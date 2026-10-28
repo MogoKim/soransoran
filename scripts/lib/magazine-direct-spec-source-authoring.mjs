@@ -33,11 +33,12 @@ import { canonicalJson, topicForbiddenPatternsOf } from './magazine-article-spec
 import {
   ADMISSION_FIELDS, ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_DIRNAME, DIRECT_SPEC_SOURCE_SCHEMA,
   DIRECT_SPEC_SOURCE_SCHEMAS, DIRECT_SPEC_SOURCE_SCHEMA_V2, DISCOVERY_RELATION_TYPE, TOPIC_PATTERNS_FIELD, directSpecSourceHash,
-  judgeDirectSpecSource, missingSourceFields, productBasisFor, queueRowFromEntry, readProductGraphState, supersedesProblem,
+  draftHashOf, draftTopicViolations, judgeDirectSpecSource, missingSourceFields, productBasisFor, queueDriftOf, queueRowFromEntry,
+  readProductGraphState, safetyRevisionEntryDrift, supersedesProblem,
 } from './magazine-direct-spec-source.mjs'
 import {
   ADMISSION_FILES, JOURNAL_FILE, KNOWN_LEGACY_ADMISSIONS, LOCK_FILE, insertQueueRows, productPayloadOf, readReceipts,
-  receiptProblems, titleProblems, verifyAdmissions, writeAtomic,
+  receiptProblems, renderQueueRow, titleProblems, verifyAdmissions, writeAtomic,
 } from './magazine-g8-promoter.mjs'
 import { isPublic, resolvePublishAt } from './magazine-gate.mjs'
 import { parseArticlesSource, parseQueueSource } from './magazine-load.mjs'
@@ -72,8 +73,15 @@ const RESEARCH = { manifest: 'contract/build/current/manifest.json', intents: 'c
 export const ADMISSION_REJECT_ORDER = Object.freeze([
   'ADMISSION_IN_PROGRESS', 'ADMISSION_LOCKED', 'RECEIPT_ABSENT', 'RECEIPT_DUPLICATE', 'RECEIPT_INVALID',
   'SLUG_BINDING_MISMATCH', 'LEDGER_MISMATCH', 'G8_INCONSISTENT', 'ADMISSION_GRAPH_STALE', 'RECEIPT_EDGE_DRIFT',
-  'ADMISSION_CLUSTER_DRIFT', 'SLUG_ALREADY_REGISTERED', 'ALREADY_QUEUED', 'ALREADY_PLANNED',
+  'ADMISSION_CLUSTER_DRIFT', 'SLUG_ALREADY_REGISTERED', 'ALREADY_QUEUED', 'SAFETY_QUEUE_ROW_INVALID', 'ALREADY_PLANNED',
 ])
+/**
+ * 🔴 **원고 보존형 안전 개정(safety)** — 일반 개정(revise)과 다른 명시적 종류 (2026-10-28 · age-learning).
+ *    이미 큐에 있고 원고(draft.md)가 회수된 DIRECT 글에 **글별 주제 금지 패턴 · 새 publishAt 만** 더한다.
+ *    승인 entry 가 그 원고의 sha256 을 `safetyRevision.draftHash` 로 고정하고, materialize 는 큐 행을 더하지 않고
+ *    기존 행 하나를 CAS 로 교체한다. 그 밖의 계획 · 관계 · hero · admission 이 하나라도 다르면 거부한다.
+ */
+export const SAFETY_REVISION_KIND = 'safety'
 
 const sha = (text) => `sha256:${createHash('sha256').update(text).digest('hex')}`
 const nonEmpty = (v) => typeof v === 'string' && v.trim() !== ''
@@ -273,7 +281,7 @@ function reviseBase(repoRoot, graphVersion, { slug, intentId }) {
   if (planned.entries.length !== 1 || exact.length !== 1 || e.status !== 'APPROVED' || e.node?.status !== 'APPROVED' || e.sourceHash !== directSpecSourceHash(e)) {
     return { ok: false, code: 'REVISE_BASE_ABSENT', why: `개정할 기존 승인 entry 가 정확히 하나가 아니다 (${planned.entries.length}개) — 개정은 승인된 글에만 한다` }
   }
-  return { ok: true, entry: e }
+  return { ok: true, entry: e, schema: planned.doc.schema }
 }
 
 function plannedEntries(repoRoot, graphVersion, { slug, intentId }) {
@@ -302,6 +310,7 @@ export function readCurrentState({ repoRoot, admissionRoot, slug, phase = 'plan'
   const reject = [...adm.reject]
   const a = adm.admission
   const intentId = a?.intentId ?? null
+  let safetyRow = null
 
   if (a) {
     const receiptGv = adm.receipt.manifest?.graph?.graphVersion ?? null
@@ -316,7 +325,10 @@ export function readCurrentState({ repoRoot, admissionRoot, slug, phase = 'plan'
     const graphIntent = graph.intents.find((i) => i.id === intentId) ?? null
     if (!graphIntent || graphIntent.cluster !== a.cluster) reject.push('ADMISSION_CLUSTER_DRIFT')
     if (articles.some((x) => x.slug === slug)) reject.push('SLUG_ALREADY_REGISTERED')
-    if (queue.some((q) => q.slug === slug || (intentId && q.intentId === intentId))) reject.push('ALREADY_QUEUED')
+    const rows = queue.filter((q) => q.slug === slug || (intentId && q.intentId === intentId))
+    // 🔴 안전 개정은 큐 행을 **교체**한다 — 이 slug·intent 의 행이 정확히 하나여야 한다. 다른 단계는 행이 없어야 한다
+    if (phase === SAFETY_REVISION_KIND) { if (rows.length === 1) safetyRow = rows[0]; else reject.push('SAFETY_QUEUE_ROW_INVALID') }
+    else if (rows.length) reject.push('ALREADY_QUEUED')
     if (phase === 'plan' && plannedEntries(repoRoot, productGraph.pointer, { slug, intentId }).entries.length) reject.push('ALREADY_PLANNED')
   }
   if (reject.length) {
@@ -339,6 +351,7 @@ export function readCurrentState({ repoRoot, admissionRoot, slug, phase = 'plan'
   return {
     ok: true,
     graph, control, surfaces: productGraph.surfaces, relationTypes: productGraph.relationTypes, articles, sourceCluster, productBasis,
+    queueRow: safetyRow,
     admission: a,
     admissionBlock,
     relations: { direct: (a.direct ?? []).map(asRelation), discovery: a.discovery ? asRelation(a.discovery) : null },
@@ -457,8 +470,11 @@ export function unresolvedOf(entry) {
  *    후보 entry 는 기존 승인을 그대로 옮기되 status 는 DRAFT, publishAt 은 비운다(사람이 새 시각을 정한다),
  *    `supersedes: { specHash, sourceHash(기존 승인) }` 를 싣는다. 승인은 기존 entry 를 CAS 로 **교체**한다.
  */
-export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, researchDir = null, nowMs = Date.now(), knownLegacy = KNOWN_LEGACY_ADMISSIONS, revise = null }) {
+export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, researchDir = null, nowMs = Date.now(), knownLegacy = KNOWN_LEGACY_ADMISSIONS, revise = null, draft = null }) {
   if (!nonEmpty(slug)) return { ok: false, code: 'SLUG_REQUIRED', why: '--slug 로 한 건을 지정해야 한다 (자동 선택 없음)' }
+  const safety = revise?.kind === SAFETY_REVISION_KIND
+  if (revise && revise.kind !== undefined && !safety) return { ok: false, code: 'REVISION_KIND_UNKNOWN', why: `모르는 개정 종류다: ${String(revise.kind)}` }
+  if (safety && (draft === null || draft === undefined)) return { ok: false, code: 'DRAFT_REQUIRED', why: '안전 개정은 보존할 원고(--draft)가 필요하다' }
   if (revise && !/^sha256:[0-9a-f]{64}$/.test(String(revise.supersedesSpecHash ?? ''))) {
     return { ok: false, code: 'SUPERSEDES_INVALID', why: '--supersedes-spec 은 sha256:<64 hex> 여야 한다 (운영 디스크 article-spec.json 의 specHash)' }
   }
@@ -468,7 +484,7 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
   let state
   let research
   try {
-    state = readCurrentState({ repoRoot, admissionRoot, slug, phase: revise ? 'revise' : 'plan', knownLegacy })
+    state = readCurrentState({ repoRoot, admissionRoot, slug, phase: safety ? SAFETY_REVISION_KIND : revise ? 'revise' : 'plan', knownLegacy })
     if (!state.ok) return state
     research = readResearchReference({ researchDir, graph: state.graph, intentId: state.admission.intentId })
   } catch (e) {
@@ -481,6 +497,10 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     const b = reviseBase(repoRoot, identity.graphVersion, { slug, intentId })
     if (!b.ok) return b
     base = b.entry
+    if (safety) {
+      const sc = safetyBaseCheck({ base, baseSchema: b.schema, state, root: repoRoot, supersedesSpecHash: revise.supersedesSpecHash, draft, draftHash: draftHashOf(draft) })
+      if (!sc.ok) return sc
+    }
   }
   const blockers = [...state.blockers]
   const rel = judgeRelations({ relations: state.relations, state, intentId, slug, atMs })
@@ -501,6 +521,7 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     hero: structuredClone(base.hero ?? null),
     publication: { publishAt: null },
     supersedes: { specHash: revise.supersedesSpecHash, sourceHash: base.sourceHash },
+    ...(safety ? { safetyRevision: { draftHash: draftHashOf(draft) } } : {}),
   } : {
     admission: state.admissionBlock,
     plan: Object.fromEntries(ARTICLE_PLAN_REQUIRED.map((k) => [k, null])),
@@ -525,6 +546,7 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
       derived(p, `기존 승인 entry ${base.sourceHash} — 사람이 고칠 수 있다`)
     }
     derived('supersedes', `운영 디스크 article-spec.json specHash(사람 확인) · 기존 승인 sourceHash`)
+    if (safety) derived('safetyRevision', '보존할 원고(--draft) 바이트의 sha256 — 원고 · 큐 행 · 옛 spec 을 기준으로 고정한다')
     open('publication.publishAt', '개정 승인은 새 공개 시각을 사람이 다시 정한다 — 옛 시각을 옮기지 않는다')
     if (baseHasPatterns) derived(TOPIC_PATTERNS_FIELD, `기존 승인 entry ${base.sourceHash} — 사람이 고칠 수 있다`)
     else open(TOPIC_PATTERNS_FIELD, '기존 승인은 source/2 — 글별 주제 금지 패턴(원고에 그대로 대조하는 literal)을 사람이 정한다. 공통 금지어 · 지침 문장은 넣지 않는다')
@@ -548,7 +570,8 @@ export function prepareCandidate({ repoRoot, admissionRoot, slug, asOf, research
     research,
     relationEvidence: rel.evidence.filter((e) => edgeIds.has(e.edgeId)),
     entry,
-    ...(base ? { revision: { baseSourceHash: base.sourceHash, supersedesSpecHash: revise.supersedesSpecHash } } : {}),
+    ...(base ? { revision: { baseSourceHash: base.sourceHash, supersedesSpecHash: revise.supersedesSpecHash,
+      ...(safety ? { kind: SAFETY_REVISION_KIND, draftHash: draftHashOf(draft) } : {}) } } : {}),
     provenance,
     unresolvedFields: unresolvedOf(entry),
     blockers: [...new Set(blockers)].sort(),
@@ -660,12 +683,31 @@ function snapshot(file) {
  * 승인 entry 로 만들 큐 행이 **실제 소비 관문**(judgeDirectSpecSource)을 통과하는가 — 쓰기 전, 메모리에서.
  * approve 와 materialize 가 같은 함수로 본다.
  */
-function gateWithEntry({ entry, root, graphVersion, day = 1 }) {
+function gateWithEntry({ entry, root, graphVersion, day = 1, schema = DIRECT_SPEC_SOURCE_SCHEMA }) {
   return judgeDirectSpecSource({
     queueItem: queueRowFromEntry(entry, { day }), draftsDir: '/nonexistent-dssa', expectedGraphVersion: graphVersion, productRoot: root,
     exists: () => true,
-    readFile: () => JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion, entries: [entry] }),
+    readFile: () => JSON.stringify({ schema, graphVersion, entries: [entry] }),
   })
+}
+
+/**
+ * 🔴 **안전 개정의 기준 대조** — prepare · approve 가 같은 함수로 본다. 파일을 쓰지 않는다.
+ *    기존 승인 entry(base)가 지금 큐 행과 정확히 짝이고(articlePlanHash · 복제 필드), base 로 컴파일한 옛 spec 의 specHash 가
+ *    사람이 운영 디스크에서 읽은 값(supersedesSpecHash)과 같아야 한다. 원고 바이트는 고정값과 같아야 한다.
+ */
+function safetyBaseCheck({ base, baseSchema, state, root, supersedesSpecHash, draft, draftHash }) {
+  const fail = (code, why) => ({ ok: false, code, why })
+  const row = state.queueRow
+  if (!row || row.articlePlanHash !== base.sourceHash || queueDriftOf(row, base).length) {
+    return fail('SAFETY_QUEUE_ROW_DRIFT', '큐 행이 기존 승인 entry 의 복제가 아니다 — 교체할 행을 확정할 수 없다')
+  }
+  const old = gateWithEntry({ entry: base, root, graphVersion: state.identity.graphVersion, day: row.day, schema: baseSchema })
+  if (!old.ok) return fail('SAFETY_BASE_INVALID', `기존 승인이 지금 소비 관문을 지나지 않는다: ${old.evidence.blockers.join(',')}`)
+  if (old.spec.specHash !== supersedesSpecHash) return fail('SUPERSEDES_MISMATCH', `기존 승인으로 컴파일한 spec(${old.spec.specHash.slice(0, 15)}…)이 대체할 spec 과 다르다`)
+  if (draft === null || draft === undefined) return fail('DRAFT_REQUIRED', '안전 개정은 보존할 원고(--draft)가 필요하다')
+  if (draftHashOf(draft) !== draftHash) return fail('DRAFT_CHANGED', '원고 바이트가 고정값과 다르다')
+  return { ok: true, oldSpec: old.spec }
 }
 
 /**
@@ -674,7 +716,7 @@ function gateWithEntry({ entry, root, graphVersion, day = 1 }) {
  *
  * @returns {{ok:true, written:boolean, path:string, sourceHash:string, entry:object}|{ok:false, code:string, why:string, problems?:string[]}}
  */
-export function approveCandidate({ candidate, approver, at, confirmCandidateHash, repoRoot, admissionRoot, outRoot, researchDir = null, nowMs = Date.now(), hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+export function approveCandidate({ candidate, approver, at, confirmCandidateHash, repoRoot, admissionRoot, outRoot, researchDir = null, nowMs = Date.now(), hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS, draft = null }) {
   const fail = (code, why, problems) => ({ ok: false, code, why, ...(problems ? { problems } : {}) })
   const roots = checkOutputRoots({ repoRoot, outRoot })
   if (!roots.ok) return roots
@@ -688,12 +730,17 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   if (asOfMs === null || atMs < asOfMs) return fail('APPROVED_AT_BEFORE_CANDIDATE', '승인 시각이 후보 기준 시각(asOf)보다 앞이다')
   const computed = candidateHashOf(candidate)
   if (confirmCandidateHash !== computed) return fail('CANDIDATE_HASH_MISMATCH', `확인한 후보 해시가 지금 후보와 다르다 (${confirmCandidateHash} ≠ ${computed})`)
-  const forged = ['status', 'approvedBy', 'approvedAt', 'sourceHash', 'productBasis', ...(candidate.revision ? [] : ['supersedes'])].filter((k) => k in (candidate.entry ?? {}))
+  const safety = candidate.revision?.kind === SAFETY_REVISION_KIND
+  if (candidate.revision?.kind !== undefined && !safety) return fail('REVISION_KIND_UNKNOWN', `모르는 개정 종류다: ${String(candidate.revision.kind)}`)
+  const forged = ['status', 'approvedBy', 'approvedAt', 'sourceHash', 'productBasis', ...(candidate.revision ? [] : ['supersedes']), ...(safety ? [] : ['safetyRevision'])].filter((k) => k in (candidate.entry ?? {}))
   if (forged.length || candidate.entry?.node?.status !== CANDIDATE_STATUS) return fail('CANDIDATE_APPROVAL_FORGED', `후보에 승인 필드가 있다 (${forged.join(',') || 'node.status'})`)
   // 🔴 개정 후보 — supersedes 는 prepare 가 고정한 값 그대로여야 한다(대체 대상을 사람이 손으로 바꾸지 않는다)
   const rev = candidate.revision ?? null
   if (rev && canonicalJson(candidate.entry?.supersedes ?? null) !== canonicalJson({ specHash: rev.supersedesSpecHash, sourceHash: rev.baseSourceHash })) {
     return fail('CANDIDATE_REVISION_EDITED', 'supersedes 가 개정 후보의 기준(old specHash · 기존 sourceHash)과 다르다')
+  }
+  if (safety && canonicalJson(candidate.entry?.safetyRevision ?? null) !== canonicalJson({ draftHash: rev.draftHash })) {
+    return fail('CANDIDATE_REVISION_EDITED', 'safetyRevision 이 개정 후보가 고정한 원고 해시와 다르다')
   }
   if ((candidate.blockers ?? []).length) return fail('CANDIDATE_BLOCKED', `후보에 차단 사유가 있다: ${candidate.blockers.join(',')}`)
 
@@ -701,7 +748,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   let state
   let unions
   try {
-    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug: candidate.identity?.admission?.slug, phase: rev ? 'revise' : 'plan', knownLegacy })
+    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug: candidate.identity?.admission?.slug, phase: safety ? SAFETY_REVISION_KIND : rev ? 'revise' : 'plan', knownLegacy })
     if (!state.ok) return state
     if (researchDir) readResearchReference({ researchDir, graph: state.graph, intentId: state.admission.intentId })
     unions = readQueueUnions(readText(join(roots.root, PRODUCT.queue), 'topic-queue.ts'))
@@ -740,6 +787,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
     // 🔴 승인한 M-GRAPH 판 — 소비 관문이 같은 helper 로 다시 계산해 정확히 같아야 쓴다 (sourceHash 에 포함)
     productBasis: state.productBasis,
     ...(rev ? { supersedes: e.supersedes } : {}),
+    ...(safety ? { safetyRevision: e.safetyRevision } : {}),
   }
   approvedEntry.sourceHash = directSpecSourceHash(approvedEntry)
   if (rev && supersedesProblem(approvedEntry)) return fail('SUPERSEDES_INVALID', 'supersedes 가 { specHash, sourceHash } sha256 계약을 지키지 않는다')
@@ -750,6 +798,23 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
   if (!gateCheck.ok) return fail('GATE_REJECTED', `source 관문이 거부했다: ${gateCheck.evidence.blockers.join(',')}`, gateCheck.evidence.blockers)
   // 🔴 개정이 대체할 spec 과 새 spec 이 같으면 개정할 것이 없다 — 승인 artifact 를 바꾸지 않는다
   if (rev && gateCheck.spec.specHash === rev.supersedesSpecHash) return fail('SUPERSEDES_NOOP', '새 승인으로 만든 spec 이 대체할 spec 과 같다 — 개정할 것이 없다')
+  /**
+   * 🔴 **안전 개정 — 쓰기 전에 전부 다시 맞춘다** (원고 · 큐 행 · 옛 spec · 허용 diff · 새 패턴의 원고 대조).
+   *    하나라도 어긋나면 승인 artifact 를 쓰지 않는다. 기준 entry 는 lock 안 CAS(REVISE_BASE_CHANGED)가 다시 묶는다.
+   */
+  if (safety) {
+    const b = reviseBase(roots.root, gv, { slug: e.node.slug, intentId: e.node.intentId })
+    if (!b.ok) return b
+    if (b.entry.sourceHash !== rev.baseSourceHash) return fail('REVISE_BASE_CHANGED', '개정 기준 승인 entry 가 지금 artifact 의 것과 다르다 — 덮어쓰지 않는다')
+    const sc = safetyBaseCheck({ base: b.entry, baseSchema: b.schema, state, root: roots.root, supersedesSpecHash: rev.supersedesSpecHash, draft, draftHash: rev.draftHash })
+    if (!sc.ok) return sc
+    // 🔴 spec 은 entry + 큐 행의 컴파일이다 — entry 가 허용 경로 밖에서 같으면 spec 도 허용 경로 밖에서 같다.
+    //    디스크 spec 과의 대조(safetyRevisionSpecDrift)는 교체 시점에 producer 가 lease 안에서 한다
+    const entryDrift = safetyRevisionEntryDrift(b.entry, approvedEntry)
+    if (entryDrift.length) return fail('SAFETY_REVISION_DRIFT', `안전 개정이 바꿀 수 없는 자리를 바꿨다: ${entryDrift.join(',')}`, entryDrift)
+    const hits = draftTopicViolations(Buffer.from(draft).toString('utf8'), gateCheck.spec.safety.topicForbiddenPatterns)
+    if (hits.length) return fail('DRAFT_PATTERN_VIOLATION', `새 주제 금지 패턴이 보존할 원고에 있다: ${hits.join(',')}`, hits)
+  }
 
   const file = join(roots.root, 'drafts/magazine', DIRECT_SPEC_SOURCE_DIRNAME, `${gv}.json`)
   const below = checkNoSymlinkBelow(roots.root, file)
@@ -826,7 +891,7 @@ export function approveCandidate({ candidate, approver, at, confirmCandidateHash
  * 🔴 쓰기 뒤 다른 writer 가 끼어들어도 내 행이 그대로 실행 대상이면 성공(`concurrentWrite:true`)이다 — 실패를 돌려주면서 실제 DIRECT 행을 남기지 않는다.
  * @returns {{ok:true, written:true, concurrentWrite:boolean, path:string, row:object, day:number}|{ok:false, code:string, why:string, problems?:string[]}}
  */
-export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = process.env, hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS }) {
+export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = process.env, hooks = {}, knownLegacy = KNOWN_LEGACY_ADMISSIONS, safety = false, draft = null }) {
   const fail = (code, why, problems) => ({ ok: false, code, why, ...(problems ? { problems } : {}) })
   const roots = checkOutputRoots({ repoRoot, outRoot })
   if (!roots.ok) return roots
@@ -835,7 +900,7 @@ export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = 
   let unions
   let planned
   try {
-    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug, phase: 'materialize', knownLegacy })
+    state = readCurrentState({ repoRoot: roots.root, admissionRoot, slug, phase: safety ? SAFETY_REVISION_KIND : 'materialize', knownLegacy })
     if (!state.ok) return state
     unions = readQueueUnions(readText(join(roots.root, PRODUCT.queue), 'topic-queue.ts'))
     planned = plannedEntries(roots.root, state.identity.graphVersion, { slug, intentId: state.admission.intentId })
@@ -858,6 +923,14 @@ export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = 
   const gv = state.identity.graphVersion
   const pre = gateWithEntry({ entry, root: roots.root, graphVersion: gv })
   if (!pre.ok) return fail('GATE_REJECTED', `source 관문이 거부했다: ${pre.evidence.blockers.join(',')}`, pre.evidence.blockers)
+  // 🔴 안전 개정은 명시적으로만 — 명령의 종류와 승인 entry 의 종류가 같아야 한다
+  if (safety !== Boolean(entry.safetyRevision)) return fail('SAFETY_REVISION_MISMATCH', safety ? '승인 entry 가 안전 개정이 아니다' : '안전 개정 entry 는 --safety-revise 로만 materialize 한다')
+  if (safety) {
+    if (draft === null || draft === undefined) return fail('DRAFT_REQUIRED', '안전 개정은 보존할 원고(--draft)가 필요하다')
+    if (draftHashOf(draft) !== entry.safetyRevision.draftHash) return fail('DRAFT_CHANGED', '원고 바이트가 승인이 고정한 값과 다르다')
+    const hits = draftTopicViolations(Buffer.from(draft).toString('utf8'), pre.spec.safety.topicForbiddenPatterns)
+    if (hits.length) return fail('DRAFT_PATTERN_VIOLATION', `주제 금지 패턴이 보존할 원고에 있다: ${hits.join(',')}`, hits)
+  }
 
   const queuePath = join(roots.root, PRODUCT.queue)
   const below = checkNoSymlinkBelow(roots.root, queuePath)
@@ -866,6 +939,7 @@ export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = 
   const locked = withQueueWriteLock(queuePath, () => {
     const before = readFileSync(queuePath, 'utf8')
     const queue = parseQueueSource(before)
+    if (safety) return replaceSafetyRow({ before, queue })
     // 🔴 lock 안에서 다시 — 판독 뒤 다른 writer 가 같은 slug·intent 행을 넣었으면 쓰지 않는다
     if (queue.some((q) => q.slug === slug || q.intentId === entry.node.intentId)) return fail('ALREADY_QUEUED', '큐에 이 slug 또는 intent 의 행이 이미 있다')
     const day = Math.max(0, ...queue.map((q) => q.day).filter(Number.isInteger)) + 1
@@ -913,6 +987,44 @@ export function materializePlan({ repoRoot, admissionRoot, slug, outRoot, env = 
   }, { env })
   if (!locked.ok) return locked
   return locked.value
+
+  /**
+   * 🔴 **안전 개정 — 큐 행을 더하지 않고 기존 행 하나를 CAS 로 교체한다** (큐 lock 안).
+   *    이 slug·intent 의 행이 정확히 하나 · 그 articlePlanHash 가 대체할 기존 승인(supersedes.sourceHash)이어야 한다.
+   *    이미 새 승인을 가리키면 멱등(쓰기 0). 기존 행의 바이트 구간이 정확히 한 곳일 때만 그 구간만 바꾼다 —
+   *    다른 행의 바이트 · 순서는 그대로다(같은 parser 로 다시 읽어 확인한다). 남의 바이트를 덮거나 되돌리지 않는다.
+   */
+  function replaceSafetyRow({ before, queue }) {
+    const hits = queue.filter((q) => q.slug === slug || q.intentId === entry.node.intentId)
+    if (hits.length !== 1) return fail('SAFETY_QUEUE_ROW_INVALID', `이 slug·intent 의 큐 행이 정확히 하나가 아니다 (${hits.length}개)`)
+    const old = hits[0]
+    const row = queueRowFromEntry(entry, { day: old.day })
+    if (old.articlePlanHash === entry.sourceHash) {
+      if (canonicalJson(old) !== canonicalJson(row)) return fail('SAFETY_QUEUE_ROW_DRIFT', '큐 행이 새 승인을 가리키지만 그 복제가 아니다')
+      return { ok: true, written: false, concurrentWrite: false, path: queuePath, row, day: old.day, supersedes: entry.supersedes, safetyRevision: entry.safetyRevision }
+    }
+    if (old.articlePlanHash !== entry.supersedes.sourceHash) return fail('SAFETY_QUEUE_ROW_DRIFT', '큐 행이 대체할 기존 승인을 가리키지 않는다')
+    const oldText = renderQueueRow(old)
+    if (before.split(oldText).length - 1 !== 1) return fail('QUEUE_ROW_SPAN_UNKNOWN', '기존 큐 행의 바이트 구간을 정확히 한 곳으로 찾지 못했다 — 쓰지 않는다')
+    const next = before.replace(oldText, renderQueueRow(row))
+    const index = queue.indexOf(old)
+    const exactlyReplaced = (text) => {
+      let rows
+      try { rows = parseQueueSource(text) } catch { return false }
+      return rows.length === queue.length && canonicalJson(rows[index]) === canonicalJson(row)
+        && canonicalJson(rows.filter((_, i) => i !== index)) === canonicalJson(queue.filter((_, i) => i !== index))
+    }
+    if (!exactlyReplaced(next)) return fail('QUEUE_RENDER_INVALID', '교체한 큐가 같은 parser 로 「다른 행 그대로 + 이 행만 교체」로 읽히지 않는다 — 쓰지 않는다')
+    hooks.beforeWrite?.({ queuePath })
+    // 🔴 lock 밖 writer — 읽은 바이트와 다르면 교체하지 않는다
+    const current = readFileSync(queuePath, 'utf8')
+    if (current !== before) return fail('QUEUE_CHANGED', '읽은 뒤 큐가 바뀌었다 — 행을 교체하지 않는다')
+    writeAtomic(queuePath, next)
+    hooks.afterWrite?.({ queuePath })
+    if (readFileSync(queuePath, 'utf8') === next) return { ok: true, written: true, concurrentWrite: false, path: queuePath, row, day: old.day, supersedes: entry.supersedes, safetyRevision: entry.safetyRevision }
+    // 🔴 쓴 뒤 다른 writer — 지금 바이트를 덮지도 되돌리지도 않는다
+    return fail('QUEUE_WRITE_CONFLICT', '쓴 뒤 다른 writer 가 큐를 바꿨다 — 지금 바이트를 그대로 두고 멈춘다. 사람이 확인하기 전 producer 를 돌리지 않는다')
+  }
 }
 
 export const AUTHORING_FILES = { ...PRODUCT, ...ADMISSION_FILES, journal: JOURNAL_FILE, lock: LOCK_FILE, research: RESEARCH }

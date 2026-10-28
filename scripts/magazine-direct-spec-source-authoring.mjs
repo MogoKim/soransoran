@@ -7,6 +7,9 @@
  *                  --repo <제품 루트> --admission-root <연구 루트(contract/g8-admission · m3-slug-manifest · m3-state)> [--research-dir <연구 루트>]
  *                개정: [--revise --supersedes-spec <sha256:…>] — 승인됐지만 큐에서 철회된 글만. 기존 승인을 옮긴 DRAFT 후보에
  *                  supersedes{운영 디스크 article-spec specHash · 기존 sourceHash} 를 싣고 publishAt 은 비운다. approve 가 기존 entry 를 CAS 로 교체한다.
+ *                원고 보존형 안전 개정: [--safety-revise --supersedes-spec <sha256:…> --draft <draft.md>] — 큐에 있고 원고가 회수된 글만.
+ *                  글별 주제 금지 패턴 · 새 publishAt 만 바꾼다. 원고 sha256 을 고정한다(--draft 는 읽기만 한다).
+ *                  approve · materialize 도 같은 --draft 를 받아 다시 대조한다. materialize 는 --safety-revise 로 기존 행을 CAS 교체한다.
  *   inspect      읽기 전용. 후보 파일의 지금 해시 · 미해결 필드 · 차단 사유를 낸다.
  *                node scripts/magazine-direct-spec-source-authoring.mjs inspect --candidate <file>
  *   approve      source artifact 의 유일한 쓰기. 사람이 채운 후보를 다시 전부 검증하고 승인 entry 하나를 원자적으로 더한다.
@@ -24,6 +27,9 @@
  * 종료 코드: 0 성공 · 1 거부(구조화 코드) · 2 사용법 오류
  */
 import { readFileSync } from 'node:fs'
+
+/** 보존할 원고 — 읽기만 한다(운영 경로여도 쓰지 않는다) */
+const readDraft = () => (arg('--draft') ? readFileSync(resolve(arg('--draft'))) : null)
 import { resolve } from 'node:path'
 
 import {
@@ -55,11 +61,15 @@ if (command === 'prepare') {
   const admission = arg('--admission-root')
   if (!repo || !admission) usage('--repo 와 --admission-root 를 명시해야 한다')
   // 🔴 개정(--revise --supersedes-spec <운영 디스크 article-spec specHash>) — 승인됐지만 큐에서 철회된 글만
-  if (argv.includes('--revise') && !arg('--supersedes-spec')) usage('--revise 는 --supersedes-spec <sha256:...> 가 필요하다')
-  if (!argv.includes('--revise') && arg('--supersedes-spec')) usage('--supersedes-spec 은 --revise 와 함께만 쓴다')
+  const safety = argv.includes('--safety-revise')
+  if (safety && argv.includes('--revise')) usage('--revise 와 --safety-revise 는 함께 쓰지 않는다 — 개정 종류를 하나만 고른다')
+  if ((argv.includes('--revise') || safety) && !arg('--supersedes-spec')) usage('--revise · --safety-revise 는 --supersedes-spec <sha256:...> 가 필요하다')
+  if (!argv.includes('--revise') && !safety && arg('--supersedes-spec')) usage('--supersedes-spec 은 --revise · --safety-revise 와 함께만 쓴다')
+  if (safety && !arg('--draft')) usage('--safety-revise 는 --draft <보존할 draft.md> 가 필요하다')
   const r = prepareCandidate({ repoRoot: resolve(repo), admissionRoot: resolve(admission), slug: arg('--slug'), asOf: arg('--as-of'),
     researchDir: arg('--research-dir') ? resolve(arg('--research-dir')) : null,
-    ...(argv.includes('--revise') ? { revise: { supersedesSpecHash: arg('--supersedes-spec') } } : {}) })
+    ...(argv.includes('--revise') ? { revise: { supersedesSpecHash: arg('--supersedes-spec') } } : {}),
+    ...(safety ? { revise: { supersedesSpecHash: arg('--supersedes-spec'), kind: 'safety' }, draft: readDraft() } : {}) })
   out(r.ok ? r.candidate : r, r.ok ? 0 : 1)
 } else if (command === 'inspect') {
   out(inspectCandidate(readCandidate()), 0)
@@ -71,7 +81,7 @@ if (command === 'prepare') {
   const r = approveCandidate({
     candidate: readCandidate(), approver: arg('--approver'), at: arg('--at'), confirmCandidateHash: arg('--confirm-candidate-hash'),
     repoRoot: resolve(repo), admissionRoot: resolve(admission), outRoot: resolve(outRoot),
-    researchDir: arg('--research-dir') ? resolve(arg('--research-dir')) : null,
+    researchDir: arg('--research-dir') ? resolve(arg('--research-dir')) : null, draft: readDraft(),
   })
   out(r.ok ? { ok: true, written: r.written, path: r.path, sourceHash: r.sourceHash, ...(r.revised ? { revised: r.revised } : {}) } : r, r.ok ? 0 : 1)
 } else if (command === 'materialize') {
@@ -79,8 +89,11 @@ if (command === 'prepare') {
   const admission = arg('--admission-root')
   const outRoot = arg('--out-root')
   if (!repo || !admission || !outRoot || !arg('--slug')) usage('--slug · --repo · --admission-root · --out-root 를 모두 명시해야 한다')
-  const r = materializePlan({ repoRoot: resolve(repo), admissionRoot: resolve(admission), outRoot: resolve(outRoot), slug: arg('--slug') })
-  out(r.ok ? { ok: true, written: r.written, concurrentWrite: r.concurrentWrite, path: r.path, day: r.day, articlePlanHash: r.row.articlePlanHash, supersedes: r.supersedes } : r, r.ok ? 0 : 1)
+  if (argv.includes('--safety-revise') && !arg('--draft')) usage('--safety-revise 는 --draft <보존할 draft.md> 가 필요하다')
+  const r = materializePlan({ repoRoot: resolve(repo), admissionRoot: resolve(admission), outRoot: resolve(outRoot), slug: arg('--slug'),
+    ...(argv.includes('--safety-revise') ? { safety: true, draft: readDraft() } : {}) })
+  out(r.ok ? { ok: true, written: r.written, concurrentWrite: r.concurrentWrite, path: r.path, day: r.day, articlePlanHash: r.row.articlePlanHash, supersedes: r.supersedes,
+    ...(r.safetyRevision ? { safetyRevision: r.safetyRevision } : {}) } : r, r.ok ? 0 : 1)
 } else {
   usage(`모르는 명령이다: ${command}`)
 }

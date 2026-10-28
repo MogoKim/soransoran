@@ -1941,7 +1941,168 @@ function supersedeCases(planMod = real.plan, sourceMod = real.source, sourcePath
     assert.ok(!existsSync(archiveOf(d)) || readFileSync(archiveOf(d), 'utf8') === d.oldBytes, '보존본이 옛 spec 과 다르다')
     assert.equal(reuseOf(r), null, '조건 위반인데 재사용 후보가 됐다')
   }
+  /**
+   * 🔴 **원고 보존형 안전 개정(SR)** (2026-10-28 · age-learning).
+   *    운영 모양: 첫 회차가 source/2 승인으로 spec/1 을 썼고, 원고(draft.md)가 회수됐다(전송은 정산됐다).
+   *    source/3 승인이 supersedes + safetyRevision.draftHash 로 그 원고를 고정하고 주제 패턴 · publishAt 만 바꾼다.
+   */
+  const SR_PATTERNS = ['수면제를 드세요', '불면증 진단입니다']
+  const draftOf = (d) => join(dir(d), 'draft.md')
+  const day1Draft = (text = PASS_DRAFT) => { const d = day1(); writeFileSync(draftOf(d), text); d.draft = readFileSync(draftOf(d)); return d }
+  const safetyEntry = (d, edit = null) => sourceEntry((e) => {
+    e.publication = { publishAt: NEW_PUBLISH }
+    e.supersedes = { specHash: d.old.specHash, sourceHash: base.sourceHash }
+    e.node.forbiddenPatterns = [...SR_PATTERNS]
+    e.safetyRevision = { draftHash: sourceMod.draftHashOf(d.draft) }
+    edit?.(e)
+    return e
+  })
+  const day2Safety = (d, entry, { queue = null, extra = {}, today = TOMORROW } = {}) => {
+    writeSource(d.r.draftsDir, { entries: [entry], schema: sourceMod.DIRECT_SPEC_SOURCE_SCHEMA })
+    return runPlan(planMod, { queue: queue ?? [directItem({}, entry)], draftsDir: d.r.draftsDir, today, ...extra })
+  }
+  /** 막혔다 — 옛 spec · 원고 바이트 그대로 · 재사용 0 */
+  const keptDraft = (d, r, code, problem) => {
+    untouched(d, r, code, problem)
+    assert.deepEqual(readFileSync(draftOf(d)), d.draft, '원고 바이트가 바뀌었다')
+  }
+  const safetyCases = [
+    ['SR1 원고 보존 안전 개정 — 실제 planRun: spec/1 → spec/2 교체 · 원고 바이트 그대로 · run 에 보존 해시 · 회수 대상 0 · ChatGPT 0', async () => {
+      const d = day1Draft()
+      const entry = safetyEntry(d)
+      const r = day2Safety(d, entry)
+      const row = reuseOf(r)
+      assert.ok(row, `재사용 후보가 아니다: ${JSON.stringify(r.run?.held).slice(0, 300)}`)
+      const now = JSON.parse(readFileSync(specPathOf(d.r.draftsDir), 'utf8'))
+      assert.equal(now.schemaVersion, 'magazine-article-spec/2'); assert.deepEqual(now.safety.topicForbiddenPatterns, SR_PATTERNS)
+      assert.equal(now.publication.publishAt, NEW_PUBLISH)
+      assert.deepEqual(row.directSpec.supersession, { superseded: true, oldSpecHash: d.old.specHash, newSpecHash: now.specHash,
+        archive: sourceMod.supersededSpecName(d.old.specHash), topicSafetyRevision: true, preservedDraftHash: sourceMod.draftHashOf(d.draft), publishAt: NEW_PUBLISH })
+      assert.deepEqual(readFileSync(draftOf(d)), d.draft, '원고 바이트가 바뀌었다')
+      assert.equal(readFileSync(archiveOf(d), 'utf8'), d.oldBytes)
+      // 🔴 DIRECT 는 brief 축 stage 를 쓰지 않는다 — 원고가 있다는 사실(reuse.draft)이 회수 0 · 등록 대상의 근거다
+      assert.equal(row.reuse.draft, true, `원고 재사용이 아니다: ${JSON.stringify(row.reuse)}`)
+      assert.equal(providerTargets(r), 0, '원고가 있는데 회수 대상이 됐다')
+      const chat = fakeChat(); const probe = { n: 0 }
+      const log = console.log; const errl = console.error; console.log = () => {}; console.error = () => {}
+      try {
+        await real.webui.fetchBatch({ date: TOMORROW, dryRun: false, draftsDir: d.r.draftsDir, quarantinePath: d.q,
+          probeFn: async () => { probe.n++; return { status: realSession.STATUS.OK } }, browserDeps: chat.deps,
+          directSourceDeps: { queue: () => [directItem({}, entry)], expectedGraphVersion: () => GV, productRoot: () => ROOT },
+          resultPath: join(dirname(d.r.draftsDir), 'sr1-result.json') })
+      } finally { console.log = log; console.error = errl }
+      SUPERSEDE['안전 개정 성공'] = { connect: chat.m.connect, send: chat.m.send, probe: probe.n, draftSame: 1 }
+      assert.deepEqual({ connect: chat.m.connect, send: chat.m.send }, { connect: 0, send: 0 })
+      assert.deepEqual(readFileSync(draftOf(d)), d.draft, '회수 단계가 원고를 바꿨다')
+    }],
+    ['SR2 새 주제 패턴이 원고에 있다 → BLOCKED DRAFT_PATTERN_VIOLATION · 쓰기 0', () => {
+      const d = day1Draft(PASS_DRAFT.replace(/\n\[CTA\]/, `\n요즘은 ${SR_PATTERNS[0]}라는 말도 듣습니다.\n\n[CTA]`))
+      keptDraft(d, day2Safety(d, safetyEntry(d)), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'DRAFT_PATTERN_VIOLATION')
+    }],
+    ['SR3 승인 뒤 원고 바이트 변경 · 삭제 → BLOCKED DRAFT_CHANGED · DRAFT_MISSING', () => {
+      const d = day1Draft(); const entry = safetyEntry(d)
+      writeFileSync(draftOf(d), `${PASS_DRAFT}\n`); d.draft = readFileSync(draftOf(d))
+      keptDraft(d, day2Safety(d, entry), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'DRAFT_CHANGED')
+      const d2 = day1Draft(); const e2 = safetyEntry(d2); rmSync(draftOf(d2))
+      untouched(d2, day2Safety(d2, e2), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'DRAFT_MISSING')
+      assert.equal(existsSync(draftOf(d2)), false, '원고를 지어냈다')
+    }],
+    ['SR4 제목 · plan · 관계 · hero 를 함께 바꾼 안전 개정 → BLOCKED SAFETY_REVISION_DRIFT', () => {
+      for (const [label, edit] of [
+        ['hero', (e) => { e.hero = { ...e.hero, alt: `${e.hero.alt} 바뀜` } }],
+        ['plan.whyNow', (e) => { e.plan.whyNow = `${e.plan.whyNow} 덧붙임` }],
+        ['relations.reason', (e) => { e.relations.direct[0] = { ...e.relations.direct[0], reason: '다른 이유' } }],
+        ['node.outline', (e) => { e.node.outline = [...e.node.outline.slice(0, 2), '다른 순서'] }],
+      ]) {
+        const d = day1Draft()
+        keptDraft(d, day2Safety(d, safetyEntry(d, edit)), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'SAFETY_REVISION_DRIFT')
+        void label
+      }
+    }],
+    ['SR5 old specHash 불일치 → DIRECT_SPEC_SUPERSEDE_MISMATCH · 원고 · spec 그대로', () => {
+      const d = day1Draft()
+      const entry = safetyEntry(d, (e) => { e.supersedes = { ...e.supersedes, specHash: `sha256:${'0'.repeat(64)}` } })
+      untouched(d, day2Safety(d, entry), 'DIRECT_SPEC_SUPERSEDE_MISMATCH')
+      assert.deepEqual(readFileSync(draftOf(d)), d.draft)
+    }],
+    ['SR6 큐 행 중복 → QUEUE_IDENTITY_DUPLICATE · 교체 0', () => {
+      const d = day1Draft(); const entry = safetyEntry(d)
+      const r = day2Safety(d, entry, { queue: [directItem({}, entry), directItem({ day: 9003 }, entry)] })
+      assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes); assert.equal(reuseOf(r), null)
+      assert.ok((r.run?.held ?? []).some((h) => h.code === 'QUEUE_IDENTITY_DUPLICATE'), JSON.stringify(r.run?.held).slice(0, 200))
+    }],
+    ['SR7 등록 영수증 · 미정산 전송 예약 → BLOCKED REGISTERED · DELIVERY_UNSETTLED', () => {
+      const d = day1Draft(); const entry = safetyEntry(d)
+      writeFileSync(join(dir(d), 'article-spec.registered.json'), '{}')
+      keptDraft(d, day2Safety(d, entry), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'REGISTERED')
+      const d2 = day1Draft(); const e2 = safetyEntry(d2)
+      realQuarantine.updateQuarantine((cur) => ({ ...cur, [DIRECT_SLUG]: { ...cur[DIRECT_SLUG], delivery: { sent: null, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', messageFingerprint: `sha256:${'9'.repeat(64)}`, reservationId: 'sr7-reservation', at: NOW } } }), d2.q)
+      keptDraft(d2, day2Safety(d2, e2), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'DELIVERY_UNSETTLED')
+    }],
+    ['SR8 설치 직전 원고가 바뀌었다(외부 writer) · lease 상실 → 새 spec 설치 0 · 옛 spec 복구 · 외부 원고 바이트 보존', () => {
+      const d = day1Draft(); const entry = safetyEntry(d)
+      const outside = Buffer.from(`${PASS_DRAFT}\n외부 writer\n`)
+      const r = day2Safety(d, entry, { extra: { supersedeFn: (a) => sourceMod.supersedeDirectSpec({ ...a, hooks: { afterTmpWrite: () => writeFileSync(draftOf(d), outside) } }) } })
+      untouched(d, r, sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'DRAFT_CHANGED')
+      assert.deepEqual(readFileSync(draftOf(d)), outside, '외부 writer 의 원고를 덮거나 되돌렸다')
+      assert.deepEqual(readdirSync(dir(d)).filter((f) => f.includes('supersede-')), [], '교체 조각이 남았다')
+      const d2 = day1Draft(); const e2 = safetyEntry(d2)
+      const r2 = day2Safety(d2, e2, { extra: { supersedeFn: (a) => sourceMod.supersedeDirectSpec({ ...a, hooks: { afterTmpWrite: ({ lease }) => writeFileSync(lease.lease, JSON.stringify({ token: 'someone-else' })) } }) } })
+      keptDraft(d2, r2, sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'LOCK_LOST')
+    }],
+    ['SR9 같은 안전 개정 승인을 다시 실행 → 멱등 (교체 0 · 원고 · spec · 보존본 그대로)', () => {
+      const d = day1Draft(); const entry = safetyEntry(d)
+      day2Safety(d, entry)
+      const spec1 = readFileSync(specPathOf(d.r.draftsDir), 'utf8'); const files1 = readdirSync(dir(d)).sort()
+      const r3 = runPlan(planMod, { queue: [directItem({}, entry)], draftsDir: d.r.draftsDir, today: DAY3 })
+      const row = reuseOf(r3)
+      assert.ok(row && !('supersession' in row.directSpec), JSON.stringify(row?.directSpec ?? r3.run?.held).slice(0, 200))
+      assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), spec1); assert.deepEqual(readdirSync(dir(d)).sort(), files1)
+      assert.deepEqual(readFileSync(draftOf(d)), d.draft)
+    }],
+    ['SR11 설치 직후 급사(실제 SIGKILL) → 다음 회차 복구가 안전 개정 기록을 남긴다 · 그 사이 원고가 바뀌었으면 RECOVERY_REQUIRED · 조각 보존', () => {
+      const d = day1Draft(); const entry = safetyEntry(d)
+      writeSource(d.r.draftsDir, { entries: [entry], schema: sourceMod.DIRECT_SPEC_SOURCE_SCHEMA })
+      assert.equal(crashChild(d, entry, 'afterReplace').signal, 'SIGKILL')
+      const r = runPlan(planMod, { queue: [directItem({}, entry)], draftsDir: d.r.draftsDir, today: TOMORROW })
+      const sup = reuseOf(r)?.directSpec?.supersession ?? null
+      assert.equal(sup?.recovered, true, JSON.stringify(r.run?.held ?? r.out).slice(0, 240))
+      assert.equal(sup.topicSafetyRevision, true); assert.equal(sup.preservedDraftHash, sourceMod.draftHashOf(d.draft)); assert.equal(sup.publishAt, NEW_PUBLISH)
+      assert.deepEqual(readFileSync(draftOf(d)), d.draft)
+      const d2 = day1Draft(); const e2 = safetyEntry(d2)
+      writeSource(d2.r.draftsDir, { entries: [e2], schema: sourceMod.DIRECT_SPEC_SOURCE_SCHEMA })
+      assert.equal(crashChild(d2, e2, 'afterReplace').signal, 'SIGKILL')
+      const changed = Buffer.from(`${PASS_DRAFT}\n급사 뒤 바뀜\n`); writeFileSync(draftOf(d2), changed)
+      const r2 = runPlan(planMod, { queue: [directItem({}, e2)], draftsDir: d2.r.draftsDir, today: TOMORROW })
+      const h = heldOf(r2)
+      assert.equal(h?.code, sourceMod.DIRECT_SPEC_SUPERSEDE_RECOVERY_REQUIRED, JSON.stringify(r2.run?.held).slice(0, 240))
+      assert.ok(sourceMod.supersedeLeftovers({ draftsDir: d2.r.draftsDir, slug: DIRECT_SLUG }).length > 0, '조각을 지웠다')
+      assert.deepEqual(readFileSync(draftOf(d2)), changed); assert.equal(reuseOf(r2), null)
+    }],
+    ['SR12 safetyRevision 형식 위반(해시 아님 · supersedes 없음) → DIRECT_SPEC_SOURCE_NOT_READY · 교체 0', () => {
+      for (const edit of [(e) => { e.safetyRevision = { draftHash: 'not-a-hash' } }, (e) => { delete e.supersedes }]) {
+        const d = day1Draft()
+        const r = day2Safety(d, safetyEntry(d, edit))
+        assert.equal(heldOf(r)?.code, 'DIRECT_SPEC_SOURCE_NOT_READY', JSON.stringify(r.run?.held).slice(0, 200))
+        assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes); assert.deepEqual(readFileSync(draftOf(d)), d.draft)
+      }
+      // 🔴 source/2 판에 safetyRevision 만 끼운 승인(패턴 없음) — 판 계약 위반으로 막힌다(교체 판정까지 가지 않는다)
+      const d = day1Draft()
+      const v2 = safetyEntry(d, (e) => { delete e.node.forbiddenPatterns })
+      writeSource(d.r.draftsDir, { entries: [v2] })
+      const r = runPlan(planMod, { queue: [directItem({}, v2)], draftsDir: d.r.draftsDir, today: TOMORROW })
+      assert.equal(heldOf(r)?.code, 'DIRECT_SPEC_SOURCE_NOT_READY', JSON.stringify(r.run?.held).slice(0, 200))
+      assert.ok(heldOf(r).directSpec.blockers.includes('SOURCE_SCHEMA_FIELD_MISMATCH'))
+      assert.equal(readFileSync(specPathOf(d.r.draftsDir), 'utf8'), d.oldBytes)
+    }],
+    ['SR10 safetyRevision 없는 일반 개정은 그대로 — 원고가 있으면 DRAFT_EXISTS (기록 모양 불변)', () => {
+      const d = day1Draft()
+      const entry = sourceEntry((e) => { e.publication = { publishAt: NEW_PUBLISH }; e.supersedes = { specHash: d.old.specHash, sourceHash: base.sourceHash }; return e })
+      keptDraft(d, day2(d, entry), sourceMod.DIRECT_SPEC_SUPERSEDE_BLOCKED, 'DRAFT_EXISTS')
+    }],
+  ]
   return [
+    ...safetyCases,
     ['P1-7 개정 — 실제 planRun 재사용: lease 안 교체 · 옛 spec 보존 · 새 spec(sourceHash·publishAt) · run 에 old/new specHash', () => {
       const d = day1()
       const entry = revised(d.old.specHash)
@@ -2371,6 +2532,17 @@ const MUTATIONS = [
   ['source', 'MSP18', 'tmp 실패를 구조화하지 않고 던진다 (P1-8)', "    } catch (e) { return restoreOld(['INSTALL_FAILED'], `새 spec tmp 를 만들지 못했다(${e?.code ?? e?.message})`) }\n", "    } catch (e) { throw e }\n"],
   ['source', 'MSP19', '복구가 canonical 바이트를 새 spec 으로 확인하지 않는다 (P1-8)', "  if (newBytes !== null && canon === newBytes) {\n", "  if (canon !== null) {\n"],
   ['source', 'MSP20', '조각 복구의 lease 요구 제거 (P1-8)', "  if (!leaseHeld(lease)) return recovery(['LEASE_REQUIRED'], '원고 lease 없이 교체 조각을 정리하지 않는다')\n", ""],
+  ['source', 'MSR1', '안전 개정이 고정한 원고 해시를 대조하지 않는다', "    if (draft && draftHash !== safety.draftHash) problems.push('DRAFT_CHANGED')\n", ''],
+  ['source', 'MSR2', '안전 개정이 새 패턴을 원고에 대조하지 않는다', "    if (draft && next && draftTopicViolations(draft.toString('utf8'), next.safety?.topicForbiddenPatterns).length) problems.push('DRAFT_PATTERN_VIOLATION')\n", ''],
+  ['source', 'MSR3', '안전 개정이 허용 밖 spec 변경을 막지 않는다', "    if (oldSpec && next && safetyRevisionSpecDrift(oldSpec, next).length) problems.push('SAFETY_REVISION_DRIFT')\n", ''],
+  ['source', 'MSR4', '안전 개정이 미정산 전송을 막지 않는다', "    if (d?.reservationId || d?.kind === 'DELIVERY_UNCERTAIN' || deliveryEntry?.sent === null) problems.push('DELIVERY_UNSETTLED')\n", ''],
+  ['source', 'MSR5', '설치 직전 원고 재확인 제거', '      if (now !== j.draftHash) return restoreOld(', '      if (false) return restoreOld('],
+  ['source', 'MSR6', '안전 개정 분기 제거 (원고가 있으면 늘 DRAFT_EXISTS)', 'const safety = judged?.evidence?.safetyRevision ?? null', 'const safety = null'],
+  ['source', 'MSR7', '복구가 원고를 다시 보지 않는다', '    if (safety && draftNow !== safety.draftHash) return recovery(', '    if (false) return recovery('],
+  ['source', 'MSR8', 'safetyRevision 형식 검사 제거', "  if (safetyRevisionProblem(entry)) blockers.push('SAFETY_REVISION_INVALID')\n", ''],
+  ['source', 'MSR9', 'run 기록에서 보존 해시를 뺀다', '      ...(j.draftHash ? { topicSafetyRevision: true, preservedDraftHash: j.draftHash, publishAt: judged.spec.publication.publishAt } : {}) } }', '      } }'],
+  ['source', 'MSR10', '안전 개정 판 계약 제거 (source/2 에서도 받는다)', "  if (entry.safetyRevision !== undefined && !sourceV3) blockers.push('SOURCE_SCHEMA_FIELD_MISMATCH')\n", ''],
+  ['plan', 'MPS6', 'plan 이 복구에 안전 개정 정보를 넘기지 않는다', 'safety: j.judged?.evidence?.safetyRevision ?? j.evidence?.safetyRevision ?? null', 'safety: null'],
   ['plan', 'MPS5', 'plan 이 앞 교체 조각을 복구하지 않는다 (P1-8 급사)', "        if (!dryRun && supersedeLeftovers({ draftsDir, slug: item.slug }).length) {\n", "        if (false) {\n"],
   ['webui', 'MW1', '회수 계획이 direct 에 "세션이 채워야 한다" 안내 (P1)', "  if (t.queueItem?.directSpecMode === DIRECT_SPEC_MODE) {\n    return t.material?.articleSpec", "  if (false) {\n    return t.material?.articleSpec"],
 ]

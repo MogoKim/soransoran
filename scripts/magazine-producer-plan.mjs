@@ -761,7 +761,7 @@ export function planRun({
             continue
           }
           let rec
-          try { rec = recoverFn({ draftsDir, slug: item.slug, lease, newSpec: j.judged?.spec ?? j.spec ?? null }) } finally { lease.release() }
+          try { rec = recoverFn({ draftsDir, slug: item.slug, lease, newSpec: j.judged?.spec ?? j.spec ?? null, safety: j.judged?.evidence?.safetyRevision ?? j.evidence?.safetyRevision ?? null }) } finally { lease.release() }
           if (!rec.ok) {
             held.push({ day: item.day, slug: item.slug, code: rec.code, why: rec.why, directSpec: { ...(j.evidence ?? {}), supersede: { problems: rec.problems, recovery: rec.recovery } } })
             continue
@@ -795,7 +795,7 @@ export function planRun({
             continue
           }
           supersession = s.record
-          log(`  ♻ ${item.slug} — 명시적 개정: spec ${s.record.oldSpecHash.slice(0, 15)}… → ${s.record.newSpecHash.slice(0, 15)}… (보존 ${s.record.archive})`)
+          log(`  ♻ ${item.slug} — 명시적 개정${s.record.topicSafetyRevision ? '(원고 보존 · 안전 개정)' : ''}: spec ${s.record.oldSpecHash.slice(0, 15)}… → ${s.record.newSpecHash.slice(0, 15)}… (보존 ${s.record.archive})`)
           j = judgeDirect(item)
         }
         if (!j.ok) {
