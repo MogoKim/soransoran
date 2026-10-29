@@ -33,6 +33,7 @@ import { judgeManuscriptFormat } from './magazine-manuscript-format.mjs'
 import { MACHINE_APPROVER } from './magazine-g8-promoter.mjs'
 import { isRealKstAt } from './magazine-graph-build.mjs'
 import { validateManuscript } from './magazine-manuscript-guard.mjs'
+import { acquireLock } from './magazine-auto-lock.mjs'
 import { acquireManuscriptLease, readQuarantine } from './magazine-quarantine.mjs'
 
 export const CTA_REPAIR_RECEIPT_SCHEMA = 'draft-cta-repair/1'
@@ -65,6 +66,13 @@ function newTextProblem(text, oldText) {
 }
 const isHumanApprover = (a) => typeof a === 'string' && !!a.trim() && !MACHINE_APPROVER.test(a.trim())
 const isPastKst = (at, nowMs) => KST_RE.test(String(at ?? '')) && isRealKstAt(at) && Date.parse(at) <= nowMs
+
+/**
+ * 🔴 **auto-register 전역 잠금 자리** (2026-10-29 Codex P1 — 확인 직후 수리가 시작되는 경쟁).
+ *    auto-register write 회차는 `<drafts>/_runs/.auto-register.lock` 을 회차 전체에서 쥔다. CTA 수리 write 도 **같은 파일**을 먼저 잡는다.
+ *    `--drafts-dir` 가 `<저장소>/drafts/magazine` 이면 그 저장소 auto-register 의 `LOCK_PATH` 와 같은 경로다(시험은 임시 drafts 의 같은 상대 경로).
+ */
+export const ctaRepairGlobalLockPath = (draftsDir) => join(draftsDir, '_runs', '.auto-register.lock')
 
 /** 영수증 자리 — 옛 원고 해시로 정한다(같은 입력이면 같은 자리) */
 export function ctaRepairReceiptPath({ draftsDir, slug, at, oldDraftHash }) {
@@ -401,6 +409,22 @@ export function repairDraftCta(args) {
     return { ok: true, written: false, preview: true, oldDraftHash: p.oldDraftHash, newDraftHash: p.newDraftHash, receipt: p.receipt, receiptPath: p.receiptPath }
   }
 
+  /**
+   * 🔴 **잠금 순서: auto-register 전역 잠금 → 원고 lease** (해제는 역순). auto-register 회차(전역 잠금 → 후보별 원고 lease)와 같은 순서다.
+   *    전역 잠금을 못 잡으면 원고 lease · 조각 · 원고 · 영수증 · 장부 전부 0 — 구조화된 잠금 코드(LOCK_HELD 등) 그대로 끝낸다.
+   */
+  const globalLock = acquireLock({ path: ctaRepairGlobalLockPath(draftsDir), label: 'draft-cta-repair' })
+  if (!globalLock.ok) return fail(globalLock.code, `auto-register 전역 잠금을 잡지 못했다 — ${globalLock.message} (원고 lease · 조각 · 쓰기 0)`)
+  try {
+    return underGlobalLock({ args, F, slug, draftsDir, quarantinePath, step, nowMs })
+  } finally {
+    globalLock.release()
+  }
+}
+
+/** 전역 잠금 안 — 원고 lease 를 잡고 남은 transaction · 새 수리를 한다 */
+function underGlobalLock({ args, F, slug, draftsDir, quarantinePath, step, nowMs }) {
+  const fail = (code, why) => ({ ok: false, code, why })
   const lease = acquireManuscriptLease({ slug, work: 'cta-repair', path: quarantinePath })
   if (!lease.ok) return fail(lease.code, lease.why)
   try {
