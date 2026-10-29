@@ -9,6 +9,7 @@
  * 🔴 기본은 미리보기다(쓰기 0) — `--write` 가 있어야 원고와 영수증을 쓴다. 계약은 `lib/magazine-draft-cta-repair.mjs`.
  * 🔴 `--drafts-dir` 는 명시해야 한다 — 그 위 두 단계(…/drafts/magazine → 저장소 루트)의 큐 · 제품 판 · 승인 source 로 정본을 다시 맞춘다.
  * 🔴 ChatGPT · Chrome · CDP · 네트워크 · 재생성 0.
+ * 🔴 `--write` 는 끝나지 않은 수리 transaction(journal)부터 끝낸다 — 끝낼 수 없으면 CTA_REPAIR_RECOVERY_REQUIRED 로 멈추고 조각을 남긴다.
  *
  * 종료 코드: 0 성공(미리보기 포함) · 1 거부(구조화 코드) · 2 사용법 오류
  */
@@ -43,5 +44,5 @@ const r = repairDraftCta({
   queue: parseQueueSource(readFileSync(queueTs, 'utf8')), expectedGraphVersion: readProductGraphVersion(currentTs), productRoot: repoRoot,
   write: argv.includes('--write'),
 })
-out(r.ok ? { ok: true, written: r.written, ...(r.preview ? { preview: true } : {}), ...(r.idempotent ? { idempotent: true } : {}),
+out(r.ok ? { ok: true, written: r.written, ...(r.preview ? { preview: true } : {}), ...(r.idempotent ? { idempotent: true } : {}), ...(r.recovered ? { recovered: r.recovered } : {}),
   oldDraftHash: r.oldDraftHash, newDraftHash: r.newDraftHash, receiptPath: r.receiptPath, receipt: r.receipt } : r, r.ok ? 0 : 1)
