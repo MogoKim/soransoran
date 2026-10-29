@@ -57,6 +57,7 @@ import { calculateInventory } from './magazine-inventory.mjs'
 import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import { ctaRepairPendingState } from './lib/magazine-draft-cta-repair.mjs'
 import {
   DIRECT_SPEC_SUPERSEDE_REQUIRED, persistDirectSpecNoClobber, readProductGraphVersion, recoverSupersession, supersedeDirectSpec, supersedeLeftovers,
   verifyDirectSpecIdentity,
@@ -741,6 +742,16 @@ export function planRun({
        *    🔴 재사용 폴더에 spec 이 없으면 **새로 쓰지 않는다** (Codex P1) — 기존 legacy draft·article-draft 가 든
        *       폴더를 direct 로 승격시키는 길이 된다. 최초 spec 저장은 신규 selected 행에만 있다.
        */
+      /**
+       * 🔴 **CTA 수리 transaction 이 남은 slug** (2026-10-29 Codex P1). 떼어 낸 뒤 급사하면 draft.md 가 없어
+       *    아래 판정이 NEEDS_DRAFT(회수 필요)로 읽는다 — 그 slug 만 HOLD 한다. direct 판정 · spec 교체 · 회수 · 등록 0.
+       *    조각은 지우지도 복구하지도 않는다 (CTA repair `--write` 만 끝낸다).
+       */
+      const cta = ctaRepairPendingState({ draftsDir, slug: item.slug })
+      if (cta.pending) {
+        held.push({ day: item.day, slug: item.slug, code: cta.code, why: cta.why, ctaRepair: { fragments: cta.fragments } })
+        continue
+      }
       const mode = resolveMagazineAutoMode(item)
       let directRow = null
       if (!mode.ok) {
@@ -814,7 +825,7 @@ export function planRun({
       else held.push({ day: item.day, slug: item.slug, code: v.code, why: v.why })
     }
     for (const h of held.slice(gated.identityHeld.length + directHeld.length)) {
-      if (!h.directSpec && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE' && h.code !== 'G8_ROW_NOT_DIRECT') continue
+      if (!h.directSpec && !h.ctaRepair && h.code !== 'UNKNOWN_MAGAZINE_AUTO_MODE' && h.code !== 'G8_ROW_NOT_DIRECT') continue
       const e = h.directSpec
       log(`  ⏸ ${h.code} — ${h.slug} (재사용)${e ? ` · expected ${e.expectedGraphVersion ?? '-'} · observed ${e.observedGraphVersion ?? '-'} · blockers ${e.blockers.join(',') || '-'}` : ''}`)
     }

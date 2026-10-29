@@ -59,6 +59,7 @@ import {
   registerDirectSpecSidecar,
   resolveMagazineAutoMode,
 } from './lib/magazine-direct-spec.mjs'
+import { ctaRepairPendingState } from './lib/magazine-draft-cta-repair.mjs'
 import { heroFilePath, injectHeroImage, verifyHeroFile } from './lib/magazine-hero.mjs'
 import { validateManuscript, describeReasons, briefEchoHeadings } from './lib/magazine-manuscript-guard.mjs'
 import { judgeManuscriptFormat, describeFormatViolation } from './lib/magazine-manuscript-format.mjs'
@@ -750,6 +751,15 @@ export function drive(slug, opts, deps = {}) {
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
   const draftsDir = deps.draftsDir ?? DRAFTS_DIR
+  /**
+   * 🔴 **CTA 수리 transaction 이 남은 slug** (2026-10-29 Codex P1) — 변환 · QA · hero · 재생성 · 복구 · 등록 전에 멈춘다.
+   *    HOLD 다(시도 · 장부 0). 조각은 지우지도 복구하지도 않는다 (CTA repair `--write` 만 끝낸다).
+   */
+  const ctaPending = ctaRepairPendingState({ draftsDir, slug })
+  if (ctaPending.pending) {
+    held = true
+    return stop('gate', ctaPending.code, ctaPending.why, { ctaRepair: { fragments: ctaPending.fragments } })
+  }
   const queue = loadQueueFn()
   const g = gate(slug, queue, draftsDir)
   if (!g.ok) {

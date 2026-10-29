@@ -344,6 +344,40 @@ function commit({ q, F, draftsDir, lease, step, nowMs }) {
 const pendingFragments = (F) => [F.journal, F.owned, F.next, F.receipt].filter((p) => existsSync(p)).map((p) => basename(p))
 
 /**
+ * 🔴 **CTA 수리 transaction 이 남았는가 — 읽기만 한다** (2026-10-29 Codex P1).
+ *    떼어 낸 뒤 급사하면 draft.md 가 잠시 없다 — producer plan 이 이것을 「회수 필요」로 읽으면 같은 글을 다시 보낸다.
+ *    producer plan · fetchSlug · fetchBatch · recoverSlug · auto-register 가 **이 함수 하나**로 그 slug 를 HOLD 한다.
+ *    🔴 지우지도 복구하지도 않는다 — settle 은 명시적 CTA repair `--write` 와 그 lease 에만 있다.
+ *    🔴 이 transaction 의 고정 조각(journal · owned · new · 내부 receipt)만 본다 — 정상 완료 영수증(_runs)은 조각이 아니다.
+ * @returns {{pending:false}|{pending:true, code:'CTA_REPAIR_PENDING'|'CTA_REPAIR_RECOVERY_REQUIRED', why:string, fragments:string[]}}
+ */
+export function ctaRepairPendingState({ draftsDir, slug, nowMs = Date.now() }) {
+  if (!SLUG_RE.test(String(slug ?? ''))) return { pending: false }
+  const F = ctaRepairFragments({ draftsDir, slug })
+  const fragments = pendingFragments(F)
+  if (!fragments.length) return { pending: false }
+  const hold = (why) => ({ pending: true, code: CTA_REPAIR_RECOVERY_REQUIRED, fragments,
+    why: `${why} — CTA 수리 조각(${fragments.join(', ')})을 사람이 확인한다. 아무것도 지우지 않았다` })
+  if (!existsSync(F.journal)) return hold('journal 없이 CTA 수리 조각이 있다')
+  try {
+    const rj = readJournal({ F, draftsDir, slug, nowMs })
+    if (!rj.ok) return hold(rj.why)
+    const j = rj.journal
+    const owned = hashOr(readOr(F.owned))
+    const next = hashOr(readOr(F.next))
+    const canon = hashOr(readOr(F.draft))
+    if (owned !== null && owned !== j.oldDraftHash) return hold('owned 조각이 journal 의 옛 원고가 아니다')
+    if (next !== null && next !== j.newDraftHash) return hold('new 조각이 journal 의 새 원고가 아니다')
+    if (canon === null && owned === null) return hold('canonical 원고와 owned 조각이 모두 없다')
+    if (canon !== null && canon !== j.oldDraftHash && canon !== j.newDraftHash) return hold('canonical 원고가 journal 의 옛 · 새 원고 어느 쪽도 아니다 (외부 바이트)')
+  } catch (e) {
+    return hold(`CTA 수리 조각을 읽지 못했다 (${e?.code ?? e?.message})`)
+  }
+  return { pending: true, code: 'CTA_REPAIR_PENDING', fragments,
+    why: `끝나지 않은 CTA 수리 transaction 이 있다 (${fragments.join(', ')}) — magazine:draft-cta-repair --write 가 lease 안에서 먼저 끝낸다` }
+}
+
+/**
  * 미리보기(기본) · 쓰기(`write: true`).
  * `hooks.fault(stage)` 는 시험 전용이다 — 던지면 그 단계의 실패, 멈추면(SIGKILL) 그 단계 뒤의 급사, 쓰면 경쟁 writer 다.
  * @returns {{ok:true, written:boolean, preview?:boolean, idempotent?:boolean, recovered?:string, oldDraftHash, newDraftHash, receipt, receiptPath}
