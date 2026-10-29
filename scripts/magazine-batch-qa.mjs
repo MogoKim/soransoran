@@ -16,6 +16,12 @@
  *    "손목터널증후군" 같은 주제별 진단명, "명절은 없어져야" 같은 톤은 잡지 못한다.
  *    그 층을 review.ts 의 forbiddenPatterns 로 받아 여기서 대조한다.
  *
+ * 🔴 **DIRECT_SPEC_V1 글은 review.ts 를 만들지도 읽지도 않는다** (2026-10-28 · age-learning 차단).
+ *    글별 주제 금지 패턴은 승인 ArticleSpec(spec/2)의 `safety.topicForbiddenPatterns` 하나에서 온다 —
+ *    정본 큐 · 현재 승인 source · 제품 판으로 다시 맞춘 spec 일 때만(`directTopicForbiddenPatterns`).
+ *    spec 없음 · 손상 · 신원 불일치 · 패턴 없음은 모드와 무관하게 BLOCKED 다. 폴더의 review.ts 는 권위가 아니다.
+ *    분기는 `resolveMagazineAutoMode` 하나로 정한다. legacy 판정과 출력은 그대로다.
+ *
  * 자동 승인 조건 (전부 AND)
  *   ① validationProfile 이 정해진다 (큐 정본 또는 고정표)
  *   ② 그 프로필의 결정론적 규칙 위반 0 (magazine-profile-qa.mjs)
@@ -48,12 +54,14 @@
 import { judgeForbidden } from './lib/magazine-forbidden.mjs'
 import { measureBody, publishText } from './lib/magazine-body-length.mjs'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
-import { join, isAbsolute, basename } from 'node:path'
+import { join, isAbsolute, basename, resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { loadQueue, sliceLiteral, evalLiteral, DRAFTS_DIR, ROOT } from './lib/magazine-load.mjs'
 import { runQa } from './magazine-qa.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { runProfileQA } from './lib/magazine-profile-qa.mjs'
+import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import { directTopicForbiddenPatterns, readProductGraphVersion } from './lib/magazine-direct-spec-source.mjs'
 
 // 🔴 AUTO_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 승인을 가르지 않는다
 
@@ -116,9 +124,21 @@ function loadReview(dir) {
 /** 발행 텍스트 — 정본은 lib/magazine-body-length.mjs (QA 의 길이 판정과 같은 텍스트) */
 const bodyText = publishText
 
+/**
+ * DIRECT 글의 주제 금지 패턴 — 운영 기본값. 정본 drafts 폴더의 글만 본다(다른 경로의 원고를 정본 spec 으로 대조하지 않는다).
+ * 제품 판은 auto-lane · delivery-gate 와 같은 자리(이 저장소 current.ts)에서 읽는다.
+ */
+function directPatternsFromSpec({ slug, dir, queue }) {
+  if (resolve(dir) !== resolve(DRAFTS_DIR, slug)) {
+    return { ok: false, code: 'DIRECT_DRAFT_DIR_NOT_CANONICAL', why: `DIRECT 원고는 정본 drafts 폴더(${slug})에서만 검사한다 — 승인 spec 과 짝을 확인할 수 없다` }
+  }
+  return directTopicForbiddenPatterns({ slug, queue: queue ?? loadQueue(), draftsDir: DRAFTS_DIR,
+    expectedGraphVersion: readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts')), productRoot: ROOT })
+}
+
 // ── 판정 ───────────────────────────────────────────────────
 
-export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = false }) {
+export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = false, queue = null, directPatterns = directPatternsFromSpec }) {
   const reasons = []
   const notes = []
   /** BLOCKED 사유를 코드로도 남긴다 — 사람은 message 를, 자동화는 code 를 본다 */
@@ -137,7 +157,21 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
       notes, checks: {},
     }
   }
-  const review = loadReview(dir)
+  /**
+   * 🔴 **모드는 resolveMagazineAutoMode 하나로 정한다.** 큐에 없는 글은 legacy(기존 그대로)다.
+   *    모르는 mode · G8 행 계약 위반은 fail-closed — review.ts 로 떨어뜨리지 않는다.
+   *    DIRECT 는 review.ts 를 읽지 않는다 — 폴더에 있어도 권위가 아니다.
+   */
+  const mode = queueItem ? resolveMagazineAutoMode(queueItem) : null
+  const direct = mode?.ok === true && mode.mode === DIRECT_SPEC_MODE
+  if (mode && !mode.ok) block(mode.code, mode.why)
+  const review = direct || (mode && !mode.ok) ? null : loadReview(dir)
+  let directSpec = null
+  if (direct) {
+    directSpec = directPatterns({ slug, dir, queue })
+    if (!directSpec.ok) block(directSpec.code, directSpec.why)
+    if (existsSync(join(dir, 'review.ts'))) notes.push('DIRECT 글이다 — 폴더의 review.ts 는 읽지 않는다 (주제 금지 패턴은 승인 ArticleSpec 에서 온다)')
+  }
 
   // ① 위험 등급 · ② autoEligible — 큐가 정본이다
   // 등급의 정본은 큐다. 큐에 없으면 review.risk 로 대체하되 출처를 표시한다 —
@@ -182,7 +216,9 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
 
   // ④ forbiddenPatterns
   const text = bodyText(article)
-  const patterns = Array.isArray(review?.forbiddenPatterns) ? review.forbiddenPatterns : null
+  const patterns = direct
+    ? (directSpec?.ok ? directSpec.patterns : null)
+    : Array.isArray(review?.forbiddenPatterns) ? review.forbiddenPatterns : null
   const patternHits = []
   if (patterns) {
     // 🔴 **글자가 아니라 뜻으로 본다** (2026-09-17).
@@ -198,7 +234,7 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
     }
     // 🔴 면제도 기록에 남긴다. 조용히 넘어가면 관문이 열린 줄도 모른다.
     for (const e of fv.exempted) notes.push(`forbiddenPatterns "${e.pattern}" ${e.count}회는 비교 표현으로 면제 (완치 주장 아님)`)
-  } else {
+  } else if (!direct) {
     notes.push('forbiddenPatterns 없음 — 주제별 검사를 건너뛴다 (하위 호환)')
   }
 
@@ -265,10 +301,11 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
     }
 
     // ⑩ forbiddenPatterns 필수 — 없으면 주제별 위험 검사가 통째로 빠진다
-    if (!patterns || patterns.length === 0) {
+    //    🔴 DIRECT 는 위에서 spec 사유로 이미 막았다 — 같은 결함을 review.ts 문구로 두 번 적지 않는다
+    if (!direct && (!patterns || patterns.length === 0)) {
       block('FORBIDDEN_PATTERNS_ABSENT', 'review.ts 에 forbiddenPatterns 가 없다 — 자동화에서는 필수다')
     }
-  } else if (!patterns || patterns.length === 0) {
+  } else if (!direct && (!patterns || patterns.length === 0)) {
     notes.push('forbiddenPatterns 없음 — 자동화 모드(--strict-auto)에서는 BLOCKED 다')
   }
 
@@ -294,6 +331,8 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
       bodyLength: text.length,
       koRatio: Number(koRatio.toFixed(3)),
       refusalHits,
+      // 🔴 DIRECT 만 — 패턴이 어느 승인 spec 에서 왔는지 남긴다. legacy 출력 모양은 그대로다
+      ...(direct ? { patternSource: directSpec?.ok ? { schemaVersion: directSpec.schemaVersion, specHash: directSpec.specHash } : null } : {}),
     },
   }
 }
@@ -391,7 +430,7 @@ function main() {
   const results = slugs.map((arg) => {
     const dir = draftDir(arg)
     const slug = basename(dir)
-    return judge(slug, { dir, queueItem: bySlug.get(slug), strictAuto, requireHero })
+    return judge(slug, { dir, queueItem: bySlug.get(slug), strictAuto, requireHero, queue })
   })
 
   if (asJson) console.log(JSON.stringify({ results }, null, 2))

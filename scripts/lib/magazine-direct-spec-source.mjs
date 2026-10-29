@@ -17,7 +17,7 @@
  * 🔴 **빈 필드를 추정하지 않는다.** 제품 graph · 낡은 연구 · 시험 fixture 에서 값을 끌어오지 않는다.
  *    입력은 아래 계약을 따르는 승인 artifact 하나뿐이다. 없으면 NOT_READY 다.
  *
- * 🔴 **source artifact 계약** (`magazine-article-spec-source/2` · ArticlePlan · 2026-10-22 PR C).
+ * 🔴 **source artifact 계약** (`magazine-article-spec-source/2·/3` · ArticlePlan · 2026-10-22 PR C · /3 2026-10-28).
  *      경로      drafts/magazine/article-spec-source/<graphVersion>.json
  *      최상위    { schema, graphVersion, entries: [entry] }
  *      entry     { status, approvedBy, approvedAt, admission, plan, node, relations, hero, publication, productBasis, sourceHash }
@@ -45,8 +45,9 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 
-import { canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
-import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem } from './magazine-direct-spec.mjs'
+import { ARTICLE_SPEC_SCHEMA_V2, canonicalJson, compileArticleSpec, verifyArticleSpec } from './magazine-article-spec.mjs'
+import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem, readDirectSpec } from './magazine-direct-spec.mjs'
+import { judgeForbidden } from './magazine-forbidden.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
 import { isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
@@ -75,11 +76,67 @@ export function supersedesProblem(entry) {
   if (s.sourceHash === entry.sourceHash) return 'SUPERSEDES_INVALID'
   return null
 }
+/**
+ * 🔴 **원고 보존형 안전 개정(safety revision)** (2026-10-28 · age-learning).
+ *    일반 개정(supersedes)은 draft.md 가 있으면 교체하지 않는다(DRAFT_EXISTS). 이미 회수·QA 를 지난 원고에
+ *    글별 주제 금지 패턴과 새 공개 시각만 더하려면 그 원고를 **고정**해야 한다 — 승인 entry 가 `safetyRevision.draftHash`
+ *    (원고 바이트 sha256)를 싣는다. 바뀌어도 되는 것은 spec 판 · 주제 패턴 · publishAt · specHash 뿐이고,
+ *    새 패턴이 고정한 원고에 하나라도 걸리면 승인 · 큐 · spec 교체 모두 0 이다. 원고는 지우지도 고치지도 않는다.
+ */
+export function safetyRevisionProblem(entry) {
+  const s = entry?.safetyRevision
+  if (s === undefined) return null
+  if (!s || typeof s !== 'object' || Array.isArray(s) || Object.keys(s).join(',') !== 'draftHash' || !SHA256_RE.test(s.draftHash)) return 'SAFETY_REVISION_INVALID'
+  if (!entry.supersedes) return 'SAFETY_REVISION_INVALID'
+  return null
+}
+/** 원고 바이트의 고정값 — `sha256:<hex>` */
+export const draftHashOf = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+/** 안전 개정이 old → new spec 에서 바꿀 수 있는 자리 — 그 밖은 하나라도 다르면 거부 */
+export const SAFETY_REVISION_SPEC_PATHS = Object.freeze(['schemaVersion', 'safety.topicForbiddenPatterns', 'publication.publishAt', 'specHash'])
+/** 안전 개정이 기존 승인 entry 에서 바꿀 수 있는 자리 — 승인 기록 · 개정 표식 · 패턴 · publishAt 뿐 */
+export const SAFETY_REVISION_ENTRY_PATHS = Object.freeze(['approvedBy', 'approvedAt', 'sourceHash', 'supersedes', 'safetyRevision', 'node.forbiddenPatterns', 'publication.publishAt'])
+/** 객체만 펼친다 — 배열 · 값은 잎(canonical)으로 본다. 개정 표식은 객체째 잎으로 본다 */
+function leaves(value, prefix = '', out = {}) {
+  if (value && typeof value === 'object' && !Array.isArray(value) && prefix !== 'supersedes' && prefix !== 'safetyRevision') {
+    for (const k of Object.keys(value)) leaves(value[k], prefix ? `${prefix}.${k}` : k, out)
+  } else out[prefix] = canonicalJson(value ?? null)
+  return out
+}
+function driftOutside(a, b, allowed) {
+  const x = leaves(a)
+  const y = leaves(b)
+  return [...new Set([...Object.keys(x), ...Object.keys(y)])].filter((k) => !allowed.includes(k) && x[k] !== y[k]).sort()
+}
+/** old → new spec 에서 허용 밖으로 바뀐 경로 — 새 spec 은 spec/2 여야 한다 */
+export function safetyRevisionSpecDrift(oldSpec, newSpec) {
+  const drift = driftOutside(oldSpec, newSpec, SAFETY_REVISION_SPEC_PATHS)
+  if (newSpec?.schemaVersion !== ARTICLE_SPEC_SCHEMA_V2) drift.push('schemaVersion')
+  return drift
+}
+/** 기존 승인 entry → 안전 개정 entry 에서 허용 밖으로 바뀐 경로 (title · plan · relations · hero · admission · node · productBasis …) */
+export function safetyRevisionEntryDrift(baseEntry, nextEntry) {
+  return driftOutside(baseEntry, nextEntry, SAFETY_REVISION_ENTRY_PATHS)
+}
+/** 고정한 원고에 걸리는 주제 패턴 — batch QA 와 같은 판정(judgeForbidden) */
+export function draftTopicViolations(draftText, patterns) {
+  return judgeForbidden(String(draftText ?? ''), Array.isArray(patterns) ? patterns : []).violations.map((v) => v.pattern)
+}
 /** 옛 spec 보존 이름 — `article-spec.superseded-<old hex>.json` (같은 폴더) */
 export const supersededSpecName = (oldSpecHash) => `article-spec.superseded-${String(oldSpecHash).replace(/^sha256:/, '')}.json`
 /** 같은 글의 개정이라고 볼 신원 — 제목 · 공개 시각 · 본문 계획은 바뀔 수 있다 */
 export const SUPERSEDE_IDENTITY_KEYS = Object.freeze(['slug', 'intentId', 'graphNodeId', 'graphVersion', 'cluster', 'admissionManifestHash'])
-export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/2'
+/**
+ * 🔴 **source 판** (2026-10-28 · 글별 주제 금지 패턴).
+ *    source/3 — 승인 entry 가 사람이 정한 `node.forbiddenPatterns` 를 반드시 싣는다 → spec/2. authoring 이 쓰는 판이다.
+ *    source/2 — 패턴이 없는 옛 판. 읽기만 한다 → spec/1(바이트 그대로). 운영 디스크의 옛 spec 과 그 개정(supersedes)을 위해 남긴다.
+ *    source/2 spec 은 batch QA 에서 DIRECT_TOPIC_PATTERNS_ABSENT 로 막힌다 — 글별 주제 위험을 대신할 것이 없다.
+ */
+export const DIRECT_SPEC_SOURCE_SCHEMA_V2 = 'magazine-article-spec-source/2'
+export const DIRECT_SPEC_SOURCE_SCHEMA = 'magazine-article-spec-source/3'
+export const DIRECT_SPEC_SOURCE_SCHEMAS = Object.freeze([DIRECT_SPEC_SOURCE_SCHEMA_V2, DIRECT_SPEC_SOURCE_SCHEMA])
+/** source/3 의 글별 주제 금지 패턴 자리 — 자연어 지침(node.safetyConstraints)과 다르다 */
+export const TOPIC_PATTERNS_FIELD = 'node.forbiddenPatterns'
 export const DIRECT_SPEC_SOURCE_DIRNAME = 'article-spec-source'
 /** canary 는 STANDARD 한 프로필만 연다 */
 export const DIRECT_SPEC_CANARY_PROFILE = 'STANDARD'
@@ -364,12 +421,14 @@ function isPresent(value, path) {
 /**
  * 🔴 hero 는 큐의 imageMode 가 정한다 — `heroRequired` 하나가 계약이다(authoring 도 이것만 쓴다).
  *    REQUIRED · OPTIONAL → hero.alt · hero.scene 필수 · NO_IMAGE → 둘 다 금지.
+ * 🔴 source/3 이면 글별 주제 금지 패턴(`node.forbiddenPatterns`)도 필수다 — 빈 배열은 없는 것이다.
  */
-export function missingSourceFields(entry, queueItem = null) {
+export function missingSourceFields(entry, queueItem = null, { schema = DIRECT_SPEC_SOURCE_SCHEMA } = {}) {
   const missing = DIRECT_SPEC_REQUIRED_FIELDS.filter((path) => !isPresent(valueAt(entry, path), path))
   if (heroRequired(queueItem?.imageMode)) {
     for (const path of ['hero.alt', 'hero.scene']) if (!isPresent(valueAt(entry, path), path)) missing.push(path)
   }
+  if (schema === DIRECT_SPEC_SOURCE_SCHEMA && !isPresent(valueAt(entry, TOPIC_PATTERNS_FIELD), TOPIC_PATTERNS_FIELD)) missing.push(TOPIC_PATTERNS_FIELD)
   return missing
 }
 
@@ -428,7 +487,8 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     blockers.push('SOURCE_UNREADABLE')
     return notReady('source artifact 를 읽거나 파싱하지 못했다')
   }
-  if (doc?.schema !== DIRECT_SPEC_SOURCE_SCHEMA) blockers.push('SOURCE_SCHEMA_UNKNOWN')
+  if (!DIRECT_SPEC_SOURCE_SCHEMAS.includes(doc?.schema)) blockers.push('SOURCE_SCHEMA_UNKNOWN')
+  const sourceV3 = doc?.schema === DIRECT_SPEC_SOURCE_SCHEMA
   evidence.observedGraphVersion = typeof doc?.graphVersion === 'string' ? doc.graphVersion : null
   if (evidence.observedGraphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')
 
@@ -440,9 +500,12 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   }
   const entry = matches[0]
   evidence.supersedes = entry.supersedes ?? null
+  evidence.safetyRevision = entry.safetyRevision ?? null
   evidence.approvalStatus = typeof entry.status === 'string' ? entry.status : null
   evidence.sourceHash = typeof entry.sourceHash === 'string' ? entry.sourceHash : null
-  evidence.missingFields = missingSourceFields(entry, queueItem)
+  evidence.missingFields = missingSourceFields(entry, queueItem, { schema: doc.schema })
+  // 🔴 source/2 판에 패턴이 끼어 있으면 판과 내용이 어긋난다 — 조용히 spec/1 로 버리지도, spec/2 로 올리지도 않는다
+  if (!sourceV3 && valueAt(entry, TOPIC_PATTERNS_FIELD) !== undefined) blockers.push('SOURCE_SCHEMA_FIELD_MISMATCH')
 
   if (entry.status !== 'APPROVED' || entry.node?.status !== 'APPROVED' || !String(entry.approvedBy ?? '').trim() || !String(entry.approvedAt ?? '').trim()) {
     blockers.push('NOT_APPROVED')
@@ -450,6 +513,9 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
   if (entry.node?.graphVersion !== expectedGraphVersion || entry.admission?.graphVersion !== expectedGraphVersion) blockers.push('GRAPH_VERSION_STALE')
   if (entry.sourceHash !== directSpecSourceHash(entry)) blockers.push('SOURCE_HASH_DRIFT')
   if (supersedesProblem(entry)) blockers.push('SUPERSEDES_INVALID')
+  // 🔴 원고 보존형 안전 개정은 source/3(패턴 필수)에서만 — 형식이 어긋나면 일반 개정으로 묻어 보내지 않는다
+  if (safetyRevisionProblem(entry)) blockers.push('SAFETY_REVISION_INVALID')
+  if (entry.safetyRevision !== undefined && !sourceV3) blockers.push('SOURCE_SCHEMA_FIELD_MISMATCH')
   if (entry.admission?.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')
   // 🔴 articlePlanHash 는 승인 entry 의 sourceHash 하나다 — 큐 행이 다른 승인(또는 위조 해시)을 가리키면 쓰지 않는다
   if (queueItem?.articlePlanHash !== entry.sourceHash) blockers.push('ARTICLE_PLAN_HASH_DRIFT')
@@ -482,6 +548,8 @@ export function judgeDirectSpecSource({ queueItem, draftsDir, expectedGraphVersi
     relations: entry.relations,
     publication: entry.publication,
     hero: entry.hero ?? null,
+    // 🔴 source/3 만 spec/2 를 만든다 — 판이 정한다, 값의 유무로 추측하지 않는다
+    ...(sourceV3 ? { topicForbiddenPatterns: entry.node.forbiddenPatterns } : {}),
   }
   let spec
   try { spec = compileArticleSpec(input) } catch (e) {
@@ -564,6 +632,29 @@ export function verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVe
   return v
 }
 
+/** DIRECT 글에 승인된 글별 주제 금지 패턴이 없다 — spec/1(source/2) 이거나 패턴이 비었다 */
+export const DIRECT_TOPIC_PATTERNS_ABSENT = 'DIRECT_TOPIC_PATTERNS_ABSENT'
+
+/**
+ * 🔴 **DIRECT 글의 글별 주제 금지 패턴** — batch QA 가 review.ts 대신 읽는 단 하나의 정본.
+ *    디스크 spec 을 읽고(없음 · 손상 · 자기검증 실패 → 그 코드) 정본 큐 행 · 현재 승인 source · 제품 판으로
+ *    다시 컴파일한 spec 과 바이트까지 같을 때만(`verifyDirectSpecOnDisk`) 그 spec 의 패턴을 돌려준다.
+ *    spec/1 이거나 패턴이 비면 DIRECT_TOPIC_PATTERNS_ABSENT 다 — 공통 목록 · 지침 문장으로 대신하지 않는다.
+ * @returns {{ok:true, patterns:string[], specHash:string, schemaVersion:string}|{ok:false, code:string, why:string}}
+ */
+export function directTopicForbiddenPatterns({ slug, queue, draftsDir, expectedGraphVersion, productRoot }) {
+  const disk = readDirectSpec({ slug, draftsDir })
+  if (!disk.ok) return { ok: false, code: disk.code, why: disk.why }
+  const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir, expectedGraphVersion, productRoot })
+  if (!v.ok) return { ok: false, code: v.code, why: v.why }
+  const patterns = v.spec.safety?.topicForbiddenPatterns
+  if (v.spec.schemaVersion !== ARTICLE_SPEC_SCHEMA_V2 || !Array.isArray(patterns) || patterns.length === 0) {
+    return { ok: false, code: DIRECT_TOPIC_PATTERNS_ABSENT,
+      why: `승인 ArticleSpec(${v.spec.schemaVersion})에 글별 주제 금지 패턴이 없다 — 공통 목록 · topicConstraints 로 대신하지 않는다 (source/3 승인 필요)` }
+  }
+  return { ok: true, patterns: [...patterns], specHash: v.spec.specHash, schemaVersion: v.spec.schemaVersion }
+}
+
 /** 디스크 spec 의 specHash — 읽기 · 파싱 · 자기검증이 모두 통과할 때만, 아니면 null */
 function diskSpecHash(path) {
   try {
@@ -579,7 +670,10 @@ function diskSpecHash(path) {
  *    ③ draft.md 없음 · 등록 영수증 없음
  *    ④ 장부에 실제 전송 흔적 없음 — 전송 기록은 sent=false · fingerprint null · 예약 없음뿐, 응답 · 재생성 계보 0
  *       (전송 0 의 과거 회수 실패가 남긴 CONTENT attempts 는 전송 흔적이 아니다)
- * @returns {{ok:true, oldBytes:string, oldSpec:object}|{ok:false, problems:string[]}}
+ * 🔴 **원고 보존형 안전 개정**(승인 entry 의 safetyRevision)이면 ③④ 대신:
+ *    draft.md 가 있고 바이트 sha256 이 고정값과 같다 · 등록 영수증 없음 · 미정산 전송 예약 없음(정산된 과거 전송은 원고의 출처다) ·
+ *    old → new spec 차이가 허용 경로(판 · 주제 패턴 · publishAt · specHash)뿐 · 새 패턴이 그 원고에 걸리지 않는다.
+ * @returns {{ok:true, oldBytes:string, oldSpec:object, draftHash?:string}|{ok:false, problems:string[]}}
  */
 export function judgeSupersession({ judged, draftsDir, slug, deliveryEntry = null }) {
   const problems = []
@@ -595,15 +689,28 @@ export function judgeSupersession({ judged, draftsDir, slug, deliveryEntry = nul
   if (!next || oldSpec?.specHash === next.specHash) problems.push('SUPERSEDE_NOOP')
   if (oldSpec && next && SUPERSEDE_IDENTITY_KEYS.some((k) => oldSpec.identity?.[k] !== next.identity?.[k])) problems.push('IDENTITY_MISMATCH')
   if (next && next.identity?.slug !== slug) problems.push('IDENTITY_MISMATCH')
-  if (existsSync(join(dir, 'draft.md'))) problems.push('DRAFT_EXISTS')
-  if (existsSync(join(dir, ARTICLE_SPEC_REGISTER_LEDGER))) problems.push('REGISTERED')
   const d = deliveryEntry?.delivery
-  if ((d && (d.sent !== false || d.messageFingerprint || d.reservationId)) || deliveryEntry?.sent === true || deliveryEntry?.sent === null
+  const safety = judged?.evidence?.safetyRevision ?? null
+  if (!safety) {
+    if (existsSync(join(dir, 'draft.md'))) problems.push('DRAFT_EXISTS')
+  }
+  if (existsSync(join(dir, ARTICLE_SPEC_REGISTER_LEDGER))) problems.push('REGISTERED')
+  let draftHash = null
+  if (safety) {
+    let draft = null
+    try { draft = readFileSync(join(dir, 'draft.md')) } catch { problems.push('DRAFT_MISSING') }
+    if (draft) draftHash = draftHashOf(draft)
+    if (draft && draftHash !== safety.draftHash) problems.push('DRAFT_CHANGED')
+    if (oldSpec && next && safetyRevisionSpecDrift(oldSpec, next).length) problems.push('SAFETY_REVISION_DRIFT')
+    if (draft && next && draftTopicViolations(draft.toString('utf8'), next.safety?.topicForbiddenPatterns).length) problems.push('DRAFT_PATTERN_VIOLATION')
+    // 🔴 정산된 과거 전송은 이 원고의 출처다 — 막는 것은 아직 결말이 없는 예약 · 전송불명뿐이다
+    if (d?.reservationId || d?.kind === 'DELIVERY_UNCERTAIN' || deliveryEntry?.sent === null) problems.push('DELIVERY_UNSETTLED')
+  } else if ((d && (d.sent !== false || d.messageFingerprint || d.reservationId)) || deliveryEntry?.sent === true || deliveryEntry?.sent === null
     || deliveryEntry?.firstResponseInvalid || (deliveryEntry?.regenLineage?.calls ?? 0) > 0 || (deliveryEntry?.regenCalls ?? 0) > 0) {
     problems.push('DELIVERY_TRACE')
   }
   const unique = [...new Set(problems)]
-  return unique.length ? { ok: false, problems: unique } : { ok: true, oldBytes, oldSpec }
+  return unique.length ? { ok: false, problems: unique } : { ok: true, oldBytes, oldSpec, ...(safety ? { draftHash } : {}) }
 }
 
 /**
@@ -721,6 +828,12 @@ export function supersedeDirectSpec({ judged, draftsDir, slug, deliveryEntry = n
     hooks.afterTmpWrite?.({ path, lease })
     // 🔴 설치 직전 lease 를 다시 본다 — 확인 뒤 잃었으면 새 spec 을 설치하지 않는다
     if (!leaseHeld(lease)) return restoreOld(['LOCK_LOST'], '설치 직전 원고 lease 소유권을 잃었다')
+    // 🔴 원고 보존형 — 설치 직전 원고가 고정한 그 바이트인지 다시 본다. 교체 · 삭제됐으면 새 spec 을 설치하지 않는다(원고는 건드리지 않는다)
+    if (j.draftHash) {
+      let now = null
+      try { now = draftHashOf(readFileSync(join(dir, 'draft.md'))) } catch { now = null }
+      if (now !== j.draftHash) return restoreOld([now ? 'DRAFT_CHANGED' : 'DRAFT_MISSING'], '설치 직전 고정한 원고가 바뀌었거나 사라졌다')
+    }
     try { inject('install'); linkSync(tmp, path) } catch (e) {
       if (e?.code === 'EEXIST') {
         drop(tmp)
@@ -735,7 +848,8 @@ export function supersedeDirectSpec({ judged, draftsDir, slug, deliveryEntry = n
       return recovery(['CONCURRENT_WRITER', 'EXTERNAL_CANONICAL'], '설치 뒤 spec 이 새 바이트가 아니다')
     }
     drop(tmp); drop(owned)
-    return { ok: true, record: { superseded: true, oldSpecHash, newSpecHash: judged.spec.specHash, archive: supersededSpecName(oldSpecHash) } }
+    return { ok: true, record: { superseded: true, oldSpecHash, newSpecHash: judged.spec.specHash, archive: supersededSpecName(oldSpecHash),
+      ...(j.draftHash ? { topicSafetyRevision: true, preservedDraftHash: j.draftHash, publishAt: judged.spec.publication.publishAt } : {}) } }
   } catch (e) {
     // 🔴 예상하지 못한 실패 — canonical 이 비었으면 옛 spec 을 되돌리고, 아니면 소유 사본을 남겨 복구로 넘긴다
     if (!existsSync(path)) return restoreOld(['UNEXPECTED'], String(e?.message ?? e))
@@ -753,7 +867,7 @@ export function supersedeDirectSpec({ judged, draftsDir, slug, deliveryEntry = n
  *    정상 복구 뒤에는 소유 사본 · tmp 가 남지 않는다.
  * @returns {{ok:true, state:'CLEAN'|'RESTORED_OLD'|'COMPLETED', record?:object}|{ok:false, code:string, problems:string[], why:string, recovery:object}}
  */
-export function recoverSupersession({ draftsDir, slug, lease = null, newSpec = null }) {
+export function recoverSupersession({ draftsDir, slug, lease = null, newSpec = null, safety = null }) {
   const dir = join(draftsDir, slug)
   const path = join(dir, ARTICLE_SPEC_FILENAME)
   const owned = join(dir, SUPERSEDE_OWNED)
@@ -786,9 +900,14 @@ export function recoverSupersession({ draftsDir, slug, lease = null, newSpec = n
   }
   if (canon === ownedBytes) { drop(tmp); drop(owned); return { ok: true, state: 'RESTORED_OLD' } }
   if (newBytes !== null && canon === newBytes) {
+    // 🔴 원고 보존형 — 고정한 원고가 그대로일 때만 끝난 교체로 인정한다. 바뀌었으면 조각을 지우지 않고 사람에게 넘긴다
+    let draftNow = null
+    if (safety) { try { draftNow = draftHashOf(readFileSync(join(dir, 'draft.md'))) } catch { draftNow = null } }
+    if (safety && draftNow !== safety.draftHash) return recovery([draftNow ? 'DRAFT_CHANGED' : 'DRAFT_MISSING'], '교체는 끝났지만 고정한 원고가 그대로가 아니다')
     drop(tmp); drop(owned)
     return { ok: true, state: 'COMPLETED',
-      record: { superseded: true, recovered: true, oldSpecHash: oldSpec.specHash, newSpecHash: newSpec.specHash, archive: supersededSpecName(oldSpec.specHash) } }
+      record: { superseded: true, recovered: true, oldSpecHash: oldSpec.specHash, newSpecHash: newSpec.specHash, archive: supersededSpecName(oldSpec.specHash),
+        ...(safety ? { topicSafetyRevision: true, preservedDraftHash: safety.draftHash, publishAt: newSpec.publication.publishAt } : {}) } }
   }
   return recovery(['EXTERNAL_CANONICAL'], 'canonical 에 옛 spec 도 새 spec 도 아닌 바이트가 있다 — 보존하고 사람이 확인한다')
 }

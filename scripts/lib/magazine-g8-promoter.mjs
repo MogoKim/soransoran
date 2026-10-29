@@ -71,7 +71,7 @@ export const KNOWN_LEGACY_ADMISSIONS = Object.freeze([
 ])
 
 /** 🔴 기계 승인 표식 — admission 은 사람 승인만 받는다 (DIRECT source 승인과 같은 규칙) */
-const MACHINE_APPROVER = /:|^(?:machine|bot|auto|automation|system|ci|agent|claude|codex|chatgpt|gpt|openai|anthropic)\b/i
+export const MACHINE_APPROVER = /:|^(?:machine|bot|auto|automation|system|ci|agent|claude|codex|chatgpt|gpt|openai|anthropic)\b/i
 
 // ── 기본 ─────────────────────────────────────────────────────
 

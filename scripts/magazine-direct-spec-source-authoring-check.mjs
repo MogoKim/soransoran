@@ -54,6 +54,9 @@ const { withQueueWriteLock } = await imp(join(ROOT, 'scripts/lib/magazine-queue-
 const producerPlan = await imp(join(ROOT, 'scripts/magazine-producer-plan.mjs'))
 const briefAuto = await imp(join(ROOT, 'scripts/magazine-brief-auto.mjs'))
 const REAL = { source: await imp(SOURCE_PATH), direct: await imp(DIRECT_PATH) }
+const { renderQueueRow } = await imp(join(dirname(SOURCE_PATH), 'magazine-g8-promoter.mjs'))
+const CTA_REPAIR = await imp(join(dirname(SOURCE_PATH), 'magazine-draft-cta-repair.mjs'))
+const { parseQueueSource: parseQueueText } = await imp(join(dirname(SOURCE_PATH), 'magazine-load.mjs'))
 
 const GV = 'g-20261015-aaaaaa'
 const OLD_GV = 'g-20260923-bbbbbb'
@@ -179,12 +182,14 @@ export function makeWorld(mutate = {}) {
   return { base, repo, admission, research, graph, receipt, adm }
 }
 
+/** source/3 — 사람이 정한 글별 주제 금지 패턴(시험 전용 · 공통 목록·지침 문장과 겹치지 않는다) */
+const TOPIC_PATTERNS = ['수면제를 드세요', '불면증 진단입니다']
 /** 사람이 채운다고 가정한 값 — fixture 의 승인 node 문장 · plan 을 그대로 쓴다(시험 전용) */
 function fill(candidate, over = {}) {
   const c = structuredClone(candidate)
   const n = fx().node
   Object.assign(c.entry.node, { readerQuestion: n.readerQuestion, scope: n.scope, outline: n.outline, evidence: n.evidence,
-    safetyConstraints: n.safetyConstraints, hubPath: n.hubPath, ctaLabel: n.ctaLabel })
+    safetyConstraints: n.safetyConstraints, forbiddenPatterns: [...TOPIC_PATTERNS], hubPath: n.hubPath, ctaLabel: n.ctaLabel })
   c.entry.plan = { ...PLAN(), ...(over.plan ?? {}) }
   c.entry.hero = ['REQUIRED', 'OPTIONAL'].includes(c.entry.plan.imageMode) ? fx().hero : null
   c.entry.publication = { publishAt: '2026-10-22T10:30:00+09:00' }
@@ -263,7 +268,7 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.equal(r.ok, true, `${r.code} ${r.why}`)
       assert.ok(!queueOf(w.repo).some((q) => q.slug === SLUG), '반례 준비 실패 — 큐에 이 slug 가 있다')
       const c = r.candidate
-      assert.equal(c.schema, 'magazine-article-spec-source-candidate/2'); assert.equal(c.status, 'DRAFT'); assert.equal(c.entry.node.status, 'DRAFT')
+      assert.equal(c.schema, 'magazine-article-spec-source-candidate/3'); assert.equal(c.status, 'DRAFT'); assert.equal(c.entry.node.status, 'DRAFT')
       assert.ok(!JSON.stringify(c).includes('APPROVED'), 'prepare 가 APPROVED 를 만들었다')
       for (const k of ['approvedBy', 'approvedAt', 'status', 'sourceHash', 'productBasis']) assert.ok(!(k in c.entry), `entry.${k}`)
       assert.equal(c.candidateHash, lib.candidateHashOf(c))
@@ -273,7 +278,8 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.deepEqual(c.identity.admission.edges, ['E-1', 'E-2', 'E-3', 'E-4'])
       assert.ok(Object.values(c.entry.plan).every((v) => v === null), 'prepare 가 plan 을 지어냈다')
       for (const k of source.ARTICLE_PLAN_REQUIRED) assert.ok(c.unresolvedFields.includes(`plan.${k}`), `plan.${k} 가 미해결로 남지 않았다`)
-      for (const p of ['readerQuestion', 'outline', 'hubPath', 'ctaLabel', 'safetyConstraints']) assert.equal(c.entry.node[p], null, `prepare 가 ${p} 를 지어냈다`)
+      for (const p of ['readerQuestion', 'outline', 'hubPath', 'ctaLabel', 'safetyConstraints', 'forbiddenPatterns']) assert.equal(c.entry.node[p], null, `prepare 가 ${p} 를 지어냈다`)
+      assert.ok(c.unresolvedFields.includes('node.forbiddenPatterns'), 'source/3 글별 주제 금지 패턴이 미해결로 남지 않았다')
       assert.equal(c.provenance['relations.direct'].status, 'DERIVED'); assert.equal(c.provenance['plan.title'].status, 'UNRESOLVED')
       assert.equal(c.entry.publication.publishAt, null); assert.equal(c.hint.primaryQuery, '잠 설친 다음 날')
       assert.equal(existsSync(sourceFile(w.repo)), false)
@@ -637,10 +643,11 @@ export function authoringCases(lib, { cliPath = CLI_PATH, source = REAL.source, 
       assert.deepEqual(readdirSync(dirname(f2)).filter((x) => x.includes('.tmp-')), [])
       COUNTS.cas = { changed: a.code, created: b.code }
     }],
-    ['S18b 승인 entry — source/2 · admission · plan · productBasis · sourceHash · 그 복제 큐 행은 실제 관문 통과', () => {
+    ['S18b 승인 entry — source/3 · admission · plan · productBasis · sourceHash · 그 복제 큐 행은 실제 관문 통과', () => {
       const w = makeWorld(); const a = approved(w)
       const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
-      assert.equal(doc.schema, 'magazine-article-spec-source/2')
+      assert.equal(doc.schema, 'magazine-article-spec-source/3')
+      assert.deepEqual(doc.entries[0].node.forbiddenPatterns, TOPIC_PATTERNS)
       const e = doc.entries[0]
       assert.deepEqual(Object.keys(e).sort(), ['admission', 'approvedAt', 'approvedBy', 'hero', 'node', 'plan', 'productBasis', 'publication', 'relations', 'sourceHash', 'status'])
       assert.deepEqual(e.admission, { g8ManifestHash: w.receipt.manifestHash, receiptHash: w.receipt.receiptHash, graphVersion: GV, readinessHash: 'dssa-readiness-0001' })
@@ -1094,8 +1101,282 @@ lib.approveCandidate({ candidate: c, approver: '창업자', at: ${JSON.stringify
       const c = p.candidate; c.entry.publication = { ...a.entry.publication }
       assert.equal(approve(w, c).code, 'SUPERSEDES_NOOP')
     }],
+    // ── H. source/2 → source/3 (글별 주제 금지 패턴 · 2026-10-28) ──────────
+    ['RV9 source/2 기준 개정 — 패턴은 지어내지 않고 미해결 · 사람이 채우면 source/3 으로 교체 · 그 행은 spec/2', () => {
+      const w = makeWorld(); toSourceV2(w, queued)
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      const c = p.candidate
+      assert.equal(c.entry.node.forbiddenPatterns, null, '옛 source/2 기준에 없는 패턴을 지어냈다')
+      assert.deepEqual(c.unresolvedFields, ['node.forbiddenPatterns', 'publication.publishAt'])
+      assert.equal(c.provenance['node.forbiddenPatterns'].status, 'UNRESOLVED')
+      c.entry.publication = { publishAt: NEW_AT }
+      assert.equal(approve(w, c).code, 'CANDIDATE_UNRESOLVED', '패턴 없이 source/3 승인을 썼다')
+      c.entry.node.forbiddenPatterns = [...TOPIC_PATTERNS]
+      const r = approve(w, c); assert.equal(r.ok, true, `${r.code} ${r.why}`)
+      const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+      assert.equal(doc.schema, 'magazine-article-spec-source/3'); assert.equal(doc.entries.length, 1)
+      assert.deepEqual(doc.entries[0].node.forbiddenPatterns, TOPIC_PATTERNS)
+      const m = materialize(w); assert.equal(m.ok, true, `${m.code} ${m.why}`)
+      const j = judgeRow(w, m.row); assert.equal(j.ok, true, j.why)
+      assert.equal(j.spec.schemaVersion, 'magazine-article-spec/2'); assert.deepEqual(j.spec.safety.topicForbiddenPatterns, TOPIC_PATTERNS)
+    }],
+    ['RV10 source/2 artifact 에 다른 승인 entry 가 남으면 판을 올리지 않는다 → ARTIFACT_SCHEMA_MIGRATION_BLOCKED · 바이트 불변', () => {
+      const w = makeWorld(); toSourceV2(w, queued, { other: true })
+      const p = prepare(w, { revise: { supersedesSpecHash: OLD_SPEC } }); assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      const c = p.candidate; c.entry.publication = { publishAt: NEW_AT }; c.entry.node.forbiddenPatterns = [...TOPIC_PATTERNS]
+      const before = readFileSync(sourceFile(w.repo), 'utf8')
+      assert.equal(approve(w, c).code, 'ARTIFACT_SCHEMA_MIGRATION_BLOCKED')
+      assert.equal(readFileSync(sourceFile(w.repo), 'utf8'), before)
+    }],
+    ['RV11 공통 금지어 · topicConstraints 문장 · 빈 배열을 패턴으로 → 승인 0 · 바이트 불변', () => {
+      for (const [label, patterns, code] of [
+        ['공통 금지어', ['완치'], 'TOPIC_PATTERNS_INVALID'],
+        ['지침 문장', [fx().node.safetyConstraints[0]], 'TOPIC_PATTERNS_INVALID'],
+        ['빈 배열', [], 'CANDIDATE_UNRESOLVED'],
+      ]) {
+        const w = makeWorld(); const c = ready(w); c.entry.node.forbiddenPatterns = patterns
+        assert.equal(approve(w, c).code, code, label)
+        assert.equal(existsSync(sourceFile(w.repo)), false, `${label} — artifact 를 썼다`)
+      }
+    }],
+    // ── I. 원고 보존형 안전 개정(--safety-revise · 2026-10-28 age-learning) ──────────
+    ['SA1 안전 개정 — prepare(원고 고정) · approve(source/3 교체) · materialize(기존 행 CAS 교체) · 다른 행 바이트·순서 그대로', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      const p = prepare(s0.w, s0.prep); assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      const c = p.candidate
+      assert.equal(c.revision.kind, 'safety'); assert.equal(c.revision.draftHash, s0.draftHash)
+      assert.deepEqual(c.entry.safetyRevision, { draftHash: s0.draftHash })
+      assert.deepEqual(c.unresolvedFields, ['node.forbiddenPatterns', 'publication.publishAt'])
+      assert.equal(c.provenance.safetyRevision.status, 'DERIVED')
+      safetyFill(c)
+      const a = approve(s0.w, c, { safety: true, draft: s0.draft }); assert.equal(a.ok, true, `${a.code} ${a.why}`)
+      const doc = JSON.parse(readFileSync(sourceFile(s0.w.repo), 'utf8'))
+      assert.equal(doc.schema, 'magazine-article-spec-source/3'); assert.equal(doc.entries.length, 1)
+      assert.deepEqual(doc.entries[0].safetyRevision, { draftHash: s0.draftHash }); assert.deepEqual(doc.entries[0].node.forbiddenPatterns, TOPIC_PATTERNS)
+      const before = readFileSync(queueFile(s0.w.repo), 'utf8'); const rowsBefore = queueOf(s0.w.repo)
+      const m = materialize(s0.w, { safety: true, draft: s0.draft }); assert.equal(m.ok, true, `${m.code} ${m.why}`)
+      assert.equal(m.written, true); assert.equal(m.day, s0.row.day)
+      const after = readFileSync(queueFile(s0.w.repo), 'utf8'); const rowsAfter = queueOf(s0.w.repo)
+      assert.equal(after, before.replace(renderQueueRow(s0.row), renderQueueRow(m.row)), '교체한 행 밖의 바이트가 바뀌었다')
+      assert.equal(rowsAfter.length, rowsBefore.length, '큐 행이 늘거나 줄었다')
+      const i = rowsBefore.findIndex((x) => x.slug === SLUG)
+      assert.deepEqual(plain(rowsAfter.filter((_, k) => k !== i)), plain(rowsBefore.filter((_, k) => k !== i)))
+      assert.equal(rowsAfter[i].articlePlanHash, a.sourceHash)
+      const j = judgeRow(s0.w, rowsAfter[i]); assert.equal(j.ok, true, j.why)
+      assert.equal(j.spec.schemaVersion, 'magazine-article-spec/2')
+      assert.deepEqual(source.safetyRevisionSpecDrift(s0.oldSpec, j.spec), [], '허용 경로 밖에서 spec 이 바뀌었다')
+      COUNTS.safety = { rows: rowsAfter.length, replacedAt: i, written: 1 }
+    }],
+    ['SA2 새 패턴이 보존할 원고에 있다 → approve DRAFT_PATTERN_VIOLATION · artifact · 큐 바이트 불변', () => {
+      const s0 = safetyWorld(makeWorld(), queued, { draft: `${DRAFT_TEXT}\n${TOPIC_PATTERNS[1]}이라는 말을 들었다.\n` })
+      const c = safetyFill(prepare(s0.w, s0.prep).candidate)
+      const keep = snapshotOf(s0.w)
+      const a = approve(s0.w, c, { safety: true, draft: s0.draft }); assert.equal(a.code, 'DRAFT_PATTERN_VIOLATION')
+      assert.deepEqual(snapshotOf(s0.w), keep)
+    }],
+    ['SA3 prepare 뒤 원고 바이트 변경 → approve · materialize DRAFT_CHANGED · 쓰기 0', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      const c = safetyFill(prepare(s0.w, s0.prep).candidate)
+      const keep = snapshotOf(s0.w)
+      assert.equal(approve(s0.w, c, { safety: true, draft: Buffer.from(`${DRAFT_TEXT}\n`) }).code, 'DRAFT_CHANGED')
+      assert.equal(approve(s0.w, c, { safety: true }).code, 'DRAFT_REQUIRED')
+      assert.deepEqual(snapshotOf(s0.w), keep)
+      assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).ok, true)
+      const q = readFileSync(queueFile(s0.w.repo), 'utf8')
+      assert.equal(materialize(s0.w, { safety: true, draft: Buffer.from(`${DRAFT_TEXT}\n`) }).code, 'DRAFT_CHANGED')
+      assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), q)
+    }],
+    ['SA4 제목 · plan · hero 를 함께 바꾼 안전 개정 → SAFETY_REVISION_DRIFT · admission 손편집 → CANDIDATE_IDENTITY_EDITED · 쓰기 0', () => {
+      for (const [label, edit, code] of [
+        ['plan.title', (c) => { c.entry.plan.title = `${c.entry.plan.title} 개정` }, 'SAFETY_REVISION_DRIFT'],
+        ['plan.whyNow', (c) => { c.entry.plan.whyNow = `${c.entry.plan.whyNow} 덧붙임` }, 'SAFETY_REVISION_DRIFT'],
+        ['hero.alt', (c) => { c.entry.hero = { ...c.entry.hero, alt: `${c.entry.hero.alt} 바뀜` } }, 'SAFETY_REVISION_DRIFT'],
+        ['node.readerQuestion', (c) => { c.entry.node.readerQuestion = `${c.entry.node.readerQuestion} 개정` }, 'SAFETY_REVISION_DRIFT'],
+        ['admission', (c) => { c.entry.admission = { ...c.entry.admission, readinessHash: 'forged' } }, 'CANDIDATE_IDENTITY_EDITED'],
+      ]) {
+        const s0 = safetyWorld(makeWorld(), queued)
+        const c = safetyFill(prepare(s0.w, s0.prep).candidate); edit(c)
+        const keep = snapshotOf(s0.w)
+        assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).code, code, label)
+        assert.deepEqual(snapshotOf(s0.w), keep, label)
+      }
+    }],
+    ['SA5 운영 old specHash 가 기존 승인 컴파일과 다르다 → prepare SUPERSEDES_MISMATCH', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      assert.equal(prepare(s0.w, { ...s0.prep, revise: { ...s0.prep.revise, supersedesSpecHash: OLD_SPEC } }).code, 'SUPERSEDES_MISMATCH')
+    }],
+    ['SA6 큐 행 없음 · 중복 → SAFETY_QUEUE_ROW_INVALID · 행이 기존 승인의 복제가 아니다 → SAFETY_QUEUE_ROW_DRIFT', () => {
+      const a = safetyWorld(makeWorld(), queued)
+      writeFileSync(queueFile(a.w.repo), queueFileText(queueOf(a.w.repo).filter((x) => x.slug !== SLUG)))
+      assert.equal(prepare(a.w, a.prep).code, 'SAFETY_QUEUE_ROW_INVALID')
+      const b = safetyWorld(makeWorld(), queued)
+      writeFileSync(queueFile(b.w.repo), queueFileText([...queueOf(b.w.repo), { ...b.row, day: 999 }]))
+      assert.equal(prepare(b.w, b.prep).code, 'SAFETY_QUEUE_ROW_INVALID')
+      const c0 = safetyWorld(makeWorld(), queued)
+      const t = readFileSync(queueFile(c0.w.repo), 'utf8')
+      writeFileSync(queueFile(c0.w.repo), t.replace(renderQueueRow(c0.row), renderQueueRow({ ...c0.row, whyNow: `${c0.row.whyNow} 손편집` })))
+      assert.equal(prepare(c0.w, c0.prep).code, 'SAFETY_QUEUE_ROW_DRIFT')
+    }],
+    ['SA7 등록된 글 → SLUG_ALREADY_REGISTERED · 승인 뒤 다른 writer 가 행을 바꿨다 → materialize SAFETY_QUEUE_ROW_DRIFT · 그 바이트 보존', () => {
+      const w = makeWorld({ articles: (r) => { r[SLUG] = { title: 't', description: 'd', cluster: 'sleep', publishedAt: '2026-10-01' } } })
+      const s0 = safetyWorld(w, queued, { skipQueued: true })
+      assert.equal(prepare(s0.w, s0.prep).code, 'SLUG_ALREADY_REGISTERED')
+      const s1 = safetyWorld(makeWorld(), queued)
+      assert.equal(approve(s1.w, safetyFill(prepare(s1.w, s1.prep).candidate), { safety: true, draft: s1.draft }).ok, true)
+      const t = readFileSync(queueFile(s1.w.repo), 'utf8')
+      const external = t.replace(renderQueueRow(s1.row), renderQueueRow({ ...s1.row, articlePlanHash: `sha256:${'e'.repeat(64)}` }))
+      writeFileSync(queueFile(s1.w.repo), external)
+      assert.equal(materialize(s1.w, { safety: true, draft: s1.draft }).code, 'SAFETY_QUEUE_ROW_DRIFT')
+      assert.equal(readFileSync(queueFile(s1.w.repo), 'utf8'), external)
+    }],
+    ['SA8 큐 lock 안 판독 뒤 외부 writer → QUEUE_CHANGED · 외부 바이트 보존', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      assert.equal(approve(s0.w, safetyFill(prepare(s0.w, s0.prep).candidate), { safety: true, draft: s0.draft }).ok, true)
+      let external = null
+      const m = materialize(s0.w, { safety: true, draft: s0.draft, hooks: { beforeWrite: ({ queuePath }) => { external = `${readFileSync(queuePath, 'utf8')}// 외부 writer\n`; writeFileSync(queuePath, external) } } })
+      assert.equal(m.code, 'QUEUE_CHANGED'); assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), external)
+    }],
+    ['SA9 같은 승인 재실행 — approve REVISE_BASE_CHANGED · materialize 쓰기 0 (멱등) · 바이트 그대로', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      const c = safetyFill(prepare(s0.w, s0.prep).candidate)
+      assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).ok, true)
+      const doc = readFileSync(sourceFile(s0.w.repo), 'utf8')
+      assert.equal(approve(s0.w, c, { safety: true, draft: s0.draft }).code, 'REVISE_BASE_CHANGED'); assert.equal(readFileSync(sourceFile(s0.w.repo), 'utf8'), doc)
+      assert.equal(materialize(s0.w, { safety: true, draft: s0.draft }).written, true)
+      const q = readFileSync(queueFile(s0.w.repo), 'utf8')
+      const again = materialize(s0.w, { safety: true, draft: s0.draft }); assert.equal(again.ok, true); assert.equal(again.written, false)
+      assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), q)
+      // 새 승인을 가리키지만 손편집된 행 — 멱등으로 보지 않는다 · 그 바이트 그대로
+      const mine = queueOf(s0.w.repo).find((x) => x.slug === SLUG)
+      const edited = q.replace(renderQueueRow(mine), renderQueueRow({ ...mine, whyNow: `${mine.whyNow} 손편집` }))
+      writeFileSync(queueFile(s0.w.repo), edited)
+      assert.equal(materialize(s0.w, { safety: true, draft: s0.draft }).code, 'SAFETY_QUEUE_ROW_DRIFT')
+      assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), edited)
+    }],
+    ['SA10 종류 혼동 — 안전 개정 entry 를 일반 materialize 로 · 일반 후보에 safetyRevision · 모르는 kind → 거부 · 쓰기 0', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      assert.equal(approve(s0.w, safetyFill(prepare(s0.w, s0.prep).candidate), { safety: true, draft: s0.draft }).ok, true)
+      const q = readFileSync(queueFile(s0.w.repo), 'utf8')
+      assert.equal(materialize(s0.w).ok, false); assert.equal(readFileSync(queueFile(s0.w.repo), 'utf8'), q)
+      const w2 = makeWorld(); const c2 = ready(w2); c2.entry.safetyRevision = { draftHash: s0.draftHash }
+      assert.equal(approve(w2, c2).code, 'CANDIDATE_APPROVAL_FORGED')
+      assert.equal(prepare(s0.w, { ...s0.prep, revise: { ...s0.prep.revise, kind: 'other' } }).code, 'REVISION_KIND_UNKNOWN')
+      // 일반 승인 · 큐 행이 있는 글을 --safety-revise 로 materialize → 종류 불일치 · 큐 바이트 그대로
+      const w3 = makeWorld(); queued(w3)
+      const q3 = readFileSync(queueFile(w3.repo), 'utf8')
+      assert.equal(materialize(w3, { safety: true, draft: Buffer.from(DRAFT_TEXT) }).code, 'SAFETY_REVISION_MISMATCH')
+      assert.equal(readFileSync(queueFile(w3.repo), 'utf8'), q3)
+    }],
+    ['SA11 approve 명시 경계 — 안전 개정 후보는 --safety-revise · --draft 둘 다 · 일반 후보에 --safety-revise 거부 · 직접 호출도 같다 · 쓰기 0', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      const c = safetyFill(prepare(s0.w, s0.prep).candidate)
+      const keep = snapshotOf(s0.w)
+      assert.equal(approve(s0.w, c, { draft: s0.draft }).code, 'SAFETY_REVISION_FLAG_REQUIRED')
+      assert.equal(approve(s0.w, c, { safety: true }).code, 'DRAFT_REQUIRED')
+      assert.deepEqual(snapshotOf(s0.w), keep, '플래그·원고 없이 승인 artifact 를 썼다')
+      const w2 = makeWorld(); const c2 = ready(w2)
+      assert.equal(approve(w2, c2, { safety: true, draft: s0.draft }).code, 'SAFETY_REVISION_MISMATCH')
+      assert.equal(existsSync(sourceFile(w2.repo)), false, '일반 후보를 안전 개정으로 승인했다')
+      // 실제 CLI — 후보 파일 · 원고 파일
+      const dir = tmp('sa11'); const cf = join(dir, 'c.json'); const df = join(dir, 'draft.md')
+      writeFileSync(cf, JSON.stringify(c)); writeFileSync(df, s0.draft)
+      const cli = (extra) => spawnSync(process.execPath, [cliPath, 'approve', '--candidate', cf, '--approver', '창업자', '--at', AT,
+        '--confirm-candidate-hash', lib.candidateHashOf(c), '--repo', s0.w.repo, '--admission-root', s0.w.admission, '--out-root', s0.w.repo, ...extra], { encoding: 'utf8' })
+      const noFlag = cli(['--draft', df])
+      assert.equal(noFlag.status, 2, 'CLI 가 --safety-revise 없는 --draft 를 받았다')
+      const flagOnly = cli(['--safety-revise'])
+      assert.equal(flagOnly.status, 2, 'CLI 가 --draft 없는 --safety-revise 를 받았다')
+      const bare = cli([])
+      assert.equal(bare.status, 1); assert.equal(JSON.parse(bare.stdout).code, 'SAFETY_REVISION_FLAG_REQUIRED')
+      assert.deepEqual(snapshotOf(s0.w), keep, 'CLI 거부 경로가 artifact 를 썼다')
+      const ok = cli(['--safety-revise', '--draft', df])
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.equal(JSON.parse(ok.stdout).written, true)
+      const c2f = join(dir, 'c2.json'); writeFileSync(c2f, JSON.stringify(c2))
+      const normal = spawnSync(process.execPath, [cliPath, 'approve', '--candidate', c2f, '--approver', '창업자', '--at', AT,
+        '--confirm-candidate-hash', lib.candidateHashOf(c2), '--repo', w2.repo, '--admission-root', w2.admission, '--out-root', w2.repo, '--safety-revise', '--draft', df], { encoding: 'utf8' })
+      assert.equal(normal.status, 1); assert.equal(JSON.parse(normal.stdout).code, 'SAFETY_REVISION_MISMATCH')
+      assert.equal(existsSync(sourceFile(w2.repo)), false)
+    }],
+    ['SA12 CTA 무전송 수리 뒤 안전 개정 — 수리 영수증의 새 원고 해시를 그대로 고정한다 · 영수증과 다른 원고는 거부', () => {
+      const s0 = safetyWorld(makeWorld(), queued)
+      // 운영 모양 — 디스크 spec(옛 승인 컴파일) · 옛 고정 CTA 문장을 가진 회수 원고 · article-draft.ts 없음
+      const dd = join(s0.w.repo, 'drafts/magazine')
+      mkdirSync(join(dd, SLUG), { recursive: true })
+      writeFileSync(join(dd, SLUG, 'article-spec.json'), `${JSON.stringify(s0.oldSpec, null, 2)}\n`)
+      const pass = readFileSync(join(ROOT, 'scripts/__fixtures__/magazine/manuscript-pass.draft.md'), 'utf8')
+      const old = pass.replace(/^(\[CTA\][^|\n]*\|[^|\n]*\| ).*$/m, '$1지금 떠오른 밤 이야기 한 조각을 남겨 주세요')
+      writeFileSync(join(dd, SLUG, 'draft.md'), old)
+      const q = join(s0.w.repo, 'sa12-quarantine.json'); writeFileSync(q, '{}\n')
+      const rep = CTA_REPAIR.repairDraftCta({ slug: SLUG, draftsDir: dd, expectDraftHash: REAL.source.draftHashOf(old),
+        expectOldText: '지금 떠오른 밤 이야기 한 조각을 남겨 주세요', text: '요즘 잠이 어떠신지 편하게 이야기해 주세요.', approver: '창업자', at: AT,
+        queue: parseQueueText(readFileSync(queueFile(s0.w.repo), 'utf8')), expectedGraphVersion: GV, productRoot: s0.w.repo, quarantinePath: q, nowMs: NOW, write: true })
+      assert.equal(rep.ok, true, `${rep.code} ${rep.why}`)
+      const repaired = readFileSync(join(dd, SLUG, 'draft.md'))
+      const p = prepare(s0.w, { revise: s0.prep.revise, draft: repaired, ctaRepairReceipt: rep.receiptPath })
+      assert.equal(p.ok, true, `${p.code} ${p.why}`)
+      assert.equal(p.candidate.revision.draftHash, rep.newDraftHash); assert.equal(p.candidate.revision.ctaRepairNewDraftHash, rep.newDraftHash)
+      assert.deepEqual(p.candidate.entry.safetyRevision, { draftHash: rep.newDraftHash })
+      // 영수증과 다른 원고(수리 전 바이트)를 고정하려 하면 거부
+      assert.equal(prepare(s0.w, { revise: s0.prep.revise, draft: Buffer.from(old), ctaRepairReceipt: rep.receiptPath }).code, 'CTA_REPAIR_RECEIPT_MISMATCH')
+      // 일반 개정에 영수증을 붙이면 거부
+      assert.equal(prepare(s0.w, { revise: { supersedesSpecHash: s0.prep.revise.supersedesSpecHash }, ctaRepairReceipt: rep.receiptPath }).code, 'CTA_REPAIR_RECEIPT_MISMATCH')
+    }],
     ['(수치) 승인·쓰기·외부 호출', () => { authoringCases.counts = COUNTS }],
   ]
+}
+
+/**
+ * 운영 실제 상태 재현 — 승인 entry 가 source/2(패턴 없음)이고 큐에서 철회됐다.
+ * `other` 면 같은 artifact 에 다른 글의 source/2 승인 entry 를 하나 더 둔다.
+ */
+/** 보존할 원고(시험 전용) — 주제 패턴이 없다 */
+const DRAFT_TEXT = '---\ntitle: 잠을 설친 밤\n---\n\n## 아침에 먼저 볼 것\n\n물 한 잔부터 마십니다.\n\n[CTA] /community/menopause | 이야기 나누기 | 여러분의 아침은 어떤가요?\n'
+/** 쓰기 대상 바이트 — 승인 artifact · 큐 */
+const snapshotOf = (w) => ({ doc: readFileSync(sourceFile(w.repo), 'utf8'), queue: readFileSync(queueFile(w.repo), 'utf8') })
+/** 사람이 채운다 — 글별 주제 금지 패턴 · 새 publishAt */
+function safetyFill(c) {
+  c.entry.node.forbiddenPatterns = [...TOPIC_PATTERNS]
+  c.entry.publication = { publishAt: NEW_AT }
+  return c
+}
+/**
+ * 운영 실제 상태 재현(age-learning) — 승인 entry 는 source/2(패턴 없음) · 큐 행은 그 복제로 **남아 있다** · 원고가 회수됐다.
+ * 큐 행은 같은 렌더러로 그 자리에서 바꾼다(materialize 가 쓴 바이트 모양 그대로).
+ */
+function safetyWorld(w, queued, { draft = DRAFT_TEXT, skipQueued = false } = {}) {
+  if (!skipQueued) queued(w)
+  else {
+    // 등록 반례 — 큐 행 없이 승인 artifact 만 둔다(SLUG_ALREADY_REGISTERED 가 먼저 막는다)
+    return { w, prep: { revise: { supersedesSpecHash: OLD_SPEC, kind: 'safety' }, draft: Buffer.from(draft) } }
+  }
+  const before = queueOf(w.repo).find((x) => x.slug === SLUG)
+  const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+  const base = doc.entries[0]
+  delete base.node.forbiddenPatterns
+  base.sourceHash = REAL.source.directSpecSourceHash(base)
+  writeFileSync(sourceFile(w.repo), `${JSON.stringify({ schema: REAL.source.DIRECT_SPEC_SOURCE_SCHEMA_V2, graphVersion: GV, entries: [base] }, null, 2)}\n`)
+  const row = REAL.source.queueRowFromEntry(base, { day: before.day })
+  const qt = readFileSync(queueFile(w.repo), 'utf8')
+  writeFileSync(queueFile(w.repo), qt.replace(renderQueueRow(before), renderQueueRow(row)))
+  const j = REAL.source.judgeDirectSpecSource({ queueItem: row, draftsDir: join(w.repo, 'drafts/magazine'), expectedGraphVersion: GV, productRoot: w.repo })
+  if (!j.ok) throw new Error(`safetyWorld 준비 실패: ${j.why}`)
+  const bytes = Buffer.from(draft)
+  return { w, base, row, oldSpec: j.spec, draft: bytes, draftHash: REAL.source.draftHashOf(bytes),
+    prep: { revise: { supersedesSpecHash: j.spec.specHash, kind: 'safety' }, draft: bytes } }
+}
+
+function toSourceV2(w, queued, { other = false } = {}) {
+  queued(w)
+  writeFileSync(queueFile(w.repo), queueFileText(queueOf(w.repo).filter((x) => x.slug !== SLUG)))
+  const doc = JSON.parse(readFileSync(sourceFile(w.repo), 'utf8'))
+  const strip = (e) => { delete e.node.forbiddenPatterns; e.sourceHash = REAL.source.directSpecSourceHash(e); return e }
+  const entries = [strip(doc.entries[0])]
+  if (other) {
+    const o = structuredClone(entries[0])
+    Object.assign(o.node, { id: 'I-OTHER-01', intentId: 'I-OTHER-01', slug: 'zzz-other-v2' })
+    entries.push(strip(o))
+  }
+  writeFileSync(sourceFile(w.repo), `${JSON.stringify({ schema: REAL.source.DIRECT_SPEC_SOURCE_SCHEMA_V2, graphVersion: GV, entries }, null, 2)}\n`)
 }
 
 /**

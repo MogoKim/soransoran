@@ -57,7 +57,8 @@ import {
   compileArticleSpec,
   verifyArticleSpec,
 } from './lib/magazine-article-spec.mjs'
-import { buildManuscriptMessage } from './lib/chatgpt-session.mjs'
+import { buildManuscriptMessage, STATUS } from './lib/chatgpt-session.mjs'
+import { writeFetchResults } from './lib/magazine-fetch-result.mjs'
 import { deliveryFingerprintOf } from './lib/magazine-quarantine.mjs'
 import {
   ARTICLE_SPEC_FILENAME,
@@ -68,10 +69,15 @@ import {
   DIRECT_SPEC_PROMPT_TEXT,
   DIRECT_SPEC_TITLE_LOCK_LINE,
   DIRECT_SPEC_TITLE_MISMATCH,
+  DIRECT_CTA_DIRECTIVE_HEAD,
+  DIRECT_CTA_TEMPLATE_COPY,
+  LEGACY_DIRECT_CTA_LEAD,
   LEGACY_BRIEF_MODE,
   UNKNOWN_MAGAZINE_AUTO_MODE,
   compileAndPersistDirectSpec,
   directSpecTitleCheck,
+  directSpecCtaCheck,
+  directCtaLeadDirective,
   directSpecBriefText,
   directSpecDeliveryGate,
   directSpecIdentityHandoff,
@@ -87,30 +93,34 @@ import { saveQuarantine, QUARANTINE_PATH } from './lib/magazine-quarantine.mjs'
 import { judgeBriefFormatContract, judgeManuscriptFormat } from './lib/magazine-manuscript-format.mjs'
 import { gate as autoLaneGate } from './lib/magazine-auto-lane.mjs'
 import {
-  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
+  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA, DIRECT_SPEC_SOURCE_SCHEMA_V2, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
   readProductGraphState, readProductGraphVersion,
 } from './lib/magazine-direct-spec-source.mjs'
 
 /** 등록 gate 는 현재 승인 source 를 요구한다 — 시험 폴더에 fixture 와 같은 내용의 승인 source 를 놓는다 */
-function writeApprovedSource(d, input, gv) {
+/** spec/2 sandbox 의 글별 주제 금지 패턴(시험 전용) */
+const W_PATTERNS = ['수면제를 드세요']
+function writeApprovedSource(d, input, gv, { v2 = false } = {}) {
   // 🔴 승인 basis — 소비 관문과 같은 helper 로 실제 제품 판에서 계산한다
   const productBasis = productBasisFor(readProductGraphState(ROOT), { intentId: input.node.intentId, queueCluster: input.queueItem.cluster })
   const entry = { status: 'APPROVED', approvedBy: 'wire-check', approvedAt: '2026-10-15T12:00:00+09:00',
     // source/2 — 연구 G8 receipt 신원 · 승인 plan(= fixture 큐 행의 plan 필드)
     admission: { g8ManifestHash: input.queueItem.g8ManifestHash, receiptHash: 'wire-check-receipt', graphVersion: gv, readinessHash: 'wire-check-readiness' },
     plan: Object.fromEntries([...ARTICLE_PLAN_REQUIRED, ...ARTICLE_PLAN_OPTIONAL].filter((k) => input.queueItem[k] !== undefined).map((k) => [k, input.queueItem[k]])),
-    node: input.node, relations: input.relations,
+    node: v2 ? { ...input.node, forbiddenPatterns: [...W_PATTERNS] } : input.node, relations: input.relations,
     hero: input.hero, publication: input.publication, productBasis }
   entry.sourceHash = directSpecSourceHash(entry)
   // 🔴 DIRECT 큐 행은 승인 entry 의 복제다(materialize 와 같은 함수) — compile 입력 필드는 fixture 그대로다
   input.queueItem = queueRowFromEntry(entry, { day: input.queueItem.day })
   const sp = directSpecSourcePath(d, gv)
   mkdirSync(dirname(sp), { recursive: true })
-  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
+  writeFileSync(sp, JSON.stringify({ schema: v2 ? DIRECT_SPEC_SOURCE_SCHEMA : DIRECT_SPEC_SOURCE_SCHEMA_V2, graphVersion: gv, entries: [entry] }))
+  // 🔴 source/3 → spec/2 — 컴파일 입력에도 같은 패턴을 싣는다(관문이 다시 컴파일한 바이트와 같아야 한다)
+  if (v2) input.topicForbiddenPatterns = [...W_PATTERNS]
 }
 import { fetchTargets, runIdOf } from './lib/magazine-run-targets.mjs'
 import { judgeFile } from './lib/magazine-merge-gate.mjs'
-import { fetchBatch } from './magazine-webui-runner.mjs'
+import { fetchBatch, recoverSlug } from './magazine-webui-runner.mjs'
 import { drive } from './magazine-auto-register.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -622,13 +632,13 @@ function driveManuscript(title, { body = '잠들기 전 내일 할 일을 짧게
  *   - `qaFailsFirst` 만큼 QA 가 FAIL 한 뒤 통과한다 — 재생성 후보는 `candidate` 글자다
  *   - `calls` 에 하위 단계 호출을 센다: run 대상 파일 이름 · 재생성 · 후보 교체
  */
-function directDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFailsFirst = 0, candidate = null } = {}) {
+function directDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFailsFirst = 0, candidate = null, v2 = false } = {}) {
   const input = loadFixture()
   // 🔴 drive 의 등록 gate 는 제품 current graphVersion 의 승인 source 를 본다
   const gv = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
   input.node.graphVersion = gv
   const d = tmp(prefix)
-  writeApprovedSource(d, input, gv)
+  writeApprovedSource(d, input, gv, { v2 })
   const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
   const slug = input.queueItem.slug
   const dir = join(d, slug)
@@ -839,6 +849,165 @@ check('W41 frontmatter 가 없는 원고 — 제목 없음으로 형식 재생�
   const s = directDriveSandbox('ds-w41', { draftText: text, candidate: driveManuscript('아무 제목') })
   const r = assertTitleFirst(s, { draft: text, article: 'export const article = {}\n' })
   assert.equal(r.blockedBy[0].actualTitle, null)
+})
+
+// ── W42~W46 DIRECT CTA 앞 문장 (2026-10-28 · age-learning "밤 이야기" 노출) ──
+/** 원고의 CTA 셋째 칸만 바꾼다 */
+const withCtaText = (text, lead) => text.replace(/^(\[CTA\][^|\n]*\|[^|\n]*\| ).*$/m, `$1${lead}`)
+const GOLDEN_SPEC1 = JSON.parse(readFileSync(join(ROOT, 'scripts/__fixtures__/magazine/direct-spec/spec1-brief-golden.json'), 'utf8'))
+check('W42 spec/1 brief · 메시지 지문은 수정 전 기준과 바이트 동일 (CTA 옛 문장 그대로)', () => {
+  const p = compileAndPersistDirectSpec({ input: loadFixture(), draftsDir: tmp('ds-w42') })
+  assert.equal(p.spec.specHash, GOLDEN_SPEC1.specHash)
+  const brief = directSpecBriefText(p.spec)
+  assert.equal(`sha256:${createHash('sha256').update(brief).digest('hex')}`, GOLDEN_SPEC1.briefSha256)
+  assert.equal(directSpecMessageFor({ slug: p.spec.identity.slug, draftsDir: dirname(p.specPath).replace(/\/[^/]+$/, '') }).messageFingerprint, GOLDEN_SPEC1.messageFingerprint)
+  assert.ok(brief.includes(LEGACY_DIRECT_CTA_LEAD))
+})
+
+check('W43 spec/2 brief CTA 셋째 칸은 완성 문장이 아니라 지시 — 승인 독자 질문 · 라벨을 참고 · brief 형식 계약 통과', () => {
+  const input = loadFixture(); input.topicForbiddenPatterns = [...W_PATTERNS]
+  const p = compileAndPersistDirectSpec({ input, draftsDir: tmp('ds-w43') })
+  assert.equal(p.spec.schemaVersion, 'magazine-article-spec/2')
+  const brief = directSpecBriefText(p.spec)
+  const line = brief.split('\n').find((l) => l.startsWith('[CTA]'))
+  const lead = line.split('|')[2].trim()
+  assert.equal(lead, directCtaLeadDirective(p.spec))
+  assert.ok(lead.startsWith(DIRECT_CTA_DIRECTIVE_HEAD) && lead.includes(p.spec.audience.readerQuestion) && lead.includes(p.spec.navigation.community.label))
+  assert.equal(brief.includes(LEGACY_DIRECT_CTA_LEAD), false, 'spec/2 brief 에 옛 고정 문장이 남았다')
+  assert.equal(judgeBriefFormatContract(brief).ok, true)
+})
+
+check('W44 CTA 앞 문장 판정 — spec/2: 옛 고정 문장 · 지시문 그대로 · 지시 머리 포함 → 차단 / 주제 문장 → 통과 · spec/1 은 판정하지 않는다', () => {
+  const input = loadFixture(); input.topicForbiddenPatterns = [...W_PATTERNS]
+  const v2 = compileAndPersistDirectSpec({ input, draftsDir: tmp('ds-w44') }).spec
+  const v1 = compileAndPersistDirectSpec({ input: loadFixture(), draftsDir: tmp('ds-w44b') }).spec
+  const base = driveManuscript(v2.identity.title)
+  for (const lead of [LEGACY_DIRECT_CTA_LEAD, directCtaLeadDirective(v2), `${DIRECT_CTA_DIRECTIVE_HEAD} 여기에 문장`]) {
+    const r = directSpecCtaCheck({ spec: v2, manuscript: withCtaText(base, lead) })
+    assert.equal(r.code, DIRECT_CTA_TEMPLATE_COPY, lead)
+  }
+  assert.equal(directSpecCtaCheck({ spec: v2, manuscript: withCtaText(base, '요즘 잠이 어떠신지 편하게 남겨 주세요') }).ok, true)
+  assert.equal(directSpecCtaCheck({ spec: v1, manuscript: withCtaText(base, LEGACY_DIRECT_CTA_LEAD) }).ok, true, 'spec/1 동작이 바뀌었다')
+})
+
+check('W45 drive — spec/2 저장된 원고의 CTA 가 템플릿 복사면 article 단계에서 BLOCKED · 변환·QA·등록·재생성 0 · 원고 불변', () => {
+  const s0 = directDriveSandbox('ds-w45-probe', { v2: true })
+  const text = withCtaText(driveManuscript(s0.persisted.spec.identity.title), LEGACY_DIRECT_CTA_LEAD)
+  const s = directDriveSandbox('ds-w45', { v2: true, draftText: text })
+  assert.equal(s.persisted.spec.schemaVersion, 'magazine-article-spec/2')
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED'); assert.equal(r.blockedBy[0].code, DIRECT_CTA_TEMPLATE_COPY, JSON.stringify(r.blockedBy))
+  assertNoDownstream(s); assert.equal(s.calls.regen, 0)
+  assert.equal(readFileSync(join(s.dir, 'draft.md'), 'utf8'), text)
+  // 주제 문장이면 같은 sandbox 가 끝까지 간다
+  const ok = directDriveSandbox('ds-w45-ok', { v2: true, draftText: withCtaText(text, '요즘 잠이 어떠신지 편하게 남겨 주세요') })
+  assert.equal(drive(ok.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, ok.deps).verdict, 'DONE')
+  // spec/1 은 옛 문장이어도 이 관문이 막지 않는다(기존 동작)
+  const v1 = directDriveSandbox('ds-w45-v1', { draftText: withCtaText(driveManuscript(s0.persisted.spec.identity.title), LEGACY_DIRECT_CTA_LEAD) })
+  assert.equal(drive(v1.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, v1.deps).verdict, 'DONE')
+})
+
+check('W46 drive — spec/2 재생성 후보가 CTA 템플릿을 옮기면 교체 0 · draft/article 바이트 불변', () => {
+  const s0 = directDriveSandbox('ds-w46-probe', { v2: true })
+  const candidate = withCtaText(driveManuscript(s0.persisted.spec.identity.title, { body: '내일 할 일을 짧게 적고 휴대전화를 멀리 두면 마음이 조금 가라앉습니다.' }), LEGACY_DIRECT_CTA_LEAD)
+  const s = directDriveSandbox('ds-w46', { v2: true, qaFailsFirst: 1, candidate })
+  const draftBefore = readFileSync(join(s.dir, 'draft.md'), 'utf8')
+  const r = drive(s.slug, { write: true, publishAt: '2026-10-22', autoLane: true }, s.deps)
+  assert.equal(r.verdict, 'BLOCKED'); assert.equal(r.blockedBy[0].code, DIRECT_CTA_TEMPLATE_COPY, JSON.stringify(r.blockedBy))
+  assert.equal(s.calls.apply, 0, 'CTA 템플릿을 옮긴 후보로 원고를 교체했다')
+  assert.equal(readFileSync(join(s.dir, 'draft.md'), 'utf8'), draftBefore)
+})
+
+/**
+ * 가짜 ChatGPT — 보낸 뒤 새 응답 1(코드블록 = manuscript). `recoverOf` 면 이미 끝난 대화(사용자 1 · 응답 1)를 연다.
+ * 실제 runner(fetchBatch · recoverSlug)가 저장 전 관문을 지나게 한다 — Chrome · CDP · 네트워크 0.
+ */
+function fakeBrowser(manuscript, { recoverOf = null } = {}) {
+  const m = { connect: 0, send: 0, typed: '' }
+  const page = () => {
+    let sent = false
+    const composer = { async click() {}, async innerText() { return m.typed } }
+    const sendBtn = { async click() { m.send++; sent = true } }
+    return {
+      async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+      url: () => (recoverOf ? recoverOf.url : 'https://chatgpt.com/c/ds-w47-fake'),
+      async evaluate(fn) {
+        if (fn?.name !== 'readConversationDom') return null
+        const answer = { id: 'ds-a1', role: 'assistant', source: recoverOf ? 'old' : 'new', candidates: [{ form: 'code-block', text: manuscript }], text: '', hasActions: true }
+        if (recoverOf) return { readOk: true, stop: false, units: [{ id: 'ds-u1', role: 'user', source: 'old', candidates: [], text: recoverOf.message, hasActions: true }, answer] }
+        return sent ? { readOk: true, stop: false, units: [answer] } : { readOk: true, stop: false, units: [] }
+      },
+      locator(sel) { const l = /send-button|보내기|Send/.test(String(sel ?? '')) ? sendBtn : composer; return { first: () => l, ...l } },
+      keyboard: { async insertText(t) { m.typed += String(t ?? '') }, async press() {} },
+    }
+  }
+  return { m, deps: { pollMs: 5, stablePolls: 2, timeoutMs: 2000, connectTimeoutMs: 500, settleMs: 1,
+    ensureTab: async () => ({ ok: true }),
+    connect: async () => { m.connect++; return { contexts: () => [{ pages: () => [], newPage: async () => page() }], async close() {} } } } }
+}
+/** spec/2 회수 sandbox — 승인 source/3 · spec/2 · run.json 선정 1 */
+function cta2Sandbox(prefix) {
+  const input = loadFixture()
+  const gv = readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts'))
+  input.node.graphVersion = gv
+  const d = tmp(prefix)
+  writeApprovedSource(d, input, gv, { v2: true })
+  const persisted = compileAndPersistDirectSpec({ input, draftsDir: d })
+  const date = '2026-10-22'
+  mkdirSync(join(d, '_runs', date), { recursive: true })
+  writeFileSync(join(d, '_runs', date, 'run.json'), `${JSON.stringify({ status: 'COMPLETED', inventoryDays: 0, selected: [input.queueItem], reusable: [] }, null, 2)}\n`)
+  const quarantinePath = join(d, 'quarantine.json')
+  saveQuarantine({}, quarantinePath)
+  const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => gv, productRoot: () => ROOT }
+  return { d, input, persisted, date, quarantinePath, directSourceDeps, slug: input.queueItem.slug, draft: join(d, input.queueItem.slug, 'draft.md') }
+}
+const quietly = async (fn) => {
+  const log = console.log; const err = console.error
+  console.log = () => {}; console.error = () => {}
+  try { return await fn() } finally { console.log = log; console.error = err }
+}
+/** 저장 전 관문을 통과하는 실제 길이의 원고(fixture) — CTA 셋째 칸 말고는 막힐 이유가 없다 */
+const PASS_MANUSCRIPT = readFileSync(join(ROOT, 'scripts/__fixtures__/magazine/manuscript-pass.draft.md'), 'utf8')
+const cta2Manuscript = (s, lead) => withCtaText(PASS_MANUSCRIPT.replace(/^title: .+$/m, `title: ${s.persisted.spec.identity.title}`), lead)
+
+await checkAsync('W47 회수(fetchBatch) 저장 전 관문 — spec/2 원고 CTA 가 템플릿 복사면 draft.md 저장 0 · 주제 문장이면 저장', async () => {
+  const s = cta2Sandbox('ds-w47')
+  const chat = fakeBrowser(cta2Manuscript(s, LEGACY_DIRECT_CTA_LEAD))
+  const out = await quietly(() => fetchBatch({ date: s.date, dryRun: false, draftsDir: s.d, quarantinePath: s.quarantinePath,
+    probeFn: async () => ({ status: STATUS.OK }), browserDeps: chat.deps, directSourceDeps: s.directSourceDeps }))
+  const row = out.results.find((x) => x.slug === s.slug)
+  assert.equal(chat.m.send, 1, '반례 준비 실패 — 보내지 않았다')
+  assert.equal(row?.reason, 'invalid_manuscript', JSON.stringify(row))
+  assert.deepEqual((row.invalid ?? []).map((x) => x.code), [DIRECT_CTA_TEMPLATE_COPY], '막힌 이유가 CTA 하나가 아니다')
+  assert.equal(existsSync(s.draft), false, '템플릿을 옮긴 원고를 저장했다')
+  const ok = cta2Sandbox('ds-w47-ok')
+  const chat2 = fakeBrowser(cta2Manuscript(ok, '요즘 잠이 어떠신지 편하게 남겨 주세요'))
+  await quietly(() => fetchBatch({ date: ok.date, dryRun: false, draftsDir: ok.d, quarantinePath: ok.quarantinePath,
+    probeFn: async () => ({ status: STATUS.OK }), browserDeps: chat2.deps, directSourceDeps: ok.directSourceDeps }))
+  assert.equal(existsSync(ok.draft), true, '주제 문장 원고를 저장하지 않았다')
+})
+
+await checkAsync('W48 무전송 회수(recoverSlug) 저장 전 관문 — spec/2 원고 CTA 가 템플릿 복사면 저장 0 · 장부 그대로 · 전송 0', async () => {
+  const s = cta2Sandbox('ds-w48')
+  const msg = directSpecMessageFor({ slug: s.slug, draftsDir: s.d })
+  const url = 'https://chatgpt.com/c/0d5f48aa-0000-4000-8000-000000000048'
+  saveQuarantine({ [s.slug]: { kind: 'CONTENT', sent: false, attempts: 1, lastAt: 1, fingerprint: null,
+    delivery: { sent: null, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', messageFingerprint: msg.messageFingerprint, reservationId: 'ds-w48', at: 1 } } }, s.quarantinePath)
+  const rp = join(s.d, 'w48-result.json')
+  writeFetchResults(rp, { date: s.date, runId: 'ds-w48', mode: 'fetch-run', sentTotal: 1,
+    results: [{ slug: s.slug, status: 'failed', reason: 'response_timeout', stage: 'await-response', sent: true, messageFingerprint: msg.messageFingerprint, conversationUrl: url }] })
+  const ledger = readFileSync(s.quarantinePath, 'utf8')
+  for (const [lead, saved] of [[LEGACY_DIRECT_CTA_LEAD, false], ['요즘 잠이 어떠신지 편하게 남겨 주세요', true]]) {
+    const chat = fakeBrowser(cta2Manuscript(s, lead), { recoverOf: { url, message: msg.message } })
+    const r = await quietly(() => recoverSlug(s.slug, { conversationUrl: url, date: s.date, resultPath: rp, quarantinePath: s.quarantinePath,
+      draftsDir: s.d, browserDeps: chat.deps, directSourceDeps: s.directSourceDeps }))
+    assert.equal(chat.m.send, 0, '회수가 보냈다')
+    assert.equal(existsSync(s.draft), saved, `${lead}: ${JSON.stringify(r).slice(0, 200)}`)
+    if (!saved) {
+      assert.deepEqual((r.invalid ?? []).map((x) => x.code), [DIRECT_CTA_TEMPLATE_COPY], JSON.stringify(r).slice(0, 200))
+      assert.equal(readFileSync(s.quarantinePath, 'utf8'), ledger, '저장 0 인데 장부가 바뀌었다')
+    }
+  }
 })
 
 // ── W21 canary slug 는 운영 queue · articles.ts 에 없다 ────
