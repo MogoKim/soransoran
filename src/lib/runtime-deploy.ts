@@ -135,8 +135,10 @@ export const DEPLOY_STEPS: readonly string[] = [
   '⑩-b 🔴 **잠시 멈춘 발행 러너를 원래 설치본 그대로 되올린다** —'
   + ' 배포 전 loaded 였을 때만. plist 원문 · ProgramArguments · WorkingDirectory 를 값으로 대조한다'
   + ' (🔴 render·write 하지 않는다 — 공급 job 과 책임을 섞지 않는다)',
-  '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime',
-  '⑫ 여기까지 통과해야 "배포 완료" 다',
+  '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime --defer-ops-loop-templates',
+  '⑫ 여기까지 통과하면 runtime 단계가 끝난다 — 🔴 **배포 완료는 아직 아니다**.'
+  + ' ops-loop 소유 job(runner-recover·stage-controller)의 원문 유예가 남아 있을 수 있다',
+  '⑫-b 🔴 `ops:loop-install --apply` 가 새 원문을 설치하고 **유예 없는 strict** 격리 검사까지 통과해야 "배포 완료" 다',
   '🔴 어느 단계든 실패하면 ⑬ 으로 간다',
   '⑬ rollback(best-effort) — 🔴 **다 내리고 → 파일을 원래대로 → 원래 돌던 것만 올린다**:'
   + ' ⓐ 영향받는 job 을 label 기반으로 **전부 정지**(plist 경로에 의존하지 않는다) →'
@@ -159,9 +161,13 @@ export const OFFLINE_GATES: readonly string[] = [
   'launchd:template-check',
 ]
 
-/** 🔴 job 을 **다시 올린 뒤에만** 의미가 있는 검사 */
+/**
+ * 🔴 job 을 **다시 올린 뒤에만** 의미가 있는 검사.
+ *    `--defer-ops-loop-templates` 는 ops-loop 소유 job 둘의 **설치본 원문 불일치 하나만** pending 으로 돌린다 —
+ *    배포기는 그 둘을 옛 설치본 그대로 되올리고, 새 원문은 ops-loop-install 이 설치한 뒤 strict 로 다시 잰다.
+ */
 export const POST_LOAD_GATES: readonly string[] = [
-  'runtime:isolation-check --require-runtime',
+  'runtime:isolation-check --require-runtime --defer-ops-loop-templates',
 ]
 
 /** 예전 이름 — 화면 안내용으로 남긴다 */
@@ -293,7 +299,7 @@ export type DeployEffects = {
    *    판정은 `judgeLoadedConfig` 정본이 한다 — 여기서 따로 정규식을 쓰지 않는다.
    */
   loadedConfig: (label: string) => LoadedJobConfig
-  /** runtime:isolation-check --require-runtime */
+  /** runtime:isolation-check --require-runtime --defer-ops-loop-templates (🔴 ops-loop 원문 유예만 · 나머지 strict) */
   isolationGate: () => boolean
 
   readManifest: () => string | null
@@ -938,10 +944,10 @@ export async function runDeploy(input: {
     }
   }
   steps.push('isolation-gate')
-  if (!fx.isolationGate()) return failWith('post-load', 'runtime:isolation-check --require-runtime 실패')
+  if (!fx.isolationGate()) return failWith('post-load', 'runtime:isolation-check --require-runtime --defer-ops-loop-templates 실패')
 
   steps.push('done')
-  fx.log(`배포 완료 — ${prevSha.slice(0, 7)} → ${input.target.slice(0, 7)}`)
+  fx.log(`runtime 단계 완료 · ops-loop strict 대기 — ${prevSha.slice(0, 7)} → ${input.target.slice(0, 7)}`)
   return { ok: true, phase: 'done', steps, problems: [], rollback: null }
 }
 

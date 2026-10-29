@@ -183,18 +183,18 @@ console.log('\n② 🔴 단계별 상한 — 앞 단계가 뒤 단계를 굶기�
   check('🔴 판정 1 · 생성 최대 4 · 전체 5 (원천당)',
     WORKSET_STAGE_PER_SOURCE.judge === 1 && WORKSET_STAGE_PER_SOURCE.draft === 4
     && WORKSET_TOTAL_PER_SOURCE === 5)
-  check('🔴 🔴 **기본 묶음 크기는 10 이다** (2026-09-28 공급 가속)', WORKSET_DEFAULT_LIMIT === 10)
+  check('🔴 🔴 **기본 묶음 크기는 20이다** (2026-10-28 D20 전환일 처리량)', WORKSET_DEFAULT_LIMIT === 20)
   {
-    const b10 = judgeStageBudget(10)
-    check('🔴 🔴 **묶음 10 → judge 10 · draft 40 · 합 50**',
-      b10.ok && b10.perStage.judge === 10 && b10.perStage.draft === 40 && b10.total === 50,
-      b10.ok ? JSON.stringify(b10) : b10.reason)
+    const b20 = judgeStageBudget(20)
+    check('🔴 🔴 **묶음 20 → judge 20 · draft 80 · 합 100**',
+      b20.ok && b20.perStage.judge === 20 && b20.perStage.draft === 80 && b20.total === 100,
+      b20.ok ? JSON.stringify(b20) : b20.reason)
   }
-  check('🔴 🔴 **천장(10) 위는 거부한다 — 무제한 호출 없음**',
-    WORKSET_MAX_LIMIT === 10 && judgeStageBudget(11).ok === false && judgeStageBudget(100).ok === false)
-  check('🔴 🔴 **--workset-limit 해석 — 없으면 10 · 천장 위·모양 틀림은 -1**',
-    resolveWorksetLimit([]) === 10 && resolveWorksetLimit(['--workset-limit=7']) === 7
-    && resolveWorksetLimit(['--workset-limit=11']) === -1 && resolveWorksetLimit(['--workset-limit=5x']) === -1
+  check('🔴 🔴 **천장(20) 위는 거부한다 — 무제한 호출 없음**',
+    WORKSET_MAX_LIMIT === 20 && judgeStageBudget(21).ok === false && judgeStageBudget(100).ok === false)
+  check('🔴 🔴 **--workset-limit 해석 — 없으면 20 · 천장 위·모양 틀림은 -1**',
+    resolveWorksetLimit([]) === 20 && resolveWorksetLimit(['--workset-limit=7']) === 7
+    && resolveWorksetLimit(['--workset-limit=21']) === -1 && resolveWorksetLimit(['--workset-limit=5x']) === -1
     && resolveWorksetLimit(['--workset-limit=0']) === -1 && resolveWorksetLimit(['--workset-limit=-3']) === -1)
   for (const bad of [0, -1, 2.5, Number.NaN]) {
     check(`🔴 상한이 ${String(bad)} 이면 거부한다`, judgeStageBudget(bad).ok === false)

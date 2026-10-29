@@ -5,7 +5,10 @@
  * 🔴 하는 것: 잠금을 잡고 → fetch 하고 → 예약 job 을 내리고(내려간 것을 확인하고) →
  *    그 SHA 로 옮기고 → offline 게이트를 돌리고 → manifest/pin 을 준비하고 → job 을 올리고
  *    (올라온 것을 확인하고) → **실제 loaded 경로**를 대조하고 →
- *    `runtime:isolation-check --require-runtime` 까지 통과해야 "배포 완료" 다.
+ *    `runtime:isolation-check --require-runtime --defer-ops-loop-templates` 까지 통과해야 runtime 단계가 끝난다.
+ * 🔴 **그래도 배포 완료가 아니다.** 이 검사는 ops-loop 소유 job(runner-recover·stage-controller)의
+ *    설치본 원문 불일치만 pending 으로 유예한다 — `npm run ops:loop-install -- --apply` 가 새 원문을 설치하고
+ *    **유예 없는 strict** 격리 검사를 통과해야 배포 완료다.
  * 🔴 하나라도 실패하면 되돌린다. 되돌리다 하나가 실패해도 **나머지를 계속 시도**하고,
  *    남은 것을 그대로 적은 뒤 exit 1 한다.
  * 🔴 하지 않는 것: live crawl · DB write · 발행 · release 단계 변경 · cron/Variables 변경.
@@ -243,7 +246,8 @@ if (!APPLY) {
   for (const s of DEPLOY_STEPS) console.log(`     ${s}`)
   console.log('\n  ── 게이트')
   for (const g of OFFLINE_GATES) console.log(`     · npm run ${g}   (job 이 내려가 있어도 돈다)`)
-  console.log('     · npm run runtime:isolation-check -- --require-runtime   🔴 job 을 다시 올린 뒤에만')
+  console.log('     · npm run runtime:isolation-check -- --require-runtime --defer-ops-loop-templates   🔴 job 을 다시 올린 뒤에만')
+  console.log('     · npm run ops:loop-install -- --apply   🔴 그다음 — strict 격리 검사까지 통과해야 배포 완료')
   /**
    * 🔴 **계획도 target 의 템플릿으로 찍는다.**
    *    지금 runtime 에 있는 파일로 찍으면 화면이 옛 인자를 보여주고,
@@ -465,7 +469,8 @@ const fx: DeployEffects = {
    *    들어 있다 — **정상 job 이 전부 실패했다**(실측). 판정은 judgeLoadedConfig 가 한다.
    */
   loadedConfig: (l) => parseLaunchctlPrint(probePrint(l).exitCode === 0 ? probePrint(l).stdout : null),
-  isolationGate: () => act('npx', ['tsx', 'scripts/runtime-isolation-check.mts', '--require-runtime']),
+  // 🔴 ops-loop 소유 job 의 원문 불일치만 유예한다 — strict 재검은 ops-loop-install --apply 가 한다
+  isolationGate: () => act('npx', ['tsx', 'scripts/runtime-isolation-check.mts', '--require-runtime', '--defer-ops-loop-templates']),
 
   readManifest: () => (existsSync(MANIFEST_FILE) ? readFileSync(MANIFEST_FILE, 'utf-8') : null),
   readPin: () => { try { return readFileSync(PIN_FILE, 'utf-8').trim() } catch { return null } },
@@ -504,7 +509,8 @@ console.log('\n  ── 실행한 단계')
 for (const s of result.steps) console.log(`     ${s}`)
 
 if (result.ok) {
-  console.log(`\n✅ 배포 완료 — ${TARGET!.slice(0, 7)}`)
+  console.log(`\n🟡 runtime 단계 통과 — ${TARGET!.slice(0, 7)} · 🔴 **배포는 아직 미완료**다`)
+  console.log('   🔴 다음: npm run ops:loop-install -- --apply — 새 ops-loop 원문 설치 + strict 격리 검사(유예 없음)까지 통과해야 배포 완료')
   console.log(`   게이트: ${DEPLOY_GATES.join(' · ')}`)
   console.log(`   🔴 하지 않은 것: ${DEPLOY_FORBIDDEN.join(' · ')}\n`)
   process.exit(0)

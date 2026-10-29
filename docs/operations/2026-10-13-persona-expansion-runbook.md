@@ -14,9 +14,11 @@
 - 기존 30명을 고치거나 지우지 않는다. wave6가 코드에 있어도 적재·활성화 전 운영 active는 30명이다.
 
 > 2026-10-15 준비 상태: 말투 스냅샷 10묶음은 운영 호스트에 동결했고, P34~P43은 당시 운영 DB read-only
-> 판정에서 ready 10/10 · creative PASS · 집단 다양성 OK였다. 다만 2026-10-16 이름 정책이 추가된 뒤에는
-> 기존 후보 표시명 10개가 작명 분포 gate를 다시 통과하기 전까지 이름 축은 qualification-pending이다.
-> 운영 DB 생성·seed·활성화는 여전히 0이며, 아래 4~7단계는 아직 실행하지 않는다.
+> 판정에서 ready 10/10 · creative PASS · 집단 다양성 OK였다. 2026-10-16 이름 정책 이후 fixture 표시명은
+> 섞인 분포로 다시 준비했다(`d10:prep-check` 안의 `persona-nickname-policy-check` ⑫⑬⑭⑮). 이는 **코드·fixture 준비(candidate-ready)**일 뿐
+> 운영 이름 준비가 아니다. 이름 축은 §2.1의 read-only live B1/B3/within-cohort 대조가 create 전에 PASS하고
+> activate 전에 다시 PASS할 때까지 qualification-pending이다. 운영 DB 생성·seed·활성화는 여전히 0이며,
+> 아래 4~7단계는 아직 실행하지 않는다.
 
 ## 1. 명령
 
@@ -48,21 +50,32 @@
 기존 30명은 공개 정체성이므로 일괄 변경하지 않는다. 아직 운영 DB에 만들지 않은 후보 cohort는 아래 순서를
 모두 통과해야 이름 축이 `ready`다.
 
-1. **비식별 분포만 만든다.** 목표 고객 크롤 작성자 이름에서 원문 문자열을 출력하지 않고 길이 band, 한글/숫자/
-   영문 구성, 단어 수, 받침·반복·숫자 꼬리 같은 리듬 특징의 집계만 만든다. 이름 빈도표와 원문 이름 목록은
-   Git·DB·로그·LLM 입력에 남기지 않는다.
-2. **분포에 맞춰 합성한다.** 한 가지 감성어·계절어·자연물 조합에 몰리지 않게 집단 분포를 먼저 정하고,
-   그 안에서 후보를 만든다. 실제 크롤 이름을 복사하거나 한두 글자만 바꾸는 생성은 금지한다.
-3. **정적 대조를 통과한다.** 현재 회원, 기존 Persona와 폐기 이름, 같은 cohort 후보, 수집 작성자에 대해 exact와
-   일반 사용자가 같은 사람으로 오인할 near-collision을 모두 거절한다.
-4. **활성화 직전에 다시 잰다.** 후보를 만든 뒤 회원·수집 작성자가 늘 수 있으므로 운영 DB create 전에 한 번,
-   activate 직전에 한 번 같은 live 대조를 반복한다. 결과에는 코드·개수·사유만 남긴다.
+1. **집계 분포만 정책 입력이다.** 목표 고객 크롤에서 관측한 길이 band, 한글/숫자/영문 구성, 단어 수,
+   받침·반복·숫자 꼬리 같은 리듬 특징의 **집계**만 합성 정책에 반영한다. 원문 작성자·회원 이름은 복사·변형·
+   저장·로그 출력하지 않고 후보 생성 입력으로도 쓰지 않는다. 이름 빈도표와 원문 이름 목록은 Git·DB·로그·LLM
+   입력에 남기지 않는다.
+2. **섞인 분포로 합성한다.** 한 가지 감성어·계절어·자연물 조합에 몰리지 않게 후보를 만든다. 형식은 한글만(H)·
+   한글+숫자(HD)·영문만(L)·영문+숫자(LD) 넷이며(한글+영문 혼합 금지) 닫힌 합성 목록에서만 고른다. 허용 문자는 완성형 한글·영문·숫자,
+   길이 2~10자다. 10명 묶음은 갈래 3종 이상(fixture 증거)·한 갈래 ≤4·영문 포함 2~4·숫자 포함 2~4·시적 명사 ≤2·
+   한 길이 ≤5·반복 리듬 ≤3·유의어 1이다. 런타임 배정은 상한만 강제하고 live 충돌 시 전원 실패한다
+   (`persona-nickname-policy-check` ⑫⑬⑮⑯가 잠근다).
+3. **원작가 대조 gate는 없다.** #641이 수집 원작가 정체를 인제스트와 Persona 이름 gate에서 의도적으로 제거했다.
+   새 행은 작성자 정체를 남기지 않고, 과거 해시 체인으로는 정체·근접 충돌을 증명할 수 없다. 복사 금지는 구조로
+   증명한다 — source author는 후보 생성·배정에 들어갈 수 없다(`npm run persona:source-author-check` +
+   `npm run persona:gate6b-check`). 별도 임시 작성자 파이프라인을 만들지 않는다. 외부 비회원 작성자와 합성 공개
+   단어가 우연히 겹칠 잔여 가능성은 받아들이며, 결과를 "크롤 작성자 충돌 0"이라 쓰지 않는다.
+4. **라이브 충돌 대조를 통과한다(read-only).** 현재 회원(B1), 비활성·폐기로 남은 정체성까지 포함한 모든 기존
+   Persona(B3), 같은 신규 cohort 안에서 exact와 일반 사용자가 같은 사람으로 오인할 near-collision을 모두
+   거절한다. 운영 DB create 전에 한 번, create 트랜잭션·활성화 순서 안에서 다시 반복한다. 후보를 만든 뒤 회원이
+   늘 수 있다. 결과에는 코드·개수·사유만 남긴다.
 5. **이름만으로 용량을 올리지 않는다.** 표시명 PASS 뒤에도 말투 근거·생활사·no-go·글/댓글 자격·cadence가
    모두 PASS여야 contract-valid로 센다.
 
-현재 P34~P43 fixture의 표시명은 자연물·계절어 계열에 치우친 2026-10-16 이전 후보라 이 gate의 승인값이 아니다.
-운영 DB 행이 0이므로 공개 이력 손실 없이 fixture와 seed 입력에서 교체할 수 있다. 생활사 카드·말투 digest를
-이름 보정의 핑계로 함께 바꾸지 않는다.
+현재 P34~P43 fixture의 표시명은 2026-10-16 이전의 자연물·계절어 후보가 아니라, 섞인 분포로 다시 만들고
+빈 충돌 집합의 기본 배정과 일치시킨 **candidate-ready 입력**이다. 이는 코드·fixture 준비일 뿐 운영 이름 준비가
+아니다. 운영 이름 준비는 위 4번의 live B1/B3/within-cohort 대조가 create 전에 PASS하고 activate 전에 다시 PASS한
+뒤에만 말한다. 활성화·배포·DB 준비를 주장하지 않으며, 운영 DB 행은 0이다. 생활사 카드·말투 digest를 이름 보정의
+핑계로 함께 바꾸지 않는다.
 
 ## 3. 단계별 활성화 방법
 
@@ -77,10 +90,13 @@
 2. `persona:expansion -- --db --fixture=scripts/__fixtures__/persona-expansion-canary.json`에서
    `d20-canary`가 `✅ 자원 준비`이고 canary 10명이 전원 `ready`,
    creative 품질 `PASS`, 집단 다양성 `OK`다.
+   cohort 승격 뒤에는 fixture 코드가 현재 `RUNNABLE_COHORTS`의 해당 cohort 전원과 순서까지 정확히 같을 때만
+   자기 cohort를 제외한 직전 운영 집단과 판정한다. 일부만 겹치거나 닫힌 cohort를 다시 넣으면 fail-closed다.
    말투 화자가 모자라면 정본 말투 자산을 다시 만든다(`persona:reference-build-asset`).
    근거 기준(관측 3 · 안전 원문 2)은 낮추지 않는다.
-3. §2.1 표시명 gate가 비식별 분포·집단 분포·정적 충돌 대조를 모두 PASS한다. 2026-10-15의 이름 후보는
-   이 새 gate 이전 산출물이므로 그대로 활성화하지 않는다.
+3. §2.1 표시명 gate가 집계 분포 정책·섞인 분포 fixture·read-only live B1/B3/within-cohort 대조를 모두 PASS한다.
+   fixture는 candidate-ready일 뿐이므로 live PASS 없이는 create로 가지 않고, activate 전에 다시 PASS해야 한다.
+   2026-10-15의 이름 후보는 이 gate 이전 산출물이므로 쓰지 않는다.
 
 순서 — 각 단계는 앞 단계의 출력을 확인한 뒤에 한다
 
@@ -97,7 +113,13 @@
 4. **seed 파일** — §2.1을 통과한 표시명을 포함해
    `persona:cohort-seed --cohort=wave6-d20-canary --creative=<fixture에서 뽑은 creative 파일> --expect-sha=<sha256>`
    dry-run 뒤 `--write`. 파일은 `tmp/` (gitignored).
-5. **draft 적재** — `persona:cohort-run --cohort=wave6-d20-canary --step=create --apply --limit=10`
+5. **draft 적재** — 표시명은 fixture에서만 뽑는다. fixture `displayName`은 빈 충돌 집합의 기본 배정과 같아야 한다
+   (`persona-nickname-policy-check` ⑭가 잠근다). 먼저 read-only live 대조
+   `persona:expansion -- --db --fixture=scripts/__fixtures__/persona-expansion-canary.json`에서 10명 전원 이름 충돌 0을
+   확인한다. 그 뒤에만 fixture의 `{코드: displayName}` 10개로 `tmp/persona-wave6-d20-canary-displayname.json`을 만든다.
+   하나라도 막히면 파일을 만들지 않고 fixture·기본 배정을 함께 고친다. 파일이 있으면 `persona:cohort-run`이 그것을 쓰고,
+   트랜잭션 안에서 Gate ⑥-B를 다시 판정한다.
+   `persona:cohort-run --cohort=wave6-d20-canary --step=create --apply --limit=10`
    → `--step=seed --apply --limit=10` → `--step=check`. 운영 DB write이므로 창업자 승인 뒤에만 한다.
 6. **활성화** — `ACTOR_USER_ID=<id> persona:cohort-run --cohort=wave6-d20-canary --step=activate --apply --limit=10 --reason "..."`.
    일부만 켜지 않는다(전원 아니면 0).

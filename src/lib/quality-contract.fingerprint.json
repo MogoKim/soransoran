@@ -11,7 +11,7 @@
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "73ee0c560dafe57285559ee7ea8f836d434992e6dbb2acb964c5d97e32dd1408",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
-    "src/lib/supply-schedule-contract.ts": "42436dd62c8c4b72ed2d4792c0cc06570aa28aa2c92ebd24bda6e938ea6e51a0",
+    "src/lib/supply-schedule-contract.ts": "e490bf07ebba8623131207e58de9aa098561f288c4f909f3f1d811a87ea05f13",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
@@ -35,12 +35,10 @@
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v25 digest 546cac2a83d4… → df29a10fc92d… · v25 배포 전 가족 건강 제목의 단수 아이 주체를 계약 digest에 포함",
+    "kind": "behaviorUnchanged",
+    "reason": "D20 공급 workset/cap·proof slot·proof-first 예산·비용추정 배수만 변경; AUTO_READY_CONTRACT·Content Core·semantic review·eligibility·quality digest 구성요소 불변",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/auto-ready-defect-resolution-store.ts"
+      "src/lib/supply-schedule-contract.ts"
     ]
   }
 }

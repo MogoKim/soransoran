@@ -41,7 +41,9 @@ import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from '
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
+  stageControllerLeaseDisposition,
+  OPS_LOOP_INSTALL_STEPS, RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS,
+  KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
 } from './lib/ops-loop-templates'
 import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
@@ -301,6 +303,42 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
   check('🔴 저장은 --apply 이면서 flag on 일 때만', /if \(!APPLY\)[\s\S]{0,200}return 0/.test(cli) && /if \(!flagOn\)[\s\S]{0,200}return 0/.test(cli))
   check('🔴 쓰는 길은 ensureStageDecision 하나 — create/update/upsert/delete 직접 호출 0',
     /ensureStageDecision\(/.test(cli) && !/stageDecision\.(create|update|upsert|delete)/.test(cli))
+  const mainSrc = cli.slice(cli.indexOf('async function main()'))
+  const leaseGate = mainSrc.indexOf('const supplyLease = probeSupplyLease()')
+  const dbFill = mainSrc.indexOf('if (!fillDbConnection())')
+  const prismaOpen = mainSrc.indexOf('const prisma = new PrismaClient()')
+  check('🔴 apply controller는 앞 예약의 busy/unknown에서 DB를 열기 전에 물러나고 마지막 예약은 안전 HOLD를 쓴다',
+    leaseGate >= 0 && leaseGate < dbFill && dbFill < prismaOpen
+      && /stageControllerLeaseDisposition\(supplyLease, NOW\)/.test(mainSrc)
+      && /disposition === 'safe-hold'[\s\S]{0,150}holdForSupplyLease/.test(mainSrc)
+      && /supplyLease === 'busy' \? 0 : 1/.test(mainSrc))
+  check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
+    stageControllerLeaseDisposition('free', new Date('2026-10-30T07:00:00+09:00')) === 'proceed'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:54:00+09:00')) === 'defer'
+    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T07:20:00+09:00')) === 'defer'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:55:00+09:00')) === 'safe-hold'
+    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T08:01:00+09:00')) === 'safe-hold'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T08:16:00+09:00')) === 'safe-hold')
+  const holdStart = cli.indexOf('async function holdForSupplyLease(')
+  const holdEnd = cli.indexOf('/** 🔴 `--evidence-date`', holdStart)
+  const holdSrc = holdStart >= 0 && holdEnd > holdStart ? cli.slice(holdStart, holdEnd) : ''
+  const safeHoldContract = (src: string): boolean =>
+    /sustainedReleaseOf\(previous, evidence\)/.test(src)
+    && /holdAtCurrent\(/.test(src)
+    && /ensureStageDecision\(/.test(src)
+    && !/(loadPublishableStock|readPreflightFacts|decideStage|trialPlanOf|nextStage|genericNextStage|carriedPlanFor|auditAwareGate)/.test(src)
+    && !/readStageDecision\(prisma, TODAY\)/.test(src)
+  check('🔴 lease 안전 HOLD는 전날 증거의 지속 단계만 저장하고 오늘 Queue·preflight·승격 계산을 읽지 않는다',
+    safeHoldContract(holdSrc))
+  check('🔴 변이 검출 — lease 안전 HOLD가 다음 단계 승격을 쓰면 계약 위반',
+    !safeHoldContract(holdSrc.replace('const current = sustainedReleaseOf(previous, evidence)',
+      'const current = nextStage(sustainedReleaseOf(previous, evidence))')))
+  check('🔴 변이 검출 — lease 안전 HOLD가 오늘 Queue를 읽으면 계약 위반',
+    !safeHoldContract(holdSrc.replace('const current = sustainedReleaseOf(previous, evidence)',
+      'const partial = await loadPublishableStock(prisma)\n    const current = sustainedReleaseOf(previous, evidence)')))
+  check('🔴 변이 검출 — lease 안전 HOLD가 오늘 결정을 승격 입력으로 다시 읽으면 계약 위반',
+    !safeHoldContract(holdSrc.replace('const current = sustainedReleaseOf(previous, evidence)',
+      'const today = await readStageDecision(prisma, TODAY)\n    const current = sustainedReleaseOf(previous, evidence)')))
   check('🔴 입력 실패는 holdAtCurrent 로 간다', /failures\.length > 0[\s\S]{0,200}holdAtCurrent/.test(cli))
 }
 
@@ -362,8 +400,14 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
   const sc = renderStageControllerPlist(input)
   const slots = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
-  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 세 번(재시도)',
-    slots.length === 3 && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE) && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 네 번(마지막 07:55 안전 판정)',
+    slots.length === 4 && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 5
+    && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE)
+    && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 네 슬롯 대조가 필수다',
+    OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('controller plist 는 아직 갱신되지 않는다'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55 네 슬롯 대조'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('runtime deploy 만 하고 끝내지 않는다')))
   check('controller 는 runtime 의 스크립트를 --apply 로 부른다', sc.includes('<string>/r/scripts/stage-controller.mts</string>') && sc.includes('<string>--apply</string>')
     && sc.includes('<key>WorkingDirectory</key><string>/r</string>'))
   const rr = renderRunnerRecoverPlist(input)
@@ -417,6 +461,16 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
     /manifest\.json/.test(installer) && /설치 검증 실패/.test(installCore)
     && /applyInstall\(desired, runtimeRoot, \{/.test(installer) && /restore: \(\) => restore\(backupDir\),/.test(installer)
     && /process\.exit\(outcome\.restored \? 1 : 2\)/.test(installer))
+  {
+    // 🔴 D20 rollout 순서 배선 — 설치기는 strict 격리 검사를 **유예 플래그 없이** 붙이고, 실패면 restore 경로로 간다
+    const isoWire = /isolation: \(\) => \{\n\s+const iso = run\(npxPath, \['tsx', 'scripts\/runtime-isolation-check\.mts', '--require-runtime'\]\)\n\s+if \(!iso\.ok\) console\.log\(iso\.out\)\n\s+return iso\.ok\n\s+\},/
+    check('🔴 공식 설치기는 loaded 검증 뒤 strict runtime:isolation-check --require-runtime 을 붙인다(유예 플래그 0)',
+      isoWire.test(installer) && !installer.includes("'--defer-ops-loop-templates'"))
+    check('🔴 설치 판정부는 loaded 검증 통과 뒤 io.isolation() 이 false 면 io.restore() 로 되돌린다',
+      /const isolated = io\.isolation\(\)/.test(installCore)
+      && /if \(isolated\) return \{ ok: true \}\n\s+io\.log\('🔴 strict 격리 검사 실패 — 설치 전 상태로 되돌린다'\)\n\s+return \{ ok: false, restored: io\.restore\(\) \}/.test(installCore)
+      && installCore.indexOf('const isolated = io.isolation()') > installCore.indexOf('verifyLoaded(label, xml, io.print(label), runtimeRoot)'))
+  }
   check('🔴 공식 설치기는 발행 러너의 렌더 표식과 **loaded** 표식·label 을 둘 다 확인하고, 틀리면 rollback 한다',
     /judgeLaunchdRunMarker\(plistEnvironmentOf\(desired\.get\(PUBLISH_RUNNER_LABEL\)!\)\)/.test(installer)
     && /judgeLaunchdRunMarker\(launchctlEnvironmentOf\(printOut\)\)/.test(installCore)
@@ -729,6 +783,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   type Sim = { calls: string[]; restores: number; loaded: Map<string, string> }
   const simulate = (opt: {
     failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
+    isolationOk?: boolean
   } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
     const old = desiredPlists('heartbeat', input)
     const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
@@ -748,7 +803,8 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
         const out = x === undefined ? null : printOf(l, x)
         return opt.printOverride === undefined ? out : opt.printOverride(l, out)
       },
-      restore: () => { sim.restores += 1; return opt.restoreOk ?? true },
+      isolation: () => { sim.calls.push('isolation'); return opt.isolationOk ?? true },
+      restore: () => { sim.calls.push('restore'); sim.restores += 1; return opt.restoreOk ?? true },
       log: () => {},
     })
     return { outcome, sim }
@@ -781,6 +837,23 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   const restoreFail = simulate({ failBootstrap: KA, restoreOk: false })
   check('(d) rollback 자체가 실패하면 restored=false 로 알린다(설치기는 exit 2)',
     !restoreFail.outcome.ok && !restoreFail.outcome.restored && restoreFail.sim.restores === 1)
+
+  // ── (e) 🔴 D20 rollout 순서 — loaded 검증 뒤 strict 격리 검사 · 실패면 snapshot 복원 ──
+  check('(e) 🔴 strict 격리 true → 설치 성공 · rollback 0 · 격리 검사는 정확히 한 번',
+    good.outcome.ok && good.sim.restores === 0 && good.sim.calls.filter((c) => c === 'isolation').length === 1)
+  check('(e) 🔴 strict 격리는 **모든 bootstrap 뒤**에 돈다(loaded 검증 다음)',
+    idx('isolation') > lastOf('bootstrap'))
+  {
+    const isoFail = simulate({ isolationOk: false })
+    check('(e) 🔴 strict 격리 false → 전체 rollback(snapshot 복원) · 설치 실패',
+      rolledBack(isoFail) && isoFail.sim.calls.indexOf('restore') > isoFail.sim.calls.indexOf('isolation'))
+    const isoFailRestoreFail = simulate({ isolationOk: false, restoreOk: false })
+    check('(e) 🔴 strict 격리 false + rollback 실패 → restored=false(설치기는 exit 2)',
+      !isoFailRestoreFail.outcome.ok && !isoFailRestoreFail.outcome.restored && isoFailRestoreFail.sim.restores === 1)
+    const loadedFail = simulate({ failBootstrap: KA })
+    check('(e) loaded 검증이 이미 실패하면 격리 검사 없이 바로 rollback 한다(잴 것이 없다)',
+      rolledBack(loadedFail) && !loadedFail.sim.calls.includes('isolation'))
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

@@ -35,7 +35,7 @@ import { AUTO_DECIDER, HUMAN_DECIDER, eligibilityOf } from '../src/lib/auto-read
 import { authoritativeGate } from '../src/lib/auto-ready-repo'
 import { RETRYABLE_NOTE_PREFIX, stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
 import { closeRunStatus, finalizeAutoReady, mayFinalizeAutoReady } from '../src/lib/supply-process'
-import { judgeAgainst, replenishmentOf, type ReadyCohortFact } from '../src/lib/stage-ladder-generic'
+import { judgeAgainst, readyCapacityOf, replenishmentOf, type ReadyCohortFact } from '../src/lib/stage-ladder-generic'
 import { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE } from '../src/lib/micro-seed-supply-autofill'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
@@ -345,21 +345,23 @@ console.log('PROBE ' + JSON.stringify({
     }
 
     /**
-     * 🔴 2026-10-27 실측 cohort — 정본 `replenishmentOf` · `judgeAgainst` 그대로(수치를 다시 계산하지 않는다).
-     *    목표 10 · 용량 14. 마감 전 미도장 3 = 모름 → 구간 10~18 → UNKNOWN. 마감 뒤 예정 3 → 10 = 10 → ok.
+     * 🔴 정본 `readyCapacityOf` · `replenishmentOf` · `judgeAgainst`를 그대로 쓴다.
+     *    D20 처리량 계약(원천 20 × 당일 5회)에서 원천 50 · raw 7의 용량은 14다.
+     *    마감 전 미도장 3 = 모름 → 필요 구간 10~18이라 UNKNOWN, 마감 뒤 예정 3이면 필요 10이라 ok다.
      */
     const TARGET = 10
-    const fits = (need: number): boolean => need <= 14
+    const capacity = readyCapacityOf(7, 50)
+    const fits = (need: number): boolean => capacity !== null && need <= capacity
     const fact = (f: Omit<ReadyCohortFact, 'usdPerSlotValidResult'>): ReadyCohortFact => ({ ...f, usdPerSlotValidResult: null })
     const rawOf = (f: ReadyCohortFact): number => f.published + f.lost + f.scheduled + f.unknown
-    const beforeF = fact({ sources: 35, published: 4, lost: 0, scheduled: 0, unknown: 3 })
-    const afterF = fact({ sources: 35, published: 4, lost: 0, scheduled: 3, unknown: 0 })
+    const beforeF = fact({ sources: 50, published: 4, lost: 0, scheduled: 0, unknown: 3 })
+    const afterF = fact({ sources: 50, published: 4, lost: 0, scheduled: 3, unknown: 0 })
     const rb = replenishmentOf(TARGET, beforeF)
     const ra = replenishmentOf(TARGET, afterF)
-    check('🔴 🔴 **마감 전 실측(원천 35 · raw 7 · 공개 4 · 손실 0 · 예정 0 · 모름 3) → min 10 · max 18 · judge unknown**',
-      rawOf(beforeF) === 7 && rb.min === 10 && rb.max === 18 && judgeAgainst(rb, fits) === 'unknown', JSON.stringify(rb))
-    check('🔴 🔴 **마감 뒤 실측(원천 35 · raw 7 · 공개 4 · 손실 0 · 예정 3 · 모름 0) → min = max 10 · judge ok**',
-      rawOf(afterF) === 7 && ra.min === 10 && ra.max === 10 && judgeAgainst(ra, fits) === 'ok', JSON.stringify(ra))
+    check('🔴 🔴 **마감 전 실측(원천 50 · raw 7 · 공개 4 · 손실 0 · 예정 0 · 모름 3) → 실제 용량 14 · 필요 10~18이라 UNKNOWN**',
+      capacity === 14 && rawOf(beforeF) === 7 && rb.min === 10 && rb.max === 18 && judgeAgainst(rb, fits) === 'unknown', JSON.stringify(rb))
+    check('🔴 🔴 **마감 뒤 실측(원천 50 · raw 7 · 공개 4 · 손실 0 · 예정 3 · 모름 0) → 실제 용량 14 · 필요 10이라 ok**',
+      capacity === 14 && rawOf(afterF) === 7 && ra.min === 10 && ra.max === 10 && judgeAgainst(ra, fits) === 'ok', JSON.stringify(ra))
   }
 
   console.log('\nI 변이 — 임시 복사본만 · 자식이 실제로 돈 변이만 센다')

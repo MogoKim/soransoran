@@ -15,8 +15,9 @@ import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import { COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT } from '../src/lib/persona-cohort'
 import {
   activityConcentration, CODE_FORMAT_LIMITS, codeCeiling, codeLimitsToLift, codeOrderSafe, codeRoom,
-  diversitySubjectOf, diversitySubjectOfCard, EXPANSION_STEPS, expansionStepOf, judgePopulationDiversity,
-  planExpansionStep, PROPOSED_COHORTS, type DiversityRule, type DiversitySubject, type ExpansionResources,
+  diversitySubjectOf, diversitySubjectOfCard, expansionFixtureComparisonInputs, EXPANSION_STEPS,
+  expansionStepOf, judgeExpansionFixtureScope, judgePopulationDiversity, planExpansionStep, PROPOSED_COHORTS,
+  type DiversityRule, type DiversitySubject, type ExpansionResources,
 } from '../src/lib/persona-expansion'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
@@ -66,6 +67,51 @@ check('승격 코드는 P34~P43 append-only · 폐기 코드 재사용 0',
   promoted.every((c) => RETIRED_AUTOGEN_CODES[c] === undefined)
   && promoted.join(',') === Array.from({ length: 10 }, (_, i) => autogenCodeOf(34 + i)).join(','))
 check('fixture 코드 = 승격 cohort 코드', fixture.candidates.map((c) => c.code).join(',') === promoted.join(','))
+const scope = (cohort: string, codes: readonly string[]) => judgeExpansionFixtureScope({
+  fixtureCohort: cohort,
+  fixtureCodes: codes,
+  productionCodes: PRODUCTION_PERSONA_CODES,
+  runnableCohorts: RUNNABLE_COHORTS.map((id) => COHORTS[id]),
+})
+const promotedScope = scope(fixture.cohort, fixture.candidates.map((candidate) => candidate.code))
+check('🔴 승격된 runnable fixture는 자기 cohort를 뺀 기존 30명과 판정한다',
+  promotedScope.ok && promotedScope.mode === 'runnable'
+  && promotedScope.baselineCodes.join(',') === priorProductionCodes.join(','))
+const proposedScope = scope('wave7-proposal', ['P44', 'P45'])
+check('승격 전 fixture는 운영 universe 전체를 기준으로 판정한다',
+  proposedScope.ok && proposedScope.mode === 'proposed'
+  && proposedScope.baselineCodes.join(',') === PRODUCTION_PERSONA_CODES.join(','))
+check('🔴 운영 코드 일부만 섞은 fixture는 막는다', !scope('wave6-d20-canary', ['P34', 'P44']).ok)
+check('🔴 runnable cohort에서 코드가 빠지면 막는다', !scope('wave6-d20-canary', promoted.slice(0, -1)).ok)
+check('🔴 runnable cohort에 코드가 더해지면 막는다', !scope('wave6-d20-canary', [...promoted, 'P44']).ok)
+check('🔴 runnable cohort id에 전혀 다른 제안 코드를 넣어도 막는다', !scope('wave6-d20-canary', ['P44']).ok)
+check('🔴 같은 운영 코드라도 cohort id가 다르면 막는다', !scope('wrong-cohort', promoted).ok)
+check('🔴 닫힌 운영 cohort fixture는 막는다', !scope('wave5-d10', COHORTS['wave5-d10'].codes).ok)
+const proposedComparison = expansionFixtureComparisonInputs({
+  mode: 'proposed', fixtureCodes: ['P44'], poolCodes: ['P01', 'P44'], dbCodes: ['P45'],
+})
+check('🔴 승격 전 제안은 자기 코드의 Pool 카드·DB 행을 CODE_TAKEN 대조에서 빼지 않는다',
+  proposedComparison.ok && proposedComparison.existingCardCodes.join(',') === 'P01,P44'
+  && proposedComparison.takenCodes.has('P44') && proposedComparison.takenCodes.has('P45'))
+const runnableComparison = expansionFixtureComparisonInputs({
+  mode: 'runnable', fixtureCodes: ['P34', 'P35'], poolCodes: ['P01', 'P34', 'P35', 'P99'], dbCodes: [],
+})
+check('승격 runnable은 자기 정본 카드만 기존 카드·taken 대조에서 뺀다',
+  runnableComparison.ok && runnableComparison.existingCardCodes.join(',') === 'P01,P99'
+  && !runnableComparison.takenCodes.has('P34') && !runnableComparison.takenCodes.has('P35'))
+const alreadyLoadedComparison = expansionFixtureComparisonInputs({
+  mode: 'runnable', fixtureCodes: ['P34'], poolCodes: ['P01', 'P34'], dbCodes: ['P34'],
+})
+check('🔴 승격 runnable도 DB에 이미 적재된 자기 코드는 CODE_TAKEN 대조에 남긴다',
+  alreadyLoadedComparison.ok && alreadyLoadedComparison.takenCodes.has('P34'))
+check('🔴 승격 runnable 정본 카드가 빠지면 판정을 시작하지 않는다',
+  !expansionFixtureComparisonInputs({
+    mode: 'runnable', fixtureCodes: ['P34', 'P35'], poolCodes: ['P01', 'P34'], dbCodes: [],
+  }).ok)
+check('🔴 승격 runnable 정본 카드가 중복돼도 판정을 시작하지 않는다',
+  !expansionFixtureComparisonInputs({
+    mode: 'runnable', fixtureCodes: ['P34'], poolCodes: ['P01', 'P34', 'P34'], dbCodes: [],
+  }).ok)
 const promotedCards = new Map(pool.cards.filter((card) => promoted.includes(card.code)).map((card) => [card.code, card]))
 check('🔴 wave6 카드 10장이 모두 정본 Pool에 있고 파싱 문제 0', promotedCards.size === 10 && pool.problems.length === 0)
 for (const candidate of fixture.candidates) {
@@ -114,6 +160,12 @@ check('🔴 보충 말투 근거는 --db 없이는 회원 대조 전에 거부�
 check('보충 말투 근거는 익명 행만 append-only 말투 풀에 넘긴다',
   cli.includes('readUsableVoiceEvidence({')
   && cli.includes('voicePoolFor({ repoRoot, newCodes: batchCodes, supplementalRows })'))
+check('🔴 CLI가 승격 fixture scope와 직전 운영 기준집단을 실제 판정 입력에 쓴다',
+  cli.includes('judgeExpansionFixtureScope({')
+  && cli.includes('expansionFixtureComparisonInputs({')
+  && cli.includes('existingCards: pool.cards.filter((card) => existingCardCodeSet.has(card.code))')
+  && cli.includes('takenCodes: comparison.takenCodes')
+  && cli.includes('productionBundles: voice.productionBundles.filter((bundle) => baselineCodeSet.has(bundle.personaCode))'))
 check('🔴 승격 산출물은 ready 후보의 검증된 카드·seed만 JSON에 싣는다',
   cli.includes("cardMarkdown: c.status === 'ready' ? c.autogen.cardMarkdown : null")
   && cli.includes("seed: c.status === 'ready' ? c.autogen.seed : null"))
@@ -196,10 +248,10 @@ const only = (got: ConflictCode[], want: ConflictCode): boolean => got.length ==
 for (const c of fixture.candidates) check(`fixture ${c.code} 충돌 0 (대조 집합 빈 값)`, conf(c).length === 0, conf(c).join(','))
 check('반례 — 대조 집합이 없으면 NAME_MEMBERS_UNMEASURED 만 (통과 아님)', only(conf(p34, { nameSets: null }), 'NAME_MEMBERS_UNMEASURED'))
 check('반례 — 표시명에 지역명 → NAME_POLICY 만', only(conf(edit({ displayName: '부산꽃' })), 'NAME_POLICY'))
-check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: [], personaNames: ['노을'] } }), 'NAME_COLLISION'))
-check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: ['노을'], personaNames: [] } }), 'NAME_COLLISION'))
+check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: [], personaNames: [p34.displayName] } }), 'NAME_COLLISION'))
+check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p34, { nameSets: { memberNames: [p34.displayName], personaNames: [] } }), 'NAME_COLLISION'))
 check('반례 — 묶음 안 같은 이름 → NAME_BATCH_CONFUSABLE 만',
-  only(conf(p34, { names: new Map([...batchNames, ['P35', '노을']]) }), 'NAME_BATCH_CONFUSABLE'))
+  only(conf(p34, { names: new Map([...batchNames, ['P35', p34.displayName]]) }), 'NAME_BATCH_CONFUSABLE'))
 check('반례 — 대상 밖 연령대 → AGE_OUT_OF_AUDIENCE 포함',
   conf(edit({ lifePatch: { ageBand: '30대 후반' } })).includes('AGE_OUT_OF_AUDIENCE'))
 check('반례 — 생일이 나이대와 어긋난다 → AGE_LIFE_CONFLICT 만', only(conf(edit({ lifePatch: { birthDate: '1990-01-01' } })), 'AGE_LIFE_CONFLICT'))

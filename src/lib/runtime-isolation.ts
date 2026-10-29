@@ -595,7 +595,27 @@ export type OptionalJobVerdict = {
   problems: string[]
   /** 🔴 통과여도 무엇을 봤는지 적는다 — "미설치" 를 조용히 넘기지 않는다 */
   notes: string[]
+  /**
+   * 🔴 **유예한 것** — `deferOpsLoopTemplate` 일 때 ops-loop 소유 job 의 설치본 원문 불일치만 여기 온다.
+   *    통과가 아니라 "ops-loop-install 이 아직 남았다" 는 기록이다. 비어 있지 않으면 배포는 미완료다.
+   */
+  pending: string[]
 }
+
+/**
+ * 🔴 **설치본 원문(템플릿 바이트) 불일치를 유예할 수 있는 label — ops-loop-install 이 소유한 둘뿐이다** (2026-10-29).
+ *
+ *    runtime:deploy 는 잠시 멈춘 이 둘을 **옛 설치본 그대로** 되올린다(render·write 하지 않는다 — 소유자가 아니다).
+ *    그 직후의 strict 격리 검사는 옛 원문 ≠ 새 템플릿으로 막혀, 정작 새 원문을 설치할 ops-loop-install 까지
+ *    가지 못했다. 그래서 runtime:deploy 의 마지막 격리 검사만 `--defer-ops-loop-templates` 로 **원문 불일치 하나**를
+ *    유예하고, ops-loop-install 이 설치 뒤 strict 로 다시 잰다.
+ *    🔴 경로 · 설치/loaded · loaded 인자/WD · HEAD=pin · 추적 스크립트 · unknown/unloaded · render 실패는 유예하지 않는다.
+ *    🔴 label 문자열은 `scripts/lib/ops-loop-templates.ts` 정본과 같아야 한다 — 격리 검사 fixture 가 대조한다.
+ */
+export const OPS_LOOP_TEMPLATE_DEFER_LABELS: readonly string[] = [
+  'com.soransoran.runner-recover',
+  'com.soransoran.stage-controller',
+]
 
 /**
  * 🔴 **설치가 선택인 runtime job 의 격리 판정** (2026-09-28).
@@ -613,6 +633,7 @@ export type OptionalJobVerdict = {
  *    · 설치본 있음 + loaded → 전부 값으로 대조한다
  *        ① 실제 load 된 plist 경로 = LaunchAgents 정본 자리
  *        ② 설치본 원문 = runtime 템플릿 render 결과 (바이트)
+ *           🔴 `deferOpsLoopTemplate` + `OPS_LOOP_TEMPLATE_DEFER_LABELS` 일 때만 이 불일치 **하나**가 pending 이 된다
  *        ③ 설치본 program·WorkingDirectory 가 runtime 안 · 개발 트리 밖
  *        ④ loaded program·WorkingDirectory 가 runtime 안 · loaded 인자 = 설치본 인자 · loaded WD = 설치본 WD
  *        ⑤ runtime HEAD = 고정 SHA · 실행 스크립트가 그 SHA 에 추적되는 파일
@@ -638,13 +659,19 @@ export function judgeOptionalRuntimeJob(input: {
   pinnedSha: string | null
   /** 실행 스크립트가 runtime HEAD 에 추적되는 파일인가 — 부르는 쪽이 `git cat-file -e` 로 실측 */
   programTrackedAtHead: boolean | null
+  /**
+   * 🔴 runtime:deploy 전환 전용 — `OPS_LOOP_TEMPLATE_DEFER_LABELS` 의 **설치본 원문 불일치 하나만** pending 으로 돌린다.
+   *    다른 label 이면 켜도 아무것도 유예하지 않는다. 기본 false(strict).
+   */
+  deferOpsLoopTemplate?: boolean
 }): OptionalJobVerdict {
   const L = input.label
   const installed = input.installedXml !== null
   const problems: string[] = []
   const notes: string[] = []
+  const pending: string[] = []
   if (input.state === 'unknown') {
-    return { ok: false, installed, problems: [`${L}: launchctl 상태를 확인하지 못했다 — 통과시키지 않는다(fail-closed)`], notes }
+    return { ok: false, installed, problems: [`${L}: launchctl 상태를 확인하지 못했다 — 통과시키지 않는다(fail-closed)`], notes, pending }
   }
   if (!installed) {
     if (input.state === 'loaded') {
@@ -652,17 +679,17 @@ export function judgeOptionalRuntimeJob(input: {
         `🔴 ${L}: LaunchAgents 정본 자리에 설치본이 없는데 loaded 다`
         + ` — 다른 plist 로 올라와 있다 (${input.loadedPlistPath ?? '경로 모름'})`,
       )
-      return { ok: false, installed, problems, notes }
+      return { ok: false, installed, problems, notes, pending }
     }
     notes.push(`${L}: 설치되지 않았다 — 필수 아님 (설치하면 이 검사가 경로·인자·SHA 를 대조한다)`)
-    return { ok: true, installed, problems, notes }
+    return { ok: true, installed, problems, notes, pending }
   }
   if (input.state !== 'loaded') {
     problems.push(
       `🔴 ${L}: 설치본은 있는데 loaded 가 아니다 — 다음 로그인·재부팅 때 그 파일로 등록된다`
       + ' (설치를 되돌렸다면 plist 를 보관소로 옮긴다)',
     )
-    return { ok: false, installed, problems, notes }
+    return { ok: false, installed, problems, notes, pending }
   }
   // ① 실제 load 된 plist 가 정본 자리인가
   if (input.loadedPlistPath !== input.expectedPlistPath) {
@@ -675,7 +702,11 @@ export function judgeOptionalRuntimeJob(input: {
   if (input.expectedXml === null) {
     problems.push(`${L}: runtime 템플릿을 render 하지 못했다 — 대조할 기준이 없다(fail-closed)`)
   } else if (input.installedXml !== input.expectedXml) {
-    problems.push(`🔴 ${L}: 설치본이 runtime 템플릿 render 와 다르다 — 템플릿이 바뀌었거나 손으로 고쳤다 (다시 렌더해 설치한다)`)
+    if (input.deferOpsLoopTemplate === true && OPS_LOOP_TEMPLATE_DEFER_LABELS.includes(L)) {
+      pending.push(`🟡 ${L}: 설치본이 runtime 템플릿 render 와 다르다 — 유예(pending) · ops-loop-install --apply 가 새 원문을 설치하고 strict 로 다시 잰다`)
+    } else {
+      problems.push(`🔴 ${L}: 설치본이 runtime 템플릿 render 와 다르다 — 템플릿이 바뀌었거나 손으로 고쳤다 (다시 렌더해 설치한다)`)
+    }
   }
   // ③ 설치본 경로
   const file = judgeJobPath({
@@ -710,6 +741,10 @@ export function judgeOptionalRuntimeJob(input: {
       ? `${L}: 실행 스크립트가 runtime HEAD 에 있는지 확인하지 못했다(fail-closed)`
       : `🔴 ${L}: 실행 스크립트가 runtime HEAD 에 추적되는 파일이 아니다 — 고정 SHA 밖의 코드를 돈다`)
   }
-  if (problems.length === 0) notes.push(`${L}: 설치·loaded — 경로·인자·원문·SHA 전부 runtime 과 같다`)
-  return { ok: problems.length === 0, installed, problems, notes }
+  if (problems.length === 0) {
+    notes.push(pending.length === 0
+      ? `${L}: 설치·loaded — 경로·인자·원문·SHA 전부 runtime 과 같다`
+      : `${L}: 설치·loaded — 경로·인자·SHA 는 runtime 과 같다 · 🟡 원문은 ops-loop-install 대기`)
+  }
+  return { ok: problems.length === 0, installed, problems, notes, pending }
 }
