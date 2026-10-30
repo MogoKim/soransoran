@@ -760,6 +760,18 @@ export type ProcessRun = {
    *    없으면 옛 기록이다. live 회차가 이 칸 없이 끝나면 성공이 아니다(`closeRunStatus`).
    */
   autoReady?: AutoReadyFinalize
+  /**
+   * 🔴 **회차 후 원천 기회 inventory** (opportunities-v3).
+   *    preflight가 가장 최근 live 공급 회차와 inventory 파일을 같은 runId로 묶는다.
+   *    없으면 옛 회차 inventory로 내려가지 않고 모름으로 닫는다. 없는 옛 기록은 legacy다.
+   */
+  opportunityInventory?: {
+    status: 'written' | 'failed'
+    runId: string
+    observedAt: string
+    written: number | null
+    reason: string | null
+  }
 }
 export type { FillRecord }
 

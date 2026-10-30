@@ -1,7 +1,7 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-29 07:10 KST
-> 마지막 창업자 동기화: 2026-10-29
+> as-of: 2026-10-30 11:51 KST
+> 마지막 창업자 동기화: 2026-10-30
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
 > [`NORTH-STAR.md`](./NORTH-STAR.md)와
@@ -11,11 +11,12 @@
 
 ## 0. 창업자용 한 문장
 
-**10월 28일 자연 D10은 자동 10/10, 첫 댓글 10/10, 추가 댓글 7건, 감사 2/2,
-수동 물량 0, usageUnknown 0으로 PASS했다. D20 처리량 보정과 rollout 순서 보정은
-main 병합·보조 Mac 배포·controller 네 슬롯·strict 격리까지 PASS했고, 10월 29일 07:00
-자연 controller가 `TRIAL · 공개 d20 · 준비 d30`을 저장했다. D20 개방은 완료됐지만
-자연 20/20과 댓글·감사·비용 증거가 끝나기 전에는 D20 operating PASS가 아니다.**
+**10월 28일 자연 D10은 PASS했다. 10월 30일 D20 재시험은 06:15 opportunities-v2가
+현재 JIT 슬롯에서 당장 나갈 수 없던 51건을 다음 D20 기회에서도 먼저 제외해,
+07:00 preflight가 12/20만 인정하고 `PREPARE d10`으로 닫힌 것이 확인됐다. 08:15에는 같은 원천으로
+D20 dry-run이 PASS했으므로 원천 부족이 아니라 **현재 공급 시간 지평과 다음 단계 증명 시간 지평을
+섞은 계약 결함**이다. opportunities-v3 stage-neutral inventory 보정은 코드·격리 DB 검증 중이며,
+병합·배포·자연 06:15·07:00 증거 전에는 D20 복구를 PASS로 쓰지 않는다.**
 
 ## 1. 검증된 운영 기준선
 
@@ -110,9 +111,27 @@ controller 시각 변경은 runtime 배포만으로 설치되지 않는다. depl
 | D10 operating | **PASS** |
 | D20 전환 code | **PASS** · PR #810·#811 exact-head CI·격리 DB 통과 |
 | D20 전환 deployed | **PASS** · runtime HEAD=pin=manifest · controller 07:00/07:20/07:40/07:55 · strict 격리 |
-| D20 preflight | **PASS** · 처리량 22 · Persona 40 · 첫 댓글 용량 258 · blocker 0 |
-| D20 operating | **진행 중** · 07:00 자연 `TRIAL d20` 개방 · 자연 20/20 전에는 PASS 금지 |
+| D20 preflight | **10/30 FAIL** · opportunities-v2 시간 지평 결함 · v3 보정 검증 중 |
+| D20 operating | **재시험 미개방** · 10/30 `PREPARE d10` · v3 배포 후 자연 증거 필요 |
 | D30 이상 | D20 operating PASS 전에는 개방 금지 |
+
+## 4.2 10월 30일 D20 재시험 결함과 복구 계약
+
+| 구간 | 관측 사실 | 판정 |
+|---|---:|---|
+| 10월 29일 22:15 원천 | lifecycle 후보 80 | 원천 재료는 존재 |
+| 10월 30일 06:15 v2 스냅샷 | 원천 inventory 29 기록 · 51 `SLOT_INELIGIBLE` | 현재 JIT release로 다음 D20 원천을 먼저 잘라냄 |
+| 07:00 controller | 29개 원천에 측정 수율을 적용한 최종 기회 12/20 · `PREPARE d10` | D20 재시험 미개방 |
+| 08:15 이후 read-only | inventory 55 · D20 dry-run PASS | 기회 자체가 아닌 판정 시각·계약 문제 |
+
+복구 정본은 다음 하나다.
+
+1. 현재 공급 선택은 자신의 부족 슬롯 release를 계속 쓴다.
+2. 회차 종료 후 실제 큐·생성 후보·결론 상태를 다시 읽어 소비된 원천만 뺀다.
+3. 선택됐어도 실제 소비되지 않은 재시도 가능 원천은 stage-neutral inventory에 남긴다.
+4. preflight가 각 원천을 자신의 대상 Dn 슬롯에서 다시 판정한다.
+5. 최신 live 공급 회차와 inventory를 runId로 묶고, 옛 판·미래 판·손상·누락 inventory는
+   직전 회차로 내려가지 않고 fail-closed한다.
 
 ## 5. 다음 critical path
 
@@ -120,8 +139,8 @@ controller 시각 변경은 runtime 배포만으로 설치되지 않는다. depl
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | **완료** · 처리량·예산·controller 배포 | code·runtime·controller 네 슬롯·read-only preflight PASS | 수동 증거 |
-| D20 | **진행 중** · 자연 D20 · D10 operating PASS 선행 | 자동 20/20·댓글·감사·비용 PASS | stage·READY·게시 보정 |
+| D20-FIX | **진행 중** · opportunities-v3 stage-neutral inventory | code·격리 DB·main·runtime·자연 06:15/07:00 증거 | 옛 inventory 수정 |
+| D20 | **재시험 대기** · D10 operating PASS 선행 | 자동 20/20·댓글·감사·비용 PASS | stage·READY·게시 보정 |
 | D30 | 자연 D30 · D20 operating PASS 선행 | Persona 60·profile green·자동 30/30 | D30 생략 |
 | D50 | 자연 D50 · D30 operating PASS 선행 | Persona 100·profile green·자동 50/50 | D20에서 바로 D50 |
 | VIEWS | 실제 근거 조회수 | 원장·dedupe·내부/봇 제외·UI 표본 PASS | 댓글 배수·최소값·난수 |

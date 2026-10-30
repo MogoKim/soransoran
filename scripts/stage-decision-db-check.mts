@@ -526,7 +526,11 @@ async function main(): Promise<void> {
       const runId = '20260930-131500'
       writeFileSync(join(dir, opportunitiesFileName(runId)), JSON.stringify({
         kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: '2026-09-30T13:15:00.000Z',
-        slotAt: slotTimesOn('2026-10-01', profileOf('d3'))[0]!.toISOString(), evidence: Array.from({ length: n }, (_, i) => evidence(i)),
+        inventory: {
+          basis: 'stage-neutral-lifecycle-v1', axis: 'auto-seed',
+          counts: { inputRows: n, lifecyclePassed: n, autoSeed: n, evidenceMissing: 0, written: n },
+        },
+        evidence: Array.from({ length: n }, (_, i) => evidence(i)),
       }))
     }
     const facts = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {

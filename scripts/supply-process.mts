@@ -62,9 +62,9 @@ import { buildQueueSnapshot, pendingSourceKeysOf, queueSnapshotFileName } from '
 import {
   attemptedOutcomes, concludedSourceKeys, humanDecisionIndexOf, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
   sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
-  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName,
-  WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
-  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease, isAutoSupplyConsumable,
+  buildOpportunitySnapshot, selectWorkset, worksetAxisOf, worksetFileName, worksetInventory,
+  WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetLifecycleInput, type WorksetRow,
+  opportunitiesFileName, preGenerationRelease,
 } from '../src/lib/supply-workset'
 /** 🔴 공급 선택 관측(P0-B0) — 선택이 끝난 뒤 기록만 읽는다. 선택 · 유료 단계 · DB 에 영향 0 */
 import {
@@ -93,7 +93,7 @@ import {
   CARRY_REJECT_LABEL, buildFillRecord, describeSkips, resolveFillArgs, runFillWithRetry,
   type CarryRejectCode,
 } from '../src/lib/supply-fill-retry'
-import { planCarryOver } from './lib/fill-carry-over.mjs'
+import { planCarryOver, planPostRunCarryOver } from './lib/fill-carry-over.mjs'
 
 /**
  * 🔴 **이 회차의 시각 하나** (2026-09-23 마스터 지적). 여기서 만들고,
@@ -1016,19 +1016,29 @@ async function main(proof: LeaseProof | null): Promise<number> {
    */
   let queuedSources: SourceKeySet | null = null
   let snapOk = false
-  try {
+  const readQueueSourceState = async () => {
     const qrows = await prisma.originalPostApprovalQueue.findMany({
       select: { createdPostId: true, rawContent: { select: { sourceArticleId: true, sourceSite: true } } },
     })
-    // 🔴 글 쪽 원천 칸 — 큐를 거치지 않은 옛 글도 같은 원천이면 막는다. 제목·본문은 읽지 않는다
     const posts = await prisma.post.findMany({
       where: { sourceArticleId: { not: null } },
       select: { sourceSite: true, sourceArticleId: true },
     })
-    queuedSources = queuedSourceKeysOf([
-      ...qrows.map((r) => ({ sourceSite: r.rawContent?.sourceSite ?? '', sourceArticleId: r.rawContent?.sourceArticleId ?? '' })),
-      ...posts,
-    ])
+    return {
+      qrows,
+      queuePending: pendingSourceKeysOf(qrows.map((r) => ({
+        sourceArticleId: r.rawContent?.sourceArticleId ?? '', sourceSite: r.rawContent?.sourceSite ?? '', createdPostId: r.createdPostId,
+      }))),
+      queuedSources: queuedSourceKeysOf([
+        ...qrows.map((r) => ({ sourceSite: r.rawContent?.sourceSite ?? '', sourceArticleId: r.rawContent?.sourceArticleId ?? '' })),
+        ...posts,
+      ]),
+    }
+  }
+  try {
+    const state = await readQueueSourceState()
+    const { qrows } = state
+    queuedSources = state.queuedSources
     const snap = buildQueueSnapshot({
       runId, takenAt: new Date(),
       rows: qrows.map((r) => ({
@@ -1039,9 +1049,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     // 🔴 이 파일은 **묶음을 고르는 데만** 쓴다 — 생성 직전에 다시 뜬다
     writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
-    queuePending = pendingSourceKeysOf(qrows.map((r) => ({
-      sourceArticleId: r.rawContent?.sourceArticleId ?? '', sourceSite: r.rawContent?.sourceSite ?? '', createdPostId: r.createdPostId,
-    })))
+    queuePending = state.queuePending
     snapOk = true
     console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSources.length}건 미발행 원천`
       + ` · 큐·글에 이미 있는 원천 ${queuedSources.bySiteId.size}건 (발행 포함 — 다시 만들지 않는다)`)
@@ -1060,6 +1068,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const nextSlotAt = nextSlotAnchor(scale.releaseProfile, {
     now: RUN_AT, publishedToday: before?.jit?.publishedToday ?? 0,
   })
+  let opportunityRows: WorksetRow[] | null = null
   if (snapOk && queuedSources !== null) {
     let listIndex: ListObservationIndex | null = null
     try { listIndex = readListObservations(DATA_DIR, RUN_AT) } catch (e) {
@@ -1070,6 +1079,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
+    opportunityRows = rows
     /**
      * 🔴 **부족 슬롯** (2026-10-04 P0-2 보정) — 다가오는 슬롯 중 자동 READY 가 정본 짝짓기로 덮지 못한 슬롯.
      *    원천은 **그 슬롯들 각각의 시각에** 생성 전 판정을 받는다 — 한 슬롯(`nextSlotAt`)으로 모두 판정하지 않는다.
@@ -1087,28 +1097,19 @@ async function main(proof: LeaseProof | null): Promise<number> {
     const runAt = RUN_AT
     const prior = priorState(rows, currentContractBase(runAt))
     /**
-     * 🔴 **생성 가능 판정 입력 — 하나다** (2026-10-01 Lane B). 기회 스냅샷과 묶음 선택이 같은 값 · 같은 함수
-     *    (`worksetEligibility`)를 쓴다. 앞판 스냅샷은 슬롯 판정만 거쳐 끝난 · 큐 · 이월 · 사람 판정 원천까지 셌다.
+     * 🔴 실제 JIT 선택은 이 lifecycle에 현재 release horizon을 더한다.
+     *    다음 단계 기회 inventory는 회차 종료 후 실제 큐 · 후보 · 결론 상태를 다시 읽어
+     *    stage-neutral로 새로 만든다. 서로 다른 시간 지평을 섞지 않는다.
      */
-    const eligibilityInput = {
+    const lifecycleInput = {
       rows, humanDecided: humanDecided(), queuePending, queuedSources,
       // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
       carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
       concluded: prior.concluded,
-      releaseOf,
     }
-    /**
-     * 🔴 **원천 기회 스냅샷** — 지금 실제로 생성 가능한(상한 전) 원천의 증거 기록(원문 없음). 다음 단계 preflight 가 읽는다.
-     *    쓰기는 live 회차에서만(dry-run 파일 write 0).
-     */
-    if (canWrite) {
-      // 🔴 opportunities-v2 = 자동 seed 전용 — JIT 선택과 같은 정본(`isAutoSupplyConsumable`) 하나로 거른다
-      const opp = worksetEligibility(eligibilityInput).eligible.filter(isAutoSupplyConsumable).flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
-      writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify({
-        kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT.toISOString(),
-        slotAt: nextSlotAt.toISOString(), evidence: opp,
-      }, null, 2)}\n`)
-      console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
+    const eligibilityInput = {
+      ...lifecycleInput,
+      releaseOf,
     }
     // 🔴 선택 관측 기록기(P0-B0) — 선택 함수에 넘겨 단계 결과를 적기만 한다
     const recorder = createSelectionRecorder()
@@ -1250,6 +1251,49 @@ async function main(proof: LeaseProof | null): Promise<number> {
   // 🔴 적재가 실패한 회차도 마감은 한다 — 앞 회차가 남긴 미도장 행이 있을 수 있다(도장은 멱등 · CAS)
   record.autoReady = (await finalizeIfLeased()) ?? undefined
   record.status = closeRunStatus(record.stages, record.autoReady)
+  /**
+   * 🔴 원천 기회는 **회차 결과가 확정된 뒤** 한 번만 적는다. 선택만 됐지만 예산·일시 실패로
+   *    처리되지 않은 원천은 남기고, 실제 큐 저장 · 생성 후보 · 최종 결론은 뺀다.
+   *    현재 JIT release horizon 은 적용하지 않는다 — 다음 단계 preflight 가 자기 슬롯에서 다시 판정한다.
+   */
+  if (opportunityRows !== null && canWrite) {
+    // 실제 종료 시각을 쓰되, 재생·지연 회차에서도 관측이 정본 회차 시각보다 앞설 수는 없다.
+    const observedAt = new Date(Math.max(Date.now(), RUN_AT.getTime()))
+    try {
+      const state = await readQueueSourceState()
+      const freshPrior = priorState(opportunityRows, currentContractBase(RUN_AT))
+      // 🔴 예전 candidate 전체가 아니라, 이 시점에 다음 회차가 실제 이월할 파일만 뺀다.
+      const postRunCarry = planPostRunCarryOver({ dataDir: DATA_DIR, nowMs: observedAt.getTime() })
+      const postRunInput: WorksetLifecycleInput = {
+        rows: opportunityRows,
+        humanDecided: humanDecided(),
+        queuePending: state.queuePending,
+        queuedSources: state.queuedSources,
+        carriedOver: queuedSourceKeysOf([
+          ...postRunCarry.picked.flatMap((x) => x.sources),
+        ]),
+        concluded: freshPrior.concluded,
+      }
+      const snapshot = buildOpportunitySnapshot({
+        runId, takenAt: observedAt, inputRows: opportunityRows.length,
+        inventory: worksetInventory(postRunInput),
+      })
+      writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify(snapshot, null, 2)}\n`)
+      const c = snapshot.inventory.counts
+      record.opportunityInventory = {
+        status: 'written', runId, observedAt: snapshot.takenAt, written: c.written, reason: null,
+      }
+      console.log(`   🟢 stage-neutral 원천 기회 ${c.written}건`
+        + ` (회차 후 lifecycle ${c.lifecyclePassed} · auto-seed ${c.autoSeed} · 증거 없음 ${c.evidenceMissing})`)
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e)
+      record.status = 'failed'
+      record.opportunityInventory = {
+        status: 'failed', runId, observedAt: observedAt.toISOString(), written: null, reason,
+      }
+      console.error(`   🔴 원천 기회 inventory 실패 — ${reason}`)
+    }
+  }
   record.completedAt = nowIso()
   save()
 
