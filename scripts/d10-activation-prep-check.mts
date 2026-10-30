@@ -375,15 +375,15 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
   check('🔴 유효 처리량은 성공률을 곱한 값이다',
     evidenceAdjustedDetailPerDay('start') === wantEffective('start')
     && evidenceAdjustedDetailPerDay('stable') === wantEffective('stable'))
-  /** 🔴 확정 일정에서의 실측값 — 82cook 30×5×0.8 + remonterrace 10×5 + wgang 10×4 */
+  /** 🔴 확정 일정에서의 계획값 — 82cook thin 17×5×0.8 + remonterrace 11×5 + wgang 16×5 */
   /**
-   * 🔴 **설정 상한 204 = 82cook thin 85 + remonterrace 55 + wgang 64** (2026-09-14).
-   *    근거 보정 추정치는 여기에 실측 성공률을 곱한 **187** 이다.
+   * 🔴 **설정 상한 220 = 82cook thin 85 + remonterrace 55 + wgang 80** (2026-10-31).
+   *    근거 보정 추정치는 여기에 실측 성공률을 곱한 **203** 이다.
    *    옛 값 210·158 은 세 번 틀렸다 — raw 목록 job 의 죽은 상세를 세고,
    *    실제로 상세를 여는 thin 을 빼고, 네이버를 옛 1페이지·10건으로 계산했다.
    */
-  check('🔴 설정 상한은 204건/day · 근거 보정 추정치는 187건/day 다',
-    configuredDetailCeilingPerDay('start') === 204 && evidenceAdjustedDetailPerDay('start') === 187)
+  check('🔴 설정 상한은 220건/day · 근거 보정 추정치는 203건/day 다',
+    configuredDetailCeilingPerDay('start') === 220 && evidenceAdjustedDetailPerDay('start') === 203)
   check('🔴 raw 목록 job 은 유효 처리량에 0 을 보탠다 — 상세를 열지 않는다',
     factsOf('82cook').detailPerRun === 0)
   check('🔴 82cook 몫은 thin 경로에서 나온다 — 상한 85 · 보정 68', (() => {
@@ -551,7 +551,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 그래서 current 는 관측된 job 몫뿐이다',
     cur.effectivePerDay === observedDetailPerDay(OBSERVED_NOW))
   check('🔴 prepared 는 정본 계획값이다 — current 와 합치지 않는다',
-    prep.effectivePerDay === evidenceAdjustedDetailPerDay('start') && prep.effectivePerDay === 187)
+    prep.effectivePerDay === evidenceAdjustedDetailPerDay('start') && prep.effectivePerDay === 203)
   check('🔴 82cook 은 미등록이라 current 기여가 0 이다',
     cur.perSource.find((x) => x.id === '82cook')!.effectivePerDay === 0)
 
@@ -596,7 +596,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 안정 단계도 BLOCKED 다', readyStable.status === 'BLOCKED')
   check('🔴 current · prepared · required 를 각각 낸다',
     readyStart.configuredPerDay === observedDetailPerDay(OBSERVED_NOW)
-      && readyStart.preparedPerDay === 187
+      && readyStart.preparedPerDay === 203
     && readyStart.requiredPerDay === 382)
   check('🔴 지금 열리는 것이 모자란다고 숫자로 적는다', (() => {
     // 🔴 이름을 `설정된 것` 으로 바꿨다 — 등록은 능력이 아니다(2026-09-10)
@@ -607,7 +607,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   })())
   check('🔴 전부 올려도 모자란다는 것을 따로 적는다',
     readyStart.reasons.some((r) => r.includes('전부 올려도')
-      && r.includes(`${382 - 187}건 모자란다`)))
+      && r.includes(`${382 - 203}건 모자란다`)))
   check('🔴 판정은 이론 최대로 하지 않는다',
     readyStart.theoreticalPerDay === wantTheoretical('start')
     && readyStart.theoreticalPerDay > readyStart.preparedPerDay)
@@ -681,7 +681,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   for (const cafe of ['remonterrace', 'wgang'] as const) {
     check(`🔴 ${cafe} 다회 템플릿이 있다`,
       read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`).includes('multi'))
-    // 🔴 슬롯 수의 정본은 `RUNS_PER_DAY` 다 — 카페마다 다르다(remonterrace 5 · wgang 4)
+    // 🔴 슬롯 수의 정본은 `RUNS_PER_DAY` 다 — 현재 두 카페 모두 5회다
     check(`🔴 ${cafe} 다회 템플릿 슬롯 수가 정본과 같다`, (() => {
       const t = read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`)
       return (t.match(/<key>Hour<\/key>/g) ?? []).length === RUNS_PER_DAY[`navercafe:${cafe}`].start

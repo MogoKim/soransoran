@@ -1,7 +1,7 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-10-30 11:51 KST
-> 마지막 창업자 동기화: 2026-10-30
+> as-of: 2026-10-31 07:00 KST
+> 마지막 창업자 동기화: 2026-10-31
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
 > [`NORTH-STAR.md`](./NORTH-STAR.md)와
@@ -11,22 +11,21 @@
 
 ## 0. 창업자용 한 문장
 
-**10월 28일 자연 D10은 PASS했다. 10월 30일 D20 재시험은 06:15 opportunities-v2가
-현재 JIT 슬롯에서 당장 나갈 수 없던 51건을 다음 D20 기회에서도 먼저 제외해,
-07:00 preflight가 12/20만 인정하고 `PREPARE d10`으로 닫힌 것이 확인됐다. 08:15에는 같은 원천으로
-D20 dry-run이 PASS했으므로 원천 부족이 아니라 **현재 공급 시간 지평과 다음 단계 증명 시간 지평을
-섞은 계약 결함**이다. opportunities-v3 stage-neutral inventory 보정은 코드·격리 DB 검증 중이며,
-병합·배포·자연 06:15·07:00 증거 전에는 D20 복구를 PASS로 쓰지 않는다.**
+**10월 28일 자연 D10은 PASS했다. opportunities-v3는 main·runtime에 배포됐고 10월 31일 06:15
+자연 공급도 성공했지만, 네이버 수집 첫 회차가 07:30 이후라 07:00 controller가 target-date 원천
+기회 14/20만 보고 `PREPARE d10`으로 닫혔다. 기준·수율을 낮추지 않고 네이버 수집 6회를
+00:30~05:30으로 옮겨 `수집 → 06:15 공급 → 07:00 판정` 순서를 맞춘다. 코드·runtime·설치와
+다음 자연 06:15·07:00 증거 전에는 D20 복구를 PASS로 쓰지 않는다.**
 
 ## 1. 검증된 운영 기준선
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-10-29 07:05 관측) | `96916bed69c0d2eb95a90e0296a198fa819e5493` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `96916bed69c0d2eb95a90e0296a198fa819e5493` · main과 동일 SHA · clean |
+| 원격 main (2026-10-31 06:48 관측) | `2654e004c9aea457d9e34cd79f845a597304d768` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `2654e004c9aea457d9e34cd79f845a597304d768` · main과 동일 SHA · clean |
 | 보조 Mac D100 job | 9개 loaded · 유일한 D100 owner |
 | 회사 Mac D100 job | 0 |
-| 최신 자연 controller | `TRIAL · 공개 d20 · 준비 d30` · 2026-10-29 07:00 저장 · exit 0 |
+| 최신 자연 controller | `PREPARE · 공개 d10 · 준비 d20` · 2026-10-31 07:00 저장 · 기회 14/20 |
 | D10 증거일 | 2026-10-28 |
 | D10 판정 | **PASS** |
 | D10 자동 공개 | 10/10 · 서로 다른 자동 Persona 10 |
@@ -50,7 +49,7 @@ releaseStamped=10 · supplyUsageUnknown=0`
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
 | 자동 D10 | ✅ | ✅ | ✅ 10-28 d10 증거 PASS |
-| D20 처리량 전환 | ✅ exact-head CI·격리 DB | ✅ runtime·pin·manifest·controller 4슬롯·strict 격리 | **진행 중** · 자연 d20 개방, 20/20 미관측 |
+| D20 처리량 전환 | ✅ exact-head CI·격리 DB | ✅ runtime·pin·manifest·controller 4슬롯·strict 격리 | **10/31 미개방** · target-date 입력 14/20 |
 | Persona 40 | ✅ | ✅ | ✅ contract-valid 40 · active 40 |
 | 첫 댓글·추가 댓글 | ✅ 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · automatic provenance | ✅ | ✅ 자연 followup 관측 |
 | 실제 조회수 | ✅ 실제 상세 열람·목록 노출 원장 | ✅ | ✅ 실제 행동만 집계 · 가짜 숫자 0 |
@@ -111,8 +110,8 @@ controller 시각 변경은 runtime 배포만으로 설치되지 않는다. depl
 | D10 operating | **PASS** |
 | D20 전환 code | **PASS** · PR #810·#811 exact-head CI·격리 DB 통과 |
 | D20 전환 deployed | **PASS** · runtime HEAD=pin=manifest · controller 07:00/07:20/07:40/07:55 · strict 격리 |
-| D20 preflight | **10/30 FAIL** · opportunities-v2 시간 지평 결함 · v3 보정 검증 중 |
-| D20 operating | **재시험 미개방** · 10/30 `PREPARE d10` · v3 배포 후 자연 증거 필요 |
+| D20 preflight | **10/31 FAIL** · opportunities-v3 정상 · target-date 원천 14/20 |
+| D20 operating | **재시험 미개방** · 10/31 `PREPARE d10` · 수집 시계 보정 후 자연 증거 필요 |
 | D30 이상 | D20 operating PASS 전에는 개방 금지 |
 
 ## 4.2 10월 30일 D20 재시험 결함과 복구 계약
@@ -133,13 +132,32 @@ controller 시각 변경은 runtime 배포만으로 설치되지 않는다. depl
 5. 최신 live 공급 회차와 inventory를 runId로 묶고, 옛 판·미래 판·손상·누락 inventory는
    직전 회차로 내려가지 않고 fail-closed한다.
 
+## 4.3 10월 31일 D20 재시험 결함과 복구 계약
+
+| 구간 | 관측 사실 | 판정 |
+|---|---:|---|
+| 06:15 자연 공급 | 성공 · opportunities-v3 inventory 기록 | v3 배포·실행 정상 |
+| 07:00 controller | 기회 14/20 · READY 용량 21 · Persona 40 · 비용·댓글·감사 정상 | `OPPORTUNITY_SHORT` 하나로 미개방 |
+| 네이버 수집 시계 | 첫 회차가 레몬 07:30·우아한갱년기 09:30 | target-date 판정 뒤에 입력이 도착 |
+| 수집 실행시간 실측 | 레몬 정상 최대 약 3분 51초 · 우아한갱년기 약 2분 56초 | 05:30→06:15 45분 buffer 충분 |
+
+복구는 기준 완화가 아니라 순서 보정 하나다.
+
+1. 레몬테라스 5회는 유지하되 00:30·02:30·05:30을 06:15 공급 전에 둔다.
+2. 우아한갱년기는 5회·110/150 요청으로 늘리고 01:30·03:30·04:30을 공급 전에 둔다.
+3. 두 수집원은 기존 전역 락을 공유한다. 새 잠금 정책을 추가하지 않는다.
+4. 전날 밤 리허설은 `npm run d20:readiness:next-day -- --json`으로 날짜를 명시한다.
+   이 시점에는 다음 날 00:30~05:30 자연 수집 전이라 `UNKNOWN`·`FAIL`이 정상일 수 있다. 리허설은
+   날짜 오판과 이미 드러난 차단축을 찾는 도구이지, 자연 06:15·07:00 증명을 대체하지 않는다.
+5. 수동 controller·stage·READY·게시·댓글·장부 보정은 계속 금지한다.
+
 ## 5. 다음 critical path
 
 📜 완료되어 활성 목록에서 뺀 작업: #804 · #789 · #796.
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | **진행 중** · opportunities-v3 stage-neutral inventory | code·격리 DB·main·runtime·자연 06:15/07:00 증거 | 옛 inventory 수정 |
+| D20-FIX | **진행 중** · target-date 수집 시계 정렬 | 00:30~05:30 수집·06:15 공급·07:00 판정 자연 증거 | 판정 기준·수율 완화 |
 | D20 | **재시험 대기** · D10 operating PASS 선행 | 자동 20/20·댓글·감사·비용 PASS | stage·READY·게시 보정 |
 | D30 | 자연 D30 · D20 operating PASS 선행 | Persona 60·profile green·자동 30/30 | D30 생략 |
 | D50 | 자연 D50 · D30 operating PASS 선행 | Persona 100·profile green·자동 50/50 | D20에서 바로 D50 |

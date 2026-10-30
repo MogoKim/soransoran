@@ -4,6 +4,7 @@
  *
  *   npm run d20:readiness                              # 지금 수치로 D20 preflight(오늘 증명일 슬롯 기준)
  *   npm run d20:readiness -- --date=YYYY-MM-DD         # 그 날짜를 증명일로 보고 판정
+ *   npm run d20:readiness:next-day                     # 다음 자연 증명일을 명시해 전날 밤 리허설
  *   npm run d20:readiness -- --d10-date=YYYY-MM-DD     # + D10 증명일 실측으로 D20 추가 댓글 profile 후보 산출
  *   npm run d20:readiness -- ... --profile-out=<path>  # 후보(승인 전) JSON 을 그 경로에 쓴다 — 유일한 write
  *   npm run d20:readiness -- --json
@@ -48,7 +49,16 @@ const fail = (m: string): never => { console.error(`🔴 ${m}`); process.exit(1)
 if (argv.some((a) => a === '--apply' || a === '--write' || a === '--execute')) fail('이 도구는 읽기만 한다 — 적용 명령이 없다')
 const JSON_OUT = argv.includes('--json')
 const NOW = new Date()
-const DATE = arg('date') ?? kstDateString(NOW)
+const EXPLICIT_DATE = arg('date')
+const NEXT_DAY = argv.includes('--next-day')
+if (NEXT_DAY && EXPLICIT_DATE !== null) fail('--next-day 와 --date 는 함께 쓰지 않는다')
+const nextCalendarDate = (date: string): string => {
+  const d = new Date(`${date}T00:00:00.000Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+const TODAY = kstDateString(NOW)
+const DATE = EXPLICIT_DATE ?? (NEXT_DAY ? nextCalendarDate(TODAY) : TODAY)
 const D10_DATE = arg('d10-date')
 const PROFILE_OUT = arg('profile-out')
 if (!isCalendarDate(DATE)) fail(`달력에 없는 날짜 — ${DATE}`)

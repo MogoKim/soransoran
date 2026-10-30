@@ -118,6 +118,12 @@ console.log('\n④ 도구가 쓰지 않는다')
   const cli = readFileSync('scripts/d20-readiness.mts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   check('🔴 CLI 에 DB 쓰기 호출이 없다', !/\.(create|update|upsert|delete)[A-Za-z]*\(|\$executeRaw/.test(cli))
   check('🔴 --apply · --write 를 거부한다', /'--apply' \|\| a === '--write'/.test(cli))
+  check('🔴 다음날 리허설은 --next-day 전용 경로다', /NEXT_DAY = argv\.includes\('--next-day'\)/.test(cli)
+    && /NEXT_DAY \? nextCalendarDate\(TODAY\) : TODAY/.test(cli))
+  check('🔴 --next-day 와 --date 동시 입력은 실패한다', /NEXT_DAY && EXPLICIT_DATE !== null\) fail/.test(cli))
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts?: Record<string, string> }
+  check('🔴 사람이 날짜를 생략하지 않도록 next-day 명령이 고정돼 있다',
+    pkg.scripts?.['d20:readiness:next-day'] === 'tsx scripts/d20-readiness.mts --next-day')
   check('🔴 후보 파일은 새 경로에만(덮어쓰기 0 · 0600)', /flag: 'wx'/.test(cli) && /mode: 0o600/.test(cli))
   check('🔴 preflight 는 controller 와 같은 판정 함수', /judgeNextPreflight\(TARGET, r\.facts, RUNNER_GRID\)/.test(cli) && /readPreflightFacts\(prisma/.test(cli))
   check('🔴 첫 댓글 분모는 정본 증거 firstCommentOk 에서만 온다', /acceptedFirstComments: typeof evidence\.counts\?\.firstCommentOk === 'number'/.test(cli))

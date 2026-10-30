@@ -156,19 +156,20 @@ export const SOURCES: readonly SourcePlan[] = [
      *    fixture 가 `planCafeRun().detailPerRun` 과 이 값을 대조한다.
      */
     maxPerRun: 11, runsPerDay: RUNS_PER_DAY['navercafe:remonterrace'].start, loaded: true,
-    note: 'launchd -multi 5회/day (07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST)'
+    note: 'launchd -multi 5회/day (00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST)'
       + ' · 회차당 상세 11건(jjong 10 + humor 1)',
   },
   {
     id: 'navercafe:wgang',
     template: 'com.soransoran.navercafe-collect-wgang-multi.plist.template',
     /**
-     * 🔴 **10 → 16** (2026-09-13). 게시판이 하나뿐이라 회차당 10건에 눌려 있었고,
-     *    하루 요청은 60/150 으로 예산의 40% 만 썼다. (5+16)×4 = 84/150 —
-     *    간격 · 차단기 · 세션 처리는 그대로다. fixture 가 `planCafeRun` 과 대조한다.
+     * 🔴 **10 → 16** (2026-09-13). 게시판이 하나뿐이라 회차당 10건에 눌려 있었다.
+     *    2026-10-31에는 D20 target-date 재료를 07:00 전에 확보하도록 5회로 늘렸다.
+     *    (5+16)×5 + member 5 = 110/150 — 예산 안이고 차단기·세션 처리는 그대로다.
+     *    fixture 가 `planCafeRun` 과 대조한다.
      */
     maxPerRun: 16, runsPerDay: RUNS_PER_DAY['navercafe:wgang'].start, loaded: true,
-    note: 'launchd -multi 4회/day (09:30 · 11:30 · 15:30 · 20:30 KST) · 회차당 상세 16건(all)',
+    note: 'launchd -multi 5회/day (01:30 · 03:30 · 04:30 · 11:30 · 20:30 KST) · 회차당 상세 16건(all)',
   },
 ]
 

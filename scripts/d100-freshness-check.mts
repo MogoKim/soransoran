@@ -428,10 +428,10 @@ console.log('\n⑦ 레몬테라스 1p 제외 · 2~16p · jjong 10 + humor 1 · �
   check('🔴 회차 상세 jjong 10 + humor 1', d(rt, 'remonterrace:jjong') === 10 && d(rt, 'remonterrace:humor') === 1 && rt.detailPerRun === 11,
     `${String(d(rt, 'remonterrace:jjong'))} + ${String(d(rt, 'remonterrace:humor'))}`)
   check('🔴 레몬테라스 하루 요청 145 ≤ 150 · 목록 16/회차 · 5회차', rt.requestsPerDay + rt.memberCheckPerDay === 145 && rt.listPerRun === 16 && rt.runsPerDay === 5 && rt.withinLimit)
-  check('🔴 wgang 하루 요청 88 ≤ 150 · 상세 16/회차 · 4회차', wg.requestsPerDay + wg.memberCheckPerDay === 88 && wg.detailPerRun === 16 && wg.runsPerDay === 4 && wg.withinLimit)
+  check('🔴 wgang 하루 요청 110 ≤ 150 · 상세 16/회차 · 5회차', wg.requestsPerDay + wg.memberCheckPerDay === 110 && wg.detailPerRun === 16 && wg.runsPerDay === 5 && wg.withinLimit)
   check('🔴 일 상한 · 회차 · 슬롯 quota 상수 불변',
     MAX_REQUESTS_PER_DAY['navercafe:remonterrace'] === 150 && MAX_REQUESTS_PER_DAY['navercafe:wgang'] === 150
-      && RUNS_PER_DAY['navercafe:remonterrace']?.start === 5 && RUNS_PER_DAY['navercafe:wgang']?.start === 4
+      && RUNS_PER_DAY['navercafe:remonterrace']?.start === 5 && RUNS_PER_DAY['navercafe:wgang']?.start === 5
       && SLOT_QUOTA.navercafe === 10)
 }
 
