@@ -26,7 +26,7 @@ import {
   pendingFateOf, cohortFatesOf, terminalYieldOf, paidSourcesFor, costAttributionOf, TIME_INVARIANT_LOSS_REASONS, pipelineRunOfLedger,
   type CostFate,
 } from '../src/lib/ready-fate'
-import { judgeJitDemand, fillUpToOf, ledgerRunIdOf } from '../src/lib/supply-process'
+import { judgeJitDemand, fillUpToOf, ledgerRunIdOf, runFileName } from '../src/lib/supply-process'
 import { judgeSettle } from '../src/lib/llm-ledger'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
@@ -256,22 +256,115 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     check('🔴 🔴 창 안 묶음 하나 손상 → 원천 수 모름(null) — 손상 파일을 빼고 20 으로 세지 않는다',
       worksetSourcesIn(dir, from, to) === null)
     const snap = (runId: string, body: string): void => writeFileSync(join(dir, opportunitiesFileName(runId)), body)
-    // 🔴 (2026-10-10 P0-B1) 스냅샷은 opportunities-v2(자동 seed 전용)만 증거다
+    const run = (runId: string, observedAt: string, written: number, status: 'written' | 'failed' = 'written'): void =>
+      writeFileSync(join(dir, runFileName(runId)), JSON.stringify({
+        runId, startedAt: observedAt, status: status === 'written' ? 'done' : 'failed', completedAt: observedAt,
+        opportunityInventory: {
+          status, runId, observedAt, written: status === 'written' ? written : null,
+          reason: status === 'written' ? null : 'fixture-failure',
+        },
+      }))
+    const inventory = (runId: string, takenAt: string): string => JSON.stringify({
+      kind: 'supply-opportunities', version: 'opportunities-v3', runId, takenAt,
+      inventory: {
+        basis: 'stage-neutral-lifecycle-v1', axis: 'auto-seed',
+        counts: { inputRows: 0, lifecyclePassed: 0, autoSeed: 0, evidenceMissing: 0, written: 0 },
+      },
+      evidence: [],
+    })
     snap('20261003-031500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v2', runId: '20261003-031500',
       takenAt: '2026-10-03T03:15:00.000Z', slotAt: '2026-10-03T03:00:00.000Z', evidence: [] }))
-    check('🔴 기회 스냅샷 정상(v2) → 읽힌다', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
+    check('🔴 v2 는 현재 release horizon 의존 옛 판 → 모름',
+      latestOpportunities(dir, NOW.getTime()).issue === 'LEGACY_CONTRACT')
     snap('20261003-091500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v1', runId: '20261003-091500',
       takenAt: '2026-10-03T09:15:00.000Z', slotAt: '2026-10-03T09:00:00.000Z', evidence: [] }))
     const legacy = latestOpportunities(dir, NOW.getTime())
-    check('🔴 🔴 가장 최근 스냅샷이 옛 판(v1 · raw 포함)이면 모름(null · LEGACY_CONTRACT) — 더 오래된 v2 로도 내려가지 않는다',
+    check('🔴 🔴 가장 최근 스냅샷이 옛 판(v1)이면 모름 — 더 오래된 파일로 내려가지 않는다',
       legacy.evidence === null && legacy.issue === 'LEGACY_CONTRACT', JSON.stringify(legacy))
-    snap('20261003-111500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v2', runId: '20261003-111500',
-      takenAt: '2026-10-03T11:15:00.000Z', slotAt: '2026-10-03T11:00:00.000Z', evidence: [] }))
-    check('🔴 v1 뒤에 새 회차가 v2 를 쓰면 정상 복구', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
+    snap('20261003-111500', inventory('20261003-111500', '2026-10-03T11:15:00.000Z'))
+    run('20261003-111500', '2026-10-03T11:15:00.000Z', 0)
+    const current = latestOpportunities(dir, NOW.getTime())
+    check('🔴 새 회차가 stage-neutral v3 를 쓰면 정상 복구',
+      current.evidence?.length === 0 && current.runId === '20261003-111500' && current.inventory?.basis === 'stage-neutral-lifecycle-v1')
+    snap('20261003-111600', inventory('20261003-111600', '2026-10-03T11:16:00.000Z'))
+    run('20261003-111600', '2026-10-03T11:16:00.000Z', 0, 'failed')
+    check('🔴 최신 live 공급 회차 marker가 failed면 같은 회차 v3도 쓰지 않고 직전 v3로 내려가지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-111700', inventory('20261003-111700', '2026-10-03T11:17:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-111700')), JSON.stringify({
+      runId: '20261003-111700', startedAt: '2026-10-03T11:17:00.000Z', status: 'done',
+    }))
+    check('🔴 최신 live 공급 회차 marker가 없으면 같은 회차 v3도 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-111800', inventory('20261003-111800', '2026-10-03T11:18:00.000Z'))
+    run('20261003-111800', '2026-10-03T11:18:01.000Z', 0)
+    check('🔴 marker observedAt과 v3 takenAt이 다르면 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-111900', inventory('20261003-111900', '2026-10-03T11:19:00.000Z'))
+    run('20261003-111900', '2026-10-03T11:19:00.000Z', 1)
+    check('🔴 marker written과 v3 written이 다르면 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112000', inventory('20261003-112000', '2026-10-03T11:20:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-112000')), JSON.stringify({
+      runId: '20261003-112000', startedAt: '2026-10-03T11:20:00.000Z', status: 'done',
+      opportunityInventory: {
+        status: 'written', runId: '20261003-112000', observedAt: '2026-10-03T11:20:00.000Z', written: 0,
+        reason: 'unexpected',
+      },
+    }))
+    check('🔴 written marker에 reason이 남으면 정상 증거로 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112100', inventory('20261003-112100', '2026-10-03T11:21:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-112100')), JSON.stringify({
+      runId: '20261003-112101', startedAt: '2026-10-03T11:21:00.000Z', status: 'done',
+      opportunityInventory: {
+        status: 'written', runId: '20261003-112100', observedAt: '2026-10-03T11:21:00.000Z', written: 0, reason: null,
+      },
+    }))
+    check('🔴 run 파일명과 본문 runId가 다르면 정상 증거로 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112200', inventory('20261003-112200', '2026-10-03T11:22:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-112200')), '{ 손상')
+    check('🔴 최신 run 파일이 손상되면 같은 회차 v3도 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112300', inventory('20261003-112300', '2026-10-03T11:22:59.000Z'))
+    run('20261003-112300', '2026-10-03T11:22:59.000Z', 0)
+    check('🔴 v3 takenAt이 회차 시작보다 이르면 손상으로 닫는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'CORRUPT')
+    const noInventoryDir = mkdtempSync(join(tmpdir(), 'supply-jit-no-inventory-'))
+    try {
+      writeFileSync(join(noInventoryDir, runFileName('20261003-112400')), JSON.stringify({
+        runId: '20261003-112400', startedAt: '2026-10-03T11:24:00.000Z', status: 'done',
+      }))
+      check('🔴 최신 live 공급 회차만 있고 opportunity 파일이 없으면 STALE로 닫는다',
+        latestOpportunities(noInventoryDir, NOW.getTime()).issue === 'STALE')
+    } finally { rmSync(noInventoryDir, { recursive: true, force: true }) }
+    const badCounts = JSON.parse(inventory('20261003-113000', '2026-10-03T11:30:00.000Z')) as {
+      inventory: { counts: { written: number } }
+    }
+    badCounts.inventory.counts.written = 1
+    snap('20261003-113000', JSON.stringify(badCounts))
+    run('20261003-113000', '2026-10-03T11:30:00.000Z', 1)
+    check('🔴 v3 수량 보존식이 틀리면 전체를 손상으로 닫는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'CORRUPT')
+    snap('20261003-114500', inventory('20261003-114501', '2026-10-03T11:45:00.000Z'))
+    run('20261003-114500', '2026-10-03T11:45:00.000Z', 0)
+    check('🔴 파일명 runId와 본문 runId가 다르면 전체를 손상으로 닫는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'CORRUPT')
+    snap('20261003-121500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v99', runId: '20261003-121500',
+      takenAt: '2026-10-03T12:15:00.000Z', evidence: [] }))
+    run('20261003-121500', '2026-10-03T12:15:00.000Z', 0)
+    check('🔴 알지 못하는 미래 판은 손상과 구분해 모름',
+      latestOpportunities(dir, NOW.getTime()).issue === 'UNKNOWN_CONTRACT')
     snap('20261003-131500', '{ 손상')
+    run('20261003-131500', '2026-10-03T13:15:00.000Z', 0)
     const corrupt = latestOpportunities(dir, NOW.getTime())
     check('🔴 🔴 가장 최근 기회 스냅샷 손상 → 모름(null · CORRUPT) — 더 오래된 스냅샷으로 내려가지 않는다',
       corrupt.evidence === null && corrupt.issue === 'CORRUPT')
+    snap('20261004-000000', inventory('20261004-000000', '2026-10-04T00:00:00.000Z'))
+    const futureSnapshot = latestOpportunities(dir, NOW.getTime())
+    check('🔴 최신 기회 스냅샷 시각이 미래면 모름(null · CORRUPT) — 더 오래된 스냅샷으로 내려가지 않는다',
+      futureSnapshot.evidence === null && futureSnapshot.issue === 'CORRUPT')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -524,12 +617,15 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
   {
     const wsrc = strip('src/lib/supply-workset.ts')
     const jitBody = wsrc.slice(wsrc.indexOf('function selectJitWorkset'), wsrc.indexOf('function selectJitWorkset') + 4000)
-    check('🔴 🔴 (2026-10-10 P0-B1) 자동 공급 가능 판정은 정본 하나 — 지금 계약은 seed 만 · JIT 선택과 기회 스냅샷이 같은 함수를 부른다',
+    check('🔴 🔴 JIT 선택은 슬롯 판정, 다음 단계 기회는 stage-neutral inventory 로 분리하되 auto-seed 축은 같다',
       /export const isAutoSupplyConsumable = \(r: WorksetRow\): boolean => worksetAxisOf\(r\) === 'seed'/.test(wsrc)
       && /if \(!isAutoSupplyConsumable\(r\)\) \{ rawExcluded \+= 1;/.test(jitBody) && !/worksetAxisOf\(r\) === 'raw'|RAW_AXIS/.test(jitBody)
-      && /const opp = worksetEligibility\(eligibilityInput\)\.eligible\.filter\(isAutoSupplyConsumable\)\.flatMap/.test(runner)
-      && /version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT\.toISOString\(\)/.test(runner)
-      && /export const OPPORTUNITY_VERSION = 'opportunities-v2'/.test(wsrc))
+      && /const freshPrior = priorState\(opportunityRows, currentContractBase\(RUN_AT\)\)/.test(runner)
+      && /inventory: worksetInventory\(postRunInput\)/.test(runner)
+      && /buildOpportunitySnapshot\(\{/.test(runner)
+      && /export const OPPORTUNITY_VERSION = 'opportunities-v3'/.test(wsrc))
+    check('🔴 회차 후 inventory 관측 시각은 벽시계와 RUN_AT 중 늦은 값 — 회차 시작보다 이를 수 없다',
+      /const observedAt = new Date\(Math\.max\(Date\.now\(\), RUN_AT\.getTime\(\)\)\)/.test(runner))
   }
   check('🔴 러너 수율은 preflight 와 같은 판독(readReadyCohort) · 같은 짝짓기 열쇠(jit.matched)',
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))

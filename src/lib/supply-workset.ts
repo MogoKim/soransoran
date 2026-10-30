@@ -75,50 +75,94 @@ export {
 export const WORKSET_FILE_RE = /^supply-workset-(\d{8}-\d{6})\.json$/
 
 // ─────────────────────────────────────────────────────────
-// 🔴 원천 기회 스냅샷 — 초안이 아직 없는 slot-valid 원천 (2026-09-30)
+// 🔴 원천 기회 inventory — 초안이 아직 없는 stage-neutral 원천 (2026-10-30)
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 공급 러너가 회차마다 적는다 — **생성 전 판정(예정 슬롯 · 참여 동력 · 배정 대기)이 eligible 이고
+ * 🔴 공급 러너가 회차마다 적는다 — lifecycle · hard gate · pre-gate 를 통과했고
  *    자동 유료 공급이 소비할 수 있는(`isAutoSupplyConsumable` — 지금은 seed 만) 원천의 증거 기록**.
- *    다음 단계 preflight 가 "증명일 슬롯을 채울 기회가 있는가" 를 이 파일과 READY 로 센다.
+ *    현재 회차의 release horizon 은 저장하지 않고, preflight 가 자기 증명 슬롯에서 다시 판정한다.
+ *    회차가 끝난 뒤 실제 큐 · 생성 후보 · 결론 상태를 다시 적용한다. 선택만 됐지만 예산 등으로
+ *    처리되지 않은 원천은 다음 회차가 다시 쓸 수 있으므로 inventory 에 남는다.
  *    🔴 원문 제목 · 본문 · URL 없음 — `source-evidence-v1` 기록뿐이다(해시 · 시각 · 수).
  *
- * 🔴 **opportunities-v2 = 자동 seed 전용** (2026-10-10 P0-B1). v1 은 생성 가능 원천 **전체**(raw 포함)를 적었다 —
- *    자동 공급이 raw 를 사지 않는데 preflight 가 raw 를 증명일 기회로 세면 D10 용량이 부푼다.
- *    v1 은 읽지 않는다(`readOpportunitySnapshot` → null · preflight 는 가장 최근 파일이 v1 이면 기회를 모른다).
- *    새 자연 공급 회차가 v2 를 쓰면 그대로 복구된다. 옛 파일을 고쳐 쓰지 않는다.
+ * 🔴 **opportunities-v3 = stage-neutral lifecycle inventory** (2026-10-30). v1 은 raw 를 포함했고,
+ *    v2 는 현재 JIT release horizon 을 저장해 다음 단계 기회를 잘라냈다. 둘 다 옛 판이다.
+ *    최신 파일이 옛 판이거나 손상되면 더 오래된 파일로 내려가지 않고 기회를 모른다.
  */
 export const OPPORTUNITY_KIND = 'supply-opportunities'
-export const OPPORTUNITY_VERSION = 'opportunities-v2'
-/** 🔴 옛 판 — 읽지 않는다. preflight 가 "손상" 과 "옛 판" 을 구분해 적으려고만 이름을 둔다 */
-export const OPPORTUNITY_VERSION_LEGACY = 'opportunities-v1'
+export const OPPORTUNITY_VERSION = 'opportunities-v3'
+/** 🔴 옛 판 — v1 은 raw 포함, v2 는 현재 release horizon 에 종속된 부분집합이다. */
+export const OPPORTUNITY_VERSIONS_LEGACY = ['opportunities-v1', 'opportunities-v2'] as const
+export const OPPORTUNITY_INVENTORY_BASIS = 'stage-neutral-lifecycle-v1' as const
+export const OPPORTUNITY_INVENTORY_AXIS = 'auto-seed' as const
 export const opportunitiesFileName = (runId: string): string => `supply-opportunities-${runId}.json`
-export const OPPORTUNITY_FILE_RE = /^supply-opportunities-\d{8}-\d{6}\.json$/
+export const OPPORTUNITY_FILE_RE = /^supply-opportunities-(\d{8}-\d{6})\.json$/
+
+export type OpportunityInventoryCounts = {
+  inputRows: number
+  lifecyclePassed: number
+  autoSeed: number
+  evidenceMissing: number
+  written: number
+}
 
 export type OpportunitySnapshot = {
   kind: typeof OPPORTUNITY_KIND
   version: typeof OPPORTUNITY_VERSION
   runId: string
   takenAt: string
-  /** 예정 슬롯(판정 기준) */
-  slotAt: string
+  inventory: {
+    basis: typeof OPPORTUNITY_INVENTORY_BASIS
+    axis: typeof OPPORTUNITY_INVENTORY_AXIS
+    counts: OpportunityInventoryCounts
+  }
   evidence: SourceEvidenceRecord[]
 }
 
-/** 🔴 모양이 틀리면 `null` — 부르는 쪽이 다음 파일을 본다(지어내지 않는다) */
+const nonNegativeInteger = (v: unknown): v is number => Number.isInteger(v) && Number(v) >= 0
+
+/** 🔴 inventory 판은 증거 한 건이라도 손상되면 전체를 모른다. 조용히 건너뛰지 않는다. */
 export function readOpportunitySnapshot(raw: unknown): OpportunitySnapshot | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
   if (r.kind !== OPPORTUNITY_KIND || r.version !== OPPORTUNITY_VERSION) return null
-  if (typeof r.runId !== 'string' || typeof r.takenAt !== 'string' || !Number.isFinite(Date.parse(r.takenAt))) return null
-  if (typeof r.slotAt !== 'string' || !Array.isArray(r.evidence)) return null
+  if (typeof r.runId !== 'string' || !/^\d{8}-\d{6}$/.test(r.runId)) return null
+  if (typeof r.takenAt !== 'string' || !Number.isFinite(Date.parse(r.takenAt))) return null
+  if (r.inventory === null || typeof r.inventory !== 'object' || Array.isArray(r.inventory) || !Array.isArray(r.evidence)) return null
+  const inventory = r.inventory as Record<string, unknown>
+  if (inventory.basis !== OPPORTUNITY_INVENTORY_BASIS || inventory.axis !== OPPORTUNITY_INVENTORY_AXIS) return null
+  if (inventory.counts === null || typeof inventory.counts !== 'object' || Array.isArray(inventory.counts)) return null
+  const c = inventory.counts as Record<string, unknown>
+  const values = [c.inputRows, c.lifecyclePassed, c.autoSeed, c.evidenceMissing, c.written]
+  if (!values.every(nonNegativeInteger)) return null
+  const counts: OpportunityInventoryCounts = {
+    inputRows: c.inputRows as number,
+    lifecyclePassed: c.lifecyclePassed as number,
+    autoSeed: c.autoSeed as number,
+    evidenceMissing: c.evidenceMissing as number,
+    written: c.written as number,
+  }
+  if (counts.lifecyclePassed > counts.inputRows || counts.autoSeed > counts.lifecyclePassed) return null
+  if (counts.evidenceMissing + counts.written !== counts.autoSeed) return null
+  if (counts.written !== r.evidence.length) return null
   const evidence: SourceEvidenceRecord[] = []
+  const hashes = new Set<string>()
   for (const e of r.evidence) {
     const p = parseEvidence(e)
-    if (p.ok) evidence.push(p.record)
+    if (!p.ok || p.record.provenance.articleIdHash === null || hashes.has(p.record.provenance.articleIdHash)) return null
+    hashes.add(p.record.provenance.articleIdHash)
+    evidence.push(p.record)
   }
-  return { kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId: r.runId, takenAt: r.takenAt, slotAt: r.slotAt, evidence }
+  return {
+    kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId: r.runId, takenAt: r.takenAt,
+    inventory: {
+      basis: OPPORTUNITY_INVENTORY_BASIS,
+      axis: OPPORTUNITY_INVENTORY_AXIS,
+      counts,
+    },
+    evidence,
+  }
 }
 
 /**
@@ -289,7 +333,7 @@ export const worksetAxisOf = (r: WorksetRow): WorksetAxis =>
 /**
  * 🔴 **자동 유료 공급이 소비할 수 있는 원천인가 — 정본 하나** (2026-10-10 P0-B1 · 마스터 결정).
  *    지금 계약: seed 축만 true. raw 축은 판정이 AUTO_RAW 로 보내도 사람 검토 레인으로만 가서 자동 초안 · 자동 READY 가 없다.
- *    🔴 JIT 선택(`selectJitWorkset`)과 원천 기회 스냅샷(→ preflight 증명일 기회)이 **이 함수 하나**를 부른다 —
+ *    🔴 JIT 선택(`selectJitWorkset`)과 stage-neutral 원천 기회 inventory가 **이 함수 하나**를 부른다 —
  *       축 비교를 두 곳에 다시 적지 않는다. raw 자료 · 수집 · 사람 검토 경로는 그대로다.
  */
 export const isAutoSupplyConsumable = (r: WorksetRow): boolean => worksetAxisOf(r) === 'seed'
@@ -941,9 +985,19 @@ export type WorksetTraceSink = {
   jit(e: { key: string; step: JitSelectStep; slotAt: Date | null; position: number | null; retryReserved: boolean }): void
 }
 
-/** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
-export type WorksetEligibilityInput = Pick<SelectWorksetInput,
-  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded' | 'releaseOf' | 'trace'>
+/** 🔴 슬롯과 무관한 원천 lifecycle 판정 입력. */
+export type WorksetLifecycleInput = Pick<SelectWorksetInput,
+  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded'>
+
+/** 🔴 현재 JIT 슬롯의 생성 가능 판정 입력. */
+export type WorksetEligibilityInput = WorksetLifecycleInput & Pick<SelectWorksetInput, 'releaseOf' | 'trace'>
+
+export type WorksetInventory = {
+  /** 🔴 슬롯 판정 전 lifecycle 통과 원천. */
+  candidates: WorksetRow[]
+  dropped: Record<WorksetDrop, number>
+  keyOf: (r: WorksetRow) => string
+}
 
 export type WorksetEligibility = {
   /** 🔴 지금 실제로 생성 가능한 원천(상한 적용 전) — 마지막 행 기준 · 사이트 · id 정리됨 */
@@ -956,27 +1010,27 @@ export type WorksetEligibility = {
 }
 
 /**
- * 🔴 **생성 가능 원천 — 정본 판정 하나** (2026-10-01 Lane B). 묶음 선택(`selectWorkset`)과
- *    원천 기회 스냅샷(공급 러너 → preflight)이 **이 함수 하나**를 부른다. 두 번째 판정을 만들지 않는다.
+ * 🔴 **현재 JIT 슬롯에서 생성 가능한 원천 — 정본 판정** (2026-10-30).
+ *    `lifecycleInventory` 결과에 현재 부족 슬롯의 release 판정만 더한다. 다음 단계 preflight가 쓰는
+ *    기회 inventory는 같은 lifecycle을 쓰되, 현재 슬롯 release는 저장하지 않고 대상 단계 슬롯에서 다시 판정한다.
  *    빼는 것: 사이트 · id 모름 · 사람 판정 · 큐 형제 · 이미 큐/글 · 이월 · 끝난 원천 · hard block ·
  *    물어봐도 HOLD · 예정 슬롯 ineligible · unknown. 앞판 스냅샷은 슬롯 판정만 거쳐 끝난 · 큐 원천까지 셌다.
  */
-export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
-  const dropped: Record<WorksetDrop, number> = {
-    identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
-    slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0, rawNotAutoConsumed: 0,
-  }
-  const releaseByKey = new Map<string, SlotReleaseVerdict>()
-  /**
-   * 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다 — 원천은 **(사이트, id)** 다.
-   *    앞판은 id 하나로 모아 같은 id 두 사이트 중 한쪽을 지웠다(P0-B). 사이트나 id 를 모르면 고르지 않는다.
-   */
+const emptyWorksetDrops = (): Record<WorksetDrop, number> => ({
+  identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
+  slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0, rawNotAutoConsumed: 0,
+})
+
+function lifecycleInventory(
+  input: WorksetLifecycleInput,
+  trace: WorksetTraceSink | undefined,
+): WorksetInventory {
+  const dropped = emptyWorksetDrops()
   const byKey = new Map<string, WorksetRow>()
   const keyOf = new Map<WorksetRow, string>()
-  /** 🔴 빼는 자리 하나 — 수를 세고, 기록기가 있으면 같은 사유를 적는다(선택에는 영향 없음) */
-  const drop = (r: WorksetRow, key: string | null, d: WorksetDrop, v: SlotReleaseVerdict | null = null): void => {
+  const drop = (r: WorksetRow, key: string | null, d: WorksetDrop): void => {
     dropped[d] += 1
-    input.trace?.eligibility({ row: r, key, drop: d, verdict: v })
+    trace?.eligibility({ row: r, key, drop: d, verdict: null })
   }
   for (const r of input.rows) {
     const key = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
@@ -986,42 +1040,107 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
   for (const [key, r] of byKey) keyOf.set(r, key)
   const K = (r: WorksetRow): string => keyOf.get(r)!
 
-  const eligible: WorksetRow[] = []
+  const candidates: WorksetRow[] = []
   for (const r of byKey.values()) {
     if (humanDecisionFor(input.humanDecided, r.sourceSite, r.sourceArticleId) !== null) { drop(r, K(r), 'humanDecided'); continue }
     if (input.queuePending.has(K(r))) { drop(r, K(r), 'queueSibling'); continue }
-    // 🔴 발행된 형제까지 — 같은 원문으로 두 번째 글을 만들지 않는다
     if (hasSource(input.queuedSources, r.sourceSite, r.sourceArticleId)) { drop(r, K(r), 'alreadyQueued'); continue }
-    // 🔴 적재 실패 후보는 이월이 적재한다 — 다시 만들지 않는다
     if (hasSource(input.carriedOver, r.sourceSite, r.sourceArticleId)) { drop(r, K(r), 'carriedOver'); continue }
     if (input.concluded.has(K(r))) { drop(r, K(r), 'terminal'); continue }
-    /**
-     * 🔴 **판정기 정본 게이트를 그대로 부른다** — 여기서 규칙을 새로 만들지 않는다.
-     *    `access`·`safety` 를 손으로 비교하던 앞판은 판정기와 어긋날 수 있었다.
-     */
     if (hardGate(r.input).some((c) => (HARD_BLOCK as readonly string[]).includes(c))) {
       drop(r, K(r), 'hardBlocked'); continue
     }
-    /**
-     * 🔴 **물어봐도 HOLD 인 것은 묶음에 넣지 않는다.** 판정기가 모델 답을 받고
-     *    나서 보던 사유를 `holdBeforeAsking` 하나로 모았다 — 같은 함수를 부른다.
-     */
     if (holdBeforeAsking(r.input).length > 0) { drop(r, K(r), 'preGated'); continue }
+    candidates.push(r)
+  }
+  return { candidates, dropped, keyOf: K }
+}
+
+/**
+ * 🔴 다음 단계 증명이 쓸 stage-neutral inventory. 현재 release horizon 을 보지 않고,
+ *    lifecycle · hard gate · pre-gate 만 적용한다. trace 는 선택 판정의 단일 기록을 위해 받지 않는다.
+ */
+export function worksetInventory(input: WorksetLifecycleInput): WorksetInventory {
+  return lifecycleInventory(input, undefined)
+}
+
+/** 🔴 회차 종료 후 lifecycle 상태를 다시 반영한 stage-neutral 기회 inventory 를 만든다. */
+export function buildOpportunitySnapshot(input: {
+  runId: string
+  takenAt: Date
+  inputRows: number
+  inventory: WorksetInventory
+}): OpportunitySnapshot {
+  if (!/^\d{8}-\d{6}$/.test(input.runId) || !Number.isFinite(input.takenAt.getTime())) {
+    throw new Error('opportunity inventory run identity is invalid')
+  }
+  if (!nonNegativeInteger(input.inputRows) || input.inventory.candidates.length > input.inputRows) {
+    throw new Error('opportunity inventory counts are invalid')
+  }
+  const autoSeed = input.inventory.candidates.filter(isAutoSupplyConsumable)
+  const evidence: SourceEvidenceRecord[] = []
+  const evidenceHashes = new Set<string>()
+  let evidenceMissing = 0
+  for (const row of autoSeed) {
+    if (row.evidence === null) {
+      evidenceMissing += 1
+      continue
+    }
+    const hash = row.evidence.provenance.articleIdHash
+    if (hash === null || evidenceHashes.has(hash)) {
+      throw new Error('opportunity inventory evidence identity is invalid')
+    }
+    evidenceHashes.add(hash)
+    evidence.push(row.evidence)
+  }
+
+  return {
+    kind: OPPORTUNITY_KIND,
+    version: OPPORTUNITY_VERSION,
+    runId: input.runId,
+    takenAt: input.takenAt.toISOString(),
+    inventory: {
+      basis: OPPORTUNITY_INVENTORY_BASIS,
+      axis: OPPORTUNITY_INVENTORY_AXIS,
+      counts: {
+        inputRows: input.inputRows,
+        lifecyclePassed: input.inventory.candidates.length,
+        autoSeed: autoSeed.length,
+        evidenceMissing,
+        written: evidence.length,
+      },
+    },
+    evidence,
+  }
+}
+
+export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
+  const inventory = lifecycleInventory(input, input.trace)
+  const dropped = { ...inventory.dropped }
+  const releaseByKey = new Map<string, SlotReleaseVerdict>()
+  const drop = (r: WorksetRow, key: string, d: WorksetDrop, v: SlotReleaseVerdict): void => {
+    dropped[d] += 1
+    input.trace?.eligibility({ row: r, key, drop: d, verdict: v })
+  }
+
+  const eligible: WorksetRow[] = []
+  for (const r of inventory.candidates) {
+    const key = inventory.keyOf(r)
     /**
      * 🔴 **예정 슬롯에서 eligible 인가 — 정본 판정 하나** (2026-09-30). 오래된 원문을 오늘 수집했어도,
      *    반응 증거가 없어도, 원천 상대 표본이 없어도 유료 생성에 들어가지 않는다.
      */
     const v = input.releaseOf(r)
     if (v.verdict !== 'eligible') {
-      drop(r, K(r), v.verdict === 'unknown' ? 'slotUnknown' : 'slotIneligible', v)
+      drop(r, key, v.verdict === 'unknown' ? 'slotUnknown' : 'slotIneligible', v)
       continue
     }
-    releaseByKey.set(K(r), v)
+    releaseByKey.set(key, v)
     eligible.push(r)
-    input.trace?.eligibility({ row: r, key: K(r), drop: null, verdict: v })
+    input.trace?.eligibility({ row: r, key, drop: null, verdict: v })
   }
 
-  return { eligible, releaseByKey, dropped, keyOf: K }
+  return { eligible, releaseByKey, dropped, keyOf: inventory.keyOf }
 }
 
 /**

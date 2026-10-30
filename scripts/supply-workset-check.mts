@@ -22,7 +22,8 @@ import {
   type RunWindow, type SourceKeySet,
   type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
-  WORKSET_VERSION, worksetFileName, preGenerationRelease, worksetEligibility, type WorksetRow,
+  WORKSET_VERSION, buildOpportunitySnapshot, worksetFileName, preGenerationRelease,
+  worksetEligibility, worksetInventory, type WorksetRow,
   WORKSET_VERSION_JIT, SUPPLY_JIT_CONTRACT, sourceIdentityOf,
 } from '../src/lib/supply-workset'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
@@ -1242,7 +1243,7 @@ console.log('\n⑪ 🔴 🔴 같은 회차 안의 순서는 단계 순서다 —
   check('🔴 🔴 **파일 이름에서 회차를 읽지 않는다** — 정본 함수에 파일명 파싱이 없다', (() => {
     const lib = readFileSync('src/lib/supply-workset.ts', 'utf-8')
     const reader = readFileSync('scripts/lib/prior-outcomes.mts', 'utf-8')
-    const body = lib.slice(lib.indexOf('export function runWindowOf'), lib.indexOf('/** 🔴 `#` 뒤 조각을 뗀 원문 id'))
+    const body = lib.slice(lib.indexOf('export function runWindowOf'), lib.indexOf('export function attributeRuns'))
     return !/auto-judge-|auto-draft-|\\d\{8\}-\\d\{6\}/.test(body) && /attributeRuns\(out, readRunWindows\(o\.dataDir\)\)/.test(reader)
   })())
   check('🔴 🔴 **판정 러너가 회차 칸(runAt · runId)을 기록에 적는다**', (() => {
@@ -1307,9 +1308,9 @@ console.log('\n⑫ 🔴 🔴 같은 원문으로 두 번째 글을 만들지 않
     sel({ rows: rows2, limit: 10 }).workset.sources.map(sid).includes('p1'))
   check('🔴 러너가 큐 **전체**(상태 무관)와 글 원천을 읽어 넘긴다 — 미발행만이 아니다', (() => {
     const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-    return /queuedSources = queuedSourceKeysOf\(\[/.test(runner)
+    return /queuedSources: queuedSourceKeysOf\(\[/.test(runner)
       && /prisma\.post\.findMany\(\{\s*where: \{ sourceArticleId: \{ not: null \} \}/.test(runner)
-      && /queuedSources,\n/.test(runner)
+      && /queuedSources = state\.queuedSources/.test(runner) && /queuedSources,\n/.test(runner)
       && /if \(snapOk && queuedSources !== null\) \{/.test(runner) && /if \(policy\.llm\) \{/.test(runner)
   })())
 
@@ -1526,7 +1527,7 @@ console.log('\n⑮ 🔴 🔴 (P0-B) 원천 = (사이트, id) — 같은 숫자 i
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하나(`worksetEligibility`) — 묶음 선택과 같은 원천')
+console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를 분리한다')
 // ─────────────────────────────────────────────────────────
 {
   /**
@@ -1550,9 +1551,11 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
     releaseOf: (r: WorksetRow) => preGenerationRelease(r, NOW, NOW),
   })
   const rawSlotEligible = rows.filter((r) => preGenerationRelease(r, NOW, NOW).verdict === 'eligible').length
+  const inventory = worksetInventory(input())
   const e = worksetEligibility(input())
   check('🔴 🔴 **슬롯 판정만 보면 221 — 생성 가능 판정은 1 (끝난 50 · 큐 50 · 사람 30 · 형제 30 · 이월 40 · 접근/안전 20)**',
-    rawSlotEligible === 221 && e.eligible.length === 1 && e.eligible[0]!.sourceArticleId === 'p220'
+    rawSlotEligible === 221 && inventory.candidates.length === 1
+    && e.eligible.length === 1 && e.eligible[0]!.sourceArticleId === 'p220'
     && e.dropped.terminal === 50 && e.dropped.alreadyQueued === 50 && e.dropped.humanDecided === 30
     && e.dropped.queueSibling === 30 && e.dropped.carriedOver === 40 && e.dropped.preGated === 20,
     JSON.stringify({ rawSlotEligible, n: e.eligible.length, dropped: e.dropped }))
@@ -1588,12 +1591,54 @@ console.log('\n⑬ 🔴 🔴 원천 기회 스냅샷 = 생성 가능 판정 하�
     fresh30.eligible.length === 30 && opp30.total === 3 && opp30.sourceExpected === 3
     && !v30.codes.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: opp30, codes: v30.codes }))
 
-  // 🔴 배선 — 러너가 스냅샷과 묶음에 같은 입력 · 같은 함수를 쓴다(슬롯 판정만 거르는 두 번째 판정이 없다)
+  const transitionRows = Array.from({ length: 20 }, (_, k) => ROW({ sourceArticleId: `transition-${k}`, commentCount: 40 }))
+  const transitionLifecycle = {
+    ...input(), rows: transitionRows, concluded: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS,
+    humanDecided: humanDecisionIndexOf([]), queuePending: new Set<string>(), carriedOver: EMPTY_SOURCE_KEYS,
+  }
+  const currentHorizon = worksetEligibility({
+    ...transitionLifecycle,
+    releaseOf: (r) => preGenerationRelease(
+      r,
+      Number.parseInt(r.sourceArticleId.split('-')[1] ?? '0', 10) < 16
+        ? NOW : new Date(NOW.getTime() + 100 * 3_600_000),
+      NOW,
+    ),
+  })
+  const transitionInventory = worksetInventory(transitionLifecycle)
+  const transitionSnapshot = buildOpportunitySnapshot({
+    runId: RUN, takenAt: NOW, inputRows: transitionRows.length, inventory: transitionInventory,
+  })
+  const d20Slots = slotTimesOn('2026-09-21', profileOf('d20'))
+  const d20Opp = slotValidOpportunitiesOf({
+    slots: d20Slots, ready: [], readyPerSource: 1,
+    sources: sourceOpportunitiesOf(transitionSnapshot.evidence, new Set(), NOW),
+  })
+  check('🔴 🔴 **현재 JIT horizon 16건이어도 stage-neutral inventory 20건을 보존해 D20 슬롯에서 다시 판정한다**',
+    currentHorizon.eligible.length === 16 && transitionSnapshot.evidence.length === 20
+    && transitionSnapshot.inventory.counts.written === 20 && d20Opp.total === 20,
+    JSON.stringify({ current: currentHorizon.eligible.length, inventory: transitionSnapshot.evidence.length, d20: d20Opp }))
+
+  const processed = new Set(transitionRows.slice(0, 3).map((r) => sourceKeyOf(r.sourceSite, r.sourceArticleId)))
+  const selectedButUnprocessed = buildOpportunitySnapshot({
+    runId: RUN, takenAt: NOW, inputRows: transitionRows.length, inventory: transitionInventory,
+  })
+  const afterRun = buildOpportunitySnapshot({
+    runId: RUN, takenAt: NOW, inputRows: transitionRows.length,
+    inventory: worksetInventory({ ...transitionLifecycle, concluded: processed }),
+  })
+  check('🔴 🔴 **선택만 된 원천은 기회로 남고, 회차 뒤 실제 결론 3건만 lifecycle inventory에서 빠진다**',
+    selectedButUnprocessed.evidence.length === 20
+    && afterRun.evidence.length === 17 && afterRun.inventory.counts.written === 17)
+
+  // 🔴 배선 — 현재 JIT 선택은 release horizon, 기회 inventory는 회차 뒤 실제 lifecycle 을 다시 읽는다
   const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-  check('🔴 🔴 **러너 스냅샷은 `worksetEligibility(eligibilityInput)` · 묶음은 `...eligibilityInput` — 두 번째 판정 없음**',
-    /const opp = worksetEligibility\(eligibilityInput\)\.eligible/.test(runner)
-    && /selectWorkset\(\{\s*\.\.\.eligibilityInput,/.test(runner)
-    && !/releaseOf\(r\)\.verdict === 'eligible'/.test(runner))
+  check('🔴 🔴 **러너는 JIT 선택과 회차 후 lifecycle inventory를 분리하고, 실제 결과 뒤 v3를 쓴다**',
+    /const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput,/.test(runner)
+    && /const freshPrior = priorState\(opportunityRows, currentContractBase\(RUN_AT\)\)/.test(runner)
+    && /inventory: worksetInventory\(postRunInput\)/.test(runner)
+    && runner.indexOf('const phase2 = await runCommonPhase') < runner.indexOf('const snapshot = buildOpportunitySnapshot')
+    && !/slotAt: nextSlotAt\.toISOString\(\), evidence: opp/.test(runner))
 }
 
 // ─────────────────────────────────────────────────────────
