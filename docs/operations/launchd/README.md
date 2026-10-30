@@ -173,8 +173,8 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 |---|---|---|---|
 | 82cook 목록 | `com.soransoran.raw-collect-82cook` | **07:00 · 10:00 · 13:00 · 16:00 · 19:00** (5회) | `micro-seed-collect-82cook.mts --list --pages=3 --live` |
 | 82cook 본문 (공급 레인) | `com.soransoran.supply-collect-82cook-thin` | **07:40 · 10:40 · 13:40 · 16:40 · 19:40** (5회 · 목록 40분 뒤) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
-| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **07:30 · 10:30 · 13:30 · 16:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
-| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **09:30 · 11:30 · 15:30 · 20:30** (4회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
+| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **00:30 · 02:30 · 05:30 · 13:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
+| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **01:30 · 03:30 · 04:30 · 11:30 · 20:30** (5회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
 
 🔴 **82cook 은 두 job 이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
 목록 job = robots 1 + 목록 3 = **4/회차** × 5 = 20
@@ -203,14 +203,14 @@ npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
 ```
 82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
 82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
-remonterrace     07:30 10:30 13:30 16:30 21:30        5회
-wgang            09:30 11:30 15:30 20:30              4회
-supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 07:00 전 복구 + 수집 뒤 drain
+remonterrace     00:30 02:30 05:30 13:30 21:30        5회
+wgang            01:30 03:30 04:30 11:30 20:30        5회
+supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 수집 처리 + 수집 뒤 drain
 ```
 
-🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 하루에 고르게 폈고,
-그래서 02:50 · 04:20 · 01:10 처럼 **기계가 꺼져 있는 시각**에 슬롯이 있었다 —
-예약은 있는데 회차는 돌지 않는다. **돌지 않는 슬롯은 능력이 아니다.**
+🔴 **D20 target date의 재료는 00:30~05:30 수집 → 06:15 공급 → 07:00 controller 순서로 만든다.**
+새벽 슬롯은 상시 호스트가 **AC 전원 · 로그인 · 덮개 열림 · keep-awake**를 모두 만족할 때만 능력이다.
+배터리·잠자기·로그아웃 상태를 능력으로 세지 않으며, 전제가 깨지면 controller가 fail-closed한다.
 
 🔴 **게시판·페이지 설정은 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
 바뀐 것은 **언제 도는가** 하나다.
@@ -272,10 +272,11 @@ JOB=com.soransoran.supply-process
 ```
 
 실행 시각은 **06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST** 7회다.
-🔴 06:15는 전날 밤 최신 수집분을 07:00 controller 전에 복구한다. 나머지는 **수집 슬롯 뒤에 붙인다** —
-07:00/07:30/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
+🔴 06:15는 00:30~05:30 target-date 네이버 수집분을 07:00 controller 전에 처리한다.
+나머지는 **수집 슬롯 뒤에 붙인다** — 07:00/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
 입력이 생긴 뒤에 비워야 대기 시간이 줄고, 그만큼 APPROVED 순증이 빨라진다.
-🔴 22:15 가 마지막이다 — 노트북이 22:30 쯤 꺼지므로 그 앞에 한 번 더 비운다.
+🔴 22:15가 마지막 처리 회차다. 상시 호스트는 이후에도 AC 전원·로그인·덮개 열림·keep-awake를
+유지해 다음 날 00:30~05:30 target-date 수집을 이어 간다.
 
 🔴 **미처리 입력이 없으면 정상 no-op 이다** — 네트워크 0 · LLM 0 · DB write 0.
 조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.
@@ -339,8 +340,8 @@ job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.
 `-multi` job 이 정본이다. 시(hour)를 어긋나게 두어 두 카페가 같은 시각에 돌지 않는다.
 
 ```
-remonterrace  07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST (5회)
-wgang         09:30 · 11:30 · 15:30 · 20:30 KST (4회)
+remonterrace  00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST (5회)
+wgang         01:30 · 03:30 · 04:30 · 11:30 · 20:30 KST (5회)
 ```
 
 🔴 **카페는 이 둘이 전부**이며, 같은 시각에 돌지 않는 것을 fixture 가 검사한다.
