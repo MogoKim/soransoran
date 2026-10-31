@@ -655,6 +655,8 @@ function directDriveSandbox(prefix, { draftTitle = null, draftText = null, qaFai
     if (name === 'magazine-batch-qa.mjs') {
       return { code: 0, json: { results: [{ slug, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [] }] } }
     }
+    // 🔴 drive 의 흐름(spec sidecar · 단계 순서)만 보는 대역이다 — 실제 register 의 DIRECT 판정은 이 대역이 가렸다(2026-10-31).
+    //    실제 register CLI · drive 의 실제 register 호출은 `magazine-register-direct-check` D01~D14 가 본다.
     if (name === 'magazine-register.mjs') return { code: 0, json: { verdict: 'READY' } }
     if (name === 'magazine-qa.mjs') {
       qaRuns += 1
