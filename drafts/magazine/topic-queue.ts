@@ -411,6 +411,6 @@ export const TOPIC_QUEUE: TopicQueueItem[] = [
     intentId: 'I-T6-05',
     g8ManifestHash: '5c6f01d8bfc97197eb13a43dc4183f61e9c025bee07a4b59c96990e2d3d53d3f',
     directSpecMode: 'DIRECT_SPEC_V1',
-    articlePlanHash: 'sha256:d51ef25f51f2835e7466ff8b065d4ab77a000b0a5be0b487eea3314655219e21',
+    articlePlanHash: 'sha256:f8305b2b0502c0f5e3a7658fbec62ac2151fbb7f99969359e6f50fa3f2911bf2',
   },
 ]
