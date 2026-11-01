@@ -45,6 +45,9 @@ const { AUTO_LANE_DECIDED_BY, AUTO_LANE_EXPIRE_REASON, commentLoopLimitsFromEnv 
 const { dedupKeyOf } = await import('../src/lib/persona-comment-queue')
 const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
 const { runCommentLoop, sweepAutoLane, generationGateOf } = await import('./lib/persona-comment-loop.mjs')
+const { createAttemptStore } = await import('./lib/persona-comment-attempt-store.mjs')
+/** 🔴 호출마다 빈 시도 기억 — 이 검사의 시나리오는 서로 이어지지 않는다(첫 댓글 시도 기억 자체는 loop-check 가 시험한다) */
+const freshAttemptStore = () => createAttemptStore({ dir: mkdtempSync(join(HOME, 'attempts-')) })
 const { readCostSignals } = await import('./lib/ops-signals.mjs')
 const { commentProvenanceOf } = await import('../src/lib/stage-evidence')
 const { SupplyLlmSession } = await import('./lib/supply-llm-call.mjs')
@@ -189,7 +192,7 @@ const auditReplies = async (): Promise<void> => {
 async function loop(gen: CommentGenerate, over: { generation?: { ok: boolean; reason: string } } = {}) {
   const r = await runCommentLoop({
     prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
-    makeGenerate: () => gen, generation: over.generation ?? { ok: true, reason: '' }, runRequestCap: 6,
+    makeGenerate: () => gen, generation: over.generation ?? { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
   })
   await auditReplies()
   return r

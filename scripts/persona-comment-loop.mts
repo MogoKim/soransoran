@@ -34,6 +34,7 @@ import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-leas
 import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
 import { followupEligibleFor, readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
+import { attemptStoreInLease } from './lib/persona-comment-attempt-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
 import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
@@ -87,8 +88,8 @@ async function main(): Promise<number> {
 }
 
 /** 🔴 한 회차 — lease 를 쥔 채로만 부른다. 0 정상 · 1 예외 · 2 발행 오류가 남았다 */
-/** 🔴 `_proof` — 커널 잠금 fd 증명을 받은 쪽만 회차를 돈다(타입이 요구한다) */
-async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: LeaseProof, ctx: PassContext): Promise<number> {
+/** 🔴 `proof` — 커널 잠금 fd 증명을 받은 쪽만 회차를 돈다(타입이 요구한다). 첫 댓글 시도 기억 저장소도 이 증명에서 만든다 */
+async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: LeaseProof, ctx: PassContext): Promise<number> {
   try {
     const budget = commentLoopLimitsFromEnv(process.env)
     const missing = missingBudgetEnvNames(budget.limits)
@@ -153,6 +154,8 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
       makeGenerate,
       generation: gate,
       runRequestCap: budget.limits.runRequestCap ?? 0,
+      // 🔴 같은 글 60분 window 안에서 이미 보낸 조합을 다시 보내지 않는다 — lease 증명에서 만든 로컬 저장소
+      attemptStore: attemptStoreInLease(proof),
       ...(followupPhase === undefined ? {} : { followupPhase }),
     })
 
@@ -170,7 +173,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, _proof: Le
       + `${t.usageUnknown > 0 ? ` · 🔴 사용량 미상 ${t.usageUnknown}` : ''}${t.settleHeld > 0 ? ` · 🔴 정산 보류 ${t.settleHeld}` : ''}`)
     // 🔴 한 줄 요약 — launchd 로그를 grep 하는 자리
     console.log(`COMMENT_LOOP pass=${pass} outcome=${report.outcome} targets=${report.targets} providerCalls=${report.providerCalls}`
-      + ` enqueued=${report.enqueued} | ${sweepLine('sweep①', report.sweepBefore)} | ${sweepLine('sweep②', report.sweepAfter)}\n`)
+      + ` enqueued=${report.enqueued} attemptExcluded=${report.attemptExcluded} attemptWarnings=${report.attemptWarnings.length} | ${sweepLine('sweep①', report.sweepBefore)} | ${sweepLine('sweep②', report.sweepAfter)}\n`)
     const errors = (report.sweepBefore?.errors ?? 0) + (report.sweepAfter?.errors ?? 0)
       + (fu?.sweepBefore?.errors ?? 0) + (fu?.sweepAfter?.errors ?? 0)
     return errors > 0 || t.settleHeld > 0 ? 2 : 0

@@ -143,6 +143,8 @@ export type PlanBlockCode =
   | 'PERSONA_ROLE_CONCENTRATED'
   | 'PERSONA_ROLE_HISTORY_UNKNOWN'
   | 'PERSONA_ALREADY_ON_POST'
+  /** 🔴 같은 글 60분 window 안에서 이미 provider 로 보낸 정확한 조합이다 — `feasible` 이 제외한다(첫 댓글 lane 전용) */
+  | 'COMBO_ALREADY_ATTEMPTED'
   | 'NO_ELIGIBLE_PERSONA'
   | 'LIMIT_EXHAUSTED'
 
