@@ -59,6 +59,8 @@ export type PipelineTarget = {
 export type PipelineStep =
   | 'MODEL_NOT_CONFIRMED'
   | 'AUTHOR_BLOCKED'
+  /** 🔴 `beforeProvider` 가 보내지 말라고 했다(시도 기록을 못 남겼거나 같은 조합이 이미 기록에 있다) — provider 0 */
+  | 'ATTEMPT_BLOCKED'
   | 'PROVIDER_FAILED'
   | 'PARSE_FAILED'
   | 'ENQUEUE_BLOCKED'
@@ -69,6 +71,8 @@ export type PipelineStep =
 export type PipelineOutcome = {
   postId: string
   personaCode: string
+  /** 🔴 정확한 조합의 마지막 칸 — 시도 기록의 열쇠(`post × Persona × role`)에 필요하다 */
+  reactionRole: string
   step: PipelineStep
   reason: string
   plan: EnqueuePlan | null
@@ -84,6 +88,16 @@ export type PipelineResult = {
   /** 🔴 회차를 멈춘 구조화 사유 — 요청 모양 거부면 `PROVIDER_REQUEST_REJECTED`, 아니면 null */
   stoppedCode: 'PROVIDER_REQUEST_REJECTED' | null
 }
+
+/**
+ * 🔴 **provider 를 부르기 직전 관문** (2026-11-01 · 첫 댓글 시도 기록). 생략하면 옛 동작 그대로다.
+ *    `proceed:false` 면 이 대상은 부르지 않고(호출 수에 세지 않는다) `ATTEMPT_BLOCKED` 로 남는다.
+ *    `stopRound:true` 면 이 회차의 남은 대상도 부르지 않는다 — 기록 저장소가 고장 난 것이라 다음 대상도 같다.
+ */
+export type PipelineBeforeProvider = (t: PipelineTarget) =>
+  | { proceed: true }
+  | { proceed: false; reason: string; stopRound: boolean }
+  | Promise<{ proceed: true } | { proceed: false; reason: string; stopRound: boolean }>
 
 /** 🔴 요청 모양 거부(400)로 회차의 provider 호출을 멈출 때의 코드 */
 export const PROVIDER_REQUEST_REJECTED = 'PROVIDER_REQUEST_REJECTED'
@@ -129,6 +143,8 @@ export async function runEnqueuePipeline(args: {
    */
   preflightOk: boolean
   preflightBlockers?: readonly string[]
+  /** 🔴 provider 호출 직전 관문 — 첫 댓글 lane 의 시도 기록이 쓴다. 다른 호출자는 넘기지 않는다 */
+  beforeProvider?: PipelineBeforeProvider
 }): Promise<PipelineResult> {
   const outcomes: PipelineOutcome[] = []
   const modelGate = judgeModelGate({ selection: args.selection })
@@ -160,7 +176,9 @@ export async function runEnqueuePipeline(args: {
     if (providerCalls >= args.providerCallLimit) break
     if (args.writer !== undefined && created >= args.limit) break
     const at = (step: PipelineStep, reason: string, plan: EnqueuePlan | null = null): void => {
-      outcomes.push({ postId: t.facts.postId, personaCode: t.facts.personaCode, step, reason, plan })
+      outcomes.push({
+        postId: t.facts.postId, personaCode: t.facts.personaCode, reactionRole: t.facts.reactionRole, step, reason, plan,
+      })
     }
 
     /**
@@ -171,6 +189,24 @@ export async function runEnqueuePipeline(args: {
     if (!author.externalSendAllowed) {
       at('AUTHOR_BLOCKED', `${author.kind} — ${author.reason}`)
       continue
+    }
+
+    // 🔴 보내기 전에 마지막으로 묻는다 — 거절되면 호출 수에 세지 않는다. 예외도 거절이다(보내지 않는다)
+    if (args.beforeProvider !== undefined) {
+      const permit = await Promise.resolve(args.beforeProvider(t)).catch(
+        (): { proceed: false; reason: string; stopRound: boolean } =>
+          ({ proceed: false, reason: 'beforeProvider 가 예외로 끝났다', stopRound: true }),
+      )
+      if (!permit.proceed) {
+        at('ATTEMPT_BLOCKED', permit.reason)
+        if (permit.stopRound) {
+          return {
+            providerCalls, created, outcomes, stoppedCode: null,
+            stoppedReason: `시도 기록 관문이 회차를 멈췄다 — ${permit.reason} · 남은 대상 provider 0`,
+          }
+        }
+        continue
+      }
     }
 
     providerCalls += 1

@@ -56,6 +56,9 @@ const { fileURLToPath } = await import('node:url')
 const { dirname } = await import('node:path')
 const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
 const { runCommentLoop, sweepAutoLane } = await import('./lib/persona-comment-loop.mjs')
+const { createAttemptStore } = await import('./lib/persona-comment-attempt-store.mjs')
+/** 🔴 호출마다 빈 시도 기억 — 이 검사의 시나리오는 서로 이어지지 않는다(첫 댓글 시도 기억 자체는 loop-check 가 시험한다) */
+const freshAttemptStore = () => createAttemptStore({ dir: mkdtempSync(join(HOME, 'attempts-')) })
 const { runFollowupPhase, readFollowupContext, sweepFollowupLane, FOLLOWUP_EXPIRE_REASON } = await import('./lib/persona-comment-followup-run.mjs')
 const { SupplyLlmSession } = await import('./lib/supply-llm-call.mjs')
 const { judgeCommentCall } = await import('./lib/persona-comment-call.mjs')
@@ -330,7 +333,7 @@ async function main(): Promise<void> {
     const r = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
       makeGenerate: () => async () => ({ ok: true, text: '읽으면서 고개가 계속 끄덕여졌어요. 그런 밤은 괜히 마음이 싱숭생숭하죠. 오늘은 푹 주무셨으면 좋겠네요~', errorCode: null }),
-      generation: { ok: true, reason: '' }, runRequestCap: 6,
+      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
       followupPhase: () => phase(g.gen),
     })
     const cs = await personaRows(pid)
@@ -344,7 +347,7 @@ async function main(): Promise<void> {
     const r2 = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
       makeGenerate: () => async () => ({ ok: true, text: '어머 그 새벽 얼마나 길게 느껴지셨을까요. 오늘은 꼭 푹 주무셨으면 좋겠어요.', errorCode: null }),
-      generation: { ok: true, reason: '' }, runRequestCap: 6,
+      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
       followupPhase: () => phase(g2.gen, { conversationAudit: { verdict: 'FAIL', codes: ['FOLLOWUP_SELF'], counts: {} } }),
     })
     const cs2 = await personaRows(pid2)

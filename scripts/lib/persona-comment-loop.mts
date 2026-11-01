@@ -52,6 +52,10 @@ import {
 } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { FOLLOWUP_KEY_PREFIX } from '../../src/lib/persona-comment-followup'
+import {
+  attemptedComboKeys, attemptKeyOf, attemptOutcomeOf, type AttemptEntry, type AttemptOutcomeUpdate,
+} from '../../src/lib/persona-comment-attempt-policy'
+import type { AttemptStore } from './persona-comment-attempt-store.mjs'
 import type { FollowupPhaseReport } from './persona-comment-followup-run.mjs'
 
 // ─────────────────────────────────────────────────────────
@@ -303,6 +307,12 @@ export type CommentLoopDeps = {
    *    첫 댓글 경로는 이 단계를 보지 않고, 이 단계가 실패해도 첫 댓글 결과는 그대로다.
    */
   followupPhase?: () => Promise<FollowupPhaseReport>
+  /**
+   * 🔴 **첫 댓글 시도 기억** (2026-11-01 · D20). 같은 글 60분 window 안에서 provider 로 이미 보낸 `post × Persona × role` 을
+   *    다시 고르지 않고 보내지도 않는다. 진입점은 커널 lease 증명에서 만든 저장소를 넘긴다 — **필수**다(빠뜨리면 typecheck 가 막는다).
+   *    추가 댓글 단계는 이 저장소를 보지 않는다.
+   */
+  attemptStore: AttemptStore
 }
 
 export type CommentLoopOutcome =
@@ -324,13 +334,22 @@ export type CommentLoopReport = {
   generationSkipped: string | null
   outcomes: readonly PipelineOutcome[]
   lines: string[]
+  /** 🔴 시도 기억 때문에 이번 계획에서 빠진 조합 수 */
+  attemptExcluded: number
+  /** 🔴 시도 기억을 읽지 못했거나 기록을 남기지 못한 사실 — `lines` 에도 실려 로그에는 그쪽으로 한 번만 찍힌다(여기는 개수·판정용) */
+  attemptWarnings: string[]
   /** 🔴 추가 댓글 단계 — 넘기지 않았으면 null */
   followup?: FollowupPhaseReport | null
 }
 
+/** 🔴 읽지 못한 기억은 "없다" 가 아니다 — 경고 문장 하나로 모은다(원문 · 경로 없이 코드만) */
+const attemptReadWarning = (m: { code: string; reason: string }): string =>
+  `🔴 첫 댓글 시도 기억을 읽지 못했다 [${m.code}] ${m.reason} — 파일이 복구되기 전까지 첫 댓글 유료 생성은 0`
+
 const emptyReport = (outcome: CommentLoopOutcome, stage: string, reason: string): CommentLoopReport => ({
   outcome, stage, reason, sweepBefore: null, sweepAfter: null, targets: 0,
   providerCalls: 0, enqueued: 0, generationSkipped: null, outcomes: [], lines: [],
+  attemptExcluded: 0, attemptWarnings: [],
 })
 
 /**
@@ -361,8 +380,12 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
   const lines: string[] = []
 
   if (!deps.live) {
+    // 🔴 미리보기도 같은 기억을 읽는다(읽기만 — 쓰지 않는다). 못 읽으면 기억 없이 보이되 경고를 남긴다
+    const previewMemory = deps.attemptStore.read(nowMs)
+    const previewWarnings: string[] = previewMemory.ok ? [] : [attemptReadWarning(previewMemory)]
     const preview = await materializeTargets({
       source: autoLaneTargetSource(deps.source, nowMs), limit: COMMENT_LOOP_PREVIEW, nowMs, windowMs,
+      ...(previewMemory.ok ? { attemptedCombos: attemptedComboKeys(previewMemory.entries, nowMs) } : {}),
     })
     const picked = firstPerPost(preview.targets, (t) => t.target.facts.postId)
     for (const t of picked) {
@@ -370,7 +393,8 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     }
     return {
       ...emptyReport('DRY_RUN', stage.stage, '--live 가 없다 — provider 0 · DB write 0'),
-      targets: picked.length, lines,
+      targets: picked.length, lines: [...previewWarnings, ...lines],
+      attemptExcluded: preview.counts.attemptExcluded, attemptWarnings: previewWarnings,
     }
   }
 
@@ -411,25 +435,50 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
   let enqueued = 0
   let targets = 0
   let outcomes: PipelineOutcome[] = []
+  let attemptExcluded = 0
+  const attemptWarnings: string[] = []
   if (!deps.generation.ok) generationSkipped = deps.generation.reason
   else if (limit === 0) generationSkipped = `오늘 남은 자리 0 — ${readiness.blockers[0] ?? readiness.detail}`
 
-  if (generationSkipped === null) {
+  /**
+   * 🔴 **시도 기억을 읽지 못하면 유료 생성은 0 이다**(fail-closed). 없는 파일은 정상 빈 기억이다.
+   *    같은 조합을 또 보내는 것보다 이번 회차 생성을 쉬는 쪽이 싸다 — 앞 단계의 PENDING 발행 sweep 은 이미 돌았고 뒤 sweep 도 돈다.
+   */
+  const memory = generationSkipped === null ? deps.attemptStore.read(nowMs) : null
+  if (memory !== null && !memory.ok) {
+    const warning = attemptReadWarning(memory)
+    attemptWarnings.push(warning)
+    lines.push(warning)
+    generationSkipped = `첫 댓글 시도 기억을 읽지 못했다 [${memory.code}] — 유료 호출 0 · 이미 적재된 PENDING 발행은 계속한다`
+  }
+
+  if (generationSkipped === null && memory !== null && memory.ok) {
     const material = await materializeTargets({
       source: autoLaneTargetSource(deps.source, nowMs), limit, nowMs, windowMs,
+      attemptedCombos: attemptedComboKeys(memory.entries, nowMs),
     })
+    attemptExcluded = material.counts.attemptExcluded
     // 🔴 같은 글의 후보를 모두 넘긴다. 첫 후보가 Gate 에서 막히면 다음 Persona 로 넘어가고,
     //    하나가 적재되면 pipeline 이 그 글의 나머지 후보를 부르지 않는다.
     const candidates = material.targets
     targets = new Set(candidates.map((t) => t.target.facts.postId)).size
     lines.push(`대상 글 ${targets}편 · 후보 ${candidates.length}건 (planner ${material.counts.planned} · 입력 ${material.counts.built})`)
     for (const b of material.providerBlockers) lines.push(`유료 호출 차단 사유: ${b}`)
+    if (attemptExcluded > 0) lines.push(`이미 보낸 조합 ${attemptExcluded}건 제외 — 같은 글 60분 window 안에서는 다시 보내지 않는다`)
+    if (candidates.length === 0 && attemptExcluded > 0) {
+      generationSkipped = `이 60분 window 의 새 조합이 없다 — 이미 보낸 ${attemptExcluded}건 제외 · 유료 호출 0`
+    }
 
     const ctxByKey = new Map(candidates.map((t) => [
       dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole),
       { gate: t.gate, recentTexts: t.recentTexts },
     ]))
     const ctxOf = (input: CommentInput) => ctxByKey.get(dedupKeyOf(input.post.id, input.personaCode, input.reactionRole))
+    const publishedByKey = new Map(candidates.map((t) => [
+      dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole), t.postPublishedAtMs,
+    ]))
+    /** 🔴 이 회차에 시작 기록을 남긴 조합 — 결과 갱신은 이것만 한다 */
+    const started = new Set<string>()
     const generate = candidates.length === 0
       ? null
       : deps.makeGenerate(candidates.map((t) => t.target.input.personaCode))
@@ -453,7 +502,40 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
       providerCallLimit: limit,
       limit,
       oneCreatedPerPost: true,
+      // 🔴 provider 앞에서 시작 기록을 내구적으로 남긴다 — 못 남기면 부르지 않는다
+      beforeProvider: (t) => {
+        const key = dedupKeyOf(t.facts.postId, t.facts.personaCode, t.facts.reactionRole)
+        const publishedAtMs = publishedByKey.get(key)
+        if (publishedAtMs === null || publishedAtMs === undefined) {
+          const reason = '글 공개 시각을 몰라 시도 기록의 만료를 정할 수 없다'
+          attemptWarnings.push(`🔴 ${reason} — 이 대상은 보내지 않는다`)
+          return { proceed: false, reason, stopRound: false }
+        }
+        const entry: AttemptEntry = {
+          postId: t.facts.postId, personaCode: t.facts.personaCode, reactionRole: t.facts.reactionRole,
+          postPublishedAtMs: publishedAtMs, attemptedAtMs: nowMs, step: 'STARTED', failedGates: [], blockCodes: [],
+        }
+        const w = deps.attemptStore.recordStart(entry, nowMs)
+        if (w.ok) { started.add(key); return { proceed: true } }
+        attemptWarnings.push(`🔴 시도 기록을 남기지 못했다 [${w.kind}] ${w.reason} — provider 0`)
+        return { proceed: false, reason: `시도 기록 실패 [${w.kind}] ${w.reason}`, stopRound: w.kind === 'IO' }
+      },
     })
+    // 🔴 결과를 같은 항목에 적는다. 실패해도 시작 기록이 남아 있어 같은 조합의 재시도는 막힌 채다 — 대신 조용히 넘기지 않는다
+    const updates: AttemptOutcomeUpdate[] = []
+    for (const o of result.outcomes) {
+      const key = attemptKeyOf(o)
+      if (!started.has(key)) continue
+      const summary = attemptOutcomeOf({
+        step: o.step, gates: o.plan?.gates ?? [], blockCodes: o.plan?.blocks.map((b) => b.code) ?? [],
+      })
+      if (summary !== null) updates.push({ key, ...summary })
+    }
+    const done = deps.attemptStore.recordOutcomes(updates, nowMs)
+    if (!done.ok) {
+      attemptWarnings.push(`🔴 시도 결과를 갱신하지 못했다 [${done.kind}] ${done.reason} — 시작 기록은 남아 같은 조합은 다시 보내지 않는다`)
+    }
+    for (const w of attemptWarnings) lines.push(w)
     providerCalls = result.providerCalls
     enqueued = result.created
     outcomes = result.outcomes
@@ -472,6 +554,6 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
   return {
     outcome: 'RAN', stage: stage.stage, reason: stage.reason,
     sweepBefore, sweepAfter, targets, providerCalls, enqueued, generationSkipped,
-    outcomes, lines, followup,
+    outcomes, lines, followup, attemptExcluded, attemptWarnings,
   }
 }

@@ -178,6 +178,8 @@ export type MaterializedTarget = {
   gate: GateContext
   /** voice 근거로 쓰는 이 persona 의 실제 발화 */
   recentTexts: readonly string[]
+  /** 🔴 글이 공개된 시각 — 첫 댓글 시도 기억의 TTL 기준이다. 모르면 null */
+  postPublishedAtMs: number | null
   /**
    * 🔴 **필드를 다 넘겼는가.** 유료 호출을 막는 것은 **이것**이다 —
    *    못 읽은 입력으로 부르면 돈을 쓰고도 잴 수 없다.
@@ -229,6 +231,8 @@ export type MaterializeResult = {
     personasSeedComplete: number
     planned: number
     built: number
+    /** 🔴 `attemptedCombos` 로 제외된 조합 수 — 0 이 아니면 "이미 보낸 것 때문에 줄었다" 를 말할 수 있다 */
+    attemptExcluded: number
   }
 }
 
@@ -270,6 +274,12 @@ export async function materializeTargets(args: {
   /** 본문 요약 길이 — 🔴 원문 전문은 나가지 않는다 */
   digestChars?: number
   commentDigestChars?: number
+  /**
+   * 🔴 **이미 provider 로 보낸 정확한 조합**(`dedupKeyOf`) — 첫 댓글 lane 만 넘긴다. 생략하면 옛 동작 그대로다.
+   *    planner 의 `feasible` 단계에서 제외한다 — 고른 뒤에 지우면 그 글의 호출 기회를 잃는다.
+   *    같은 Persona 라도 다른 역할은 다른 조합이라 남는다.
+   */
+  attemptedCombos?: ReadonlySet<string>
 }): Promise<MaterializeResult> {
   const digestChars = args.digestChars ?? 600
   const commentDigestChars = args.commentDigestChars ?? 60
@@ -413,6 +423,8 @@ export async function materializeTargets(args: {
     memory: { has: false, note: '' },
   })
 
+  /** 🔴 이번 계획에서 `attemptedCombos` 때문에 빠진 조합 — 자격은 있었으나 이미 보낸 것만 센다 */
+  const attemptExcluded = new Set<string>()
   const plan = planCommentDistribution({
     posts: plannerPosts,
     personas: plannerPersonas,
@@ -432,6 +444,12 @@ export async function materializeTargets(args: {
       const pe = personaByCode.get(combo.personaCode)
       // 🔴 모르면 "만들 수 있다" 고 하지 않는다 — 본 루프가 어차피 걸러낸다
       if (pr === undefined || pe === undefined) return []
+      // 🔴 이미 보낸 조합은 입력을 만들기 전에 뺀다 — planner 가 같은 글의 다음 조합으로 이어 간다
+      const comboKey = dedupKeyOf(combo.postId, combo.personaCode, combo.reactionRole)
+      if (args.attemptedCombos?.has(comboKey) === true) {
+        attemptExcluded.add(comboKey)
+        return [{ code: 'COMBO_ALREADY_ATTEMPTED', message: `${combo.personaCode}/${combo.reactionRole} 는 이 글의 60분 window 안에서 이미 보냈다` }]
+      }
       const probe = buildFor(pr, pe, combo.reactionRole)
       return probe.ok ? [] : probe.blocks.map((b) => ({ code: b.code as never, message: b.message }))
     },
@@ -513,6 +531,7 @@ export async function materializeTargets(args: {
       },
       gate,
       recentTexts,
+      postPublishedAtMs: pr.publishAtMs,
       fieldsComplete: readiness.fieldsComplete,
       gateReady: readiness.ok,
       gateMissing: readiness.missing,
@@ -546,6 +565,7 @@ export async function materializeTargets(args: {
       personasSeedComplete: plannerPersonas.filter((p) => p.seedComplete).length,
       planned: plan.items.length,
       built: targets.length,
+      attemptExcluded: attemptExcluded.size,
     },
   }
 }
