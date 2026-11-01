@@ -57,6 +57,11 @@ import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, conservativeShareUsd,
 } from '../src/lib/supply-scheduled-reserve'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
+import {
+  PRESERVED_FIELDS, buildClosedSettlement, closedSettlementProblems, findAttempt, listClosedUnknown, parseActualUsd,
+} from './supply-llm-ledger-resolve.mjs'
+import { costAttributionOf, type CostFate } from '../src/lib/ready-fate'
+import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
 const stripComments = (src: string): string =>
@@ -1767,6 +1772,171 @@ console.log('\n⑫ 공급 장부 정본 자리 · 시험 격리 표식 — 🔴 
     const cfg = at < 0 ? '' : src.slice(at, src.indexOf(')', at))
     check(`🔴 ${f} 가 공급 장부 세션에 dir 를 넘기지 않는다(정본 자리만 쓴다)`, at > 0 && !/\bdir\s*:/.test(cfg), cfg)
   }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n[CU] 🔴 끝난 사용량 미상 시도 — 제공사 확인 금액으로만 append-only 정산 (2026-10-13)')
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-cu-'))
+  const D1 = '2026-10-10'
+  const D2 = '2026-10-11'
+  const p1 = ledgerPathOf(dir, D1)
+  const p2 = ledgerPathOf(dir, D2)
+  const base = (o: Partial<LedgerEntry> & { attemptId: string; startedAt: string }): LedgerEntry => ({
+    runId: '20261010-131506-d', stage: 'judge', requestNo: 3,
+    provider: 'google', apiModelId: 'gemini-api-id-fixture', model: 'gemini-3.7-flash',
+    status: 'reserved', blockCode: null, countedInputTokens: 900, maxOutputTokens: 1200, reservedUsd: 0.0063774,
+    inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+    settledUsd: null, pricingVersion: PRICING_VERSION, endedAt: null, errorCode: null,
+    runKind: 'scheduled', runSlot: '22:15', supplyContract: SUPPLY_JIT_CONTRACT, sourceKey: 'srcA',
+    budgetDailyUsd: 0.5, budgetCeilingUsd: 0.5, budgetCapUsd: 0.5, budgetSource: 'env.local',
+    ...o,
+  })
+  /** 🔴 공급 세션이 실제로 남기는 모양 — 예약 줄 + `usageUnknown` 끝 줄(열린 예약에서는 이미 지워졌다) */
+  const closedUnknown = (path: string, e: LedgerEntry): void => {
+    appendLedgerLine(path, e)
+    appendLedgerLine(path, { ...e, status: 'usageUnknown', endedAt: e.startedAt, errorCode: 'TIMEOUT' })
+  }
+  // A — 현재 계약 Gemini timeout (해소 대상)
+  closedUnknown(p1, base({ attemptId: 'A-gemini', startedAt: '2026-10-10T13:15:55.620Z' }))
+  // B — 같은 날 다른 사용량 미상(legacy · Anthropic) — 오염 0 을 본다
+  closedUnknown(p1, base({
+    attemptId: 'B-legacy', startedAt: '2026-10-10T13:16:30.000Z', provider: 'anthropic', apiModelId: 'claude-api-id-fixture',
+    model: 'claude-haiku-4.5', stage: 'draftQuality', supplyContract: null, sourceKey: null, reservedUsd: 0.0094,
+  }))
+  // C — 이미 정산된 시도
+  appendLedgerLine(p1, base({ attemptId: 'C-settled', startedAt: '2026-10-10T13:17:00.000Z' }))
+  appendLedgerLine(p1, base({ attemptId: 'C-settled', startedAt: '2026-10-10T13:17:00.000Z', status: 'settled', settledUsd: 0.004, endedAt: '2026-10-10T13:17:10.000Z' }))
+  // D — 다른 날짜의 사용량 미상
+  closedUnknown(p2, base({ attemptId: 'D-other-day', runId: '20261011-031503-d', startedAt: '2026-10-11T03:15:20.000Z', sourceKey: 'srcD' }))
+  // F — 원래 줄 자체가 Gemini 모델을 anthropic 으로 적은 깨진 줄
+  closedUnknown(p2, base({ attemptId: 'F-wrong-provider', startedAt: '2026-10-11T03:16:00.000Z', provider: 'anthropic' }))
+  // G — 같은 시도가 두 날짜 파일에 있다(최종 상태를 모른다)
+  closedUnknown(p1, base({ attemptId: 'G-two-days', startedAt: '2026-10-10T13:18:00.000Z', supplyContract: null }))
+  closedUnknown(p2, base({ attemptId: 'G-two-days', startedAt: '2026-10-10T13:18:00.000Z', supplyContract: null }))
+  // E — 아직 열린 예약(기본 경로 대상)
+  const eStart = '2026-10-11T03:17:00.000Z'
+  appendLedgerLine(p2, base({ attemptId: 'E-open', startedAt: eStart, runId: '20261011-031503-d' }))
+  addOpenReservation(dir, {
+    attemptId: 'E-open', runId: '20261011-031503-d', stage: 'judge', date: D2, startedAt: eStart,
+    timeoutMs: 25_000, reservedUsd: 0.0063774, pid: 999_999, sessionId: 'gone',
+  })
+
+  const run = (args: readonly string[]): { code: number | null; out: string } => {
+    const r = spawnSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), 'scripts/supply-llm-ledger-resolve.mts'), `--dir=${dir}`, ...args],
+      { encoding: 'utf-8' },
+    )
+    return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+  }
+  const snap = (): string => [p1, p2, openReservationsPathOf(dir)].map((p) => (existsSync(p) ? readFileSync(p, 'utf-8') : '∅')).join('\u0001')
+  const finalOf = (id: string): LedgerEntry | undefined => {
+    const f = findAttempt(dir, id)
+    return f.ok ? f.entry : undefined
+  }
+  const OK = ['--closed-unknown', '--attempt=A-gemini', '--confirmed-with-provider', '--actual-usd=0.0031']
+
+  // ── 조회 ──
+  const s0 = snap()
+  const listed = listClosedUnknown(dir)
+  check('[CU] 끝난 사용량 미상 시도를 날짜 파일 전부에서 찾는다 — 정산된 시도 · 열린 예약은 아니다',
+    listed !== null && ['A-gemini', 'B-legacy', 'D-other-day', 'F-wrong-provider'].every((id) => listed.some((c) => c.entry.attemptId === id))
+    && !listed.some((c) => c.entry.attemptId === 'C-settled' || c.entry.attemptId === 'E-open'),
+    listed?.map((c) => c.entry.attemptId).join(',') ?? 'null')
+  const l = run(['--closed-unknown'])
+  check('[CU] 🔴 조회는 아무것도 쓰지 않는다', l.code === 0 && snap() === s0 && l.out.includes('A-gemini') && l.out.includes('실제 비용 아님'))
+
+  // ── 거부 — 하나라도 빠지면 쓰지 않는다 ──
+  const refuse = (label: string, args: readonly string[], why: RegExp): void => {
+    const r = run(args)
+    check(`[CU] 🔴 거부 — ${label}`, r.code !== 0 && snap() === s0 && why.test(r.out), r.out.split('\n').filter((x) => x.includes('중단')).join(' '))
+  }
+  refuse('확인 표시 없음', ['--closed-unknown', '--attempt=A-gemini', '--actual-usd=0.0031', '--apply'], /confirmed-with-provider/)
+  refuse('금액 없음', ['--closed-unknown', '--attempt=A-gemini', '--confirmed-with-provider', '--apply'], /actual-usd/)
+  refuse('--actual-unknown (모름을 다시 적지 않는다)', ['--closed-unknown', '--attempt=A-gemini', '--confirmed-with-provider', '--actual-unknown', '--apply'], /actual-unknown/)
+  for (const bad of ['-0.001', '-0', 'NaN', '1e-3', '', 'reserved', 'auto', '0.003x', 'Infinity']) {
+    refuse(`금액 "${bad}"`, ['--closed-unknown', '--attempt=A-gemini', '--confirmed-with-provider', `--actual-usd=${bad}`, '--apply'], /actual-usd/)
+  }
+  refuse('🔴 예약액을 그대로 적은 금액(추정액)', ['--closed-unknown', '--attempt=A-gemini', '--confirmed-with-provider', '--actual-usd=0.0063774', '--apply'], /예약액/)
+  refuse('없는 시도', ['--closed-unknown', '--attempt=NOPE', '--confirmed-with-provider', '--actual-usd=0.001', '--apply'], /없다/)
+  refuse('이미 정산된 시도', ['--closed-unknown', '--attempt=C-settled', '--confirmed-with-provider', '--actual-usd=0.001', '--apply'], /settled/)
+  refuse('아직 열린 예약(기본 경로 대상)', ['--closed-unknown', '--attempt=E-open', '--confirmed-with-provider', '--actual-usd=0.001', '--apply'], /열린 예약/)
+  refuse('두 날짜 파일에 같은 시도(최종 상태 모름)', ['--closed-unknown', '--attempt=G-two-days', '--confirmed-with-provider', '--actual-usd=0.001', '--apply'], /여러 날짜/)
+  refuse('🔴 원래 줄이 Gemini 모델을 anthropic 으로 적었다', ['--closed-unknown', '--attempt=F-wrong-provider', '--confirmed-with-provider', '--actual-usd=0.001', '--apply'], /제공사 anthropic/)
+
+  // ── dry-run 기본 ──
+  const dry = run(OK)
+  check('[CU] 🔴 --apply 없이는 dry-run — 장부 0 변경', dry.code === 0 && snap() === s0 && dry.out.includes('dry-run'))
+
+  // ── 적용 ──
+  const before1 = readFileSync(p1, 'utf-8')
+  const before2 = readFileSync(p2, 'utf-8')
+  const openBefore = readFileSync(openReservationsPathOf(dir), 'utf-8')
+  const a = run([...OK, '--apply'])
+  const after1 = readFileSync(p1, 'utf-8')
+  const added = after1.slice(before1.length).split('\n').filter((x) => x.trim() !== '')
+  check('[CU] 🔴 정확한 금액 + 확인 + --apply 면 해소된다', a.code === 0, a.out.split('\n').filter((x) => x.includes('중단') || x.includes('✅')).join(' '))
+  check('[CU] 🔴 append-only — 앞 내용은 바이트 그대로 · 새 줄 정확히 1개', after1.startsWith(before1) && added.length === 1)
+  check('[CU] 🔴 다른 날짜 파일 · 열린 예약 오염 0', readFileSync(p2, 'utf-8') === before2 && readFileSync(openReservationsPathOf(dir), 'utf-8') === openBefore)
+  const fa = finalOf('A-gemini')
+  const raw = JSON.parse(added[0] ?? '{}') as LedgerEntry
+  check('[CU] 🔴 최종 상태 settled · 적은 금액 그대로 · 사람 마감 표시',
+    fa?.status === 'settled' && fa.settledUsd === 0.0031 && fa.resolvedBy === 'human' && fa.reservedUsd === 0.0063774)
+  check('[CU] 🔴 provider · apiModelId · model · supplyContract · sourceKey · runKind · runSlot · startedAt 보존',
+    raw.provider === 'google' && raw.apiModelId === 'gemini-api-id-fixture' && raw.model === 'gemini-3.7-flash'
+    && raw.supplyContract === SUPPLY_JIT_CONTRACT && raw.sourceKey === 'srcA' && raw.runKind === 'scheduled'
+    && raw.runSlot === '22:15' && raw.startedAt === '2026-10-10T13:15:55.620Z' && raw.runId === '20261010-131506-d')
+  check('[CU] 토큰을 지어내지 않는다 — 모르는 토큰은 null', raw.inputTokens === null && raw.outputTokens === null)
+  check('[CU] 같은 날 다른 시도 오염 0 — B 는 여전히 사용량 미상', finalOf('B-legacy')?.status === 'usageUnknown' && finalOf('C-settled')?.settledUsd === 0.004)
+  const s1 = snap()
+  const dup = run([...OK, '--apply'])
+  check('[CU] 🔴 중복 해소 거부 — 장부 그대로 · 첫 관문(최종 상태)에서 막힌다', dup.code !== 0 && snap() === s1 && /중복 마감 거부/.test(dup.out))
+
+  // ── 비용 귀속 계약 — 해소 뒤 미정산이 줄고 결과당 단가가 생긴다 ──
+  const pooled = (entries: LedgerEntry[]): ReturnType<typeof costAttributionOf> => costAttributionOf({
+    entries, fateByKey: new Map<string, CostFate>([['srcA', 'published']]),
+    counts: { published: 1, scheduled: 0 }, cohortRuns: new Set(['20261010-131506']),
+  })
+  const beforeEntries = (() => {
+    // 해소 전 모양 — 새 줄을 뺀 원본을 접는다
+    const tmp = mkdtempSync(join(tmpdir(), 'ledger-cu-before-'))
+    writeFileSync(ledgerPathOf(tmp, D1), before1)
+    const r = readLedgerDay(ledgerPathOf(tmp, D1))
+    rmSync(tmp, { recursive: true, force: true })
+    return r.ok ? r.entries : []
+  })()
+  const afterRead = readLedgerDay(p1)
+  const cb = pooled(beforeEntries)
+  const ca = pooled(afterRead.ok ? afterRead.entries : [])
+  check('[CU] 🔴 해소 전 — 현재 계약 미정산 1건 · 결과당 단가 모름',
+    cb !== null && cb.openRequests === 1 && cb.usdPerSlotValidResult === null, JSON.stringify(cb && { o: cb.openRequests, u: cb.usdPerSlotValidResult }))
+  check('[CU] 🔴 해소 뒤 — 미정산 0 · 결과당 단가가 실제 금액으로 생긴다(legacy B 는 막지 않는다)',
+    ca !== null && ca.openRequests === 0 && ca.legacyOpenRequests === 2 && ca.usdPerSlotValidResult !== null
+    && Math.abs(ca.usdPerSlotValidResult - (0.0031 + 0.004)) < 1e-12, JSON.stringify(ca && { o: ca.openRequests, u: ca.usdPerSlotValidResult }))
+
+  // ── 기존 열린 예약 마감은 그대로 ──
+  const o = run(['--attempt=E-open', '--confirmed-with-provider', '--actual-usd=0.002'])
+  const openAfter = readOpenReservations(dir)
+  check('[CU] 🔴 기존 열린 예약 마감은 그대로 돈다 (--closed-unknown 없이)',
+    o.code === 0 && openAfter.ok && openAfter.list.length === 0 && finalOf('E-open')?.status === 'settled')
+
+  // ── 순수 대조 — 변이로 무너지지 않게 직접 본다 ──
+  const orig = base({ attemptId: 'X', startedAt: '2026-10-10T13:15:55.620Z', status: 'usageUnknown', errorCode: 'TIMEOUT' })
+  const good = buildClosedSettlement(orig, 0.0031, '', new Date('2026-10-13T00:00:00Z'))
+  check('[CU] 정상 settled 줄은 대조 통과', closedSettlementProblems(orig, good).length === 0, closedSettlementProblems(orig, good).join(' · '))
+  check('[CU] 🔴 Gemini 요청을 anthropic 으로 적으면 실패', closedSettlementProblems(orig, { ...good, provider: 'anthropic' }).length > 0)
+  check('[CU] 🔴 보존 칸 하나라도 바뀌면 실패 — 칸마다',
+    PRESERVED_FIELDS.every((k) => closedSettlementProblems(orig, { ...good, [k]: k === 'model' ? 'claude-haiku-4.5' : `${String((good as Record<string, unknown>)[k])}-x` } as LedgerEntry).length > 0))
+  check('[CU] 🔴 이미 정산된 원래 줄 · 빈 apiModelId · 금액 없는 새 줄은 실패',
+    closedSettlementProblems({ ...orig, status: 'settled' }, good).length > 0
+    && closedSettlementProblems({ ...orig, apiModelId: '' }, { ...good, apiModelId: '' }).length > 0
+    && closedSettlementProblems(orig, { ...good, settledUsd: null }).length > 0
+    && closedSettlementProblems(orig, { ...good, settledUsd: Number.NaN }).length > 0)
+  check('[CU] 금액 판독 — 십진수만', parseActualUsd('0.0031').ok && parseActualUsd('0').ok
+    && !parseActualUsd('-1').ok && !parseActualUsd('-0').ok && !parseActualUsd('NaN').ok && !parseActualUsd('1e-3').ok && !parseActualUsd(null).ok)
+  rmSync(dir, { recursive: true, force: true })
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
