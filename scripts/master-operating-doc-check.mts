@@ -229,7 +229,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   for (const p of ['source-to-slot 판정', '발행 직전 재판정', '판정 함수 하나', 'JIT 공급', '증명일 준비도',
     '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
-    'Dn 최대 용량', '가까운 수요 지평', 'event-assisted 실행', '원천 순위 하나', '날짜 정밀도 보존',
+    'Dn 최대 용량', '가까운 수요 지평', '댓글 event-assisted·공급 자연 예약', '원천 순위 하나', '날짜 정밀도 보존',
     'Persona 결정 분리', '자동 댓글 provenance', '댓글 1~5 · 실제 답글', '실제 열람·노출 조회수',
     '자동 품질 생명주기', 'bounded creativity']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
@@ -253,9 +253,10 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §3 이 생성 수요를 가장 가까운 실제 공개 기회로 정한다',
     d100Goal.includes('가장 가까운 실제 공개 기회')
     && d100Goal.includes('Persona 여력도 같은')])
-  out.push(['canon §3.3 이 event-assisted · 시간표 fallback · 공통 lease · exactly-once 금지를 적는다',
-    ['수집 완료가 공급을 깨운다', '공개 commit 이 첫 댓글을 깨운다', 'fallback', '실행 lease/token',
-      'coalescing', 'exactly-once 시스템을 새로 만들지 않는다'].every((t) => d100Goal.includes(t))])
+  out.push(['canon §3.3 이 공급 자연 예약 · 댓글 event-assisted · 공통 lease · exactly-once 금지를 적는다',
+    ['공급은 하루 7회 고정 schedule만 돈다', '공개 commit 이 첫 댓글을 깨운다', '댓글 회차가 fallback',
+      '실행 lease/token', '공급 recovery도 비예약 회차를', 'exactly-once 시스템을 새로 만들지 않는다']
+      .every((t) => d100Goal.includes(t))])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
     d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
     && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')

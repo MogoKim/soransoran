@@ -10,6 +10,7 @@
  * 🔴 관측을 건너뛰는 것과 통과시키는 것은 다르다 — 건너뛰면 화면에 그렇게 적는다.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync,
   readdirSync,
@@ -34,6 +35,7 @@ import {
 import {
   judgeDeploy, judgeDeployLock, judgeLockRelease, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
+import { runtimePersonaAssetIdentityOf } from '../src/lib/persona-reference-digest'
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
 import { programArguments, rollbackDirOf, sameArgs } from './lib/launchd-install.mjs'
 /** 🔴 발행 러너 label 의 정본 — 여기에 문자열을 다시 적지 않는다 */
@@ -609,6 +611,10 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     quiesceDrift?: 'loaded' | 'plist' | 'unknown'
     /** 🔴 `quiesceDrift` 를 걸 job — 기본은 가짜 발행 러너(QJOB) */
     quiesceDriftJob?: string
+    /** 🔴 배포 manifest 에 결속할 실제 Persona 자산 식별자. null/깨진 digest 는 unload 전에 차단한다. */
+    personaAssets?: { referenceDigest: string; supplementDigest: string | null } | null
+    /** 🔴 n번째 조회별 자산. preflight→post-load→rollback 대조 사이 drift 반례를 만든다. */
+    personaAssetReads?: readonly ({ referenceDigest: string; supplementDigest: string | null } | null)[]
     /**
      * 🔴 **감사 러너의 배포 전 모양** (2026-09-28). 기본은 `absent` — 지금 운영이 그렇다.
      *    absent            설치본 없음 · unloaded
@@ -726,6 +732,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     let probes = 0
     /** 🔴 `quiesceDrift: 'unknown'` 이 켜지면 그때부터 관측이 실패한다 */
     let driftUnknown = false
+    let personaAssetReadCount = 0
     /** 🔴 명령이 실제로 상태를 바꿨는가 — 반환값과 독립이다 */
     const applyEffect = (l: string, eff: JobState | 'keep' | undefined, fallback: JobState): void => {
       const e = eff ?? fallback
@@ -737,6 +744,17 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       originMain: () => NEXT,
       isAncestor: () => true,
       dirty: () => false,
+      runtimePersonaAssets: () => {
+        const fallback = f.personaAssets === undefined
+          ? { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+          : f.personaAssets
+        const configured = f.personaAssetReads
+        const value = configured === undefined || configured.length === 0
+          ? fallback
+          : configured[Math.min(personaAssetReadCount, configured.length - 1)]!
+        personaAssetReadCount += 1
+        return value
+      },
       // 🔴 실제 배포기와 같게 — 퇴역 job 도 본다 (돌고 있는 옛 job 위로 배포하지 않는다)
       /**
        * 🔴 실제 배포기와 같게 — 퇴역 job 과 **잠시 멈출 job** 도 본다.
@@ -2202,6 +2220,98 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [A] 끝난 뒤 예약 job 이 모두 올라와 있다', allLoaded(w))
     check('🔴 [A] SHA·의존성·manifest·pin 이 새 것이다',
       w.sha === NEXT && w.deps === NEXT && manifestSha(w) === NEXT && pinOf(w) === NEXT)
+    const manifest = JSON.parse(readFileSync(w.manifestFile, 'utf-8')) as {
+      personaAssets?: { referenceDigest?: string; supplementDigest?: string }
+    }
+    check('🔴 [A] manifest 는 코드 SHA뿐 아니라 실제 Persona 기본·보충 자산 digest도 결속한다',
+      manifest.personaAssets?.referenceDigest === 'c'.repeat(64)
+      && manifest.personaAssets?.supplementDigest === 'd'.repeat(64))
+    const noSupplement = makeWorld({ personaAssets: { referenceDigest: 'c'.repeat(64), supplementDigest: null } })
+    const noSupplementResult = await deploy(noSupplement)
+    const noSupplementManifest = JSON.parse(readFileSync(noSupplement.manifestFile, 'utf-8')) as {
+      personaAssets?: { supplementDigest?: string | null }
+    }
+    check('🔴 [A] 보충 자산 두 파일이 모두 없는 정상 미도입 상태는 null로 결속하고 배포를 막지 않는다',
+      noSupplementResult.ok && noSupplementManifest.personaAssets?.supplementDigest === null)
+  }
+
+  // ── [A-2] Persona 자산 식별자를 모르면 job 을 내리기 전에 멈춘다 ──
+  {
+    for (const [label, personaAssets] of [
+      ['없음', null],
+      ['기본 digest 모양 오류', { referenceDigest: 'short', supplementDigest: 'd'.repeat(64) }],
+      ['보충 digest 모양 오류', { referenceDigest: 'c'.repeat(64), supplementDigest: 'short' }],
+    ] as const) {
+      const w = makeWorld({ personaAssets })
+      const r = await deploy(w)
+      check(`🔴 [A-2] Persona 자산 ${label} → preflight 차단 · unload/checkout/manifest 0 · 기존 상태 보존`,
+        !r.ok && r.phase === 'preflight' && r.steps.includes('runtime-persona-assets')
+        && idx(w, 'unload') === -1 && idx(w, 'checkout') === -1 && countOf(w, 'write-manifest') === 0
+        && w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV && allLoaded(w))
+    }
+  }
+
+  // ── [A-2b] preflight 뒤 자산 drift는 성공으로 기록하지 않고 rollback에서도 숨기지 않는다 ──
+  {
+    const before = { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const drifted = { referenceDigest: 'e'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const w = makeWorld({ personaAssetReads: [before, drifted, drifted] })
+    const r = await deploy(w)
+    check('🔴 [A-2b] job 재기동 뒤 Persona 자산 drift는 post-load에서 배포를 실패시킨다',
+      !r.ok && r.phase === 'post-load' && r.steps.includes('persona-assets-verify'))
+    check('🔴 [A-2b] 외부 자산을 원래 값으로 되돌리지 못했으면 완전 rollback이라 하지 않는다',
+      r.rollback?.complete === false
+      && (r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+  }
+
+  // ── [A-2c] rollback 검증 시점에만 생긴 drift도 복구 잔여로 잡는다 ──
+  {
+    const before = { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const drifted = { referenceDigest: 'f'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const w = makeWorld({ gateFail: 'gate1', personaAssetReads: [before, drifted] })
+    const r = await deploy(w)
+    check('🔴 [A-2c] rollback 대조 중 Persona 자산 drift가 생기면 복구 불완전으로 남긴다',
+      !r.ok && r.rollback?.complete === false
+      && (r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+  }
+
+  // ── [A-3] 자산 식별자는 corpus뿐 아니라 manifest 바이트도 결속한다 ──
+  {
+    const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+    const referenceRaw = JSON.stringify({
+      version: 1, generatedAt: '2026-11-02T00:00:00.000Z',
+      comments: [{ speakerId: 'a'.repeat(12), content: '저도 그랬어요' }],
+    })
+    const contents = ['저도 그랬어요']
+    const manifestOf = (generatedAt: string): string => JSON.stringify({
+      sourceDigest: sha256(referenceRaw).slice(0, 16),
+      sanitizedCorpusDigest: sha256(JSON.stringify(contents)).slice(0, 16),
+      generatedAt,
+    })
+    const first = runtimePersonaAssetIdentityOf({
+      referenceRaw, referenceManifestRaw: manifestOf('2026-11-02T00:00:00.000Z'),
+      supplementRaw: null, supplementManifestRaw: null,
+    })
+    const manifestOnlyChange = runtimePersonaAssetIdentityOf({
+      referenceRaw, referenceManifestRaw: manifestOf('2026-11-02T00:01:00.000Z'),
+      supplementRaw: null, supplementManifestRaw: null,
+    })
+    check('🔴 [A-3] 같은 corpus라도 manifest 바이트가 바뀌면 runtime 자산 식별자가 달라진다',
+      first !== null && manifestOnlyChange !== null
+      && first.referenceDigest !== manifestOnlyChange.referenceDigest)
+    check('🔴 [A-3] 보충 corpus·manifest 중 하나만 있으면 정상 미도입으로 꾸미지 않고 차단한다',
+      runtimePersonaAssetIdentityOf({
+        referenceRaw, referenceManifestRaw: manifestOf('2026-11-02T00:00:00.000Z'),
+        supplementRaw: '{}', supplementManifestRaw: null,
+      }) === null)
+    check('🔴 [A-3] 기본 manifest가 corpus digest를 속이면 차단한다',
+      runtimePersonaAssetIdentityOf({
+        referenceRaw,
+        referenceManifestRaw: JSON.stringify({
+          sourceDigest: '0'.repeat(16), sanitizedCorpusDigest: sha256(JSON.stringify(contents)).slice(0, 16),
+        }),
+        supplementRaw: null, supplementManifestRaw: null,
+      }) === null)
   }
 
   // ── [B] fetch 실패 ──

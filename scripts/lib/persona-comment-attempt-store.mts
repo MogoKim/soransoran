@@ -14,7 +14,7 @@
  *    오류 사유도 errno 코드만 싣는다 — 경로 · 메시지 원문은 로그에 남기지 않는다.
  */
 import {
-  closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync,
+  closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
 
@@ -22,10 +22,13 @@ import {
   activeAttempts, parseAttemptJournal, serializeAttemptJournal, withAttemptOutcomes, withAttemptStarted,
   type AttemptEntry, type AttemptOutcomeUpdate,
 } from '../../src/lib/persona-comment-attempt-policy'
+import { AUTO_FIRST_COMMENT_WINDOW_MS } from '../../src/lib/persona-comment-auto-lane'
 import type { LeaseProof } from './runner-lease.mjs'
 
 /** 🔴 잠금 디렉터리 안의 파일 — 비용 장부(`persona-comment-ledger`)와 다른 자리다 */
 export const ATTEMPT_JOURNAL_FILE = 'first-comment-attempts.v1.json'
+export const ATTEMPT_JOURNAL_CORRUPT_FILE = `${ATTEMPT_JOURNAL_FILE}.corrupt`
+export const ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE = `${ATTEMPT_JOURNAL_CORRUPT_FILE}.previous`
 
 export type AttemptFsOps = {
   readFileSync: (path: string, enc: 'utf-8') => string
@@ -38,16 +41,18 @@ export type AttemptFsOps = {
   closeSync: (fd: number) => unknown
   renameSync: (from: string, to: string) => unknown
   unlinkSync: (path: string) => unknown
+  statSync: (path: string) => { mtimeMs: number }
 }
 const REAL_OPS: AttemptFsOps = {
   readFileSync: (p, enc) => readFileSync(p, enc), mkdirSync: (p, o) => mkdirSync(p, o),
   openSync: (p, f, m) => openSync(p, f, m), writeSync: (fd, d, off, len) => writeSync(fd, d, off, len),
   fchmodSync: (fd, m) => fchmodSync(fd, m), fsyncSync: (fd) => fsyncSync(fd), closeSync: (fd) => closeSync(fd),
   renameSync: (a, b) => renameSync(a, b), unlinkSync: (p) => unlinkSync(p),
+  statSync: (p) => statSync(p),
 }
 
 export type AttemptRead =
-  | { ok: true; entries: AttemptEntry[]; missing: boolean }
+  | { ok: true; entries: AttemptEntry[]; missing: boolean; warning?: string }
   | { ok: false; code: 'READ_FAILED' | 'JSON_INVALID' | 'SCHEMA_MISMATCH'; reason: string }
 
 export type AttemptWrite =
@@ -58,7 +63,8 @@ export type AttemptStore = {
   /** 파일 경로 — 진단용 */
   readonly path: string
   /** 🔴 만료되지 않은 기억만 돌려준다. 파일이 없으면 정상 빈 기억이다 */
-  read: (nowMs: number) => AttemptRead
+  /** `repair:false`는 preview 전용 — 손상본 격리·초기화를 포함한 파일 write 0 */
+  read: (nowMs: number, options?: { repair?: boolean }) => AttemptRead
   /** 🔴 provider 앞에서 부른다. 적지 못했으면 `ok:false` — 호출하지 않는다 */
   recordStart: (entry: AttemptEntry, nowMs: number) => AttemptWrite
   /** 결과 갱신. 기록이 없는 열쇠가 있어도 실패로 돌려준다(조용히 버리지 않는다) */
@@ -73,16 +79,90 @@ const codeOf = (e: unknown): string => {
 export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps> }): AttemptStore {
   const ops: AttemptFsOps = { ...REAL_OPS, ...o.ops }
   const path = join(o.dir, ATTEMPT_JOURNAL_FILE)
+  const corruptPath = join(o.dir, ATTEMPT_JOURNAL_CORRUPT_FILE)
+  const previousCorruptPath = join(o.dir, ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE)
 
-  const readAll = (): AttemptRead => {
+  const exists = (p: string): boolean => {
+    try { ops.statSync(p); return true } catch (e) {
+      if (codeOf(e) === 'ENOENT') return false
+      throw e
+    }
+  }
+
+  /**
+   * 🔴 손상 직후에는 이미 시작한 60분 window 를 알 수 없으므로 fail-closed 다.
+   *    파일 mtime 뒤 60분이 지난 뒤에만 손상본을 보존하고 새 장부를 시작한다.
+   *    격리본은 현재·직전 두 개로 제한한다. 어느 파일 작업이든 실패하면 원장 복구를 시도하지 않고 닫는다.
+   */
+  const quarantineExpiredCorruption = (nowMs: number): { ok: true; warning: string } | { ok: false; reason: string } => {
+    let mtimeMs: number
+    try { mtimeMs = ops.statSync(path).mtimeMs } catch (e) {
+      return { ok: false, reason: `손상 시각 확인 실패 ${codeOf(e)}` }
+    }
+    if (!Number.isFinite(mtimeMs) || nowMs - mtimeMs <= AUTO_FIRST_COMMENT_WINDOW_MS) {
+      return { ok: false, reason: '손상 파일이 첫 댓글 60분 window 안이다 — 자동 복구하지 않는다' }
+    }
+    try {
+      if (exists(corruptPath)) {
+        try { ops.unlinkSync(previousCorruptPath) } catch (e) { if (codeOf(e) !== 'ENOENT') throw e }
+        ops.renameSync(corruptPath, previousCorruptPath)
+      }
+      ops.renameSync(path, corruptPath)
+      return { ok: true, warning: '🟡 만료된 첫 댓글 시도 기억 손상본을 격리하고 빈 장부로 복구했다' }
+    } catch (e) {
+      return { ok: false, reason: `손상본 격리 실패 ${codeOf(e)}` }
+    }
+  }
+
+  /**
+   * 🔴 격리본은 있는데 정본 장부가 없다 — 격리 뒤 빈 장부 쓰기가 실패했거나 그 사이 프로세스가 죽었다.
+   *    rename 은 mtime 을 보존하므로 격리본 mtime 이 손상 장부의 마지막 쓰기다. 그 뒤 60분이 지났으면 그 안의
+   *    시도는 전부 만료됐으니 live 회차가 빈 장부를 다시 만든다. 쓰기 실패는 그 회차만 닫고 다음 live 회차가 다시 시도한다.
+   *    preview(`repair:false`)는 write 0 — 닫힌 채로 둔다.
+   */
+  const resumeAfterQuarantine = (nowMs: number, quarantinedAtMs: number, repair: boolean): AttemptRead => {
+    if (!repair) {
+      return { ok: false, code: 'READ_FAILED', reason: '격리된 손상본은 있으나 새 장부가 없다 · read-only preview는 새 장부를 만들지 않는다' }
+    }
+    if (!Number.isFinite(quarantinedAtMs) || nowMs - quarantinedAtMs <= AUTO_FIRST_COMMENT_WINDOW_MS) {
+      return { ok: false, code: 'READ_FAILED', reason: '격리된 손상본이 첫 댓글 60분 window 안이다 — 새 장부를 만들지 않는다' }
+    }
+    const err = writeAtomic(serializeAttemptJournal([]))
+    if (err !== null) {
+      return { ok: false, code: 'READ_FAILED', reason: `격리된 손상본 뒤 새 장부 재생성 실패 ${err} — 다음 회차가 다시 시도한다` }
+    }
+    return { ok: true, entries: [], missing: false, warning: '🟡 격리된 손상본 뒤 빈 장부가 없어 새 장부를 다시 만들었다' }
+  }
+
+  const readAll = (nowMs: number, options: { repair?: boolean } = {}): AttemptRead => {
     let text: string
     try { text = ops.readFileSync(path, 'utf-8') } catch (e) {
       // 🔴 없는 파일만 정상이다. 권한 · 디렉터리 · I/O 오류는 "기억이 없다" 가 아니다
-      if (codeOf(e) === 'ENOENT') return { ok: true, entries: [], missing: true }
+      if (codeOf(e) === 'ENOENT') {
+        let quarantinedAtMs: number | null = null
+        try { quarantinedAtMs = ops.statSync(corruptPath).mtimeMs } catch (statError) {
+          if (codeOf(statError) !== 'ENOENT') {
+            return { ok: false, code: 'READ_FAILED', reason: `격리 상태 확인 실패 ${codeOf(statError)}` }
+          }
+        }
+        if (quarantinedAtMs !== null) return resumeAfterQuarantine(nowMs, quarantinedAtMs, options.repair !== false)
+        return { ok: true, entries: [], missing: true }
+      }
       return { ok: false, code: 'READ_FAILED', reason: `읽기 실패 ${codeOf(e)}` }
     }
     const parsed = parseAttemptJournal(text)
-    if (!parsed.ok) return { ok: false, code: parsed.code, reason: parsed.reason }
+    if (!parsed.ok) {
+      if (options.repair === false) {
+        return { ok: false, code: parsed.code, reason: `${parsed.reason} · read-only preview는 손상 장부를 수정하지 않는다` }
+      }
+      const recovered = quarantineExpiredCorruption(nowMs)
+      if (!recovered.ok) return { ok: false, code: parsed.code, reason: `${parsed.reason} · ${recovered.reason}` }
+      const resetError = writeAtomic(serializeAttemptJournal([]))
+      if (resetError !== null) {
+        return { ok: false, code: 'READ_FAILED', reason: `${parsed.reason} · 손상본은 격리했지만 새 장부 쓰기 실패 ${resetError}` }
+      }
+      return { ok: true, entries: [], missing: false, warning: recovered.warning }
+    }
     return { ok: true, entries: [...parsed.journal.entries], missing: false }
   }
 
@@ -120,13 +200,13 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
 
   return {
     path,
-    read: (nowMs) => {
-      const r = readAll()
+    read: (nowMs, options) => {
+      const r = readAll(nowMs, options)
       if (!r.ok) return r
       return { ...r, entries: activeAttempts(r.entries, nowMs) }
     },
     recordStart: (entry, nowMs) => {
-      const cur = readAll()
+      const cur = readAll(nowMs)
       if (!cur.ok) return { ok: false, kind: 'IO', reason: `시작 기록 전 읽기 실패 ${cur.code}` }
       const next = withAttemptStarted(cur.entries, entry, nowMs)
       if (!next.ok) return { ok: false, kind: 'ALREADY_ATTEMPTED', reason: next.reason }
@@ -135,7 +215,7 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
     },
     recordOutcomes: (updates, nowMs) => {
       if (updates.length === 0) return { ok: true }
-      const cur = readAll()
+      const cur = readAll(nowMs)
       if (!cur.ok) return { ok: false, kind: 'IO', reason: `결과 갱신 전 읽기 실패 ${cur.code}` }
       const next = withAttemptOutcomes(cur.entries, updates, nowMs)
       const err = writeAtomic(serializeAttemptJournal(next.entries))

@@ -60,6 +60,7 @@ import {
  */
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeGate, sealSnapshot, takeSourceSnapshot } from './lib/source-snapshot.mjs'
+import { readRuntimePersonaAssetIdentity } from '../src/lib/persona-reference-digest'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 /** 🔴 예약 실행이 절대 물으면 안 되는 곳 — 개발 작업트리들 */
@@ -447,6 +448,7 @@ const fx: DeployEffects = {
   // 🔴 runtime 트리는 이미 target 이다 — source 는 job 을 내리기 전에 뜬 snapshot 그대로(지금 DB 집합과 대조된다)
   contractTransitionGate: (rt) => TARGET !== null && SOURCE_GATE !== null
     && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, ...sourceArgs(TARGET, SOURCE_GATE), `--verify-succession=${successionFileOf(TARGET)}`]),
+  runtimePersonaAssets: () => readRuntimePersonaAssetIdentity(),
 
   // ── 🔴 plist cutover — **target commit 의** 템플릿을 실제 설치본으로 옮긴다 ──
   readInstalledPlist: (l) => readInstalled(AGENT_DIR, l),

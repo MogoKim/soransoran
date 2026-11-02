@@ -27,7 +27,7 @@ import {
 } from './scale-profile'
 import { planStageDecision, preparedStageOf } from './stage-ladder'
 import {
-  DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision, isLegacyDecision,
+  DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision, isLegacyDecision, previousKstDate,
   type StageDecision, type ValidatedStageDecision,
 } from './stage-decision-contract'
 import { PROOF_DATE_ENV, PROOF_ENV_KEYS, PROOF_STAGE_ENV } from './stage-proof-day'
@@ -61,10 +61,16 @@ const lower = (a: RuntimeStage, b: RuntimeStage): RuntimeStage => (stageRank(a) 
  *    · 전날 결정이 옛 판(v4 · source-slot-v1 이전) → 바닥(d1) — 옛 계약의 단계는 근거가 아니다(재증명)
  *    · 전날이 TRIAL 이고 그날 운영 증거가 PASS 면 **그 시험 단계**(증명됐다 · PR3 KEEP)
  *    · 전날이 TRIAL 인데 PASS 가 아니면 그 **시험 기반**
+ *    · 전날이 인증보다 낮춘 HOLD·PREPARE(`transition.kind === 'CERTIFIED'`)면 그 **인증 단계**
+ *      — brake·lease HOLD 가 낮춘 공개는 그날 하루의 값이다. 인증 권한은 행 하나가 들고 간다(이력 검색 없음)
  *    · 그 밖(HOLD · PREPARE · REPROVE)이면 전날 공개 단계
+ *    · 인증 칸이 없는 HOLD·PREPARE 는, controller 가 되짚은 `carriedPlan` 의 기반이 전날 공개보다 높으면 그 기반을 쓴다.
+ *      🔴 `READER_READY` 판(`CERTIFIED_ROLLOUT_PHASE`)에서는 controller 가 새 행에도 인증 칸을 쓰지 않으므로
+ *      새 감속 행도 이 길을 탄다(3일 이월 밖이면 감속 공개가 남는다). writer 활성 뒤에는 옛 행만 이 길을 탄다
  */
 export function sustainedReleaseOf(
   prev: ValidatedStageDecision | null, evidence: StageEvidenceVerdict | null = null,
+  carried: TrialPlan | null = null,
 ): RuntimeStage {
   if (prev === null || isLegacyDecision(prev)) return SAFEST_STAGE
   if (prev.state === 'TRIAL' && prev.transition !== null && prev.transition.kind === 'TRIAL') {
@@ -72,8 +78,38 @@ export function sustainedReleaseOf(
       && evidence.kstDate === prev.kstDate && evidence.stage === prev.release
     return passed ? prev.release : prev.transition.trialBase
   }
+  if (prev.state !== 'HOLD' && prev.state !== 'PREPARE') return prev.release
+  if (prev.transition !== null && prev.transition.kind === 'CERTIFIED') return prev.transition.certified
+  if (prev.transition === null && carried !== null
+    && stageRank(carried.base) > stageRank(prev.release)) return carried.base
   return prev.release
 }
+
+/**
+ * 🔴 **`CERTIFIED` 배포 단계 — 코드 상수 하나다** (2026-11-02 H2). env · 문자열 파싱으로 바꾸지 않는다.
+ *    · `READER_READY`  — validator · `sustainedReleaseOf` 는 `CERTIFIED` 행을 읽지만, controller 는 **쓰지 않는다**.
+ *    · `WRITER_ACTIVE` — controller 가 인증보다 낮춘 HOLD·PREPARE 에 `CERTIFIED` 를 쓴다.
+ *    🔴 **이 판은 `READER_READY` 다.** 옛 runtime 의 validator 는 `CERTIFIED` 가 붙은 HOLD·PREPARE 를 깨진 행으로 거절한다.
+ *       reader 판이 운영에 배포되어 rollback 대상까지 이 칸을 읽을 수 있게 된 뒤에만, **별도 writer 활성 릴리스**에서
+ *       이 값을 `WRITER_ACTIVE` 로 바꾼다. 한 번에 둘을 켜면 rollback 한 runtime 이 다음 날 전날 행을 못 읽어 멈춘다.
+ *    🔴 reader 판에서는 `BRAKE_DEMOTION_PERSISTS` 가 **다 닫히지 않았다** — 3일 이월 계획(`carriedPlan`)이 닿는 감속만
+ *       인증을 되찾고, 인증 PASS 가 이월 밖이면 감속 release 가 다음 날 지속 단계로 남는다. writer 활성이 그 나머지를 닫는다.
+ */
+export type CertifiedRolloutPhase = 'READER_READY' | 'WRITER_ACTIVE'
+export const CERTIFIED_ROLLOUT_PHASE: CertifiedRolloutPhase = 'READER_READY'
+
+/**
+ * 🔴 인증보다 낮춘 날만 인증 권한을 따로 적는다 — 같으면 전이 근거 없음. `READER_READY` 면 언제나 `null`(write 0).
+ *    🔴 `CERTIFIED` 를 **쓰는 곳은 이 함수 하나**다. 읽는 쪽(validator · `sustainedReleaseOf`)과 떨어져 있다.
+ */
+export function certifiedProvenanceOf(
+  phase: CertifiedRolloutPhase, release: RuntimeStage, certified: RuntimeStage,
+): StageDecision['transition'] {
+  if (phase !== 'WRITER_ACTIVE') return null
+  return stageRank(certified) > stageRank(release) ? { kind: 'CERTIFIED', certified } : null
+}
+const certifiedProvenance = (release: RuntimeStage, certified: RuntimeStage): StageDecision['transition'] =>
+  certifiedProvenanceOf(CERTIFIED_ROLLOUT_PHASE, release, certified)
 
 export type ControllerInputs = {
   kstDate: string
@@ -101,6 +137,8 @@ export type ControllerResult = {
  */
 export function holdAtCurrent(input: {
   kstDate: string; decidedAt: string; current: RuntimeStage; reason: string; headline?: string
+  /** 🔴 공개보다 높은 인증 단계 — writer 활성 판에서만 행에 남는다(`certifiedProvenance`) · 없으면 공개 그대로 */
+  certified?: RuntimeStage
 }): StageDecision {
   const release = input.current
   return {
@@ -110,7 +148,139 @@ export function holdAtCurrent(input: {
       `🔴 ${input.reason}`,
     ],
     blocks: [], dayPinned: false, supply: null, decidedAt: input.decidedAt,
-    contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition: null,
+    contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
+    transition: certifiedProvenance(release, input.certified ?? release),
+  }
+}
+
+/**
+ * 🔴 **오늘 신호를 판정하지 못한 HOLD 의 공개** — 전날 보이던 공개와 인증 중 낮은 쪽.
+ *    인증 복원(올리기)은 품질·비용·오류를 본 정상 controller 경로에서만 한다.
+ */
+export function heldReleaseOf(prev: ValidatedStageDecision | null, certified: RuntimeStage): RuntimeStage {
+  return prev === null || isLegacyDecision(prev) ? certified : lower(prev.release, certified)
+}
+
+/** 🔴 오늘 결정의 권한 중 멈춤이 아닌 것 — 신호를 못 본 HOLD 가 어느 행에 기대는지 호출자가 밝힌다 */
+export type SignalBlindAuthority = Exclude<PreviousAuthority, { kind: 'stop' }>
+
+/** 🔴 권한 행 — 전날 행(exact) · 이틀 전 행(bridge) · 없음(first-run) */
+export function authorityRowOf(a: SignalBlindAuthority): ValidatedStageDecision | null {
+  return a.kind === 'exact' ? a.previous : a.kind === 'bridge' ? a.bridge : null
+}
+
+/**
+ * 🔴 **신호를 보지 못한 HOLD 의 보이는 공개 — 이 규칙의 단일 자리** (입력 실패 · 공급 lease 안전 HOLD).
+ *    · exact              — 인접한 전날 행이 보이던 공개와 인증 중 낮은 쪽(`heldReleaseOf`)
+ *    · bridge · first-run — 전날 행이 없어 consumer 는 오늘 결정 전에 d1 을 본다. 이틀 전 공개를 되살리지 않고
+ *      **바닥(d1)을 보이게 붙잡는다**. 숨은 인증 권한(`certified`)은 행에 남길 수 있으나, 쓰는 것은
+ *      `WRITER_ACTIVE` 판뿐이다(`READER_READY` 면 `CERTIFIED` 0)
+ */
+export function signalBlindReleaseOf(authority: SignalBlindAuthority, certified: RuntimeStage): RuntimeStage {
+  return authority.kind === 'exact' ? heldReleaseOf(authority.previous, certified) : SAFEST_STAGE
+}
+
+/** 🔴 **입력 실패 HOLD** — 오늘 신호를 판정하지 못했다. 공개는 `signalBlindReleaseOf`, 인증은 행에 따로 남긴다 */
+export function inputFailureHoldOf(input: {
+  kstDate: string; decidedAt: string; authority: SignalBlindAuthority; certified: RuntimeStage; reason: string
+}): StageDecision {
+  return holdAtCurrent({
+    kstDate: input.kstDate, decidedAt: input.decidedAt, reason: input.reason, certified: input.certified,
+    current: signalBlindReleaseOf(input.authority, input.certified),
+  })
+}
+
+/**
+ * 🔴 **공급 lease 안전 HOLD** — 마지막 controller 예약에도 공급 lease 가 busy·unknown 인 날.
+ *    오늘 품질·비용·오류 신호를 보지 않았으므로 **전날 보이던 공개보다 올리지 않는다**(`signalBlindReleaseOf`).
+ *    인증 권한은 공개와 따로 이어 준다 — 다음 정상 controller 가 신호를 보고 복원한다.
+ *    전날 행이 없으면(bridge · first-run) 공개는 바닥(d1)이다.
+ */
+export function leaseSafeHoldOf(input: {
+  kstDate: string; decidedAt: string; lease: 'busy' | 'unknown'
+  authority: SignalBlindAuthority
+  previousEvidence: StageEvidenceVerdict | null
+  carriedPlan: TrialPlan | null
+}): { decision: StageDecision; certified: RuntimeStage } {
+  const certified = sustainedReleaseOf(authorityRowOf(input.authority), input.previousEvidence, input.carriedPlan)
+  const current = signalBlindReleaseOf(input.authority, certified)
+  const decision = holdAtCurrent({
+    kstDate: input.kstDate, decidedAt: input.decidedAt, current, certified,
+    headline: `🟡 공급 lease 충돌 — 공개 ${current} 를 안전 HOLD한다(부분 재고·오늘 신호 없이 올리지 않는다 · 인증 ${certified})`,
+    reason: `마지막 controller 예약에도 공급 lease가 ${input.lease} — 오늘의 부분 재고를 읽지 않고 승격을 막는다`,
+  })
+  return { decision, certified }
+}
+
+/** 🔴 한 날짜의 저장 결정 판독 — 없음과 깨짐을 가른다. 읽기 예외는 부르는 쪽이 던진다 */
+export type DecisionRead =
+  | { kind: 'valid'; decision: ValidatedStageDecision }
+  | { kind: 'absent' }
+  | { kind: 'broken'; reason: string }
+
+/** 🔴 오늘 결정의 권한 출처 — 전날 행 · 이틀 전 행(다리) · 첫 시작 · 멈춤(계산·저장 0) */
+export type PreviousAuthority =
+  | { kind: 'exact'; previous: ValidatedStageDecision }
+  | { kind: 'bridge'; bridge: ValidatedStageDecision }
+  | { kind: 'first-run' }
+  | { kind: 'stop'; code: 'PREVIOUS_BROKEN' | 'PREVIOUS_READ_ERROR'; reason: string }
+
+/**
+ * 🔴 **전날 결정의 권한을 정한다 — 최대 이틀 전 행 하나까지만 읽는다** (2026-11-02 M3).
+ *    · 전날 행이 유효 → 그 행(정상 연속)
+ *    · 전날 행이 깨짐 · 읽기 예외 → **멈춤**. 대체 d1 결정을 계산·저장하지 않는다 — 다음 예약이 다시 읽는다.
+ *      깨진 전날 행을 이틀 전 행으로 건너뛰지 않는다
+ *    · 전날 행이 없음 → 이틀 전 행만 본다. 유효 → 다리(시험 없이 권한만 잇는다) · 없음 → 첫 시작(d1) ·
+ *      깨짐 · 예외 → 멈춤. 그보다 앞은 읽지 않는다
+ */
+export async function resolvePreviousAuthority(
+  today: string, read: (kstDate: string) => Promise<DecisionRead>,
+): Promise<PreviousAuthority> {
+  const exactDate = previousKstDate(today)
+  const bridgeDate = exactDate === null ? null : previousKstDate(exactDate)
+  if (exactDate === null || bridgeDate === null) {
+    return { kind: 'stop', code: 'PREVIOUS_READ_ERROR', reason: `오늘 날짜가 달력에 없다 — ${today}` }
+  }
+  const at = async (date: string): Promise<DecisionRead | { kind: 'error'; reason: string }> => {
+    try { return await read(date) } catch (e) { return { kind: 'error', reason: (e as Error).name } }
+  }
+  const exact = await at(exactDate)
+  if (exact.kind === 'valid') return { kind: 'exact', previous: exact.decision }
+  if (exact.kind === 'broken') return { kind: 'stop', code: 'PREVIOUS_BROKEN', reason: `전날(${exactDate}) 결정이 깨졌다 — ${exact.reason}` }
+  if (exact.kind === 'error') return { kind: 'stop', code: 'PREVIOUS_READ_ERROR', reason: `전날(${exactDate}) 결정을 읽지 못했다 — ${exact.reason}` }
+  const bridge = await at(bridgeDate)
+  if (bridge.kind === 'valid') return { kind: 'bridge', bridge: bridge.decision }
+  if (bridge.kind === 'absent') return { kind: 'first-run' }
+  return {
+    kind: 'stop', code: bridge.kind === 'broken' ? 'PREVIOUS_BROKEN' : 'PREVIOUS_READ_ERROR',
+    reason: `전날(${exactDate}) 결정이 없고 이틀 전(${bridgeDate}) 결정을 ${bridge.kind === 'broken' ? '판독하지 못했다(깨짐)' : '읽지 못했다'} — ${bridge.reason}`,
+  }
+}
+
+/**
+ * 🔴 **다리 날 — 전날 행이 없고 이틀 전 행만 유효한 날** (2026-11-02 M3).
+ *    인접하지 않은 행으로 시험·증명일·재인증을 열지 않는다 — HOLD·PREPARE 만 쓴다.
+ *    공개는 이틀 전 공개와 인증 중 낮은 쪽이고, 나쁜 신호면 인증 아래 칸까지 낮춘다.
+ *    인증 권한(`CERTIFIED`)은 writer 활성 판에서만 행에 남는다(`CERTIFIED_ROLLOUT_PHASE`) — reader 판은 쓰지 않는다.
+ */
+export function bridgeHoldOf(i: {
+  kstDate: string; decidedAt: string
+  bridge: ValidatedStageDecision; bridgeEvidence: StageEvidenceVerdict | null
+  publishedToday: number; signals: readonly HealthSignal[]
+}): ControllerResult {
+  const sustained = sustainedReleaseOf(i.bridge, i.bridgeEvidence)
+  const bad = i.signals.filter((s) => s.health === 'bad')
+  const held = heldReleaseOf(i.bridge, sustained)
+  const target = bad.length > 0 ? lower(held, previousStage(sustained)) : held
+  const base = holdAtCurrent({
+    kstDate: i.kstDate, decidedAt: i.decidedAt, current: target, certified: sustained,
+    headline: `🟡 전날 결정이 없다 — 이틀 전(${i.bridge.kstDate}) 결정으로 권한만 잇고 공개 ${target} 를 HOLD한다(시험 없음 · 인증 ${sustained})`,
+    reason: '인접하지 않은 결정으로는 시험·증명일을 열지 않는다',
+  })
+  const reasons = [...base.reasons, ...bad.map((s) => `🔴 감속(${s.axis}): ${s.reasons.join(' · ') || '나쁨'}`)]
+  return {
+    decision: finishHold(base, target, sustained, i.publishedToday, reasons),
+    brake: bad.length > 0 ? 'slowdown' : 'holdUnknown', sustained,
   }
 }
 
@@ -127,7 +297,7 @@ function finishHold(d: StageDecision, release: RuntimeStage, sustained: RuntimeS
   }
   const capacity = preparedStageOf(rel)
   const state = stageRank(capacity) > stageRank(rel) ? 'PREPARE' as const : 'HOLD' as const
-  return { ...d, capacity, release: rel, state, transition: null, dayPinned, reasons }
+  return { ...d, capacity, release: rel, state, transition: certifiedProvenance(rel, sustained), dayPinned, reasons }
 }
 
 /**
@@ -135,7 +305,7 @@ function finishHold(d: StageDecision, release: RuntimeStage, sustained: RuntimeS
  *    브레이크는 **내리거나 붙잡기만** 한다 — 어떤 경우에도 사다리보다 높게 올리지 않는다.
  */
 export function decideStage(i: ControllerInputs): ControllerResult {
-  const sustained = sustainedReleaseOf(i.previousDecision, i.previousEvidence ?? null)
+  const sustained = sustainedReleaseOf(i.previousDecision, i.previousEvidence ?? null, i.carriedPlan ?? null)
   const planned = planStageDecision({
     kstDate: i.kstDate, sustainedRelease: sustained, previousDecision: i.previousDecision,
     previousEvidence: i.previousEvidence ?? null, carriedPlan: i.carriedPlan ?? null,

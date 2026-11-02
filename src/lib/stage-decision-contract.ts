@@ -108,6 +108,14 @@ export type TransitionProvenance =
     readonly basis?: TrialBasis
   }
   | { readonly kind: 'SUSTAIN'; readonly from: RuntimeStage; readonly to: RuntimeStage }
+  /**
+   * 🔴 **그날 공개가 인증 단계보다 낮은 HOLD·PREPARE** — 운영 신호 brake · lease 안전 HOLD.
+   *    낮춘 공개를 다음 날의 지속 단계로 승계하지 않게 인증 권한을 행 하나에 남긴다(이력 검색 없음).
+   *    `certified` 는 그날 공개보다 높아야 한다 — 같거나 낮으면 이 칸이 없다(`null`).
+   *    🔴 validator 는 이 칸을 **읽는다**. controller 가 쓰는지는 `CERTIFIED_ROLLOUT_PHASE`(stage-controller)가 정한다 —
+   *       reader 판이 배포·rollback 호환으로 확인된 뒤의 별도 릴리스에서만 writer 를 켠다.
+   */
+  | { readonly kind: 'CERTIFIED'; readonly certified: RuntimeStage }
 
 /**
  * 🔴 **deeply readonly 다** (2026-09-24 8차 · 마스터 지적).
@@ -132,7 +140,7 @@ export type StageDecision = {
   readonly contractVersion: StageDecisionVersion
   /** 🔴 누가 썼나 — controller 하나뿐이다 */
   readonly decidedBy: string
-  /** 🔴 **필수 키다.** `TRIAL`·`SUSTAIN` 이면 구조가 있고, 나머지 상태에서는 `null` */
+  /** 🔴 **필수 키다.** `TRIAL`·`SUSTAIN` 이면 구조가 있고, 인증보다 낮춘 HOLD·PREPARE 는 `CERTIFIED`, 나머지는 `null` */
   readonly transition: TransitionProvenance | null
 }
 
@@ -419,8 +427,18 @@ export function validateStoredDecision(input: {
     }
     transition = { kind: 'SUSTAIN', from: t.from, to: release }
   } else {
-    /** 🔴 REPROVE 는 올라가지 않는 날이다 — HOLD·PREPARE 처럼 전이 근거가 없다 */
-    if (t !== null) return no(`${state} 인데 전이 근거가 붙어 있다`)
+    /**
+     * 🔴 REPROVE 는 올라가지 않는 날이다 — 전이 근거가 없다.
+     *    HOLD·PREPARE 는 공개가 인증보다 낮을 때만 `CERTIFIED` 를 들고, 그 밖에는 전이 근거가 없다.
+     */
+    if (t !== null && (state === 'HOLD' || state === 'PREPARE')
+      && contractVersion === STAGE_DECISION_VERSION && isRec(t) && t.kind === 'CERTIFIED') {
+      if (!isStage(t.certified)) return no(`인증 단계가 정본이 아니다 — ${String(t.certified)}`)
+      if (rank(t.certified) <= rank(release)) {
+        return no(`인증 ${t.certified} 가 공개 ${release} 보다 높지 않다 — 낮춘 날만 인증을 따로 적는다`)
+      }
+      transition = { kind: 'CERTIFIED', certified: t.certified }
+    } else if (t !== null) return no(`${state} 인데 전이 근거가 붙어 있다`)
     /** 🔴 PREPARE 는 천장이 공개보다 높다는 뜻이다 — 같거나 낮으면 그 상태일 수 없다 */
     if (state === 'PREPARE' && rank(capacity) <= rank(release)) {
       return no(`PREPARE 인데 천장 ${capacity} 가 공개 ${release} 보다 높지 않다`)

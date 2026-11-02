@@ -1,19 +1,21 @@
 #!/usr/bin/env tsx
 /**
- * D100 reliability replay — 지금 코드의 baseline gap 을 실제 함수 호출로 재현하는 characterization 검사
+ * D100 reliability replay — 여섯 운영 결함의 **교정 계약**을 실제 함수 호출로 재현하는 회귀 검사
  *
  *   npm run check:d100-reliability-replay
  *
- *   ① preflight — 07:00 의 READY + 원천 기회로 하루 전체 N 슬롯을 요구한다           PREFLIGHT_FULL_DAY_OPPORTUNITY
- *   ② controller — bad 신호 하나가 인증 단계의 다음 날 release 를 낮춘 채 남긴다     BRAKE_DEMOTION_PERSISTS
- *   ③ 증거 — 전날 판정에 오늘 관측한 러너 오류가 들어간다                         EVIDENCE_USES_CURRENT_RUNNER_HEALTH
- *   ④ 깨움 — 공급 깨움 없음 · 댓글 깨움만 follow-up 표식으로 합쳐진다               SUPPLY_WAKE_NOT_IMPLEMENTED
- *   ⑤ 첫 댓글 시도 기억 — 없음 · 손상 · STARTED 결과 갱신 실패                     ATTEMPT_JOURNAL_CORRUPTION_PERMANENT
- *   ⑥ runtime manifest — SHA 만 결속한다                                         RUNTIME_MANIFEST_LACKS_PERSONA_ASSET_IDENTITY
+ *   ① preflight — 현재 기회 + 과거 같은 시각 3일 하한의 당일 추가 기회             PREFLIGHT_FULL_DAY_OPPORTUNITY
+ *   ② controller — 일시 감속 뒤 기존 인증 단계 복구                               BRAKE_DEMOTION_PERSISTS
+ *   ③ 증거 — 과거 proof day는 그날 자연 공급 슬롯 오류만 사용                      EVIDENCE_USES_CURRENT_RUNNER_HEALTH
+ *   ④ 깨움 — 공급 비예약 경로 폐쇄 + 댓글 사건 깨움만 허용                         SUPPLY_WAKE_NOT_IMPLEMENTED
+ *   ⑤ 첫 댓글 시도 기억 — 60분 fail-closed 뒤 손상본 격리·복구                     ATTEMPT_JOURNAL_CORRUPTION_PERMANENT
+ *   ⑥ runtime manifest — SHA + 실제 Persona 자산 상태 결속                         RUNTIME_MANIFEST_LACKS_PERSONA_ASSET_IDENTITY
  *   ⑦ 경계 표현 — KST 23:59/00:00 · N-1/N/N+1 · 깨움 중복 · 시도 기억 손상 변형
  *
- * 🔴 판정 규칙은 `scripts/lib/d100-reliability-replay.mts` 의 장부(`BASELINE_GAPS`)가 정한다.
- *    지금 main 에서 PASS 하려면 각 gap 이 **관측돼야** 한다 — 결함이 사라지면 GAP_CLOSED 로 FAIL 하고 장부를 뒤집는다.
+ * 🔴 판정 규칙은 `scripts/lib/d100-reliability-replay.mts` 의 역사 장부(`BASELINE_GAPS`)가 정한다.
+ *    이 검사는 각 시나리오가 과거 `current`가 아니라 교정 `target`과 일치해 `GAP_CLOSED`인지 고정한다.
+ *    🔴 단 ② 는 `CERTIFIED_ROLLOUT_PHASE` 가 `READER_READY` 인 판에서 `READER_READY` 여야 한다 — writer 가 꺼진 판을
+ *       해소로 보고하지 않는다. writer 활성 릴리스에서만 `GAP_CLOSED` 를 기대한다.
  *
  * 🔴 ③ 의 경계: `scripts/stage-controller.mts` 는 top-level 에서 DB 를 열고 끝나서 import 할 수 없다.
  *    그래서 순수 판정(`judgeStageEvidence` · `sustainedReleaseOf`)은 실제로 부르고, controller 가 전날 증거에
@@ -37,7 +39,9 @@ import {
   type PreflightFacts, type ReadyCohortFact,
 } from '../src/lib/stage-ladder-generic'
 import { minuteOfDay, profileOf, stageRank, type RuntimeStage } from '../src/lib/scale-profile'
-import { RUNNER_GRID, preflightWindowsOf, slotValidOpportunitiesOf } from './lib/stage-preflight-facts.mjs'
+import {
+  RUNNER_GRID, futureAdditionalOf, measuredFutureSourceOpportunities, preflightWindowsOf, slotValidOpportunitiesOf,
+} from './lib/stage-preflight-facts.mjs'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import {
@@ -54,10 +58,14 @@ import {
 } from '../src/lib/stage-decision-contract'
 import {
   decideStage, errorSignalOf, qualitySignalOf, sustainedReleaseOf, validateForToday, type HealthSignal,
+  CERTIFIED_ROLLOUT_PHASE, certifiedProvenanceOf,
 } from '../src/lib/stage-controller'
 import { preparedStageOf } from '../src/lib/stage-ladder'
 import { kstDateString } from '../src/lib/release-canary'
-import { EVENT_WAKE_ENV, FAKE_LAUNCHCTL_MARK, WAKE_TARGETS, launchctlPath, wakeAllowed, wakeRunner } from './lib/runner-wake.mjs'
+import {
+  EVENT_WAKE_ENV, FAKE_LAUNCHCTL_MARK, WAKE_TARGETS, launchctlPath, wakeRunner,
+} from './lib/runner-wake.mjs'
+import { proofDaySupplyHealth, type ProcessRunRead } from './lib/runner-health.mjs'
 import { FOLLOW_UP_FILE, followUpTriggerOf } from './lib/runner-lease.mjs'
 import { ATTEMPT_JOURNAL_FILE, createAttemptStore } from './lib/persona-comment-attempt-store.mjs'
 import {
@@ -201,7 +209,7 @@ try {
   check('D-1 PASS 면 지속 단계 d5 (인증)', sustainedReleaseOf(rowDm1, evDm1Own) === 'd5')
 
   // ─────────────────────────────────────────────────────────
-  section('① preflight — 07:00 재고로 하루 전체 N 슬롯')
+  section('① preflight — 현재 기회 + 측정된 당일 추가 기회')
   {
     const stage: RuntimeStage = 'd5'
     const n = profileOf(stage).dailyTarget
@@ -215,21 +223,35 @@ try {
       sources: currentSources,
       readyPerSource: 0.2,
     })
-    const pf = judgeNextPreflight(stage, preflightFacts(stage, { slotValidOpportunities: opp.total }), GRID)
-    const control = judgeNextPreflight(stage, preflightFacts(stage), GRID)
     // 08:15 이후 회차가 처리할 **새** 원천. 현재 10건과 key 교집합이 0이어야 두 번 세지 않는다.
     const futureSources = Array.from({ length: 10 }, (_, i) => always(`future-src:${i}`))
+    // 🔴 추가 기회 = `measuredFutureSourceOpportunities` 의 하루 산식(`futureAdditionalOf` — 겹침 상한 ∧ 순유입 자기 수율 상한)
+    const unionAdditional = (inflow: readonly ReturnType<typeof always>[]): number => futureAdditionalOf({
+      slots, ready: [always('ready:0'), always('ready:1')], current: currentSources, inflow, readyPerSource: 0.2,
+    })
+    const futureAdditional = unionAdditional(futureSources)
+    const pf = judgeNextPreflight(stage, preflightFacts(stage, {
+      slotValidOpportunities: opp.total, futureSupplyCapacity: futureAdditional,
+    }), GRID)
+    const control = judgeNextPreflight(stage, preflightFacts(stage), GRID)
     const future = slotValidOpportunitiesOf({ slots, ready: [], sources: futureSources, readyPerSource: 0.2 })
     const zeroFuture = slotValidOpportunitiesOf({ slots, ready: [], sources: [], readyPerSource: 0.2 })
+    const zeroFutureAdditional = unionAdditional([])
     const zeroFutureVerdict = judgeNextPreflight(stage, preflightFacts(stage, {
-      slotValidOpportunities: opp.total + zeroFuture.sourceExpected,
+      slotValidOpportunities: opp.total + zeroFuture.sourceExpected, futureSupplyCapacity: zeroFutureAdditional,
     }), GRID)
     const unknownYield = slotValidOpportunitiesOf({ slots, ready: [always('ready:0'), always('ready:1')], sources: futureSources, readyPerSource: null })
-    const unknownFuture = judgeNextPreflight(stage, preflightFacts(stage, { slotValidOpportunities: unknownYield.total }), GRID)
+    const unknownAdditional = measuredFutureSourceOpportunities({
+      dataDir: tmpdir(), kstDate: D, now: new Date(`${D}T07:00:00+09:00`), proofSlots: slots,
+      ready: [always('ready:0'), always('ready:1')], current: currentSources, readyPerSourceLow: null,
+    })
+    const unknownFuture = judgeNextPreflight(stage, preflightFacts(stage, {
+      slotValidOpportunities: unknownYield.total, futureSupplyCapacity: unknownAdditional,
+    }), GRID)
     const preflightFactsSource = readFileSync('scripts/lib/stage-preflight-facts.mts', 'utf-8')
     const preflightGateSource = readFileSync('src/lib/stage-ladder-generic.ts', 'utf-8')
     const controllerSource = readFileSync('scripts/stage-controller.mts', 'utf-8')
-    const preflightFactsCurrentOnly = /const slotValidOpportunities = snap\.evidence === null \? null\s*:\s*combineOpportunityBounds\(opp\.total, oppHigh\.total, i\.proofSlots\.length\)/.test(preflightFactsSource)
+    const preflightFactsCurrentOnly = !/measuredFutureSourceOpportunities\(\{/.test(preflightFactsSource)
     const opportunityGateCurrentOnly = /facts\.slotValidOpportunities < n\) codes\.add\('OPPORTUNITY_SHORT'\)/.test(preflightGateSource)
     const controllerPassesFactsDirectly = /nextPreflight = judgeNextPreflight\(target, r\.facts, RUNNER_GRID\)/.test(controllerSource)
     const currentKeys = new Set(currentSources.map((x) => x.key))
@@ -241,10 +263,14 @@ try {
     check('대조 — 기회가 N 이면 같은 사실로 PASS', control.verdict === 'PASS', control.codes.join(','))
     check('기회 계산은 실제 짝짓기 함수 결과다(READY 2 + floor(10 × 0.2))', opp.total === 4 && opp.readyFilled === 2 && opp.sourceExpected === 2)
     check('보충 원천은 07:00 원천과 다른 key 이고 실측 수율로 부족분을 덮는다', distinctFutureCapacityCoversShortfall)
-    check('새 원천 0이면 보충 기대량은 0이고 별도 preflight도 계속 막는다', zeroFuture.sourceExpected === 0 && zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'))
-    check('실측 수율을 모르면 보충 가능으로 지어내지 않는다', unknownFuture.codes.includes('OPPORTUNITY_SHORT'))
-    check('실제 preflight facts는 07:00 snapshot 기회만 넣는다', preflightFactsCurrentOnly)
-    check('실제 기회 gate는 snapshot 기회가 N 미만이면 곧바로 막는다', opportunityGateCurrentOnly)
+    check('측정된 3일 하한의 추가 기회로 부족 1을 덮으면 PASS',
+      pf.verdict === 'PASS' && futureAdditional !== null && futureAdditional >= shortfall)
+    check('새 원천 0이면 보충 기대량은 0이고 별도 preflight도 계속 막는다', zeroFuture.sourceExpected === 0
+      && zeroFutureAdditional === 0 && zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'))
+    check('실측 하한을 모르면 보충 가능으로 지어내지 않는다', unknownAdditional === null
+      && unknownFuture.codes.includes('OPPORTUNITY_UNKNOWN'))
+    check('실제 preflight facts는 현재 snapshot뿐 아니라 측정된 3일 하한을 읽는다', !preflightFactsCurrentOnly)
+    check('실제 기회 gate는 현재와 측정된 추가 기회를 합쳐 판정한다', !opportunityGateCurrentOnly)
     check('실제 controller는 facts를 보정하지 않고 그대로 기회 gate에 넘긴다', controllerPassesFactsDirectly)
     observations.set('PREFLIGHT_FULL_DAY_OPPORTUNITY', {
       verdict: pf.verdict,
@@ -252,15 +278,15 @@ try {
       hasOpportunityShort: pf.codes.includes('OPPORTUNITY_SHORT'),
       opportunities: opp.total, target: n, futureExpected: future.sourceExpected,
       distinctFutureCapacityCoversShortfall,
-      usesFutureSupplyCapacity: pf.verdict === 'PASS' && opp.total < n,
+      usesFutureSupplyCapacity: pf.verdict === 'PASS' && opp.total < n && futureAdditional !== null,
       zeroFutureCapacityBlocked: zeroFuture.sourceExpected === 0 && zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'),
-      unknownYieldBlocked: unknownFuture.codes.includes('OPPORTUNITY_SHORT'),
+      unknownYieldBlocked: unknownFuture.verdict !== 'PASS' && unknownFuture.codes.includes('OPPORTUNITY_UNKNOWN'),
       preflightFactsCurrentOnly, opportunityGateCurrentOnly, controllerPassesFactsDirectly,
     })
   }
 
   // ─────────────────────────────────────────────────────────
-  section('② controller — bad 신호 하나의 감속이 다음 날에도 남는다')
+  section('② controller — 일시 감속 뒤 인증 단계 복구')
   {
     // 현재 errors를 쓰면 과거 증거 오염(시나리오 ③)과 섞인다. 감속 자체만 보려고 quality 축을 나쁘게 둔다.
     const bad = qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 })
@@ -275,7 +301,7 @@ try {
     // controller 와 같은 순서로 이어진 계획을 되짚는다(전날이 HOLD·PREPARE 면 그 앞 증명일까지)
     const carried = trialPlanThrough([{ decision: rowDm1, evidence: evDm1Own }])
     const plan1 = trialPlanOf(row0, ev0, carried)
-    const sustained1 = sustainedReleaseOf(row0, ev0)
+    const sustained1 = sustainedReleaseOf(row0, ev0, carried)
     const target1 = plan1 !== null ? (plan1.base === sustained1 ? plan1.target : null) : nextStage(sustained1)
     // 실제 controller와 같다. 이어진 계획이 없으면 지속 단계의 다음 칸 preflight를 본다.
     const pfStage = target1
@@ -284,10 +310,11 @@ try {
       carriedPlan: carried, nextPreflight: pfStage === null ? null : judgeNextPreflight(pfStage, preflightFacts(pfStage), GRID),
       publishedToday: 0, signals: OK_SIGNALS,
     })
-    // 대조: 감속 평상일도 exact-N이면 다음 날 d5 재시험을 연다. N-1일 때 인증이 사라지는 경계를 분리한다.
+    // 대조: 감속 평상일도 exact-N이면 그날 공개 d3 PASS가 우선돼 다음 날 d5로 복귀한다.
+    // N-1은 평상 운영이므로 기존 인증 d5와 이어진 d10 계획을 그대로 회복한다.
     const ev0Exact = judgeStageEvidence(D, row0.release, dayFacts(D, row0.release, row0.state), SIDE_OK)
     const plan1Exact = trialPlanOf(row0, ev0Exact, carried)
-    const sustained1Exact = sustainedReleaseOf(row0, ev0Exact)
+    const sustained1Exact = sustainedReleaseOf(row0, ev0Exact, carried)
     const target1Exact = plan1Exact !== null
       ? (plan1Exact.base === sustained1Exact ? plan1Exact.target : null)
       : nextStage(sustained1Exact)
@@ -299,18 +326,30 @@ try {
     console.log(`   D-1 TRIAL:d5 PASS → D ${row0.state}:${row0.release}(brake ${d0.brake}) → D+1 ${d1.decision.state}:${d1.decision.release}(지속 ${d1.sustained} · 신호 전부 정상)`)
     check('D 의 감속은 시험·증명일을 열지 않는다', row0.state === 'HOLD' || row0.state === 'PREPARE')
     check('D+1 신호는 전부 정상이고 brake 가 없다', d1.brake === 'none')
-    check('대조 — 감속일 exact-N이면 D+1 d5 재시험을 연다', ev0Exact.verdict === 'PASS'
-      && d1Exact.decision.state === 'TRIAL' && d1Exact.decision.release === 'd5')
+    check('감속일 N-1은 인증 d5를 회복해 준비된 d10 시험을 열고, exact-N은 d5로 안전 복귀한다',
+      d1.decision.state === 'TRIAL' && d1.decision.release === 'd10' && d1.sustained === 'd5'
+      && d1Exact.decision.release === 'd5' && d1Exact.sustained === 'd5')
+    // 🔴 H2 — reader 는 writer 활성 판이 쓸 합성 CERTIFIED 행을 읽는가 · 이 판의 controller 감속 행은 그 칸을 쓰는가
+    const certifiedRow = validateStoredDecision({
+      row: { ...row0, transition: certifiedProvenanceOf('WRITER_ACTIVE', row0.release, 'd5') }, expectKstDate: D,
+    })
+    const readerAcceptsCertified = certifiedRow.ok && certifiedRow.decision.transition?.kind === 'CERTIFIED'
+      && sustainedReleaseOf(certifiedRow.decision, ev0, null) === 'd5'
+    const writerEmitsCertified = row0.transition !== null && row0.transition.kind === 'CERTIFIED'
+    check(`H2 단계 ${CERTIFIED_ROLLOUT_PHASE} — reader 는 합성 CERTIFIED 행을 지속 d5 로 읽는다(이월 계획 없이)`, readerAcceptsCertified)
+    check(`H2 단계 ${CERTIFIED_ROLLOUT_PHASE} — controller 감속 행의 CERTIFIED 쓰기는 단계와 일치한다`,
+      writerEmitsCertified === (CERTIFIED_ROLLOUT_PHASE === 'WRITER_ACTIVE'))
     observations.set('BRAKE_DEMOTION_PERSISTS', {
       certified: 'd5', day0Brake: d0.brake, day0Operating: row0.release, day0Release: row0.release, day0Evidence: ev0.verdict,
       day1State: d1.decision.state, day1Sustained: d1.sustained, day1Release: d1.decision.release,
       day1BelowCertified: stageRank(d1.decision.release) < stageRank('d5'),
       exactNDay1Release: d1Exact.decision.release,
+      readerAcceptsCertified, writerEmitsCertified,
     })
   }
 
   // ─────────────────────────────────────────────────────────
-  section('③ 증거 — 전날 판정에 오늘 관측한 러너 오류')
+  section('③ 증거 — 과거 proof day는 그날 자연 공급 슬롯만')
   {
     const errorsNow = currentErrors()
     const strip = (f: string): string => readFileSync(f, 'utf-8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
@@ -324,17 +363,45 @@ try {
         || /(?:^|,)errors$/.test(compact)
     }).length
     const observerHasNoDate = /function observeErrors\(\): HealthSignal \{/.test(ctl)
-    const canDistinguishErrorDate = /function observeErrorsFor\([^)]*(?:kstDate|from|to)/.test(ctl)
+    const usesProofDaySupplyHealth = /proofDaySupplyHealth\(readProcessRuns\(\), i\.kstDate\)/.test(evidenceBody)
+    const processRead: ProcessRunRead = {
+      runs: [
+        ...['06:15', '08:15', '12:15', '14:15', '17:15'].map((time, index) => ({
+          runId: `past-ok-${index}`, startedAt: kstAt(DM1, time).toISOString(), status: 'done' as const,
+          completedAt: new Date(kstAt(DM1, time).getTime() + 15 * 60_000).toISOString(), runtimeSha: 'x',
+          runTokenShadow: {
+            ok: true as const, code: null, tokenId: `token-${time}`, trigger: 'scheduled' as const,
+            launchTrigger: 'scheduled' as const, absorbedTrigger: null, absorbedAt: null,
+            pass: 0, budgetWindow: `${DM1} ${time}`,
+          }, failedStages: [],
+        })),
+        {
+          runId: 'today-fail', startedAt: kstAt(D, '06:15').toISOString(), status: 'failed',
+          completedAt: kstAt(D, '06:20').toISOString(), runtimeSha: 'x',
+          runTokenShadow: {
+            ok: true as const, code: null, tokenId: 'token-fail', trigger: 'scheduled' as const,
+            launchTrigger: 'scheduled' as const, absorbedTrigger: null, absorbedAt: null,
+            pass: 0, budgetWindow: `${D} 06:15`,
+          }, failedStages: ['collect exit 1'],
+        },
+      ],
+      unreadable: 0, unreadableFiles: [],
+    }
+    const historicalHealth = proofDaySupplyHealth(processRead, DM1)
+    const canDistinguishErrorDate = usesProofDaySupplyHealth && historicalHealth === 'ok'
     const controllerFeedsCurrentErrors = evidenceBody.includes('errors: i.errors.health,')
       && callBodies.length === 4 && currentErrorCallCount === callBodies.length && observerHasNoDate
     // 판정은 wiring 관측값에서 유도한다. 하네스가 AS-IS 결과를 상수로 지어내지 않는다.
     const historicalSide: EvidenceSideSignals = {
-      ...SIDE_OK, errors: controllerFeedsCurrentErrors ? errorsNow.health : SIDE_OK.errors,
+      ...SIDE_OK, errors: controllerFeedsCurrentErrors ? errorsNow.health : historicalHealth,
     }
     const past = judgeStageEvidence(DM1, 'd5', factsDm1, historicalSide)
     const sustainedAfter = sustainedReleaseOf(rowDm1, past)
     console.log(`   전날 자기 러너 ${evDm1Own.verdict} · 오늘 관측 errors=${errorsNow.health} 를 넣으면 ${past.verdict} [${past.codes.join(',')}] → 지속 ${sustainedAfter}`)
-    console.log(`   wiring(원문) ${JSON.stringify({ historicalCallCount: callBodies.length, currentErrorCallCount, observerHasNoDate, canDistinguishErrorDate })}`)
+    console.log(`   wiring(원문) ${JSON.stringify({
+      historicalCallCount: callBodies.length, currentErrorCallCount, observerHasNoDate,
+      usesProofDaySupplyHealth, canDistinguishErrorDate,
+    })}`)
     check('순수 판정 — 같은 전날 사실 · errors=ok 면 PASS(대조)', evDm1Own.verdict === 'PASS')
     check('controller 의 과거 증거 호출 4곳을 전부 계약에 넣었다', callBodies.length === 4, String(callBodies.length))
     observations.set('EVIDENCE_USES_CURRENT_RUNNER_HEALTH', {
@@ -345,7 +412,7 @@ try {
   }
 
   // ─────────────────────────────────────────────────────────
-  section('④ 깨움 — 공급 없음 · 댓글만 follow-up 표식으로 합쳐진다')
+  section('④ 깨움 — 공급 비예약 경로 폐쇄 · 댓글 사건 깨움만 허용')
   const g = globalThis as unknown as Record<symbol, unknown>
   {
     const sb = createReplaySandbox('d100-reliability-wake')
@@ -366,15 +433,17 @@ try {
     const nowMs = kstAt(D, '09:00').getTime()
     const wake = (target: 'comment' | 'supply', mode: string) => wakeRunner({ target, env: { [EVENT_WAKE_ENV]: mode }, nowMs, home: sb.home })
 
-    // 공급 깨움이 생긴 뒤 baseline을 갱신하지 않은 채 이 검사를 돌려 실제 job을 깨우지 않는다.
-    const supplyAppearsImplemented = wakeAllowed('all', 'supply') || !wakeSource.includes("i.target !== 'comment'")
-    const supply = supplyAppearsImplemented
-      ? { kind: 'IMPLEMENTED_UNVERIFIED' as const }
-      : wake('supply', 'all')
+    const supply = wake('supply', 'all')
     const supplyMarker = supply.kind === 'SENT' ? supply.marker : null
     const supplyKicks = sb.launchctlCalls().length
     const supplyWakeImplemented = supply.kind === 'SENT' && supply.marker === 'REQUESTED' && supply.kick === 'OK'
-    // 공급 호출과 댓글 호출 수를 섞지 않는다. 공급이 구현된 뒤에도 댓글 3회 반례는 그대로다.
+    const supplyAgain = wakeRunner({
+      target: 'supply', env: { [EVENT_WAKE_ENV]: 'all' }, nowMs: kstAt(D, '12:00').getTime(), home: sb.home,
+    })
+    check('🔴 공급 비예약 깨움은 시각과 all 설정에 관계없이 OFF · 표식 0 · kickstart 0',
+      supply.kind === 'OFF' && supplyAgain.kind === 'OFF' && supplyMarker === null && supplyKicks === 0
+      && sb.launchctlCalls().length === 0 && Object.keys(WAKE_TARGETS).join(',') === 'comment')
+    // 공급 호출과 댓글 호출 수를 섞지 않는다. 댓글 3회 반례는 그대로다.
     sb.resetLaunchctlCalls()
     // 같은 순간 댓글 깨움 3번 — 표식 하나 · kickstart 는 launchd 가 합친다
     const comments = [wake('comment', 'comment'), wake('comment', 'all'), wake('comment', 'comment')]
@@ -388,7 +457,7 @@ try {
     delete g[FAKE_LAUNCHCTL_MARK]
     observations.set('SUPPLY_WAKE_NOT_IMPLEMENTED', {
       supplyOutcome: supply.kind, supplyMarker, supplyKicks, supplyWakeImplemented,
-      wakeTargets: Object.keys(WAKE_TARGETS).sort().join(','),
+      wakeTargets: Object.keys(WAKE_TARGETS).sort().join(','), supplyWakeIntentionallyClosed: true,
     })
   }
 
@@ -526,7 +595,8 @@ try {
     const consumerControlGenerates = cleanConsumer.report.providerCalls >= 1
       && cleanConsumer.generated >= 1 && cleanConsumer.bypass.length === 0
     console.log(`   손상 +1일 · 무관한 글 — 읽기 ${readLater.ok ? 'ok' : readLater.code} · 시작 기록 ${startLater.ok ? 'ok' : startLater.kind}`)
-    check('실제 댓글 consumer는 시도 기억을 못 읽으면 유료 생성을 건너뛴다', consumerSkipsOnCorruptMemory)
+    check('60분 지난 손상 기억을 격리한 실제 댓글 consumer는 무관한 새 글 생성을 재개한다',
+      !consumerSkipsOnCorruptMemory && corruptConsumer.report.providerCalls >= 1 && corruptConsumer.generated >= 1)
     check('대조 — 같은 실제 consumer와 정상 기억은 provider를 부른다', consumerControlGenerates,
       `provider=${cleanConsumer.report.providerCalls} generated=${cleanConsumer.generated} bypass=${cleanConsumer.bypass.join(',')}`)
     observations.set('ATTEMPT_JOURNAL_CORRUPTION_PERMANENT', {
@@ -552,6 +622,7 @@ try {
       unload: () => true, bootout: () => true, probeJob: () => 'unloaded', load: () => true,
       checkout: () => true, install: () => true, generate: () => true, offlineGate: () => true,
       runtimeQualityContract: () => `replay:${REFERENCE_DIGEST}`, stagedTransitionCheck: () => true, contractTransitionGate: () => true,
+      runtimePersonaAssets: () => ({ referenceDigest: REFERENCE_DIGEST, supplementDigest: SUPPLEMENT_DIGEST }),
       readInstalledPlist: () => null, renderPlist: () => '<plist/>', writePlist: () => true, removePlist: () => true,
       retirePlist: () => true, unretirePlist: () => true, lintPlist: () => true,
       argsOf: () => [], workingDirOf: () => null,
@@ -607,13 +678,15 @@ try {
   }
 
   // ─────────────────────────────────────────────────────────
-  section('baseline gap 판정')
+  section('교정 계약 판정')
   for (const gap of BASELINE_GAPS) {
     const observed = observations.get(gap.code)
     if (observed === undefined) { check(`${gap.code} — 관측이 없다`, false); continue }
     const verdict = judgeGap(gap, observed)
-    const label = `[baseline] ${gap.code} (시나리오 ${gap.scenario}) → ${verdict}`
-    check(label, verdict === 'MATCH', `관측 ${JSON.stringify(observed)} · current ${JSON.stringify(gap.current)} · target ${JSON.stringify(gap.target)}`)
+    // 🔴 reader 판(`READER_READY`)에서 writer 가 필요한 gap 은 해소로 세지 않는다 — 기대값부터 READER_READY 다
+    const expected = gap.readerReady !== undefined && CERTIFIED_ROLLOUT_PHASE === 'READER_READY' ? 'READER_READY' : 'GAP_CLOSED'
+    const label = `[corrected] ${gap.code} (시나리오 ${gap.scenario}) → ${verdict}${expected === 'GAP_CLOSED' ? '' : ' (writer 활성 전 · 미해소)'}`
+    check(label, verdict === expected, `관측 ${JSON.stringify(observed)} · current ${JSON.stringify(gap.current)} · target ${JSON.stringify(gap.target)}`)
     console.log(`      ${gap.summary}`)
     console.log(`      관측 ${JSON.stringify(observed)}`)
     console.log(`      current ${JSON.stringify(gap.current)} · target ${JSON.stringify(gap.target)}`)
@@ -624,6 +697,8 @@ try {
   for (const sb of sandboxes) sb.dispose()
 }
 
-console.log(`\n${fail === 0 ? '✅' : '🔴'} D100 reliability replay ${pass} pass · ${fail} fail · baseline gap ${BASELINE_GAPS.length}/${BASELINE_GAPS.length} 검출 기대`)
+const readerOnlyGaps = CERTIFIED_ROLLOUT_PHASE === 'READER_READY' ? BASELINE_GAPS.filter((x) => x.readerReady !== undefined).length : 0
+console.log(`\n${fail === 0 ? '✅' : '🔴'} D100 reliability replay ${pass} pass · ${fail} fail · 교정 계약 GAP_CLOSED ${BASELINE_GAPS.length - readerOnlyGaps}/${BASELINE_GAPS.length}`
+  + ` · READER_READY ${readerOnlyGaps}(CERTIFIED ${CERTIFIED_ROLLOUT_PHASE} — writer 활성 릴리스 전 미해소)`)
 console.log('🔴 DB 0 · 네트워크 0 · provider 0 · 운영 HOME 0 · 운영 launchctl 0\n')
 process.exitCode = fail === 0 ? 0 : 1

@@ -22,6 +22,25 @@ export const SUPPLY_RUNS_PER_DAY = SUPPLY_RUN_SLOTS_KST.length
  */
 export const SUPPLY_RUN_WINDOW_MS = 45 * 60 * 1000
 export const SUPPLY_PROOF_LAST_PUBLISH_MINUTE = 19 * 60
+
+/**
+ * 공급 회차 시작 시각을 정본 슬롯 창에 붙인다.
+ *
+ * 정각 문자열을 비교하지 않는다. launchd 지연으로 08:16에 시작한 08:15 회차도 같은 회차다.
+ * 반대로 창 밖 시작은 가까운 슬롯으로 추정하지 않고 `null`이다.
+ */
+export function supplyRunSlotMinuteOf(
+  startMinute: number,
+  slots: readonly { readonly hour: number; readonly minute: number }[] = SUPPLY_RUN_SLOTS_KST,
+  windowMs: number = SUPPLY_RUN_WINDOW_MS,
+): number | null {
+  const windowMinutes = windowMs / 60_000
+  if (!Number.isInteger(startMinute) || startMinute < 0 || startMinute >= 24 * 60
+    || !Number.isFinite(windowMinutes) || windowMinutes <= 0) return null
+  const starts = slots.map((slot) => slot.hour * 60 + slot.minute).sort((a, b) => a - b)
+  return starts.find((minute) => startMinute >= minute && startMinute < minute + windowMinutes) ?? null
+}
+
 export function supplyProofRunSlots(
   slots: readonly { readonly hour: number; readonly minute: number }[],
   windowMs: number = SUPPLY_RUN_WINDOW_MS,

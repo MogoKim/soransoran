@@ -11,7 +11,9 @@
  * 🔴 **쓰는 곳은 하나다** — `ensureStageDecision` → `createStageDecision`(create 뿐 · 덮어쓰기 0).
  *
  * 🔴 **fail-closed = 지금 공개 단계를 지킨다.**
- *    · 재고·전날 결정을 못 읽음 → `holdAtCurrent`
+ *    · 전날 결정이 깨짐·읽기 예외 → 계산·저장 0 · exit 1 (다음 예약이 다시 읽는다 · `resolvePreviousAuthority`)
+ *    · 전날 결정이 없음        → 이틀 전 행 하나로 권한만 잇는 HOLD(`bridgeHoldOf`) · 둘 다 없으면 첫 시작 d1
+ *    · 재고를 못 읽음          → `inputFailureHoldOf` (전날 행이 없으면 d1)
  *    · 운영 신호를 모름        → 시험·증명일만 막는다
  *    · DB 자체에 못 닿음       → 아무것도 쓰지 못한다 · exit 1 (consumer 는 정본 fallback)
  *
@@ -29,21 +31,22 @@ import { PrismaClient } from '@prisma/client'
 
 import { profileOf, releaseCapsOf, resolveRuntimeStage, type RuntimeStage } from '../src/lib/scale-profile'
 import { kstDateString } from '../src/lib/release-canary'
-import { previousKstDate, isCalendarDate, nextStage, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
+import { isCalendarDate, nextStage, DECISION_WRITER, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, controllerEnabled, CONTROLLER_ENV } from '../src/lib/stage-decision-store'
 import { readStageDecision, stageDecisionIo } from '../src/lib/stage-decision-repo'
 import {
-  decideStage, holdAtCurrent, validateForToday, qualitySignalOf, costSignalOf, errorSignalOf,
-  sustainedReleaseOf, type HealthSignal, type ControllerResult,
+  decideStage, inputFailureHoldOf, authorityRowOf, leaseSafeHoldOf, validateForToday, qualitySignalOf, costSignalOf, errorSignalOf,
+  sustainedReleaseOf, resolvePreviousAuthority, bridgeHoldOf,
+  type HealthSignal, type ControllerResult, type DecisionRead,
 } from '../src/lib/stage-controller'
 import { unresolvedDefectCount, missingAutoPostCount } from '../src/lib/auto-ready-repo'
 import { auditAwareGate, overdueAuditCount, retryableFailureCount } from '../src/lib/auto-ready-audit-store'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
-import { observeJob, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
+import { observeJob, proofDaySupplyHealth, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
 import { fillDbConnection, readCostSignals, readEnvKeys } from './lib/ops-signals.mjs'
 import {
-  judgeStageEvidence, trialPlanOf, trialPlanThrough, evidenceReasonOf, PLAN_CARRY_MAX_DAYS,
+  judgeStageEvidence, trialPlanOf, carriedTrialPlanFor, evidenceReasonOf,
   type StageEvidenceVerdict, type StageEvidenceFacts, type EvidenceSideSignals, type TrialPlan,
 } from '../src/lib/stage-evidence'
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
@@ -70,7 +73,7 @@ const log = (s: string): void => { if (!JSON_OUT) console.log(s) }
  *    어느 것이든 못 읽으면 그 칸은 모름이다 — PASS 가 되지 않는다(fail-closed = 지금 단계에 머문다).
  */
 async function evidenceFor(prisma: PrismaClient, i: {
-  kstDate: string; stage: RuntimeStage; decision: ValidatedStageDecision | null; errors: HealthSignal
+  kstDate: string; stage: RuntimeStage; decision: ValidatedStageDecision | null
 }): Promise<StageEvidenceVerdict> {
   let facts: StageEvidenceFacts | null = null
   try {
@@ -89,7 +92,8 @@ async function evidenceFor(prisma: PrismaClient, i: {
         { name: '댓글 장부', health: c.commentLedger.health },
         { name: '감사 장부', health: c.auditLedger.health },
       ],
-      errors: i.errors.health,
+      // 🔴 과거 증명은 그날의 불변 공급 회차 기록만 쓴다. 지금 launchd health 는 오늘 브레이크에만 들어간다.
+      errors: proofDaySupplyHealth(readProcessRuns(), i.kstDate),
       /**
        * 🔴 §3.4 — proof-day 관련 natural supply 미상 수를 명시적으로 넘긴다 (2026-10-16 D5 보정 B).
        *    `relevantUsageUnknownCount` 가 KST 날짜 · stage · runKind·manual 제외 규칙으로 센 값이다.
@@ -104,23 +108,23 @@ async function evidenceFor(prisma: PrismaClient, i: {
  * 🔴 **전날의 계획을 되짚는다** (PR3 KEEP) — 전날이 브레이크 날(HOLD·PREPARE)이면 그 앞날들의 결정·증거로
  *    그날 계획을 다시 만든다. 저장 행에 새 칸을 두지 않는다. 최대 `PLAN_CARRY_MAX_DAYS` 행. 못 읽으면 잇지 않는다.
  */
-async function carriedPlanFor(prisma: PrismaClient, previous: ValidatedStageDecision, errors: HealthSignal): Promise<TrialPlan | null> {
-  const isHold = (d: ValidatedStageDecision): boolean => d.state === 'HOLD' || d.state === 'PREPARE'
-  if (!isHold(previous)) return null
-  const days: { decision: ValidatedStageDecision; evidence: StageEvidenceVerdict | null }[] = []
-  let date = previous.kstDate
-  for (let k = 0; k < PLAN_CARRY_MAX_DAYS; k += 1) {
-    const d = previousKstDate(date)
-    if (d === null) break
-    const r = await readStageDecision(prisma, d)
-    if (!r.found || !r.result.ok) break
-    const dec = r.result.decision
-    const hold = isHold(dec)
-    days.unshift({ decision: dec, evidence: await evidenceFor(prisma, { kstDate: d, stage: dec.release, decision: dec, errors }) })
-    date = d
-    if (!hold) break
-  }
-  return trialPlanThrough(days)
+async function carriedPlanFor(prisma: PrismaClient, previous: ValidatedStageDecision): Promise<TrialPlan | null> {
+  return carriedTrialPlanFor(previous, {
+    readDecision: async (kstDate) => {
+      const r = await readStageDecision(prisma, kstDate)
+      return r.found && r.result.ok ? r.result.decision : null
+    },
+    readEvidence: (decision) => evidenceFor(prisma, {
+      kstDate: decision.kstDate, stage: decision.release, decision,
+    }),
+  })
+}
+
+/** 🔴 저장 결정 한 날짜 판독 — 없음 · 유효 · 깨짐. DB 예외는 그대로 던진다(`resolvePreviousAuthority` 가 멈춤으로 바꾼다) */
+const decisionReader = (prisma: PrismaClient) => async (kstDate: string): Promise<DecisionRead> => {
+  const r = await readStageDecision(prisma, kstDate)
+  if (!r.found) return { kind: 'absent' }
+  return r.result.ok ? { kind: 'valid', decision: r.result.decision } : { kind: 'broken', reason: r.result.reason }
 }
 
 function observeErrors(): HealthSignal {
@@ -133,8 +137,8 @@ function observeErrors(): HealthSignal {
 }
 
 /**
- * 마지막 controller 예약까지 공급 lease가 끝나지 않은 날의 안전 결정.
- * 오늘의 부분 Queue는 읽지 않고, 전날 증거로 확인되는 지속 공개 단계만 HOLD로 기록한다.
+ * 마지막 controller 예약까지 공급 lease가 끝나지 않은 날의 안전 결정(`leaseSafeHoldOf`).
+ * 오늘의 부분 Queue는 읽지 않고, 전날 보이던 공개를 넘지 않는 HOLD만 기록한다. 인증 권한은 행에 따로 남긴다.
  */
 async function holdForSupplyLease(lease: 'busy' | 'unknown', flagOn: boolean): Promise<number> {
   if (!fillDbConnection()) {
@@ -143,28 +147,30 @@ async function holdForSupplyLease(lease: 'busy' | 'unknown', flagOn: boolean): P
   }
   const prisma = new PrismaClient()
   try {
-    const prevDate = previousKstDate(TODAY)
-    let previous: ValidatedStageDecision | null = null
-    let evidence: StageEvidenceVerdict | null = null
-    if (prevDate !== null) {
-      const r = await readStageDecision(prisma, prevDate)
-      if (r.found && r.result.ok) {
-        previous = r.result.decision
-        evidence = await evidenceFor(prisma, {
-          kstDate: previous.kstDate, stage: previous.release, decision: previous, errors: observeErrors(),
-        })
+    const authority = await resolvePreviousAuthority(TODAY, decisionReader(prisma))
+    if (authority.kind === 'stop') {
+      console.error(`🔴 ${authority.code} — ${authority.reason}. 공급 lease HOLD도 계산·저장하지 않는다`)
+      return 1
+    }
+    // 🔴 다리(이틀 전 행)는 권한만 잇는다 — 신호를 못 본 HOLD 라 공개는 d1 이다(`signalBlindReleaseOf`). 계획은 되짚지 않는다
+    const previous = authorityRowOf(authority)
+    const evidence = previous === null ? null : await evidenceFor(prisma, {
+      kstDate: previous.kstDate, stage: previous.release, decision: previous,
+    })
+    let carriedPlan: TrialPlan | null = null
+    if (previous !== null && authority.kind === 'exact') {
+      try { carriedPlan = await carriedPlanFor(prisma, previous) } catch {
+        // 🔴 복원 실패는 인증을 지어내지 않는다. 전날 공개 단계 그대로 HOLD한다.
       }
     }
-    const current = sustainedReleaseOf(previous, evidence)
-    const decision = holdAtCurrent({
-      kstDate: TODAY, decidedAt: NOW.toISOString(), current,
-      headline: `🟡 공급 lease 충돌 — 지속 공개 단계 ${current} 를 안전 HOLD한다(부분 재고로 승격하지 않는다)`,
-      reason: `마지막 controller 예약에도 공급 lease가 ${lease} — 오늘의 부분 재고를 읽지 않고 승격을 막는다`,
+    const { decision, certified } = leaseSafeHoldOf({
+      kstDate: TODAY, decidedAt: NOW.toISOString(), lease,
+      authority, previousEvidence: evidence, carriedPlan,
     })
     const valid = validateForToday(decision)
     if (!valid.ok) { console.error(`🔴 공급 lease 충돌 HOLD가 계약을 지키지 않는다 — ${valid.reason}`); return 1 }
     if (JSON_OUT) console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, supplyLease: lease, safeHold: true, decision }, null, 2))
-    else log(`\n🟡 SUPPLY_LEASE_${lease.toUpperCase()} — 마지막 예약이므로 부분 재고로 승격하지 않고 지속 단계 ${current} HOLD를 기록한다\n`)
+    else log(`\n🟡 SUPPLY_LEASE_${lease.toUpperCase()} — 마지막 예약이므로 부분 재고로 승격하지 않고 공개 ${decision.release} HOLD를 기록한다(인증 ${certified})\n`)
     if (!flagOn) {
       log(`🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다 (consumer 는 옛 env/canary 단계로 돌아가지 않고 가장 안전한 d1 로 감속한다)\n`)
       return 0
@@ -195,7 +201,7 @@ async function evidenceOnly(date: string): Promise<number> {
     const stageArg = argv.find((a) => a.startsWith('--evidence-stage='))?.slice('--evidence-stage='.length)
     const stage = (stageArg !== undefined ? resolveRuntimeStage(stageArg, 'release').stage : decision?.release) ?? null
     if (stage === null) { console.error(`🔴 ${date} 결정이 없거나 깨졌다 — --evidence-stage 로 단계를 준다`); return 1 }
-    const v = await evidenceFor(prisma, { kstDate: date, stage, decision, errors: observeErrors() })
+    const v = await evidenceFor(prisma, { kstDate: date, stage, decision })
     if (JSON_OUT) console.log(JSON.stringify({ date, decision: decision === null ? null : { state: decision.state, release: decision.release, contractVersion: decision.contractVersion }, evidence: v }, null, 2))
     else {
       log(`\n══ 운영 증거 ${date} · ${stage} (read-only · DB write 0) ══`)
@@ -248,35 +254,40 @@ async function main(): Promise<number> {
     const decidedAt = NOW.toISOString()
     const failures: string[] = []
 
-    // ① 전날 결정
-    let previous: ValidatedStageDecision | null = null
-    const prevDate = previousKstDate(TODAY)
-    try {
-      if (prevDate !== null) {
-        const r = await readStageDecision(prisma, prevDate)
-        if (r.found && r.result.ok) previous = r.result.decision
-        else if (r.found && !r.result.ok) log(`   🔴 전날 결정이 깨졌다 — ${r.result.reason} (기반으로 쓰지 않는다)`)
-      }
-    } catch (e) { failures.push(`전날 결정을 읽지 못했다 — ${(e as Error).name}`) }
-    if (previous !== null && previous.contractVersion !== undefined) {
-      log(`   전날 결정 ${previous.state} · 공개 ${previous.release} · ${previous.contractVersion}`)
+    // ① 전날 결정 — 깨짐·읽기 예외면 대체 결정을 계산·저장하지 않는다(다음 예약이 다시 읽는다)
+    const authority = await resolvePreviousAuthority(TODAY, decisionReader(prisma))
+    if (authority.kind === 'stop') {
+      if (JSON_OUT) console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, stopped: true, code: authority.code, reason: authority.reason }, null, 2))
+      console.error(`🔴 ${authority.code} — ${authority.reason}. 결정 계산 0 · DB write 0 — 다음 예약이 다시 읽는다`)
+      return 1
     }
+    const previous: ValidatedStageDecision | null = authority.kind === 'exact' ? authority.previous : null
+    /** 🔴 전날 행이 없을 때만 — 이틀 전 행. 권한만 잇고 시험을 열지 않는다 */
+    const bridge: ValidatedStageDecision | null = authority.kind === 'bridge' ? authority.bridge : null
+    if (previous !== null) log(`   전날 결정 ${previous.state} · 공개 ${previous.release} · ${previous.contractVersion}`)
+    if (bridge !== null) log(`   🟡 전날 결정 없음 — 이틀 전 ${bridge.kstDate} ${bridge.state} · 공개 ${bridge.release} 로 권한만 잇는다(시험 없음)`)
+    if (authority.kind === 'first-run') log('   전날·이틀 전 결정 없음 — 첫 시작(d1)')
 
     // ①-b 전날 운영 증거 · 이어진 계획
     const errorSignal = observeErrors()
     let evidence: StageEvidenceVerdict | null = null
     let carriedPlan: TrialPlan | null = null
-    if (previous !== null) {
+    // 🔴 권한 행 — 전날 행, 없으면 다리(이틀 전 행). 증거는 그 행의 날짜·단계로만 판정한다
+    const authorityRow = previous ?? bridge
+    if (authorityRow !== null) {
       evidence = await evidenceFor(prisma, {
-        kstDate: previous.kstDate, stage: previous.release, decision: previous, errors: errorSignal,
+        kstDate: authorityRow.kstDate, stage: authorityRow.release, decision: authorityRow,
       })
       log(`   ${evidence.verdict === 'PASS' ? '🟢' : '🔴'} ${evidenceReasonOf(evidence)}`)
-      try { carriedPlan = await carriedPlanFor(prisma, previous, errorSignal) } catch (e) {
+    }
+    // 🔴 계획 되짚기는 인접한 전날 행에서만 — 다리 날은 시험을 열지 않는다
+    if (previous !== null) {
+      try { carriedPlan = await carriedPlanFor(prisma, previous) } catch (e) {
         log(`   ⬚ 지난 계획을 되짚지 못했다 — ${(e as Error).name} (잇지 않는다)`)
       }
       if (carriedPlan !== null) log(`   전날(브레이크 날)이 이은 계획  ${carriedPlan.target} (기반 ${carriedPlan.base} · ${carriedPlan.basis})`)
     }
-    const sustained = sustainedReleaseOf(previous, evidence)
+    const sustained = sustainedReleaseOf(authorityRow, evidence, carriedPlan)
     const plan = previous === null ? null : trialPlanOf(previous, evidence, carriedPlan)
     log(`   지속 단계 ${sustained} · 시험 계획  ${plan === null ? '없음 — 평상일(0..Dn) · 증명 기반이 없고 다음 단계 preflight PASS 인 날만 현재 단계 재인증' : `${plan.target} (기반 ${plan.base} · ${plan.basis})`}`)
 
@@ -335,9 +346,14 @@ async function main(): Promise<number> {
     let result: ControllerResult
     if (failures.length > 0) {
       result = {
-        decision: holdAtCurrent({ kstDate: TODAY, decidedAt, current: sustained, reason: failures.join(' · ') }),
+        // 🔴 입력 실패 날은 오늘 신호를 판정하지 못했다 — 전날 행이 없으면 d1, 인증은 행에 따로 남긴다(`inputFailureHoldOf`)
+        decision: inputFailureHoldOf({
+          kstDate: TODAY, decidedAt, reason: failures.join(' · '), certified: sustained, authority,
+        }),
         brake: 'controllerFailure', sustained,
       }
+    } else if (bridge !== null) {
+      result = bridgeHoldOf({ kstDate: TODAY, decidedAt, bridge, bridgeEvidence: evidence, publishedToday, signals })
     } else {
       result = decideStage({
         kstDate: TODAY, decidedAt, previousDecision: previous, previousEvidence: evidence, carriedPlan,

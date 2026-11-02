@@ -1,19 +1,19 @@
 #!/usr/bin/env tsx
 /**
- * 사건 깨움(발행 commit → 댓글 러너) 검사 (2026-10-12 Batch C2)
+ * 사건 깨움(발행 commit → 댓글) 검사
  *
  *   npx tsx scripts/event-wake-check.mts
  *
- * ① 순수 — kill switch(off|comment|all · 미설정 = off) · 행동 범위(C2 는 댓글만) · 고아 표식 복구 판정(표식당 1회)
+ * ① 순수 — kill switch(off|comment|all · 미설정 = off) · 댓글 범위 · 고아 표식 복구 판정(표식당 1회)
  * ② 깨움 helper — 임시 HOME · launchctl 대역: off 면 표식 · kickstart 0 · 합치기 · 실패 · 매달림 · 디렉터리 없음 · 던지지 않는다
- * ③ 배선 — 발행 러너가 commit(published) 뒤에만 깨우고 결과가 종료 코드에 들어가지 않는다 · 깨움을 부르는 곳은 발행 러너 하나
+ * ③ 배선 — 발행만 댓글을 깨우며 결과가 종료 코드에 들어가지 않는다 · 공급 비예약 깨움은 닫힌다
  * ④ 실제 OS 프로세스(macOS + /usr/bin/lockf · 그 밖은 SKIP 이고 PASS 가 아니다) — 댓글 러너와 같은 진입(leaseEntry) ·
  *    정기 회차 중 깨움 여러 개 → 본체 최대 1 · follow-up 1 · 고아 표식 → 복구 1회 뒤 반복 0
  *
  * 🔴 DB 0 · provider 0 · 운영 HOME 0 · 운영 launchctl 0(언제나 대역)
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -21,7 +21,10 @@ import {
   EVENT_WAKE_ENV, FAKE_LAUNCHCTL_MARK, KICKSTART_TIMEOUT_MS, LAUNCHCTL_PATH, WAKE_TARGETS,
   describeWake, eventWakeModeOf, launchctlPath, publishWakeGate, wakeAllowed, wakeRunner,
 } from './lib/runner-wake.mjs'
-import { FOLLOW_UP_FILE, LOCKF_PATH, MAX_FOLLOW_UPS, followUpTriggerOf, lockfUsable } from './lib/runner-lease.mjs'
+import {
+  FOLLOW_UP_FILE, LOCKF_PATH, MAX_FOLLOW_UPS, followUpTriggerOf, lockfUsable,
+  requestFollowUp, takeFollowUpRecord, type LeaseProof,
+} from './lib/runner-lease.mjs'
 import { COMMENT_RUNNER_LABEL, commentLoopLockDir } from './lib/persona-comment-runner-template'
 import { commentLoopLockDir as loopReExport, COMMENT_LOOP_LOCK_FILE } from './lib/persona-comment-loop.mjs'
 import { ORPHAN_WAKE_GRACE_MS, judgeOrphanWake, parseHandledWake, type OrphanWakeInput } from '../src/lib/runner-recovery'
@@ -43,14 +46,36 @@ try {
   check('🔴 kill switch — 미설정 · 빈 값 · off · 모르는 값(ON · true · comments)은 전부 off',
     [undefined, '', '  ', 'off', 'ON', 'true', 'comments', 'Comment'].every((v) => mode(v) === 'off'))
   check('kill switch — comment · all 만 켜진다', mode('comment') === 'comment' && mode('all') === 'all' && mode(' comment ') === 'comment')
-  check('🔴 C2 행동 범위 — 댓글만 · 공급 깨움은 all 이어도 없다(C3)',
+  check('🔴 행동 범위 — comment·all은 댓글만 · 공급 사건 깨움과 off는 닫힘',
     wakeAllowed('comment', 'comment') && wakeAllowed('all', 'comment') && !wakeAllowed('off', 'comment')
-    && !wakeAllowed('all', 'supply') && !wakeAllowed('comment', 'supply'))
-  check('대상 — 댓글 러너 label · 잠금 디렉터리 정본 하나(러너 모듈이 같은 함수를 다시 내보낸다)',
+    && !wakeAllowed('all', 'supply') && !wakeAllowed('comment', 'supply') && !wakeAllowed('off', 'supply'))
+  check('대상 — 댓글 러너 label · 잠금 디렉터리는 정본 하나',
     WAKE_TARGETS.comment.label === COMMENT_RUNNER_LABEL && WAKE_TARGETS.comment.lockDir('/h') === commentLoopLockDir('/h')
     && loopReExport('/h') === commentLoopLockDir('/h') && commentLoopLockDir('/h') === '/h/Library/Application Support/soransoran/persona-comment-loop')
 
-  const now = new Date('2026-10-12T03:00:00.000Z')
+  const markerRace = mkdtempSync(join(ROOT, 'marker-race-'))
+  const oldAt = Date.parse('2026-10-12T00:00:00.000Z')
+  const newAt = Date.parse('2026-10-12T00:01:00.000Z')
+  requestFollowUp(markerRace, oldAt, 'event')
+  const proof = { lockPath: '/fixture', followUpDir: markerRace, lockf: '/fixture', fd: 9 } as LeaseProof
+  const old = takeFollowUpRecord(proof, () => { requestFollowUp(markerRace, newAt, 'event') })
+  const fresh = followUpTriggerOf(readFileSync(join(markerRace, FOLLOW_UP_FILE), 'utf-8'))
+  check('🔴 marker를 회수하는 사이 새 깨움이 오면 옛 claim만 지우고 새 marker는 보존한다',
+    old.take === 'TAKEN' && old.at === new Date(oldAt).toISOString()
+    && fresh.at === new Date(newAt).toISOString())
+  check('🔴 보존된 새 marker는 다음 회차가 정확히 한 번 거둔다',
+    takeFollowUpRecord(proof).take === 'TAKEN' && takeFollowUpRecord(proof).take === 'NONE')
+  check('🔴 marker 공개는 완성 임시 파일의 원자 hard-link, 회수는 정본 이름의 원자 claim이다', (() => {
+    const source = readFileSync('scripts/lib/runner-lease.mts', 'utf-8')
+    return /writeFileSync\(temporary,[\s\S]*\{ flag: 'wx', mode: 0o600 \}\)/.test(source)
+      && /linkSync\(temporary, path\)/.test(source) && /renameSync\(path, claimed\)/.test(source)
+      && !/writeFileSync\(path,/.test(source)
+  })())
+  check('marker 회수 뒤 정본·임시 write·claim 파일이 남지 않는다', readdirSync(markerRace).length === 0,
+    readdirSync(markerRace).join(','))
+  rmSync(markerRace, { recursive: true, force: true })
+
+  const now = new Date('2026-10-12T01:00:00.000Z')
   const at = new Date(now.getTime() - ORPHAN_WAKE_GRACE_MS).toISOString()
   const base: OrphanWakeInput = { enabled: true, state: 'loaded', running: false, marker: { trigger: 'event', at }, handled: { kind: 'missing' }, now }
   const act = (o: Partial<OrphanWakeInput>): string => judgeOrphanWake({ ...base, ...o }).action
@@ -109,7 +134,12 @@ try {
   }
   reset()
   const sup = wake({ [EVENT_WAKE_ENV]: 'all' }, 'supply')
-  check('🔴 all 이어도 공급 깨움은 행동하지 않는다(C3) — 표식 0 · kickstart 0', sup.kind === 'NOT_IMPLEMENTED' && marker() === null && calls().length === 0)
+  check('🔴 all이어도 공급 사건 깨움은 OFF — 실행시간 상한 없는 비예약 회차·표식·kickstart 0',
+    sup.kind === 'OFF' && marker() === null && calls().length === 0, JSON.stringify(sup))
+  reset()
+  const supOff = wake({ [EVENT_WAKE_ENV]: 'comment' }, 'supply')
+  check('🔴 comment 모드의 공급 깨움은 OFF — 표식·kickstart 0',
+    supOff.kind === 'OFF' && marker() === null && calls().length === 0)
   reset()
   const w1 = wake({ [EVENT_WAKE_ENV]: 'comment' })
   const m1 = marker()
@@ -164,17 +194,25 @@ try {
   check('🔴 예고 Persona 불일치는 깨움 앞에서 회차를 끝낸다(fail → exit 1 · 깨움 0)',
     /if \(announced !== null && res\.personaCode !== announced\) \{\s*\n\s*await prisma\.\$disconnect\(\)\s*\n\s*fail\(/.test(pub))
   const users = ['scripts/original-post-auto-publish.mts', 'scripts/runner-recover.mts', 'scripts/persona-comment-loop.mts', 'scripts/supply-process.mts',
-    'scripts/micro-seed-navercafe-run.mts', 'scripts/lib/supply-lease.mts']
+    'scripts/micro-seed-navercafe-run.mts', 'scripts/micro-seed-collect-navercafe.mts', 'scripts/micro-seed-82cook-thin-detail.mts', 'scripts/lib/supply-lease.mts']
     .filter((f) => /wakeRunner\(/.test(strip(f)))
-  check('🔴 깨움을 부르는 곳은 발행 러너 하나 — 수집 → 공급 깨움 0(C3)', JSON.stringify(users) === JSON.stringify(['scripts/original-post-auto-publish.mts']), users.join(','))
+  check('🔴 깨움 배선 — 발행 뒤 댓글 한 곳만 남고, 수집기에는 공급 깨움 호출 자체가 없다',
+    JSON.stringify(users) === JSON.stringify(['scripts/original-post-auto-publish.mts']), users.join(','))
   const rec = strip('scripts/runner-recover.mts')
   check('🔴 처리 기록 읽기 — 없음 · 읽음 · 못 읽음을 구조로 가른다(읽기 실패도 unreadable · 문자열 표식 0)',
     /if \(!existsSync\(p\)\) return \{ kind: 'missing' \}/.test(rec) && /try \{ return parseHandledWake\(readFileSync\(p, 'utf-8'\)\) \} catch \{ return \{ kind: 'unreadable' \} \}/.test(rec)
     && /handled: readHandledWake\(label\)/.test(rec)
     && (() => { const body = rec.slice(rec.indexOf('function readHandledWake('), rec.indexOf('function writeHandledWake(')); return body.length > 0 && !/return 'unreadable'|: string \| null/.test(body) })())
   check('🔴 고아 복구 — 표식 시각을 kickstart 전에 따로 적는다(슬롯 복구 표식과 섞지 않는다) · -k 없음',
-    rec.indexOf('writeHandledWake(label, marker.at)') > 0 && rec.indexOf('writeHandledWake(label, marker.at)') < rec.indexOf("execFileSync('launchctl', ['kickstart', `gui/${process.getuid?.() ?? 0}/${label}`]", rec.indexOf('writeHandledWake(label, marker.at)'))
+    rec.indexOf('writeHandledWake(label, marker.at)') > 0 && rec.indexOf('writeHandledWake(label, marker.at)') < rec.indexOf('execFileSync(LAUNCHCTL_PATH', rec.indexOf('writeHandledWake(label, marker.at)'))
     && /`\$\{label\}\.wake\.json`/.test(rec) && !/'-k'/.test(rec))
+  check('🔴 공급 비예약 복구는 실행하지 않고, 댓글 고아 복구·다른 복구 명령은 5초 timeout을 쓴다',
+    /supplyRecoveryClosed = label === SUPPLY_PROCESS_LAUNCHD_LABEL && v\.action === 'kickstart'/.test(rec)
+    && /if \(supplyRecoveryClosed \|\| v\.action !== 'kickstart' \|\| !APPLY\) continue/.test(rec)
+    && (rec.match(/timeout: KICKSTART_TIMEOUT_MS/g) ?? []).length === 2
+    && (rec.match(/execFileSync\(LAUNCHCTL_PATH/g) ?? []).length === 2)
+  check('🔴 공급 복구 provenance를 흉내 내는 marker·kickstart 경로가 없다',
+    !/requestFollowUp\([^)]*'recovery'/.test(rec) && !/withdrawFollowUp\(/.test(rec))
   const hook = readFileSync('scripts/lib/fake-provider-hook.mjs', 'utf-8')
   const wakeSrc = readFileSync('scripts/lib/runner-wake.mts', 'utf-8')
   check('🔴 launchctl 대역 표식은 가짜 provider 훅만 건다 · runner-wake 는 env 를 보지 않는다',

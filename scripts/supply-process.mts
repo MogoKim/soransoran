@@ -52,6 +52,7 @@ import {
 } from './lib/supply-lease.mjs'
 import { LEASE_INNER_ENV, type LeaseProof } from './lib/runner-lease.mjs'
 import { supplyRunIdOf, shadowTagOf } from '../src/lib/supply-run-token'
+import { createProcessRunRecord, writeProcessRunRecord } from './lib/process-run-record.mjs'
 /**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17) — 판정 규칙은 여기서 만들지 않는다.
  *    정본은 `micro-seed-supply-autofill.hasPendingSibling` · `baseArticleId` 이고,
@@ -851,21 +852,20 @@ async function main(proof: LeaseProof | null): Promise<number> {
 
   // ── ⑤ 실행 — 🔴 잠금은 ①에서 이미 잡았다. 여기서 다시 만들지 않는다 ──
   const runPath = join(DATA_DIR, runFileName(runId))
-  const record: ProcessRun = {
-    runId,
-    runtimeSha: ((): string | undefined => {
+  const runtimeSha = ((): string | undefined => {
       try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim() } catch { return undefined }
-    })(),
+    })()
+  const record: ProcessRun = createProcessRunRecord({
+    runId,
+    ...(runtimeSha === undefined ? {} : { runtimeSha }),
     startedAt: now.toISOString(),
-    status: 'running', completedAt: null,
     jit: {
       slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, upTo: policy.upTo, reason: policy.reason,
       paidSources: policy.llm ? paid.sources : 0, paidBasis: paid.basis, sourceYieldHigh: before?.sourceYield?.high ?? null,
     },
-    sources: [], stages: [],
     ...(tokenShadow === null ? {} : { runTokenShadow: shadowTagOf(tokenShadow) }),
-  }
-  const save = (): void => { writeAtomic(runPath, `${JSON.stringify(record, null, 2)}\n`) }
+  })
+  const save = (): void => { writeProcessRunRecord(runPath, record) }
   save()
 
   const tally = {

@@ -6,6 +6,10 @@
  */
 
 import { judgeLoadedConfig, type EnvBlocker, type JobState, type LoadedJobConfig } from './runtime-isolation'
+import {
+  sameRuntimePersonaAssetIdentity,
+  type RuntimePersonaAssetIdentity,
+} from './persona-reference-digest'
 
 /** 🔴 배포가 남기는 기록. 이것이 있어야 "언제 무엇을 올렸는가" 를 나중에 대조할 수 있다 */
 export type RuntimeManifest = {
@@ -16,6 +20,8 @@ export type RuntimeManifest = {
   gates: readonly string[]
   /** 직전 SHA — 되돌릴 곳 */
   previousSha: string | null
+  /** 🔴 이 SHA 가 실제로 사용한 기본·보충 Persona 말투 자산(보충 미도입은 null) */
+  personaAssets: RuntimePersonaAssetIdentity
 }
 
 export type DeployGate = { ok: true } | { ok: false; code: string; reason: string }
@@ -246,6 +252,8 @@ export type DeployEffects = {
    *    main 최신 판정(`judgeDeploy`)을 대신하지 않는다.
    */
   contractTransitionGate: (runtimeContract: string) => boolean
+  /** 🔴 checkout 전 실제 Persona 말투 자산 두 벌. 못 읽거나 manifest 와 다르면 `null` */
+  runtimePersonaAssets: () => RuntimePersonaAssetIdentity | null
 
   // ── 🔴 plist cutover — 이것이 없으면 배포해도 **옛 인자가 그대로 돈다** ──
   /**
@@ -515,6 +523,19 @@ export async function runDeploy(input: {
     }
   }
 
+  // 🔴 코드 SHA 만으로는 같은 실행을 재현할 수 없다. 실제 말투 자산 두 벌도 job 을 내리기 전에 결속한다.
+  steps.push('runtime-persona-assets')
+  const personaAssets = fx.runtimePersonaAssets()
+  if (personaAssets === null
+    || !/^[0-9a-f]{64}$/.test(personaAssets.referenceDigest)
+    || (personaAssets.supplementDigest !== null && !/^[0-9a-f]{64}$/.test(personaAssets.supplementDigest))) {
+    return {
+      ok: false, phase: 'preflight', steps,
+      problems: ['Persona 말투 자산의 실제 상태를 확인하지 못했다 — 코드 SHA 만으로 배포하지 않는다(fail-closed · job·코드·plist 그대로)'],
+      rollback: null,
+    }
+  }
+
   /**
    * 🔴 **render 를 unload 보다 먼저 한다.** 템플릿이 없거나 치환이 남아 있으면
    *    job 을 내리기 전에 멈춘다 — 내려놓고 나서야 "설치할 것이 없다" 를 알면
@@ -702,6 +723,11 @@ export async function runDeploy(input: {
     if (fx.currentSha() !== prevSha) residual.push('사후 대조: SHA 가 이전 값이 아니다')
     if (fx.readPin() !== prevSha) residual.push('사후 대조: pin 이 이전 값이 아니다')
     if (fx.readManifest() !== prevManifest) residual.push('사후 대조: manifest 가 이전 값이 아니다')
+    const restoredPersonaAssets = fx.runtimePersonaAssets()
+    if (restoredPersonaAssets === null
+      || !sameRuntimePersonaAssetIdentity(restoredPersonaAssets, personaAssets)) {
+      residual.push('사후 대조: Persona 말투 자산이 배포 전 식별자와 다르다')
+    }
     return residual
   }
 
@@ -843,6 +869,7 @@ export async function runDeploy(input: {
   // ── ⑩ manifest·pin 준비 후 load ──
   const manifest: RuntimeManifest = {
     sha: input.target, deployedAt: now(), gates: [...gates, ...POST_LOAD_GATES], previousSha: prevSha,
+    personaAssets,
   }
   steps.push('write-manifest')
   if (!fx.writeManifest(JSON.stringify(manifest, null, 2))) return failWith('manifest', 'manifest 기록 실패')
@@ -945,6 +972,15 @@ export async function runDeploy(input: {
   }
   steps.push('isolation-gate')
   if (!fx.isolationGate()) return failWith('post-load', 'runtime:isolation-check --require-runtime --defer-ops-loop-templates 실패')
+
+  // 🔴 manifest 에 적은 값과 job 이 실제로 다시 올라온 뒤의 파일이 같아야 한다.
+  //    preflight 와 load 사이에 외부 자산이 바뀌면 코드 SHA 만 맞는 거짓 배포가 된다.
+  steps.push('persona-assets-verify')
+  const loadedPersonaAssets = fx.runtimePersonaAssets()
+  if (loadedPersonaAssets === null
+    || !sameRuntimePersonaAssetIdentity(loadedPersonaAssets, personaAssets)) {
+    return failWith('post-load', 'Persona 말투 자산이 배포 중 바뀌었다 — manifest 와 실제 runtime 이 다르다')
+  }
 
   steps.push('done')
   fx.log(`runtime 단계 완료 · ops-loop strict 대기 — ${prevSha.slice(0, 7)} → ${input.target.slice(0, 7)}`)

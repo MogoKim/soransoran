@@ -1,13 +1,12 @@
 /**
  * D100 reliability replay — 검사 전용 하네스 부품. 운영 경로는 이 파일을 import 하지 않는다.
  *
- * 🔴 **baseline gap 은 승인된 정책이 아니다.** 지금 코드가 정본(canon)과 어긋나는 자리를 실제 함수 호출로
- *    재현해 구조화된 값으로 남긴 characterization 이다. 각 gap 은 지금 관측돼야 하는 값(`current`)과
- *    고친 뒤 관측돼야 하는 값(`target`)을 함께 가진다.
+ * 🔴 **baseline gap 은 승인된 정책이 아니다.** 2026-11-02 보정 전 코드가 정본(canon)과 어긋났던 자리를
+ *    실제 함수 호출로 남긴 characterization 이다. 각 gap 의 `current`는 보정 전 기준선이고,
+ *    `target`은 지금 코드가 계속 지켜야 하는 교정 계약이다.
  *
- * 🔴 **뒤집는 방법은 하나다.** 후속 PR 이 결함을 고치면 이 하네스가 `GAP_CLOSED` 또는
- *    `DRIFT`로 먼저 실패해야 한다. 그 PR 에서 실제 새 운영 함수를 부르는 반례로 시나리오를 바꾸고
- *    교정 값을 고정한다. 아직 없는 미래 API를 하네스가 지어내 “고쳐진 판”을 PASS 하지 않는다.
+ * 🔴 **판정은 실제 운영 함수로만 한다.** `target`과 같으면 `GAP_CLOSED`, 옛 기준선이면 `BASELINE_REPRODUCED`,
+ *    둘 다 아니면 `DRIFT`다. 아직 없는 미래 API를 하네스가 지어내 “고쳐진 판”을 PASS 하지 않는다.
  *
  * 🔴 DB 0 · 네트워크 0 · provider 0 · 운영 HOME 0 · 운영 launchctl 0. 파일은 OS 임시 디렉터리에만 쓴다.
  */
@@ -24,10 +23,15 @@ export type BaselineGap = {
   /** 사용자 과제의 시나리오 번호(1~6) */
   readonly scenario: number
   readonly summary: string
-  /** 지금 관측돼야 하는 값(부분 일치) */
+  /** 2026-11-02 보정 전 기준선(부분 일치) */
   readonly current: Observation
-  /** 고친 뒤 관측돼야 하는 값(부분 일치) */
+  /** 보정 뒤 계속 지켜야 하는 값(부분 일치) */
   readonly target: Observation
+  /**
+   * 🔴 reader 판에서 멈춘 중간 상태(부분 일치) — 읽는 쪽은 준비됐지만 writer 가 아직 꺼져 있다.
+   *    이 칸이 있는 gap 은 `target` 이 아니라 여기와 맞으면 `READER_READY` 다. 해소(`GAP_CLOSED`)로 세지 않는다.
+   */
+  readonly readerReady?: Observation
 }
 
 export const BASELINE_GAPS: readonly BaselineGap[] = [
@@ -43,7 +47,7 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
     target: {
       verdict: 'PASS', hasOpportunityShort: false, distinctFutureCapacityCoversShortfall: true,
       usesFutureSupplyCapacity: true, zeroFutureCapacityBlocked: true, unknownYieldBlocked: true,
-      preflightFactsCurrentOnly: false, opportunityGateCurrentOnly: false, controllerPassesFactsDirectly: false,
+      preflightFactsCurrentOnly: false, opportunityGateCurrentOnly: false, controllerPassesFactsDirectly: true,
     },
   },
   {
@@ -54,9 +58,19 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
       day0Brake: 'slowdown', day0Operating: 'd3', day0Release: 'd3', day1State: 'REPROVE',
       day1Sustained: 'd3', day1BelowCertified: true, exactNDay1Release: 'd5',
     },
+    /**
+     * 🔴 완전 해소는 writer 활성(`CERTIFIED_ROLLOUT_PHASE = WRITER_ACTIVE`) 뒤다 — 3일 이월 밖 감속까지 인증을 되찾으려면
+     *    감속 행이 `CERTIFIED` 를 들어야 한다. reader 판은 이월 안 감속만 복구하고 `READER_READY` 로 남는다.
+     */
     target: {
       certified: 'd5', day0Brake: 'slowdown', day0Operating: 'd3', day1Sustained: 'd5',
-      day1Release: 'd5', day1BelowCertified: false, exactNDay1Release: 'd5',
+      day1State: 'TRIAL', day1Release: 'd10', day1BelowCertified: false, exactNDay1Release: 'd5',
+      readerAcceptsCertified: true, writerEmitsCertified: true,
+    },
+    readerReady: {
+      certified: 'd5', day0Brake: 'slowdown', day0Operating: 'd3', day1Sustained: 'd5',
+      day1State: 'TRIAL', day1Release: 'd10', day1BelowCertified: false, exactNDay1Release: 'd5',
+      readerAcceptsCertified: true, writerEmitsCertified: false,
     },
   },
   {
@@ -81,8 +95,8 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
       supplyWakeImplemented: false, wakeTargets: 'comment',
     },
     target: {
-      supplyOutcome: 'SENT', supplyMarker: 'REQUESTED', supplyKicks: 1,
-      supplyWakeImplemented: true, wakeTargets: 'comment,supply',
+      supplyOutcome: 'OFF', supplyMarker: null, supplyKicks: 0,
+      supplyWakeImplemented: false, wakeTargets: 'comment', supplyWakeIntentionallyClosed: true,
     },
   },
   {
@@ -114,7 +128,7 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
   },
 ]
 
-export type GapVerdict = 'MATCH' | 'GAP_CLOSED' | 'DRIFT'
+export type GapVerdict = 'MATCH' | 'GAP_CLOSED' | 'READER_READY' | 'DRIFT'
 
 /** 기대 칸이 전부 같은 값인가 — 관측에 없는 칸은 불일치다 */
 export function matchesObservation(observed: Observation, spec: Observation): boolean {
@@ -124,7 +138,11 @@ export function matchesObservation(observed: Observation, spec: Observation): bo
 export function judgeGap(gap: BaselineGap, observed: Observation): GapVerdict {
   const atCurrent = matchesObservation(observed, gap.current)
   const atTarget = matchesObservation(observed, gap.target)
-  return atCurrent && !atTarget ? 'MATCH' : atTarget && !atCurrent ? 'GAP_CLOSED' : 'DRIFT'
+  const atReader = gap.readerReady !== undefined && matchesObservation(observed, gap.readerReady)
+  if (atCurrent && !atTarget && !atReader) return 'MATCH'
+  if (atTarget && !atCurrent) return 'GAP_CLOSED'
+  if (atReader && !atCurrent && !atTarget) return 'READER_READY'
+  return 'DRIFT'
 }
 
 /** `YYYY-MM-DD` 의 KST `HH:MM` 순간 */
