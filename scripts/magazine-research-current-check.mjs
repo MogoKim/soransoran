@@ -266,6 +266,21 @@ if (REAL) {
   cpSync(resolve(REAL), R, { recursive: true, verbatimSymlinks: true })
   const snap = join(R, 'reconciled', SNAP_NAME)
   const realBefore = treeSnap(join(resolve(REAL), 'contract', 'build'))
+  // 🔴 (2026-11-02) 실제 연구는 이미 fence 적용 · current 427d4d 전환이 끝났다. 시험은 **사본에서만** 공식 도구로 전환 전 모양을 되살린다:
+  //    fence rollback(원본 백업 → 고정 sha256) → current rollback(427d4d → ad8e89 · control 도). 실제 연구는 읽기만 한다
+  {
+    const fs0 = F.fenceStatus(R)
+    if (fs0.files.some((f) => f.state === 'RETIRED')) {
+      const fr = F.runFence({ root: R, op: 'rollback', write: true })
+      ok('사본 준비 — 실제 연구가 fence 적용 상태 → 사본에서 fence rollback 으로 9개 원본 복원', fr.code === 'RESTORED' && F.fenceStatus(R).files.every((f) => f.state === 'ORIGINAL'), fr)
+    }
+    const Bc = join(R, 'contract', 'build')
+    if (linkOf(join(Bc, 'current')) === EXPECT.graphVersion) {
+      const rr = RC.rollbackCurrent({ researchDir: R, expectCurrent: EXPECT.graphVersion, expectPrevious: linkOf(join(Bc, 'previous')), expectControlSha256: sha(readFileSync(join(Bc, 'control.json'))), write: true })
+      ok('사본 준비 — 실제 연구가 427d4d 전환 상태 → 사본에서 공식 rollback 으로 ad8e89 current 를 되살린다', rr.code === 'ROLLED_BACK' && linkOf(join(Bc, 'current')) === 'g-20260923-ad8e89', rr)
+      rmSync(join(Bc, EXPECT.graphVersion), { recursive: true, force: true })
+    }
+  }
   // 제품 builder 후보 (CLI 그대로)
   const out = join(TMP, 'cand-out')
   const b = run([join(HERE, 'magazine-graph-build.mjs'), '--input-root', snap, '--product-root', ROOT, '--effective-at', '2026-11-02T11:00:00+09:00', '--generated-at', '2026-11-02T02:00:00.000Z', '--out-dir', out, '--admission-root', R])
@@ -400,8 +415,9 @@ if (REAL) {
   hu.kill()
   ok('대조 — fence 가 없으면 옛 promote-graph 는 research-current 잠금을 무시하고 current·control 을 쓴다 (차단이 필요한 이유)', lu.status === 0 && changedUnfenced, { status: lu.status, changedUnfenced })
   const fence = (...a) => run([join(HERE, 'magazine-research-legacy-fence.mjs'), ...a, '--research', R])
+  const fpre = treeSnap(join(R, 'contract'))
   const fdry = fence('apply')
-  ok('fence 실제 사본 dry-run — 9개 ORIGINAL · 쓰기 0', fdry.status === 0 && JSON.parse(fdry.stdout).plan.todo.length === 9 && !existsSync(join(R, 'contract', '.legacy-retired')))
+  ok('fence 실제 사본 dry-run — 9개 ORIGINAL · 쓰기 0 (전후 contract 바이트 동일)', fdry.status === 0 && JSON.parse(fdry.stdout).plan.todo.length === 9 && treeSnap(join(R, 'contract')) === fpre)
   const fw = fence('apply', '--write')
   ok('fence 실제 사본 apply — 9개 RETIRED', fw.status === 0 && JSON.parse(fw.stdout).code === 'RETIRED', fw.stdout.slice(0, 300))
   const hf = holder(R); waitLock(R)
