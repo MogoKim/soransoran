@@ -135,6 +135,7 @@
     "check:source-times": "tsx scripts/source-times-check.mts",
     "check:d100-freshness": "tsx scripts/d100-freshness-check.mts",
     "d100:freshness-replay": "tsx scripts/d100-freshness-replay.mts",
+    "check:d100-reliability-replay": "tsx --tsconfig tsconfig.ops.json scripts/d100-reliability-replay-run.mts",
     "check:content-core-v2": "tsx scripts/content-core-v2-check.mts && tsx scripts/generation-loss-check.mts && tsx scripts/quality-v12-creativity-mutation.mts",
     "check:generation-loss": "tsx scripts/generation-loss-check.mts",
     "check:draft-life-gates": "tsx scripts/draft-life-gates-check.mts",
