@@ -53,6 +53,7 @@ import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
 import { judgeNextPreflight, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { planStageRecovery, type StageRecoveryPlan } from '../src/lib/stage-recovery'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 import { probeSupplyLease } from './lib/supply-lease.mjs'
@@ -67,6 +68,16 @@ const NOW = new Date()
 const TODAY = kstDateString(NOW)
 
 const log = (s: string): void => { if (!JSON_OUT) console.log(s) }
+
+const recoveryDeficitLabel = (plan: StageRecoveryPlan): string => {
+  if (plan.deficitUnit === 'none') return '해당 없음'
+  const range = plan.deficitMin === null && plan.deficitMax === null
+    ? '모름'
+    : plan.deficitMin === plan.deficitMax
+      ? String(plan.deficitMin)
+      : `${plan.deficitMin ?? '?'}..${plan.deficitMax ?? '?'}`
+  return `${range} ${plan.deficitUnit}`
+}
 
 /**
  * 🔴 **KST 날짜 D · 단계 S 의 운영 증거 판정** — 읽기만 한다.
@@ -293,6 +304,8 @@ async function main(): Promise<number> {
 
     // ② 시험 대상 preflight — 오늘(증명일) 전체 슬롯 기준
     let nextPreflight: PreflightVerdict | null = null
+    let recoveryShadow: StageRecoveryPlan | null = null
+    let recoveryShadowError: string | null = null
     let publishedToday = 0
     let preflightDetail: Record<string, unknown> | null = null
     try {
@@ -323,6 +336,23 @@ async function main(): Promise<number> {
         for (const n of r.notes) log(`      ⬚ ${n}`)
       }
     } catch (e) { failures.push(`재고·preflight 를 읽지 못했다 — ${(e as Error).name}`) }
+    /**
+     * shadow는 기존 preflight 입력과 완전히 분리한다. planner 결함이 나도 failures에 넣지 않으며,
+     * StageDecision·공개 단계·DB write를 바꾸지 않는다.
+     */
+    if (nextPreflight !== null) {
+      try {
+        recoveryShadow = planStageRecovery(nextPreflight)
+        log(`      ◇ recovery shadow ${recoveryShadow.lane}/${recoveryShadow.action}`
+          + ` · 부족 ${recoveryDeficitLabel(recoveryShadow)} (${recoveryShadow.deficitBasis})`
+          + ` · 이유 ${recoveryShadow.reasons.join(',')}`
+          + `${recoveryShadow.secondaryCodes.length > 0 ? ` · 동반 ${recoveryShadow.secondaryCodes.join(',')}` : ''}`
+          + ' · write 0 · stage 변경 0')
+      } catch (e) {
+        recoveryShadowError = (e as Error).name
+        log(`      ⬚ recovery shadow 계산 실패 — ${recoveryShadowError} (기존 preflight·StageDecision 영향 0)`)
+      }
+    }
 
     // ③ 운영 신호 — 품질 · 비용 · 오류
     const signals: HealthSignal[] = []
@@ -363,7 +393,10 @@ async function main(): Promise<number> {
     const v = validateForToday(result.decision)
 
     if (JSON_OUT) {
-      console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, result, valid: v.ok, signals, failures, evidence, carriedPlan, plan, nextPreflight, preflightDetail }, null, 2))
+      console.log(JSON.stringify({
+        today: TODAY, apply: APPLY, flagOn, result, valid: v.ok, signals, failures, evidence, carriedPlan, plan,
+        nextPreflight, recoveryShadow, recoveryShadowError, preflightDetail,
+      }, null, 2))
     } else {
       for (const s of signals) log(`   ${s.health === 'ok' ? '🟢' : s.health === 'bad' ? '🔴' : '⚪'} ${s.axis.padEnd(8)} ${s.reasons.join(' · ') || '정상'}`)
       const d = result.decision

@@ -269,6 +269,11 @@ export type ReadyCohortFact = {
    *    🔴 raw READY 단가(정산 ÷ 행 수)를 대신 쓰지 않는다.
    */
   usdPerSlotValidResult: number | null
+  /**
+   * 결과당 비용이 null인 원인. `zero_result`는 장부를 읽고 현재 cohort 귀속도 완전하지만 확인된
+   * slot-valid 결과가 0이라 분모만 없는 경우다. 장부 손상·미연결·미정산과 섞지 않는다.
+   */
+  costUnknownReason?: 'zero_result' | 'ledger_or_attribution'
   /** 실제 단가를 만들지 않고, 다음 단계 제한 trial 에만 쓰는 미상 비용 위험 표본 */
   trialCost?: {
     settledRequests: number
@@ -430,10 +435,11 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
    */
   const perResult = c === null ? null : c.usdPerSlotValidResult
   if (perResult !== null && perResult > 0) { counts.usdPerSlotValidResult = perResult; counts.supplyDailyUsdNeeded = n * perResult }
+  if (c?.costUnknownReason === 'zero_result') counts.supplyCostUnobserved = 1
+  if (facts.supplyDailyUsdCap !== null) counts.supplyProofBudgetUsd = supplyProofBudgetUsd(facts.supplyDailyUsdCap)
   if (facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
   else if (perResult !== null && perResult > 0) {
     const proofBudget = supplyProofBudgetUsd(facts.supplyDailyUsdCap)
-    counts.supplyProofBudgetUsd = proofBudget
     if (n * perResult > proofBudget) codes.add('SUPPLY_COST_SHORT')
   } else {
     const trial = c?.trialCost ?? null

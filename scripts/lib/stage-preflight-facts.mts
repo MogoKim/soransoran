@@ -31,7 +31,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
 import type { PreflightFacts, ReadyCohortFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
 import {
-  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, terminalYieldOf,
+  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, readyCostUnknownReasonOf, terminalYieldOf,
   type CostAttribution, type CostFate, type FateCounts, type PendingFate,
 } from '../../src/lib/ready-fate'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
@@ -925,6 +925,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
     : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort.cohortRuns })
+  const costUnknownReason = readyCostUnknownReasonOf(costAttribution)
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
@@ -934,6 +935,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     : {
         sources: worksetSources, ...fates,
         usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null,
+        ...(costUnknownReason === undefined ? {} : { costUnknownReason }),
         trialCost: costAttribution === null ? null : {
           settledRequests: costAttribution.settledRequests,
           usageUnknownRequests: costAttribution.usageUnknownRequests,

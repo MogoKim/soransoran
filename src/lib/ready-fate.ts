@@ -169,6 +169,8 @@ export type CostAttribution = {
    * 현재 계약의 결말 모름 · 손실 · READY 미생성 비용까지 분자에 모두 넣고, 확인된 결과만 분모에 넣는다.
    */
   usdPerSlotValidResult: number | null
+  /** 결과당 단가가 null인 원인. 단순 무표본과 장부·귀속 결함을 회복 제어에서 구분한다. */
+  unknownReason: 'zero_result' | 'ledger_or_attribution' | null
   /** 🔴 공개 1건당 전 비용 — 위 조건 + 대기 결과가 없을 때만 */
   usdPerPublished: number | null
   /** 🔴 손실(만료 · 철회 · 손실 확정 대기)로 끝난 원천에 쓴 돈 — 연결이 완전할 때만 */
@@ -177,10 +179,19 @@ export type CostAttribution = {
   noReadyUsd: number | null
 }
 
+/** 비용 귀속 결과를 READY cohort의 null-단가 원인으로 옮기는 단일 경계. 알려진 단가에는 원인 필드를 만들지 않는다. */
+export function readyCostUnknownReasonOf(
+  attribution: CostAttribution | null,
+): 'zero_result' | 'ledger_or_attribution' | undefined {
+  if (attribution === null) return 'ledger_or_attribution'
+  if (attribution.usdPerSlotValidResult !== null) return undefined
+  return attribution.unknownReason ?? 'ledger_or_attribution'
+}
+
 /**
  * 🔴 **장부 요청을 원천 결과에 붙인다.** 현재 JIT 계약 표식(`supplyContract`)이 있는 요청만 `sourceKey`(원천 해시)로
  *    결과 행의 결말에 붙인다. 표식 없는 요청은 legacy 다 — 따로 보고하고 현재 계약 단가에는 넣지도 막지도 않는다.
- *    현재 계약 요청 중 미연결 · 미정산이 하나라도 있거나, 현재 계약 정산 0 · slot-valid 결과 0 이면 단가는 모른다.
+ *    현재 계약 요청 중 미연결 · 미정산이 하나라도 있거나, 현재 계약 양수 정산이 없거나 slot-valid 결과가 0이면 단가는 모른다.
  *    🔴 미정산 요청의 예약액은 실제 비용도 그 한계도 아니다 — 예약이 있어도 단가를 확정하지 않는다(보고용 합계만).
  *    결말 모름 비용은 분자에 포함한다. 그 행이 나중에 성공하면 분모만 늘어 단가가 낮아지고, 실패하면 지금 상한이 그대로라
  *    `전체 정산 ÷ 현재 확인된 결과`는 예산을 과소평가하지 않는다.
@@ -247,6 +258,11 @@ export function costAttributionOf(i: {
     trialRiskUsdPerSlotValidResult: trialRisk, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,
+    unknownReason: complete && total > 0 && results > 0
+      ? null
+      : complete && total > 0 && results === 0
+        ? 'zero_result'
+        : 'ledger_or_attribution',
     usdPerPublished: complete && total > 0 && byFate.unknown === 0 && i.counts.scheduled === 0 && i.counts.published > 0
       ? total / i.counts.published : null,
     wasteUsd: complete ? byFate.lost : null,
