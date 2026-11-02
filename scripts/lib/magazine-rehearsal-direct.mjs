@@ -118,17 +118,33 @@ export async function prepareDirect(repo, { variant = null } = {}) {
   mkdirSync(sdir, { recursive: true })
   writeFileSync(join(sdir, `${id.graphVersion}.json`), sourceText)
   // ③ 승격된 판 — promote 가 바꾸는 세 파일 (bundle 추가 · current 가리킴 · control graphVersion·previous)
+  //    🔴 (2026-11-02) 제품이 이미 이 판으로 승격됐으면 그대로 두고 bundle 바이트만 대조한다 (fixture 는 판이 바뀌어도 그대로다).
+  //       'graph-not-promoted' 반례는 그때 control.previousGraphVersion 판으로 되돌려 "source 판 ≠ 제품 판" 을 만든다.
   const gdir = join(repo, 'src', 'content', 'magazine', 'graph')
   const cur = readFileSync(join(gdir, 'current.ts'), 'utf8')
-  const prev = /from '\.\/(g-\d{8}-[0-9a-f]{6})'/.exec(cur)?.[1]
-  if (!prev) throw new Error('current.ts 에서 지금 판을 찾지 못했다')
-  writeFileSync(join(gdir, `${id.graphVersion}.ts`), fx.files[fx.names.bundle])
-  if (variant !== 'graph-not-promoted') {
-    writeFileSync(join(gdir, 'current.ts'), cur.replace(`from './${prev}'`, `from './${id.graphVersion}'`))
-    const ctl = readFileSync(join(gdir, 'control.ts'), 'utf8')
-    const next = ctl.replace(`graphVersion: '${prev}',`, `graphVersion: '${id.graphVersion}',`).replace(/previousGraphVersion: '[^']*',/, `previousGraphVersion: '${prev}',`)
-    if (next === ctl || !next.includes(`graphVersion: '${id.graphVersion}',`)) throw new Error('control.ts 를 승격하지 못했다')
+  const ctl = readFileSync(join(gdir, 'control.ts'), 'utf8')
+  const now = /from '\.\/(g-\d{8}-[0-9a-f]{6})'/.exec(cur)?.[1]
+  if (!now) throw new Error('current.ts 에서 지금 판을 찾지 못했다')
+  const bundlePath = join(gdir, `${id.graphVersion}.ts`)
+  if (existsSync(bundlePath) && readFileSync(bundlePath, 'utf8') !== fx.files[fx.names.bundle]) throw new Error(`제품 ${id.graphVersion}.ts 가 DIRECT_E2E fixture bundle 과 바이트가 다르다`)
+  writeFileSync(bundlePath, fx.files[fx.names.bundle])
+  const promotedAlready = now === id.graphVersion
+  const prev = promotedAlready ? /previousGraphVersion: '([^']*)',/.exec(ctl)?.[1] : now
+  if (!prev) throw new Error('control.ts 에서 이전 판을 찾지 못했다')
+  const setControl = (gv, pv) => {
+    const next = ctl.replace(/\n  graphVersion: '[^']*',/, `\n  graphVersion: '${gv}',`).replace(/previousGraphVersion: '[^']*',/, `previousGraphVersion: '${pv}',`)
+    if (!next.includes(`  graphVersion: '${gv}',`)) throw new Error('control.ts 판 신원을 바꾸지 못했다')
     writeFileSync(join(gdir, 'control.ts'), next)
+  }
+  if (variant === 'graph-not-promoted') {
+    if (promotedAlready) {
+      if (!existsSync(join(gdir, `${prev}.ts`))) throw new Error(`이전 판 ${prev}.ts 가 제품에 없다 — 미승격 반례를 만들 수 없다`)
+      writeFileSync(join(gdir, 'current.ts'), cur.replace(`from './${now}'`, `from './${prev}'`))
+      setControl(prev, 'g-00000000-000000')
+    }
+  } else if (!promotedAlready) {
+    writeFileSync(join(gdir, 'current.ts'), cur.replace(`from './${now}'`, `from './${id.graphVersion}'`))
+    setControl(id.graphVersion, now)
   }
   // ④ articles — 대상은 "등록 전" · 예약일이 비어 있어야 한다 (실제 runtime 이 그 날을 채웠다면 fixture 가 낡았다)
   const aPath = join(repo, 'src', 'content', 'magazine', 'articles.ts')

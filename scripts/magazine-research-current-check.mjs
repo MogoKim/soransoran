@@ -349,15 +349,21 @@ if (REAL) {
   }
   const G = join(P, 'src', 'content', 'magazine', 'graph')
   const prevGv = /from '\.\/(g-[0-9a-f-]+)'/.exec(readFileSync(join(G, 'current.ts'), 'utf8'))[1]
-  cpSync(join(cand, 'bundle', `${EXPECT.graphVersion}.ts`), join(G, `${EXPECT.graphVersion}.ts`))
-  writeFileSync(join(G, 'current.ts'), readFileSync(join(G, 'current.ts'), 'utf8').replace(`'./${prevGv}'`, `'./${EXPECT.graphVersion}'`))
-  writeFileSync(join(G, 'control.ts'), readFileSync(join(G, 'control.ts'), 'utf8').replace(`graphVersion: '${prevGv}',`, `graphVersion: '${EXPECT.graphVersion}',`).replace(/previousGraphVersion: '[^']*',/, `previousGraphVersion: '${prevGv}',`))
+  // 🔴 제품이 이미 427d4d 로 승격됐으면(promote PR 뒤) 승격 사본을 다시 만들지 않는다 — bundle 바이트만 대조
+  if (prevGv === EXPECT.graphVersion) ok('제품 graph 파일 = 후보 bundle 바이트 (이미 승격됨)', readFileSync(join(G, `${EXPECT.graphVersion}.ts`), 'utf8') === readFileSync(join(cand, 'bundle', `${EXPECT.graphVersion}.ts`), 'utf8'))
+  else {
+    cpSync(join(cand, 'bundle', `${EXPECT.graphVersion}.ts`), join(G, `${EXPECT.graphVersion}.ts`))
+    writeFileSync(join(G, 'current.ts'), readFileSync(join(G, 'current.ts'), 'utf8').replace(`'./${prevGv}'`, `'./${EXPECT.graphVersion}'`))
+    writeFileSync(join(G, 'control.ts'), readFileSync(join(G, 'control.ts'), 'utf8').replace(`graphVersion: '${prevGv}',`, `graphVersion: '${EXPECT.graphVersion}',`).replace(/previousGraphVersion: '[^']*',/, `previousGraphVersion: '${prevGv}',`))
+  }
   const tsx = join(ROOT, 'node_modules', '.bin', 'tsx')
   const gc = (dir) => { const r = spawnSync(tsx, ['scripts/magazine-graph-check.mts'], { cwd: dir, encoding: 'utf8', maxBuffer: 1e8 }); return (/(\d+) PASS · (\d+) FAIL/.exec(r.stdout) ?? []).slice(1).map(Number) }
   const gcCand = gc(P)
   const gcCur = gc(P0)
   ok('반례12 candidate 판 graph-check 339/0', JSON.stringify(gcCand) === '[339,0]', gcCand)
-  ok('반례13 지금 current(081d9a) graph-check 336/3 그대로 재현 — 수리가 실패를 숨기지 않는다', JSON.stringify(gcCur) === '[336,3]', gcCur)
+  // 🔴 지금 제품 판 기준 — 081d9a 면 age-learning 미매핑 3 FAIL 이 그대로 재현돼야 하고(수리가 실패를 숨기지 않는다), 이미 427d4d 면 339/0
+  const wantCur = prevGv === 'g-20261021-081d9a' ? '[336,3]' : prevGv === EXPECT.graphVersion ? '[339,0]' : null
+  ok(`반례13 지금 제품 판(${prevGv}) graph-check ${wantCur} — 수리가 실패를 숨기지 않는다`, wantCur !== null && JSON.stringify(gcCur) === wantCur, gcCur)
   const g8 = run([join(P, 'scripts', 'magazine-g8-promote.mjs'), '--snapshot', snap, '--research', R, '--repo', P, '--at', '2026-11-02T11:00:00+09:00', '--out', join(TMP, 'g8.json')], { cwd: P })
   const g8m = existsSync(join(TMP, 'g8.json')) ? JSON.parse(readFileSync(join(TMP, 'g8.json'), 'utf8')) : null
   ok('B G8 dry-run (새 current · 승격 판) — manifest b5dc90be… · 후보 I-T6-03 하나', g8.status === 0 && g8m?.hash === 'b5dc90be4649d59760c03aefd1c6cc68055e13300c15322689cc8b0ef06839c0' &&
