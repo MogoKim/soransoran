@@ -36,6 +36,12 @@ const F = {
   webui: path.join(HERE, 'magazine-webui-runner.mjs'),
   ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
   content: path.join(HERE, 'lib', 'magazine-rehearsal-content.mjs'),
+  dsource: path.join(HERE, 'lib', 'magazine-direct-spec-source.mjs'),
+  session: path.join(HERE, 'lib', 'chatgpt-session.mjs'),
+  batch: path.join(HERE, 'magazine-batch-qa.mjs'),
+  reg: path.join(HERE, 'magazine-register.mjs'),
+  plan: path.join(HERE, 'magazine-producer-plan.mjs'),
+  dgate: path.join(HERE, 'lib', 'magazine-delivery-gate.mjs'),
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -155,6 +161,41 @@ const MUTATIONS = [
     find: '    if (sha !== x.bodySha256) bad(', replace: '    if (false) bad(' }] },
   { name: '㊺ STANDARD 뼈대 fixture 의 대표 문장 대조 제거', scenarios: 'S11', edits: [{ file: F.content,
     find: '    if (missing.length) bad(`${x.slug} 대표 문장이 본문에 없다', replace: '    if (false) bad(`${x.slug} 대표 문장이 본문에 없다' }] },
+  // ── 2026-11-02 DIRECT_E2E — 신규 DIRECT 글의 실제 전체 경로 (I-T6-03 promote 전 release gate) ──
+  { name: 'D1 DIRECT producer 단계 생략', scenarios: 'S15', edits: [{ file: F.orch,
+    find: "  stages.push(runStage(sb, { entry: 'producer', name: 'producer', kst: KST(date, '00:10') }))\n", replace: '' }] },
+  { name: 'D2 DIRECT source 검증 우회 (manifest · sourceHash 대조 제거)', scenarios: 'S15M,S15H', edits: [
+    { file: F.dsource, find: "  if (entry.admission?.g8ManifestHash !== queueItem?.g8ManifestHash) blockers.push('MANIFEST_DRIFT')", replace: "  if (false) blockers.push('MANIFEST_DRIFT')" },
+    { file: F.dsource, find: "  if (entry.sourceHash !== directSpecSourceHash(entry)) blockers.push('SOURCE_HASH_DRIFT')", replace: "  if (false) blockers.push('SOURCE_HASH_DRIFT')" }] },
+  // 🔴 D3 은 전송 관문의 DIRECT 분기 자체를 끈다 — runner 가 queueItem 만 버리면 디스크 spec(persisted 신원)이 DIRECT 를 되살려 강등이 일어나지 않는다
+  { name: 'D3 DIRECT 원고 요청을 legacy brief 경로로 강등 (전송 관문의 DIRECT 분기 제거)', scenarios: 'S15', edits: [{ file: F.dgate,
+    find: '  if (resolved.mode === DIRECT_SPEC_MODE || persistedDirectIdentity({ slug, draftsDir, packet })) {', replace: '  if (false) {' }] },
+  { name: 'D4 runner 원고 저장 생략', scenarios: 'S15', edits: [{ file: F.session,
+    find: '    writeFileSync(outPath, text)\n', replace: '' }] },
+  { name: 'D5 DIRECT auto-register 단계 생략', scenarios: 'S15', edits: [{ file: F.orch,
+    find: "  stages.push(runStage(sb, { name: 'register', entry: 'register', kst: registerKst }))\n", replace: '' }] },
+  { name: 'D6 batch QA 를 고정 READY 대역으로 교체', scenarios: 'S15B', edits: [{ file: F.register,
+    find: "      const r = runStep(BATCH_QA, [slug, '--strict-auto', '--json', ...(autoLane ? ['--require-hero'] : [])], { json: true })\n      const rows = Array.isArray(r.json) ? r.json : r.json?.results ?? []",
+    replace: "      const rows = [{ slug, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }]" }] },
+  { name: 'D7 실제 register.mjs 를 고정 READY 대역으로 교체', scenarios: 'S15', edits: [{ file: F.register,
+    find: '    const r = runStep(REGISTER, args, { json: true })', replace: "    const r = { code: 0, json: { verdict: 'READY' }, stdout: '', stderr: '' }" }] },
+  // 🔴 D8 은 세 자리를 함께 되돌린다 — review 를 읽기만 해서는 DIRECT 패턴이 spec 에서 오므로 요구가 생기지 않는다
+  { name: 'D8 DIRECT 에 review.ts 요구 복원 (batch 가 review.ts forbiddenPatterns 를 요구)', scenarios: 'S15', edits: [
+    { file: F.batch, find: '  const review = direct || (mode && !mode.ok) ? null : loadReview(dir)', replace: '  const review = (mode && !mode.ok) ? null : loadReview(dir)' },
+    { file: F.batch, find: '  const patterns = direct\n    ? (directSpec?.ok ? directSpec.patterns : null)', replace: '  const patterns = false\n    ? (directSpec?.ok ? directSpec.patterns : null)' },
+    { file: F.batch, find: '    if (!direct && (!patterns || patterns.length === 0)) {', replace: '    if ((!patterns || patterns.length === 0)) {' }] },
+  { name: 'D9 DIRECT publishAt ↔ 등록 예약일 관문 제거', scenarios: 'S15P', edits: [{ file: F.register,
+    find: '    if (publishAt && directSpec.publication.publishAt.slice(0, 10) !== publishAt) {', replace: '    if (false) {' }] },
+  { name: 'D10 hero 를 미리 배치해 provider 호출 우회', scenarios: 'S15', edits: [{ file: F.orch,
+    find: '      return prepareDirect(repo, { variant })\n', replace: '      const p = await prepareDirect(repo, { variant })\n      placeHero({ repo, slug: p.target })\n      return p\n' }] },
+  { name: 'D11 register 가 큐 행을 지우지 않는다', scenarios: 'S15', edits: [{ file: F.reg,
+    find: '    const nextQueue = removeQueueDay(queueSrc, item.day)\n', replace: '    const nextQueue = queueSrc\n' }] },
+  { name: 'D12 DIRECT 등록 영수증 생략', scenarios: 'S15', edits: [{ file: F.register,
+    find: '        const receipt = registerDirectSpecSidecar({ spec: directSpec, draftsDir, registeredAt })', replace: '        const receipt = { written: true }' }] },
+  { name: 'D13 중복 등록 허용 (producer 가 이미 등록된 slug 를 건너뛰지 않는다)', scenarios: 'S15D', edits: [{ file: F.plan,
+    find: '    if (takenSlugs.has(item.slug)) {', replace: '    if (false) {' }] },
+  { name: 'D14 DIRECT 잔여 lock/journal 검사 제거', scenarios: 'S15', edits: [{ file: F.scen,
+    find: '  return [...new Set(hits)].sort()', replace: '  return []' }] },
   { name: '㊻ 정상 출처 원고도 실패 경로 뼈대로 만든다 (gray 제목 + 다른 질문 본문 등록)', scenarios: 'S12', edits: [{ file: F.content,
     find: '  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()', replace: '  let body = (fx ? fx.body : foreign()).trimEnd()' }] },  // ── 2026-10-19 금융 brief·review 상류 — 큐 행 → title → brief → review 가 한 질문 ──
   { name: '㊼ FINANCIAL 이 다시 avoiding brief·review 를 부분 치환해 쓴다', scenarios: 'S1', edits: [{ file: F.content,
@@ -183,7 +224,7 @@ let caught = 0
 const only = process.argv.includes('--only') ? String(process.argv[process.argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean) : null
 const RUN = only ? MUTATIONS.filter((m) => only.some((o) => m.name.startsWith(o))) : MUTATIONS
 console.log(`\n매거진 rehearsal 변이 시험${only ? ` (일부만: ${only.join(',')} — 판정용 아님)` : ''}\n`)
-const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14U,S14B'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
+const base = spawnSync(process.execPath, [CHECK, '--scenario', only ? [...new Set(RUN.flatMap((m) => m.scenarios.split(',')))].join(',') : 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14U,S14B,S15,S15G,S15M,S15H,S15C,S15P,S15R,S15F,S15I,S15B,S15E,S15Q,S15D,S15W'], { encoding: 'utf8', cwd: ROOT, timeout: 60 * 60 * 1000 })
 /** 🔴 변이 시험이 만든 rehearsal 산출물(임시 루트·보고서)은 남기지 않는다 */
 const cleanup = (stdout) => {
   for (const m of stdout.matchAll(/(?:보존|보고서|실패 증거\(임시 루트 보존\)): (\S+)/g)) {

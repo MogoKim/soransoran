@@ -13,6 +13,7 @@
  *      그 밖                          → 최초 원고 요청
  *    시나리오(`fixture/scenario.json` 의 `chatgpt[slug]`)가 회차별 응답 모양을 고른다 (기본 good).
  */
+import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -22,6 +23,7 @@ const REPO = join(ROOT, 'repo')
 const FIX = join(ROOT, 'fixture')
 const L = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-load.mjs')).href)
 const C = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-rehearsal-content.mjs')).href)
+const D = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-rehearsal-direct.mjs')).href)
 /** 🔴 의료 플래그는 실제 QA 정본에서 */
 const { MEDICAL_REQUIRED } = await import(pathToFileURL(join(REPO, 'scripts/magazine-qa.mjs')).href)
 
@@ -57,8 +59,11 @@ function replyFor(text) {
   const plan = st.chatgpt?.[key] ?? []
   const mode = plan[calls[key] - 1] ?? 'good'
   // 🔴 재생성 요청은 보낸 글자를 남긴다 — 실패 패킷에 실제 QA 사유가 실렸는지 rehearsal 이 본다
-  log({ slug: item.slug, kind, call: calls[key], mode, ...(kind === 'regen' ? { typed: text } : {}) })
+  // 🔴 DIRECT 행 — 승인 spec 을 지키는 고정 원고 fixture (legacy 뼈대를 쓰지 않는다). 보낸 글자 지문을 남긴다
+  const direct = item.directSpecMode === 'DIRECT_SPEC_V1'
+  log({ slug: item.slug, kind, call: calls[key], mode, ...(direct ? { direct: true, typedSha256: createHash('sha256').update(text).digest('hex') } : {}), ...(kind === 'regen' ? { typed: text } : {}) })
   lastMode = mode
+  if (direct) return D.directManuscriptFor({ repo: REPO, mode })
   // 🔴 obedient — 보낸 글자에 적힌 위반만 고친다 (재생성 패킷의 내용이 결과를 바꾼다 · 2026-10-12 cold)
   if (mode === 'obedient') return C.obedientRevision(text)
   return C.manuscriptFor({ repo: REPO, draftsDir: L.DRAFTS_DIR, slug: item.slug, item, mode: mode === 'no-identity' ? 'no-frontmatter' : mode, medicalRequired: MEDICAL_REQUIRED })
@@ -101,7 +106,13 @@ const fixture = {
   connect: async () => ({ contexts: () => [{ pages: () => [], newPage: async () => makePage() }], async close() {} }),
   fetchTiming: { pollMs: 5, stablePolls: 2, timeoutMs: 5000 },
   /** 🔴 hero runner 의 ChatGPT 이미지 결과만 대신한다 — 변환·저장·검증·주입은 실제 코드 */
-  generateImage: async (prompt) => { log({ op: 'hero-image', promptHead: String(prompt).slice(0, 60) }); return { ok: true, buffer: await C.fixtureHeroPng() } },
+  generateImage: async (prompt) => {
+    log({ op: 'hero-image', promptHead: String(prompt).slice(0, 60) })
+    // 🔴 반례 — 시나리오가 hero 생성 실패를 고르면 실제 hero runner 의 실패 모양 그대로 돌려준다
+    const st = JSON.parse(readFileSync(join(FIX, 'scenario.json'), 'utf8'))
+    if (st.heroFail) return { ok: false, stage: 'image', why: 'REHEARSAL_HERO_FAIL — 이미지 생성 실패 (fixture)' }
+    return { ok: true, buffer: await C.fixtureHeroPng() }
+  },
   heroTrace: (e) => log({ op: `hero-trace-${e.stage}`, slug: e.slug }),
 }
 export default fixture

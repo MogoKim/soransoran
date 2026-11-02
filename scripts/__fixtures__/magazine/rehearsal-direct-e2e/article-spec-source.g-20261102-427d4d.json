@@ -1,0 +1,183 @@
+{
+  "schema": "magazine-article-spec-source/3",
+  "graphVersion": "g-20261102-427d4d",
+  "entries": [
+    {
+      "status": "APPROVED",
+      "approvedBy": "REHEARSAL-scratch-not-approval",
+      "approvedAt": "2026-11-02T10:59:00+09:00",
+      "admission": {
+        "g8ManifestHash": "b5dc90be4649d59760c03aefd1c6cc68055e13300c15322689cc8b0ef06839c0",
+        "receiptHash": "00d0b4bc090ad18faca56a0856b23406ed5dddb205fad1161e7128d1286c92a9",
+        "graphVersion": "g-20261102-427d4d",
+        "readinessHash": "f3d7116f8d6c14e497d08dcdd8e03825d790d1cb483c7c0dd08188aacc71b085"
+      },
+      "plan": {
+        "title": "50대 이력서, 나이와 경력 공백은 어디까지 적어야 할까요?",
+        "contentType": "EVERGREEN",
+        "intent": "방법",
+        "target": "다시 일하려고 이력서를 쓰는 40대 후반~60대 초반 여성",
+        "riskLevel": "MEDIUM",
+        "validationProfile": "STANDARD",
+        "reviewMode": "RISK_SENTENCES",
+        "ctaBoard": "/community/free",
+        "whyNow": "이력서 나이·생년월일 표기는 「이력서 나이」「이력서 생년월일」 줄기에서 표기·기재·작성 방법으로 계속 검색된다(2026-11-01 자동완성 관측). 같은 클러스터의 job-credentials·back-to-work-homemaker·certificate-in-50s·age-learning 이 공개돼 있어 칸을 채우는 실무 질문이 비어 있다",
+        "notes": "칸 표기 형식까지만. 공백 마음가짐(back-to-work-homemaker)·살림 역량 번역(job-credentials)·자격증 취득 판단(certificate-in-50s)은 다시 쓰지 않는다. 법은 채용절차법 제3조·제4조의3·제6조와 연령차별금지법 제4조의4·제4조의5 원문 범위 안에서만 쓴다",
+        "imageMode": "OPTIONAL"
+      },
+      "node": {
+        "id": "I-T6-03",
+        "intentId": "I-T6-03",
+        "slug": "resume-age",
+        "status": "APPROVED",
+        "graphVersion": "g-20261102-427d4d",
+        "readerQuestion": "이력서를 다시 쓰려는데 나이·생년월일과 오래된 경력, 비어 있는 기간을 양식에 어떻게 넣어야 하나요?",
+        "scope": {
+          "include": [
+            "자유양식과 기업 지정 양식의 차이",
+            "나이·생년월일은 공고와 양식이 요구하는지 먼저 확인",
+            "오래된 경력을 지원 직무 관련성 기준으로 추리기",
+            "경력 공백 기간을 숨기거나 허위로 채우지 않고 짧게 정리하기",
+            "관련 교육·자격과 실제 경력을 구분해 적기",
+            "지원 직무에 맞게 순서를 바꾸는 기준"
+          ],
+          "exclude": [
+            "합격을 보장하는 표현",
+            "나이를 쓰면 탈락하거나 안 쓰면 합격한다는 단정",
+            "모든 사업장이 생년월일을 요구할 수 없다는 법률 단정",
+            "차별 피해의 법률 판단·신고 절차",
+            "허위 경력·과장·가짜 활동 제안",
+            "자격증 추천 목록",
+            "구체적인 정부 지원금·수급 자격 판단",
+            "살림 경험을 역량으로 번역하기 (job-credentials)",
+            "공백을 대하는 마음가짐 (back-to-work-homemaker)",
+            "자격증 취득 판단 (certificate-in-50s)"
+          ]
+        },
+        "outline": [
+          "먼저 지원할 곳의 양식이 자유양식인지 지정 양식인지 확인합니다",
+          "나이·생년월일 칸은 공고와 양식이 요구하는 대로 적습니다",
+          "오래된 경력은 지원 직무와 이어지는 것부터 추립니다",
+          "비어 있는 기간은 사실대로 한 줄로 정리합니다",
+          "교육·자격은 경력과 다른 칸에 구분해 적습니다",
+          "지원 직무에 맞게 항목 순서를 바꿉니다"
+        ],
+        "evidence": {
+          "factsToVerify": [
+            "채용절차법 제3조 — 상시 30명 이상 사업장, 국가·지자체 공무원 채용 제외",
+            "채용절차법 제4조의3 — 금지 항목은 신체조건·출신지역·혼인여부·재산·가족 학력/직업/재산. 생년월일·연령은 목록에 없다",
+            "채용절차법 제6조 — 구직자는 채용서류를 거짓으로 작성하면 안 된다",
+            "연령차별금지법 제4조의4·제4조의5 — 합리적 이유 없는 연령 차별 금지 · 직무상 불가피한 연령 기준은 예외"
+          ],
+          "sourceRequirements": [
+            "국가법령정보센터 현행 원문 (채용절차법 법률 제17326호 · 연령차별금지법 법률 제18921호)",
+            "고용노동부 표준 이력서 양식은 1차 원본을 확인한 뒤에만 인용 — 제3자 사본 인용 금지"
+          ]
+        },
+        "safetyConstraints": [
+          "법 조문은 원문이 말하는 범위까지만 쓴다. 위반 여부 판단·신고 안내를 하지 않는다",
+          "공고와 양식이 요구하면 그대로 따른다는 기본선을 먼저 쓴다",
+          "공백·경력은 사실대로 쓰는 것을 전제로 하고, 꾸미는 요령을 쓰지 않는다",
+          "검색 결과의 「경력이 없으면 자격증은 필수」 같은 주장을 사실 근거로 옮기지 않는다 — E-0338 의 검색 관측은 독자 이동 근거일 뿐이다",
+          "자격증을 따라고 권하거나 추천하지 않는다 — 따야 하나의 판단은 certificate-in-50s 로 넘긴다"
+        ],
+        "forbiddenPatterns": [
+          "합격을 보장",
+          "무조건 합격",
+          "쓰면 탈락",
+          "안 쓰면 합격",
+          "생년월일은 불법",
+          "나이를 묻는 것은 불법",
+          "법적으로 금지",
+          "신고하세요",
+          "경력을 부풀",
+          "추천 자격증"
+        ],
+        "hubPath": "/magazine?cluster=money-work",
+        "ctaLabel": "이력서 칸 앞에서 막혔던 이야기 나누기"
+      },
+      "relations": {
+        "direct": [
+          {
+            "slug": "certificate-in-50s",
+            "source": "M-GRAPH",
+            "relationType": "DIRECT_NEXT",
+            "reason": "이력서 자격 칸이 비어 보이면 지금이라도 자격증을 따야 하나 묻게 된다"
+          },
+          {
+            "slug": "back-to-work-homemaker",
+            "source": "M-GRAPH",
+            "relationType": "SAME_EXPERIENCE",
+            "reason": "이력서에서 가장 막히는 곳이 오래 비어 있는 경력 칸이라면, 주부로 지내다 다시 일하려는 사람의 이야기가 같은 자리다"
+          }
+        ],
+        "discovery": {
+          "slug": "age-learning",
+          "source": "M-GRAPH",
+          "relationType": "BRIDGE_DISCOVERY",
+          "reason": "온라인 이력서 작성 자체가 낯설다면, 취업 준비에 필요한 배움을 고르는 기준으로 이어진다"
+        }
+      },
+      "hero": {
+        "alt": "식탁에서 노트북 화면의 이력서 양식을 보며 수첩에 적어 둔 경력을 옮기는 50대 한국 여성",
+        "scene": "자연광이 드는 집 식탁에서 50대 한국 여성이 노트북의 이력서 양식과 손글씨 메모를 번갈아 보며 칸을 채우는 현실적인 장면"
+      },
+      "publication": {
+        "publishAt": "2026-11-04T10:30:00+09:00"
+      },
+      "productBasis": {
+        "graphVersion": "g-20261102-427d4d",
+        "exportHash": "cb57795ed0dd8ec4",
+        "control": {
+          "graphVersion": "g-20261102-427d4d",
+          "enabled": true,
+          "killSwitchTripped": false,
+          "enabledClusters": [
+            "family",
+            "money-work",
+            "sleep"
+          ],
+          "surfaces": {
+            "BODY_CALLOUT": false,
+            "BODY_INLINE_OR_TOP": false,
+            "CTA_END": true,
+            "FOOTER_BRIDGE": true,
+            "FOOTER_NEXT": true,
+            "FOOTER_SIBLING": true,
+            "SERIES_NAV": false
+          }
+        },
+        "sourceCluster": "money-work",
+        "relationContract": {
+          "implementedSurfaces": [
+            "CTA_END",
+            "FOOTER_BRIDGE",
+            "FOOTER_NEXT",
+            "FOOTER_SIBLING"
+          ],
+          "footerSurfaces": [
+            "FOOTER_BRIDGE",
+            "FOOTER_NEXT",
+            "FOOTER_SIBLING"
+          ],
+          "enabledRelationSurfaces": [
+            "FOOTER_BRIDGE",
+            "FOOTER_NEXT",
+            "FOOTER_SIBLING"
+          ],
+          "relationTypes": [
+            "ACTION",
+            "BRIDGE",
+            "COMMUNITY",
+            "NEXT_QUESTION",
+            "PREREQUISITE",
+            "SERIES",
+            "SIBLING"
+          ],
+          "discoveryType": "BRIDGE"
+        }
+      },
+      "sourceHash": "sha256:d84a3253707ea8ec86581b84be936cad5cdd51fe3d22ce4e8bdd7c9c9b652788"
+    }
+  ]
+}
