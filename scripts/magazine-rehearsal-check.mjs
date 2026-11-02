@@ -270,6 +270,12 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
     check('S15 원시 — hero provider 1 · PR 1 MERGED · 배포 1', s15.evidence.hero?.image === 1 && s15.evidence.prs.length === 1 && s15.evidence.prs[0].state === 'MERGED' && s15.evidence.deployments.length === 1,
       { hero: s15.evidence.hero, prs: s15.evidence.prs })
   }
+  // 🔴 고정 release fixture ↔ 제품 판 (2026-11-02) — fixture 는 판이 바뀌어도 그대로다. 같은 판 파일이 제품에 있으면 바이트가 같아야 한다
+  {
+    const prod = join(dirname(HERE), 'src', 'content', 'magazine', 'graph', `${dfx.id.graphVersion}.ts`)
+    if (existsSync(prod)) check(`DIRECT_E2E fixture bundle = 제품 ${dfx.id.graphVersion}.ts 바이트`, readFileSync(prod, 'utf8') === dfx.files[dfx.names.bundle])
+    else console.log(`  · 제품에 ${dfx.id.graphVersion}.ts 가 아직 없다 — promote 전 후보 대조는 magazine-research-current verify 가 한다`)
+  }
   for (const id of DIRECT_IDS.filter((x) => x !== 'S15' && x !== 'S15W')) {
     if (S[id]) check(`${id} 원시 — DIRECT 반례 등록·PR·병합 0`, S[id].evidence.registered.length === 0 && S[id].evidence.prs.length === 0 && S[id].evidence.mergeCalls.length === 0, { registered: S[id].evidence.registered, prs: S[id].evidence.prs })
   }

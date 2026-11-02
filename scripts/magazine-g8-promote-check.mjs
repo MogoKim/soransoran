@@ -1135,8 +1135,29 @@ const runRegister = (m) => { const r = spawnSync('node', regCli(m), { encoding: 
 
 
 // ── ⑪ 실제 연구 정본 (읽기만) ────────────────────────────────
-const REAL_RESEARCH = path.resolve(REPO, '..', 'soransoran-mgraph-research')
-const REAL_SNAPSHOT = path.join(REAL_RESEARCH, 'reconciled', '2026-10-21-money-work-retirement-next-e0335')
+//    🔴 판별 계약 (2026-11-02) — 제품 current 가 가리키는 판마다 실제 snapshot · 시각 · 기대값을 고정한다.
+//       앞판은 081d9a 하나만 알았다 — promote 뒤에는 이 시험이 **조용히 SKIP** 됐다. 이제 표에 없는 판 · 없는 snapshot 은 FAIL 이다.
+const REAL_RESEARCH = process.env.MGRAPH_REAL_RESEARCH ? path.resolve(process.env.MGRAPH_REAL_RESEARCH) : path.resolve(REPO, '..', 'soransoran-mgraph-research')
+export const REAL_GRAPH_CONTRACTS = Object.freeze({
+  'g-20261021-081d9a': { snapshot: '2026-10-21-money-work-retirement-next-e0335', at: '2026-10-22T00:30:00+09:00', intentId: 'I-T6-05', slug: 'age-learning',
+    admission: [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]] },
+  'g-20261102-427d4d': { snapshot: '2026-11-02-money-work-age-learning-live', at: '2026-11-02T11:00:00+09:00', intentId: 'I-T6-03', slug: 'resume-age',
+    manifestHash: 'b5dc90be4649d59760c03aefd1c6cc68055e13300c15322689cc8b0ef06839c0', admission: [['I-T6-03', ['E-0338', 'E-0339'], 'E-0340', ['E-0093']]] },
+})
+/** 판 → 계약. 없으면 null (부른 쪽이 FAIL 로 센다 — SKIP 이 아니다) */
+export function realGraphContract(pointer, contracts = REAL_GRAPH_CONTRACTS) {
+  return Object.hasOwn(contracts, pointer) ? contracts[pointer] : null
+}
+/** 실제 snapshot 시험을 돌릴 수 있는가 — 계약 · snapshot 둘 다 있어야 한다. 아니면 부른 쪽이 FAIL 로 센다 */
+export function realSnapshotGate({ pointer, researchDir }) {
+  const c = realGraphContract(pointer)
+  const snap = c ? path.join(researchDir, 'reconciled', c.snapshot) : null
+  return { contract: c, snapshot: snap, ok: Boolean(c) && fs.existsSync(snap) }
+}
+expect('⑪ 판별 계약 자기 시험 — 모르는 판은 계약 없음(null)', realGraphContract('g-20990101-000000'), null)
+expect('⑪ 판별 gate 자기 시험 — 모르는 판 · snapshot 없는 연구는 실행 불가(FAIL 로 센다)',
+  [realSnapshotGate({ pointer: 'g-20990101-000000', researchDir: REAL_RESEARCH }).ok, realSnapshotGate({ pointer: 'g-20261102-427d4d', researchDir: path.join(REPO, 'no-such-research') }).ok], [false, false])
+expect('⑪ 판별 계약 자기 시험 — 알려진 판은 snapshot 을 준다', realGraphContract('g-20261102-427d4d')?.snapshot, '2026-11-02-money-work-age-learning-live')
 if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
   console.log('⑪ 실제 연구 정본 (읽기만)')
   for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) {
@@ -1145,22 +1166,26 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
   const v = lib.verifyAdmissionState({ researchDir: REAL_RESEARCH, repoDir: REPO })
   expect('실제 장부 — receipt 또는 KNOWN_LEGACY 로만 설명된다 (UNKNOWN 0 · 문제 0)', [v.classes.UNKNOWN, v.problems], [0, []])
   const pointer = /from '\.\/(g-[a-z0-9-]+)'/.exec(fs.readFileSync(path.join(REPO, lib.PRODUCT_FILES.graphCurrent), 'utf8'))?.[1]
-  if (fs.existsSync(REAL_SNAPSHOT) && pointer === 'g-20261021-081d9a') {
+  const gate = realSnapshotGate({ pointer, researchDir: REAL_RESEARCH })
+  const c = gate.contract
+  const realSnapshot = gate.snapshot
+  expect(`실제 snapshot dry-run — 제품 current ${pointer} 의 판별 계약과 snapshot 이 있다 (없으면 SKIP 이 아니라 FAIL)`, gate.ok, true)
+  if (gate.ok) {
     const pre = snapshot(path.join(REAL_RESEARCH, 'contract'))
-    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: REAL_SNAPSHOT, at: '2026-10-22T00:30:00+09:00' })
-    expect('실제 dry-run — readiness 시각 = --at(다음 날 00:30) · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], ['2026-10-22T00:30:00+09:00', 'g-20261021-081d9a'])
-    // 🔴 시점 사실을 고정하지 않는다 — 실제 receipt 가 I-T6-05 를 이미 편입했는지 읽고, 두 상태 각각 정확한 값을 본다
-    //    (2026-10-22 사람 승인 apply 뒤 「후보 I-T6-05 하나」는 낡은 사실이 됐다 — 이제 재편입 거부가 지켜야 할 불변식이다)
-    const admittedNow = lib.readReceipts(REAL_RESEARCH).some(({ text }) => JSON.parse(text).manifest?.admissions?.some((a) => a.intentId === 'I-T6-05' && a.slug === 'age-learning'))
+    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: realSnapshot, at: c.at })
+    expect('실제 dry-run — readiness 시각 = 계약 시각 · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], [c.at, pointer])
+    // 🔴 시점 사실을 고정하지 않는다 — 실제 receipt 가 계약 intent 를 이미 편입했는지 읽고, 두 상태 각각 정확한 값을 본다
+    const admittedNow = lib.readReceipts(REAL_RESEARCH).some(({ text }) => JSON.parse(text).manifest?.admissions?.some((a) => a.intentId === c.intentId && a.slug === c.slug))
     if (!admittedNow) {
-      expect('실제 snapshot dry-run(편입 전) — 후보 I-T6-05 하나 · E-0188 · E-0329 + E-0100 · reverse E-0099',
-        m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]])
+      expect(`실제 snapshot dry-run(편입 전) — 후보 ${c.intentId} 하나 · 계약 direct · discovery · reverse`,
+        m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), c.admission)
+      if (c.manifestHash) expect('실제 snapshot dry-run(편입 전) — manifest hash = 계약', m.hash, c.manifestHash)
     } else {
-      expect('실제 snapshot dry-run(편입 뒤) — 후보 0 · I-T6-05 는 ALREADY_ADMITTED 로 거부 (재편입 없음)',
-        [m.admissions.length, m.refused.filter((r) => r.intentId === 'I-T6-05').map((r) => [r.slug, r.why.includes('ALREADY_ADMITTED')])], [0, [['age-learning', true]]])
+      expect(`실제 snapshot dry-run(편입 뒤) — 후보 0 · ${c.intentId} 는 ALREADY_ADMITTED 로 거부 (재편입 없음)`,
+        [m.admissions.length, m.refused.filter((r) => r.intentId === c.intentId).map((r) => [r.slug, r.why.includes('ALREADY_ADMITTED')])], [0, [[c.slug, true]]])
     }
     expect('실제 dry-run — 연구 contract 쓰기 0', JSON.stringify(snapshot(path.join(REAL_RESEARCH, 'contract'))) === JSON.stringify(pre), true)
-  } else console.log('  SKIP 실제 snapshot dry-run — 제품 graph 가 g-20261021-081d9a 가 아니거나 snapshot 이 없다 (통과로 세지 않는다)')
+  }
 } else {
   console.log('⑪ 실제 연구 정본 — SKIP (연구 디렉터리가 없다 · fixture Ⓐ~Ⓘ 가 같은 반례를 본다)')
 }
