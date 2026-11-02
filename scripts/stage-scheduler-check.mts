@@ -44,7 +44,7 @@ import {
 import {
   SUPPLY_PROOF_LAST_PUBLISH_MINUTE, SUPPLY_PROOF_RUNS_PER_DAY,
   SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN,
-  supplyProofBudgetUsd, supplyProofRunSlots,
+  supplyProofBudgetUsd, supplyProofRunSlots, supplyRunSlotMinuteOf,
 } from '../src/lib/supply-schedule-contract'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
 import {
@@ -190,6 +190,10 @@ const d3LastPublishMinute = Math.max(...profileOf('d3').slots.map((slot) => slot
 check('🔴 당일 증명 회차 경계는 가장 이른 D3 마지막 발행 슬롯 19:00과 맞고 5회다',
   SUPPLY_PROOF_LAST_PUBLISH_MINUTE === d3LastPublishMinute
   && supplyProofRunSlots(SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS).length === 5)
+check('launchd 가 1분 늦게 시작한 08:16은 08:15 자연 공급 회차에 귀속된다',
+  supplyRunSlotMinuteOf(8 * 60 + 16) === 8 * 60 + 15)
+check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정하지 않는다',
+  supplyRunSlotMinuteOf(9 * 60) === null)
 {
   const target = '2026-11-03'
   const now = new Date(`${target}T07:00:00+09:00`)
