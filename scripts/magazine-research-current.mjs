@@ -5,9 +5,11 @@
  *   verify    node scripts/magazine-research-current.mjs verify --research-dir <연구> --candidate-dir <제품 build 산출 판 폴더> \
  *               --snapshot <reconciled/…> --product-root <후보를 만든 제품 판> \
  *               --expect-graph-version <g-…> --expect-semantic <16> --expect-export <16> --expect-bundle-sha256 <64>
- *   install   verify 인자 + --expect-current <지금 current 링크 값> [--write]
- *   rollback  --research-dir <연구> --expect-current <g-…> --expect-previous <g-…> [--write]
+ *   install   verify 인자 + --expect-current <지금 current 링크 값> --expect-control-sha256 <지금 control.json sha256> [--write]
+ *             새 control.json 은 후보 manifest · --product-root 의 control.ts 에서만 만든다
+ *   rollback  --research-dir <연구> --expect-current <g-…> --expect-previous <g-…> --expect-control-sha256 <64> [--write]
  *   recover   --research-dir <연구> [--write]
+ *   check     --research-dir <연구>   공식 current · control 검증 (옛 validate-graph · promote-regression 대체 · 읽기만)
  *
  * 🔴 기본은 dry-run — 연구 파일 쓰기 0. `--write` 가 있을 때만 쓴다.
  * 🔴 운영 runtime 을 연구 · 후보 · 제품 루트로 받지 않는다. 제품 루트는 읽기만 한다.
@@ -17,7 +19,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { ResearchCurrentError, installCandidate, recoverCurrent, rollbackCurrent, verifyCandidate } from './lib/magazine-research-current.mjs'
+import { ResearchCurrentError, checkCurrent, installCandidate, recoverCurrent, rollbackCurrent, verifyCandidate } from './lib/magazine-research-current.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -48,16 +50,21 @@ const verifyArgs = () => {
 }
 const guard = (fn) => { try { return fn() } catch (e) { if (e instanceof ResearchCurrentError) return { ok: false, code: e.code, why: e.why }; throw e } }
 
-if (!cmd || cmd === '--help') { process.stdout.write('연구 current 전환 — verify · install · rollback · recover (인자는 머리말). 인자 없이는 아무것도 읽거나 쓰지 않는다.\n'); process.exit(0) }
+if (!cmd || cmd === '--help') { process.stdout.write('연구 current 전환 — verify · install · rollback · recover · check (인자는 머리말). 인자 없이는 아무것도 읽거나 쓰지 않는다.\n'); process.exit(0) }
 const write = argv.includes('--write')
 if (cmd === 'verify') {
   const a = verifyArgs()
   out(guard(() => { const v = verifyCandidate(a); return { ok: true, code: 'VERIFIED', graphVersion: v.graphVersion, intentsHash: v.intentsHash, treeSha256: v.treeSha256, fixtureBundleCompared: a.fixtureBundle !== null } }))
 } else if (cmd === 'install') {
   const a = verifyArgs()
-  out(guard(() => installCandidate({ researchDir: a.researchDir, candidateDir: a.candidateDir, expectCurrent: need('--expect-current'), verify: () => verifyCandidate(a), write })))
+  const productControlText = readFileSync(join(a.productRoot, 'src', 'content', 'magazine', 'graph', 'control.ts'), 'utf8')
+  out(guard(() => installCandidate({ researchDir: a.researchDir, candidateDir: a.candidateDir, expectCurrent: need('--expect-current'), expectControlSha256: need('--expect-control-sha256'),
+    productControlText, verify: () => verifyCandidate(a), write })))
 } else if (cmd === 'rollback') {
-  out(guard(() => rollbackCurrent({ researchDir: real(need('--research-dir'), '--research-dir'), expectCurrent: need('--expect-current'), expectPrevious: need('--expect-previous'), write })))
+  out(guard(() => rollbackCurrent({ researchDir: real(need('--research-dir'), '--research-dir'), expectCurrent: need('--expect-current'), expectPrevious: need('--expect-previous'),
+    expectControlSha256: need('--expect-control-sha256'), write })))
 } else if (cmd === 'recover') {
   out(guard(() => recoverCurrent({ researchDir: real(need('--research-dir'), '--research-dir'), write })))
+} else if (cmd === 'check') {
+  out(guard(() => checkCurrent({ researchDir: real(need('--research-dir'), '--research-dir') })))
 } else usage(`모르는 명령 ${cmd}`)

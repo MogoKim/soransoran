@@ -290,6 +290,7 @@
     "check:magazine-g8": "node scripts/magazine-g8-promote-check.mjs",
     "check:research-current": "node scripts/magazine-research-current-check.mjs",
     "check:research-current-mutation": "node scripts/magazine-research-current-mutation.mjs",
+    "research:legacy-fence": "node scripts/magazine-research-legacy-fence.mjs",
     "check:magazine-g8-mutation": "node scripts/magazine-g8-promote-mutation.mjs",
     "magazine:g8-promote": "node scripts/magazine-g8-promote.mjs",
     "auto-ready:probe": "tsx scripts/auto-ready-v2-probe.mts",
