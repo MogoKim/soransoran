@@ -340,4 +340,3 @@ export function recoverCurrent({ researchDir, write = false }) {
   if (lock) unlinkSync(lockPath)
   return { ok: true, code: outcome === 'SWITCHED' ? 'RECOVERED_SWITCHED' : 'RECOVERED_NOT_SWITCHED', plan }
 }
-
