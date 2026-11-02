@@ -41,7 +41,11 @@ import {
 } from '../../src/lib/persona-comment-auto-lane'
 import { AUTO_DECIDER, AUTO_READY_ENV, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
-import { SUPPLY_DAILY_USD_APPROVED } from '../../src/lib/supply-schedule-contract'
+import {
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS,
+  supplyRunSlotMinuteOf,
+} from '../../src/lib/supply-schedule-contract'
+import { isNaturalScheduledRunTag, parseRunTokenShadowTag } from '../../src/lib/supply-run-token'
 import {
   judgeSlotRelease, matchOpportunitiesToSlots, publishEventAtOf, readSourceEvidence, releaseStampStatusOf,
   type SlotOpportunity,
@@ -183,6 +187,253 @@ const runMsOf = (runId: string): number | null => {
   if (m === null) return null
   const ms = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`)
   return Number.isFinite(ms) ? ms : null
+}
+
+const KST_OFFSET_MS = 9 * 3_600_000
+const kstWallClock = (ms: number): { date: string; minute: number } | null => {
+  if (!Number.isFinite(ms)) return null
+  const iso = new Date(ms + KST_OFFSET_MS).toISOString()
+  return { date: iso.slice(0, 10), minute: Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16)) }
+}
+
+/** 공급 회차 id 의 KST 날짜와 proof 슬롯 — 창 밖 시작이면 슬롯 `null` */
+const proofSlotOfRunId = (runId: string): { date: string; minute: number | null } | null => {
+  const ms = runMsOf(runId)
+  const wall = ms === null ? null : kstWallClock(ms)
+  return wall === null ? null
+    : { date: wall.date, minute: supplyRunSlotMinuteOf(wall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS) }
+}
+
+type NaturalRunSnapshot = {
+  date: string; slot: number; startedAtMs: number; startMinute: number; evidence: readonly unknown[]; takenAt: string
+}
+
+/**
+ * 🔴 **자연 예약 공급 회차 하나의 기회 snapshot — 기준선과 미래 표본이 같은 무결성 규칙을 쓴다** (2026-11-02 M2).
+ *    · provenance 가 온전한 수동·사건·복구 회차 → `'not-natural'`(표본이 아니다 · 손상도 아니다)
+ *    · 회차가 **끝났어야** 한다 — `done` 또는 `failed`. 🔴 `failed` 는 회차의 다른 단계가 실패했다는 뜻이다.
+ *      snapshot · marker(`written` · runId · 관측 시각 · 건수 · reason 없음)가 온전하면 그 시각 inventory 로 쓴다.
+ *      `running`·모르는 상태는 모름이다
+ *    · runId(파일 이름) · `startedAt` · `completedAt`(시작 뒤 · `atMs` 이전) · `runtimeSha` · proof 슬롯 창이 맞아야 한다
+ *    · snapshot 관측은 회차 시작 ~ `atMs` 사이
+ *    하나라도 어긋나면 `null`(모름).
+ */
+function naturalRunSnapshotOf(dataDir: string, runId: string, atMs: number): NaturalRunSnapshot | 'not-natural' | null {
+  try {
+    const run = JSON.parse(readFileSync(join(dataDir, `supply-process-${runId}.run.json`), 'utf-8')) as Record<string, unknown>
+    const shadow = parseRunTokenShadowTag(run.runTokenShadow)
+    if (shadow === null) return null
+    if (!isNaturalScheduledRunTag(shadow)) return 'not-natural'
+    const file = proofSlotOfRunId(runId)
+    const startedAtMs = typeof run.startedAt === 'string' ? Date.parse(run.startedAt) : Number.NaN
+    const completedAtMs = typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : Number.NaN
+    const runWall = Number.isFinite(startedAtMs) ? kstWallClock(startedAtMs) : null
+    const runSlot = runWall === null ? null
+      : supplyRunSlotMinuteOf(runWall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
+    if (run.runId !== runId || (run.status !== 'done' && run.status !== 'failed')
+      || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs || completedAtMs > atMs
+      || typeof run.runtimeSha !== 'string' || run.runtimeSha.trim() === ''
+      || file === null || file.minute === null || runWall === null || runWall.date !== file.date || runSlot !== file.minute) return null
+    const snapshot = readOpportunitySnapshot(JSON.parse(readFileSync(join(dataDir, `supply-opportunities-${runId}.json`), 'utf-8')))
+    if (snapshot === null || snapshot.runId !== runId) return null
+    const takenAtMs = Date.parse(snapshot.takenAt)
+    if (!Number.isFinite(takenAtMs) || takenAtMs < startedAtMs || takenAtMs > atMs) return null
+    const marker = run.opportunityInventory
+    if (marker === null || typeof marker !== 'object' || Array.isArray(marker)) return null
+    const m = marker as Record<string, unknown>
+    if (m.status !== 'written' || m.runId !== runId || m.observedAt !== snapshot.takenAt
+      || m.written !== snapshot.inventory.counts.written || m.reason !== null) return null
+    return {
+      date: file.date, slot: file.minute, startedAtMs, startMinute: runWall.minute,
+      evidence: snapshot.evidence, takenAt: snapshot.takenAt,
+    }
+  } catch { return null }
+}
+
+/**
+ * 🔴 **표본일 `date` 의 기준선 inventory — 판정 벽시계 `nowMinute` 직전에 창이 끝난 자연 proof 슬롯 하나** (2026-11-02).
+ *    07:00 판정이면 06:15 슬롯(06:15 + 45분 = 07:00)이다. 그 슬롯의 자연 예약 회차가 남긴 snapshot 만 쓴다
+ *    (`naturalRunSnapshotOf` — 미래 표본과 같은 무결성 규칙). 겹친 자연 회차가 여럿이면 마지막 회차다.
+ *    🔴 그 슬롯에 자연 회차가 없거나(사건·수동·복구뿐 포함) 하나라도 손상·미완료면 `null`(모름) —
+ *       전날 밤 회차 · 더 이른 슬롯 · 비자연 회차로 내려가지 않는다. 창이 끝난 슬롯이 없는 시각도 `null` 이다.
+ */
+function baselineEvidenceOf(dataDir: string, date: string, nowMinute: number): readonly unknown[] | null {
+  const windowMinutes = SUPPLY_RUN_WINDOW_MS / 60_000
+  const slot = SUPPLY_PROOF_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute)
+    .filter((minute) => minute + windowMinutes <= nowMinute).sort((a, b) => a - b).at(-1)
+  if (slot === undefined) return null
+  const atMs = Date.parse(`${date}T00:00:00+09:00`) + nowMinute * 60_000
+  const natural: NaturalRunSnapshot[] = []
+  for (const name of readdirSync(dataDir)) {
+    const runId = /^supply-process-(\d{8}-\d{6})\.run\.json$/.exec(name)?.[1]
+    const at = runId === undefined ? null : proofSlotOfRunId(runId)
+    if (runId === undefined || at === null || at.date !== date || at.minute !== slot) continue
+    const read = naturalRunSnapshotOf(dataDir, runId, atMs)
+    if (read === null) return null
+    if (read !== 'not-natural') natural.push(read)
+  }
+  return natural.sort((a, b) => a.startedAtMs - b.startedAtMs).at(-1)?.evidence ?? null
+}
+
+/**
+ * 🔴 **당일 남은 정기 공급의 추가 기회 — 재고 수준이 아니라 새로 들어온 원천으로 센다.**
+ *    설정상 `회차×20`·선행 재고 할당을 쓰지 않는다. 직전 3개 완결 KST 일자마다:
+ *    ① 기준선 = 그날 `now` 벽시계 직전에 창이 끝난 자연 proof 슬롯(07:00 이면 06:15)의 inventory(`baselineEvidenceOf`)
+ *       — 전날 밤·사건·수동·복구 회차로 대신하지 않는다
+ *    ② 오늘 남은 proof 공급 슬롯과 **동일한 슬롯 창**의 자연 예약 회차가 기준선 뒤에 처음 관측한 고유 원천
+ *       (`articleIdHash`)만 순유입이다. 같은 원천을 두 회차가 보면 먼저 본 회차 하나로 센다. 해시가 없으면 세지 않는다
+ *    ③ 순유입 원천은 그 회차 시작 + 45분 뒤 발행 슬롯에서만, 그날 같은 벽시계 슬롯에서 `judgeSlotRelease` 가
+ *       eligible 일 때만 쓸 수 있다(원천↔슬롯 유효성 · 도착 시각 보존)
+ *    ④ 하루 추가분 = `futureAdditionalOf` — 합집합 겹침 상한과 순유입 자기 수율 상한 중 작은 값
+ *    날짜별 추가 기회의 최솟값을 쓴다. 다른 날 원천을 오늘 원천과 대조하지 않는다.
+ *    지연된 첫 예약 pass는 정본 45분 창으로 같은 슬롯에 붙인다. provenance가 완전한 예약 follow-up도 자연 표본이다.
+ *    사건·복구·수동·기원 불명 follow-up은 표본이 아니다 — 세지 않을 뿐 용량을 만들지 않는다.
+ *    🔴 자연 표본이 **없음이 증명된** 슬롯(창 안에 기회 파일이 없고, 회차 기록도 없거나 snapshot 을 주장하지 않는다)은
+ *       그 슬롯 순유입 0 이다. 순유입은 더하기만 하므로 0 은 보수적이다 — 다음 회차가 같은 원천을 더 늦게 볼 뿐이다.
+ *    🔴 파일·run marker·provenance 하나라도 어긋나거나, 어느 표본일이든 기준선이 없으면 모름(`null`)이다.
+ *    🔴 기준선·표본은 `naturalRunSnapshotOf` 한 규칙이다 — `failed` 회차도 snapshot·marker 가 온전하면 쓰고,
+ *       `running`·모르는 상태·marker/snapshot 손상은 모름이다.
+ */
+export function measuredFutureSourceOpportunities(input: {
+  dataDir: string
+  kstDate: string
+  now: Date
+  proofSlots: readonly Date[]
+  /** 오늘 READY 기회 — 먼저 짝짓는다 */
+  ready: readonly SlotOpportunity[]
+  /** 오늘 현재 원천 기회 — 순유입과 같은 남은 슬롯을 다툰다 */
+  current: readonly SlotOpportunity[]
+  readyPerSourceLow: number | null
+  sampleDays?: number
+}): number | null {
+  const y = input.readyPerSourceLow
+  const sampleDays = input.sampleDays ?? UNIT_COST_DAYS
+  if (!Number.isFinite(input.now.getTime()) || y === null || !Number.isFinite(y) || y < 0 || y > 1
+    || !Number.isInteger(sampleDays) || sampleDays <= 0 || !existsSync(input.dataDir)) return null
+  const calendarStart = Date.parse(`${input.kstDate}T00:00:00Z`)
+  if (!Number.isFinite(calendarStart)) return null
+  const nowWall = kstWallClock(input.now.getTime())
+  if (nowWall === null || nowWall.date !== input.kstDate) return null
+  const nowMinute = nowWall.minute
+  const futureSupplyMinutes = SUPPLY_PROOF_RUN_SLOTS_KST
+    .map((slot) => slot.hour * 60 + slot.minute)
+    .filter((minute) => minute > nowMinute)
+  if (futureSupplyMinutes.length === 0) return 0
+  const publishMinutes = input.proofSlots.map((slot) => kstWallClock(slot.getTime()))
+    .filter((wall): wall is { date: string; minute: number } => wall !== null && wall.date === input.kstDate)
+    .map((wall) => wall.minute)
+  if (publishMinutes.length !== input.proofSlots.length) return null
+  const sampleDates = Array.from({ length: sampleDays }, (_, index) =>
+    new Date(calendarStart - (sampleDays - index) * 86_400_000).toISOString().slice(0, 10))
+  const sampleDateSet = new Set(sampleDates)
+
+  /** 표본일의 남은 공급 슬롯 창 안 회차면 그 날짜·슬롯, 아니면 null */
+  const sampleSlotOf = (runId: string): { date: string; minute: number } | null => {
+    const runMs = runMsOf(runId)
+    const wall = runMs === null ? null : kstWallClock(runMs)
+    const minute = wall === null ? null
+      : supplyRunSlotMinuteOf(wall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
+    return wall === null || minute === null || !sampleDateSet.has(wall.date) || !futureSupplyMinutes.includes(minute)
+      ? null : { date: wall.date, minute }
+  }
+  type Sample = { date: string; minute: number; startedAtMs: number; availableAt: number; evidence: readonly unknown[]; takenAt: Date }
+  const samples: Sample[] = []
+  const files = readdirSync(input.dataDir)
+  const snapshotRuns = new Set<string>()
+  for (const name of files) {
+    const match = OPPORTUNITY_FILE_RE.exec(name)
+    if (match === null) continue
+    const runId = match[1]!
+    snapshotRuns.add(runId)
+    if (sampleSlotOf(runId) === null) continue
+    // 🔴 기준선과 같은 무결성 규칙 — 끝난(done·failed) 자연 회차의 온전한 snapshot 만. 손상·미완료는 모름
+    const read = naturalRunSnapshotOf(input.dataDir, runId, input.now.getTime())
+    if (read === null) return null
+    // 수동·사건·복구 회차는 기회량을 부풀리지 않는다. 그 슬롯에 자연 표본이 따로 없으면 그 슬롯 순유입은 0이다.
+    if (read === 'not-natural') continue
+    samples.push({
+      date: read.date, minute: read.slot, startedAtMs: read.startedAtMs,
+      availableAt: read.startMinute + SUPPLY_RUN_WINDOW_MS / 60_000,
+      evidence: read.evidence, takenAt: new Date(read.takenAt),
+    })
+  }
+  // 🔴 누락 증명 — 기회 파일 없는 창 안 회차 기록은 읽혀야 하고, 자연 회차라면 끝났어야(done·failed · 완료 시각이
+  //    시작 뒤 · 판정 이전) 하며 snapshot 을 썼다고 주장하지 않아야 한다. 못 읽거나 기원 불명이거나 `running`·모르는
+  //    상태·완료 시각 손상이거나 `written` 을 주장하는데 파일이 없으면 누락이 아니라 모름이다.
+  for (const name of files) {
+    const match = /^supply-process-(\d{8}-\d{6})\.run\.json$/.exec(name)
+    if (match === null || snapshotRuns.has(match[1]!) || sampleSlotOf(match[1]!) === null) continue
+    try {
+      const run = JSON.parse(readFileSync(join(input.dataDir, name), 'utf-8')) as Record<string, unknown>
+      const shadow = parseRunTokenShadowTag(run.runTokenShadow)
+      if (run.runId !== match[1] || shadow === null) return null
+      if (!isNaturalScheduledRunTag(shadow)) continue
+      const startedAtMs = typeof run.startedAt === 'string' ? Date.parse(run.startedAt) : Number.NaN
+      const completedAtMs = typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : Number.NaN
+      if ((run.status !== 'done' && run.status !== 'failed') || !Number.isFinite(startedAtMs)
+        || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs || completedAtMs > input.now.getTime()) return null
+      const marker = run.opportunityInventory
+      if (marker !== null && typeof marker === 'object' && (marker as Record<string, unknown>).status === 'written') return null
+    } catch { return null }
+  }
+
+  const minuteOf = (slot: Date): number => kstWallClock(slot.getTime())?.minute ?? -1
+  const slotOn = (date: string, minute: number): Date => new Date(
+    `${date}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00+09:00`)
+  let additional: number | null = null
+  for (const date of sampleDates) {
+    const daySamples = samples.filter((sample) => sample.date === date).sort((a, b) => a.startedAtMs - b.startedAtMs)
+    const baseline = baselineEvidenceOf(input.dataDir, date, nowMinute)
+    if (baseline === null) return null
+    const seen = new Set<string>()
+    for (const ev of baseline) {
+      const read = readSourceEvidence({ sourceEvidence: ev })
+      if (read.ok && read.record.provenance.articleIdHash !== null) seen.add(read.record.provenance.articleIdHash)
+    }
+    const inflow: SlotOpportunity[] = []
+    for (const sample of daySamples) {
+      for (const ev of sample.evidence) {
+        const read = readSourceEvidence({ sourceEvidence: ev })
+        const hash = read.ok ? read.record.provenance.articleIdHash : null
+        if (hash === null || seen.has(hash)) continue
+        seen.add(hash)
+        const historical = sourceOpportunitiesOf([ev], new Set<string>(), sample.takenAt)[0]
+        if (historical === undefined) continue
+        inflow.push({
+          key: `future:${date}:${hash}`,
+          validAt: (slotAt) => {
+            const minute = minuteOf(slotAt)
+            return minute >= sample.availableAt && historical.validAt(slotOn(date, minute))
+          },
+        })
+      }
+    }
+    additional = Math.min(additional ?? Number.POSITIVE_INFINITY, futureAdditionalOf({
+      slots: input.proofSlots, ready: input.ready, current: input.current, inflow, readyPerSource: y,
+    }))
+  }
+  return additional
+}
+
+/**
+ * 🔴 **하루 순유입의 추가 기회** — 순수. 두 상한 중 작은 값이다.
+ *    ① 겹침 상한: READY → (현재 원천 ∪ 순유입) 합집합 짝짓기 − 현재만의 짝짓기. 셋이 같은 늦은 슬롯을 다투면 겹친 몫은 0이다
+ *    ② 자기 수율 상한: READY 뒤 열린 슬롯에서 유효한 **순유입만**의 기대 기회(`floor(유효 순유입 × y)` · 짝짓기 최대 이하)
+ *    🔴 수율은 원천 묶음마다 따로 곱한다. 합집합에 한 번 곱하면 현재 원천(이른 슬롯 300건)의 남는 수율이
+ *       순유입이 덮는 늦은 슬롯으로 옮겨 가 순유입이 사실상 수율 1 로 세진다 — 반례 3+17 슬롯 · y=0.1 에서 20/20 거짓 PASS.
+ */
+export function futureAdditionalOf(input: {
+  slots: readonly Date[]
+  ready: readonly SlotOpportunity[]
+  current: readonly SlotOpportunity[]
+  inflow: readonly SlotOpportunity[]
+  readyPerSource: number
+}): number {
+  const at = (sources: readonly SlotOpportunity[]) => slotValidOpportunitiesOf({
+    slots: input.slots, ready: input.ready, sources, readyPerSource: input.readyPerSource,
+  })
+  const overlapCap = Math.max(0, at([...input.current, ...input.inflow]).total - at(input.current).total)
+  return Math.min(overlapCap, at(input.inflow).sourceExpected)
 }
 
 
@@ -628,6 +879,14 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const oppHigh = oppAt(yieldBounds?.high ?? null)
   const slotValidOpportunities = snap.evidence === null ? null
     : combineOpportunityBounds(opp.total, oppHigh.total, i.proofSlots.length)
+  // 🔴 현재 원천 판독이 깨졌으면 순유입을 얹을 기준이 없다 — 모름
+  const futureSupplyCapacity = snap.evidence === null ? null : measuredFutureSourceOpportunities({
+    dataDir: i.dataDir, kstDate: kstDateString(i.now), now: i.now, proofSlots: i.proofSlots,
+    ready: readyOpps, current: sourceOpps, readyPerSourceLow: yieldBounds?.low ?? null,
+  })
+  if (futureSupplyCapacity === null) {
+    notes.push('남은 당일 공급 기회를 모른다 — 하한 수율 · 3일 기준선 · 남은 공급 슬롯 자연 표본 중 하나가 없거나 깨졌다. 현재 기회가 목표 미만이면 시험을 열지 않는다')
+  }
 
   // 지연 — 지금 계약 도장으로 나간 글 · 원천 게시 → 공개
   let latencyP50H: number | null = null
@@ -685,6 +944,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
 
   const facts: PreflightFacts = {
     slotValidOpportunities,
+    futureSupplyCapacity,
     readyCohort,
     latencyP50H, latencyP90H,
     contractValidPersonas,
@@ -700,6 +960,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     detail: {
       readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
+      futureSupplyCapacity,
       opportunitySnapshotAt: snap.takenAt, opportunitySnapshotRunId: snap.runId,
       opportunityInventory: snap.inventory, readyCount, legacyExcluded: cohort.legacyExcluded,
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,

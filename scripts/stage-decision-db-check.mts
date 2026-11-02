@@ -788,13 +788,14 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n⑩ 🔴 2026-10-08 22:15 사건 재생 — 회차 시계 · 도장 전 행 · 미상 비용 UNKNOWN · D10 은 여전히 BLOCK (2026-10-09 P0)')
+  console.log('\n⑩ 🔴 2026-10-08 22:15 사건 재생 — 회차 시계 · 도장 전 행 · 과거 원천 inventory 없음 · D10 은 여전히 BLOCK (2026-10-09 P0)')
   {
     /**
      * 🔴 운영 실측 모양(보조 맥북 · 정본 판독기로 재계산한 값) — 증거일 2026-10-08 · 창 KST 10-06~08 · 판정 10-09 07:00.
      *    창 안 workset 회차 11개(UTC id) · 원천 101 · 그 회차들이 만든 READY 20 —
      *      도장된 16(공개 8 · 만료 2 · 대기 6) + **22:15 회차(20261008-131506) 4건은 22:16 적재 · 08:00 자동 도장**(07:00 엔 도장 전).
-     *    앞판(분자 = decidedAt 창)은 16 ÷ 101 → 공급 능력 9. 회차 시계면 20 ÷ 101 → 11. 필요 12 → 여전히 THROUGHPUT_SHORT.
+     *    앞판(분자 = decidedAt 창)은 16 ÷ 101 → 공급 능력 9. 회차 시계 보정은 실제 20행을 모두 센다.
+     *    당시에는 opportunities-v3와 완료 run marker가 없었으므로 새 정본에서 미래 기회는 추정하지 않고 UNKNOWN이다.
      *    장부 — 사용량 미상 2건(추정 예약 $0.008652 · $0.0085926 · 운영 실측값) → 결과당 비용 확정 불가(SUPPLY_COST_UNKNOWN).
      */
     const site = 'fixture:p0-2215'
@@ -954,9 +955,9 @@ async function main(): Promise<void> {
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
-      check('🔴 🔴 **보정 후 공급 능력 19 · 필요 하한 12 → 처리량 부족은 해소하되 다른 미상 때문에 D10은 계속 FAIL**',
+      check('🔴 🔴 **보정 후 공급 능력 19 · 필요 하한 12 → 처리량 부족은 해소하되 과거 원천 inventory 부재로 D10은 UNKNOWN**',
         v.counts.readyCapacity === 19 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
-        && !v.codes.includes('THROUGHPUT_SHORT') && v.verdict === 'FAIL',
+        && !v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('OPPORTUNITY_UNKNOWN') && v.verdict === 'UNKNOWN',
         JSON.stringify({ counts: v.counts, codes: v.codes }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
       const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-r` } }, select: { id: true } })).map((x) => x.id)
@@ -970,8 +971,9 @@ async function main(): Promise<void> {
       check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
         c !== null && c.usdPerSlotValidResult === null && v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
         JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
-      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소됐지만 SUPPLY_COST_UNKNOWN 등 남은 축으로 D10 BLOCK (FAIL)**',
-        v.verdict === 'FAIL' && !v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
+      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소됐지만 원천·비용 미상 축으로 D10 BLOCK (UNKNOWN)**',
+        v.verdict === 'UNKNOWN' && !v.codes.includes('THROUGHPUT_SHORT')
+        && v.codes.includes('OPPORTUNITY_UNKNOWN') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
       check('preflight 메모 — 미정산 2건 · 추정 예약액 $0.0172 · 실제 비용 아님',
         (r.notes as string[]).some((x) => /미정산 2건 \(추정 예약액 \$0\.0172 — 실제 비용 아님\)/.test(x)), JSON.stringify(r.notes))
       // 🔴 예약이 없는 미상이어도 같다 — SUPPLY_COST_UNKNOWN

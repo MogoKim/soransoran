@@ -403,6 +403,14 @@ check('🔴 잠금 상태를 못 읽으면 통과시키지 않는다(fail-closed
     (code.match(/new PrismaClient\(\)/g) ?? []).length === 1
     && code.indexOf('new PrismaClient()') > code.indexOf('async function main(proof: LeaseProof | null)')
     && code.indexOf('new PrismaClient()') < code.indexOf('async function entry()'))
+  check('🔴 ProcessRun은 커널 lease 안에서 읽은 실행 기원을 정본 shadow tag로 저장한다',
+    /const tokenShadow = proof === null \? null : runTokenShadowFromEnv\(process\.env, new Date\(\)\)/.test(code)
+    && /runTokenShadow: shadowTagOf\(tokenShadow\)/.test(code))
+  check('🔴 실제 ProcessRun writer는 관통검사와 같은 builder·원자 writer를 사용한다',
+    /import \{ createProcessRunRecord, writeProcessRunRecord \} from '\.\/lib\/process-run-record\.mjs'/.test(code)
+    && /const record: ProcessRun = createProcessRunRecord\(\{/.test(code)
+    && /const save = \(\): void => \{ writeProcessRunRecord\(runPath, record\) \}/.test(code)
+    && !/writeAtomic\(runPath, record\)/.test(code))
   check('🔴 자식 단계는 npx 를 거치지 않고 같은 Node · loader 로 — fd 9 는 lease 증명이 있을 때만(stageSpawnOf)',
     /const how = stageSpawnOf\(script, args, STAGE_LEASE\)/.test(code) && !/spawn\('npx'/.test(code))
   check('🔴 main 안에 process.exit 이 없다 — 예외도 진입부 finally 를 지난다', (() => {

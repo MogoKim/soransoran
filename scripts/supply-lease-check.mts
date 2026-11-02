@@ -14,13 +14,14 @@
  * 🔴 DB 0 · provider 0 · 운영 HOME 0 — 모든 실행은 임시 HOME · 임시 cwd 다. 운영 lockf 잠금 파일을 건드리지 않는다.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   FOLLOW_UP_FILE, LEASE_FD_ENV, LEASE_INNER_ENV, LOCKF_PATH, MAX_FOLLOW_UPS,
-  followUpTriggerOf, lockfUsable, mergePassTrigger, probeKernelLease, shouldRunFollowUp,
+  followUpTriggerOf, lockfUsable, mergePassTrigger, probeKernelLease, requestFollowUp, shouldRunFollowUp,
+  takeFollowUpRecord,
 } from './lib/runner-lease.mjs'
 import {
   FAKE_LOCKF_MARK, SUPPLY_LOCK_FILE, SUPPLY_PASS_ENV, SUPPLY_RUN_TOKEN_ENV, SUPPLY_RUN_TOKEN_FILE,
@@ -28,7 +29,7 @@ import {
 } from './lib/supply-lease.mjs'
 import {
   RUN_TOKEN_TTL_MS, RUN_TOKEN_VERSION, budgetWindowShadowOf, buildRunToken, judgeRunTokenShadow, parseRunToken,
-  shadowTagOf, supplyRunIdOf, type RunToken,
+  isNaturalScheduledRunTag, naturalScheduledRunEvidenceAt, parseRunTokenShadowTag, shadowTagOf, supplyRunIdOf, type RunToken,
 } from '../src/lib/supply-run-token'
 import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, supplyRunKindOf, supplySpendProtectAt,
@@ -82,6 +83,28 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
   })
   const code = (s: ReturnType<typeof judgeRunTokenShadow>): string => (s.ok ? 'OK' : s.code)
   check('shadow — 다섯 칸이 다 맞으면 ok · trigger · 창', (() => { const s = J({}); return s.ok && s.trigger === 'event' && s.budgetWindowShadow === '2026-10-12 08:15' })())
+  check('🔴 저장 shadow가 최종 trigger뿐 아니라 launch·흡수 표식·pass를 보존한다', (() => {
+    const tag = shadowTagOf(J({}))
+    const parsed = parseRunTokenShadowTag(tag)
+    return parsed?.ok === true && parsed.trigger === 'event' && parsed.launchTrigger === 'manual'
+      && parsed.absorbedTrigger === 'event' && parsed.absorbedAt === '2026-10-12T02:59:00.000Z'
+      && parsed.pass === 0 && !isNaturalScheduledRunTag(parsed)
+  })())
+  check('🔴 옛 trigger-only tag는 자연 회차로 추정하지 않고, 첫 예약·예약 follow-up만 원시각으로 자연 증거다', (() => {
+    const old = { ok: true, code: null, tokenId: 'old', trigger: 'scheduled', budgetWindow: '2026-10-12 08:15' }
+    const natural = {
+      ok: true, code: null, tokenId: 'new', trigger: 'scheduled', launchTrigger: 'scheduled',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-10-12 08:15',
+    }
+    const followUp = {
+      ...natural, tokenId: 'follow', absorbedTrigger: 'scheduled' as const,
+      absorbedAt: '2026-10-12T03:15:00.000Z', pass: 1,
+    }
+    return parseRunTokenShadowTag(old) === null && !isNaturalScheduledRunTag(old)
+      && isNaturalScheduledRunTag(natural)
+      && naturalScheduledRunEvidenceAt(followUp, '2026-10-12T05:30:00.000Z') === '2026-10-12T03:15:00.000Z'
+      && naturalScheduledRunEvidenceAt(followUp, '2026-10-12T03:14:59.999Z') === null
+  })())
   check('🔴 shadow — lease 표식 없음(손 실행) → NO_LEASE', code(J({ lease: { kind: 'absent' } })) === 'NO_LEASE')
   check('🔴 shadow — lease 증명 실패(fd 위조) → LEASE_NOT_PROVEN', code(J({ lease: { kind: 'unproven' } })) === 'LEASE_NOT_PROVEN')
   check('🔴 shadow — token env 없음 → NO_TOKEN_ENV', code(J({ envTokenId: null })) === 'NO_TOKEN_ENV' && code(J({ envTokenId: '' })) === 'NO_TOKEN_ENV')
@@ -95,7 +118,8 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
   check('🔴 shadow — 미래 발급(시계 오차 1분 초과) → TOKEN_NOT_YET_VALID', code(J({ now: new Date(at.getTime() - 61_000) })) === 'TOKEN_NOT_YET_VALID')
   check('장부 칸 모양 — 실패면 trigger · 창을 싣지 않는다', (() => {
     const t = shadowTagOf(J({ envTokenId: 't-2' }))
-    return !t.ok && t.code === 'TOKEN_ID_MISMATCH' && t.trigger === null && t.budgetWindow === null
+    return !t.ok && t.code === 'TOKEN_ID_MISMATCH' && t.trigger === null && t.launchTrigger === null
+      && t.absorbedTrigger === null && t.absorbedAt === null && t.pass === null && t.budgetWindow === null
   })())
 
   check('follow-up 표식 trigger — 네 값은 그대로 · 깨짐 · 모르는 값 · 칸 없음은 unknown(추정 0)',
@@ -107,6 +131,21 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
     && mergePassTrigger('manual', 'unknown') === 'manual' && mergePassTrigger('recovery', null) === 'recovery'
     && mergePassTrigger('event', 'scheduled') === 'scheduled')
   check('follow-up 상한 — 첫 회차 뒤 한 번', MAX_FOLLOW_UPS === 1 && shouldRunFollowUp(0, 'TAKEN') && !shouldRunFollowUp(1, 'TAKEN'))
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'follow-up-read-error-'))
+    try {
+      requestFollowUp(dir, at.getTime(), 'scheduled')
+      const proof = { lockPath: join(dir, 'lock'), followUpDir: dir, lockf: LOCKF_PATH, fd: 9 }
+      const taken = takeFollowUpRecord(proof, () => {
+        const claim = readdirSync(dir).find((name) => name.startsWith(`.${FOLLOW_UP_FILE}.claim-`))
+        if (claim !== undefined) chmodSync(join(dir, claim), 0o000)
+      })
+      const restored = join(dir, FOLLOW_UP_FILE)
+      check('🔴 follow-up marker 읽기 실패는 ERROR이고 정본 이름으로 보존된다(조용한 삭제 0)',
+        taken.take === 'ERROR' && existsSync(restored))
+      if (existsSync(restored)) chmodSync(restored, 0o600)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
 
   // 띄운 이유 = 지금 예산 판정의 실행 종류(같은 함수)
   const label = { [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL }
@@ -227,7 +266,15 @@ writeFileSync(HARNESS, [
 ].join('\n'))
 
 type Line = { kind: string; pid: number; ppid: number; pass: number; at: number; runAt?: string; token?: string | null; tag?: string
-  shadow?: { ok: boolean; code?: string; trigger?: string; tokenId?: string | null } }
+  shadow?: {
+    ok: boolean
+    code?: string
+    trigger?: string
+    launchTrigger?: string
+    absorbedTrigger?: string | null
+    pass?: number
+    tokenId?: string | null
+  } }
 const lines = (): Line[] => (existsSync(LOG) ? readFileSync(LOG, 'utf-8') : '').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Line)
 const starts = (): Line[] => lines().filter((l) => l.kind === 'start')
 const leaves = (): Line[] => lines().filter((l) => l.kind === 'leaf')
@@ -305,7 +352,9 @@ try {
     await waitFor(() => leaves().length >= 1)
     const leaf0 = leaves()[0]
     check('🔴 🔴 fd 9 실제 자식 전달 — 회차 자식이 stageSpawnOf 로 띄운 자식이 같은 lease 를 증명하고 token 이 일치한다(shadow ok)',
-      leaf0?.shadow?.ok === true && leaf0.shadow.tokenId === t0?.tokenId && leaf0.ppid === s0?.pid, JSON.stringify(leaf0?.shadow))
+      leaf0?.shadow?.ok === true && leaf0.shadow.tokenId === t0?.tokenId && leaf0.ppid === s0?.pid
+      && leaf0.shadow.launchTrigger === 'manual' && leaf0.shadow.absorbedTrigger === null && leaf0.shadow.pass === 0,
+      JSON.stringify(leaf0?.shadow))
     check('회차 자식 자신의 shadow 도 ok · token 의 trigger = manual(라벨 없음)', s0?.shadow?.ok === true && t0?.trigger === 'manual' && t0.pass === 0)
     const contenders = [run(0), run(0), run(0), run(0), run(0)]
     const cExits = await Promise.all(contenders.map(exitOf))
@@ -346,6 +395,25 @@ try {
     const tc = tokenNow()
     check('🔴 🔴 반례 깨진 표식 → 추정하지 않고 unknown 으로 기록 · trigger 는 띄운 이유 그대로 · 표식은 거둔다',
       cr === 0 && starts().length === 1 && tc?.absorbedTrigger === 'unknown' && tc.trigger === 'manual' && !existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+
+    // ── 읽을 수 없는 표식 ──
+    reset()
+    writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'scheduled' }), { mode: 0o000 })
+    const unreadable = await exitOf(run(200))
+    check('🔴 🔴 반례 읽을 수 없는 표식 → holder exit 1 · 본체 0 · marker 보존',
+      unreadable === 1 && starts().length === 0 && existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+    if (existsSync(join(LOCKD, FOLLOW_UP_FILE))) chmodSync(join(LOCKD, FOLLOW_UP_FILE), 0o600)
+
+    // ── 첫 회차 중 들어온 표식을 follow-up 직전에 읽지 못함 ──
+    reset()
+    const loopErrorHolder = run(2_000)
+    const loopErrorExit = exitOf(loopErrorHolder)
+    check('첫 회차가 시작된 뒤 follow-up 표식 오류를 주입한다', await waitFor(() => starts().length === 1))
+    writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'scheduled' }), { mode: 0o000 })
+    const loopUnreadable = await loopErrorExit
+    check('🔴 🔴 반례 첫 회차 뒤 표식을 읽지 못하면 exit 1 · 추가 회차 0 · marker 보존',
+      loopUnreadable === 1 && starts().length === 1 && starts()[0]?.pass === 0 && existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+    if (existsSync(join(LOCKD, FOLLOW_UP_FILE))) chmodSync(join(LOCKD, FOLLOW_UP_FILE), 0o600)
 
     // ── holder SIGKILL → 즉시 재획득 ──
     reset()

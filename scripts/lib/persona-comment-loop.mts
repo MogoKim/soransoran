@@ -381,8 +381,10 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
 
   if (!deps.live) {
     // 🔴 미리보기도 같은 기억을 읽는다(읽기만 — 쓰지 않는다). 못 읽으면 기억 없이 보이되 경고를 남긴다
-    const previewMemory = deps.attemptStore.read(nowMs)
-    const previewWarnings: string[] = previewMemory.ok ? [] : [attemptReadWarning(previewMemory)]
+    const previewMemory = deps.attemptStore.read(nowMs, { repair: false })
+    const previewWarnings: string[] = previewMemory.ok
+      ? (previewMemory.warning === undefined ? [] : [previewMemory.warning])
+      : [attemptReadWarning(previewMemory)]
     const preview = await materializeTargets({
       source: autoLaneTargetSource(deps.source, nowMs), limit: COMMENT_LOOP_PREVIEW, nowMs, windowMs,
       ...(previewMemory.ok ? { attemptedCombos: attemptedComboKeys(previewMemory.entries, nowMs) } : {}),
@@ -445,6 +447,9 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
    *    같은 조합을 또 보내는 것보다 이번 회차 생성을 쉬는 쪽이 싸다 — 앞 단계의 PENDING 발행 sweep 은 이미 돌았고 뒤 sweep 도 돈다.
    */
   const memory = generationSkipped === null ? deps.attemptStore.read(nowMs) : null
+  if (memory !== null && memory.ok && memory.warning !== undefined) {
+    attemptWarnings.push(memory.warning)
+  }
   if (memory !== null && !memory.ok) {
     const warning = attemptReadWarning(memory)
     attemptWarnings.push(warning)

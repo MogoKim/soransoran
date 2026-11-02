@@ -13,7 +13,8 @@
  *    놓친 깨움은 정기 회차(≤ 20분)와 `runner-recover` 의 고아 표식 복구(표식당 1회)가 받는다.
  *
  * 🔴 **kill switch** — `SORAN_EVENT_WAKE=off|comment|all` (정본 env). 미설정 · 빈 값 · 모르는 값은 `off` 다 — 표식도 kickstart 도 0.
- *    C2 는 `comment` 까지만 행동한다. `all` 이어도 공급 깨움은 C3 전까지 행동하지 않는다(`NOT_IMPLEMENTED`).
+ *    `comment` 와 `all` 모두 댓글만 연다. 공급 사건 깨움은 회차 실행시간 상한이 없어 자연 증명 슬롯과
+ *    충돌할 수 있으므로 이 버전에서는 열지 않는다. 공급은 정기 예약 회차만 돈다.
  */
 import { execFileSync } from 'node:child_process'
 
@@ -33,7 +34,7 @@ export function eventWakeModeOf(env: Readonly<Record<string, string | undefined>
   return { mode: 'off', note: `${EVENT_WAKE_ENV} 모르는 값 → off` }
 }
 
-/** 🔴 C2: 댓글만 행동한다. 공급 깨움(수집 완료 → 공급)은 C3 — `all` 이어도 false */
+/** 🔴 댓글만 행동한다. 공급 사건 깨움은 실행시간 상한 계약이 생기기 전까지 닫힌다. */
 export function wakeAllowed(mode: EventWakeMode, target: WakeTarget): boolean {
   return target === 'comment' && (mode === 'comment' || mode === 'all')
 }
@@ -46,7 +47,6 @@ export const WAKE_TARGETS: Readonly<Record<'comment', { label: string; lockDir: 
 export const LAUNCHCTL_PATH = '/bin/launchctl'
 /** 🔴 kickstart 가 매달려도 발행 러너를 붙잡지 않는다 */
 export const KICKSTART_TIMEOUT_MS = 5_000
-
 /**
  * 🔴 **시험 전용 launchctl** — 가짜 provider 훅(`fake-provider-hook.mjs` · `NODE_OPTIONS=--import` 로만 들어간다)이
  *    `FAKE_LAUNCHCTL` 을 받아 전역 표식에 건 경로만 쓴다. 운영 경로는 env 를 보지 않고 언제나 `/bin/launchctl` 이다.
@@ -60,13 +60,12 @@ export function launchctlPath(): string {
 
 export type WakeOutcome =
   | { kind: 'OFF'; why: string }
-  | { kind: 'NOT_IMPLEMENTED'; why: string }
   | { kind: 'SENT'; marker: FollowUpRequest; kick: 'OK' | 'FAILED'; detail: string }
   | { kind: 'ERROR'; why: string }
 
 /**
  * 🔴 **깨움 하나 — 던지지 않는다.** `home` 은 시험이 잠금 디렉터리 자리를 고를 때만 준다.
- *    표식을 못 남겨도(러너가 한 번도 돈 적 없어 디렉터리가 없다 등) kickstart 는 보낸다 — launchd 가 정기 회차와 같은 길로 띄운다.
+ *    표식을 못 남겨도 정기 댓글 회차가 보완하므로 kickstart를 보낼 수 있다.
  */
 export function wakeRunner(i: {
   target: WakeTarget; env: Readonly<Record<string, string | undefined>>; nowMs: number; home?: string
@@ -75,7 +74,7 @@ export function wakeRunner(i: {
     const m = eventWakeModeOf(i.env)
     if (m.mode === 'off') return { kind: 'OFF', why: m.note }
     if (!wakeAllowed(m.mode, i.target) || i.target !== 'comment') {
-      return { kind: 'NOT_IMPLEMENTED', why: `${i.target} 깨움은 아직 없다(C3) · ${m.note}` }
+      return { kind: 'OFF', why: `${i.target} 사건 깨움 닫힘 — 정기 공급만 사용 · ${m.note}` }
     }
     const t = WAKE_TARGETS.comment
     const marker = requestFollowUp(t.lockDir(i.home), i.nowMs, 'event')
@@ -86,7 +85,8 @@ export function wakeRunner(i: {
       return { kind: 'SENT', marker, kick: 'OK', detail: '' }
     } catch (e) {
       const err = e as { code?: string; status?: number | null; signal?: string | null }
-      return { kind: 'SENT', marker, kick: 'FAILED', detail: err.code ?? (err.status != null ? `exit ${err.status}` : err.signal ?? 'unknown') }
+      const detail = err.code ?? (err.status != null ? `exit ${err.status}` : err.signal ?? 'unknown')
+      return { kind: 'SENT', marker, kick: 'FAILED', detail }
     }
   } catch (e) {
     return { kind: 'ERROR', why: e instanceof Error ? e.name : 'unknown' }
@@ -108,7 +108,6 @@ export function publishWakeGate(i: { verifyOk: boolean; auditIntegrityOk: boolea
 export function describeWake(target: WakeTarget, o: WakeOutcome): string {
   switch (o.kind) {
     case 'OFF': return `깨움(${target}) 0 — ${o.why}`
-    case 'NOT_IMPLEMENTED': return `깨움(${target}) 0 — ${o.why}`
     case 'ERROR': return `🟡 깨움(${target}) 실패(${o.why}) — 발행 결과와 무관 · 정기 회차가 받는다`
     case 'SENT': return `${o.kick === 'OK' ? '🔔' : '🟡'} 깨움(${target}) 표식 ${o.marker} · kickstart ${o.kick}${o.detail === '' ? '' : `(${o.detail})`}`
       + (o.kick === 'OK' && o.marker !== 'ERROR' ? '' : ' — 발행 결과와 무관 · 정기 회차 · 고아 표식 복구가 받는다')

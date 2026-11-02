@@ -61,8 +61,11 @@
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0. 모으기는 `stage-evidence-repo` 가 한다.
  * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — **코드와 개수만**.
  */
-import { SAFEST_STAGE, profileOf, type RuntimeStage } from './scale-profile'
-import { DECISION_WRITER, isLegacyDecision, nextStage, type TrialBasis, type ValidatedStageDecision } from './stage-decision-contract'
+import { SAFEST_STAGE, profileOf, stageRank, type RuntimeStage } from './scale-profile'
+import {
+  DECISION_WRITER, isLegacyDecision, nextStage, previousKstDate,
+  type TrialBasis, type ValidatedStageDecision,
+} from './stage-decision-contract'
 import {
   AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
 } from './persona-comment-auto-lane'
@@ -567,10 +570,12 @@ export function trialPlanOf(
   }
   /**
    * 🔴 **브레이크 날을 건너 계획을 잇는다** (PR3 · 2026-09-30 자동 승급 부품 보존). `carried` 는 **전날(prev)의 계획**이다.
-   *    전날이 HOLD·PREPARE(증명일 아님 — 운영 신호 브레이크로 시험이 되돌려진 날)이고 그날 공개가 계획의 기반과
-   *    같으면 그 계획을 잇는다. 🔴 증명일(TRIAL·REPROVE)의 결과는 잇지 않는다 — 그날 증거가 스스로 말한다.
+   *    전날이 HOLD·PREPARE(증명일 아님 — 운영 신호 브레이크로 시험이 되돌려진 날)이고 그날 공개가 계획의 기반
+   *    이하이면 그 계획을 잇는다. 감속으로 한 칸 낮춘 공개가 인증 기반 자체를 지우지 않게 하기 위함이다.
+   *    🔴 증명일(TRIAL·REPROVE)의 결과는 잇지 않는다 — 그날 증거가 스스로 말한다.
    */
-  if (carried !== null && CARRY_STATES.includes(prev.state) && prev.release === carried.base) return carried
+  if (carried !== null && CARRY_STATES.includes(prev.state)
+    && stageRank(prev.release) <= stageRank(carried.base)) return carried
   if (prev.release === SAFEST_STAGE) {
     const up = nextStage(SAFEST_STAGE)
     return up === null ? null : { base: SAFEST_STAGE, target: up, basis: 'FLOOR' }
@@ -602,6 +607,37 @@ export function trialPlanThrough(
     prevDate = d.decision.kstDate
   }
   return plan
+}
+
+/**
+ * 🔴 controller가 실제 저장 행을 되짚는 검색 정본.
+ *
+ * 단위 판정(`trialPlanThrough`)과 DB 검색을 각자 구현하면 누락·깨진 행·검색 상한에서
+ * 서로 다른 계획을 만들 수 있다. 저장소 접근은 callback으로 주입하되, 날짜 진행과
+ * 중단 조건은 이 한 함수만 소유한다.
+ */
+export async function carriedTrialPlanFor(
+  previous: ValidatedStageDecision,
+  io: {
+    readDecision: (kstDate: string) => Promise<ValidatedStageDecision | null>
+    readEvidence: (decision: ValidatedStageDecision) => Promise<StageEvidenceVerdict | null>
+  },
+): Promise<TrialPlan | null> {
+  if (!CARRY_STATES.includes(previous.state)) return null
+  const days: { decision: ValidatedStageDecision; evidence: StageEvidenceVerdict | null }[] = []
+  let date = previous.kstDate
+  for (let k = 0; k < PLAN_CARRY_MAX_DAYS; k += 1) {
+    const expectedDate = previousKstDate(date)
+    if (expectedDate === null) break
+    const decision = await io.readDecision(expectedDate)
+    // 🔴 저장소가 다른 날짜 행을 돌려줘도 이어 붙이지 않는다.
+    if (decision === null || decision.kstDate !== expectedDate) break
+    const hold = CARRY_STATES.includes(decision.state)
+    days.unshift({ decision, evidence: await io.readEvidence(decision) })
+    date = expectedDate
+    if (!hold) break
+  }
+  return trialPlanThrough(days)
 }
 
 const nextKstDate = (d: string): string =>

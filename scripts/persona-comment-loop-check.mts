@@ -13,7 +13,7 @@
  *
  *   npm run persona:comment-loop-check
  */
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
@@ -40,7 +40,10 @@ import { materializeTargets, type SourcePersona, type SourcePost } from './lib/p
 import { RATIO_WINDOW_DAYS } from '../src/lib/persona-comment-governor'
 import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
 import { dedupKeyOf } from '../src/lib/persona-comment-queue'
-import { ATTEMPT_JOURNAL_FILE, createAttemptStore, type AttemptFsOps, type AttemptStore } from './lib/persona-comment-attempt-store.mjs'
+import {
+  ATTEMPT_JOURNAL_CORRUPT_FILE, ATTEMPT_JOURNAL_FILE, ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE, createAttemptStore,
+  type AttemptFsOps, type AttemptStore,
+} from './lib/persona-comment-attempt-store.mjs'
 import { parseAttemptJournal, serializeAttemptJournal } from '../src/lib/persona-comment-attempt-policy'
 import { lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, LEASE_FD_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
 import { spawn } from 'node:child_process'
@@ -561,8 +564,8 @@ console.log('\n⑧ 🔴 공통 lease · 겹친 깨움 합치기 · 예산 선검
     && wcode.indexOf('-s -t 0 9') < wcode.indexOf('exec "$@"'))
   const lease = readFileSync('scripts/lib/runner-lease.mts', 'utf-8')
   const leaseCode = lease.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
-  check('🔴 🔴 lease 모듈 — wrapper 를 인자 배열로만 띄운다 · 부모 명령줄 · ppid · rename · kill · wx 잠금(collect-lock) 0',
-    !/rename|process\.kill|ppid|\/bin\/ps|exec\(|execSync\(|shell: true|collect-lock|acquireLock/.test(leaseCode)
+  check('🔴 🔴 lease 모듈 — wrapper 를 인자 배열로만 띄운다 · 부모 명령줄 · ppid · kill · wx 잠금(collect-lock) 0 (follow-up marker 원자 claim rename 은 허용)',
+    !/process\.kill|ppid|\/bin\/ps|exec\(|execSync\(|shell: true|collect-lock|acquireLock/.test(leaseCode)
     && /spawnSync\('\/bin\/sh', \[LEASE_WRAPPER, i\.lockPath, lockf, i\.command, \.\.\.i\.args\]/.test(leaseCode)
     && /fstatSync\(LEASE_FD\)/.test(leaseCode) && /a\.dev === b\.dev && a\.ino === b\.ino/.test(leaseCode))
   const entry = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
@@ -874,6 +877,134 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     check('🔴 E 시각 범위 밖(발행 전 · +60분 1ms 초과)과 같은 조합 중복은 SCHEMA_MISMATCH · 다른 role 은 별 조합이라 유효',
       !early.ok && early.code === 'SCHEMA_MISMATCH' && !late.ok && late.code === 'SCHEMA_MISMATCH'
       && !dup.ok && dup.code === 'SCHEMA_MISMATCH' && otherRole.ok)
+  }
+
+  // ── E-2. 손상본은 60분 동안 fail-closed, 그 뒤 격리 보존 + 새 장부로 자동 복구 ──
+  {
+    const dir = freshDir()
+    const path = join(dir, ATTEMPT_JOURNAL_FILE)
+    writeFileSync(path, '{oops')
+    utimesSync(path, new Date(PUBLISHED_MS), new Date(PUBLISHED_MS))
+    const store = createAttemptStore({ dir })
+    const fresh = store.read(PUBLISHED_MS + WINDOW_MS)
+    check('🔴 E-2 손상 직후 60분 경계까지는 fail-closed · 격리 0',
+      !fresh.ok && fresh.code === 'JSON_INVALID' && existsSync(path)
+      && !existsSync(join(dir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+
+    const later = PUBLISHED_MS + WINDOW_MS + 86_400_000
+    const previewDir = freshDir()
+    const previewPath = join(previewDir, ATTEMPT_JOURNAL_FILE)
+    writeFileSync(previewPath, '{expired-corrupt')
+    utimesSync(previewPath, new Date(PUBLISHED_MS), new Date(PUBLISHED_MS))
+    const preview = await runCommentLoop({
+      prisma: makeDb().prisma, now: new Date(later), env: ENV, live: false,
+      source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], [persona('P14')]), canon,
+      makeGenerate: () => { throw new Error('preview에서 생성기를 만들면 안 된다') },
+      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: createAttemptStore({ dir: previewDir }),
+    })
+    check('🔴 E-2 만료된 손상 장부여도 dry-run preview는 격리·초기화·새 파일 write 0',
+      preview.outcome === 'DRY_RUN' && preview.providerCalls === 0
+      && readFileSync(previewPath, 'utf-8') === '{expired-corrupt'
+      && readdirSync(previewDir).join(',') === ATTEMPT_JOURNAL_FILE,
+      readdirSync(previewDir).join(','))
+    const db = makeDb(); const sent: Sent[] = []
+    const rep = await runRound({
+      round: 1, nowMs: later, store, db, sent,
+      source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], POOL.map((c) => persona(c))),
+    })
+    const restored = store.read(later)
+    check('🔴 E-2 60분이 지난 손상본 → 격리 보존 · 새 장부 유효 · 새 글 provider 재개',
+      sent.length > 0 && rep.providerCalls > 0 && restored.ok && existsSync(path)
+      && existsSync(join(dir, ATTEMPT_JOURNAL_CORRUPT_FILE)),
+      `보냄 ${sent.length} · provider ${rep.providerCalls} · 파일 ${readdirSync(dir).join(',')}`)
+    check('🔴 E-2 복구는 구조화 경고 한 번 · 본문/경로 노출 0',
+      rep.attemptWarnings.length === 1 && rep.attemptWarnings[0]!.includes('격리하고 빈 장부로 복구')
+      && rep.lines.filter((line) => line === rep.attemptWarnings[0]).length === 1
+      && !rep.attemptWarnings[0]!.includes(BODY.slice(0, 10)) && !rep.attemptWarnings[0]!.includes(dir),
+      rep.attemptWarnings.join(' / '))
+
+    const oldCorrupt = (targetDir: string): string => {
+      const target = join(targetDir, ATTEMPT_JOURNAL_FILE)
+      writeFileSync(target, '{oops')
+      utimesSync(target, new Date(PUBLISHED_MS), new Date(PUBLISHED_MS))
+      return target
+    }
+    {
+      const statDir = freshDir(); const statPath = oldCorrupt(statDir)
+      const r = createAttemptStore({ dir: statDir, ops: { statSync: (p) => {
+        if (p === statPath) throw Object.assign(new Error('x'), { code: 'EIO' })
+        return statSync(p)
+      } } }).read(later)
+      check('🔴 E-2 손상 시각 stat 실패 → 자동 비우기 0 · 원본 유지 · fail-closed',
+        !r.ok && r.reason.includes('손상 시각 확인 실패 EIO') && existsSync(statPath)
+        && !existsSync(join(statDir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+    }
+    {
+      const renameDir = freshDir(); const renamePath = oldCorrupt(renameDir)
+      const r = createAttemptStore({ dir: renameDir, ops: { renameSync: () => {
+        throw Object.assign(new Error('x'), { code: 'EIO' })
+      } } }).read(later)
+      check('🔴 E-2 손상본 rename 실패 → 자동 비우기 0 · 원본 유지 · fail-closed',
+        !r.ok && r.reason.includes('손상본 격리 실패 EIO') && existsSync(renamePath)
+        && !existsSync(join(renameDir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+    }
+    {
+      const resetDir = freshDir(); oldCorrupt(resetDir)
+      const r = createAttemptStore({ dir: resetDir, ops: { writeSync: () => {
+        throw Object.assign(new Error('x'), { code: 'ENOSPC' })
+      } } }).read(later)
+      check('🔴 E-2 격리 뒤 새 장부 쓰기 실패(ENOSPC) → 그 회차만 fail-closed · 손상본 보존 · 정본 장부 없음',
+        !r.ok && r.code === 'READ_FAILED' && r.reason.includes('새 장부 쓰기 실패 ENOSPC')
+        && existsSync(join(resetDir, ATTEMPT_JOURNAL_CORRUPT_FILE)) && !existsSync(join(resetDir, ATTEMPT_JOURNAL_FILE)))
+      // 프로세스가 죽은 뒤와 같다 — 메모리 상태 없이 새 인스턴스가 정본 없음 + 격리본을 본다
+      const previewBefore = readdirSync(resetDir).sort().join(',')
+      const preview = createAttemptStore({ dir: resetDir }).read(later + 1, { repair: false })
+      check('🔴 E-2 그 상태의 preview(repair:false) → 닫힌 채 write 0',
+        !preview.ok && preview.code === 'READ_FAILED' && readdirSync(resetDir).sort().join(',') === previewBefore)
+      const failedAgain = createAttemptStore({ dir: resetDir, ops: { writeSync: () => {
+        throw Object.assign(new Error('x'), { code: 'ENOSPC' })
+      } } }).read(later + 2)
+      check('🔴 E-2 새 인스턴스 재시도도 ENOSPC 면 그 회차만 실패 · 정본 없음 · 격리본 그대로',
+        !failedAgain.ok && failedAgain.reason.includes('재생성 실패 ENOSPC')
+        && !existsSync(join(resetDir, ATTEMPT_JOURNAL_FILE)) && existsSync(join(resetDir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+      const second = createAttemptStore({ dir: resetDir }).read(later + 3)
+      check('🔴🔴 E-2 디스크가 회복된 뒤 새 인스턴스 live 읽기 → 빈 장부를 다시 만들고 진행 · 격리본 한 개 보존',
+        second.ok && second.entries.length === 0 && second.warning !== undefined
+        && readFileSync(join(resetDir, ATTEMPT_JOURNAL_FILE), 'utf-8') === serializeAttemptJournal([])
+        && readdirSync(resetDir).sort().join(',') === [ATTEMPT_JOURNAL_FILE, ATTEMPT_JOURNAL_CORRUPT_FILE].sort().join(','),
+        second.ok ? readdirSync(resetDir).join(',') : second.reason)
+      const resumed = createAttemptStore({ dir: resetDir })
+      const db = makeDb(); const sent: Sent[] = []
+      const rep2 = await runRound({
+        round: 1, nowMs: later + 4, store: resumed, db, sent,
+        source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], POOL.map((c) => persona(c))),
+      })
+      check('🔴 E-2 복구된 장부로 다음 회차 첫 댓글 provider 재개', rep2.providerCalls > 0 && sent.length > 0,
+        `provider ${rep2.providerCalls} · 보냄 ${sent.length}`)
+    }
+    {
+      // 격리본 mtime 이 60분 window 안이면(그 안의 시도를 모른다) 정본이 없어도 새 장부를 만들지 않는다
+      const recentDir = freshDir()
+      const recentCorrupt = join(recentDir, ATTEMPT_JOURNAL_CORRUPT_FILE)
+      writeFileSync(recentCorrupt, '{oops')
+      utimesSync(recentCorrupt, new Date(later - 10 * MIN), new Date(later - 10 * MIN))
+      const r = createAttemptStore({ dir: recentDir }).read(later)
+      check('🔴 E-2 격리본이 60분 window 안이면 정본 없음이어도 fail-closed · write 0',
+        !r.ok && r.reason.includes('60분 window 안') && readdirSync(recentDir).join(',') === ATTEMPT_JOURNAL_CORRUPT_FILE)
+    }
+    {
+      const boundedDir = freshDir()
+      for (let i = 0; i < 3; i += 1) {
+        oldCorrupt(boundedDir)
+        const recovered = createAttemptStore({ dir: boundedDir }).read(later + i)
+        if (!recovered.ok) break
+      }
+      const files = readdirSync(boundedDir).sort()
+      check('🔴 E-2 반복 손상 격리본은 현재·직전 두 개만 보존한다',
+        files.length === 3 && files.includes(ATTEMPT_JOURNAL_FILE)
+        && files.includes(ATTEMPT_JOURNAL_CORRUPT_FILE)
+        && files.includes(ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE), files.join(','))
+    }
   }
 
   // ── F. 시작 기록의 atomic write 실패 → provider 0 · 원본 그대로 · 임시 파일 정리 ──

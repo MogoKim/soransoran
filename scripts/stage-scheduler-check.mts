@@ -43,11 +43,12 @@ import {
 } from '../src/lib/d100-capacity'
 import {
   SUPPLY_PROOF_LAST_PUBLISH_MINUTE, SUPPLY_PROOF_RUNS_PER_DAY,
-  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN, supplyProofBudgetUsd, supplyProofRunSlots,
+  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN,
+  supplyProofBudgetUsd, supplyProofRunSlots, supplyRunSlotMinuteOf,
 } from '../src/lib/supply-schedule-contract'
 import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
 import {
-  judgeStageEvidence, judgeEvidenceForTarget, trialPlanOf, PROOF_STATES,
+  judgeStageEvidence, judgeEvidenceForTarget, trialPlanOf, carriedTrialPlanFor, PROOF_STATES,
   type EvidencePost, type EvidenceSideSignals, type StageEvidenceFacts, type StageEvidenceVerdict,
 } from '../src/lib/stage-evidence'
 import { auditTarget } from '../src/lib/auto-ready-v2'
@@ -56,14 +57,20 @@ import {
   type ValidatedStageDecision, type StageDecision,
 } from '../src/lib/stage-decision-contract'
 import {
-  decideStage, consumerEnvOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerResult,
+  decideStage, consumerEnvOf, validateForToday, sustainedReleaseOf, leaseSafeHoldOf, type HealthSignal, type ControllerResult,
+  resolvePreviousAuthority, bridgeHoldOf, inputFailureHoldOf, signalBlindReleaseOf, heldReleaseOf, type DecisionRead,
+  CERTIFIED_ROLLOUT_PHASE, certifiedProvenanceOf, type CertifiedRolloutPhase,
 } from '../src/lib/stage-controller'
 import { preparedStageOf } from '../src/lib/stage-ladder'
 import { resolveScale, boundedReleaseStage } from '../src/lib/scale-runtime'
 import { proofDayOf, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { CONTROLLER_ENV, controllerEnabled } from '../src/lib/stage-decision-store'
-import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import {
+  RUNNER_GRID, futureAdditionalOf, measuredFutureSourceOpportunities, slotValidOpportunitiesOf,
+} from './lib/stage-preflight-facts.mjs'
 import { settledUnitUsd, settledTotalUsd, cappedBy } from './lib/stage-preflight-facts.mjs'
+import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
+import { OPPORTUNITY_INVENTORY_AXIS, OPPORTUNITY_INVENTORY_BASIS, OPPORTUNITY_KIND, OPPORTUNITY_VERSION } from '../src/lib/supply-workset'
 import { COMMENT_RUNNER_SLOTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 import { readEnvKeys } from './lib/ops-signals.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
@@ -173,10 +180,278 @@ section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 �
  *    용량 = 필요량(= 목표)을 겨우 채움 · Persona = canary 하한). 넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
  */
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
+/** 🔴 미래 순유입 합집합 반례의 실제 산출 — 아래 D20 preflight 판정에 그대로 넣는다 */
+const FUTURE_UNION: {
+  overlap: number | null; distinct: number | null
+  /** H1 반례 — 현재 원천 300(이른 슬롯) · y=0.1 · 순유입 17(늦은 슬롯) */
+  pooledCurrent: number | null; pooled: number | null; oldPooled: number | null
+} = { overlap: null, distinct: null, pooledCurrent: null, pooled: null, oldPooled: null }
 const d3LastPublishMinute = Math.max(...profileOf('d3').slots.map((slot) => slot.hour * 60 + slot.minute))
 check('🔴 당일 증명 회차 경계는 가장 이른 D3 마지막 발행 슬롯 19:00과 맞고 5회다',
   SUPPLY_PROOF_LAST_PUBLISH_MINUTE === d3LastPublishMinute
   && supplyProofRunSlots(SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS).length === 5)
+check('launchd 가 1분 늦게 시작한 08:16은 08:15 자연 공급 회차에 귀속된다',
+  supplyRunSlotMinuteOf(8 * 60 + 16) === 8 * 60 + 15)
+check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정하지 않는다',
+  supplyRunSlotMinuteOf(9 * 60) === null)
+{
+  const target = '2026-11-03'
+  const now = new Date(`${target}T07:00:00+09:00`)
+  const runIdAt = (date: string, hour = 8, minute = 15): string => {
+    const iso = new Date(`${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+09:00`).toISOString()
+    return iso.replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+  }
+  const snapshotAt = (
+    targetDir: string, date: string, ids: readonly string[], hour = 8, minute = 15, evidenceAt?: Date,
+    origin: 'natural' | 'scheduled-followup' | 'event' | 'manual' | 'legacy' = 'natural',
+  ): void => {
+    const written = ids.length
+    const runId = runIdAt(date, hour, minute)
+    const runAt = new Date(`${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+09:00`)
+    const takenAt = new Date(runAt.getTime() + 10 * 60_000).toISOString()
+    const budgetSlot = SUPPLY_RUN_SLOTS_KST.find((slot) => {
+      const start = slot.hour * 60 + slot.minute
+      const actual = hour * 60 + minute
+      return actual >= start && actual < start + SUPPLY_RUN_WINDOW_MS / 60_000
+    })
+    const budgetWindow = budgetSlot === undefined ? `${date} 00:00`
+      : `${date} ${String(budgetSlot.hour).padStart(2, '0')}:${String(budgetSlot.minute).padStart(2, '0')}`
+    const evidence = ids.map((id) => fakeSourceEvidence(evidenceAt ?? new Date(takenAt), {
+      site: 'navercafe:fixture', id, ageH: 3,
+    }))
+    const snapshot = {
+      kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt,
+      inventory: {
+        basis: OPPORTUNITY_INVENTORY_BASIS, axis: OPPORTUNITY_INVENTORY_AXIS,
+        counts: { inputRows: written, lifecyclePassed: written, autoSeed: written, evidenceMissing: 0, written },
+      },
+      evidence,
+    }
+    writeFileSync(join(targetDir, `supply-opportunities-${runId}.json`), JSON.stringify(snapshot))
+    writeFileSync(join(targetDir, `supply-process-${runId}.run.json`), JSON.stringify({
+      runId, startedAt: runAt.toISOString(), status: 'done', completedAt: takenAt, runtimeSha: 'fixture-runtime-sha',
+      runTokenShadow: origin === 'natural'
+        ? {
+            ok: true, code: null, tokenId: `token-${runId}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+            absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow,
+          }
+        : origin === 'scheduled-followup'
+          ? {
+              ok: true, code: null, tokenId: `token-${runId}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+              absorbedTrigger: 'scheduled', absorbedAt: new Date(`${date}T08:15:00+09:00`).toISOString(),
+              pass: 1, budgetWindow,
+            }
+        : origin === 'event'
+          ? {
+              ok: true, code: null, tokenId: `token-${runId}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+              absorbedTrigger: 'event', absorbedAt: runAt.toISOString(), pass: 0, budgetWindow,
+            }
+          : origin === 'manual' ? {
+              ok: true, code: null, tokenId: `token-${runId}`, trigger: 'manual', launchTrigger: 'manual',
+              absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow,
+            } : {
+              ok: true, code: null, tokenId: `token-${runId}`, trigger: 'scheduled', budgetWindow,
+            },
+      opportunityInventory: { status: 'written', runId, observedAt: takenAt, written, reason: null },
+    }))
+  }
+  const SAMPLE_DATES = ['2026-10-31', '2026-11-01', '2026-11-02']
+  const ids = (prefix: string, n: number): string[] => Array.from({ length: n }, (_, k) => `${prefix}-${k}`)
+  type DayPlan = {
+    baseline?: readonly string[] | null; inflow0815: readonly string[]; skip?: readonly number[]
+    origin?: 'natural' | 'event'; evidenceAt?: (date: string) => Date
+    /** 기준선 원천이 소진돼 뒤 회차 inventory 에서 빠진다(재고 수준은 그대로 · 원천은 교체) */
+    dropBaseline?: boolean
+  }
+  /** 🔴 하루 = 06:15 기준선 회차 + 남은 proof 공급 회차 넷. 08:15 회차가 순유입을 처음 보고, 뒤 회차는 같은 원천을 다시 본다 */
+  const writeDay = (targetDir: string, date: string, p: DayPlan): void => {
+    const base = p.baseline === undefined ? ids(`${date}-base`, 5) : p.baseline
+    if (base !== null) snapshotAt(targetDir, date, base, 6, 15, p.evidenceAt?.(date))
+    const seen = [...(base === null || p.dropBaseline === true ? [] : base), ...p.inflow0815]
+    for (const [h, m] of [[8, 15], [12, 15], [14, 15], [17, 15]] as const) {
+      if (p.skip?.includes(h)) continue
+      snapshotAt(targetDir, date, seen, h, m, p.evidenceAt?.(date), p.origin ?? 'natural')
+    }
+  }
+  const at = (h: number, m: number): Date =>
+    new Date(`${target}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+09:00`)
+  // 증명 슬롯 20 — 이른 3개(08:00·08:20·08:40)는 아무도 못 채운다 · 늦은 17개 09:00~10:20(5분 간격)
+  const PROOF20 = [at(8, 0), at(8, 20), at(8, 40), ...Array.from({ length: 17 }, (_, k) => at(9 + Math.floor((k * 5) / 60), (k * 5) % 60))]
+  const LATE = 9 * 60
+  const kstMinute = (d: Date): number => { const w = new Date(d.getTime() + 9 * 3600_000); return w.getUTCHours() * 60 + w.getUTCMinutes() }
+  const opp = (key: string, ok: (minute: number) => boolean) => ({ key, validAt: (slot: Date) => ok(kstMinute(slot)) })
+  const lateOnly = (prefix: string, n: number) => ids(prefix, n).map((k) => opp(k, (m) => m >= LATE))
+  const earlyOnly = (prefix: string, n: number) => ids(prefix, n).map((k) => opp(k, (m) => m < LATE))
+  const futureOf = (dataDir: string, o: {
+    ready?: ReturnType<typeof opp>[]; current?: ReturnType<typeof opp>[]; y?: number | null; kstDate?: string
+  } = {}): number | null => measuredFutureSourceOpportunities({
+    dataDir, kstDate: o.kstDate ?? target, now, proofSlots: PROOF20,
+    ready: o.ready ?? [], current: o.current ?? [], readyPerSourceLow: o.y === undefined ? 1 : o.y,
+  })
+  const scenario = (name: string, plans: (date: string) => DayPlan): string => {
+    const d = mkdtempSync(join(tmpdir(), `future-inflow-${name}-`))
+    for (const date of SAMPLE_DATES) writeDay(d, date, plans(date))
+    return d
+  }
+  const dirs: string[] = []
+  const keep = (d: string): string => { dirs.push(d); return d }
+
+  // ① 재현 — READY 10 · 미래 원천 17 이 모두 늦은 17슬롯에서만 유효 · 이른 3슬롯은 못 채운다
+  const overlap = keep(scenario('overlap', (date) => ({ inflow0815: ids(`${date}-new`, 17) })))
+  const ready10 = lateOnly('ready', 10)
+  FUTURE_UNION.overlap = futureOf(overlap, { ready: ready10 })
+  check('🔴🔴 합집합 — READY 10 이 늦은 17슬롯을 먼저 쓰면 순유입 17 은 남은 늦은 7슬롯만 채운다 → 추가 7',
+    FUTURE_UNION.overlap === 7, String(FUTURE_UNION.overlap))
+  check('🔴 같은 겹침 — 현재 원천 10 이 늦은 슬롯만 유효해도 같은 슬롯을 다툰다(추가 7)',
+    futureOf(overlap, { current: lateOnly('cur', 10) }) === 7)
+
+  // ② 서로 다른 슬롯의 순유입 — READY 3 은 이른 슬롯, 순유입 17 은 늦은 슬롯 → 20/20
+  FUTURE_UNION.distinct = futureOf(overlap, { ready: earlyOnly('ready', 3) })
+  check('🟢 서로 다른 슬롯 — READY 3(이른) + 순유입 17(늦은) → 추가 17(85~90 선행 재고 없음)',
+    FUTURE_UNION.distinct === 17, String(FUTURE_UNION.distinct))
+  const turnover = keep(scenario('turnover', (date) => ({
+    baseline: ids(`${date}-old`, 17), inflow0815: ids(`${date}-new`, 17), dropBaseline: true,
+  })))
+  check('🟢 재고 수준은 17→17 그대로여도 원천이 통째로 바뀌었으면 새 원천 17 을 순유입으로 센다(재고 차이 0 이 아니다)',
+    futureOf(turnover, { ready: earlyOnly('ready', 3) }) === 17)
+  const noInflow = keep(scenario('flat', (date) => ({ baseline: ids(`${date}-old`, 17), inflow0815: [] })))
+  check('🔴 재고가 많아도(기준선 17 을 다시 봄) 새로 들어온 원천이 없으면 추가 0 — 재고 수준은 유입이 아니다',
+    futureOf(noInflow, { ready: earlyOnly('ready', 3) }) === 0)
+  const weakDay = keep(scenario('weak', (date) => ({ inflow0815: ids(`${date}-new`, date === '2026-11-01' ? 12 : 17) })))
+  check('🔴 3일 중 가장 약한 날의 추가분을 쓴다(17·12·17 → 12)', futureOf(weakDay, { ready: earlyOnly('ready', 3) }) === 12)
+  check('🔴 하한 수율로 할인한다 — 순유입 17 × 0.5 → 8(현재 0)', futureOf(overlap, { y: 0.5 }) === 8)
+  const stale = keep(scenario('stale', (date) => ({
+    inflow0815: ids(`${date}-new`, 17), evidenceAt: (d) => new Date(`${addDays(d, -4)}T00:00:00+09:00`),
+  })))
+  check('🔴 순유입이어도 그날 같은 슬롯에서 신선도·품질 관문을 못 넘으면 추가 0', futureOf(stale, { ready: earlyOnly('ready', 3) }) === 0)
+
+  // ③ H1 — 수율은 묶음마다 따로 곱한다. 현재 원천 300(이른 3슬롯만) · y=0.1 · 순유입 17(늦은 17슬롯만)
+  const early300 = earlyOnly('cur', 300)
+  const pooled = futureOf(overlap, { current: early300, y: 0.1 })
+  const pooledCurrent = slotValidOpportunitiesOf({ slots: PROOF20, ready: [], sources: early300, readyPerSource: 0.1 }).total
+  FUTURE_UNION.pooledCurrent = pooledCurrent
+  FUTURE_UNION.pooled = pooled
+  FUTURE_UNION.oldPooled = slotValidOpportunitiesOf({
+    slots: PROOF20, ready: [], sources: [...early300, ...lateOnly('in', 17)], readyPerSource: 0.1,
+  }).total - pooledCurrent
+  check('🔴🔴 H1 — 현재 300(이른) 의 남는 수율을 순유입(늦은 17)에 빌려주지 않는다: 현재 3 + 추가 floor(17×0.1)=1 = 4',
+    pooledCurrent === 3 && pooled === 1, `current=${pooledCurrent} future=${String(pooled)}`)
+  check('🔴 H1 순수 산식 — 합집합 겹침 상한(17)과 순유입 자기 수율 상한(1) 중 작은 값',
+    futureAdditionalOf({ slots: PROOF20, ready: [], current: early300, inflow: lateOnly('in', 17), readyPerSource: 0.1 }) === 1
+    && futureAdditionalOf({ slots: PROOF20, ready: lateOnly('ready', 10), current: [], inflow: lateOnly('in', 17), readyPerSource: 1 }) === 7)
+
+  // ④ 증명된 누락은 0 · 기준선 없음과 손상은 모름(null)
+  const skipped = keep(scenario('skip', (date) => ({ inflow0815: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [14] : [] })))
+  check('🟢 M2 — 표본일 하나에 14:15 자연 회차만 빠져도 08:15 이 이미 본 순유입 17 은 센다(UNKNOWN 아님)',
+    futureOf(skipped, { ready: earlyOnly('ready', 3) }) === 17)
+  const skippedInflow = keep(scenario('skip-inflow', (date) => ({ inflow0815: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [8] : [] })))
+  check('🔴 M2 — 순유입을 처음 볼 08:15 회차가 빠지면 그 원천은 12:15 에야 보인다 → 그날 늦은 가용(증명 슬롯 뒤) · 추가 0',
+    futureOf(skippedInflow, { ready: earlyOnly('ready', 3) }) === 0)
+  const noNatural = keep(scenario('no-natural', (date) => ({ inflow0815: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [8, 12, 14, 17] : [] })))
+  check('🔴 M2 — 기준선은 있고 자연 공급 회차가 하루 통째로 없으면 그날 추가 0 → 3일 최솟값 0',
+    futureOf(noNatural, { ready: earlyOnly('ready', 3) }) === 0)
+  const noBase = keep(scenario('nobase', (date) => ({ inflow0815: ids(`${date}-new`, 17), baseline: date === SAMPLE_DATES[0] ? null : undefined })))
+  check('🔴 첫 표본일 07:00 기준선 inventory 가 없으면 순유입을 셀 수 없다 → UNKNOWN', futureOf(noBase) === null)
+  const eventOnly = keep(scenario('event', (date) => ({ inflow0815: ids(`${date}-new`, 17), origin: 'event' })))
+  check('🔴 슬롯 창 안 event kickstart 회차는 자연 표본이 아니다 → 추가 0(부풀리지 않는다)', futureOf(eventOnly, { ready: earlyOnly('ready', 3) }) === 0)
+  const corrupt = keep(scenario('corrupt', (date) => ({ inflow0815: ids(`${date}-new`, 17) })))
+  writeFileSync(join(corrupt, `supply-opportunities-${runIdAt('2026-11-01', 12, 15)}.json`), '{')
+  check('🔴 M2 — 남은 슬롯 표본 하나라도 손상이면 여전히 UNKNOWN(누락이 아니다)', futureOf(corrupt) === null)
+  const orphan = keep(scenario('orphan', (date) => ({ inflow0815: ids(`${date}-new`, 17) })))
+  rmSync(join(orphan, `supply-opportunities-${runIdAt('2026-11-01', 14, 15)}.json`))
+  check('🔴 M2 — 자연 회차가 snapshot written 을 주장하는데 파일이 없으면 손상 → UNKNOWN', futureOf(orphan) === null)
+  const twoDays = keep(mkdtempSync(join(tmpdir(), 'future-inflow-two-')))
+  for (const date of SAMPLE_DATES.slice(1)) writeDay(twoDays, date, { inflow0815: ids(`${date}-new`, 17) })
+  check('🔴 표본 3일 중 하루가 통째로 없으면(기준선 없음) UNKNOWN', futureOf(twoDays) === null)
+  check('🔴 하한 수율을 모르거나 kstDate·now 날짜가 어긋나면 UNKNOWN',
+    futureOf(overlap, { y: null }) === null && futureOf(overlap, { kstDate: '2026-11-04' }) === null)
+
+  // ⑤ M2 — 끝난 failed 회차도 snapshot·marker 가 온전하면 표본이다 · running · marker 손상은 모름
+  const runPath = (dir: string, date: string, h: number, m: number): string =>
+    join(dir, `supply-process-${runIdAt(date, h, m)}.run.json`)
+  const patchRun = (dir: string, date: string, h: number, m: number, patch: Record<string, unknown>): void => {
+    const path = runPath(dir, date, h, m)
+    writeFileSync(path, JSON.stringify({ ...(JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>), ...patch }))
+  }
+  const markerOf = (dir: string, date: string, h: number, m: number): Record<string, unknown> =>
+    (JSON.parse(readFileSync(runPath(dir, date, h, m), 'utf-8')) as { opportunityInventory: Record<string, unknown> }).opportunityInventory
+  const inflowPlan = (date: string): DayPlan => ({ inflow0815: ids(`${date}-new`, 17) })
+  const failedOk = keep(scenario('failed-written', inflowPlan))
+  patchRun(failedOk, '2026-11-01', 8, 15, { status: 'failed' })
+  patchRun(failedOk, '2026-11-02', 6, 15, { status: 'failed' })
+  check('🟢 M2 — 다른 단계가 실패한(failed) 자연 회차도 snapshot·marker·runId·시각·SHA 가 온전하면 표본·기준선이다(대조와 같은 17)',
+    futureOf(failedOk, { ready: earlyOnly('ready', 3) }) === 17 && futureOf(overlap, { ready: earlyOnly('ready', 3) }) === 17)
+  const failedBadMarker = keep(scenario('failed-bad-marker', inflowPlan))
+  patchRun(failedBadMarker, '2026-11-01', 8, 15, {
+    status: 'failed',
+    opportunityInventory: { ...markerOf(failedBadMarker, '2026-11-01', 8, 15), status: 'failed', written: null, reason: 'write EIO' },
+  })
+  const failedDriftMarker = keep(scenario('failed-drift-marker', inflowPlan))
+  patchRun(failedDriftMarker, '2026-11-01', 8, 15, {
+    status: 'failed',
+    opportunityInventory: { ...markerOf(failedDriftMarker, '2026-11-01', 8, 15), observedAt: '2026-11-01T00:00:00.000Z' },
+  })
+  check('🔴 M2 — failed 회차의 marker 가 written 이 아니거나 snapshot 과 어긋나면 UNKNOWN',
+    futureOf(failedBadMarker) === null && futureOf(failedDriftMarker) === null)
+  const runningWritten = keep(scenario('running-written', inflowPlan))
+  patchRun(runningWritten, '2026-11-01', 8, 15, { status: 'running', completedAt: null })
+  const runningBaseline = keep(scenario('running-baseline', inflowPlan))
+  patchRun(runningBaseline, '2026-11-01', 6, 15, { status: 'running', completedAt: null })
+  const unknownStatus = keep(scenario('unknown-status', inflowPlan))
+  patchRun(unknownStatus, '2026-11-01', 8, 15, { status: 'partial' })
+  check('🔴 M2 — running(완료 시각 없음)·모르는 상태는 snapshot·marker 가 written 이어도 UNKNOWN(표본·기준선 모두)',
+    futureOf(runningWritten) === null && futureOf(runningBaseline) === null && futureOf(unknownStatus) === null)
+  /** 2026-11-01 14:15 자연 회차의 기회 파일을 지우고 marker 를 비운다 — snapshot 을 주장하지 않는 회차 기록만 남는다 */
+  const noSnapshot = (name: string, patch: Record<string, unknown>): string => {
+    const dir = keep(scenario(name, inflowPlan))
+    rmSync(join(dir, `supply-opportunities-${runIdAt('2026-11-01', 14, 15)}.json`))
+    patchRun(dir, '2026-11-01', 14, 15, { opportunityInventory: null, ...patch })
+    return dir
+  }
+  check('🟢 M2 대조 — 끝난(done) 자연 회차가 snapshot 없이 written 도 주장하지 않으면 증명된 누락 → 슬롯 0 · 08:15 순유입 17',
+    futureOf(noSnapshot('nosnap-done', {}), { ready: earlyOnly('ready', 3) }) === 17)
+  check('🔴 M2 — running 자연 회차가 snapshot 없이 marker 도 없으면 누락이 아니라 UNKNOWN',
+    futureOf(noSnapshot('nosnap-running', { status: 'running', completedAt: null }), { ready: earlyOnly('ready', 3) }) === null)
+  check('🔴 M2 — 모르는 상태(partial) 자연 회차가 snapshot 없이 marker 도 없으면 UNKNOWN',
+    futureOf(noSnapshot('nosnap-unknown', { status: 'partial' }), { ready: earlyOnly('ready', 3) }) === null)
+  check('🔴 M2 — done 이어도 completedAt 이 깨졌거나 판정 시각 뒤면 snapshot 없는 회차는 UNKNOWN',
+    futureOf(noSnapshot('nosnap-bad-completed', { completedAt: 'not-a-date' }), { ready: earlyOnly('ready', 3) }) === null
+    && futureOf(noSnapshot('nosnap-future-completed', { completedAt: '2026-11-04T00:00:00.000Z' }), { ready: earlyOnly('ready', 3) }) === null)
+
+  // ⑥ 기준선 provenance — 07:00 판정의 기준선은 그날 06:15 자연 proof 슬롯 하나다
+  /** 표본일 전날 22:15 자연 회차 — 06:15 이 없을 때 앞판이 내려가 읽던 "전날 밤" 기준선 */
+  const priorNight = (dir: string): void => {
+    for (const date of SAMPLE_DATES) snapshotAt(dir, addDays(date, -1), ids(`${date}-base`, 5), 22, 15)
+  }
+  const missingAll = keep(scenario('base-missing-all', (date) => ({ ...inflowPlan(date), baseline: null })))
+  priorNight(missingAll)
+  check('🔴🔴 기준선 — 세 표본일 모두 06:15 이 없고 전날 밤 22:15 자연 snapshot 이 온전해도 UNKNOWN(전날 밤으로 내려가지 않는다)',
+    futureOf(missingAll) === null)
+  const priorControl = keep(scenario('base-prior-control', inflowPlan))
+  priorNight(priorControl)
+  check('🟢 기준선 대조 — 06:15 이 있으면 같은 전날 밤 회차가 있어도 06:15 로 센다(17)',
+    futureOf(priorControl, { ready: earlyOnly('ready', 3) }) === 17)
+  const nonNaturalBase = (origin: 'event' | 'manual'): string => {
+    const dir = keep(scenario(`base-${origin}`, (date) => ({ ...inflowPlan(date), baseline: null })))
+    for (const date of SAMPLE_DATES) snapshotAt(dir, date, ids(`${date}-base`, 5), 6, 15, undefined, origin)
+    priorNight(dir)
+    return dir
+  }
+  check('🔴 기준선 — 세 표본일의 06:15 이 event·manual 회차뿐이면 UNKNOWN(비자연 회차를 기준선으로 쓰지 않는다)',
+    futureOf(nonNaturalBase('event')) === null && futureOf(nonNaturalBase('manual')) === null)
+  const corruptBase = keep(scenario('base-corrupt', inflowPlan))
+  writeFileSync(join(corruptBase, `supply-opportunities-${runIdAt('2026-11-01', 6, 15)}.json`), '{')
+  const noShaBase = keep(scenario('base-no-sha', inflowPlan))
+  patchRun(noShaBase, '2026-11-01', 6, 15, { runtimeSha: '' })
+  check('🔴 기준선 — 06:15 snapshot 손상 · runtimeSha 없음이면 UNKNOWN',
+    futureOf(corruptBase) === null && futureOf(noShaBase) === null)
+  check('🔴 기준선 — 창이 끝난 proof 슬롯이 없는 06:50 판정은 UNKNOWN(전날 밤으로 내려가지 않는다)',
+    measuredFutureSourceOpportunities({
+      dataDir: priorControl, kstDate: target, now: new Date(`${target}T06:50:00+09:00`), proofSlots: PROOF20,
+      ready: [], current: [], readyPerSourceLow: 1,
+    }) === null)
+  for (const d of dirs) rmSync(d, { recursive: true, force: true })
+}
 const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
   sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
   usdPerSlotValidResult: SUPPLY_USD_PER_READY, ...o,
@@ -230,6 +505,44 @@ for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
   const v = judgeNextPreflight(s, factsFor(s), GRID)
   check(`${s} preflight PASS — 댓글 ${v.counts.firstComments}건 · 감사 ${v.counts.auditExpected}건 · READY ${v.counts.readyNeeded}건 비용 상한 안`,
     v.verdict === 'PASS', `${v.verdict} [${v.codes.join(',')}]`)
+}
+{
+  const enough = judgeNextPreflight('d20', factsFor('d20', {
+    slotValidOpportunities: 16, futureSupplyCapacity: 4,
+  }), GRID)
+  const short = judgeNextPreflight('d20', factsFor('d20', {
+    slotValidOpportunities: 16, futureSupplyCapacity: 3,
+  }), GRID)
+  const unknown = judgeNextPreflight('d20', factsFor('d20', {
+    slotValidOpportunities: 16, futureSupplyCapacity: null,
+  }), GRID)
+  const alreadyEnough = judgeNextPreflight('d20', factsFor('d20', {
+    slotValidOpportunities: 20, futureSupplyCapacity: null,
+  }), GRID)
+  check('🔴 현재 16 + 보수 미래 4 = D20 기회 PASS (미래를 READY 재고로 세지 않고 opportunity 축만 보완)',
+    enough.verdict === 'PASS' && enough.counts.opportunitiesCurrent === 16
+    && enough.counts.opportunitiesFuture === 4 && enough.counts.opportunities === 20)
+  check('🔴 현재 16 + 미래 3이면 SHORT, 미래 수율 모름이면 UNKNOWN',
+    short.codes.includes('OPPORTUNITY_SHORT') && unknown.codes.includes('OPPORTUNITY_UNKNOWN'))
+  const oldArithmetic = judgeNextPreflight('d20', factsFor('d20', { slotValidOpportunities: 10, futureSupplyCapacity: 17 }), GRID)
+  const unionVerdict = judgeNextPreflight('d20', factsFor('d20', { slotValidOpportunities: 10, futureSupplyCapacity: FUTURE_UNION.overlap }), GRID)
+  const distinctVerdict = judgeNextPreflight('d20', factsFor('d20', { slotValidOpportunities: 3, futureSupplyCapacity: FUTURE_UNION.distinct }), GRID)
+  check('🔴 반례 고정 — 고치기 전 산식(재고 17 − 현재 원천 0 = 17)은 READY 10 + 17 → D20 기회 20 PASS 였다',
+    oldArithmetic.counts.opportunities === 20 && !oldArithmetic.codes.includes('OPPORTUNITY_SHORT'))
+  check('🔴🔴 합집합 산출(READY 10 + 추가 7)을 넣으면 D20 기회 17/20 → OPPORTUNITY_SHORT · 시험을 열지 않는다',
+    unionVerdict.counts.opportunities === 17 && unionVerdict.codes.includes('OPPORTUNITY_SHORT'),
+    `opp=${String(unionVerdict.counts.opportunities)} [${unionVerdict.codes.join(',')}]`)
+  check('🟢 서로 다른 슬롯 산출(READY 3 + 추가 17)이면 D20 기회 20 — 실시간 JIT 순유입만으로 연다',
+    distinctVerdict.counts.opportunities === 20 && !distinctVerdict.codes.includes('OPPORTUNITY_SHORT'))
+  const pooledVerdict = judgeNextPreflight('d20', factsFor('d20', {
+    slotValidOpportunities: FUTURE_UNION.pooledCurrent, futureSupplyCapacity: FUTURE_UNION.pooled,
+  }), GRID)
+  check('🔴🔴 H1 — 같은 사실로 D20 은 OPPORTUNITY_SHORT(4/20) · 고치기 전 합집합 단독 산식은 추가 17 → 20/20 거짓 PASS 였다',
+    pooledVerdict.counts.opportunities === 4 && pooledVerdict.codes.includes('OPPORTUNITY_SHORT')
+    && FUTURE_UNION.oldPooled === 17,
+    `opp=${String(pooledVerdict.counts.opportunities)} old=${String(FUTURE_UNION.oldPooled)} [${pooledVerdict.codes.join(',')}]`)
+  check('🟢 현재 기회가 이미 목표면 미래를 몰라도 기존 PASS를 훼손하지 않는다',
+    alreadyEnough.verdict === 'PASS' && !alreadyEnough.codes.includes('OPPORTUNITY_UNKNOWN'))
 }
 {
   const s20 = judgeNextPreflight('d20', factsFor('d20'), GRID)
@@ -380,6 +693,389 @@ const tr = (d: Day): string => `${d.decision.state}:${d.decision.release}`
 const basisOf = (d: Day): string | null => (d.decision.transition?.kind === 'TRIAL' ? d.decision.transition.basis ?? null : null)
 const baseOf = (d: Day): string | null => (d.decision.transition?.kind === 'TRIAL' ? d.decision.transition.trialBase : null)
 const blocked = (d: Day, code: string): boolean => d.decision.blocks.some((b) => b.code === code)
+
+// S0 — controller가 쓰는 실제 과거 검색 정본: 누락·깨진 날짜·3일 상한을 포함한다
+{
+  const historyRow = (
+    kstDate: string,
+    release: RuntimeStage,
+    state: 'HOLD' | 'PREPARE' | 'TRIAL',
+  ): ValidatedStageDecision => {
+    const transition = state === 'TRIAL'
+      ? {
+          kind: 'TRIAL' as const,
+          trialBase: release === 'd5' ? 'd3' as const : 'd1' as const,
+          previousKstDate: addDays(kstDate, -1), target: release,
+          basis: 'PASS' as const,
+        }
+      : null
+    const v = validateStoredDecision({
+      row: {
+        kstDate, capacity: preparedStageOf(release), release, state,
+        reasons: [], blocks: [], dayPinned: false, supply: null,
+        decidedAt: at0700(kstDate), contractVersion: STAGE_DECISION_VERSION,
+        decidedBy: DECISION_WRITER, transition,
+      },
+      expectKstDate: kstDate,
+    })
+    if (!v.ok) throw new Error(v.reason)
+    return v.decision
+  }
+  const previous = historyRow(D0, 'd3', 'HOLD')
+  const seed = historyRow(addDays(D0, -3), 'd5', 'TRIAL')
+  const hold1 = historyRow(addDays(D0, -2), 'd3', 'HOLD')
+  const hold2 = historyRow(addDays(D0, -1), 'd3', 'PREPARE')
+  const full = new Map([seed, hold1, hold2].map((d) => [d.kstDate, d]))
+  const calls: string[] = []
+  const carried = await carriedTrialPlanFor(previous, {
+    readDecision: async (date) => { calls.push(date); return full.get(date) ?? null },
+    readEvidence: async (decision) => decision.kstDate === seed.kstDate
+      ? evidenceOfDay(decision, 'perfect') : null,
+  })
+  check('🔴 S0 실제 검색 — 최신→과거 3일을 읽고 PASS seed에서 d10 계획을 복원한다',
+    calls.join(',') === [hold2.kstDate, hold1.kstDate, seed.kstDate].join(',')
+    && carried?.base === 'd5' && carried.target === 'd10' && carried.basis === 'PASS')
+
+  const missing = await carriedTrialPlanFor(previous, {
+    readDecision: async () => null,
+    readEvidence: async () => { throw new Error('누락 행의 증거를 읽으면 안 된다') },
+  })
+  check('🔴 S0 과거 결정이 누락·깨졌으면 계획을 지어내지 않는다', missing === null)
+
+  const wrongDate = await carriedTrialPlanFor(previous, {
+    readDecision: async () => seed,
+    readEvidence: async () => evidenceOfDay(seed, 'perfect'),
+  })
+  check('🔴 S0 저장소가 요청과 다른 날짜 행을 돌려주면 계획을 잇지 않는다', wrongDate === null)
+
+  const overLimitRows = new Map([
+    historyRow(addDays(D0, -1), 'd3', 'HOLD'),
+    historyRow(addDays(D0, -2), 'd3', 'HOLD'),
+    historyRow(addDays(D0, -3), 'd3', 'HOLD'),
+    historyRow(addDays(D0, -4), 'd5', 'TRIAL'),
+  ].map((d) => [d.kstDate, d]))
+  const overLimit = await carriedTrialPlanFor(previous, {
+    readDecision: async (date) => overLimitRows.get(date) ?? null,
+    readEvidence: async (decision) => decision.state === 'TRIAL' ? evidenceOfDay(decision, 'perfect') : null,
+  })
+  check('🔴 S0 3일보다 오래된 인증 seed는 읽지 않고 계획을 버린다', overLimit === null)
+
+  let nonCarryReads = 0
+  const nonCarry = await carriedTrialPlanFor(seed, {
+    readDecision: async () => { nonCarryReads += 1; return null },
+    readEvidence: async () => null,
+  })
+  check('🔴 S0 TRIAL·REPROVE 같은 증명일에는 이월 검색 자체를 하지 않는다', nonCarry === null && nonCarryReads === 0)
+}
+
+// S-CERT — 인증 권한과 다음 시험 계획을 나눈다: brake·lease HOLD 가 낮춘 공개는 인증을 지우지 않는다
+{
+  const BAD_COST: HealthSignal[] = [
+    { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'bad', reasons: ['UNSETTLED_OVERRUN'] },
+    { axis: 'errors', health: 'ok', reasons: [] },
+  ]
+  const validated = (row: Record<string, unknown>): ValidatedStageDecision | string => {
+    const v = validateStoredDecision({ row, expectKstDate: row.kstDate as string })
+    return v.ok ? v.decision : v.reason
+  }
+  const rowOf = (kstDate: string, release: RuntimeStage, state: string, transition: unknown, contractVersion: string = STAGE_DECISION_VERSION) => ({
+    kstDate, capacity: preparedStageOf(release), release, state, reasons: [], blocks: [], dayPinned: false, supply: null,
+    decidedAt: at0700(kstDate), contractVersion, decidedBy: DECISION_WRITER, transition,
+  })
+
+  /** 🔴 controller 스크립트 main 과 같은 조립 — 저장소에서 전날 행 · 그 증거 · 되짚은 계획을 읽고 decideStage → 저장 검증 */
+  const passDay = addDays(D0, -10)
+  const store = new Map<string, ValidatedStageDecision>()
+  const evidenceOf = (d: ValidatedStageDecision): StageEvidenceVerdict =>
+    evidenceOfDay(d, d.kstDate === passDay ? 'perfect' : 'unread')
+  const controllerDay = async (kstDate: string, signals: HealthSignal[]): Promise<Day> => {
+    const prev = store.get(addDays(kstDate, -1)) ?? null
+    const evidence = prev === null ? null : evidenceOf(prev)
+    const carried = prev === null ? null : await carriedTrialPlanFor(prev, {
+      readDecision: async (date) => store.get(date) ?? null, readEvidence: async (d) => evidenceOf(d),
+    })
+    const sustained = sustainedReleaseOf(prev, evidence, carried)
+    const plan = prev === null ? null : trialPlanOf(prev, evidence, carried)
+    const target = plan !== null ? (plan.base === sustained ? plan.target : null) : nextStage(sustained)
+    // 다음 칸 preflight 는 모름 — 시험·재인증 없이 평상 PREPARE 가 이어지는 날
+    const nextPreflight = target === null ? null : judgeNextPreflight(target, factsFor(target, { contractValidPersonas: null }), GRID)
+    const result = decideStage({
+      kstDate, decidedAt: at0700(kstDate), previousDecision: prev, previousEvidence: evidence, carriedPlan: carried,
+      nextPreflight, publishedToday: 0, signals,
+    })
+    const v = validateForToday(result.decision)
+    if (v.ok) store.set(kstDate, v.decision)
+    return { decision: result.decision, valid: v.ok ? v.decision : null, result, evidence, reason: v.ok ? '' : v.reason }
+  }
+  const seed = validated(rowOf(passDay, 'd10', 'TRIAL', {
+    kind: 'TRIAL', trialBase: 'd5', previousKstDate: addDays(passDay, -1), target: 'd10', basis: 'PASS',
+  }))
+  if (typeof seed === 'string') throw new Error(seed)
+  store.set(passDay, seed)
+  check('S-CERT 시작 — 운영 d10 시험일이 증거 PASS 다', evidenceOf(seed).verdict === 'PASS')
+
+  const normal: Day[] = []
+  for (let k = 1; k <= 6; k += 1) normal.push(await controllerDay(addDays(passDay, k), OK_SIGNALS))
+  console.log(`   S-CERT 평상 사슬: ${normal.map(tr).join(' ')}`)
+  check('S-CERT PASS 뒤 6일 평상 PREPARE d10 — 시험·재인증 없이 공개 d10 유지 · 저장 계약 통과',
+    normal.every((d) => tr(d) === 'PREPARE:d10' && d.valid !== null && d.decision.transition === null), normal.map((d) => d.reason).join(' / '))
+
+  /**
+   * 🔴 **H2 배포 단계 — 이 판은 reader 판이다.** validator · `sustainedReleaseOf` 는 `CERTIFIED` 행을 읽고,
+   *    controller 경로는 쓰지 않는다(write 0). writer 활성은 reader 판 배포·rollback 호환 확인 뒤의 별도 릴리스다.
+   *    🔴 아래 기대값은 `READER_READY` 기준이다 — writer 를 켜는 릴리스는 이 단언부터 일부러 바꿔야 한다.
+   */
+  const phase: CertifiedRolloutPhase = CERTIFIED_ROLLOUT_PHASE
+  check('🔴🔴 H2 — 이 판의 CERTIFIED 단계는 READER_READY 다(코드 상수 · env·문자열 파싱 없음)', phase === 'READER_READY', phase)
+  check('🔴 H2 writer 계약 — READER_READY 는 인증이 높아도 null · WRITER_ACTIVE 만 공개보다 높은 인증을 CERTIFIED 로 쓴다',
+    certifiedProvenanceOf('READER_READY', 'd5', 'd10') === null
+    && certifiedProvenanceOf('WRITER_ACTIVE', 'd10', 'd10') === null
+    && certifiedProvenanceOf('WRITER_ACTIVE', 'd5', 'd10')?.kind === 'CERTIFIED')
+
+  const brakeDay = await controllerDay(addDays(passDay, 7), BAD_COST)
+  check('🔴🔴 S-CERT reader 판 write 0 — PASS 가 7일 전인 날 비용 bad → 감속 PREPARE d5 · 행에 CERTIFIED 를 쓰지 않는다',
+    tr(brakeDay) === 'PREPARE:d5' && brakeDay.result.brake === 'slowdown' && brakeDay.valid !== null
+    && brakeDay.result.sustained === 'd10' && brakeDay.decision.transition === null, `${tr(brakeDay)} ${brakeDay.reason}`)
+  const after = await controllerDay(addDays(passDay, 8), OK_SIGNALS)
+  check('🔴 S-CERT reader 판 한계 고정 — 이월 밖 감속은 다음 정상일에도 d5 로 남는다(BRAKE_DEMOTION_PERSISTS 는 writer 활성 전 미해소)',
+    tr(after) === 'PREPARE:d5' && after.result.sustained === 'd5', tr(after))
+
+  // 🔴 reader 수용 — writer 활성 판이 쓸 같은 행(합성 CERTIFIED)을 이 판의 validator · controller 가 읽는다
+  const certifiedRow = validated(rowOf(brakeDay.decision.kstDate, 'd5', 'PREPARE',
+    certifiedProvenanceOf('WRITER_ACTIVE', 'd5', 'd10')))
+  if (typeof certifiedRow === 'string') throw new Error(certifiedRow)
+  check('🔴 S-CERT reader 수용 — 합성 CERTIFIED d10 행이 저장 계약을 지나고 지속 단계 d10 으로 읽힌다',
+    certifiedRow.transition?.kind === 'CERTIFIED' && sustainedReleaseOf(certifiedRow, evidenceOf(certifiedRow), null) === 'd10')
+  store.set(certifiedRow.kstDate, certifiedRow)
+  const afterReader = await controllerDay(addDays(passDay, 8), OK_SIGNALS)
+  check('🔴🔴 S-CERT reader 수용 — 전날이 합성 CERTIFIED 행이면 다음 정상일 인증 d10 복원 · 새 행엔 인증 칸 없음',
+    tr(afterReader) === 'PREPARE:d10' && afterReader.result.sustained === 'd10' && afterReader.decision.transition === null, tr(afterReader))
+
+  // 🔴 고치기 전 코드의 경로 — 같은 brake 행이 인증 칸 없이 저장되면 되짚을 PASS 가 3일 밖이라 d5 로 떨어진다
+  const legacyBrake = validated({ ...rowOf(brakeDay.decision.kstDate, 'd5', 'PREPARE', null) })
+  if (typeof legacyBrake === 'string') throw new Error(legacyBrake)
+  const legacyCarried = await carriedTrialPlanFor(legacyBrake, {
+    readDecision: async (date) => store.get(date) ?? null, readEvidence: async (d) => evidenceOf(d),
+  })
+  check('🔴 S-CERT 반례 고정 — 인증 칸이 없던 옛 행이면 이월 계획 null · 지속 d5(고치기 전 결과)',
+    legacyCarried === null && sustainedReleaseOf(legacyBrake, evidenceOf(legacyBrake), legacyCarried) === 'd5')
+
+  const bad2 = await controllerDay(addDays(passDay, 9), BAD_COST)
+  const bad3 = await controllerDay(addDays(passDay, 10), BAD_COST)
+  check('🔴 S-CERT reader 판 한계 고정 — 이틀 연속 brake 면 첫날만 인증 d10 아래 d5 · 인증 칸을 쓰지 않으니 둘째 날 d3 로 내려간다',
+    tr(bad2) === 'PREPARE:d5' && bad2.decision.transition === null
+    && tr(bad3) === 'PREPARE:d3' && bad3.decision.transition === null,
+    [bad2, bad3].map(tr).join(' '))
+
+  // D — lease 안전 HOLD: 어제 brake d3 · 인증 d5(합성 CERTIFIED) · 오늘 lease busy → 공개 d3 HOLD(올리지 않음)
+  const yBrake = validated(rowOf(D0, 'd3', 'PREPARE', { kind: 'CERTIFIED', certified: 'd5' }))
+  if (typeof yBrake === 'string') throw new Error(yBrake)
+  const today = addDays(D0, 1)
+  const lease = leaseSafeHoldOf({
+    kstDate: today, decidedAt: new Date(`${today}T07:55:00+09:00`).toISOString(), lease: 'busy',
+    authority: { kind: 'exact', previous: yBrake }, previousEvidence: evidenceOfDay(yBrake, 'unread'), carriedPlan: null,
+  })
+  const leaseValid = validateForToday(lease.decision)
+  check('🔴🔴 D lease busy + 어제 brake d3(합성 인증 d5) → HOLD d3 · d5 로 올리지 않는다 · reader 판은 인증 칸을 쓰지 않는다',
+    lease.decision.state === 'HOLD' && lease.decision.release === 'd3' && lease.certified === 'd5'
+    && lease.decision.transition === null && leaseValid.ok,
+    `${lease.decision.state}:${lease.decision.release} ${leaseValid.ok ? '' : leaseValid.reason}`)
+  check('🔴 D 반례 고정 — 고치기 전 공식(sustainedReleaseOf 그대로)은 같은 입력에서 d5 를 공개했다',
+    sustainedReleaseOf(yBrake, evidenceOfDay(yBrake, 'unread'), null) === 'd5')
+  const nextAfter = (prev: ValidatedStageDecision) => decideStage({
+    kstDate: addDays(prev.kstDate, 1), decidedAt: at0700(addDays(prev.kstDate, 1)), previousDecision: prev,
+    previousEvidence: evidenceOfDay(prev, 'unread'), carriedPlan: null,
+    nextPreflight: judgeNextPreflight('d10', factsFor('d10', { contractValidPersonas: null }), GRID), publishedToday: 0, signals: OK_SIGNALS,
+  })
+  const fromCertified = nextAfter(yBrake)
+  check('🔴 D reader 수용 — 전날이 합성 CERTIFIED d5 행이면 신호 ok 인 다음 controller 가 인증 d5 복원',
+    fromCertified.decision.release === 'd5' && fromCertified.sustained === 'd5',
+    `${fromCertified.decision.state}:${fromCertified.decision.release}`)
+  if (leaseValid.ok) {
+    const next = nextAfter(leaseValid.decision)
+    check('🔴 D reader 판 한계 고정 — 인증 칸 없는 lease HOLD 다음 날은 d3 유지(writer 활성 전 복원 없음)',
+      next.decision.release === 'd3' && next.sustained === 'd3', `${next.decision.state}:${next.decision.release}`)
+  }
+  const plainPrev = validated(rowOf(D0, 'd5', 'PREPARE', null))
+  const trialFail = validated(rowOf(D0, 'd10', 'TRIAL', { kind: 'TRIAL', trialBase: 'd5', previousKstDate: addDays(D0, -1), target: 'd10', basis: 'PASS' }))
+  if (typeof plainPrev === 'string' || typeof trialFail === 'string') throw new Error('S-CERT 행 검증 실패')
+  const leaseOf = (p: ValidatedStageDecision | null) => leaseSafeHoldOf({
+    kstDate: today, decidedAt: new Date(`${today}T07:55:00+09:00`).toISOString(), lease: 'unknown',
+    authority: p === null ? { kind: 'first-run' } : { kind: 'exact', previous: p },
+    previousEvidence: p === null ? null : evidenceOfDay(p, 'unread'), carriedPlan: null,
+  }).decision
+  check('D lease HOLD — 평상 d5 는 d5 그대로(인증 칸 없음) · 시험 d10 미증명은 기반 d5 · 전날 결정 없음은 d1',
+    leaseOf(plainPrev).release === 'd5' && leaseOf(plainPrev).transition === null
+    && leaseOf(trialFail).release === 'd5' && leaseOf(null).release === 'd1')
+
+  // S-BLIND — 신호를 보지 못한 HOLD 는 인접한 전날 행일 때만 보이던 공개를 지킨다. 다리·첫 시작은 보이는 공개가 d1 이다
+  {
+    const bridgeRow = validated(rowOf(D0, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd10' }))
+    if (typeof bridgeRow === 'string') throw new Error(bridgeRow)
+    const decidedAt = new Date(`${today}T07:55:00+09:00`).toISOString()
+    const bridgeAuth = { kind: 'bridge', bridge: bridgeRow } as const
+    const exactAuth = { kind: 'exact', previous: bridgeRow } as const
+    const firstAuth = { kind: 'first-run' } as const
+    const failOf = (authority: typeof bridgeAuth | typeof exactAuth | typeof firstAuth, certified: 'd1' | 'd5' | 'd10') =>
+      inputFailureHoldOf({ kstDate: today, decidedAt, authority, certified, reason: 'fixture 재고 읽기 실패' })
+    const leaseBy = (authority: typeof bridgeAuth | typeof exactAuth | typeof firstAuth) => leaseSafeHoldOf({
+      kstDate: today, decidedAt, lease: 'busy', authority,
+      previousEvidence: authority.kind === 'first-run' ? null : evidenceOfDay(bridgeRow, 'unread'), carriedPlan: null,
+    })
+    const bf = failOf(bridgeAuth, 'd10')
+    const bl = leaseBy(bridgeAuth)
+    check('🔴🔴 S-BLIND 다리 + 입력 실패 → 보이는 공개 d1 HOLD(이틀 전 d5 를 되살리지 않는다) · 숨은 인증 d10 은 reader 판에서 행에 쓰지 않는다',
+      bf.state === 'HOLD' && bf.release === 'd1' && bf.capacity === 'd1' && bf.transition === null && validateForToday(bf).ok,
+      `${bf.state}:${bf.release}`)
+    check('🔴🔴 S-BLIND 다리 + lease 안전 HOLD → 보이는 공개 d1 · 인증 d10 은 숨겨 둔다 · reader 판은 CERTIFIED 0',
+      bl.decision.state === 'HOLD' && bl.decision.release === 'd1' && bl.certified === 'd10'
+      && bl.decision.transition === null && validateForToday(bl.decision).ok,
+      `${bl.decision.state}:${bl.decision.release}`)
+    check('🔴 S-BLIND 반례 고정 — 고치기 전 공식(heldReleaseOf 그대로)은 같은 다리 입력에서 d5 를 공개했다',
+      heldReleaseOf(bridgeRow, 'd10') === 'd5' && signalBlindReleaseOf(bridgeAuth, 'd10') === 'd1')
+    const ef = failOf(exactAuth, 'd10')
+    const el = leaseBy(exactAuth)
+    check('🔴 S-BLIND 인접 전날 행은 보이던 공개를 보존한다 — 입력 실패·lease 모두 d5(올리지도 내리지도 않는다)',
+      ef.release === 'd5' && el.decision.release === 'd5' && el.certified === 'd10'
+      && ef.transition === null && el.decision.transition === null)
+    const ff = failOf(firstAuth, 'd1')
+    const fl = leaseBy(firstAuth)
+    check('🔴 S-BLIND 첫 시작은 입력 실패·lease 모두 d1 · 인증 d1',
+      ff.release === 'd1' && fl.decision.release === 'd1' && fl.certified === 'd1'
+      && ff.transition === null && fl.decision.transition === null)
+    check('🔴 S-BLIND reader 판 전이 0 — 어떤 권한이든 신호 없는 HOLD 는 CERTIFIED 를 쓰지 않는다',
+      [bf, bl.decision, ef, el.decision, ff, fl.decision].every((d) => d.transition === null))
+    check('🔴 S-BLIND writer 활성 판에서만 숨은 인증 d10 이 행에 남는다(d1 공개 + CERTIFIED d10)',
+      certifiedProvenanceOf('WRITER_ACTIVE', bf.release, 'd10')?.kind === 'CERTIFIED'
+      && certifiedProvenanceOf('READER_READY', bf.release, 'd10') === null)
+    const bridgeSignalAware = bridgeHoldOf({
+      kstDate: today, decidedAt, bridge: bridgeRow, bridgeEvidence: evidenceOfDay(bridgeRow, 'unread'),
+      publishedToday: 0, signals: OK_SIGNALS,
+    })
+    const bridgeBad = bridgeHoldOf({
+      kstDate: today, decidedAt, bridge: bridgeRow, bridgeEvidence: evidenceOfDay(bridgeRow, 'unread'),
+      publishedToday: 0, signals: BAD_COST,
+    })
+    check('🔴 S-BLIND 정상 bridgeHoldOf 는 그대로 신호를 본다 — ok 는 holdUnknown · bad 는 slowdown d5다',
+      bridgeSignalAware.decision.release === 'd5' && bridgeSignalAware.brake === 'holdUnknown'
+      && bridgeBad.decision.release === 'd5' && bridgeBad.brake === 'slowdown',
+      `${bridgeSignalAware.decision.release} ${bridgeBad.decision.release}`)
+  }
+
+  // 저장 계약 — 구조화된 인증 칸만 받는다(문구 파싱 없음) · 옛 행은 그대로 읽힌다
+  check('🔴 계약 — CERTIFIED 는 공개보다 높아야 하고 HOLD·PREPARE·v5 에만 붙는다',
+    typeof validated(rowOf(D0, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd5' })) === 'string'
+    && typeof validated(rowOf(D0, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd3' })) === 'string'
+    && typeof validated(rowOf(D0, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd99' })) === 'string'
+    && typeof validated(rowOf(D0, 'd5', 'REPROVE', { kind: 'CERTIFIED', certified: 'd10' })) === 'string'
+    && typeof validated(rowOf(D0, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd10' }, 'stage-decision-v4')) === 'string'
+    && typeof validated(rowOf(D0, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd10' })) !== 'string'
+    && typeof validated(rowOf(D0, 'd5', 'PREPARE', null)) !== 'string')
+
+  // S-GAP (M3) — 전날 행 읽기 실패·깨짐은 계산·저장 0 · 하루 누락은 이틀 전 행 하나로 권한만 잇는다
+  {
+    type Slot = ValidatedStageDecision | 'broken' | 'throw'
+    const rows = new Map<string, Slot>()
+    const reads: string[] = []
+    let computes = 0
+    let writes = 0
+    const read = async (date: string): Promise<DecisionRead> => {
+      reads.push(date)
+      const r = rows.get(date)
+      if (r === 'throw') throw new Error('PrismaClientKnownRequestError')
+      if (r === 'broken') return { kind: 'broken', reason: 'fixture broken row' }
+      return r === undefined ? { kind: 'absent' } : { kind: 'valid', decision: r }
+    }
+    /** controller main 과 같은 조립 — 권한 판정 → (멈춤 | 다리 HOLD | decideStage) → 저장 검증 */
+    const assemble = async (kstDate: string, signals: HealthSignal[]) => {
+      reads.length = 0
+      const a = await resolvePreviousAuthority(kstDate, read)
+      if (a.kind === 'stop') return { stop: a.code, reads: [...reads] } as const
+      computes += 1
+      let result: ControllerResult
+      if (a.kind === 'bridge') {
+        result = bridgeHoldOf({
+          kstDate, decidedAt: at0700(kstDate), bridge: a.bridge, bridgeEvidence: evidenceOfDay(a.bridge, 'unread'),
+          publishedToday: 0, signals,
+        })
+      } else {
+        const prev = a.kind === 'exact' ? a.previous : null
+        const evidence = prev === null ? null : evidenceOfDay(prev, 'unread')
+        const sustained = sustainedReleaseOf(prev, evidence, null)
+        const plan = prev === null ? null : trialPlanOf(prev, evidence, null)
+        const target = plan !== null ? (plan.base === sustained ? plan.target : null) : nextStage(sustained)
+        result = decideStage({
+          kstDate, decidedAt: at0700(kstDate), previousDecision: prev, previousEvidence: evidence, carriedPlan: null,
+          // 🔴 preflight 는 열려 있다 — 다리 날이 그래도 시험을 열지 않는지 본다
+          nextPreflight: target === null ? null : judgeNextPreflight(target, factsFor(target), GRID), publishedToday: 0, signals,
+        })
+      }
+      const v = validateForToday(result.decision)
+      if (v.ok) { rows.set(kstDate, v.decision); writes += 1 }
+      return { decision: result.decision, valid: v.ok, reads: [...reads], authority: a.kind } as const
+    }
+    const X = addDays(D0, 20)
+    const brakeRow = validated(rowOf(X, 'd5', 'PREPARE', { kind: 'CERTIFIED', certified: 'd10' }))
+    if (typeof brakeRow === 'string') throw new Error(brakeRow)
+
+    rows.set(X, 'throw')
+    const thrown = await assemble(addDays(X, 1), OK_SIGNALS)
+    check('🔴🔴 S-GAP 전날 행 읽기 예외 → PREVIOUS_READ_ERROR · 결정 계산 0 · 저장 0 (d1 대체 행을 쓰지 않는다)',
+      'stop' in thrown && thrown.stop === 'PREVIOUS_READ_ERROR' && computes === 0 && writes === 0 && !rows.has(addDays(X, 1)))
+    rows.set(X, 'broken')
+    rows.set(addDays(X, -1), brakeRow)
+    const broken = await assemble(addDays(X, 1), OK_SIGNALS)
+    check('🔴🔴 S-GAP 전날 행 깨짐 → PREVIOUS_BROKEN · 계산·저장 0 · 이틀 전 유효 행으로 건너뛰지 않는다(읽은 날 = 전날 하나)',
+      'stop' in broken && broken.stop === 'PREVIOUS_BROKEN' && computes === 0 && writes === 0
+      && broken.reads.length === 1 && broken.reads[0] === X)
+
+    rows.clear()
+    rows.set(X, brakeRow)
+    const gap = await assemble(addDays(X, 2), OK_SIGNALS)
+    check('🔴🔴 S-GAP 하루 누락 + 이틀 전 유효(공개 d5 · 합성 인증 d10) → 시험 없음 · 공개 d5 HOLD/PREPARE · reader 판은 인증 칸을 쓰지 않는다',
+      !('stop' in gap) && gap.authority === 'bridge' && gap.valid
+      && (gap.decision.state === 'HOLD' || gap.decision.state === 'PREPARE') && gap.decision.release === 'd5'
+      && gap.decision.transition === null
+      && gap.reads.join(',') === `${addDays(X, 1)},${X}`,
+      'stop' in gap ? gap.stop : `${gap.decision.state}:${gap.decision.release} reads=${gap.reads.join(',')}`)
+    const gapNext = await assemble(addDays(X, 3), OK_SIGNALS)
+    check('🔴 S-GAP 다음 날 — 다리 행이 전날 행이 되어 정상 연속(이력 검색 없음) · reader 판 한계: 인증 칸이 없어 d5 유지',
+      !('stop' in gapNext) && gapNext.authority === 'exact' && gapNext.valid && gapNext.decision.release === 'd5'
+      && gapNext.reads.length === 1,
+      'stop' in gapNext ? gapNext.stop : `${gapNext.decision.state}:${gapNext.decision.release}`)
+    const plainRow = validated(rowOf(X, 'd5', 'PREPARE', null))
+    if (typeof plainRow === 'string') throw new Error(plainRow)
+    rows.clear()
+    rows.set(X, plainRow)
+    const gapPlain = await assemble(addDays(X, 2), OK_SIGNALS)
+    const exactPlain = decideStage({
+      kstDate: addDays(X, 1), decidedAt: at0700(addDays(X, 1)), previousDecision: plainRow,
+      previousEvidence: evidenceOfDay(plainRow, 'unread'), carriedPlan: null,
+      nextPreflight: judgeNextPreflight('d10', factsFor('d10'), GRID), publishedToday: 0, signals: OK_SIGNALS,
+    })
+    check('🔴 S-GAP 다리 날은 preflight PASS 여도 TRIAL·REPROVE 를 열지 않는다(인접 전날이면 여는 같은 입력 대조)',
+      !('stop' in gapPlain) && gapPlain.decision.state !== 'TRIAL' && gapPlain.decision.state !== 'REPROVE'
+      && gapPlain.decision.release === 'd5'
+      && (exactPlain.decision.state === 'REPROVE' || exactPlain.decision.state === 'TRIAL'),
+      `${'stop' in gapPlain ? gapPlain.stop : gapPlain.decision.state} / 대조 ${exactPlain.decision.state}`)
+    rows.clear()
+    rows.set(X, brakeRow)
+    const gapBrake = await assemble(addDays(X, 2), BAD_COST)
+    check('🔴 S-GAP 다리 날 비용 bad → 공개 d5(합성 인증 d10 아래 칸) · reader 판 write 0',
+      !('stop' in gapBrake) && gapBrake.decision.release === 'd5' && gapBrake.decision.transition === null)
+
+    rows.clear()
+    const first = await assemble(addDays(X, 2), OK_SIGNALS)
+    check('🟢 S-GAP 전날·이틀 전 모두 진짜 없음 → 첫 시작 d1 · 읽은 날은 둘뿐(그 앞을 훑지 않는다)',
+      !('stop' in first) && first.authority === 'first-run' && first.valid && first.decision.release === 'd1'
+      && first.reads.length === 2)
+    rows.clear()
+    rows.set(X, 'broken')
+    const deepBroken = await assemble(addDays(X, 2), OK_SIGNALS)
+    check('🔴 S-GAP 전날 없음 + 이틀 전 깨짐 → 진짜 첫 시작이 아니다 → PREVIOUS_BROKEN · 저장 0',
+      'stop' in deepBroken && deepBroken.stop === 'PREVIOUS_BROKEN' && !rows.has(addDays(X, 2)))
+  }
+}
 
 // S1 — 전부 PASS → 날마다 한 칸 · 맨 위 d50 에서 멈춘다
 {

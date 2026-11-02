@@ -236,7 +236,9 @@ export type LedgerEntry = {
    *    🔴 **판정은 이 칸을 읽지 않는다.** 공급 장부의 예약 · 정산 줄에만 실린다. 없으면 옛 줄이다.
    */
   runTokenShadow?: {
-    ok: boolean; code: string | null; tokenId: string | null; trigger: string | null; budgetWindow: string | null
+    ok: boolean; code: string | null; tokenId: string | null; trigger: string | null
+    launchTrigger: string | null; absorbedTrigger: string | null; absorbedAt: string | null
+    pass: number | null; budgetWindow: string | null
   } | null
 }
 

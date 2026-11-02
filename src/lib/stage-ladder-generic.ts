@@ -211,6 +211,14 @@ export type PreflightFacts = {
    */
   slotValidOpportunities: number | null
   /**
+   * 🔴 **아직 시작하지 않은 당일 정기 공급의 보수 추가 기회.** READY 재고가 아니다.
+   *    과거 3일 같은 공급 시각에 기준선 뒤 새로 관측된 고유 원천을, 오늘 READY·현재 원천이 못 채운 슬롯에만
+   *    짝지은 합집합 추가분의 최솟값이다(`measuredFutureSourceOpportunities`). 그래서 `slotValidOpportunities` 에
+   *    더해도 같은 슬롯을 두 번 세지 않는다. 설정상 회차 상한은 쓰지 않으며, 측정할 수 없으면 `null`이다.
+   *    옛 호출부가 생략하면 0으로 읽어 기존 current-only 계약을 보존한다.
+   */
+  futureSupplyCapacity?: number | null
+  /**
    * 🔴 **자동 READY cohort** — 생산능력 · 손실 · 공급 비용이 **같은 행 묶음 · 같은 창**에서 나온다. 모르면 `null`.
    *    처리량 · 필요 READY · 비용 단가는 전부 이 한 사실에서 판정이 계산한다(따로 받은 수율 · 단가와 섞지 않는다).
    */
@@ -350,7 +358,19 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
   if (pubCap < n) codes.add('PUBLISH_CAPACITY_SHORT')
   // 기회 — 증명일 전체 슬롯이 슬롯 시점 가치로 덮이는가
   if (facts.slotValidOpportunities === null) codes.add('OPPORTUNITY_UNKNOWN')
-  else { counts.opportunities = facts.slotValidOpportunities; if (facts.slotValidOpportunities < n) codes.add('OPPORTUNITY_SHORT') }
+  else {
+    const future = facts.futureSupplyCapacity
+    counts.opportunitiesCurrent = facts.slotValidOpportunities
+    if (future === null) {
+      if (facts.slotValidOpportunities < n) codes.add('OPPORTUNITY_UNKNOWN')
+      else counts.opportunities = facts.slotValidOpportunities
+    } else {
+      const futureKnown = future ?? 0
+      counts.opportunitiesFuture = futureKnown
+      counts.opportunities = Math.min(n, facts.slotValidOpportunities + futureKnown)
+      if (counts.opportunities < n) codes.add('OPPORTUNITY_SHORT')
+    }
+  }
   // 처리량 — 같은 cohort 의 raw READY 수율 × 공급 회차 용량이 필요 READY 구간(목표 + 실측 손실 보충)을 채우는가
   const c = facts.readyCohort
   const req = replenishmentOf(n, c)
