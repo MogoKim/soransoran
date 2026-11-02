@@ -311,7 +311,7 @@ if (REAL) {
   const rbDir = existsSync(rbOut) ? join(rbOut, readdirSync(rbOut).find((n) => n.startsWith('g-')) ?? 'none') : null
   const rbr = rbDir && existsSync(rbDir) ? V(rbDir) : { code: 'NO_RESEARCH_BUILD', why: rb.stderr.slice(0, 200) }
   ok('반례2 옛 연구 builder 후보(3d32a6) → CANDIDATE_NOT_PRODUCT_BUILD', rbDir?.endsWith('g-20261102-3d32a6') && rbr.code === 'CANDIDATE_NOT_PRODUCT_BUILD', { rbDir, rbr })
-  const forged = tamper('forged', (d) => {
+  const forged = !(rbDir && existsSync(rbDir)) ? { code: 'NO_RESEARCH_BUILD' } : tamper('forged', (d) => {
     cpSync(join(rbDir, 'intents.jsonl'), join(d, 'intents.jsonl'))
     mani(d, (m) => { m.contentHash.intents = sha(readFileSync(join(d, 'intents.jsonl'))).slice(0, 16) })
   })
