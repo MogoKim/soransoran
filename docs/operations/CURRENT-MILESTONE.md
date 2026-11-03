@@ -1,6 +1,6 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-11-02 13:05 KST
+> as-of: 2026-11-02 22:25 KST
 > 마지막 창업자 동기화: 2026-11-02
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
@@ -11,17 +11,17 @@
 
 ## 0. 창업자용 한 문장
 
-**D10의 마지막 확정 자연 증거는 PASS지만 D20 operating PASS는 아직 아니다. 11월 2일에는
-07:00 preflight의 미래 공급 계산, 일시 brake 뒤 인증 복원, 과거 증명일 runner 건강 귀속 등
-여섯 회귀 경로를 같은 하네스에서 재현했다. 현재 별도 branch의 근본 보정은 로컬 검증 중이며
-main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정적·변이·격리 DB 검증과 독립
-재검토를 통과한 뒤에만 배포 후보로 올리고, 다음 자연 증명으로 D20을 다시 판정한다.**
+**D10의 마지막 확정 자연 증거는 PASS지만 D20 operating PASS는 아직 아니다. 여섯 회귀 경로의
+근본 보정 PR #820은 원격 main `1f15416ca2976591d7551d59f57d66372adbe434`에 병합됐지만 Production·보조 Mac runtime 동일 SHA는
+이 문서 시각에 재관측하지 못했다. D20의 다음 병목은 이 runtime 정합과 자연 operating 증명이다. 별도의 구조 개선
+트랙은 회복 가능한 preflight 부족을 bounded recovery와 재측정으로 잇는 상위 제어 루프이며, 현재 첫 구현은 순수
+planner·반례·controller shadow 출력뿐이다. 이 shadow는 D20 자연 PASS의 선행조건이 아니며 DB write·수집·발행·단계 변경은 0이다.**
 
 ## 1. 검증된 운영 기준선
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-11-02 12:54 관측) | `3bdd50e2ad3c567fa483b2b32ac9a268ec9892e1` |
+| 원격 main (2026-11-02 22:25 관측) | `1f15416ca2976591d7551d59f57d66372adbe434` |
 | 보조 Mac D100 runtime HEAD = pin = manifest | `2654e004c9aea457d9e34cd79f845a597304d768` · 10월 31일 마지막 확인값 · 11월 2일 현재 재관측 전 UNKNOWN · main 차이를 별도 판정 |
 | 보조 Mac D100 job | 9개 loaded · 10월 31일 마지막 확인값 · 현재 재관측 전 UNKNOWN |
 | 회사 Mac D100 job | 0 |
@@ -31,7 +31,7 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
 | Persona | contract-valid 40 · active 40 · 마지막 운영 확인값 |
 | 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 |
 | 현재 댓글 계약 | 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · automatic provenance |
-| 이번 보정의 운영 변경 | 0 · merge 0 · Production 0 · 운영 DB write 0 · runtime 변경 0 |
+| active recovery shadow | 로컬 branch `feat/d100-active-recovery-shadow` · 순수 planner/반례/controller 관측만 · 운영 DB write 0 · runtime 변경 0 |
 
 마지막 확정 D10 증거는 자동 공개 10/10, 서로 다른 자동 Persona 10, 첫 댓글 10/10,
 감사 2/2, 공급 `usageUnknown=0`, 수동 stage·READY·게시·댓글·장부 보정 0이었다.
@@ -41,7 +41,8 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
 | D10 기준선 | ✅ | ✅ | ✅ 10-28 d10 증거 PASS |
-| D20 근본 신뢰성 보정 | **검증 중** · 로컬 branch | ❌ 미병합·미배포 | ❌ 자연 증명 전 |
+| D20 근본 신뢰성 보정 | ✅ PR #820 main merge | ❓ Production·runtime 재관측 전 UNKNOWN | ❌ 자연 증명 전 |
+| active recovery planner | ✅ 로컬 전체 검증·Claude read-only 재검토 PASS | ❌ shadow 미병합·미배포 | ❌ 행동 연결 0 |
 | Persona 40 | ✅ | 마지막 확인 ✅ | 마지막 확인 contract-valid 40 · 현재 runtime 재관측 전 UNKNOWN |
 | 첫 댓글·추가 댓글 | ✅ 첫 댓글 1 + 선택적 0~4 · 실제 `parentId` 답글 · automatic provenance | 마지막 확인 ✅ | ✅ 자연 followup 관측 · 최대 10은 미도입 |
 | 실제 조회수 | ✅ 실제 상세 열람·목록 노출 원장 | ✅ | ✅ 실제 행동만 집계 · 가짜 숫자 0 |
@@ -49,7 +50,7 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
 공개, 자연스러운 대화, 실제 회원 재방문과 실제 열람은 별도로 관측한다.
 
-## 2. 11월 2일 근본 보정 범위
+## 2. 11월 2일 main에 병합된 근본 보정 범위
 
 | 경로 | 재현된 문제 | 보정 계약 |
 |---|---|---|
@@ -63,6 +64,22 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
 이 보정은 첫 댓글·추가 댓글의 품질 정책이나 글당 댓글 상한을 바꾸지 않는다. 최대 댓글 10과
 깊은 대화 실험은 D20 기준선 보존 뒤 별도 설계·shadow·bounded canary로 진행한다.
 
+### 2.1 active recovery — 현재는 shadow만
+
+- AS-IS의 하부에는 이미 요청 예약·예산·breaker가 있는 수집 guard, 부족 슬롯·실측 수율 기반 JIT 공급,
+  못 낸 슬롯 한 건씩의 catch-up이 있다. 결함은 이 기능이 없는 것이 아니라 preflight 부족 원인을 다음 action과
+  재측정으로 잇는 상위 제어 루프가 없다는 점이다.
+- 첫 PR은 `PASS → done`, 기회 부족 → `source`, 처리량 부족 → `supply`, 필요 READY 구간·지연 표본 모름 → `observe`,
+  안전·비용·Persona·러너·발행 용량 문제 → `blocked` 한 결과로만 줄인다. 기회 부족은 `public_slot`, 처리량 부족은
+  `ready_result` 단위와 최솟값·최댓값 범위로 분리하고, 우선순위 밖 동반 finding도 보존한다.
+- 공급 비용 상한·장부·귀속 모름과 현재 cohort의 양수 정산 부재는 계속 `blocked`다. 양수 정산이 완전히 귀속됐지만
+  slot-valid 결과만 0인 비용 무표본은 `measure_ready_yield` shadow 후보로 분리한다. 비용·수율을 지어내거나 이 결과로
+  실제 provider·DB를 호출하지 않는다.
+- 이 결과는 `mode=shadow`, `authorizesWrites=false`, `authorizesStageChange=false`다. 기존 `StageDecision`의
+  최종 단계 권한과 불변 저장 계약은 건드리지 않는다.
+- 다음 PR에서 행동을 연결하기 전에 실제 D10·D20 preflight를 replay해 원인 분류·부족 수·우선순위가 맞는지
+  독립 재검토한다. 같은 날 승격 변경은 그 뒤 별도 PR로 다룬다.
+
 ## 3. D20 개방의 정확한 blocker
 
 현재 blocker는 “아침에 완성 글 85~90개를 미리 쌓지 않았다”가 아니다. D20은 JIT 공급과
@@ -71,10 +88,10 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
 
 | blocker code | 현재 | 해소 조건 |
 |---|---|---|
-| `OPPORTUNITY_SHORT` | 미래 공급을 현재 snapshot 또는 설정상 용량으로 잘못 읽던 경로를 보정 중 | 동일 미래 슬롯의 자연 예약 3일 실측 하한 회귀검사와 자연 preflight PASS |
-| `RUNNER_BAD` | 과거 증명일에 현재 오류를 소급하던 경로를 보정 중 | proof-day 정기 5회·동일 SHA·자동 증거 PASS |
+| `OPPORTUNITY_SHORT` | PR #820에서 미래 공급을 현재 snapshot·설정상 용량으로 잘못 읽던 코드 보정은 main 병합 · runtime 재관측 전 | 동일 미래 슬롯의 자연 예약 3일 실측 하한 회귀검사와 자연 preflight PASS |
+| `RUNNER_BAD` | PR #820에서 과거 증명일에 현재 오류를 소급하던 코드 보정은 main 병합 · runtime 재관측 전 | proof-day 정기 5회·동일 SHA·자동 증거 PASS |
 | `BRAKE_DEMOTION_PERSISTS` | **READER_READY · 미해소** — 3일 이월 안 감속만 인증 복원. 이월 밖 감속과 lease·다리 HOLD는 controller가 `CERTIFIED`를 쓰지 않아 낮춘 release가 남는다 | reader 판 배포·rollback 호환 확인 → 별도 writer 활성 릴리스(`WRITER_ACTIVE`) 배포 → replay ② `GAP_CLOSED` |
-| `RELIABILITY_PATCH_UNDEPLOYED` | branch 로컬 변경 · code PASS 미확정 | 전체 로컬·변이·격리 DB·독립 재검토 후 승인된 main과 runtime 동일 SHA |
+| `RELIABILITY_RUNTIME_UNVERIFIED` | PR #820 main merge · Production·보조 Mac runtime SHA 재관측 전 | 승인된 main·Production·runtime HEAD=pin=manifest 동일 SHA와 job 확인 |
 | `OPERATING_PROOF_PENDING` | D20 자연 operating PASS 없음 | 수동 보정 0으로 정확 20/20과 댓글·감사·비용·provenance PASS |
 
 ### 3-1. `CERTIFIED` 두 단계 배포 — reader 먼저, writer는 별도 릴리스
@@ -107,7 +124,15 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
   알림으로 올라가야 하고, 해소는 운영자 격리(quarantine) 절차(깨진 행의 원인 확인 → 승인된 방법으로 격리 → 다음 예약 재판독)로만 한다.
   이 알림·격리 절차는 아직 코드로 닫히지 않았다(잔여 위험).
 
-## 4. 배포 전 완료 조건
+### 3-3. 병렬 개선 트랙 — `PASSIVE_PREFLIGHT`
+
+회복 가능한 부족도 아침 StageDecision 뒤 다음 action·재측정으로 이어지지 않는 것은 구조적 개선 대상이다. 다만 자연
+preflight가 처음부터 PASS하면 D20 증명을 막지 않으므로 위 D20 blocker 표에는 넣지 않는다. 순수 shadow replay → 기존
+guard를 재사용한 bounded action → 별도 same-day authority 순서로 진행하며, 어느 단계도 기존 StageDecision을 우회하지 않는다.
+
+## 4. 서로 독립인 배포 전 완료 조건
+
+### 4.1 PR #820 runtime
 
 1. D100 reliability replay에서 다섯 gap이 `GAP_CLOSED`이고, `BRAKE_DEMOTION_PERSISTS`는 이 reader 릴리스에서
    `READER_READY`다(해소로 세지 않는다). writer 활성 릴리스의 완료 조건만 여섯 gap 모두 `GAP_CLOSED`다.
@@ -117,7 +142,12 @@ main·Production·운영 DB·보조 Mac에는 적용하지 않았다. 전체 정
 5. typecheck·typecheck:ops·lint·build가 PASS다.
 6. Claude read-only 재검토와 Codex 독립 대조에서 새 blocker가 없다.
 7. diff에는 이번 계약과 무관한 파일·운영 비밀·임시 산출물이 없다.
-8. 창업자 승인 전 commit 이후의 merge·Production·runtime 배포·운영 DB write는 0이다.
+
+### 4.2 active recovery shadow
+
+active recovery shadow는 D20 자연 PASS와 독립된 개선 트랙이다. 자체 순수 반례·실제 preflight replay·Claude read-only
+재검토·Codex 대조가 PASS해야 하며, 창업자 승인 전 merge·Production·runtime 배포·운영 DB write는 0이다. PR #820의
+main merge나 D20 자연 PASS 어느 쪽도 이 shadow의 배포 승인을 대신하지 않는다.
 
 배포 승인이 난 뒤에도 code PASS가 operating PASS를 대신하지 않는다. 승인된 main SHA를 유일한
 D100 owner에 배포하고 HEAD=pin=manifest, Persona 자산 식별자, 설치 plist, loaded job을 확인한 뒤
@@ -133,8 +163,11 @@ runner가 idle인 창에서만 한다. 06:15~22:15 proof 운영 중간에 코드
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | **진행 중** · 여섯 근본 회귀 경로를 하나의 계약으로 닫기 | §4 전체 PASS · 독립 재검토 · 승인된 main/runtime 동일 SHA | 부분 배포·기준 완화·선행 재고 강제 |
+| D20-FIX | **진행 중** · PR #820 runtime 정합 | HEAD=pin=manifest 동일 SHA · 설치 job·자산 digest 재대조 | 관측 없는 deployed PASS·수동 운영 보정 |
 | D20 | D10 operating PASS 선행 · 다음 자연 증명 | 자동 20/20·댓글·감사·비용·READY·provenance PASS | stage·READY·게시·댓글 수동 보정 |
+| ACTIVE-RECOVERY-SHADOW (병렬) | D20과 독립 · 상위 회복 분류 관측 | 순수 반례·실제 preflight replay·독립 재검토 PASS | D20 선행조건화·DB write·provider 호출·단계 변경 |
+| ACTIVE-RECOVERY-ACTION | shadow 증거 뒤 기존 guard에 bounded action 연결 | 예산·breaker·lease·공개 상한 재사용 · action 뒤 같은 사실로 재측정 PASS | 새 고정 재고·무제한 재시도·shadow 수량의 직접 DB write |
+| SAME-DAY-AUTHORITY | action 증거 뒤 같은 날 승격 가능성 별도 설계 | single authority·단조 전이·rollback·구/신 reader 호환 PASS | shadow 결과로 직접 단계 개방 |
 | D30 | D20 operating PASS 선행 | Persona 60·preflight green·자동 30/30 | D30 생략 |
 | D50 | D30 operating PASS 선행 | Persona 100·preflight green·자동 50/50 | D20에서 바로 D50 |
 | VIEWS | 실제 근거 조회수 | 원장·dedupe·내부/봇 제외·UI 표본 PASS | 댓글 배수·최소값·난수 |

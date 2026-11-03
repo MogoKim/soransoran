@@ -274,6 +274,7 @@
     "stage:db-check": "tsx scripts/stage-decision-db-check.mts",
     "stage:preflight-window-check": "tsx scripts/stage-preflight-window-check.mts",
     "stage:preflight-window-mutation": "tsx scripts/stage-preflight-window-mutation.mts",
+    "stage:recovery-check": "tsx --tsconfig tsconfig.ops.json scripts/stage-recovery-check.mts",
     "stage:controller": "tsx scripts/stage-controller.mts",
     "stage:evidence-check": "tsx scripts/stage-evidence-check.mts",
     "d5:rehearsal": "tsx scripts/d5-proof-rehearsal.mts",
