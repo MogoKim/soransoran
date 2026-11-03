@@ -82,6 +82,7 @@ const INCOMPLETE_GATE = {
 }
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE } from '../src/lib/supply-cost-envelope'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { ledgerDirForHome } from './lib/llm-ledger-store.mjs'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
@@ -710,9 +711,28 @@ async function main(): Promise<void> {
           auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 33 → 양끝을 채우므로 READY 모름 없이 PASS**',
+        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 33 → 처리량은 확정, 시행일 전 비용 증거는 UNKNOWN**',
           d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
-          && !d5.codes.includes('READY_REQUIREMENT_UNKNOWN') && d5.verdict === 'PASS', JSON.stringify({ counts: d5.counts, codes: d5.codes }))
+          && !d5.codes.includes('READY_REQUIREMENT_UNKNOWN')
+          && d5.counts.supplyProofBudgetUsd === undefined
+          && JSON.stringify(d5.codes) === JSON.stringify(['SUPPLY_COST_UNKNOWN']) && d5.verdict === 'UNKNOWN',
+          JSON.stringify({ counts: d5.counts, codes: d5.codes }))
+        const d5CurrentContract = judgeNextPreflight('d5', {
+          ...r.facts, proofKstDate: SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
+          slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
+          commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
+          auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
+          readyCohort: {
+            ...c, usdPerSlotValidResult: 0.01,
+            trialCost: {
+              settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0,
+              riskUsdPerSlotValidResult: 0.01,
+            },
+          },
+        }, RUNNER_GRID)
+        check('🟢 같은 DB cohort + 시행일 이후 온전한 비용 증거 → D5 preflight PASS',
+          d5CurrentContract.verdict === 'PASS' && d5CurrentContract.codes.length === 0,
+          JSON.stringify({ counts: d5CurrentContract.counts, codes: d5CurrentContract.codes }))
         const d5Boundary = judgeNextPreflight('d5', {
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
           commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
