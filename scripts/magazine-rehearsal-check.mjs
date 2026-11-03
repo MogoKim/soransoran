@@ -27,7 +27,7 @@ import { directFixture } from './lib/magazine-rehearsal-direct.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
 const pick = argv.includes('--scenario') ? argv[argv.indexOf('--scenario') + 1] : null
-/** 🔴 DIRECT_E2E — S15 정상 1 · 반례 14 (2026-11-02 · I-T6-03 promote 전 release gate · S15S 회차 격리 2026-11-03) */
+/** 🔴 DIRECT_E2E — 완주 시나리오 3(S15·S15S·S15W) · 차단 반례 12 (2026-11-02 · I-T6-03 promote 전 release gate · S15S 회차 격리 2026-11-03) */
 export const DIRECT_IDS = ['S15', 'S15S', 'S15G', 'S15M', 'S15H', 'S15C', 'S15P', 'S15R', 'S15F', 'S15I', 'S15B', 'S15E', 'S15Q', 'S15D', 'S15W']
 const ids = (pick ?? ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S8B', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S14U', 'S14B', ...DIRECT_IDS].join(',')).split(',')
 const repeat = !pick || argv.includes('--repeat')
