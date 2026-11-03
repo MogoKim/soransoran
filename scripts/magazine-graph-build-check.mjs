@@ -1085,12 +1085,30 @@ if (oldInput && newInput && realProduct) {
   results.push('  ⏭  실제 입력 재현성 — --old-input · --new-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 
-// ── 실제 최종 입력 (2026-10-21) — money-work 활성 graph 의 입력 계약 ──
+// ── 실제 최종 입력 — snapshot 별 판별 계약 ──
 //    🔴 snapshot 이름 · effectiveAt 을 고정한다. 다른 snapshot 이나 다른 시각으로 돌리면 통과가 아니라 실패다
-const FINAL_NAME = '2026-10-21-money-work-retirement-next-e0335'
-const FINAL_PARENT = '2026-10-21-national-pension-live-money-work-relations'
-const FINAL_EFF = '2026-10-21T11:00:00+09:00', FINAL_GEN = '2026-10-21T02:00:00.000Z'
+//    🔴 (2026-11-02) 앞판은 e0335 하나만 알았다 — 새 snapshot 을 넣으면 시험 0 이 실패할 뿐 새 판의 계약은 아무도 보지 않았다.
+//       이제 snapshot 이름이 계약을 고른다. 계약이 없는 snapshot 은 시험 0 에서 FAIL 이다 (SKIP 이 아니다).
+export const FINAL_CONTRACTS = Object.freeze({
+  '2026-10-21-money-work-retirement-next-e0335': { kind: 'e0335', parent: '2026-10-21-national-pension-live-money-work-relations', eff: '2026-10-21T11:00:00+09:00', gen: '2026-10-21T02:00:00.000Z' },
+  '2026-11-02-money-work-age-learning-live': { kind: '427d4d', parent: '2026-11-01-money-work-resume-i-t6-03', eff: '2026-11-02T11:00:00+09:00', gen: '2026-11-02T02:00:00.000Z',
+    graphVersion: 'g-20261102-427d4d', semanticHash: '4aacc9d7b38c25cd', exportHash: 'cb57795ed0dd8ec4', bundleSha256: '26988e25fd06671563ff855418add012d6614083021b54b77a7db95d9d5c10bf' },
+})
+export const finalContractOf = (name, contracts = FINAL_CONTRACTS) => (Object.hasOwn(contracts, name) ? contracts[name] : null)
+test('최종 입력 계약 자기 시험 — 모르는 snapshot 은 계약 없음(null) · 아는 snapshot 은 계약', () => {
+  eq(finalContractOf('2099-01-01-unknown'), null, '모르는 snapshot')
+  eq(finalContractOf('2026-11-02-money-work-age-learning-live')?.graphVersion, 'g-20261102-427d4d', '427d4d 계약')
+})
+const FINAL_NAME = finalInput ? finalInput.replace(/\/+$/, '').split('/').pop() : null
+const FINAL = FINAL_NAME ? finalContractOf(FINAL_NAME) : null
+const FINAL_PARENT = FINAL?.parent
+const FINAL_EFF = FINAL?.eff, FINAL_GEN = FINAL?.gen
 if (finalInput && realProduct) {
+  test('최종 입력 0 — --final-input 은 판별 계약이 있는 snapshot 이다 (없으면 SKIP 이 아니라 FAIL)', () => {
+    ok(FINAL !== null, `계약 없는 snapshot: ${FINAL_NAME}`)
+  })
+}
+if (finalInput && realProduct && FINAL?.kind === 'e0335') {
   const at = (snap) => join(reconciledRoot, snap)
   const product = lib.parseProductTexts(productAt(realProduct))
   const articles = product.articles
@@ -1098,9 +1116,6 @@ if (finalInput && realProduct) {
   const admissionTexts = Object.fromEntries(Object.entries(lib.ADMISSION_FILES).map(([k, rel]) => [k, readText(join(dirname(reconciledRoot), rel))]))
   const buildFinal = (dir, productTexts = productAt(realProduct)) => lib.buildAll({ inputTexts: inputsAt(dir), productTexts, admissionTexts, effectiveAt: FINAL_EFF, generatedAt: FINAL_GEN })
   const drift = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(at(snap))), articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
-  test('최종 입력 0 — --final-input 은 정확히 최종 snapshot 이다', () => {
-    eq(finalInput.replace(/\/+$/, '').split('/').pop(), FINAL_NAME, 'snapshot 이름')
-  })
   test('최종 입력 1 — 같은 effectiveAt · generatedAt 2회 CLI build 가 목록 · 바이트까지 동일', () => {
     const a = join(TMP, 'final-a'), b = join(TMP, 'final-b')
     eq([runRealCli(finalInput, a, FINAL_EFF, FINAL_GEN), runRealCli(finalInput, b, FINAL_EFF, FINAL_GEN)], [0, 0], 'CLI 종료 코드')
@@ -1141,7 +1156,7 @@ if (finalInput && realProduct) {
     const C = Object.fromEntries(inputs.canonical.map((r) => [r.intentId, r.magazineCluster ?? null]))
     eq(sem.filter((e) => ((C[e.fromIntentId] ?? null) !== (C[e.toIntentId] ?? null)) !== (e.fromCluster !== e.toCluster)).length, 74, '옛 판정과 다른 edge')
   })
-  test('최종 입력 5 — money-work 를 켠 control 에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099 · G8_NOT_ADMITTED 유지', () => {
+  test('최종 입력 5 — money-work 를 켠 control 에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099 · G8 편입 상태는 실제 장부대로', () => {
     const pt = productAt(realProduct)
     const mwControl = ensureCluster(pt.control, 'money-work').text
     ok(readControl(mwControl).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
@@ -1151,12 +1166,60 @@ if (finalInput && realProduct) {
     eq(x.direct.targets.map((t) => `${t.edgeId}→${t.toIntentId}/${t.slug}`), ['E-0188→I-T6-04/certificate-in-50s', 'E-0329→I-T6-01/rehire-where-to-start'], 'direct')
     eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
     ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
-    eq([x.admission.state, x.admission.blockers], ['NOT_ADMITTED', ['G8_NOT_ADMITTED']], 'G8')
+    // 🔴 시점 사실을 고정하지 않는다 (2026-11-02) — I-T6-05 는 2026-10-22 사람 승인 apply 로 편입됐다. 실제 장부대로 판정한다
+    const admitted = admissionTexts.ledger.split('\n').some((l) => l.includes('"event":"ADMITTED"') && l.includes('"intentId":"I-T6-05"'))
+    eq([x.admission.state, x.admission.blockers], admitted ? ['ADMITTED', []] : ['NOT_ADMITTED', ['G8_NOT_ADMITTED']], 'G8')
     eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
     eq(b.layers.participation.map((p) => `${p.slug}:${p.state}:${p.evidenceHash}`),
       ['starting-work-at-this-age:EDITORIAL_NON_SEARCH:0a4dfd8b35d1b8ebc17fcdac3e3cc1b537a7cb919f638ecc7262612104181872'], 'participation')
   })
-} else {
+}
+// ── 427d4d 계약 (2026-11-02) — age-learning 공개 반영 · I-T6-03 GRAPH_READY ──
+if (finalInput && realProduct && FINAL?.kind === '427d4d') {
+  const at = (snap) => join(reconciledRoot, snap)
+  const product = lib.parseProductTexts(productAt(realProduct))
+  const admissionTexts = Object.fromEntries(Object.entries(lib.ADMISSION_FILES).map(([k, rel]) => [k, readText(join(dirname(reconciledRoot), rel))]))
+  const buildAt = (dir, eff = FINAL_EFF) => lib.buildAll({ inputTexts: inputsAt(dir), productTexts: productAt(realProduct), admissionTexts, effectiveAt: eff, generatedAt: FINAL_GEN })
+  const drift = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(at(snap))), articles: product.articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
+  test('최종 입력 427d4d-1 — 2회 CLI build 바이트 동일 · 판 · semantic · export · bundle sha256 = 계약', () => {
+    const a = join(TMP, 'final427-a'), b = join(TMP, 'final427-b')
+    eq([runRealCli(finalInput, a, FINAL_EFF, FINAL_GEN), runRealCli(finalInput, b, FINAL_EFF, FINAL_GEN)], [0, 0], 'CLI 종료 코드')
+    eq(treeHash(a), treeHash(b), '트리 해시')
+    const built = buildAt(finalInput)
+    eq([built.graphVersion, built.manifest.semanticHash, built.manifest.exportHash, createHash('sha256').update(built.files[`bundle/${built.graphVersion}.ts`]).digest('hex')],
+      [FINAL.graphVersion, FINAL.semanticHash, FINAL.exportHash, FINAL.bundleSha256], '판·해시')
+  })
+  test('최종 입력 427d4d-2 — lifecycle 경계: 10:29:59 drift=age-learning · 10:30:00 drift 0 · 10:00 build 거부', () => {
+    eq(drift(FINAL_NAME, '2026-11-02T10:29:59+09:00'), ['age-learning'], '10:29:59')
+    eq(drift(FINAL_NAME, '2026-11-02T10:30:00+09:00'), [], '10:30:00')
+    const r = rejectWhy(() => buildAt(finalInput, '2026-11-02T10:00:00+09:00'))
+    ok(r?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT', JSON.stringify(r).slice(0, 200))
+  })
+  test('최종 입력 427d4d-3 — parent 대비: 새 mapping 은 I-T6-05→age-learning 하나 · edge 신원 집합 · 의미 변화 0', () => {
+    const layersAt = (dir) => lib.buildGraphLayers({ inputs: lib.parseInputTexts(inputsAt(dir)), implementedSurfaces: product.implemented })
+    const o = layersAt(at(FINAL_PARENT)), n = layersAt(finalInput)
+    const key = (m) => `${m.intentId}|${m.slug}`
+    const om = new Set(o.mappings.map(key))
+    eq(n.mappings.filter((m) => !om.has(key(m))).map(key), ['I-T6-05|age-learning'], '새 mapping')
+    eq(o.mappings.filter((m) => !n.mappings.some((x) => key(x) === key(m))).map(key), [], '사라진 mapping')
+    eq(n.edges.map((e) => e.edgeId).sort(), o.edges.map((e) => e.edgeId).sort(), 'edge 신원')
+    const sem = (e) => JSON.stringify([e.fromIntentId, e.toIntentId, e.relationType, e.placement, e.recommendationSlot, e.readerReason, e.anchorLabel, e.reciprocalGroupId, e.generatedBy])
+    const oById = new Map(o.edges.map((e) => [e.edgeId, e]))
+    eq(n.edges.filter((e) => sem(e) !== sem(oById.get(e.edgeId))).map((e) => e.edgeId), [], '의미 바뀐 edge')
+  })
+  test('최종 입력 427d4d-4 — GRAPH_READY 는 I-T6-03 하나 · direct E-0338 · E-0339 · discovery E-0340 · reverse E-0093 · 편입 상태는 실제 장부대로', () => {
+    const b = buildAt(finalInput)
+    eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-03'], 'GRAPH_READY')
+    const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-03')
+    eq(x.direct.targets.map((t) => `${t.edgeId}→${t.slug}`), ['E-0338→certificate-in-50s', 'E-0339→back-to-work-homemaker'], 'direct')
+    eq(x.discovery.targets.map((t) => `${t.edgeId}→${t.slug}`), ['E-0340→age-learning'], 'discovery')
+    eq(x.reverse.sources.map((s) => s.edgeId), ['E-0093'], 'reverse')
+    // 🔴 시점 사실을 고정하지 않는다 — 실제 장부에 I-T6-03 편입이 있으면 ADMITTED 여야 하고, 없으면 NOT_ADMITTED
+    const admitted = admissionTexts.ledger.split('\n').some((l) => l.includes('"event":"ADMITTED"') && l.includes('"intentId":"I-T6-03"'))
+    eq(x.admission.state, admitted ? 'ADMITTED' : 'NOT_ADMITTED', 'admission')
+  })
+}
+if (!(finalInput && realProduct)) {
   results.push('  ⏭  실제 최종 입력 — --final-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 

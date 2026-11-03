@@ -6,7 +6,7 @@
  *    PR/merge/배포 · 경계 합계 · 반복성 · runtime 불변을 여기서 다시 센다. 그래서 "실패 단계를 성공으로 적는"
  *    결함이나 "래퍼 대신 가짜 성공값" 결함은 orchestrator 가 초록이라고 해도 여기서 FAIL 이다.
  *
- *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S14 + S8B · S14U · S14B + S1 반복)
+ *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S14 + S8B · S14U · S14B + DIRECT_E2E S15 계열 + S1 반복)
  *   node scripts/magazine-rehearsal-check.mjs --scenario S1,S4    고른 시나리오만 (변이 시험이 쓴다)
  */
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
@@ -22,11 +22,14 @@ import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
 import { parseReview } from './magazine-brief-auto.mjs'
 import { parseQueueSource } from './lib/magazine-load.mjs'
 import { fixtureQueue } from './fixtures/magazine-format-contract/repair-queue-rows.mjs'
+import { directFixture } from './lib/magazine-rehearsal-direct.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
 const pick = argv.includes('--scenario') ? argv[argv.indexOf('--scenario') + 1] : null
-const ids = (pick ?? 'S1,S2,S3,S4,S5,S6,S7,S8,S8B,S9,S10,S11,S12,S13,S14,S14U,S14B').split(',')
+/** 🔴 DIRECT_E2E — S15 정상 1 · 반례 13 (2026-11-02 · I-T6-03 promote 전 release gate) */
+export const DIRECT_IDS = ['S15', 'S15G', 'S15M', 'S15H', 'S15C', 'S15P', 'S15R', 'S15F', 'S15I', 'S15B', 'S15E', 'S15Q', 'S15D', 'S15W']
+const ids = (pick ?? ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S8B', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S14U', 'S14B', ...DIRECT_IDS].join(',')).split(',')
 const repeat = !pick || argv.includes('--repeat')
 
 let pass = 0
@@ -134,8 +137,9 @@ for (const s of report.scenarios) {
 check('경계 자체 시험 7/7 (쓰기·TCP·fetch·명령·시계·위반 기록·잔여물 검사기)', report.selfTest.ok && report.selfTest.checks.length === 7 && report.selfTest.checks.every((c) => c.ok), report.selfTest.checks.filter((c) => !c.ok))
 for (const [k, v] of Object.entries(report.totals)) check(`합계 — ${k} 0`, v === 0, `${v}`)
 check('운영 runtime 자료 불변 (해시 · HEAD · status)', report.runtime.unchanged && report.runtime.before.sha256 === report.runtime.after.sha256, report.runtime)
-check('고정 시각 — 모든 단계가 지정한 KST 날짜의 run 디렉터리에 결과를 남겼다',
-  report.scenarios.every((s) => !s.stages.some((st) => st.entry === 'producer') || Object.keys(s.evidence.runFiles ?? {}).includes(report.date)), report.scenarios.map((s) => [s.id, Object.keys(s.evidence.runFiles ?? {})]))
+// 🔴 시나리오마다 자기 회차 날짜 — DIRECT_E2E 는 승인 source 의 publishAt 에 묶인 고정 회차(2026-11-03)다
+check('고정 시각 — 모든 단계가 그 시나리오의 KST 회차 날짜 run 디렉터리에 결과를 남겼다',
+  report.scenarios.every((s) => !s.stages.some((st) => st.entry === 'producer') || Object.keys(s.evidence.runFiles ?? {}).includes(s.date ?? report.date)), report.scenarios.map((s) => [s.id, s.date, Object.keys(s.evidence.runFiles ?? {})]))
 
 // ── 시나리오별 원시 증거 ──
 const ev = (id) => S[id]?.evidence
@@ -214,6 +218,11 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
   const fin = financialSkeleton(ROOT)
   const std = standardSkeletons(ROOT)
   const sources = new Map([[fin.source.slug, { title: fin.source.title, rep: fin.riskSentences }], ...std.sources.map((x) => [x.slug, { title: x.title, rep: x.representativeSentences }])])
+  // ③ DIRECT_E2E 고정 원고 — 승인 spec 제목 · 원고 본문 문단 전부 (fixture 원고 그대로가 아니면 신원 불일치)
+  const dfx = directFixture(ROOT)
+  const dDraft = dfx.files[dfx.names.draft]
+  const dParas = dDraft.split('\n---\n')[1].split('\n').map((l) => l.replace(/^(## |- )/, '').trim()).filter((l) => l && !l.startsWith('[CTA]'))
+  sources.set(dfx.id.slug, { title: dfx.entry.plan.title, rep: dParas })
   const realManuscripts = new Map(fixtureQueue(['cold-weather-joint-pain']).map((q) => [q.slug, q.title]))
   const otherRep = (slug) => [...sources].filter(([k]) => k !== slug).flatMap(([, v]) => v.rep)
   for (const sc of report.scenarios) {
@@ -248,6 +257,27 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
       bad.push(...financialUpstreamIdentity({ brief: u.brief ?? '', review: u.review ?? '', fx: fin }))
     }
     check(`${sc.id} 금융 등록 글 상류 — 실제 brief.md·review.ts 가 같은 질문 (큐 행 → title → brief → review → 원고 → 등록)`, bad.length === 0, bad)
+  }
+  // ── DIRECT_E2E 원시 증거 — orchestrator 단언과 따로 센다 ──
+  if (S.S15) {
+    const s15 = S.S15
+    const calls = s15.evidence.sends
+    const up = (s15.extras?.registeredUpstream ?? []).find((u) => u.slug === dfx.id.slug)
+    const reg = s15.evidence.registered.find((r) => r.slug === dfx.id.slug)
+    check('S15 원시 — DIRECT 원고 전송 정확히 1 · legacy brief(Claude) 0', calls.bySlug?.[`${dfx.id.slug}:initial`] === 1 && calls.initial === 1 && s15.evidence.claude.length === 0, { calls, claude: s15.evidence.claude })
+    check('S15 원시 — 병합 main 등록 1건 = resume-age · publishAt 승인값 · hero 연결', s15.evidence.registered.length === 1 && reg?.publishAt === dfx.id.publishAt && reg?.heroFile?.riff === 'RIFF', s15.evidence.registered)
+    check('S15 원시 — 등록 상류에 review.ts · brief.md 0 (DIRECT 는 spec 만)', Boolean(up) && up.review === null && up.brief === null, up && { review: up.review !== null, brief: up.brief !== null })
+    check('S15 원시 — hero provider 1 · PR 1 MERGED · 배포 1', s15.evidence.hero?.image === 1 && s15.evidence.prs.length === 1 && s15.evidence.prs[0].state === 'MERGED' && s15.evidence.deployments.length === 1,
+      { hero: s15.evidence.hero, prs: s15.evidence.prs })
+  }
+  // 🔴 고정 release fixture ↔ 제품 판 (2026-11-02) — fixture 는 판이 바뀌어도 그대로다. 같은 판 파일이 제품에 있으면 바이트가 같아야 한다
+  {
+    const prod = join(dirname(HERE), 'src', 'content', 'magazine', 'graph', `${dfx.id.graphVersion}.ts`)
+    if (existsSync(prod)) check(`DIRECT_E2E fixture bundle = 제품 ${dfx.id.graphVersion}.ts 바이트`, readFileSync(prod, 'utf8') === dfx.files[dfx.names.bundle])
+    else console.log(`  · 제품에 ${dfx.id.graphVersion}.ts 가 아직 없다 — promote 전 후보 대조는 magazine-research-current verify 가 한다`)
+  }
+  for (const id of DIRECT_IDS.filter((x) => x !== 'S15' && x !== 'S15W')) {
+    if (S[id]) check(`${id} 원시 — DIRECT 반례 등록·PR·병합 0`, S[id].evidence.registered.length === 0 && S[id].evidence.prs.length === 0 && S[id].evidence.mergeCalls.length === 0, { registered: S[id].evidence.registered, prs: S[id].evidence.prs })
   }
   // 실패 경로 전용 뼈대를 쓰는 경로 — 등록 0 · 지정 실패에서 멈춘다
   if (S.S2) check('S2 실패 경로 뼈대(입력 수리 응답) — 등록 0 · producer 단계만 (실제 종료 3)', S.S2.evidence.registered.length === 0 && stage(S.S2, 'producer')?.exit === 3, S.S2.evidence.registered)

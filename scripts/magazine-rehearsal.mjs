@@ -2,9 +2,10 @@
 /**
  * 🔴 **매거진 M-AUTO rehearsal — 실제 엔트리포인트 전체를 격리된 임시 사본에서 같은 날 반복 실행한다** (2026-10-10).
  *
- *   npm run magazine:rehearsal                          시나리오 S1~S14 · S8B · S14U · S14B + S1 반복성
+ *   npm run magazine:rehearsal                          시나리오 S1~S14 · S8B · S14U · S14B · DIRECT_E2E S15 계열 + S1 반복성
  *   node scripts/magazine-rehearsal.mjs --scenario S1,S4 고른 시나리오만
  *   node scripts/magazine-rehearsal.mjs --date 2026-10-11 --keep --out <report.json>
+ *   🔴 S15 계열(DIRECT_E2E)은 승인 source 의 publishAt 에 묶인 고정 회차(2026-11-03)라 --date 를 따르지 않는다
  *
  * 🔴 **왜 생겼나.** 자연 회차(하루 한 번)를 버그 발견에 쓰면 결함 하나에 하루가 간다.
  *    10/10 입력 수리 ENOTDIR 은 단위 검사 115/115 를 통과하고도 실제 producer wrapper 에서 매 회차 실패했다 —
@@ -29,6 +30,7 @@ import { buildSandbox, readGuard, stageEnv } from './lib/magazine-rehearsal-sand
 import { pathToFileURL } from 'node:url'
 import net from 'node:net'
 import { KST, SPEED, addDays, collect, curate, leftovers, pickTargets as pickRuntimeTargets, placeHero, runStage, templatePair, writeSlugFiles } from './lib/magazine-rehearsal-scenarios.mjs'
+import { directFacts, prepareDirect } from './lib/magazine-rehearsal-direct.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SOURCE = resolve(HERE, '..')
@@ -385,6 +387,211 @@ function coldRecoveryExpect(id, shape, ev, ctx) {
       row.regenHistory[0].outcome === 'APPLIED' && row?.verdict === 'DONE', { bySlug: ev.sends.bySlug, verdict: row?.verdict, history: row?.regenHistory }),
     exp(`${id} 등록 1 · PR MERGED · 배포 · 장부 행 정리`, ev.registered.length === 1 && ev.registered[0].slug === t && ev.prs[0]?.state === 'MERGED' && ev.deployments.length === 1 && !ev.ledger?.[t], { registered: ev.registered }),
   ]
+}
+
+/**
+ * 🔴 **DIRECT_E2E — 신규 DIRECT 글 한 편의 실제 전체 경로** (2026-11-02 · I-T6-03 promote 전 release gate).
+ *    S1~S14 는 legacy brief·review 경로뿐이다. 여기서는 승인 source → producer spec 컴파일 → 원고 요청(가짜 ChatGPT) →
+ *    runner 저장 → auto-register(md-to-draft · QA · hero · batch QA · register) → PR · 병합 · 배포를 고정 회차에 돈다.
+ *    회차는 승인 source 의 publishAt(2026-11-04 10:30)에 묶여 있다 — producer 11-03 00:10 · register 11-03 01:00.
+ */
+const DIRECT_DATE = '2026-11-03'
+
+function directScenario({ title, variant = null, chatgpt = {}, heroFail = false, run = null, expect }) {
+  return {
+    title,
+    date: DIRECT_DATE,
+    async prepare(repo) {
+      await curate({ repo, keep: [] })
+      return prepareDirect(repo, { variant })
+    },
+    scenarioFor: (p) => ({ ci: {}, deploy: {}, chatgpt: Object.fromEntries(Object.entries(chatgpt).map(([k, v]) => [`${p.target}:${k}`, v])), heroFail }),
+    async run(ctx) {
+      if (run) return run(ctx)
+      await normalDay(ctx)
+      ctx.direct = await directFacts(ctx.sb, ctx.prepared.target)
+    },
+    expect,
+  }
+}
+
+const fetchResultOf = (sb, date) => readJson(join(sb.root, 'home', 'Library', 'Application Support', 'soransoran', 'magazine-fetch-results', `${date}.json`))
+const sha256Of = (f) => (existsSync(f) ? createHash('sha256').update(readFileSync(f)).digest('hex') : null)
+
+/** DIRECT 하루 — producer 직후 사실(run · 회수 결과 · 원고 해시)을 재실행이 덮기 전에 붙잡는다 */
+async function directDay(ctx, { registerKst = KST(ctx.date, '01:00') } = {}) {
+  const { sb, date, stages } = ctx
+  const t = ctx.prepared.target
+  stages.push(runStage(sb, { entry: 'producer', name: 'producer', kst: KST(date, '00:10') }))
+  ctx.runJson = readJson(join(sb.repo, 'drafts', 'magazine', '_runs', date, 'run.json'))
+  ctx.fetchResult = fetchResultOf(sb, date)
+  ctx.draftSha = sha256Of(join(sb.repo, 'drafts', 'magazine', t, 'draft.md'))
+  ctx.specOnDisk = readJson(join(sb.repo, 'drafts', 'magazine', t, 'article-spec.json'))
+  stages.push(runStage(sb, { name: 'register', entry: 'register', kst: registerKst }))
+  const regDate = registerKst.slice(0, 10)
+  if (regDate !== date) sb.extraDates = [...(sb.extraDates ?? []), regDate]
+  ctx.applyResult = readJson(runFile(sb, regDate, /^auto-merge\.json$/)[0] ?? '')
+  ctx.registerResult = readJson(runFile(sb, regDate, /^auto-register\.json$/)[0] ?? '')
+  stages.push(runStage(sb, { name: 'recover', entry: 'recover', kst: KST(regDate, '02:00') }))
+  ctx.direct = await directFacts(sb, t)
+}
+
+/** 등록 결과의 단계 하나 (실제 auto-register 보고서) */
+const stepOf = (ctx, slug, name) => ((ctx.registerResult?.results ?? []).find((r) => r.slug === slug)?.steps ?? []).filter((s) => s.stage === name)
+
+/** 반례가 어디서 막혔는지 — producer held · register blocked · 단계 */
+function directOutcome(ev, ctx) {
+  const t = ctx.prepared.target
+  const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+  return {
+    stages: ctx.stages.map((s) => `${s.name}:${s.exit}`),
+    held: (ctx.runJson?.held ?? []).filter((h) => h.slug === t).map((h) => h.code),
+    selected: (ctx.runJson?.selected ?? []).filter((x) => x.slug === t).length,
+    verdict: row?.verdict ?? null,
+    blockedBy: (row?.blockedBy ?? []).map((b) => b.code),
+    steps: (row?.steps ?? []).map((x) => `${x.stage}:${x.status}`),
+    skipped: (ctx.registerResult?.skipped ?? []).filter((x) => x.slug === t).map((x) => (x.blockedBy ?? []).map((b) => b.code ?? b)),
+    sends: ev.sends.bySlug, hero: ev.hero.image, registered: ev.registered.map((a) => a.slug), prs: ev.prs.length,
+    direct: { articles: ctx.direct?.articles?.length, queueRows: ctx.direct?.queueRows, receipt: Boolean(ctx.direct?.receipt) },
+  }
+}
+/**
+ * 반례 공통 — 막혔다 · 부분 반영 0. 사유는 실제 producer run.json · auto-register 보고서의 구조화 코드로만 판정한다.
+ *   where  'producer'  producer held(code · why) 또는 skipped(reason) 에 want 가 있다 · 원고 전송 0
+ *          'gate'      auto-register gateSkipped codes 에 want
+ *          'register'  auto-register 후보 verdict BLOCKED · blockedBy 에 want
+ */
+const blockedAt = (where, want, { sends = where === 'producer' ? 0 : 1 } = {}) => (id) => (ev, ctx) => {
+  const o = directOutcome(ev, ctx)
+  const t = ctx.prepared.target
+  const run = ctx.runJson ?? readJson(join(ctx.sb.repo, 'drafts', 'magazine', '_runs', ctx.date, 'run.json'))
+  const heldText = (run?.held ?? []).filter((h) => h.slug === t).map((h) => `${h.code} ${h.why ?? ''}`).concat((run?.skipped ?? []).filter((x) => x.slug === t).map((x) => String(x.reason ?? '')))
+  const gate = (ctx.registerResult?.gateSkipped ?? []).filter((g) => g.slug === t).flatMap((g) => g.codes ?? [])
+  const hit = where === 'producer' ? heldText.some((x) => x.includes(want)) && o.selected === 0
+    : where === 'gate' ? gate.includes(want)
+      : o.verdict === 'BLOCKED' && o.blockedBy.includes(want)
+  const dup = ctx.prepared.variant === 'article-duplicate'
+  const wt = readFileSync(join(ctx.sb.repo, 'src', 'content', 'magazine', 'articles.ts'), 'utf8').split(`'${t}': {`).length - 1
+  return [
+    exp(`${id} ${where} 에서 ${want} 로 막혔다`, hit, { ...o, heldText, gate }),
+    exp(`${id} 등록·PR·병합·배포 0`, ev.registered.length === 0 && ev.prs.length === 0 && ev.mergeCalls.length === 0 && ev.deployments.length === 0, { registered: ev.registered, prs: ev.prs }),
+    exp(`${id} 부분 반영 0 — main articles ${t} ${dup ? '1(심어 둔 중복 그대로)' : '0'} · main 큐 행 그대로 · DIRECT 영수증 0 · 작업 트리 articles ${dup ? 1 : 0}`,
+      (ctx.direct?.articles?.length ?? -1) === (dup ? 1 : 0) && (ctx.direct?.queueRows ?? 0) >= 1 && ctx.direct?.receipt === null && wt === (dup ? 1 : 0), { direct: o.direct, worktreeArticles: wt }),
+    exp(`${id} 원고 전송 ${sends}회 · 재생성 0`, (ev.sends.bySlug[`${t}:initial`] ?? 0) === sends && ev.sends.regen === 0, ev.sends),
+  ]
+}
+
+const DIRECT_SCENARIOS = {
+  S15G: directScenario({ title: 'DIRECT 반례 — 제품 판 미승격 (source 판 ≠ current)', variant: 'graph-not-promoted', expect: blockedAt('producer', 'DIRECT_SPEC_SOURCE_NOT_READY')('S15G') }),
+  S15M: directScenario({ title: 'DIRECT 반례 — 큐 행 G8 manifest 불일치', variant: 'manifest-mismatch', expect: blockedAt('producer', 'MANIFEST_DRIFT')('S15M') }),
+  S15H: directScenario({ title: 'DIRECT 반례 — source sourceHash 불일치 (entry 한 글자)', variant: 'source-hash-mismatch', expect: blockedAt('producer', 'SOURCE_HASH_DRIFT')('S15H') }),
+  S15C: directScenario({
+    title: 'DIRECT 반례 — 원고 저장 뒤 spec 손상',
+    async run(ctx) {
+      const { sb, date } = ctx
+      ctx.stages.push(runStage(sb, { name: 'producer', entry: 'producer', kst: KST(date, '00:10') }))
+      ctx.runJson = readJson(join(sb.repo, 'drafts', 'magazine', '_runs', date, 'run.json'))
+      const f = join(sb.repo, 'drafts', 'magazine', ctx.prepared.target, 'article-spec.json')
+      writeFileSync(f, readFileSync(f, 'utf8').replace('"riskLevel": "MEDIUM"', '"riskLevel": "LOW"'))
+      ctx.stages.push(runStage(sb, { name: 'register', entry: 'register', kst: KST(date, '01:00') }))
+      ctx.registerResult = readJson(runFile(sb, date, /^auto-register\.json$/)[0] ?? '')
+      ctx.direct = await directFacts(sb, ctx.prepared.target)
+    },
+    expect: blockedAt('gate', 'ARTICLE_SPEC_HASH')('S15C'),
+  }),
+  S15P: directScenario({ title: 'DIRECT 반례 — 등록 회차가 하루 밀림 (peek 11-05 ≠ spec 11-04)', run: (ctx) => directDay(ctx, { registerKst: KST(addDays(DIRECT_DATE, 1), '01:00') }), expect: blockedAt('register', 'DIRECT_SPEC_PUBLISH_AT_MISMATCH')('S15P') }),
+  S15R: directScenario({ title: 'DIRECT 반례 — 원고 폴더에 review.ts 가 이미 있다', variant: 'review-present', expect: blockedAt('producer', 'DIRECT_SPEC_MISSING')('S15R') }),
+  S15F: directScenario({ title: 'DIRECT 반례 — 원고에 주제 금지 패턴 (재생성도 같다)', chatgpt: { initial: ['topic-forbidden'], regen: ['topic-forbidden', 'topic-forbidden'] }, expect: blockedAt('register', 'FORBIDDEN_PATTERN')('S15F') }),
+  S15I: directScenario({ title: 'DIRECT 반례 — hero 생성 실패', heroFail: true, expect: blockedAt('register', 'HERO_FAILED')('S15I') }),
+  S15B: directScenario({ title: 'DIRECT 반례 — batch QA 실패 (거절 정형구 · 재생성도 같다)', chatgpt: { initial: ['batch-refusal'], regen: ['batch-refusal', 'batch-refusal'] }, expect: blockedAt('register', 'REFUSAL_TEXT')('S15B') }),
+  S15E: directScenario({
+    title: 'DIRECT 반례 — register 뒤 영수증 신원 충돌 (원고 저장 뒤 다른 spec 의 영수증이 생겼다)',
+    async run(ctx) {
+      const { sb, date } = ctx
+      const t = ctx.prepared.target
+      ctx.stages.push(runStage(sb, { name: 'producer', entry: 'producer', kst: KST(date, '00:10') }))
+      ctx.runJson = readJson(join(sb.repo, 'drafts', 'magazine', '_runs', date, 'run.json'))
+      writeFileSync(join(sb.repo, 'drafts', 'magazine', t, 'article-spec.registered.json'), `${JSON.stringify({
+        schema: 'direct-spec-register/1', schemaVersion: 'magazine-article-spec/2', mode: 'DIRECT_SPEC_V1', specHash: `sha256:${'0'.repeat(64)}`,
+        slug: t, graphNodeId: 'I-T6-03', intentId: 'I-T6-03', publishAt: '2026-11-04T10:30:00+09:00', registeredAt: '2026-11-02T01:00:00+09:00' }, null, 2)}\n`)
+      ctx.stages.push(runStage(sb, { name: 'register', entry: 'register', kst: KST(date, '01:00') }))
+      ctx.registerResult = readJson(runFile(sb, date, /^auto-register\.json$/)[0] ?? '')
+      ctx.stages.push(runStage(sb, { name: 'recover', entry: 'recover', kst: KST(date, '02:00') }))
+      ctx.direct = await directFacts(sb, t)
+    },
+    expect: blockedAt('register', 'DIRECT_SPEC_REGISTER_IDENTITY')('S15E'),
+  }),
+  S15Q: directScenario({ title: 'DIRECT 반례 — 큐 행 중복', variant: 'queue-duplicate', expect: blockedAt('producer', 'QUEUE_IDENTITY_DUPLICATE')('S15Q') }),
+  S15D: directScenario({ title: 'DIRECT 반례 — 이미 등록된 article 중복', variant: 'article-duplicate', expect: blockedAt('producer', '이미 articles.ts 에 있다')('S15D') }),
+  S15W: directScenario({
+    title: 'DIRECT 반례 — 원고 저장 뒤 producer 재실행 (등록 전)',
+    async run(ctx) {
+      const { sb, date } = ctx
+      ctx.stages.push(runStage(sb, { name: 'producer', entry: 'producer', kst: KST(date, '00:10') }))
+      ctx.runJson = readJson(join(sb.repo, 'drafts', 'magazine', '_runs', date, 'run.json'))
+      ctx.stages.push(runStage(sb, { name: 'rerun-producer', entry: 'producer', kst: KST(date, '00:40') }))
+      ctx.stages.push(runStage(sb, { name: 'register', entry: 'register', kst: KST(date, '01:00') }))
+      ctx.registerResult = readJson(runFile(sb, date, /^auto-register\.json$/)[0] ?? '')
+      ctx.direct = await directFacts(sb, ctx.prepared.target)
+    },
+    expect: (ev, ctx) => {
+      const t = ctx.prepared.target
+      return [
+        exp('S15W producer · 재실행 producer · register 종료 0', ['producer', 'rerun-producer', 'register'].every((n) => stageOk(ctx.stages, n)), ctx.stages.map((x) => `${x.name}:${x.exit}`)),
+        exp('S15W 원고 저장 뒤 재실행 — 추가 전송 0 (전송 정확히 1) · 원고 덮어쓰기 0', ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.regen === 0, ev.sends),
+        exp('S15W 이어진 등록 정확히 1 · PR 1 · 영수증 1', ev.registered.length === 1 && ev.prs.length === 1 && ctx.direct?.articles?.length === 1 && Boolean(ctx.direct?.receipt), { registered: ev.registered, prs: ev.prs }),
+      ]
+    },
+  }),
+  S15: directScenario({
+    title: 'DIRECT_E2E — resume-age 승인 source · 승격 판 g-20261102-427d4d → producer spec → 원고 1회 → QA · hero 생성 · batch · register DONE → PR · 병합 · 배포 · 재실행 멱등',
+    async run(ctx) {
+      await directDay(ctx)
+      ctx.stages.push(runStage(ctx.sb, { name: 'rerun-producer', entry: 'producer', kst: KST(ctx.date, '03:00') }))
+      ctx.stages.push(runStage(ctx.sb, { name: 'rerun-register', entry: 'register', kst: KST(ctx.date, '03:30') }))
+      ctx.rerunResult = readJson(runFile(ctx.sb, ctx.date, /^auto-register\.json$/)[0] ?? '')
+      ctx.directAfterRerun = await directFacts(ctx.sb, ctx.prepared.target)
+    },
+    expect(ev, ctx) {
+      const t = ctx.prepared.target
+      const id = ctx.prepared.identity
+      const s = ctx.stages
+      const d = ctx.direct
+      const sel = (ctx.runJson?.selected ?? []).filter((x) => x.slug === t)
+      const ds = sel[0]?.directSpec ?? {}
+      const fx = (ctx.fetchResult?.results ?? []).filter((r) => r.slug === t)
+      const row = (ctx.registerResult?.results ?? []).find((r) => r.slug === t) ?? null
+      const steps = (row?.steps ?? []).map((x) => `${x.stage}:${x.status}`)
+      const art = d?.articles?.[0] ?? null
+      const draftWant = createHash('sha256').update(readFileSync(join(ctx.sb.repo, 'scripts', '__fixtures__', 'magazine', 'rehearsal-direct-e2e', 'resume-age.draft.md'))).digest('hex')
+      const again = ctx.directAfterRerun
+      return [
+        exp('S15 producer · register · recover · 재실행 둘 종료 0', ['producer', 'register', 'recover', 'rerun-producer', 'rerun-register'].every((n) => stageOk(s, n)), s.map((x) => `${x.name}:${x.exit}`)),
+        exp('S15 producer 가 resume-age 를 DIRECT_SPEC_V1 로 정확히 1회 선정 · legacy brief(Claude) 0', sel.length === 1 && ds.mode === 'DIRECT_SPEC_V1' && ev.claude.length === 0, { sel: sel.map((x) => x.slug), claude: ev.claude }),
+        exp('S15 spec 신원 — specHash · sourceHash · G8 manifest · graphVersion · publishAt 이 승인값', ds.specHash === id.specHash && ds.sourceHash === id.sourceHash && ds.g8ManifestHash === id.g8ManifestHash &&
+          ds.graphVersion === id.graphVersion && ctx.specOnDisk?.specHash === id.specHash && ctx.specOnDisk?.publication?.publishAt === id.publishAt, { ds, disk: ctx.specOnDisk?.specHash }),
+        exp('S15 ChatGPT 가짜 전송 정확히 1회 (DIRECT 메시지) · 재생성·수리 0', ev.sends.bySlug[`${t}:initial`] === 1 && ev.sends.initial === 1 && ev.sends.regen === 0 && ev.sends.repair === 0, ev.sends),
+        exp('S15 runner 원고 저장 정확히 1회 · 저장 원고 = fixture 원고 바이트', fx.length === 1 && fx[0].status === 'ok' && fx[0].sent === true && ctx.fetchResult?.sentTotal === 1 && ctx.draftSha === draftWant,
+          { fetch: fx.map((r) => ({ status: r.status, sent: r.sent })), sentTotal: ctx.fetchResult?.sentTotal, draftSha: ctx.draftSha }),
+        exp('S15 auto-register 실제 단계 — article(md-to-draft) · qa(QA FAIL 0) · hero · batch · register 전부 ok · 막힘 0', row?.verdict === 'DONE' && ['article', 'qa', 'hero', 'batch', 'register'].every((n) => steps.includes(`${n}:ok`)) &&
+          !steps.some((x) => /:(blocked|fail)/.test(x)) && stepOf(ctx, t, 'qa').some((x) => x.detail === 'QA FAIL 0'), { verdict: row?.verdict, steps }),
+        exp('S15 batch QA READY_TO_SCHEDULE (STANDARD · hero=true) — 실제 batch-qa 행', stepOf(ctx, t, 'batch').some((x) => x.status === 'ok' && /^READY · STANDARD .*hero=true$/.test(x.detail)), stepOf(ctx, t, 'batch')),
+        exp('S15 실제 register.mjs 등록 · DIRECT 영수증 기록 단계', stepOf(ctx, t, 'register').some((x) => x.status === 'ok' && x.detail === `등록 (publishAt ${id.publishAt.slice(0, 10)})`) &&
+          stepOf(ctx, t, 'register').some((x) => x.status === 'ok' && x.detail === `DIRECT_SPEC_V1 영수증 기록 (${id.specHash})`), stepOf(ctx, t, 'register')),
+        exp('S15 hero provider 가짜 호출 정확히 1 · 생성 경로 1 · 변환 1 · 재사용 0 (사전 배치 0)', ev.hero.image === 1 && ev.hero.generate === 1 && ev.hero.convert === 1 && ev.hero.reuse === 0, ev.hero),
+        exp('S15 articles 에 resume-age 정확히 1건 · SCHEDULED · publishAt 2026-11-04T10:30:00+09:00 · 승인 제목', d?.articles?.length === 1 && art.status === 'SCHEDULED' && art.publishAt === id.publishAt && art.title === ctx.specOnDisk?.identity?.title, d?.articles),
+        exp('S15 heroImage 4필드 — src · alt(승인 alt) · 1200 · 675 · 병합 tree 에 RIFF/WEBP', art?.heroImage?.src === `/magazine/${t}/hero.webp` && art?.heroImage?.alt === ctx.specOnDisk?.hero?.alt && art?.heroImage?.width === 1200 && art?.heroImage?.height === 675 &&
+          ev.registered[0]?.heroFile?.riff === 'RIFF' && ev.registered[0]?.heroFile?.webp === 'WEBP', { hero: art?.heroImage, file: ev.registered[0]?.heroFile }),
+        exp('S15 main 큐에서 resume-age 0행', d?.queueRows === 0, d?.queueRows),
+        exp('S15 DIRECT 등록 영수증 1개 — specHash · intentId · publishAt 승인값', d?.receipt?.mode === 'DIRECT_SPEC_V1' && d.receipt.specHash === id.specHash && d.receipt.intentId === id.intentId && d.receipt.publishAt === id.publishAt, d?.receipt),
+        exp('S15 review.ts 0 (DIRECT 는 review 를 요구하지 않는다)', d?.reviewTs === false && !existsSync(join(ctx.sb.repo, 'drafts', 'magazine', t, 'review.ts')), d?.reviewTs),
+        exp('S15 PR 1 · MERGED · merge 1회(--match-head-commit) · Production fixture 배포 1 · 예약 404', ev.prs.length === 1 && ev.prs[0].state === 'MERGED' && ev.mergeCalls.length === 1 && ev.mergeCalls[0].args.includes('--match-head-commit') &&
+          ev.deployments.length === 1 && (ctx.applyResult?.deploy?.checked ?? []).some((c) => String(c).includes(t) && String(c).includes('404')), { prs: ev.prs, deploy: ctx.applyResult?.deploy?.checked }),
+        exp('S15 재실행 멱등 — 추가 전송 0 · 추가 hero 0 · PR·병합·등록 그대로 · 영수증·article 1', ev.sends.initial === 1 && ev.hero.image === 1 && ev.prs.length === 1 && ev.mergeCalls.length === 1 && ev.registered.length === 1 &&
+          again?.articles?.length === 1 && again?.receipt?.specHash === id.specHash && (ctx.rerunResult?.done ?? []).length === 0, { rerunDone: ctx.rerunResult?.done, again: again?.articles?.length }),
+      ]
+    },
+  }),
 }
 
 export const SCENARIOS = {
@@ -999,6 +1206,8 @@ IR.commitFiles({ draftsDir: ${JSON.stringify(join(sb.repo, 'drafts', 'magazine')
       ]
     },
   },
+
+  ...DIRECT_SCENARIOS,
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1052,8 +1261,10 @@ console.log(JSON.stringify(r))
 // 실행
 // ─────────────────────────────────────────────────────────
 
-export async function runScenario(id, { date, runtime, base, keep = false }) {
+export async function runScenario(id, { date: runDate, runtime, base, keep = false }) {
   const def = SCENARIOS[id]
+  // 🔴 고정 회차 시나리오(DIRECT_E2E) — 승인 source 의 publishAt 이 회차 날짜에 묶여 있어 --date 를 따르지 않는다
+  const date = def.date ?? runDate
   let sb
   try { sb = await buildSandbox({ source: SOURCE, runtime, label: id.toLowerCase(), base, prepare: (repo) => def.prepare(repo, date) }) } catch (e) {
     // 🔴 준비 실패도 그 시나리오의 FAIL 이다 — 다른 시나리오를 멈추지 않는다
