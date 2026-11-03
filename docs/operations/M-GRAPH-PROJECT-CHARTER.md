@@ -29,7 +29,8 @@
 | 현재 분기 목표와 병목 | [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md) |
 | M-AUTO 설치·가동·잠금·병합·배포·공개 감시 | [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) |
 | 매거진 콘텐츠 품질·글 구조·위험 등급 정의 | [`2026-08-23-soransoran-magazine-strategy.md`](./2026-08-23-soransoran-magazine-strategy.md) |
-| 일일 제작 역할·`ArticleSpec` 전환·48~72시간 commissioning 실행표 | 이 문서 §18 · [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
+| 매거진 현재 상태·critical path | [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) |
+| vNext 실행 계약 — provider·Job·rollout switch·release·A commissioning·legacy 삭제 조건 | [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) §0.0B |
 | 매거진 QA·예약 재고·공개 엔진·창업자 개입 기준의 운영 정본 | [`2026-08-23-soransoran-magazine-seo-production-strategy.md`](./2026-08-23-soransoran-magazine-seo-production-strategy.md) |
 | robots·canonical·sitemap·색인 허용 | [`2026-08-23-soransoran-seo-index-policy.md`](./2026-08-23-soransoran-seo-index-policy.md) |
 | 고객 화면 디자인 시스템 | [`soransoran-brand-design-spec.md`](./soransoran-brand-design-spec.md) |
@@ -48,7 +49,7 @@
 **이 문서가 대체하지 않는 범위** — 아래는 위 두 문서와 runbook, 색인 정책이 계속 정본이다.
 
 - M-AUTO의 안전·QA·위험 등급 판정·예약·병합·배포·공개 감시 계약
-- 콘텐츠 품질과 위험 검증의 독립성. 일일 제작 역할은 이 문서 §18의 2026-10-15 결정이 우선한다.
+- 콘텐츠 품질과 위험 검증의 독립성. 권위 객체·관계·ContentPlan·공급 정책은 이 문서 §18-B(2026-11-03)가 우선한다.
 - 콘텐츠 품질 기준·글 구조·의료 안전 문구
 - `2026-08-23-soransoran-seo-index-policy.md` §5의 **색인 제출 게이트(4개 AND)**
   — 이것은 검색 *성과* 게이트가 아니라 *색인 허용* 게이트다. §14와 무관하게 유지된다.
@@ -128,7 +129,17 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 🔴 자동화를 이유로 의료·재정·안전 관문을 약화하지 않는다 (§4 와 같은 뜻이다).
 자동화는 관문을 없애는 것이 아니라 **사람 대기를 없애는 것**이다.
 
-### 3-B-1. 🔴 M3-A 구현 확정 (창업자 확정 · 2026-09-24) — **상태 RECOVERY_IN_PROGRESS**
+> 2026-11-03: 현재 코드의 계획별 사람 승인자 강제(`scripts/lib/magazine-direct-spec-source-authoring.mjs:62,731-732,931` ·
+> `scripts/lib/magazine-g8-promoter.mjs:74,344,793` 의 `MACHINE_APPROVER`)는 이 원칙과 충돌한다. vNext 는 이것을
+> 정책 판(영토 등급표) 영수증으로 교체한다(§18-B.7). 그 전까지 legacy·DIRECT 경로의 기존 동작은 그대로다.
+
+### 3-B-1. 📜 M3-A 구현 확정 (창업자 확정 · 2026-09-24) — HISTORY · legacy 웹 UI 경로 기록
+
+> 📜 **이 절은 2026-09-24~10-05 legacy ChatGPT 웹 UI 경로의 구현·복구 기록이다. 현재 vNext 정책이 아니다.**
+> 계속 유효한 것: 검증은 결정론적 코드가 한다 · 실패는 그 글만 격리 · 같은 지문 재전송 0(→ runbook §0.0B.1 Job 으로 이식).
+> 대체된 것(2026-11-03 창업자 결정): `Claude CLI brief → ChatGPT 웹 UI 원고` 와 "새 유료 AI API 0" — vNext 는 OpenAI API
+> Manuscript·Image provider 를 예산 상한 안에서 쓰고 브라우저는 수동 비상수단이다(runbook §0.0B.2).
+> legacy runner 가 운영 중인 동안 이 절의 운영 사실은 legacy 경로의 설명으로 남는다.
 
 > 🔴 **상태를 낮춘다** (2026-09-28). 계약은 그대로 확정이지만 구현 상태는
 > `LOCAL_COMPLETE` 가 아니다. 2026-09-28 자연 회차가 **공급 0건**으로 끝났고,
@@ -661,8 +672,9 @@ seed keyword
 다음 근거 중 하나 이상이 있어야 한다 — 검색 의도 그래프 · 실제 검색 연관 표현 ·
 창업자 블로그 유입 표현 · 커뮤니티에서 반복 관측된 질문 · 같은 독자군의 후속 관심 근거.
 
-유효한 발견 관계가 **없으면 억지로 만들지 않는다.** 직접 연관이나 기존 안전한
-추천으로 보충한다.
+유효한 발견 관계가 **없으면 억지로 만들지 않는다.** 그 intent 는 신규 ContentPlan 으로 컴파일하지 않고
+M-GRAPH 공급 loop(§18-B.5)로 보낸다. 이미 공개된 글의 화면은 resolver 가 근거 있는 관계만큼 보여 주고,
+graph 가 꺼진 cluster 는 같은 cluster 최신 글 폴백을 쓴다.
 
 **개수**
 
@@ -678,8 +690,8 @@ seed keyword
 - 직접 연관 3개와 발견 1개를 **약하게** 구분한다
 - 기존 브랜드 토큰과 레이아웃 유지 · 장식보다 **읽기와 선택의 명확성** 우선
 
-🔴 **현재 운영 배포에는 이 구성이 없다.** 운영은 여전히 같은 cluster 최신 3편이고,
-G9 로컬 구현도 최대 3개다. 4개 구성은 **M1(G9.1)** 의 목표다.
+현재(2026-11-03): 제품 resolver 는 graph 활성 cluster 에서 direct 최대 3(`MAX_DIRECT`) + discovery 1(`MAX_DISCOVERY`)을 보여 주고,
+그 밖에는 같은 cluster 최신 3편 폴백이다(`src/lib/magazine-graph.ts:130-132,334-340`). 신규 ContentPlan 의 선택량은 §18-B.2.
 
 ---
 
@@ -715,7 +727,27 @@ G9 로컬 구현도 최대 3개다. 4개 구성은 **M1(G9.1)** 의 목표다.
 행동이 필요한 사람     → 체크리스트·검진·진료 정보
 ```
 
-모든 글에 동일한 가입 문구를 반복하지 않는다. CTA는 해당 글을 읽은 사람이 실제로 다음에 할 행동과 맞아야 한다.
+모든 글에 동일한 **가입** 문구를 반복하지 않는다. CTA는 해당 글을 읽은 사람이 실제로 다음에 할 행동과 맞아야 한다.
+기존 글 하단의 주제별 게시판 CTA는 그대로 유지한다. 아래 브랜드 띠배너는 가입 문구가 아니라 2026-11-03 창업자가
+확정한 단일 브랜드 연결이며, 이 원칙의 예외로 명시한다.
+
+### hero · 본문 중간 브랜드 띠배너 (2026-11-03 창업자 결정)
+
+- **hero 는 유지한다.** 홈·목록·상세 hero 는 바꾸지 않는다. hero 는 원고와 분리된 ImageProvider 가 만든다(runbook §0.0B.2).
+- hero 장면은 ContentPlan 의 글별 장면 방향에서 만든다. 고객 연령대(40대 중반~60대 중반, 핵심 50대)와 한국 생활 배경을 지키고,
+  주 피사체는 가로 중앙·세로 가운데 띠에 둔다. 비율을 무시하는 변환(`scripts/lib/magazine-hero-webp.mjs:23` `fit: 'fill'`)은 제거 대상이다.
+- **같은 hero 를 본문 중간 브랜드 띠배너 배경으로 재사용한다.** 새 이미지를 만들지 않는다. 이미지 영역과 문구 영역을 분리하고
+  문구는 이미지에 굽지 않는다(HTML). 장식 이미지이므로 대체 텍스트는 비운다. 가입 전환의 "본문 끝 도달" 지점보다 앞에 둔다.
+- 띠배너 문구(정확히):
+
+```text
+자매처럼 편하게, 속마음까지 소란소란.
+고민과 일상을 눈치 보지 않고 나눠요.
+CTA  소란소란 둘러보기  →  /
+```
+
+- 색·버튼은 브랜드 토큰만 쓴다(버튼 `--cta`). 글자 크기 3단계·767px·터치 52px 를 지킨다.
+- 배너 클릭은 진단 지표이며 North Star 가 아니다(§18-B.8). 하단 게시판 CTA 의 `MagazineClick` 경로로 위장하지 않는다.
 
 ---
 
@@ -828,14 +860,14 @@ M-GRAPH 가 매거진 발행량을 늘린다는 이유로 제출 게이트를 �
 ### 보호하는 것
 
 - producer와 auto-register의 역할 분리
-- peek/commit 슬롯 계약
+- peek/commit 슬롯 계약 — legacy 경로 한정. vNext 는 release 직전 날짜 배정(§18-B.1 · runbook §0.0B.4)
 - QA, batch QA, 위험 등급, 격리
 - hero 필수와 이미지 파일 검증
 - run-id 결과 연결
 - PR SHA 고정, 파일 범위, CI, merge gate
 - 🔴 자동 레인 PR 의 **변경 파일 허용 목록** `ALLOWED_FILE_RULES`
   (`scripts/lib/magazine-merge-gate.mjs`) — 목록 밖 파일은 `UNEXPECTED_FILES` 로 병합이 막힌다
-- 🔴 자동 병합의 **위험 등급 정본** `drafts/magazine/topic-queue.ts`
+- 🔴 자동 병합의 **위험 등급 정본** `drafts/magazine/topic-queue.ts` (legacy 큐 한정 — vNext 는 ContentPlan 의 위험 등급)
   — 🔴 `validationProfile` 을 정할 수 있고 결정론적 QA 를 통과한 글이 자동으로 나간다
 - 예약 전 비공개
 - Production SHA와 도메인 서빙 확인
@@ -860,7 +892,7 @@ M-GRAPH 가 매거진 발행량을 늘린다는 이유로 제출 게이트를 �
 5. 기존 글은 내용 재작성보다 관계 정보 연결을 먼저 검토한다.
 6. 새 주제망 정보가 없으면 기존 동작이 유지되는 호환 경로를 둔다.
 7. M-GRAPH 오류가 기존 예약 공개를 막지 않게 한다.
-8. 새 방식이 실제 캠페인에서 검증되기 전에는 옛 로직을 삭제하지 않는다.
+8. 새 방식이 실제 캠페인에서 검증되기 전에는 옛 로직을 삭제하지 않는다. 삭제 조건은 runbook §0.0B.7 의 네 조건이다.
 9. 주제 지도와 topic queue가 서로 다른 정본으로 존재하지 않게 한다.
 10. 구조 전환은 읽기 전용 진단 → 그림자 계산 → 일부 적용 → 실제 관찰 → 옛 로직 제거 순서를 지킨다.
 11. 주제 그래프 파일의 **저장 위치는 자동 병합 허용 목록과 함께 결정한다**(아래).
@@ -963,53 +995,14 @@ watch 거짓 PASS 0
 
 ## 18. 역할과 승인 경계
 
-🔴 **2026-10-16 창업자 결정 — M-GRAPH plan-first와 M-AUTO execute-only로 단순화한다.**
-이 결정은 후보를 고른 뒤 관계·source 부족을 발견하던 흐름과 옛 `Claude brief → ChatGPT 원고`
-역할 분리를 대체한다. M-GRAPH가 생산 가능한 계획 재고를 먼저 만들고, M-AUTO는 승인된 계획을
-재해석하지 않고 실행한다. 매일 Claude가 자유 서술형 `brief.md`·`review.ts`를 새로 만드는 단계는
-목표 경로에서 제거한다.
-
-```text
-M-GRAPH       조사된 검색 의도 -> GRAPH_READY 계획 재고와 근거 있는 관계 제공
-G8            graph-ready intent에 stable slug와 admission 신원 부여
-ArticlePlan   독자 질문·범위·관계·근거·안전·공개 계획의 승인 정본
-ArticleSpec   ArticlePlan에서 결정적으로 생성하는 버전 고정 실행 계약
-M-AUTO        SPEC_READY 선택 -> 원고·QA·hero·등록·배포·watch 실행
-창업자        검색 영토 · 브랜드 경계 · 고위험 정책 · 구조 변경 승인
-```
-
-`ArticleSpec`에는 최소한 아래 항목이 들어간다.
-
-- `specVersion`, `specHash`, slug, 검색 의도와 그래프 노드·관계
-- 독자 질문, 범위, 구조, 근거·안전 제약, 길이와 형식 계약
-- CTA, 근거 있는 직접 관련 2~3개와 발견 1개, 시리즈·허브·커뮤니티 출구
-- hero 요구와 공개 예약 정보
-
-graph에는 근거 있는 관계를 수량 제한 없이 저장한다. 생산 최소선은 공개 대상 direct 2개 이상과
-discovery 1개이며, 제품 상세의 표시 목표는 direct 최대 3개와 discovery 1개다. direct가 2개뿐이면
-2개만 표시하고 숫자를 위해 약한 관계를 만들지 않는다. hub·series·community 출구는 discovery를
-대신하지 않는다.
-
-주제 선정은 없애지 않는다. 일일 동적 창작 대신 **M-GRAPH가 미리 준비한 `GRAPH_READY` 재고에서
-다음 계획을 결정적으로 선택**한다. readiness는 graph에서 재생성되는 파생 보고서이며 사람이 수정하는
-새 정본이 아니다. `draft.md`는 생성 결과를 QA·재생성·원자 교체하는 경계로 유지한다.
-
-전환 중 DIRECT와 LEGACY는 실행 입구와 후보 집합을 분리한다. 한 run에서 두 mode를 섞거나 DIRECT
-실패 행을 legacy로 자동 강등하지 않는다. `LEGACY_BRIEF_V1`은 신규 유입을 동결한 bounded rollback으로만
-보존하고, 서로 다른 DIRECT 계획 2건과 lane rollback을 증명한 뒤 활성 경로에서 제거한다.
-이 전환의 48~72시간 commissioning 마일스톤(목표 2026-10-18 KST)과 완료 조건은
-`magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다. 이 게이트는 M-GRAPH → M-AUTO 순서로 두 층만 판정하고,
-OUTCOME은 트래픽이 충분해질 때까지 `DEFERRED — TRAFFIC_NOT_SUFFICIENT`로 둔다(2026-10-16 창업자 결정).
-OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
-
 | 역할 | 책임 (M-GRAPH 범위) |
 |---|---|
 | 창업자 | 검색 정체성·핵심 영토·브랜드 방향·고위험 주제 결정 |
 | Codex | 목적·정본·조사 품질·중복·마일스톤·구현 범위·배포 판단 총괄 |
 | Claude Code | 승인된 범위의 read-only 조사, 구현, 검증, 증거 보고 |
-| M-GRAPH | 확정된 검색 의도·관계·GRAPH_READY ArticlePlan 재고 제공 |
+| M-GRAPH | 확정된 검색 의도·관계와 3+1 관계를 채운 ContentPlan 재고 제공(§18-B) |
 | G8 | graph-ready intent의 stable slug·admission 신원 부여 |
-| M-AUTO | SPEC_READY 참조를 안전하게 생성·검사·예약·병합·공개 |
+| M-AUTO | ContentPlan 을 생성·검증·release·병합·공개 (runbook §0.0B) |
 
 ### 초기 운영
 
@@ -1019,8 +1012,132 @@ OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
 - 🔴 **원고의 반복 실행은 전부 자동화한다** (M3-A). 등급으로 사람에게 넘기지 않는다.
   사람이 판단하는 것은 브랜드 경계와 새 검색 영토뿐이다.
 - 새 M-AUTO 경로의 일일 입력은 자유 서술형 brief나 전체 콘텐츠를 복제한 queue 행이 아니라
-  `planId`·`planHash`로 참조하는 버전 고정 `ArticleSpec`이다.
+  `planId`·`planHash`로 참조하는 날짜 없는 ContentPlan 이다(§18-B.1).
 - Claude는 M-GRAPH 연구·설계와 코드 구현·검증에는 계속 쓰되, 일일 운영 필수 provider가 아니다.
+
+### 18-H. 대체 기록 (2026-11-03)
+
+2026-10-16 plan-first 판의 네 정책은 다음 현재 절로 대체됐다. 원문은 Git 이력(이 변경의 parent)에 있다.
+
+| 폐기 정책 | 현재 절 |
+|---|---|
+| 사람 승인 ArticlePlan | §18-B.7 정책 판 영수증 |
+| direct 2 생산 최소선 | §18-B.2 보존량·선택량(3+1) |
+| publishAt 을 담은 ArticleSpec | §18-B.1 날짜 없는 ContentPlan · release 직전 배정 |
+| DIRECT 2건 뒤 legacy 삭제 | runbook §0.0B.7 삭제 조건 네 개 |
+
+---
+
+## 18-B. 🔴 Magazine vNext 설계 (2026-11-03 · Codex DESIGN_FREEZE_APPROVED · 창업자 결정 포함)
+
+이 절은 M-GRAPH 목적·관계·ContentPlan·공급 정책의 정본이다. 실행 절차(provider·Job·rollout·release·A·legacy)는
+runbook §0.0B, 현재 상태와 critical path 는 milestone 이 정본이며 여기에 반복하지 않는다.
+우선순위는 **OUTCOME → M-GRAPH → M-AUTO → 신뢰성 장치**다.
+
+### 18-B.1 권위 객체
+
+저장하는 권위는 다섯이다. READY · RELEASE_READY · EXPIRED · usable · 재고 · 표시 링크 · cluster 활성은 **매번 계산**하고 저장하지 않는다.
+
+| 권위 | 위치 | 책임 |
+|---|---|---|
+| **Evidence** | 연구 repo (`contract/build/current` + 증거) | intent·관계 단위 검색 근거와 출처 신원 |
+| **Canonical Graph** | 제품 `src/content/magazine/graph/*` | intent·edge·mapping·control. 근거 있는 유효 관계를 수량 제한 없이 보존 |
+| **ContentPlan** | Git | 검색 질문 · 독자 상황 · 답변 범위 · include/exclude · 사실 확인 항목 · 관계와 독자 이동 이유 · 위험도와 검증 방식 · hero 장면 방향 · CTA · graphVersion·evidence 신원 · 정책 판 |
+| **Job** | runtime (Git 밖) | 글 하나의 실행 기록 — runbook §0.0B.1 |
+| **Article** | Git (`src/content/magazine/articles.ts` · hero) | 최종 공개본과 `publishAt` 의 유일한 소유자 |
+
+- 🔴 **ContentPlan 에 넣지 않는 것**: `publishAt` · provider 이름 · provider 작업 ID · runtime 경로 · PR·branch·배포 정보 · 승인자.
+- 🔴 **`publishAt` 은 release 직전에 배정한다.** 날짜를 놓쳐도 ContentPlan·원고·해시는 바뀌지 않고 재승인도 없다.
+- queue 는 legacy 가 남아 있는 동안만 존재하며, vNext 는 queue 에 콘텐츠 필드를 복제하지 않는다.
+
+### 18-B.2 관계 계약 — 보존량과 선택량
+
+| 층 | 계약 |
+|---|---|
+| **Canonical Graph (보존량)** | 유효한 direct relation **3개 이상**, discovery relation **1개 이상**을 보존할 수 있다. 근거 있는 추가 관계를 삭제하지 않는다 |
+| **ContentPlan · 제품 표시 (선택량)** | direct **3개**, discovery **1개**를 현재 relation policy 의 품질·표면·결정적 tie 규칙(`scripts/lib/magazine-graph-build.mjs:970` priority → edgeId · 제품 `MAX_DIRECT = 3`)으로 **결정적으로 선택**한다 |
+| 모든 관계 | `readerReason`(독자가 다음 글을 읽는 이유)과 `anchorLabel` 이 있어야 한다 |
+| 미충족 | 3+1 을 채우지 못하면 **ContentPlan 을 만들지 않고** 공급 loop(§18-B.5)로 보낸다 |
+| 기준 | 관계 근거 기준을 낮추지 않는다. 숫자를 채우려고 약한 관계나 가짜 edge 를 만들지 않는다 |
+
+수량의 코드 정의는 `scripts/lib/magazine-relation-policy.mjs` 한 곳이다. 선택량은 그 파일에서만 정하고 두 번째 숫자를 만들지 않는다.
+
+### 18-B.3 research previous 와 product previous — 계층별 이력
+
+| 계층 | previous 의 뜻 | 용도 | 근거 |
+|---|---|---|---|
+| 연구 | 직전 **research current** | 연구 후보 생성·검증·current 전환을 되돌린다 | `scripts/lib/magazine-research-current.mjs:178-179` · `scripts/magazine-research-current-check.mjs:337,401` |
+| 제품 | 직전 **배포 product graph** | 사용자에게 서빙되는 graph 를 되돌린다 | `src/content/magazine/graph/control.ts` · `current.ts` |
+
+- 두 previous 는 **같을 필요가 없다.** 같아야 하는 것은 신규 공급 시점의 **current graphVersion 과 후보 신원**뿐이다.
+- 연구만 rollback → 제품 서비스는 현행 유지 · 신규 공급 HOLD · 제품 파일 쓰기 0.
+- 제품만 rollback → 사용자는 product previous 를 서빙받음 · 연구 current 유지 · 신규 공급 HOLD · 연구 파일 쓰기 0.
+- 신규 공급 재개는 두 current 가 다시 같은 제품화 후보 신원으로 맞을 때다.
+- 기존 fail-closed `GRAPH_BUNDLE_MISMATCH` 를 그대로 쓴다. **새 gate 를 만들지 않는다.**
+
+### 18-B.4 공개 순서
+
+- 관계 대상은 ① 이미 공개 ② 같은 release ③ 이미 merge 되어 원문보다 먼저 또는 같은 시각에 공개 — 중 하나면 인정한다.
+  지금의 "대상이 지금 공개" 조건(`scripts/lib/magazine-graph-build.mjs:939` `TARGET_NOT_PUBLIC`)은 이 규칙으로 교체할 대상이다.
+- 순서를 어겨도 미공개 글 누출은 0 이다 — resolver 가 런타임에 공개 글만 후보로 쓰고(`src/lib/magazine-graph.ts:274,287`), graph watch 가 누출을 감시한다.
+- 역링크(`REVERSE_LINK_ABSENT`, `graph-build.mjs:1012`)를 readiness 선행 조건에서 공개 후 표시 파생으로 옮기는 것은
+  research builder · 제품 resolver · graph watch · rollback 계약 대조를 통과한 뒤에만 한다. 그 전에는 현행 유지다.
+- 순환(A↔B)은 같은 release 로 묶거나 상대가 공개될 때까지 resolver 가 숨긴다. 별도 부트스트랩 장치를 만들지 않는다.
+
+### 18-B.5 M-GRAPH 공급 loop
+
+관계가 부족한 intent 를 생산 경로가 메우지 않는다. 다음 loop 가 근거를 보강한다.
+
+1. readiness shortfall 을 이유별로 집계한다(builder 산출 그대로).
+2. 우선 intent 를 결정적으로 고른다 — 대상: 영토 등급 AUTO·CONTROLLED ∧ `policyScope=ALLOWED` ∧ `automationDecision=PASS` ·
+   정렬: 부족 관계 수 오름차순 → 이미 공개된 관계 대상이 많은 순 → intentId.
+3. 부족한 슬롯(direct / discovery)마다 고정 템플릿으로 질의를 만든다(같은 입력 = 같은 질의).
+4. EvidenceProvider 가 승인된 예산 안에서 수집한다(실행 한도·멱등·재시도는 runbook §0.0B.2).
+5. 증거를 정규화·중복 제거하고 출처 신원(정규화 URL · 도메인 · snippet 해시 · 관측 시각 · 엔진 · 질의 해시)을 저장한다.
+6. builder 가 무료로 재계산한다(결정적 해시).
+7. 3 direct + 1 discovery 충족 여부를 판정한다(§18-B.2 · §18-B.4).
+8. 충족한 intent 만 ContentPlan 으로 컴파일한다.
+9. 부족하면 그 intent 만 `HOLD(evidence)` 로 두고 다른 intent 는 계속한다. 사람 대기는 없다.
+
+- **관계 인정**: ① 두 intent 를 잇는 정규화 증거가 있다 ② `readerReason`·`anchorLabel` 이 결정적 검사(비어 있지 않음 · 길이 · 금칙어 · 대상 질문 언급)를 통과한다
+  ③ builder 의 기존 layer 규칙(`AUTOMATION_READY` · slot · relationType · surface)을 통과한다. 하나라도 실패하면 그 관계만 거절한다.
+- **신선도**: intent 의 `profileSpec.maxSourceAgeMonths`(없으면 12개월)를 넘은 증거는 관계 판정에서 뺀다.
+- 외부 검색 근거 수집(EvidenceProvider)과 내부 graph 계산(builder)을 분리한다.
+- 연구 intent 의 "사람을 기다리는" HOLD 판정(갈래·커뮤니티 제목·증거 수)은 증거가 보강되면 같은 숫자 기준으로 기계가 다시 판정한다.
+- 재고 지표는 **usable ContentPlan 수와 검증된 후보 수**다. 고정 일수(30·60일) 목표와 완성 원고 선생성은 두지 않는다.
+
+### 18-B.6 영토 등급 (2026-11-03 창업자 결정)
+
+| 등급 | 범위 | 뜻 |
+|---|---|---|
+| **AUTO** | T0~T8 의 `STANDARD` 검증 프로필 | 자동 생성 · STANDARD 검증 |
+| **CONTROLLED** | T0~T8 의 `MEDICAL` · `FINANCIAL` · `SENSITIVE` | 자동 생성(사람 승인 없음) · 1차 출처·기준일 필수 · 사실 오류는 문장 수리로 덮지 않음 · 발행 직전 재검증 |
+| **EXCLUDED** | T9(후보) · `policyScope: BLOCKED` · `automationDecision: REJECT` | 자동 계산에서 제외 · 표 개정 전까지 |
+
+- **cluster 활성은 사람이 하나씩 승인하지 않고 이 표로 계산한다.** 승인 영토 안에 ① 현재 공개·매핑된 Article 이 있거나
+  ② usable ContentPlan 이 있으면 활성이다. 신규 plan 재고가 0 이라는 이유로 기존 공개 graph 를 끄지 않는다.
+- `menopause-symptom` 기존 공개 14편은 별도 안전 검증(관계 대상·표면·resolver 출력 대조)과 public watch 를 통과한 뒤 활성한다.
+- 표 개정만 창업자 결정이다. 클러스터별·글별 승인은 없다.
+
+### 18-B.7 승인 경계
+
+- 일반 글마다 창업자·Codex·Claude 가 승인하는 단계와 대기열을 만들지 않는다(§3-B).
+- 계획의 승인은 사람 서명 칸이 아니라 **정책 판(영토 등급표) 영수증**이다. 승인자 필드·`founderApproved` 류 필드를 새로 만들지 않는다.
+- 창업자가 결정하는 것: 영토 등급표 개정 · 브랜드 경계 · 예산 상한 · 구조 변경 · A commissioning 1회(runbook §0.0B.6).
+
+### 18-B.8 OUTCOME 최소 측정
+
+| 무엇 | 출처 | 성격 |
+|---|---|---|
+| **North Star 하한 (제품 전체)** | DB — 7일 창 안에 서로 다른 KST 날짜 2일 이상 실제 글·댓글을 쓴 회원 수. 글 `Post.source=USER` ∧ `personaId` 없음 ∧ `operatorWriterId` 없음 · 댓글 `Comment.commentOrigin=MEMBER` ∧ 작성자 있음 · 작성자 관리자 아님. 비회원 댓글은 사람 식별자가 없어 하한에서 뺀다(보수) | North Star 하한 |
+| 매거진 귀속 | 기존 `SignupFunnelDaily` 의 `contentType=magazine` 일별 합계 · 본문 끝 도달 | 진단 |
+| 관련 글 클릭 · 커뮤니티 진입 | `magazine_related_impression/click` · 하단 게시판 CTA 의 `MagazineClick` | 진단 |
+| 띠배너 클릭 | GA 진단 이벤트 1개(slug 없음) | 진단 |
+| 검색 유입 | GA page_view | 진단 |
+
+- 제품 전체 하한과 매거진 귀속 OUTCOME 을 섞지 않는다. 페이지뷰·배너 클릭·발행 수를 North Star 로 부르지 않는다.
+- 이번 설계는 새 테이블·대규모 추적 시스템을 확정하지 않는다. 측정 실패가 콘텐츠 공개를 막지 않는다.
+
 
 ---
 
@@ -1028,15 +1145,15 @@ OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
 
 1. **깊은 복잡성은 사전 조사에 둔다.** 매일 실행기에 동적 판단을 계속 추가하지 않는다.
 2. **검색 성과를 기다리지 않는다.** 기술 문제가 없으면 확정된 계획을 계속 실행한다.
-3. **역할마다 한 개의 정본만 둔다.** graph, ArticlePlan, ArticleSpec, execution ledger, published article의
-   책임을 분리하고 queue·run·ledger에 콘텐츠 필드를 복제하지 않는다.
+3. **역할마다 한 개의 정본만 둔다.** Evidence · Canonical Graph · ContentPlan · Job · Article 의 책임을 분리하고(§18-B.1)
+   queue·run·Job 에 콘텐츠 필드를 복제하지 않는다.
 4. **규칙에는 사고 근거가 있어야 한다.** 막연한 품질 우려로 새 FAIL 게이트를 만들지 않는다.
 5. **WARN과 FAIL을 구분한다.** 불확실함을 전부 차단으로 바꾸지 않는다.
-6. **공유 경계는 `draft.md` 이후로 제한한다.** DIRECT와 LEGACY가 후보 선정·prompt 경로를 공유하지 않는다.
-7. **증거 뒤에 삭제한다.** DIRECT 2건과 rollback 전에는 legacy를 격리 보존하고, 증거 뒤에는 활성 경로와
+6. **전환 중 경로는 rollout switch 하나로 가른다.** legacy 와 vNext 가 한 회차에서 섞이지 않는다(runbook §0.0B.5).
+7. **증거 뒤에 삭제한다.** runbook §0.0B.7 의 네 조건이 모두 충족되기 전에는 legacy 를 보존하고, 충족 뒤에는 활성 경로와
    제거된 분기 전용 검사를 함께 삭제한다.
 8. **수치가 작을 때 과잉 반응하지 않는다.** 노출 0~소수는 기록하되 일일 실행을 바꾸지 않는다.
-9. **매일 승인받지 않는다.** 승인 대상은 검색 영토·고위험 주제·구조 변경이다.
+9. **매일 승인받지 않는다.** 승인 대상은 영토 등급표 개정·브랜드 경계·예산·구조 변경이다(§18-B.7).
 10. **완료를 과장하지 않는다.** 설계·구현·가동·실제 캠페인·장기 성과를 분리해 보고한다.
 
 ---
@@ -1058,7 +1175,9 @@ OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
 
 ---
 
-## 21. 현재 상태와 바로 다음 단계
+## 21. 📜 착수 시점 상태와 다음 단계 (2026-09-21 기록)
+
+> 📜 이 절은 프로젝트 착수 시점 기록이다. **현재 상태와 다음 단계는 [`magazine/MAGAZINE-CURRENT-MILESTONE.md`](./magazine/MAGAZINE-CURRENT-MILESTONE.md) 가 정본이다.**
 
 ### 확정된 것
 
@@ -1127,3 +1246,18 @@ G9 호환 구현 이후의 코드·배포 변경
 
 Codex나 Claude가 구현 편의를 이유로 이 문서의 목적을 축소하지 않는다. 문서와 구현이 충돌하면
 충돌을 보고하고, 창업자 결정 없이 문서를 구현에 맞춰 조용히 바꾸지 않는다.
+
+### 변경 기록
+
+**2026-11-03 — Magazine vNext 설계 동결 반영 (§18-B 신설 · §0·§3-B·§11·§12·§15·§18·§19·§21 정정)**
+
+1. **무엇을 바꾸는가** — 권위 객체 다섯(Evidence·Canonical Graph·ContentPlan·Job·Article), 관계 보존량·선택량(3+1), 계층별 previous,
+   공개 순서(same-release), M-GRAPH 공급 loop, 영토 등급표, 정책 판 승인, OUTCOME 최소 측정, hero·브랜드 띠배너.
+   2026-10-16 판은 §18-H 대체 기록과 Git 이력으로만 남기고, 2026-09-24 legacy 웹 UI 판(§3-B-1)은 legacy 경로 기록으로 남긴다.
+2. **왜** — 계획별 사람 승인이 §3-B 와 충돌했고, 날짜가 콘텐츠 해시 안에 있어 하루를 놓치면 재승인이 필요했으며,
+   readiness 의 "대상이 지금 공개" 조건이 새 영토의 첫 글들을 서로 기다리게 했다.
+3. **근거** — 연구 readiness(427d4d): `GRAPH_READY` 1 · `TARGET_NOT_PUBLIC` 49 · `CLUSTER_DISABLED` 43 · 2026-11-03 01:00 등록 0 · 예약 재고 0 ·
+   운영 격리 장부의 면책 문장 오탐(`dinner-change-two-weeks`) · Codex DESIGN_FREEZE_APPROVED(2026-11-03) · 창업자 결정(영토·예산·A 판정자).
+4. **M-AUTO 와 기존 예약 재고 영향** — 이 변경은 문서만이다. 운영 경로·runtime·launchd·큐·예약 글 변화 0. vNext 는 runbook §0.0B.5 의 rollout switch 가
+   `vnext` 일 때만 실행되며 기본은 `legacy` 다.
+5. **판정 변화** — M-GRAPH PARTIAL · M-AUTO PARTIAL · OUTCOME NOT PROVEN(이전 DEFERRED). A commissioning 은 M-AUTO OPERATING_PASS 가 아니다.
