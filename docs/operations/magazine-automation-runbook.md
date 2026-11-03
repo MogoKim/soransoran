@@ -1,6 +1,6 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 갱신 2026-10-16 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
+작성 2026-09-15 · 갱신 2026-11-03 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09) · `com.soransoran.magazine-graph-watch`
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
 
@@ -10,9 +10,9 @@
 
 | | 자동 | 사람·CI |
 |---|---|---|
-| graph readiness·ArticlePlan 승인 | ❌ | M-GRAPH·G8가 실행 queue 앞에서 완료 |
-| `SPEC_READY` 다음 계획 선택 | ✅ producer | 계획 내용을 재해석하지 않음 |
-| 원고 회수 (ChatGPT 웹 UI) + 관문 | ✅ producer | |
+| graph readiness·ContentPlan | vNext: ✅ M-GRAPH 공급 loop (charter §18-B.5) | legacy·DIRECT 현행: M-GRAPH·G8·사람 승인 ArticlePlan 이 queue 앞에서 완료 |
+| 다음 계획 선택 | ✅ producer — DIRECT 현행: `SPEC_READY` 참조 · vNext: usable ContentPlan(charter §18-B.5) | 계획 내용을 재해석하지 않음 |
+| 원고 생성 + 관문 | ✅ producer — legacy: ChatGPT 웹 UI · vNext: ManuscriptProvider API(§0.0B.2) | |
 | 변환 · QA · hero · batch-qa | ✅ auto-register | |
 | `articles.ts` 등록 (**PR 브랜치 위에서**) | ✅ auto-register | |
 | **PR 생성** (`[merge 금지]`) | ✅ auto-register | |
@@ -25,7 +25,11 @@
 사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
 **모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
 
-### 0.0A plan-first 제작 계약 전환 (2026-10-16 창업자 결정)
+### 0.0A 📜 plan-first 제작 계약 전환 (2026-10-16 창업자 결정 · 대체됨 2026-11-03)
+
+> 📜 이 절은 2026-10-16 판이다. 아래 `ArticlePlan` 명령은 **현재 main 코드의 동작 설명**으로 남기지만, 정책으로서는 §0.0B 와
+> charter §18-B 로 대체됐다 — 사람 승인 ArticlePlan → 정책 판 영수증 · direct 2 생산 최소선 → 선택량 3+1 · 공개 예약을 담은 ArticleSpec →
+> 날짜 없는 ContentPlan · "DIRECT 2건 뒤 legacy 제거" → §0.0B.7 의 네 조건.
 
 현재 Production은 Claude가 `brief.md`·`review.ts`를 만드는 `LEGACY_BRIEF_V1`이다. 목표 경로는
 M-GRAPH가 미리 준비한 `GRAPH_READY` 계획을 G8이 편입하고, 승인된 ArticlePlan을 버전 고정
@@ -64,6 +68,169 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
   - materialize가 `QUEUE_WRITE_CONFLICT`이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
     producer를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
 
+
+### 0.0B 🔴 Magazine vNext 실행 계약 (2026-11-03 · Codex DESIGN_FREEZE_APPROVED · 구현 전)
+
+권위 객체·관계·ContentPlan·공급 정책은 charter §18-B, 현재 상태와 구현 커밋 순서는 milestone 이 정본이다. 이 절은 **실행**만 정한다.
+🔴 아직 구현 전이다. 아래는 구현이 지켜야 할 계약이며, 지금 운영은 legacy 경로다.
+
+#### 0.0B.1 Job — 글 하나의 실행 기록
+
+- 위치: runtime 밖 `~/Library/Application Support/soransoran/magazine-jobs/<planHash>/job.json` (Git 밖). 글 하나당 하나.
+- 담는 것(파생할 수 없는 사실만): `planHash` · `contractHash` · provider 작업 ID·응답 해시 · 원고·이미지 해시 · 실제 또는 계산 가능한 비용 ·
+  검증 결과 · 부분 수리·전체 재생성 횟수 · release PR 번호 · 실패 원인 · 상한 있는 `attempts[]`.
+- 담지 않는 것: READY · EXPIRED · RELEASE_READY 같은 파생 상태. 매번 계산한다.
+- 쓰기: temp + rename 원자 덮어쓰기. replay·compaction 장부를 만들지 않는다.
+- 🔴 기존 격리 장부의 불변조건(같은 메시지 지문 재전송 0 · 전송 전 예약 · 전송 불명 시 재전송 금지)을 Job 이 그대로 지킨다.
+  Job 이 이를 시험으로 증명하기 전에는 `scripts/lib/magazine-quarantine.mjs` 의 전송 예약·지문을 지우지 않는다.
+
+#### 0.0B.2 Provider 계약
+
+- **ManuscriptProvider · ImageProvider · EvidenceProvider 를 코드 계약으로 분리한다.** 같은 OpenAI API 를 쓸 수 있지만 실패·비용·재시도는 독립이다.
+- provider 는 graph · queue · `publishAt` · PR · Git · 다른 후보를 모른다. 계약 객체만 받는다.
+- 🔴 **브라우저 ChatGPT 는 자동 fallback 이 아니라 수동 비상수단이다.** 어떤 실패도 브라우저로 자동 강등하지 않는다.
+- ImageProvider 는 원고가 아니라 ContentPlan 의 hero 장면 방향에서 만든다 — 이미지 실패에 원고 재생성 0, 원고 수리에 이미지 재생성 0.
+
+**ManuscriptProvider — Responses API · background + polling · `store: false`**
+
+1. 생성 요청 직전에 요청 키를 배타 생성하고(`openSync wx`), 요청 직후 받은 **response ID 를 Job 에 원자적으로 기록**한다.
+2. `queued`·`in_progress` 동안 바로 polling 한다.
+3. 🔴 **임의의 5분·10분 생성 timeout 을 두지 않는다.**
+4. provider 가 문서화한 **terminal 상태까지 durable 하게 재조회**한다(프로세스가 다시 떠도 Job 의 response ID 로 이어서 본다).
+5. terminal 응답을 받으면 즉시 원고·usage·response 해시를 Job 에 저장한다.
+6. 🔴 **response ID 를 받기 전에 전송 결과가 불명확하면 자동 재전송하지 않는다** — 그 후보 HOLD.
+7. 🔴 **response ID 가 있지만 더 이상 조회할 수 없으면 그 후보만 HOLD 하고 자동 재생성하지 않는다.**
+8. AUTH·계통 장애가 아니면 다른 후보는 계속 처리한다.
+9. background + strict JSON schema(Structured Outputs)는 **실제 모델 canary** 에서 검증한다.
+10. 🔴 canary 가 실패하면 **`DESIGN_CONTRACT_CONFLICT` 로 중단**한다. browser 방식으로 자동 강등하지 않는다.
+
+- Batch 는 pilot 에서 쓰지 않는다.
+- 모델 선택: 원고 baseline `gpt-6.1-sol` · challenger `gpt-6.1-terra` 를 같은 기존 계획 3건으로 비교(품질·구조화 성공·비용) → 품질이 같으면 저비용 모델.
+  이미지 baseline `gpt-image-2.5-flare`(필요 시 `gpt-image-2.5-sunburst` 비교). 실제 A 는 선택된 모델을 쓴다. 모델명·단가는 구현 직전 공식 가격 페이지로 다시 대조한다.
+
+**EvidenceProvider (M-GRAPH 공급 loop 의 외부 수집기 — 정책은 charter §18-B.5)**
+
+- 입력 `{ intentId, graphVersion, slot: DIRECT | DISCOVERY, query, locale, engine }` · 출력은 정규화 가능한 검색 hit 목록.
+- 멱등 키 = `sha256(engine | query | locale | YYYY-MM)` — 같은 달 같은 질의는 저장된 결과를 쓰고 호출 0.
+- 예산: 현재 SerpAPI 구독 범위 안 · 유료 추가 0(증거 예산은 승인된 적 없다) · 기본 상한 하루 20회 · 월 200회.
+- 실패 범위는 질의 1개. 429·5xx·네트워크는 같은 키로 백오프 2회 → 그 질의만 다음 회차. 상한 도달은 그날 loop 중단(실패 아님).
+- 키는 출력·저장하지 않는다.
+
+**예산 (2026-11-03 창업자 결정)**
+
+| 항목 | 상한 | 넘으면 |
+|---|---|---|
+| A commissioning 총액(모델 비교 포함) | **$5** | A 중단 |
+| 편당 provider hard cap | **$1** | 그 후보만 HOLD |
+| pilot 월 hard cap | **$30** | 새 provider 호출 0 · 검증된 후보의 release 는 계속 · 알림 1회 · 다음 달 재개 |
+| 월 $100 확대 | **미승인** | — |
+
+비용은 Job 에 호출마다 기록하고 합계는 계산한다. 코드 상한이 1차 방어다.
+
+#### 0.0B.3 검증 · 부분 수리 · 전체 재생성
+
+검증은 결정론적 코드다(기존 `magazine-qa.mjs` · `magazine-batch-qa.mjs` · `lib/magazine-forbidden.mjs` · profile QA).
+
+| 위반 | 처리 |
+|---|---|
+| 고정 문장 누락(진료 안내 · 위기 상담 안내 · CTA) | 정본 문장을 **결정적으로 삽입** → 재검증 |
+| description · FAQ · CTA · 단순 표현 | **그 필드·문장만** 수리 → 같은 검증기로 재판정 |
+| 금지 패턴 일치 | **일치 문장 하나만** 재작성 → 같은 검증기로 재판정. 동사·문맥 예외 목록을 늘리지 않는다 |
+| 의료·법률·세금·금융 사실 오류 · 검색 의도 불일치 · 구조 붕괴 | 문장 수리로 덮지 않는다 → **전체 재생성** |
+| 그 뒤에도 실패 | **그 후보만 HOLD** |
+
+- 기본 상한: 부분 수리 최대 2곳 · 전체 재생성 최대 1회 · 이후 그 후보 HOLD.
+- CONTROLLED 후보(charter §18-B.6)는 release 직전에 사실 확인 항목의 기준일을 다시 대조한다.
+- hero: 크기·형식 · 비율 왜곡 0 · 기존 hero 와의 지각 해시 중복을 자동으로 본다. 실패하면 이미지 1장만 다시 만들고, 그래도 실패하면 그 후보 HOLD.
+
+#### 0.0B.4 release writer · 날짜 마지막 배정
+
+- **release writer 는 하나다.** `articles.ts` 와 날짜를 쓰는 주체가 하나다. 생성 worker 와 분리한다.
+- 입력은 검증을 통과했고 아직 release 되지 않은 후보 중 `targetCandidates` 개 이하다. 묶기 위해 원고를 더 만들지 않는다.
+- `publishAt` 은 이때 배정한다 — main 과 열린 release PR 의 날짜를 읽어 내일부터 빈 날(10:30 KST). 관계 대상이 같은 release 에 있으면 대상 날짜 ≤ 원문 날짜.
+- 쓰기는 기존 `scripts/magazine-register.mjs` journal 트랜잭션을 후보마다 쓰고 PR 은 하나다. 한 편과 여러 편이 같은 코드다.
+- 실패한 후보는 PR 조립 전에 빠진다. release PR 의 CI 가 실패하면 그 release 만 닫고 후보를 검증됨으로 되돌린다.
+- 🔴 **열린 release PR 은 다음 release 만 기다리게 한다. 생성은 막지 않는다.** (§0.1 의 전역 HOLD 는 legacy 경로의 현행 동작이다.)
+- merge 관문(SHA 고정 · 변경 파일 모양 · CI · 중복 slug · 예약일 · 과거 날짜)은 그대로 둔다. 변경 파일 모양은 release 의 slug 집합 기준으로 본다.
+
+#### 0.0B.5 rollout switch — lifecycle
+
+**전환 중**
+
+| 항목 | 계약 |
+|---|---|
+| 위치 | runtime 밖 설정 파일 1개 — merge 가 곧 활성화가 되지 않게 한다(runtime 은 00:10 에 main 을 ff-only 로 따라붙는다) |
+| 값 | `legacy` 또는 `vnext` · A 에서만 쓰는 Draft release 표시 · `targetCandidates` |
+| 없음 · 손상 · schema 불일치 | `legacy` |
+| 쓰기 | 단일 owner CLI · schema 검증 · 원자 쓰기 · 변경자·시각·old/new 기록 |
+| 읽기 | producer · auto-register 가 회차 시작 때 읽어 분기한다. plist 변경 0 |
+
+**A · 첫 무인 글 · 다른 cluster 검증 이후**
+
+- vNext 를 고정하고, legacy 삭제와 **같은 변경에서** switch 분기와 A 전용 Draft 분기를 코드에서 제거한다.
+- 제거 이후의 이상 상태는 legacy fallback 이 아니라 **생성 HOLD** 다. release 와 이미 공개된 Article 은 영향 없다.
+
+#### 0.0B.6 A commissioning · 첫 무인 글 · 다른 cluster
+
+**A (1회)**
+
+1. 실제 provider 로 후보 1개 생성(공급 loop 가 만든 3+1 ContentPlan).
+2. 실제 검증.
+3. **Draft release PR** 생성 — **auto-merge 0**.
+4. 창업자가 로컬 production 렌더로 상세·홈·목록·hero·띠배너를 확인한다(제품 route 추가 0).
+5. 창업자 **예/아니오 1칸**.
+6. 예 → **수동 병합**. 아니오 → 병합하지 않고 닫은 뒤 원고가 아니라 **시스템을 고치고** 같은 ContentPlan 으로 재생성.
+
+- 사람이 원고를 직접 고치지 않는다. 고쳐야만 통과한다면 A 는 FAIL 이다.
+- A 전용 승인 필드 · 승인자 필드 · 영구 대기 상태를 만들지 않는다. 판정은 PR 병합 여부 그 자체다.
+- 🔴 **A 는 M-AUTO `OPERATING_PASS` 가 아니다.**
+
+**첫 신규 무인 글 B · 다른 cluster**
+
+- 첫 신규 무인 글 B 의 release·배포·공개가 **자연 회차로** 끝나야 M-AUTO 판정 근거가 된다.
+- 다른 cluster 의 production-shaped 검증도 필요하다. release 선택은 직전과 다른 cluster 를 우선한다.
+- 완성 원고 여러 편을 미리 만드는 정책은 없다. 구조는 N 개 후보를 처리하되 `targetCandidates` 는 근거로 올린다
+  (직전 release 들의 검증 첫 통과 · 전체 재생성 0 · 이미지 재시도 · 중복 0 · 잔존물 0 · watch 실패 0 · 비용 상한).
+  올리는 것은 사람의 설정 변경이고, 기준이 하나라도 깨지면 기계가 1로 내린다.
+
+#### 0.0B.7 legacy 삭제 조건 · rollback
+
+다음 **네 조건이 모두** 충족되기 전에는 legacy 를 삭제하지 않는다.
+
+1. 운영 진입점에서 옛 모듈 도달 0 (import 그래프로 기계 확인)
+2. vNext 신규 글의 무인 release·배포·공개 완료
+3. 다른 cluster 의 production-shaped 검증 완료
+4. fixture · mutation · rollback 참조 0
+
+- 옛 graph 판 파일은 위 네 조건과 함께 연구·제품 각 계층의 current·previous·rollback 소비처를 확인한 뒤에만 지운다.
+- legacy 큐 행은 기계로 분류한다 — 계절 창이 지난 행은 만료 · 격리 원인이 원고 결함인 행은 원고를 버리고 같은 intent 를 공급 loop 로 ·
+  전달 불명 HOLD 는 같은 intent 의 3+1 ContentPlan 이 있으면 이전하고 없으면 보류 유지.
+- rollback 단위: rollout switch `legacy`(분기 제거 전) → release PR revert → 글 1편 `status: 'BLOCKED'` → graph kill(graph watch) →
+  계층별 previous(charter §18-B.3 — 신규 공급은 current 가 다시 맞을 때까지 HOLD). 분기 제거 뒤에는 Git revert.
+
+#### 0.0B.8 구현 · 검사 게이트
+
+- 구현 커밋 순서와 진행 위치는 milestone 이 정본이다.
+- **완성 exact head 의 공통 PASS**: rollout switch 가 없거나 손상됐거나 `legacy` 일 때 legacy 회차 산출(run.json · handoff · PR 모양) 바이트 불변 ·
+  `legacy` 에서 vNext 진입점 쓰기 0 · ContentPlan 해시에 날짜·provider·경로 0 · `typecheck` · `typecheck:ops` · `lint` · `build` · `check:tokens` ·
+  `magazine:auto-check` · `check:m3a` · `check:magazine-graph` · `check:research-current` · `magazine:rehearsal`.
+- **production-shaped rehearsal** (fake provider · 녹화 evidence · 격리 저장소): 서로 다른 cluster 를 포함한 계획 여러 개 · 공급 loop(보강·부족·상한) ·
+  이미지 실패 · 금지 패턴(면책 문장) · 메타 칸 · 의료 안내 누락 · 사실 오류 · 비용 상한 · 급사 후 재개 · 같은 slug 동시 실행 · release CI 실패 ·
+  날짜 놓침 · switch 손상 · Draft release 를 주입한다. PASS 는 실패 후보만 격리 · 나머지는 PR 하나에 서로 다른 날짜 · 이미지 실패 시 원고 재생성 0 ·
+  같은 멱등 키 재호출 0 · ID 수신 전 불명 재전송 0 · 날짜를 놓쳐도 ContentPlan 해시 불변 · exact-head · 중복 0 · 잔존물 0 · Chrome/CDP 0 ·
+  사람 입력 0 · vNext 진입점의 legacy 모듈 도달 0 · Draft release 의 병합 0.
+
+#### 0.0B.9 실패 범위와 알림
+
+| 실패 | 범위 | 동작 | 알림 |
+|---|---|---|---|
+| 원고·이미지·검증·수리 실패 · ID 수신 전 불명 · ID 있으나 조회 불가 | 그 후보 | HOLD · 다른 후보 계속 | 상태가 바뀔 때 1회 |
+| 관계 근거 부족 | 그 intent | `HOLD(evidence)` | 없음(정상 상태) |
+| EvidenceProvider 상한 · 429 | 그날 공급 loop | 중단 · 다음 회차 | 1회 |
+| AUTH · 월 비용 상한 | 생성 전체 | 새 호출 0 · 검증된 후보 release 계속 | 1회 |
+| release CI 실패 | 그 release | 후보를 검증됨으로 되돌림 | 1회 |
+| 정상 대기(열린 release PR · 목표 도달) | — | 아무것도 안 함 | 없음 |
+
 ### 0.0 자동 병합이 확인하는 것
 
 | 확인 | 막는 것 |
@@ -72,14 +239,16 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
 | **SHA 고정** | 검증 뒤 커밋이 붙으면 `SHA_DRIFTED` |
 | 변경 파일 **모양** | `articles.ts` · `topic-queue.ts` · `drafts/{slug}/*` · `hero.webp` 밖이면 막는다 (소스·워크플로 변경 불가) |
 | CI · check-runs | 하나라도 실패·진행 중이면 막는다 |
-| **위험 등급** | `topic-queue` 정본 · LOW/MEDIUM · `autoEligible=true` 만 |
+| **큐 등급 변경** | PR 이 큐 행의 `riskLevel`·`autoEligible` 을 바꾸면 `QUEUE_GRADE_CHANGED`. 등급 자체로 병합을 가르지 않는다(M3-A · `lib/magazine-merge-gate.mjs:62,286`) |
 | 중복 slug | PR 안 · main 양쪽 |
 | 예약일 | 10:30 KST 형태 · `publishedAt` 일치 · 중복 없음 |
 | **과거 날짜** | `PUBLISH_AT_PAST` — merge 즉시 공개되는 것을 막는다 |
 
 🔴 `--admin` 을 쓰지 않는다. 보호 규칙과 CI 를 우회하는 손잡이는 이 경로에 없다.
 
-### 0.1 미해결 자동 PR 은 **한 번에 하나**
+### 0.1 미해결 자동 PR 은 **한 번에 하나** (legacy·현행)
+
+> vNext 는 열린 release PR 이 다음 release 만 기다리게 하고 생성은 막지 않는다(§0.0B.4). 이 절은 지금 운영 중인 경로의 동작이다.
 
 🔴 **이전 PR 이 처리되기 전에는 다음 생산 회차가 HOLD 한다.**
 무인 운영에서는 **같은 회차의 자동 병합이 그것을 푼다** — 01:00 등록 직후 merge 까지 간다.
@@ -236,13 +405,14 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 
 ## 4.5 무인 운영 — 하루의 흐름
 
-아래 `brief(claude)`는 **현재 배포된 legacy runner**다. DIRECT 전환 뒤 producer 입구는
-`SPEC_READY 참조 → ArticleSpec 검증 → 원고 회수`로 바뀐다. 두 runner는 같은 회차에 실행하지 않으며,
-`draft.md` 이후의 QA·재생성·hero·register·merge·deploy·watch만 공유한다.
+아래는 **지금 배포된 코드의 하루**다. `LEGACY` 는 운영 중인 경로이고, `DIRECT` 는 main 에 있는 현행 코드 경로다(운영 회차 0).
+vNext(§0.0B)는 구현 전이며, 구현 뒤에는 rollout switch 가 `vnext` 일 때만 producer 입구가
+`ContentPlan → Job → ManuscriptProvider·ImageProvider → 검증·부분 수리` 로, 날짜 배정이 release writer(§0.0B.4)로 바뀐다.
+한 회차에서 두 경로를 섞지 않는다.
 
 ```
 00:10 KST  producer        LEGACY: 동결 queue → brief(claude) → 원고 회수 → 관문 → 알림
-                           DIRECT: SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
+                           DIRECT(현행 코드): SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
                            끝나면 _runs/{date}/producer-handoff.json 을 남긴다
 01:00 KST  auto-register   ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
                            ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register
@@ -318,10 +488,10 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 🔴 **producer 가 실패해도 등록은 진행한다.** 이미 준비된 후보로 돈다 — 공급이 목적이다.
 🔴 **막힌 후보는 격리된다.** 2회 연속 QA 에 막히면 7일간 비켜 주고 **다음 후보가 진행**한다.
    원고를 고치면(파일이 바뀌면) 냉각을 기다리지 않고 즉시 다시 후보가 된다.
-   🔴 자동화가 원고를 고쳐 주지 않는다 — 비켜 줄 뿐이다.
-🔴 **API 를 새로 붙이지 않는다.** brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI.
-   생성 경로의 제한(로그인 만료·Cloudflare·한도)은 **숨기지 않고 그대로 실패로 낸다.**
-   우회하지 않는다.
+   📜 (legacy 현행 · vNext 대체) 자동화가 원고를 고쳐 주지 않는다 — 비켜 줄 뿐이다. → vNext 는 §0.0B.3 의 부분 수리.
+📜 (legacy 현행 · 2026-11-03 대체) API 를 새로 붙이지 않는다 — brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI.
+   → vNext 는 §0.0B.2 의 API provider 를 예산 상한 안에서 쓰고 브라우저는 수동 비상수단이다.
+🔴 생성 경로의 제한(로그인 만료·Cloudflare·한도·provider 장애)은 **숨기지 않고 그대로 실패로 낸다.** 우회하지 않는다.
 
 ## 5. 감시
 
@@ -477,5 +647,5 @@ npm run magazine:launchd-check    # 설치기 판정 · 템플릿 렌더 (tsx)
 - `drafts/magazine/after-holiday-body-ache/draft.md` 에는 ChatGPT 인용 마커가 **아직 남아 있다.**
   `dea1c7a` (#299) 가 `articles.ts` 본문만 고쳤다. 관문은 이것을 정상적으로 막는다 —
   회귀 테스트가 "여전히 막힌다" 를 시험한다. 원본 정리는 별건이다.
-- `imageMode: OPTIONAL` 은 여전히 기본 스킵이다. 자동 hero 생성 범위를 넓히지 않았다.
-- HIGH · `autoEligible=false` 는 gate 와 `register.mjs` 의 `AUTO_RISK` 두 겹으로 막힌다.
+- 📜 ~~`imageMode: OPTIONAL` 은 여전히 기본 스킵이다.~~ 현재 코드: 자동 레인은 `imageMode` 와 무관하게 hero 를 요구한다(`scripts/magazine-auto-register.mjs:1253` `--require-hero` · `scripts/magazine-batch-qa.mjs:274`). hero 는 유지가 창업자 결정이다(charter §12).
+- 📜 ~~HIGH · `autoEligible=false` 는 gate 와 `register.mjs` 의 `AUTO_RISK` 두 겹으로 막힌다.~~ 현재 코드: `AUTO_RISK` 는 M3-A 에서 제거됐다(`scripts/magazine-register.mjs:49`). 위험은 등급이 아니라 검증 강도로 다룬다(charter §3-B).
