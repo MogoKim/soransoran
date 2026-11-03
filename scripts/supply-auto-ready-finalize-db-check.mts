@@ -352,7 +352,9 @@ console.log('PROBE ' + JSON.stringify({
     const TARGET = 10
     const capacity = readyCapacityOf(7, 50)
     const fits = (need: number): boolean => capacity !== null && need <= capacity
-    const fact = (f: Omit<ReadyCohortFact, 'usdPerSlotValidResult'>): ReadyCohortFact => ({ ...f, usdPerSlotValidResult: null })
+    const fact = (f: Omit<ReadyCohortFact, 'usdPerSlotValidResult' | 'trialCost'>): ReadyCohortFact => ({
+      ...f, usdPerSlotValidResult: null, trialCost: null,
+    })
     const rawOf = (f: ReadyCohortFact): number => f.published + f.lost + f.scheduled + f.unknown
     const beforeF = fact({ sources: 50, published: 4, lost: 0, scheduled: 0, unknown: 3 })
     const afterF = fact({ sources: 50, published: 4, lost: 0, scheduled: 3, unknown: 0 })

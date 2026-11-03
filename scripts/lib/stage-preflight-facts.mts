@@ -937,12 +937,17 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
         trialCost: costAttribution === null ? null : {
           settledRequests: costAttribution.settledRequests,
           usageUnknownRequests: costAttribution.usageUnknownRequests,
-          ineligibleOpenRequests: costAttribution.trialIneligibleOpenRequests,
+          overrunRequests: costAttribution.trialOverrunRequests,
+          ineligibleRequests: costAttribution.trialIneligibleRequests,
           riskUsdPerSlotValidResult: costAttribution.trialRiskUsdPerSlotValidResult,
         },
       }
 
   const facts: PreflightFacts = {
+    proofKstDate: (() => {
+      const proofDates = new Set(i.proofSlots.map((slot) => kstDateString(slot)))
+      return proofDates.size === 1 ? [...proofDates][0]! : null
+    })(),
     slotValidOpportunities,
     futureSupplyCapacity,
     readyCohort,

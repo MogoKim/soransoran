@@ -228,7 +228,16 @@ async function main(): Promise<void> {
     if (dec.ok) await createStageDecision(prisma, dec.decision)
     const facts = await readStageEvidenceFacts(prisma, { kstDate: TODAY, stage: 'd3', decision: dec.ok ? dec.decision : null, now: NOW,
       commentCapPerPost: personaCommentCapFor('bootstrap-auto') })
-    const ev = judgeStageEvidence(TODAY, 'd3', facts, { cost: [{ name: 'x', health: 'ok' }], errors: 'ok' })
+    const ev = judgeStageEvidence(TODAY, 'd3', facts, {
+      cost: [
+        { lane: 'supply', name: '공급', health: 'ok' },
+        { lane: 'comment', name: '댓글', health: 'ok' },
+        { lane: 'audit', name: '감사', health: 'ok' },
+      ], errors: 'ok',
+      supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+        settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
+      } },
+    })
     check('🟢 증거 — 자동 target 3/3 · PUBLISH_NOT_AUTO_READY 없음', ev.counts.autoTargets === 3 && !ev.codes.includes('PUBLISH_NOT_AUTO_READY'),
       `${ev.verdict} ${ev.codes.join(',')} ${JSON.stringify(ev.counts)}`)
   }
@@ -246,7 +255,16 @@ async function main(): Promise<void> {
     if (dec.ok) await createStageDecision(prisma, dec.decision)
     const facts = await readStageEvidenceFacts(prisma, { kstDate: TODAY, stage: 'd3', decision: dec.ok ? dec.decision : null, now: NOW,
       commentCapPerPost: personaCommentCapFor('bootstrap-auto') })
-    const ev = judgeStageEvidence(TODAY, 'd3', facts, { cost: [{ name: 'x', health: 'ok' }], errors: 'ok' })
+    const ev = judgeStageEvidence(TODAY, 'd3', facts, {
+      cost: [
+        { lane: 'supply', name: '공급', health: 'ok' },
+        { lane: 'comment', name: '댓글', health: 'ok' },
+        { lane: 'audit', name: '감사', health: 'ok' },
+      ], errors: 'ok',
+      supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+        settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
+      } },
+    })
     check('🔴 🔴 **증거 FAIL — PUBLISH_NOT_AUTO_READY (자동 1 · 사람 2 는 물량 0)**',
       ev.verdict === 'FAIL' && ev.codes.includes('PUBLISH_NOT_AUTO_READY') && ev.counts.autoTargets === 1 && ev.counts.humanApproved === 2,
       `${ev.verdict} ${ev.codes.join(',')} ${JSON.stringify(ev.counts)}`)

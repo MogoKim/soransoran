@@ -38,7 +38,7 @@ import {
   classifyCall, failureKindOf, isTransientCall, transientProviderError,
   type CallOutcome,
 } from '../src/lib/content-core/generation-failure'
-import { INCOMPLETE_CAUSES } from '../src/lib/content-core/review'
+import { artifactRetryable, INCOMPLETE_CAUSES } from '../src/lib/content-core/review'
 import {
   SPEAKER_PLAN_VERSION, decidePersona, orderPersonasForSource, parseSourceNeed,
 } from '../src/lib/content-core/speaker'
@@ -434,6 +434,27 @@ try {
   check('🔴 🔴 [장부 상한] 회차 요청 상한이 재시도에도 걸린다 — sourceNeedRetry 가 blocked 로 남고 provider 0',
     PAID === 1 && blocked?.status === 'blocked' && blocked.settledUsd === null && attemptsWellFormed(c.rawLines),
     c.paidLines.map((e) => `${e.stage}:${e.status}:${e.blockCode ?? ''}`).join(' '))
+
+  // ── 자연 슬롯 종료 차단은 기술 실패가 아니라 재시도 가능한 HOLD다 ──
+  const closedAsk = ledgerAskOf({
+    take: () => true,
+    count: () => undefined,
+    call: async () => ({
+      ok: false, rawText: '', maxTokensReached: false, usageKnown: false,
+      inputTokens: 0, outputTokens: 0, reasoningTokens: null,
+      finishReason: '', responseChars: 0,
+      cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+      errorCode: 'LEDGER_BLOCKED:SCHEDULED_WINDOW_CLOSED', settledUsd: null,
+      errorMessage: '자연 공급 슬롯 종료 뒤 새 유료 요청을 차단했다',
+      settlementRecorded: false,
+    }),
+  })
+  const closed = await run({ ask: closedAsk })
+  check('🔴 [슬롯 종료] LEDGER_BLOCKED:SCHEDULED_WINDOW_CLOSED는 budgetBlocked HOLD이며 adopt가 아니다',
+    closed.failure?.kind === 'budgetBlocked'
+    && closed.review.machineOutcome === 'hold'
+    && artifactRetryable(closed.review) === true,
+    `${closed.failure?.kind ?? '-'} · ${closed.review.semanticCompletion.reason} · ${closed.review.machineOutcome}`)
 } finally {
   globalThis.fetch = realFetch
   if (prevKeys.g === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = prevKeys.g
