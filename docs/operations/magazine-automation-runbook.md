@@ -10,7 +10,7 @@
 
 | | 자동 | 사람·CI |
 |---|---|---|
-| graph readiness·ContentPlan | vNext: ✅ M-GRAPH 공급 loop (charter §18-B.5) | legacy·DIRECT 현행: M-GRAPH·G8·사람 승인 ArticlePlan 이 queue 앞에서 완료 |
+| graph readiness·ContentPlan | vNext: ✅ M-GRAPH 공급 loop (charter §18-B.5) | DIRECT 현행 코드: G8 편입 · ArticlePlan prepare/approve/materialize 가 queue 앞에서 완료(§0.0A) |
 | 다음 계획 선택 | ✅ producer — DIRECT 현행: `SPEC_READY` 참조 · vNext: usable ContentPlan(charter §18-B.5) | 계획 내용을 재해석하지 않음 |
 | 원고 생성 + 관문 | ✅ producer — legacy: ChatGPT 웹 UI · vNext: ManuscriptProvider API(§0.0B.2) | |
 | 변환 · QA · hero · batch-qa | ✅ auto-register | |
@@ -25,49 +25,32 @@
 사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
 **모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
 
-### 0.0A 📜 plan-first 제작 계약 전환 (2026-10-16 창업자 결정 · 대체됨 2026-11-03)
+### 0.0A 현행 legacy·DIRECT 실행 설명 (vNext 구현 전까지)
 
-> 📜 이 절은 2026-10-16 판이다. 아래 `ArticlePlan` 명령은 **현재 main 코드의 동작 설명**으로 남기지만, 정책으로서는 §0.0B 와
-> charter §18-B 로 대체됐다 — 사람 승인 ArticlePlan → 정책 판 영수증 · direct 2 생산 최소선 → 선택량 3+1 · 공개 예약을 담은 ArticleSpec →
-> 날짜 없는 ContentPlan · "DIRECT 2건 뒤 legacy 제거" → §0.0B.7 의 네 조건.
+정책은 charter §18-B, vNext 실행 계약은 §0.0B 다. 이 절은 **지금 main 코드가 실제로 하는 일**과 운영자가 따라야 할 절차만 적는다.
 
-현재 Production은 Claude가 `brief.md`·`review.ts`를 만드는 `LEGACY_BRIEF_V1`이다. 목표 경로는
-M-GRAPH가 미리 준비한 `GRAPH_READY` 계획을 G8이 편입하고, 승인된 ArticlePlan을 버전 고정
-`ArticleSpec`으로 컴파일해 M-AUTO가 실행만 하는 `DIRECT_SPEC_V1`이다. 전환 완료 전의 자연 회차
-설명은 현재 legacy 경로를 뜻한다.
+- 자연 회차의 운영 경로는 `LEGACY_BRIEF_V1` 이다. `DIRECT_SPEC_V1` 코드 경로도 main 에 있다.
 
 ```text
 LEGACY_BRIEF_V1  frozen legacy queue -> Claude brief -> ChatGPT manuscript -> draft.md -> QA...
 DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -> draft.md -> QA...
 ```
 
-- M-GRAPH는 생산 최소선인 공개 direct 2개 이상 + discovery 1개를 갖춘 계획만 `GRAPH_READY`로 낸다.
-  제품 표시는 direct 최대 3개 + discovery 1개다. 숫자를 위해 관계를 만들지 않는다.
-- M-AUTO는 `SPEC_READY` 참조 중 다음 하나를 결정적으로 고르며 주제·관계·계획을 다시 판단하지 않는다.
-- queue는 최종 목표에서 `planId`·`planHash`·`executeAt`만 참조한다.
-- 일일 Claude brief와 review 생성은 direct 경로에서 제거한다.
-- `draft.md`, QA, 재생성 예산, HOLD, dirty-tree, 원자 교체, exact-head, 배포·watch 관문은 유지한다.
-- DIRECT와 LEGACY는 runner 입구와 후보 집합을 분리한다. 한 run에서 두 mode를 섞지 않는다.
-- DIRECT 실패 행을 legacy로 자동 강등하지 않는다. 정확한 HOLD를 남기고 같은 spec 신원으로 재개한다.
-- rollback은 행별 mode 변경이 아니라 실행 lane 전체를 명시적으로 legacy runner로 전환한다.
-- 서로 다른 DIRECT 계획 2건과 rollback 증거 전에는 legacy를 격리 보존한다. 증거 뒤에는 daily brief/review,
-  direct 대상 input-repair, mixed selected/reusable, 행별 mode 분기와 그 전용 검사를 활성 경로에서 제거한다.
-- 일정과 완료 게이트는 `magazine/MAGAZINE-CURRENT-MILESTONE.md`를 따른다.
-- **ArticlePlan (2026-10-22 · PR C)** — G8은 연구 admission(receipt · slug manifest · ledger)만 기록하고 큐를 쓰지 않는다.
-  큐 행은 사람이 승인한 source/2 entry에서만 만든다. 세 단계를 섞지 않는다.
-  - `magazine-direct-spec-source-authoring.mjs prepare` — 읽기 전용. 큐 행 없이 admission과 현재 제품 graph를 대조해
-    DRAFT 후보를 낸다. 관계는 receipt edge로 고정한다.
-  - `approve` — 사람 승인자만 받는다. 승인 직전에 admission·graph를 다시 대조하고, plan을 topic-queue union으로 검증한 뒤
-    `drafts/magazine/article-spec-source/<graphVersion>.json`에 entry 하나를 더한다.
-  - `materialize` — 승인 entry 하나로 큐 writer lock 안에서 `max(day)+1` 행을 넣고, 같은 parser로 다시 읽어 대조한다.
-  - 소비 쪽 fail-closed: G8 해시(`g8ManifestHash` · `articlePlanHash`) 중 하나라도 있는 행은 둘 다 있고 `DIRECT_SPEC_V1`이어야 한다
-    (`G8_ROW_NOT_DIRECT`). plan 복제 필드를 손으로 고치면 `SOURCE_QUEUE_DRIFT`다.
-  - 승인 잠금(`article-spec-source/<graphVersion>.json.lock`)이 있어 `LOCK_BUSY`이면 자동으로 지우거나 재시도하지 않는다.
-    잠금의 pid와 실행 중 프로세스를 확인한 뒤 사람만 stale 잠금을 정리한다.
+- 한 run 에서 두 mode 를 섞지 않는다. DIRECT 실패 행을 legacy 로 자동 강등하지 않고, HOLD 를 남겨 같은 신원으로 재개한다.
+- `draft.md` · QA · 재생성 예산 · HOLD · dirty-tree · 원자 교체 · exact-head · 배포·watch 관문은 두 경로에 공통이다.
+- **DIRECT 경로의 ArticlePlan 명령 (현행 코드)** — G8 은 연구 admission(receipt · slug manifest · ledger)만 기록하고 큐를 쓰지 않는다.
+  - `magazine-direct-spec-source-authoring.mjs prepare` — 읽기 전용. 큐 행 없이 admission 과 현재 제품 graph 를 대조해
+    DRAFT 후보를 낸다. 관계는 receipt edge 로 고정한다.
+  - `approve` — 현행 코드는 기계가 아닌 `--approver` 를 요구한다(`MACHINE_APPROVER`). 승인 직전에 admission·graph 를 다시 대조하고,
+    plan 을 topic-queue union 으로 검증한 뒤 `drafts/magazine/article-spec-source/<graphVersion>.json` 에 entry 하나를 더한다.
+  - `materialize` — entry 하나로 큐 writer lock 안에서 `max(day)+1` 행을 넣고, 같은 parser 로 다시 읽어 대조한다.
+  - 소비 쪽 fail-closed: G8 해시(`g8ManifestHash` · `articlePlanHash`) 중 하나라도 있는 행은 둘 다 있고 `DIRECT_SPEC_V1` 이어야 한다
+    (`G8_ROW_NOT_DIRECT`). plan 복제 필드를 손으로 고치면 `SOURCE_QUEUE_DRIFT` 다.
+  - 승인 잠금(`article-spec-source/<graphVersion>.json.lock`)이 있어 `LOCK_BUSY` 이면 자동으로 지우거나 재시도하지 않는다.
+    잠금의 pid 와 실행 중 프로세스를 확인한 뒤 사람만 stale 잠금을 정리한다.
   - `.release-*` 파일이 보이면 자동으로 지우지 않는다 — 해제 경쟁의 사고 잔존물로 보고 주인을 확인한다.
-  - materialize가 `QUEUE_WRITE_CONFLICT`이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
-    producer를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
-
+  - materialize 가 `QUEUE_WRITE_CONFLICT` 이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
+    producer 를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer 의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
 
 ### 0.0B 🔴 Magazine vNext 실행 계약 (2026-11-03 · Codex DESIGN_FREEZE_APPROVED · 구현 전)
 
@@ -155,19 +138,45 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
 
 #### 0.0B.5 rollout switch — lifecycle
 
-**전환 중**
+**위치** (runtime·저장소 밖 — merge 가 곧 활성화가 되지 않게 한다. runtime 은 00:10 에 main 을 ff-only 로 따라붙는다)
+
+```text
+~/Library/Application Support/soransoran/magazine-rollout.json
+```
+
+**schema**
+
+```json
+{
+  "schemaVersion": "magazine-rollout/1",
+  "path": "legacy | vnext",
+  "release": "draft | auto",
+  "targetCandidates": 1,
+  "changedBy": "...",
+  "changedAt": "...",
+  "previous": {
+    "path": "legacy | vnext",
+    "release": "draft | auto",
+    "targetCandidates": 1
+  }
+}
+```
+
+**전환 중 계약**
 
 | 항목 | 계약 |
 |---|---|
-| 위치 | runtime 밖 설정 파일 1개 — merge 가 곧 활성화가 되지 않게 한다(runtime 은 00:10 에 main 을 ff-only 로 따라붙는다) |
-| 값 | `legacy` 또는 `vnext` · A 에서만 쓰는 Draft release 표시 · `targetCandidates` |
-| 없음 · 손상 · schema 불일치 | `legacy` |
-| 쓰기 | 단일 owner CLI · schema 검증 · 원자 쓰기 · 변경자·시각·old/new 기록 |
-| 읽기 | producer · auto-register 가 회차 시작 때 읽어 분기한다. plist 변경 0 |
+| 없음 · 손상 · schema 불일치 | `legacy` 로 본다. 이때 vNext 쓰기 0 · 상태가 바뀔 때 알림 1회 |
+| 쓰기 | 단일 owner CLI 만 원자적으로 쓴다(schema 검증 · temp + rename · `changedBy` · `changedAt` · `previous` 기록) |
+| 읽기 | `magazine-producer-run.mjs` 와 `magazine-auto-register-run.mjs` 가 회차 시작 때 **각각 한 번** 읽는다 |
+| launchd | plist 변경 0 |
+| A commissioning | `path: vnext` · `release: draft` · `targetCandidates: 1` |
+| 첫 무인 글 B | `path: vnext` · `release: auto` |
+| 이 문서 작업 | 실제 운영 rollout 파일 생성·활성화 **0** |
 
 **A · 첫 무인 글 · 다른 cluster 검증 이후**
 
-- vNext 를 고정하고, legacy 삭제와 **같은 변경에서** switch 분기와 A 전용 Draft 분기를 코드에서 제거한다.
+- vNext 를 고정하고, legacy 삭제와 **같은 변경에서** switch 분기와 `release: draft` 분기를 코드에서 제거한다.
 - 제거 이후의 이상 상태는 legacy fallback 이 아니라 **생성 HOLD** 다. release 와 이미 공개된 Article 은 영향 없다.
 
 #### 0.0B.6 A commissioning · 첫 무인 글 · 다른 cluster
@@ -488,9 +497,8 @@ vNext(§0.0B)는 구현 전이며, 구현 뒤에는 rollout switch 가 `vnext` �
 🔴 **producer 가 실패해도 등록은 진행한다.** 이미 준비된 후보로 돈다 — 공급이 목적이다.
 🔴 **막힌 후보는 격리된다.** 2회 연속 QA 에 막히면 7일간 비켜 주고 **다음 후보가 진행**한다.
    원고를 고치면(파일이 바뀌면) 냉각을 기다리지 않고 즉시 다시 후보가 된다.
-   📜 (legacy 현행 · vNext 대체) 자동화가 원고를 고쳐 주지 않는다 — 비켜 줄 뿐이다. → vNext 는 §0.0B.3 의 부분 수리.
-📜 (legacy 현행 · 2026-11-03 대체) API 를 새로 붙이지 않는다 — brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI.
-   → vNext 는 §0.0B.2 의 API provider 를 예산 상한 안에서 쓰고 브라우저는 수동 비상수단이다.
+   legacy runner 는 원고를 고치지 않고 비켜 준다(현행 동작). vNext 의 수리는 §0.0B.3 이다.
+🔴 legacy runner 의 생성 경로(현행 동작): brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI. vNext 의 생성 경로는 §0.0B.2 이다.
 🔴 생성 경로의 제한(로그인 만료·Cloudflare·한도·provider 장애)은 **숨기지 않고 그대로 실패로 낸다.** 우회하지 않는다.
 
 ## 5. 감시
@@ -647,5 +655,5 @@ npm run magazine:launchd-check    # 설치기 판정 · 템플릿 렌더 (tsx)
 - `drafts/magazine/after-holiday-body-ache/draft.md` 에는 ChatGPT 인용 마커가 **아직 남아 있다.**
   `dea1c7a` (#299) 가 `articles.ts` 본문만 고쳤다. 관문은 이것을 정상적으로 막는다 —
   회귀 테스트가 "여전히 막힌다" 를 시험한다. 원본 정리는 별건이다.
-- 📜 ~~`imageMode: OPTIONAL` 은 여전히 기본 스킵이다.~~ 현재 코드: 자동 레인은 `imageMode` 와 무관하게 hero 를 요구한다(`scripts/magazine-auto-register.mjs:1253` `--require-hero` · `scripts/magazine-batch-qa.mjs:274`). hero 는 유지가 창업자 결정이다(charter §12).
-- 📜 ~~HIGH · `autoEligible=false` 는 gate 와 `register.mjs` 의 `AUTO_RISK` 두 겹으로 막힌다.~~ 현재 코드: `AUTO_RISK` 는 M3-A 에서 제거됐다(`scripts/magazine-register.mjs:49`). 위험은 등급이 아니라 검증 강도로 다룬다(charter §3-B).
+- 자동 레인은 `imageMode` 와 무관하게 hero 를 요구한다(`scripts/magazine-auto-register.mjs:1253` `--require-hero` · `scripts/magazine-batch-qa.mjs:274`). hero 유지는 charter §12.
+- 등록·병합은 위험 등급으로 막지 않는다 — `AUTO_RISK`·`MERGE_RISK` 는 M3-A 에서 제거됐다(`scripts/magazine-register.mjs:49` · `scripts/lib/magazine-merge-gate.mjs:62`). 위험은 검증 강도로 다룬다(charter §3-B).

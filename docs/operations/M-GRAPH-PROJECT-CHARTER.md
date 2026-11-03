@@ -690,7 +690,6 @@ graph 가 꺼진 cluster 는 같은 cluster 최신 글 폴백을 쓴다.
 - 직접 연관 3개와 발견 1개를 **약하게** 구분한다
 - 기존 브랜드 토큰과 레이아웃 유지 · 장식보다 **읽기와 선택의 명확성** 우선
 
-📜 (2026-09-23 기록 · 대체됨) ~~현재 운영 배포에는 이 구성이 없다. 운영은 여전히 같은 cluster 최신 3편이고, G9 로컬 구현도 최대 3개다.~~
 현재(2026-11-03): 제품 resolver 는 graph 활성 cluster 에서 direct 최대 3(`MAX_DIRECT`) + discovery 1(`MAX_DISCOVERY`)을 보여 주고,
 그 밖에는 같은 cluster 최신 3편 폴백이다(`src/lib/magazine-graph.ts:130-132,334-340`). 신규 ContentPlan 의 선택량은 §18-B.2.
 
@@ -1016,51 +1015,16 @@ watch 거짓 PASS 0
   `planId`·`planHash`로 참조하는 날짜 없는 ContentPlan 이다(§18-B.1).
 - Claude는 M-GRAPH 연구·설계와 코드 구현·검증에는 계속 쓰되, 일일 운영 필수 provider가 아니다.
 
-### 📜 18-H. 2026-10-16 plan-first 판 (대체됨 2026-11-03)
+### 18-H. 대체 기록 (2026-11-03)
 
-> 📜 아래는 2026-10-16 창업자 결정 원문이다. 역사 증거로 보존한다. **현재 정책이 아니다.**
-> 대체: 사람 승인 ArticlePlan → 정책 판 영수증(§18-B.7) · 생산 최소선 direct 2 → ContentPlan 선택량 direct 3 + discovery 1(§18-B.2) ·
-> ArticleSpec 의 공개 예약 정보 → 날짜 없는 ContentPlan + release 직전 배정(§18-B.1) · "DIRECT 2건 뒤 legacy 제거" → 삭제 조건 네 개(runbook §0.0B.7) ·
-> OUTCOME `DEFERRED` → `NOT PROVEN`(§18-B.8).
+2026-10-16 plan-first 판의 네 정책은 다음 현재 절로 대체됐다. 원문은 Git 이력(이 변경의 parent)에 있다.
 
-> 🔴 **2026-10-16 창업자 결정 — M-GRAPH plan-first와 M-AUTO execute-only로 단순화한다.**
-> 이 결정은 후보를 고른 뒤 관계·source 부족을 발견하던 흐름과 옛 `Claude brief → ChatGPT 원고`
-> 역할 분리를 대체한다. M-GRAPH가 생산 가능한 계획 재고를 먼저 만들고, M-AUTO는 승인된 계획을
-> 재해석하지 않고 실행한다. 매일 Claude가 자유 서술형 `brief.md`·`review.ts`를 새로 만드는 단계는
-> 목표 경로에서 제거한다.
->
-> ```text
-> M-GRAPH       조사된 검색 의도 -> GRAPH_READY 계획 재고와 근거 있는 관계 제공
-> G8            graph-ready intent에 stable slug와 admission 신원 부여
-> ArticlePlan   독자 질문·범위·관계·근거·안전·공개 계획의 승인 정본
-> ArticleSpec   ArticlePlan에서 결정적으로 생성하는 버전 고정 실행 계약
-> M-AUTO        SPEC_READY 선택 -> 원고·QA·hero·등록·배포·watch 실행
-> 창업자        검색 영토 · 브랜드 경계 · 고위험 정책 · 구조 변경 승인
-> ```
->
-> `ArticleSpec`에는 최소한 아래 항목이 들어간다.
->
-> - `specVersion`, `specHash`, slug, 검색 의도와 그래프 노드·관계
-> - 독자 질문, 범위, 구조, 근거·안전 제약, 길이와 형식 계약
-> - CTA, 근거 있는 직접 관련 2~3개와 발견 1개, 시리즈·허브·커뮤니티 출구
-> - hero 요구와 공개 예약 정보
->
-> graph에는 근거 있는 관계를 수량 제한 없이 저장한다. 생산 최소선은 공개 대상 direct 2개 이상과
-> discovery 1개이며, 제품 상세의 표시 목표는 direct 최대 3개와 discovery 1개다. direct가 2개뿐이면
-> 2개만 표시하고 숫자를 위해 약한 관계를 만들지 않는다. hub·series·community 출구는 discovery를
-> 대신하지 않는다.
->
-> 주제 선정은 없애지 않는다. 일일 동적 창작 대신 **M-GRAPH가 미리 준비한 `GRAPH_READY` 재고에서
-> 다음 계획을 결정적으로 선택**한다. readiness는 graph에서 재생성되는 파생 보고서이며 사람이 수정하는
-> 새 정본이 아니다. `draft.md`는 생성 결과를 QA·재생성·원자 교체하는 경계로 유지한다.
->
-> 전환 중 DIRECT와 LEGACY는 실행 입구와 후보 집합을 분리한다. 한 run에서 두 mode를 섞거나 DIRECT
-> 실패 행을 legacy로 자동 강등하지 않는다. `LEGACY_BRIEF_V1`은 신규 유입을 동결한 bounded rollback으로만
-> 보존하고, 서로 다른 DIRECT 계획 2건과 lane rollback을 증명한 뒤 활성 경로에서 제거한다.
-> 이 전환의 48~72시간 commissioning 마일스톤(목표 2026-10-18 KST)과 완료 조건은
-> `magazine/MAGAZINE-CURRENT-MILESTONE.md`가 정본이다. 이 게이트는 M-GRAPH → M-AUTO 순서로 두 층만 판정하고,
-> OUTCOME은 트래픽이 충분해질 때까지 `DEFERRED — TRAFFIC_NOT_SUFFICIENT`로 둔다(2026-10-16 창업자 결정).
-> OUTCOME이 제품 목적의 최상위라는 원칙은 바뀌지 않는다.
+| 폐기 정책 | 현재 절 |
+|---|---|
+| 사람 승인 ArticlePlan | §18-B.7 정책 판 영수증 |
+| direct 2 생산 최소선 | §18-B.2 보존량·선택량(3+1) |
+| publishAt 을 담은 ArticleSpec | §18-B.1 날짜 없는 ContentPlan · release 직전 배정 |
+| DIRECT 2건 뒤 legacy 삭제 | runbook §0.0B.7 삭제 조건 네 개 |
 
 ---
 
@@ -1289,7 +1253,7 @@ Codex나 Claude가 구현 편의를 이유로 이 문서의 목적을 축소하�
 
 1. **무엇을 바꾸는가** — 권위 객체 다섯(Evidence·Canonical Graph·ContentPlan·Job·Article), 관계 보존량·선택량(3+1), 계층별 previous,
    공개 순서(same-release), M-GRAPH 공급 loop, 영토 등급표, 정책 판 승인, OUTCOME 최소 측정, hero·브랜드 띠배너.
-   2026-10-16 판(사람 승인 ArticlePlan · direct 2 생산 최소선 · 공개 예약을 담은 ArticleSpec)과 2026-09-24 legacy 웹 UI 판은 📜 HISTORY 로 보존한다.
+   2026-10-16 판은 §18-H 대체 기록과 Git 이력으로만 남기고, 2026-09-24 legacy 웹 UI 판(§3-B-1)은 legacy 경로 기록으로 남긴다.
 2. **왜** — 계획별 사람 승인이 §3-B 와 충돌했고, 날짜가 콘텐츠 해시 안에 있어 하루를 놓치면 재승인이 필요했으며,
    readiness 의 "대상이 지금 공개" 조건이 새 영토의 첫 글들을 서로 기다리게 했다.
 3. **근거** — 연구 readiness(427d4d): `GRAPH_READY` 1 · `TARGET_NOT_PUBLIC` 49 · `CLUSTER_DISABLED` 43 · 2026-11-03 01:00 등록 0 · 예약 재고 0 ·
