@@ -740,6 +740,16 @@ expect('운영 호출부는 taken 을 주입하지 않는다', /slotAllocator\(k
  *    여기서는 **배선만** 본다: producer-run 이 그 흐름에 실제로 연결돼 있는가.
  */
 const producerSrc = readFileSync(join('scripts', 'magazine-producer-run.mjs'), 'utf8')
+/**
+ * 🔴 **rollout 진입 거부와 legacy 회차 본문을 나눈다** (①A · runbook §0.0B.5 · 2026-11-03).
+ *    `VNEXT_NOT_IMPLEMENTED` 거부는 회차가 **시작되기 전**(잠금 · sync · 자식 · 알림 · handoff 보다 앞) 끝나는 진입 거부다 —
+ *    알림 0 이 요구라 finalizer 를 지나지 않는다. 그 거부 줄 **뒤**가 legacy 회차 본문이고, 본문의 종료 계약은 그대로다.
+ *    거부가 실제로 하위 실행 0 인지는 `magazine-rollout-check.mjs` P4~P7 이 entrypoint 를 돌려서 증명한다. 여기서는 배선만 본다.
+ */
+const ROLLOUT_GUARD = 'if (!ROLLOUT.proceed) { console.error(ROLLOUT.line); process.exit(ROLLOUT.exitCode) }'
+const rolloutGuardAt = producerSrc.indexOf(ROLLOUT_GUARD)
+const producerPreGuard = rolloutGuardAt === -1 ? producerSrc : producerSrc.slice(0, rolloutGuardAt)
+const producerBody = rolloutGuardAt === -1 ? producerSrc : producerSrc.slice(rolloutGuardAt + ROLLOUT_GUARD.length)
 expect('producer 가 같은 미해결 판정을 쓴다', producerSrc.includes("from './lib/magazine-outstanding.mjs'"), true)
 expect('producer 가 단일 finalizer 흐름에 연결돼 있다', producerSrc.includes('runProducerFlow({'), true)
 expect('producer 가 흐름에 checkTools 를 준다', /checkTools: \(\) => preflightTools/.test(producerSrc), true)
@@ -748,8 +758,10 @@ expect('producer 가 흐름에 checkGit 을 준다', /checkGit: \(\) => \(POST_S
 expect('producer 가 흐름에 checkOutstanding 을 준다', /checkOutstanding: \(\) => readOutstanding/.test(producerSrc), true)
 // 🔴 재실행 자식은 알림 시도 표식을 먼저 남기고 같은 notifyOnce 를 부른다 (2026-10-25 sync-reload P1)
 expect('producer 가 흐름에 notify 를 준다', /notify: \(ctx\) => \{[\s\S]{0,260}?return notifyOnce\(ctx\)/.test(producerSrc), true)
-// 🔴 옛 결함의 화석 — 시작 전 검사의 중간 exit 가 되살아나면 알림 계약이 다시 깨진다
-expect('시작 전 검사에 중간 process.exit 가 없다', /process\.exit\(1\)/.test(producerSrc), false)
+// 🔴 옛 결함의 화석 — 시작 전 검사의 중간 exit 가 되살아나면 알림 계약이 다시 깨진다.
+//    legacy 회차 본문(rollout 진입 거부 뒤 — 잠금·도구·git·미해결 검사 포함)과 rollout 거부 앞쪽 모두에 중간 exit 가 없어야 한다.
+expect('legacy 회차 본문의 시작 전 검사에 중간 process.exit 가 없다', /process\.exit\(1\)/.test(producerBody), false)
+expect('rollout 진입 거부 앞쪽(import·인자 해석)에 process.exit 가 없다', /process\.exit\(/.test(producerPreGuard), false)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ P0-2 producer 종료 코드 — 실패를 성공으로 숨기지 않는다')
@@ -826,7 +838,30 @@ expect('판정 입력에 slack 이 없다', Object.keys(allOk).includes('slack')
 //    여기서는 종료가 판정 결과로 이뤄지는지만 본다.
 expect('판정 결과로 종료한다 (planCode 가 아니다)', /process\.exit\(result\.code\)/.test(producerSrc), true)
 expect('planCode 를 그대로 반환하던 코드가 없다', /process\.exit\(planCode\)/.test(producerSrc), false)
-expect('종료 경로가 하나다', (producerSrc.match(/process\.exit\(/g) ?? []).length, 1)
+// 🔴 종료 경로 (①A 이후) — 회차 종료는 여전히 하나다. 진입 거부는 회차 밖의 별도 한 곳이다.
+expect('① legacy 회차가 시작된 뒤의 최종 종료는 process.exit(result.code) 정확히 한 곳이다',
+  [(producerBody.match(/process\.exit\(/g) ?? []).length, (producerBody.match(/process\.exit\(result\.code\)/g) ?? []).length], [1, 1])
+expect('② rollout VNEXT_NOT_IMPLEMENTED 진입 거부는 정확히 한 곳이다',
+  [producerSrc.split(ROLLOUT_GUARD).length - 1, (producerSrc.match(/process\.exit\(/g) ?? []).length], [1, 2])
+expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT = rolloutGate\(readRollout\(\), \{ warn: !POST_SYNC \}\)\n/.test(producerPreGuard), true)
+{
+  // ③ 거부 줄이 아래 모든 것보다 앞이다 — 각 표식의 **첫** 등장 위치로 본다(정의·호출 모두)
+  const after = {
+    BOOT_HEAD: 'const BOOT_HEAD',
+    '시작 로그': 'line(`매거진 producer 시작',
+    'producer lock': 'acquireLock({',
+    'sync(preflight · 재실행)': 'preflight({ exec })',
+    '자식 stage': 'spawnSync(',
+    notify: 'notifyOnce(',
+    handoff: 'writeHandoff({',
+    'finalizer 흐름': 'runProducerFlow({',
+  }
+  const late = Object.entries(after).filter(([, m]) => { const i = producerSrc.indexOf(m); return rolloutGuardAt === -1 || i === -1 || i < rolloutGuardAt }).map(([k]) => k)
+  expect('③ rollout 진입 거부가 BOOT_HEAD · 시작 로그 · lock · sync · 자식 stage · notify · handoff · finalizer 보다 앞이다', late, [])
+}
+// ④ 기존 preflight 실패 · HOLD · 정상 회차는 계속 단일 finalizer 를 지난다 — 흐름 연결은 거부 줄 뒤에 정확히 한 번이고,
+//    알림 계약 자체는 아래 `P0-3` 묶음이 주입한 흐름을 돌려서 증명한다(호출 수 · 종료 코드).
+expect('④ legacy 회차 본문이 단일 finalizer 흐름(runProducerFlow)을 정확히 한 번 부른다', (producerBody.match(/runProducerFlow\(\{/g) ?? []).length, 1)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ P0-3 알림 계약 — 흐름을 실제로 돌려서 시험한다')

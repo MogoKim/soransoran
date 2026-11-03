@@ -39,6 +39,7 @@ import { composeLedger, formatLedger, linkResult } from './lib/magazine-ledger.m
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { readHandoff, waitForProducer } from './lib/magazine-handoff.mjs'
 import { PRODUCER_LOCK_PATH, defaultPidAlive, readLock } from './lib/magazine-auto-lock.mjs'
+import { readRollout, rolloutGate } from './lib/magazine-rollout.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -53,6 +54,15 @@ const line = (m) => console.log(`[${stamp()}] ${m}`)
 
 const passthrough = process.argv.slice(2)
 const write = passthrough.includes('--write')
+
+/**
+ * 🔴 **rollout 판정** (①A · runbook §0.0B.5) — 회차 시작 때 한 번 읽는다. producer 인계 대기 · 등록 · 병합보다 앞이다.
+ *    없음 · 손상 · `legacy` 는 아래 legacy 회차를 그대로 돈다(손상만 경고 1줄).
+ *    `vnext` 는 이 코드 판에 세로 경로가 없으므로 아무것도 시작하지 않고 non-zero 로 끝난다 — legacy 로 대신 돌리지 않는다.
+ */
+const ROLLOUT = rolloutGate(readRollout())
+if (!ROLLOUT.proceed) { console.error(ROLLOUT.line); process.exit(ROLLOUT.exitCode) }
+if (ROLLOUT.warning) console.error(ROLLOUT.warning)
 
 /**
  * 🔴 **write 회차는 Slack 을 실제로 보낸다** (2026-09-15 복구).

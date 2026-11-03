@@ -196,6 +196,9 @@ const MUTATIONS = [
     find: '    if (takenSlugs.has(item.slug)) {', replace: '    if (false) {' }] },
   { name: 'D14 DIRECT 잔여 lock/journal 검사 제거', scenarios: 'S15', edits: [{ file: F.scen,
     find: '  return [...new Set(hits)].sort()', replace: '  return []' }] },
+  // ── 2026-11-03 S15 회차 격리 — runtime 사본의 같은 고정 회차 COMPLETED run.json 에 시험이 묶이지 않는다 ──
+  { name: 'D15 S15 고정 회차 격리 제거 (stale COMPLETED run.json 이 기준 커밋에 남는다)', scenarios: 'S15S', edits: [{ file: F.orch,
+    find: '      p.isolatedRun = isolateDirectRunDay(repo, DIRECT_DATE)\n', replace: '      p.isolatedRun = { moved: false }\n' }] },
   { name: '㊻ 정상 출처 원고도 실패 경로 뼈대로 만든다 (gray 제목 + 다른 질문 본문 등록)', scenarios: 'S12', edits: [{ file: F.content,
     find: '  let body = (fx ? fx.body : sx ? sx.body : foreign()).trimEnd()', replace: '  let body = (fx ? fx.body : foreign()).trimEnd()' }] },  // ── 2026-10-19 금융 brief·review 상류 — 큐 행 → title → brief → review 가 한 질문 ──
   { name: '㊼ FINANCIAL 이 다시 avoiding brief·review 를 부분 치환해 쓴다', scenarios: 'S1', edits: [{ file: F.content,

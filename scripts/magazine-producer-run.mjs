@@ -61,6 +61,7 @@ import { handoffPath, writeHandoff } from './lib/magazine-handoff.mjs'
 import { fetchResultPath, readFetchResults } from './lib/magazine-fetch-result.mjs'
 import { acquireLock, PRODUCER_LOCK_PATH, readLock } from './lib/magazine-auto-lock.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
+import { readRollout, rolloutGate } from './lib/magazine-rollout.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -102,6 +103,16 @@ const ENTRY_REL = 'scripts/magazine-producer-run.mjs'
  */
 const NOTIFY_MARK = POST_SYNC ? process.env.SORAN_PRODUCER_NOTIFY_MARK ?? null : null
 delete process.env.SORAN_PRODUCER_NOTIFY_MARK
+
+/**
+ * 🔴 **rollout 판정** (①A · runbook §0.0B.5) — 회차 시작 때 한 번 읽는다. 잠금 · sync · 자식 · 알림 · handoff 보다 앞이다.
+ *    없음 · 손상 · `legacy` 는 아래 legacy 회차를 그대로 돈다(손상만 경고 1줄).
+ *    `vnext` 는 이 코드 판에 세로 경로가 없으므로 아무것도 시작하지 않고 non-zero 로 끝난다 — legacy 로 대신 돌리지 않는다.
+ *    재실행 자식(--post-sync)도 같은 판정을 지난다. 손상 경고는 같은 회차의 부모가 이미 냈으므로 자식은 내지 않는다.
+ */
+const ROLLOUT = rolloutGate(readRollout(), { warn: !POST_SYNC })
+if (!ROLLOUT.proceed) { console.error(ROLLOUT.line); process.exit(ROLLOUT.exitCode) }
+if (ROLLOUT.warning) console.error(ROLLOUT.warning)
 
 /** 판정에 쓰는 읽기 전용 실행기. stdout 을 잡아서 돌려준다 */
 const exec = (cmd, args) => {

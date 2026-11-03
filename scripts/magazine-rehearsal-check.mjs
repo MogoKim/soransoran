@@ -27,8 +27,8 @@ import { directFixture } from './lib/magazine-rehearsal-direct.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
 const pick = argv.includes('--scenario') ? argv[argv.indexOf('--scenario') + 1] : null
-/** 🔴 DIRECT_E2E — S15 정상 1 · 반례 13 (2026-11-02 · I-T6-03 promote 전 release gate) */
-export const DIRECT_IDS = ['S15', 'S15G', 'S15M', 'S15H', 'S15C', 'S15P', 'S15R', 'S15F', 'S15I', 'S15B', 'S15E', 'S15Q', 'S15D', 'S15W']
+/** 🔴 DIRECT_E2E — 완주 시나리오 3(S15·S15S·S15W) · 차단 반례 12 (2026-11-02 · I-T6-03 promote 전 release gate · S15S 회차 격리 2026-11-03) */
+export const DIRECT_IDS = ['S15', 'S15S', 'S15G', 'S15M', 'S15H', 'S15C', 'S15P', 'S15R', 'S15F', 'S15I', 'S15B', 'S15E', 'S15Q', 'S15D', 'S15W']
 const ids = (pick ?? ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S8B', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S14U', 'S14B', ...DIRECT_IDS].join(',')).split(',')
 const repeat = !pick || argv.includes('--repeat')
 
@@ -259,15 +259,16 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
     check(`${sc.id} 금융 등록 글 상류 — 실제 brief.md·review.ts 가 같은 질문 (큐 행 → title → brief → review → 원고 → 등록)`, bad.length === 0, bad)
   }
   // ── DIRECT_E2E 원시 증거 — orchestrator 단언과 따로 센다 ──
-  if (S.S15) {
-    const s15 = S.S15
+  // 🔴 S15S(stale 회차 격리 반례)도 정상 완주다 — 같은 원시 증거를 같은 기준으로 센다 (2026-11-03)
+  for (const sid of ['S15', 'S15S'].filter((x) => S[x])) {
+    const s15 = S[sid]
     const calls = s15.evidence.sends
     const up = (s15.extras?.registeredUpstream ?? []).find((u) => u.slug === dfx.id.slug)
     const reg = s15.evidence.registered.find((r) => r.slug === dfx.id.slug)
-    check('S15 원시 — DIRECT 원고 전송 정확히 1 · legacy brief(Claude) 0', calls.bySlug?.[`${dfx.id.slug}:initial`] === 1 && calls.initial === 1 && s15.evidence.claude.length === 0, { calls, claude: s15.evidence.claude })
-    check('S15 원시 — 병합 main 등록 1건 = resume-age · publishAt 승인값 · hero 연결', s15.evidence.registered.length === 1 && reg?.publishAt === dfx.id.publishAt && reg?.heroFile?.riff === 'RIFF', s15.evidence.registered)
-    check('S15 원시 — 등록 상류에 review.ts · brief.md 0 (DIRECT 는 spec 만)', Boolean(up) && up.review === null && up.brief === null, up && { review: up.review !== null, brief: up.brief !== null })
-    check('S15 원시 — hero provider 1 · PR 1 MERGED · 배포 1', s15.evidence.hero?.image === 1 && s15.evidence.prs.length === 1 && s15.evidence.prs[0].state === 'MERGED' && s15.evidence.deployments.length === 1,
+    check(`${sid} 원시 — DIRECT 원고 전송 정확히 1 · legacy brief(Claude) 0`, calls.bySlug?.[`${dfx.id.slug}:initial`] === 1 && calls.initial === 1 && s15.evidence.claude.length === 0, { calls, claude: s15.evidence.claude })
+    check(`${sid} 원시 — 병합 main 등록 1건 = resume-age · publishAt 승인값 · hero 연결`, s15.evidence.registered.length === 1 && reg?.publishAt === dfx.id.publishAt && reg?.heroFile?.riff === 'RIFF', s15.evidence.registered)
+    check(`${sid} 원시 — 등록 상류에 review.ts · brief.md 0 (DIRECT 는 spec 만)`, Boolean(up) && up.review === null && up.brief === null, up && { review: up.review !== null, brief: up.brief !== null })
+    check(`${sid} 원시 — hero provider 1 · PR 1 MERGED · 배포 1`, s15.evidence.hero?.image === 1 && s15.evidence.prs.length === 1 && s15.evidence.prs[0].state === 'MERGED' && s15.evidence.deployments.length === 1,
       { hero: s15.evidence.hero, prs: s15.evidence.prs })
   }
   // 🔴 고정 release fixture ↔ 제품 판 (2026-11-02) — fixture 는 판이 바뀌어도 그대로다. 같은 판 파일이 제품에 있으면 바이트가 같아야 한다
@@ -276,7 +277,7 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
     if (existsSync(prod)) check(`DIRECT_E2E fixture bundle = 제품 ${dfx.id.graphVersion}.ts 바이트`, readFileSync(prod, 'utf8') === dfx.files[dfx.names.bundle])
     else console.log(`  · 제품에 ${dfx.id.graphVersion}.ts 가 아직 없다 — promote 전 후보 대조는 magazine-research-current verify 가 한다`)
   }
-  for (const id of DIRECT_IDS.filter((x) => x !== 'S15' && x !== 'S15W')) {
+  for (const id of DIRECT_IDS.filter((x) => x !== 'S15' && x !== 'S15S' && x !== 'S15W')) {
     if (S[id]) check(`${id} 원시 — DIRECT 반례 등록·PR·병합 0`, S[id].evidence.registered.length === 0 && S[id].evidence.prs.length === 0 && S[id].evidence.mergeCalls.length === 0, { registered: S[id].evidence.registered, prs: S[id].evidence.prs })
   }
   // 실패 경로 전용 뼈대를 쓰는 경로 — 등록 0 · 지정 실패에서 멈춘다
