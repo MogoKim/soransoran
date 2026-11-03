@@ -15,8 +15,8 @@
  * 🔴 판정을 흉내 내지 않는다. 등록 여부는 실제 래퍼가 정한다. 여기서는 자료를 놓고 사실을 모을 뿐이다.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const DIRECT_E2E_DIR = join('scripts', '__fixtures__', 'magazine', 'rehearsal-direct-e2e')
@@ -173,6 +173,37 @@ export async function prepareDirect(repo, { variant = null } = {}) {
   }
   return { target: id.slug, identity: id, variant, previousGraphVersion: prev,
     untrack: [`drafts/magazine/${id.slug}`].filter((p) => existsSync(join(repo, p))) }
+}
+
+/**
+ * 🔴 **DIRECT 고정 회차 격리** (2026-11-03 · S15 rehearsal 수리).
+ *    sandbox 는 runtime 의 `drafts/magazine` 을 그대로 복사하므로 `_runs/` 도 따라온다. S15 계열은 고정 회차
+ *    (`DIRECT_DATE`)를 쓰는데, runtime 에 그 날짜의 자연 회차(COMPLETED run.json)가 이미 있으면 producer 가
+ *    "같은 날 지금 판 COMPLETED 는 다시 계산하지 않는다" 계약대로 새 S15 실행 전에 끝난다 — 시험이 runtime 날짜에 묶인다.
+ *    그래서 **sandbox 사본에서만**, 기준 커밋 전에 S15 가 소유하는 그 한 날짜 폴더를 sandbox 루트의 `isolated-runs/` 로 옮긴다.
+ *    다른 날짜 이력은 그대로 둔다. runtime 원본은 읽기만 한다(복사 뒤 사본만 움직인다).
+ * @returns {{date:string, moved:boolean, files:string[], staleCompleted:boolean, dest:string|null, otherDates:string[]}}
+ */
+export function isolateDirectRunDay(repo, date) {
+  const runs = join(repo, 'drafts', 'magazine', '_runs')
+  const own = join(runs, date)
+  const otherDates = existsSync(runs) ? readdirSync(runs).filter((n) => n !== date).sort() : []
+  if (!existsSync(own)) return { date, moved: false, files: [], staleCompleted: false, dest: null, otherDates }
+  const files = readdirSync(own).sort()
+  let staleCompleted = false
+  try { staleCompleted = JSON.parse(readFileSync(join(own, 'run.json'), 'utf8'))?.status === 'COMPLETED' } catch { staleCompleted = false }
+  const dest = join(dirname(repo), 'isolated-runs', date)
+  mkdirSync(dirname(dest), { recursive: true })
+  renameSync(own, dest)
+  return { date, moved: true, files, staleCompleted, dest, otherDates }
+}
+
+/** S15S 반례 — runtime 사본에 같은 고정 회차의 stale COMPLETED run.json 이 있는 모양을 결정적으로 만든다 (sandbox 사본만) */
+export const STALE_RUN_MARKER = 'rehearsal-stale-direct-day'
+export function plantStaleDirectRun(repo, date) {
+  const own = join(repo, 'drafts', 'magazine', '_runs', date)
+  mkdirSync(own, { recursive: true })
+  writeFileSync(join(own, 'run.json'), `${JSON.stringify({ schemaVersion: 'producer-run/2', date, status: 'COMPLETED', selected: [], reusable: [], held: [], marker: STALE_RUN_MARKER }, null, 2)}\n`)
 }
 
 /** 등록 뒤 사실 — origin main 의 articles · queue · 영수증 (읽기만) */
