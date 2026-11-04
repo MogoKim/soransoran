@@ -544,7 +544,7 @@ try {
       boardType: 'FREE', publishAtMs: later - 10 * 60_000, category: null, sourceSite: null,
       authorPersonaCode: 'P02', authorOperatorWriterId: null, author: null,
       visibility: { status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false },
-      comments: [],
+      comments: [], personaCodesEverOnPost: [],
     }
     const persona: SourcePersona = {
       code: 'P14', status: 'active', identity: { job: '강사', maritalStatus: '기혼' },

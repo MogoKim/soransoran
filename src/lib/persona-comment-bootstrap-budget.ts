@@ -22,13 +22,23 @@
  *    지금 정본은 **모든 관리형 글에 자리를 열고, 댓글 0 인 글을 먼저 채운다**.
  */
 
-import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
+/**
+ * 🔴 **bootstrap 운영 예산의 글당 자리 기준.** 구조 상한과 분리한다 (2026-11-04).
+ *
+ *    공개 구조는 한 글에 Persona 댓글을 최대 10건까지 허용하지만, 그 숫자를 곧바로
+ *    첫 댓글 예산에 곱하면 상한 변경만으로 provider 호출 여력과 러너 용량이 두 배가 된다.
+ *    운영 예산은 기존 실측 계약인 첫 댓글 1 + 선택적 추가 댓글 평균 기준 4 = 5를 유지한다.
+ *    10은 `persona-target-rules`·발행 트랜잭션·대화 감사가 막는 **글당 구조 상한**이고,
+ *    5는 이 모듈이 쓰는 **하루 운영 용량 기준**이다. 어느 쪽도 목표 수량이 아니다.
+ */
+export const BOOTSTRAP_SLOTS_PER_POST = 5
 
 /**
  * 🔴 하루 절대 상한 — 글이 아무리 많아도 이보다 많이 달지 않는다.
  *
- *    공개 글 100/day · 글당 최대 5건이 지금의 단기 정본이고, 그 곱이 500 이다.
- *    상한을 곱보다 작게 두면 "글당 1~5" 계약이 상한에 잘려 조용히 깨진다.
+ *    공개 글 100/day · 운영 예산 기준 5건의 곱이 500 이다.
+ *    구조 상한 10으로 바뀌어도 이 값을 1000으로 올리지 않는다. 실제 추가 댓글은
+ *    별도 승인 profile(40/day · $0.08 · runMax 3 · Persona당 3)이 더 좁게 막는다.
  */
 export const BOOTSTRAP_DAILY_MAX = 500
 
@@ -93,8 +103,8 @@ export function countManagedPosts(rows: readonly ManagedPostFacts[]): ManagedCou
     if (r.authorKind === 'operator') { drop('운영자 직접 글'); continue }
     if (r.authorKind === 'unknown') { drop('작성자 유형 불명'); continue }
     if (!isCount(r.personaCommentCount)) { drop('기존 Persona 댓글 수 불명'); continue }
-    const slots = PERSONA_COMMENTS_PER_POST_MAX - r.personaCommentCount
-    if (slots <= 0) { drop(`Persona 댓글 ${PERSONA_COMMENTS_PER_POST_MAX}건이 이미 찼다`); continue }
+    const slots = BOOTSTRAP_SLOTS_PER_POST - r.personaCommentCount
+    if (slots <= 0) { drop(`운영 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST}건이 이미 찼다`); continue }
     eligible += 1
     openSlots += slots
   }
@@ -122,7 +132,7 @@ export type BootstrapBudget = {
 }
 
 /**
- * 🔴 **글 1편이면 최대 5건, 100편이면 500건이다.**
+ * 🔴 **글 1편이면 운영 예산 5건, 100편이면 500건이다.**
  *
  *    글 1 → 5 · 10 → 50 · 100 → 500 · 200 → 500(절대 상한).
  *
@@ -170,7 +180,7 @@ export function judgeBootstrapBudget(f: BootstrapBudgetFacts): BootstrapBudget {
     cap, used, remaining, blockers,
     reason: blockers.length > 0
       ? blockers[0]!
-      : `열린 댓글 자리 ${slots}개(글당 최대 ${PERSONA_COMMENTS_PER_POST_MAX})`
+      : `열린 댓글 자리 ${slots}개(글당 운영 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST})`
         + ` · 오늘 ${used}건 발행 → 일 상한 잔량 ${dayLeft}건(절대 ${BOOTSTRAP_DAILY_MAX})`
         + ` → 남은 ${remaining}건`,
   }

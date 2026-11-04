@@ -79,7 +79,10 @@ const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
   postId: `p-${i}`, queueId: `q-${i}`,
   publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `author-${i}`,
   decider: 'auto', release: 'STAMPED_ELIGIBLE',
-  personaComments: [{ personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true, provenance: 'auto' as const }],
+  personaComments: [{
+    personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN,
+    topLevel: true, provenance: 'auto' as const,
+  }],
   ...o,
 })
 /** 🔴 감사 표본 한 행 — 그날 자동 target(postId·queueId)에 속해야 표본으로 센다 */
@@ -180,10 +183,10 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   check('경계 — 정확히 60분은 시한 안이다', judge(facts('d3', { posts: [post(0, {
     personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })).verdict === 'PASS')
   // (b) 추가 댓글 계약 — 상한은 댓글 단계의 정본 상수다
-  check('상한 — bootstrap-auto 1 · review/organic 5 · shadow 0 (정본 상수 그대로)',
+  check('상한 — bootstrap-auto 1 · review/organic 10 · shadow 0 (정본 상수 그대로)',
     personaCommentCapFor('bootstrap-auto') === AUTO_PERSONA_COMMENTS_PER_POST_MAX && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1
-    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === 5
-    && personaCommentCapFor('bootstrap-review') === 5 && personaCommentCapFor('shadow') === 0)
+    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === 10
+    && personaCommentCapFor('bootstrap-review') === 10 && personaCommentCapFor('shadow') === 0)
   const withComments = (n: number, o: { same?: boolean; self?: boolean } = {}): EvidencePost => post(0, {
     personaComments: Array.from({ length: n }, (_, k) => ({
       personaId: o.self === true && k === n - 1 ? 'author-0' : o.same === true ? 'c-same' : `c${k}`,
@@ -196,13 +199,13 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     const v = judge(capFacts(withComments(2), 1))
     return v.codes.length === 1 && v.counts.firstCommentOk === 3
   })())
-  for (const n of [2, 3, 4, 5]) {
-    const v = judge(capFacts(withComments(n), 5))
-    check(`🟢 장기 1~5(상한 5) — 60분 안 서로 다른 Persona ${n}건 → PASS`, v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+  for (const n of [2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+    const v = judge(capFacts(withComments(n), 10))
+    check(`🟢 장기 1~10(상한 10) — 60분 안 서로 다른 Persona ${n}건 → PASS`, v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
-  failWith('🔴 상한 5 — 6건 → 상한 초과 FAIL', judge(capFacts(withComments(6), 5)), 'COMMENT_OVER_CAP')
-  failWith('🔴 상한 5 — 같은 Persona 2건 → FAIL', judge(capFacts(withComments(2, { same: true }), 5)), 'DUP_COMMENT')
-  failWith('🔴 상한 5 — 자기 글 댓글 → FAIL', judge(capFacts(withComments(3, { self: true }), 5)), 'COMMENT_SELF')
+  failWith('🔴 상한 10 — 11건 → 상한 초과 FAIL', judge(capFacts(withComments(11), 10)), 'COMMENT_OVER_CAP')
+  failWith('🔴 상한 10 — 같은 Persona 2건 → FAIL', judge(capFacts(withComments(2, { same: true }), 10)), 'DUP_COMMENT')
+  failWith('🔴 상한 10 — 자기 글 댓글 → FAIL', judge(capFacts(withComments(3, { self: true }), 10)), 'COMMENT_SELF')
   const capUnknown = judge(capFacts(withComments(1), null))
   check('⬚ 댓글 단계(상한)를 모른다 → UNKNOWN', capUnknown.verdict === 'UNKNOWN' && has(capUnknown, 'COMMENT_CAP_UNKNOWN'), capUnknown.codes.join(','))
   failWith('🔴 글쓴 Persona 가 자기 글에 단 댓글은 세지 않고 FAIL', judge(facts('d3', { posts: [post(0, {
@@ -874,11 +877,28 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
   for (const [name, f] of fuBroken) check(`🔴 추가 댓글 ${name} → followup-broken`, personaCommentProvenanceOf(f) === 'followup-broken', personaCommentProvenanceOf(f))
 
   // 판정 본체
-  const first = { personaId: 'commenter-0', createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: 'auto' as const }
-  const fu = (k: number, o: Partial<EvidencePost['personaComments'][number]> = {}) =>
-    ({ personaId: `fu-${k}`, createdAtMs: T0 + (90 + 40 * k) * MIN, topLevel: false, provenance: 'followup' as const, ...o })
-  const withThread = (cs: EvidencePost['personaComments'], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
-    judge(facts('d3', { commentCapPerPost: cap, posts: [post(0, { personaComments: cs }), post(1), post(2)] }))
+  type ThreadComment = EvidencePost['personaComments'][number] & {
+    id: string; parentId: string | null; reportedAtMs?: number | null; isDeleted?: boolean
+  }
+  const first: ThreadComment = {
+    id: 'first-0', personaId: 'commenter-0', parentId: null,
+    createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: 'auto' as const,
+  }
+  const fu = (k: number, o: Partial<ThreadComment> = {}): ThreadComment =>
+    ({
+      id: `fu-${k}`, personaId: `fu-${k}`, parentId: k === 1 ? first.id : `fu-${k - 1}`,
+      createdAtMs: T0 + (90 + 40 * k) * MIN, topLevel: false, provenance: 'followup' as const, ...o,
+    })
+  const conversationOf = (cs: readonly ThreadComment[]) => cs.map((c) => ({
+    id: c.id, personaId: c.personaId, parentId: c.parentId, commentOrigin: 'PERSONA',
+    isDeleted: c.isDeleted ?? false, createdAtMs: c.createdAtMs, reportedAtMs: c.reportedAtMs ?? null,
+    provenance: c.provenance,
+  }))
+  const withThread = (cs: readonly ThreadComment[], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
+    judge(facts('d3', { commentCapPerPost: cap, posts: [post(0, {
+      personaComments: cs,
+      conversationComments: conversationOf(cs),
+    }), post(1), post(2)] }))
   check('🔴 상한은 그대로 1 이다(bootstrap-auto) — 1→5 로 바꾸지 않았다', personaCommentCapFor('bootstrap-auto') === 1)
 
   const four = withThread([first, fu(1), fu(2), fu(3), fu(4)])
@@ -922,24 +942,88 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
   const dupFu = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
   check('🔴 추가 댓글끼리 같은 Persona → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
-  // 🔴 (2026-10-24) 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 · 두 번째부터는 FOLLOWUP_SELF
+  // 🔴 (2026-11-04) 글쓴이는 자기 글의 서로 다른 Persona 발화에 답글로 최대 세 번 답할 수 있다.
   const authorReply = withThread([first, fu(1, { personaId: 'author-0' })])
   check('🟢 글쓴이 답글 한 번(최상위 아님) → 대화 감사 PASS · 단계 COMMENT_SELF 아님',
     authorReply.verdict === 'PASS' && authorReply.conversation?.verdict === 'PASS', JSON.stringify(authorReply.conversation))
-  const self = withThread([first, fu(1, { personaId: 'author-0', topLevel: true })])
+  const self = withThread([first, fu(1, { personaId: 'author-0', parentId: null, topLevel: true })])
   check('🔴 글쓴이의 최상위 추가 댓글(자기 글) → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
     self.verdict === 'PASS' && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
-  const selfTwice = withThread([first, fu(1, { personaId: 'author-0' }), fu(2, { personaId: 'author-0' })])
-  check('🔴 글쓴이 답글 두 번 → 대화 감사 FOLLOWUP_SELF', selfTwice.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTwice.conversation))
-  const over = withThread([first, fu(1), fu(2), fu(3), fu(4), fu(5)])
-  check('🔴 첫 댓글 1 + 추가 5(총 6 > 5) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
+  const authorConversation = (n: number): ThreadComment[] => [
+    first,
+    ...Array.from({ length: n }, (_, i) => fu(20 + i, {
+      id: `target-${i + 1}`, personaId: `speaker-${i + 1}`, parentId: null, topLevel: true,
+    })),
+    ...Array.from({ length: n }, (_, i) => fu(30 + i, {
+      id: `author-reply-${i + 1}`, personaId: 'author-0', parentId: `target-${i + 1}`, topLevel: false,
+    })),
+  ]
+  const selfThree = withThread(authorConversation(3))
+  check('🟢 글쓴이 답글 세 번 → 대화 감사 PASS', selfThree.conversation?.verdict === 'PASS', JSON.stringify(selfThree.conversation))
+  const selfFour = withThread(authorConversation(4))
+  check('🔴 글쓴이 답글 네 번 → 대화 감사 FOLLOWUP_SELF', selfFour.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfFour.conversation))
+  const authorFourHistory = authorConversation(4)
+  const deletedAuthorId = 'author-reply-1'
+  const deletedAuthorStillCounts = judgeConversationAudit([post(0, {
+    personaComments: authorFourHistory.filter((c) => c.id !== deletedAuthorId),
+    conversationComments: conversationOf(authorFourHistory.map((c) => c.id === deletedAuthorId ? { ...c, isDeleted: true } : c)),
+  })])
+  check('🔴 삭제된 글쓴이 답글도 과거 턴이다 — 4회를 3회로 축소하지 않음',
+    deletedAuthorStillCounts.codes.includes('FOLLOWUP_SELF'), JSON.stringify(deletedAuthorStillCounts))
+  const over = withThread([first, ...Array.from({ length: 10 }, (_, i) => fu(i + 1, { personaId: `fu-${i + 1}` }))])
+  check('🔴 첫 댓글 1 + 추가 10(총 11 > 10) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
     over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
   const early = withThread([first, fu(1, { createdAtMs: T0 + 6 * MIN })])
   check('🔴 첫 댓글보다 앞선 추가 댓글 → FOLLOWUP_WITHOUT_FIRST', early.conversation?.codes.includes('FOLLOWUP_WITHOUT_FIRST') === true)
+  const depth6 = withThread([first, ...Array.from({ length: 5 }, (_, i) => fu(i + 1))])
+  check('🟢 루트 포함 사슬 깊이 6 → 대화 감사 PASS', depth6.conversation?.verdict === 'PASS', JSON.stringify(depth6.conversation))
+  const depth7 = withThread([first, ...Array.from({ length: 6 }, (_, i) => fu(i + 1))])
+  check('🔴 루트 포함 사슬 깊이 7 → FOLLOWUP_CHAIN_OVER_DEPTH',
+    depth7.conversation?.codes.includes('FOLLOWUP_CHAIN_OVER_DEPTH') === true, JSON.stringify(depth7.conversation))
+  const reused = withThread([first, fu(1), fu(2, { parentId: first.id })])
+  check('🔴 같은 답글 대상을 두 번 소비 → FOLLOWUP_TARGET_REUSED',
+    reused.conversation?.codes.includes('FOLLOWUP_TARGET_REUSED') === true, JSON.stringify(reused.conversation))
+  const missingTarget = withThread([first, fu(1, { parentId: 'missing-target' })])
+  check('🔴 없는·삭제된 답글 대상 → FOLLOWUP_TARGET_INVALID',
+    missingTarget.conversation?.codes.includes('FOLLOWUP_TARGET_INVALID') === true, JSON.stringify(missingTarget.conversation))
+  const missingStructure = judgeConversationAudit([post(0, { personaComments: [first, fu(1)], conversationComments: undefined })])
+  check('🔴 대화 시간순 장부를 못 읽음 → FOLLOWUP_TARGET_INVALID(fail-closed)',
+    missingStructure.codes.includes('FOLLOWUP_TARGET_INVALID'), JSON.stringify(missingStructure))
+  const reportedTarget = withThread([{ ...first, reportedAtMs: T0 + 20 * MIN }, fu(1)])
+  check('🔴 발행 전에 신고된 답글 대상 → FOLLOWUP_TARGET_INVALID',
+    reportedTarget.conversation?.codes.includes('FOLLOWUP_TARGET_INVALID') === true, JSON.stringify(reportedTarget.conversation))
+  const lateMemberReply = {
+    id: 'member-later', personaId: null, parentId: first.id, commentOrigin: 'MEMBER', isDeleted: false,
+    createdAtMs: T0 + 300 * MIN, reportedAtMs: null, provenance: null,
+  }
+  const laterInteraction = judgeConversationAudit([post(0, {
+    personaComments: [first, fu(1)], conversationComments: [...conversationOf([first, fu(1)]), lateMemberReply],
+  })])
+  check('🟢 Persona 답글 발행 뒤 실회원이 같은 대상에 답해도 소급 실패 없음',
+    laterInteraction.verdict === 'PASS', JSON.stringify(laterInteraction))
+  const laterReport = judgeConversationAudit([post(0, {
+    personaComments: [first, fu(1)], conversationComments: conversationOf([{ ...first, reportedAtMs: T0 + 300 * MIN }, fu(1)]),
+  })])
+  check('🟢 Persona 답글 발행 뒤 신고는 소급 실패를 만들지 않음', laterReport.verdict === 'PASS', JSON.stringify(laterReport))
+  const deletedTarget = judgeConversationAudit([post(0, {
+    personaComments: [first, fu(2, { id: 'later-live', parentId: 'deleted-mid' })],
+    conversationComments: conversationOf([
+      first,
+      fu(1, { id: 'deleted-mid', isDeleted: true }),
+      fu(2, { id: 'later-live', parentId: 'deleted-mid' }),
+    ]),
+  })])
+  check('🟢 정상 발행 뒤 중간 Persona 댓글이 삭제돼도 사슬 사실은 보존',
+    deletedTarget.verdict === 'PASS', JSON.stringify(deletedTarget))
+  const selfTarget = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
+  check('🔴 자기 댓글에 답글 → FOLLOWUP_SELF',
+    selfTarget.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTarget.conversation))
   check('대화 감사 코드는 단계 코드 목록 밖이다', CONVERSATION_AUDIT_CODES.every((c) => !(STAGE_EVIDENCE_CODES as readonly string[]).includes(c)))
   check('⬚ 사실을 못 읽었으면 대화 감사도 없다', judge(null).conversation === undefined)
   check('🟢 추가 댓글이 없는 날 → 대화 감사 PASS(이어지지 않는 글이 정상)', judge(facts()).conversation?.verdict === 'PASS')
-  check('대화 감사는 단계 판정 함수와 같은 결과다(직접 호출)', judgeConversationAudit([post(0, { personaComments: [first, fu(1)] })]).verdict === 'PASS')
+  check('대화 감사는 단계 판정 함수와 같은 결과다(직접 호출)', judgeConversationAudit([post(0, {
+    personaComments: [first, fu(1)], conversationComments: conversationOf([first, fu(1)]),
+  })]).verdict === 'PASS')
 }
 
 console.log('\n② 시험 계획 — 날짜가 아니라 증거로')

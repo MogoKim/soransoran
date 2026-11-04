@@ -170,7 +170,7 @@ const commentWindow = await (async () => {
   } catch { return { measured: false, real: 0, persona: 0, windowDays: RATIO_WINDOW_DAYS } }
 })()
 const publishedToday = await prisma.comment.count({
-  where: { isDeleted: false, commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
+  where: { commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
 }).catch(() => null)
 const killSwitchOff = await (async (): Promise<boolean | null> => {
   try {

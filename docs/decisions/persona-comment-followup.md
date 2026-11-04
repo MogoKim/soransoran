@@ -1,17 +1,17 @@
-# 글당 Persona 댓글 1~5 — 첫 댓글 뒤 선택적 추가 댓글(0~4)
+# 글당 Persona 댓글 최대 10 — 첫 댓글 뒤 선택적 추가 댓글·답글(0~9)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 정책 보정 · 상태: **운영 공통 profile code PASS 후보 · 배포 전**
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 profile 보정 · 2026-11-04 구조 상한 보정 · 상태: **최대 10 구현 후보 · 운영 검증 전**
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
 
 - 자동 글마다 60분 안 첫 댓글 1건 계약과 provenance는 **그대로**다. 첫 댓글 경로는 한 바이트도 다르게 돌지 않는다
   (첫 댓글 프롬프트 바이트 동일 · 첫 댓글 격리 DB 검사 39/39 · 단계 증거 격리 DB 검사 81/81).
-- 첫 댓글 뒤 **아직 답이 없는 질문·반론·경험·공감**이 있을 때만 Persona 댓글을 한 건씩, 시간차를 두고 잇는다. 글당 Persona 총 5건이 상한이다.
+- 첫 댓글 뒤 **아직 답이 없는 질문·반론·경험·공감**이 있을 때만 Persona 댓글을 한 건씩, 시간차를 두고 잇는다. 글당 Persona 총 10건이 구조 상한이다.
 - 러너 · 발행 트랜잭션 · 장부 · 단계 증거 분리 · CI 까지 실행 경로가 연결됐다. 기존 보조 Mac runtime에는
   E6 consumer 경유 plist, 스위치 `on`, 승인된 D10 전용 profile이 설치돼 있었다.
 - 2026-10-19부터 기능 사용 가능 여부를 단계와 분리한다. 승인된 운영 공통 profile(`stage: all`)은 d5부터 D100까지
-  같은 안전 관문을 쓰고, 공개량·Persona·예산·회차 상한만 실측에 맞춰 조정한다. 모든 글을 5건으로 채우지는 않는다.
+  같은 안전 관문을 쓰고, 공개량·Persona·예산·회차 상한만 실측에 맞춰 조정한다. 모든 글을 10건으로 채우지는 않는다.
 - `SORAN_EVENT_WAKE`는 공개 직후 댓글 첫 반응만 재촉한다. `comment`와 `all` 모두 댓글만 열며, 공급 event wake와
   공급 recovery kickstart는 실행시간 상한 없는 비예약 owner가 자연 증명과 충돌하지 않도록 닫혀 있다.
   공급은 하루 7회 자연 예약만 사용한다. 이 결정은 댓글 event-assisted 실행을 바꾸지 않는다.
@@ -38,9 +38,9 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 ```
 
 - **사건 깨움 · 복구 · 수동 회차는 추가 댓글을 돌지 않는다** — 첫 댓글만 한다. 정기 회차가 사건 표식을 거둬 trigger 가 `event` 가 되면 그 회차도 건너뛴다(다음 정기 회차가 본다).
-- **발행 트랜잭션**(`followupLane`)은 기존 재검사(9관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)를 **하나도 빼지 않고** 돌리고,
+- **발행 트랜잭션**(`followupLane`)은 공통 안전 재검사(9관문 · 실회원 3건 · kill switch · provenance · 생활사 · 하루 절대 500)를 그대로 돌린다. 첫 댓글의 글당 provider 기준 5는 followup에 재적용하지 않고, followup은 승인 profile 잔량과 글당 구조 상한 10을 함께 본다. 일반 Persona는 한 글에 한 번만 말하고, 글쓴이 Persona만 서로 다른 유효 대상에 답글로 최대 3회 말할 수 있다.
   그 위에 `judgeFollowupPublish` 를 더한다: 스위치·단계 재판독 · profile 재판독 · 오늘 추가 수(profile 상한) · Persona 하루 상한 · 다른 열린 후보 ·
-  도장 검증 · 순번 = 지금 자리 · 최소 간격 · 같은 Persona/글쓴이 · 대상 유효성(살아 있음 · Persona 댓글 · 신고 없음 · 아직 답 없음 · 사슬 3) · 글 hook 1회.
+  도장 검증 · 순번 = 지금 자리 · 최소 간격 · 같은 Persona/글쓴이 · 대상 유효성(살아 있음 · Persona 댓글 · 신고 없음 · 아직 답 없음 · 사슬 6) · 글 hook 1회.
   트랜잭션은 반응을 다시 분류하지 않는다(분류기가 `scripts/` 에 있다) — 대상은 도장이 가리키고 유효성만 다시 본다.
 - 생성 쪽과 트랜잭션 쪽은 **같은 함수**(`followupBaseOf` · `replyTargetOpen` · `postHookOpen`)를 쓴다.
 - 답글은 `Comment.parentId` 로 쓴다. 첫 댓글 · 사람 발행은 언제나 최상위다.
@@ -50,13 +50,13 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 | # | 정책 | 코드 |
 |---|---|---|
 | 1 | 첫 댓글 1개 계약·provenance 유지 | 자동 출처(`auto`) 첫 댓글이 없는 글 `STOP` · 60분 안 첫 댓글 대기 글이 있으면 회차 0건 · 표식·분류는 #707 정본(`FOLLOWUP_LANE_*` · `personaCommentProvenanceOf`) · 대화 감사 FAIL·판독 불가 → 추가 0(첫 댓글은 계속) |
-| 2 | 추가 0~4 | `FOLLOWUP_EXTRA_PER_POST_MAX = 5 − 1` |
-| 3 | 모든 글을 5개로 채우지 않음 | 수량은 **미해결 hook** 이 정한다. 근거 0 → 0. 한 건이 hook 하나를 소비 — 답이 한 번이라도 달린 대상(실회원·지운 답 포함)과 이미 쓴 글 hook 은 재소비 금지. 해시는 동률 순서·jitter 에만 |
-| 4 | 같은 Persona · 자기 글 · 내용 중복 금지 | 그 글에 쓴 Persona(지운 것 포함)·글쓴이 제외(생성·트랜잭션 둘 다) · 자기 댓글 답글은 같은 규칙으로 막힘 · 정규화 일치 / bigram Jaccard ≥0.5 / 같은 도입 6자 |
+| 2 | 추가 0~9 | `FOLLOWUP_EXTRA_PER_POST_MAX = 10 − 1` |
+| 3 | 모든 글을 10개로 채우지 않음 | 수량은 **미해결 hook** 이 정한다. 근거 0 → 0. 한 건이 hook 하나를 소비 — 답이 한 번이라도 달린 대상(실회원·지운 답 포함)과 이미 쓴 글 hook 은 재소비 금지. 해시는 동률 순서·jitter 에만 |
+| 4 | 일반 Persona 반복 금지 · 글쓴이 제한 답글 | 일반 Persona는 그 글에 1회. 글쓴이는 최상위 댓글 0, 서로 다른 유효 대상에 답글로 최대 3회. 정규화 일치 / bigram Jaccard ≥0.5 / 같은 도입 6자 |
 | 5 | 실회원 우선 · 추가량 축소 | 실회원 1~2건 → 추가 ≤1 · 3건 이상 → 0 · 마지막 말이 실회원이면 0 · 실회원 댓글에는 답하지 않음 |
 | 6 | 시간차 | 직전 Persona 댓글 + 30분 + 결정적 0~40분 · 한 회차 한 글 1건 · 회차 전체는 profile `runMax` · 같은 회차 같은 Persona 한 글 · 공개 24시간 뒤 종료 |
 | 7 | 이어질 가치가 있을 때만 | 답 없는 Persona 댓글의 question·rebuttal·experience·empathy, 없으면 글 반응으로 최상위 추가 1회 |
-| 8 | 글당 Persona 최대 5 | `PERSONA_COMMENTS_PER_POST_MAX` · 트랜잭션 `recheckBeforePublish` 도 그대로 본다 |
+| 8 | 글당 Persona 최대 10 · 사슬 최대 6 | `PERSONA_COMMENTS_PER_POST_MAX` · `PERSONA_REPLY_CHAIN_MAX` · 트랜잭션 `recheckBeforePublish` 도 그대로 본다 |
 | 9 | 비용 · 상한 · kill switch · 멱등 · 복구 | §3 · §4 |
 | 10 | 기본 OFF | `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값 · 트랜잭션도 다시 읽는다 · 이 PR 은 설정하지 않는다 |
 
@@ -72,6 +72,8 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
   (회차·트랜잭션 같은 함수): 표식 날짜 = 오늘(KST) · 공개·천장이 정본 단계 · 공개 ≤ 천장. 아니면 단계 모름 → 0건.
   러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 이 모듈은 단계 칸 env 를 직접 읽지 않는다.
   `FOLLOWUP_CANARY_PROFILE_CANDIDATE`(40건 · $0.08 · 3 · 3)는 승인자가 비어 있는 **후보값**이다.
+- 구조 상한 10은 운영 예산을 확대하지 않는다. 첫 댓글 부트스트랩 계산은 기존 기준 5(첫 댓글 1 + profile 산출 기준 4),
+  하루 절대 500을 유지하고, 추가 댓글 profile도 40건 · $0.08 · 회차 3 · Persona당 3을 유지한다.
 - kill switch: `PersonaGlobalSwitch` — 회차와 트랜잭션 둘 다.
 
 ## 4. 멱등 · 복구
@@ -92,9 +94,9 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 
 | 명령 | CI | 내용 |
 |---|---|---|
-| `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 173개 — 시나리오 26 · profile 반례 15 · 시뮬레이션 · 트랜잭션 판정 · 첫 댓글 프롬프트 바이트 동일 |
-| `npm run check:persona-followup-mutation` | 같은 step | 막는 줄 63개를 하나씩 지워 전부 잡히는지(임시 디렉터리 · worktree 변경 0) |
-| `npm run persona:followup-db-check` | 격리 Postgres step | 68개 — 실제 consumer 프로세스 e2e(오늘 결정 · 없음 · 어제 · 위조 env 4종 · OFF 읽기 0) · — OFF 무변화 · 첫 댓글 회귀 · 대화 감사 FAIL 에도 첫 댓글 · 정상 답글 · 총 5 상한 도달 · 실회원 우선 · 우회 주입 반례(그 사유로 막혔는지 단언) · 중복·동시 · 복구 · 브레이크 9종 · 장부 단계 · 단계 증거 분리 |
+| `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 시나리오 · profile 반례 · 구조 상한 10 · 일반 Persona 1회 · 글쓴이 답글 3회 · 사슬 6 · 첫 댓글 프롬프트 바이트 동일 |
+| `npm run check:persona-followup-mutation` | 같은 step | 구조 상한·글쓴이 예외·일반 반복 금지·profile·비용·증거를 지우거나 넓히면 잡히는지 확인 |
+| `npm run persona:followup-db-check` | 격리 Postgres step | 실제 consumer e2e · OFF 무변화 · 첫 댓글 회귀 · 정상 답글 · 총 10 상한 · 글쓴이 두 번째 답글 · 일반 반복 차단 · 실회원 우선 · 중복·동시 · 복구 · 장부 · 단계 증거 분리 |
 
 새 step 은 없다(무조건 step 상한 불변 · `check:workflow-budget` 90/90).
 
@@ -118,8 +120,8 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - 🔴 첫 연결판은 그날 단계를 `StageDecision` 표에서 직접 읽었다 — `stage:ladder-check`(adapter 는 controller·consumer·운영 화면만)가 잡았다.
   consumer env 로 바꾸자 지금 댓글 러너 모양에서는 단계가 비어 0건이 된다. 켜려면 E6(댓글 러너 consumer 경유)이 먼저다.
 
-- stamina 를 지운 뒤 근거 있는 글이 길게 이어진다. 시뮬레이션에서 D10 근거 있는 글이 추가 1~4건, 격리 DB 에서 질문이 이어지는 글은 5건 상한에 실제로 닿았다.
-  추가 댓글이 스스로 질문을 만들면 다음 거리가 되기 때문이다. 상한·사슬 3·같은 대상 1회·실회원 우선이 막지만, 실제 생성기가 질문을 얼마나 자주 내는지는
+- stamina 를 지운 뒤 근거 있는 글이 길게 이어진다. 구조는 추가 0~9건까지 허용하지만 실제 수량은 미해결 hook과 승인 profile이 정한다.
+  추가 댓글이 스스로 질문을 만들면 다음 거리가 되기 때문이다. 상한 10·사슬 6·같은 대상 1회·실회원 우선이 막지만, 실제 생성기가 질문을 얼마나 자주 내는지는
   운영 관측 전이다 — profile 의 `dailyCount` · `runMax` 를 정할 때 이 수치를 본다.
 - 정기 회차가 사건 표식을 거두면 trigger 가 `event` 로 기록되어 그 회차는 추가 댓글을 건너뛴다. 사건이 잦은 날 추가 댓글이 적게 돌 수 있다(첫 댓글에는 영향 없음).
 - 변이 시험이 실제로 일을 했다: 실회원 댓글이 첫 댓글 뒤에 있던 우회 반례는 모든 사례가 "마지막 말 실회원" 하나로 막혀 의도한 사유를 못 보고 있었다 — 사유 단언으로 고쳤다.

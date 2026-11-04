@@ -6,7 +6,7 @@
  *      `readStageEvidenceFacts` → `judgeStageEvidence` 가 PASS 를 낸다
  *   ② 행 하나씩 비틀면(댓글 없음 · 61분 · 지운 댓글 · 자기 글 댓글 · 감사 미판정/시한 초과 · 결함 yes · 표본 0 ·
  *      표본이 자동 target 밖 · 발행 기록 중복 · 같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · 사람 승인만/혼합 ·
- *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 상한 5 에서 5건 PASS · 6건 FAIL
+ *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 구조 상한 10에서 10건 PASS · 11건 FAIL
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
  *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → 계획 d3 재시험 · 전날 PASS → 계획 d5 · DB write 0
  *      🔴 (2026-09-30) 실제 진입점의 preflight 는 Persona 4상태 정본(`readContractValidPersonas`)을 읽는다 — 격리 DB 에는
@@ -148,6 +148,7 @@ async function followupComment(postId: string, parentId: string | null, createdA
 
 async function wipe(): Promise<void> {
   await prisma.autoReadyAudit.deleteMany({})
+  await prisma.report.deleteMany({})
   await prisma.comment.deleteMany({})
   await prisma.personaApprovalQueue.deleteMany({})
   await prisma.personaActivityLog.deleteMany({})
@@ -331,7 +332,7 @@ try {
     const s2 = await seedDay()
     await secondPersonaComment(s2)
     const v = await verdictOf(d2, personaCommentCapFor('organic'))
-    check('🟢 상한 5(장기 1~5) — 같은 두 댓글은 PASS (60분 안 2건은 실패가 아니다)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+    check('🟢 구조 상한 10 — 같은 두 댓글은 PASS (60분 안 2건은 실패가 아니다)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
 
   console.log('\n④-c 🔴 추가 댓글 실제 행 — 첫 댓글 증거와 분리 (2026-10-13 · PR #704 E1)')
@@ -340,7 +341,12 @@ try {
     const d = await storeDecision(TRIAL_D3)
     const s = await seedDay()
     const fu: { id: string; personaId: string }[] = []
-    for (let k = 0; k < n; k += 1) fu.push(await followupComment(s.posts[0]!, s.comments[0]!, new Date(SLOTS[0]!.getTime() + (90 + 40 * k) * MIN)))
+    let parentId = s.comments[0]!
+    for (let k = 0; k < n; k += 1) {
+      const row = await followupComment(s.posts[0]!, parentId, new Date(SLOTS[0]!.getTime() + (90 + 40 * k) * MIN))
+      fu.push(row)
+      parentId = row.id
+    }
     return { d, s, fu }
   }
   {
@@ -374,6 +380,71 @@ try {
     const v = await verdictOf(d)
     check('🔴 추가 댓글 Persona 를 첫 댓글 Persona 로 바꾸면 연결이 깨진다 → 단계 PASS · 대화 감사 FAIL',
       fuPersona !== null && v.verdict === 'PASS' && v.conversation?.verdict === 'FAIL', `${v.verdict} ${JSON.stringify(v.conversation)}`)
+  }
+  {
+    const { d } = await thread(6)
+    const v = await verdictOf(d)
+    check('🔴 실제 DB 사슬 깊이 7 → 단계 판정은 유지 · 대화 감사 FOLLOWUP_CHAIN_OVER_DEPTH',
+      v.verdict === 'PASS' && v.conversation?.codes.includes('FOLLOWUP_CHAIN_OVER_DEPTH') === true,
+      `${v.verdict} ${JSON.stringify(v.conversation)}`)
+  }
+  {
+    const { d, s, fu } = await thread(2)
+    await prisma.comment.update({ where: { id: fu[1]!.id }, data: { parentId: s.comments[0]! } })
+    const v = await verdictOf(d)
+    check('🔴 실제 DB 같은 답글 대상 재소비 → 대화 감사 FOLLOWUP_TARGET_REUSED',
+      v.conversation?.codes.includes('FOLLOWUP_TARGET_REUSED') === true, JSON.stringify(v.conversation))
+  }
+  {
+    const { d, s } = await thread(1)
+    const reporter = await prisma.user.findFirstOrThrow({ select: { id: true } })
+    await prisma.report.create({ data: {
+      reporterId: reporter.id, commentId: s.comments[0]!, reason: 'fixture',
+      createdAt: new Date(SLOTS[0]!.getTime() + 20 * MIN),
+    } })
+    const v = await verdictOf(d)
+    check('🔴 실제 DB 발행 전 신고된 답글 대상 → 대화 감사 FOLLOWUP_TARGET_INVALID',
+      v.conversation?.codes.includes('FOLLOWUP_TARGET_INVALID') === true, JSON.stringify(v.conversation))
+  }
+  {
+    const { d, s } = await thread(1)
+    const reporter = await prisma.user.findFirstOrThrow({ select: { id: true } })
+    await prisma.report.create({ data: {
+      reporterId: reporter.id, commentId: s.comments[0]!, reason: 'later-fixture',
+      createdAt: new Date(SLOTS[0]!.getTime() + 300 * MIN),
+    } })
+    const v = await verdictOf(d)
+    check('🟢 실제 DB Persona 답글 발행 뒤 신고는 과거 대화를 소급 실패로 바꾸지 않음',
+      v.conversation?.verdict === 'PASS', JSON.stringify(v.conversation))
+  }
+  {
+    const { d, s } = await thread(1)
+    const member = await prisma.user.create({ data: { nickname: `later-member-${seq}` }, select: { id: true } })
+    await prisma.comment.create({ data: {
+      content: '늦게 합류한 회원 답글', source: 'USER', commentOrigin: 'MEMBER', postId: s.posts[0]!,
+      parentId: s.comments[0]!, authorId: member.id, createdAt: new Date(SLOTS[0]!.getTime() + 300 * MIN),
+    } })
+    const v = await verdictOf(d)
+    check('🟢 실제 DB Persona 답글 발행 뒤 실회원의 같은 대상 답글은 소급 재소비가 아님',
+      v.conversation?.verdict === 'PASS', JSON.stringify(v.conversation))
+  }
+  {
+    const { d, s } = await thread(1)
+    const member = await prisma.user.create({ data: { nickname: `early-member-${seq}` }, select: { id: true } })
+    await prisma.comment.create({ data: {
+      content: '먼저 소비한 회원 답글', source: 'USER', commentOrigin: 'MEMBER', postId: s.posts[0]!,
+      parentId: s.comments[0]!, authorId: member.id, createdAt: new Date(SLOTS[0]!.getTime() + 60 * MIN),
+    } })
+    const v = await verdictOf(d)
+    check('🔴 실제 DB Persona 답글 발행 전 대상을 먼저 소비한 답글은 FOLLOWUP_TARGET_REUSED',
+      v.conversation?.codes.includes('FOLLOWUP_TARGET_REUSED') === true, JSON.stringify(v.conversation))
+  }
+  {
+    const { d, fu } = await thread(2)
+    await prisma.comment.update({ where: { id: fu[0]!.id }, data: { isDeleted: true } })
+    const v = await verdictOf(d)
+    check('🟢 실제 DB 정상 발행 뒤 중간 Persona 답글을 삭제해도 사슬 사실은 보존',
+      v.conversation?.verdict === 'PASS', JSON.stringify(v.conversation))
   }
   await counter('🔴 연결 없는 수동 Persona 댓글은 여전히 상한에 든다(상한 1) → COMMENT_OVER_CAP', 'COMMENT_OVER_CAP', async (s) => {
     const other = await persona(`M-${seq}`)
@@ -429,20 +500,20 @@ try {
     await wipe()
     const d5 = await storeDecision(TRIAL_D3)
     const s5 = await seedDay()
-    for (let k = 0; k < 4; k += 1) {
+    for (let k = 0; k < 9; k += 1) {
       const o = await persona(`M${k}-${seq}`)
       const u = (await prisma.persona.findUniqueOrThrow({ where: { id: o }, select: { userId: true } })).userId
       await autoComment({ data: { content: `저도요 ${k}`, source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u,
         personaId: o, createdAt: new Date(SLOTS[0]!.getTime() + (20 + k) * MIN) } })
     }
-    const v5 = await verdictOf(d5, personaCommentCapFor('organic'))
-    check('🟢 상한 5 — 한 글에 서로 다른 Persona 5건(첫 1 + 추가 4) → PASS', v5.verdict === 'PASS', `${v5.verdict} ${v5.codes.join(',')}`)
-    const o6 = await persona(`M6-${seq}`)
-    const u6 = (await prisma.persona.findUniqueOrThrow({ where: { id: o6 }, select: { userId: true } })).userId
-    await autoComment({ data: { content: '여섯 번째', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u6,
-      personaId: o6, createdAt: new Date(SLOTS[0]!.getTime() + 40 * MIN) } })
-    const v6 = await verdictOf(d5, personaCommentCapFor('organic'))
-    check('🔴 상한 5 — 6건 → COMMENT_OVER_CAP', v6.verdict === 'FAIL' && has(v6, 'COMMENT_OVER_CAP'), `${v6.verdict} ${v6.codes.join(',')}`)
+    const v10 = await verdictOf(d5, personaCommentCapFor('organic'))
+    check('🟢 구조 상한 10 — 한 글에 서로 다른 Persona 10건(첫 1 + 추가 9) → PASS', v10.verdict === 'PASS', `${v10.verdict} ${v10.codes.join(',')}`)
+    const o11 = await persona(`M11-${seq}`)
+    const u11 = (await prisma.persona.findUniqueOrThrow({ where: { id: o11 }, select: { userId: true } })).userId
+    await autoComment({ data: { content: '열한 번째', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u11,
+      personaId: o11, createdAt: new Date(SLOTS[0]!.getTime() + 40 * MIN) } })
+    const v11 = await verdictOf(d5, personaCommentCapFor('organic'))
+    check('🔴 구조 상한 10 — 11건 → COMMENT_OVER_CAP', v11.verdict === 'FAIL' && has(v11, 'COMMENT_OVER_CAP'), `${v11.verdict} ${v11.codes.join(',')}`)
   }
   await counter('🔴 같은 Persona 가 한 글에 두 번 → DUP_COMMENT', 'DUP_COMMENT', async (s) => {
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: s.commenters[0]! }, select: { userId: true } })).userId

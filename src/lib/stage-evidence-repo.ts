@@ -108,21 +108,34 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   const orphanPublishLogs = logs.filter((l) =>
     l.targetId === null || l.targetId === '' || !postOf.has(l.targetId) || !queueOf.has(l.targetId)).length
 
-  const comments = posts.length === 0 ? [] : await db.comment.findMany({
-    where: { postId: { in: posts.map((p) => p.id) }, commentOrigin: 'PERSONA', isDeleted: false },
-    select: { id: true, postId: true, personaId: true, parentId: true, createdAt: true },
+  const allComments = posts.length === 0 ? [] : await db.comment.findMany({
+    where: { postId: { in: posts.map((p) => p.id) } },
+    select: { id: true, postId: true, personaId: true, parentId: true, createdAt: true, commentOrigin: true, isDeleted: true },
   })
+  const allPersonaComments = allComments.filter((c) => c.commentOrigin === 'PERSONA')
+  const comments = allPersonaComments.filter((c) => !c.isDeleted)
   /** 🔴 출처 연결 — 같은 Comment id 를 가리키는 Queue · ActivityLog 를 **전부** 읽는다(겹침을 숨기지 않는다) */
-  const commentIds = comments.map((c) => c.id)
-  const linkQueues = commentIds.length === 0 ? [] : await db.personaApprovalQueue.findMany({
-    where: { publishedCommentId: { in: commentIds } },
+  const personaCommentIds = allPersonaComments.map((c) => c.id)
+  const allCommentIds = allComments.map((c) => c.id)
+  const linkQueues = personaCommentIds.length === 0 ? [] : await db.personaApprovalQueue.findMany({
+    where: { publishedCommentId: { in: personaCommentIds } },
     select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
   })
-  const linkLogs = commentIds.length === 0 ? [] : await db.personaActivityLog.findMany({
-    where: { kind: 'comment', targetId: { in: commentIds } },
+  const linkLogs = personaCommentIds.length === 0 ? [] : await db.personaActivityLog.findMany({
+    where: { kind: 'comment', targetId: { in: personaCommentIds } },
     select: { targetId: true, personaId: true, decidedBy: true, publishedAt: true },
   })
-  const provenanceOf = (c: (typeof comments)[number]) => personaCommentProvenanceOf({
+  const commentReports = allCommentIds.length === 0 ? [] : await db.report.findMany({
+    where: { commentId: { in: allCommentIds } }, select: { commentId: true, createdAt: true },
+  })
+  const firstReportAt = new Map<string, number>()
+  for (const r of commentReports) {
+    if (r.commentId === null) continue
+    const at = r.createdAt.getTime()
+    const previous = firstReportAt.get(r.commentId)
+    if (previous === undefined || at < previous) firstReportAt.set(r.commentId, at)
+  }
+  const provenanceOf = (c: (typeof allPersonaComments)[number]) => personaCommentProvenanceOf({
     comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
     queues: linkQueues.filter((q) => q.publishedCommentId === c.id).map((q) => ({
       targetPostId: q.targetPostId, personaId: q.personaId, status: q.status, decidedBy: q.decidedBy,
@@ -160,6 +173,17 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
       personaComments: comments.filter((c) => c.postId === p.id).map((c) => ({
         personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null,
         provenance: provenanceOf(c),
+      })),
+      // 🔴 현재 화면 상태와 발행 당시 사실을 분리한다. 나중의 답글·신고·삭제가 과거 정상 발행을 소급 실패로 바꾸지 않는다.
+      conversationComments: allComments.filter((c) => c.postId === p.id).map((c) => ({
+        id: c.id,
+        personaId: c.personaId,
+        parentId: c.parentId,
+        commentOrigin: c.commentOrigin,
+        isDeleted: c.isDeleted,
+        createdAtMs: c.createdAt.getTime(),
+        reportedAtMs: firstReportAt.get(c.id) ?? null,
+        provenance: c.commentOrigin === 'PERSONA' ? provenanceOf(c) : null,
       })),
       release: releaseOfPost.get(p.id) ?? 'MISSING',
     }
