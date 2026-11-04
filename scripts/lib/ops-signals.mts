@@ -11,9 +11,15 @@ import { existsSync, openSync, readSync, closeSync, readFileSync, statSync } fro
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { ledgerDateOf, relevantUsageUnknownCount, tallyOf, type LedgerEntry, type LedgerStage } from '../../src/lib/llm-ledger'
+import {
+  ledgerDateOf, recordedSupplyBudgetOf, relevantUsageUnknownCount, supplyProofCostObservationOf, tallyOf,
+  type LedgerEntry, type LedgerStage,
+} from '../../src/lib/llm-ledger'
+import {
+  supplyCostProofBudgetUsd, usesSupplyCostEnvelope, type SupplyCostEvidence,
+} from '../../src/lib/supply-cost-envelope'
 import { judgeCost, type CostVerdict } from '../../src/lib/ops-status'
-import { defaultLedgerDir, ledgerPathOf, readLedgerDay, readSettleHold } from './llm-ledger-store.mjs'
+import { defaultLedgerDir, ledgerPathOf, readLedgerDay, readSettleHoldAsOf } from './llm-ledger-store.mjs'
 import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
 import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
@@ -80,12 +86,8 @@ export type CostSignals = {
   commentLedger: CostVerdict
   /** 감사 전용 장부 — 공급과 섞이지 않는다 */
   auditLedger: CostVerdict
-  /**
-   * 🔴 **그 KST 날 공급 장부에서 proof-day 증거로 셀 관련 `usageUnknown` 요청 수** (2026-10-16 D5 보정 B).
-   *    정본 `relevantUsageUnknownCount` 가 센 값. `null` 이면 그 날 장부를 못 읽었다(모름). stage-evidence 는
-   *    이 값을 `EvidenceSideSignals.supplyUsageUnknown` 로 받아 §3.4(증명일 미상 0)를 평가한다.
-   */
-  supplyUsageUnknownRelevant: number | null
+  /** 시행일 전 옛 판정과 시행일부터의 자연 proof 슬롯 비용 envelope. */
+  supplyCostEvidence: SupplyCostEvidence | null
 }
 
 export function readCostSignals(
@@ -100,12 +102,21 @@ export function readCostSignals(
   ]).values
   const supplyDir = dirs.supply ?? defaultLedgerDir()
   const s = readLedgerToday(supplyDir, now)
+  const targetLedgerDate = ledgerDateOf(now)
+  const supplySettleHold = readSettleHoldAsOf(supplyDir, targetLedgerDate)
+  const configuredSupplyCap = limitsFromEnv(envVals).dailyUsd
+  const recordedSupplyBudget = s.entries === null ? null : recordedSupplyBudgetOf(s.entries, targetLedgerDate)
+  const supplyEnvelopeEffective = usesSupplyCostEnvelope(targetLedgerDate)
+  const supplyCap = !supplyEnvelopeEffective || recordedSupplyBudget === null || recordedSupplyBudget.kind === 'none'
+    ? configuredSupplyCap
+    : recordedSupplyBudget.kind === 'valid' ? recordedSupplyBudget.capUsd : null
   const supplyLedger = judgeCost({
     uses: true,
     tally: s.entries === null ? null : tallyOf(s.entries),
     ledgerError: s.error,
-    settleHold: readSettleHold(supplyDir),
-    capUsd: limitsFromEnv(envVals).dailyUsd,
+    settleHold: supplySettleHold,
+    // 요청이 실제로 시작된 날은 장부에 기록된 당시 상한이 권위다. 현재 env로 과거를 재판정하지 않는다.
+    capUsd: supplyCap,
   })
   const commentSpentUsd = s.entries === null ? null : (() => {
     const t = tallyOf(s.entries.filter((e) => COMMENT_STAGES.includes(e.stage)))
@@ -117,7 +128,7 @@ export function readCostSignals(
     uses: true,
     tally: a.entries === null ? null : tallyOf(a.entries),
     ledgerError: a.error,
-    settleHold: readSettleHold(auditDir),
+    settleHold: readSettleHoldAsOf(auditDir, targetLedgerDate),
     capUsd: auditLimitsFromEnv(envVals).dailyUsd,
   })
   const commentDir = dirs.comment ?? commentLoopLedgerDir()
@@ -126,12 +137,53 @@ export function readCostSignals(
     uses: true,
     tally: c.entries === null ? null : tallyOf(c.entries),
     ledgerError: c.error,
-    settleHold: readSettleHold(commentDir),
+    settleHold: readSettleHoldAsOf(commentDir, targetLedgerDate),
     capUsd: commentLoopLimitsFromEnv(envVals).limits.dailyUsd,
   })
-  // 🔴 §3.4 — proof-day 관련 natural supply 미상 수(2026-10-16 D5 보정 B). 못 읽었으면 null(모름).
-  const supplyUsageUnknownRelevant = s.entries === null ? null : relevantUsageUnknownCount(s.entries)
-  return { supplyLedger, commentSpentUsd, auditLedger, commentLedger, supplyUsageUnknownRelevant }
+  // §3.4 — 시행일 전 옛 판정과 시행일부터의 자연 proof 슬롯 envelope를 함께 읽어 소급을 막는다.
+  const supplyCostEvidence: SupplyCostEvidence | null = s.entries === null ? {
+    // 장부를 못 읽은 것은 표본 부족이 아니라 비용 안전장치 자체의 고장이다.
+    // envelope 값을 지어내지 않되, stage 증거가 반드시 COST_BAD 로 닫히도록
+    // whole-day 축의 hard failure를 보존한다.
+    legacyUsageUnknownRequests: 0,
+    wholeDayCriticalHealth: s.error !== null || supplySettleHold !== null ? 'bad' : 'unknown',
+    envelope: {
+      settledRequests: 0,
+      usageUnknownRequests: 0,
+      overrunRequests: 0,
+      ineligibleRequests: 0,
+      riskUsd: null,
+      budgetUsd: null,
+    },
+  } : (() => {
+    const proof = supplyProofCostObservationOf(s.entries, targetLedgerDate)
+    const wholeDay = tallyOf(s.entries)
+    const wholeDayCap = recordedSupplyBudget?.kind === 'valid' ? recordedSupplyBudget.capUsd : null
+    const wholeDayRisk = wholeDay.settledUsd + wholeDay.openReservedUsd
+    const wholeDayOverBudget = wholeDayCap !== null && wholeDayRisk > wholeDayCap + 1e-9
+    const wholeDayCriticalHealth: SupplyCostEvidence['wholeDayCriticalHealth'] =
+      s.error !== null || supplySettleHold !== null || wholeDay.overruns > 0 || wholeDayOverBudget
+        ? 'bad'
+        : recordedSupplyBudget === null || recordedSupplyBudget.kind === 'invalid' ? 'unknown' : 'ok'
+    return {
+      legacyUsageUnknownRequests: relevantUsageUnknownCount(s.entries),
+      // 늦은 준비 회차의 단순 usageUnknown은 proof를 소급 파괴하지 않는다. 그러나 그 요청의
+      // 기록 예산 출처·상한 자체가 깨졌다면 하루 예산 무결성을 증명할 수 없으므로 UNKNOWN이다.
+      wholeDayCriticalHealth,
+      envelope: {
+        settledRequests: proof.settledRequests,
+        usageUnknownRequests: proof.usageUnknownRequests,
+        overrunRequests: proof.overrunRequests,
+        ineligibleRequests: proof.ineligibleRequests,
+        riskUsd: proof.riskUsd,
+        // 과거 증거는 현재 env가 아니라 요청 전에 장부에 기록된 당시 예산으로 판정한다.
+        budgetUsd: proof.recordedDailyCapUsd === null
+          ? null
+          : supplyCostProofBudgetUsd(targetLedgerDate, proof.recordedDailyCapUsd),
+      },
+    }
+  })()
+  return { supplyLedger, commentSpentUsd, auditLedger, commentLedger, supplyCostEvidence }
 }
 
 /** 🔴 로그 끝만 읽는다 — 큰 로그를 통째로 올리지 않는다 */

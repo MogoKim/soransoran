@@ -238,6 +238,7 @@
     "supply:workset-check": "tsx scripts/supply-workset-check.mts",
     "supply:workset-e2e-check": "tsx scripts/supply-workset-e2e-check.mts",
     "supply:ledger-check": "tsx scripts/supply-llm-ledger-check.mts",
+    "supply:cost-envelope-mutation": "tsx scripts/supply-cost-envelope-mutation.mts",
     "supply:reserve-check": "tsx scripts/supply-scheduled-reserve-check.mts",
     "supply:lease-check": "tsx scripts/supply-lease-check.mts",
     "supply:lease-mutation": "tsx scripts/supply-lease-mutation.mts",

@@ -116,15 +116,29 @@ const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
 const SIDE_OK: EvidenceSideSignals = {
-  cost: [{ name: '공급 장부', health: 'ok' }, { name: '댓글 장부', health: 'ok' }, { name: '감사 장부', health: 'ok' }],
-  errors: 'ok', supplyUsageUnknown: 0,
+  cost: [
+    { lane: 'supply', name: '공급 장부', health: 'ok' },
+    { lane: 'comment', name: '댓글 장부', health: 'ok' },
+    { lane: 'audit', name: '감사 장부', health: 'ok' },
+  ],
+  errors: 'ok',
+  supplyCostEvidence: {
+    legacyUsageUnknownRequests: 0,
+    wholeDayCriticalHealth: 'ok',
+    envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
+  },
 }
 
 /** 각 칸이 그 단계를 딱 채우는 preflight 사실 — 바꾼 칸만 판정을 가른다 */
 const preflightFacts = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): PreflightFacts => {
   const n = profileOf(s).dailyTarget
-  const cohort: ReadyCohortFact = { sources: RUNS, published: n, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: SUPPLY_USD_PER_RESULT }
+  const cohort: ReadyCohortFact = {
+    sources: RUNS, published: n, lost: 0, scheduled: 0, unknown: 0,
+    usdPerSlotValidResult: SUPPLY_USD_PER_RESULT,
+    trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: SUPPLY_USD_PER_RESULT },
+  }
   return {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: n, readyCohort: cohort, latencyP50H: 20, latencyP90H: 60,
     contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
     commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,

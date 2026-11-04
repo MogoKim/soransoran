@@ -1,12 +1,12 @@
 /**
- * 공급 실행 token — 🔴 **shadow 전용 순수 판정. 파일 · 프로세스 · env 읽기 0** (2026-10-12 Batch C1)
+ * 공급 실행 token — 🔴 **실행 provenance 전용 순수 판정. 파일 · 프로세스 · env 읽기 0** (2026-10-12 Batch C1)
  *
  * 🔴 **무엇인가.** 커널 lease(`runner-lease`)를 증명한 공급 holder 가 회차(pass)마다 하나 발급하는 기록이다.
  *    "이 회차가 어떤 깨움으로 열렸고, 다음 단계의 예산 판정이라면 어느 창의 몫을 썼을 것인가" 를 남긴다.
  *
- * 🔴 **무엇이 아닌가 — 예산 허가가 아니다.** 지금 예산 판정은 `supply-scheduled-reserve` 그대로다
- *    (launchd 라벨 + 벽시계 45분 슬롯 창). 이 파일의 결과는 장부 줄과 회차 기록에 **나란히 적히기만** 한다.
- *    token 을 예산에 쓰는 것은 Batch C3 이고, 그 전에 shadow 기록으로 두 판정이 어디서 갈리는지 실측한다.
+ * 🔴 **무엇이 아닌가 — 예산 허가가 아니다.** 예산 허가는 `supply-scheduled-reserve`가 요청 전에 맡는다.
+ *    다만 비용 envelope 시행일 이후의 proof·preflight는 장부의 이 tag를 `runKind`·`runSlot`과 함께 읽어
+ *    자연 예약 실행과 event·recovery·manual 실행을 구분한다. token이 예산 상한을 늘리거나 요청을 허가하지 않는다.
  *
  * 🔴 **검증은 다섯 칸을 전부 본다** — 하나라도 어긋나면 `ok: false` 와 그 코드다(추정하지 않는다).
  *    ① 이 프로세스가 공급 커널 lease 안이다(fd 9 증명 — 부르는 쪽이 넘긴다)
@@ -43,7 +43,7 @@ export type RunToken = {
   /** 거둔 follow-up 표식의 trigger · 시각 — 없으면 null */
   absorbedTrigger: RunTokenTrigger | null
   absorbedAt: string | null
-  /** 🔴 shadow — 이어 붙인 예산 창(설계 D1) 이름. 지금 예산 판정은 이 값을 읽지 않는다 */
+  /** 🔴 shadow — 이어 붙인 예산 창(설계 D1) 이름. 예산 허가에는 쓰지 않는다 */
   budgetWindowShadow: string
   issuedAt: string
   expiresAt: string
@@ -84,7 +84,7 @@ export function supplyRunIdOf(d: Date): string {
   return `${d.toISOString().slice(0, 10).replace(/-/g, '')}-${d.toISOString().slice(11, 19).replace(/:/g, '')}`
 }
 
-/** 🔴 장부 줄에 싣는 모양 — 짧은 칸만(본문 · 경로 없음). 판정은 이 칸을 읽지 않는다 */
+/** 🔴 장부 줄에 싣는 모양 — 짧은 칸만(본문 · 경로 없음). 자연 실행 provenance만 판정하고 예산은 허가하지 않는다 */
 export type RunTokenShadowTag = {
   ok: boolean
   code: RunTokenShadowCode | null

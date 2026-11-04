@@ -27,7 +27,7 @@ import {
   type CostFate,
 } from '../src/lib/ready-fate'
 import { judgeJitDemand, fillUpToOf, ledgerRunIdOf, runFileName } from '../src/lib/supply-process'
-import { judgeSettle } from '../src/lib/llm-ledger'
+import { judgeSettle, tallyOf } from '../src/lib/llm-ledger'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
   WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
@@ -41,6 +41,8 @@ import { sourceKeyOf } from '../src/lib/source-identity'
 import { claimsJitContract, intentLinkIssue, type SupplyIntent } from '../src/lib/supply-intent'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
+import { PRICING_VERSION } from '../src/lib/llm-pricing'
+import { supplyRunIdOf } from '../src/lib/supply-run-token'
 import {
   pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
 } from './lib/stage-preflight-facts.mjs'
@@ -385,6 +387,132 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const hs = articleIdHashOf('fx', 'sch')
   const hl = articleIdHashOf('fx', 'lost')
   const fateByKey = new Map<string, CostFate>([[hp, 'published'], [hs, 'scheduled'], [hl, 'lost']])
+  const effectiveEntry = (o: Partial<LedgerEntry> = {}): LedgerEntry => ({
+    ...e(hp, 0.02),
+    runId: `${supplyRunIdOf(new Date('2026-11-05T06:15:02+09:00'))}-j`,
+    startedAt: '2026-11-04T21:15:03.000Z',
+    endedAt: '2026-11-04T21:15:10.000Z',
+    pricingVersion: PRICING_VERSION,
+    reservedUsd: 0.03,
+    budgetDailyUsd: 1.2,
+    budgetCeilingUsd: 1.2,
+    budgetCapUsd: 1.2,
+    budgetSource: 'env.local',
+    runKind: 'scheduled',
+    runSlot: '2026-11-05 06:15',
+    runTokenShadow: {
+      ok: true, code: null, tokenId: 'token-0615', trigger: 'scheduled', launchTrigger: 'scheduled',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-11-05 06:15',
+    },
+    ...o,
+  })
+  const effectiveCohort: ReadonlySet<string> = new Set([supplyRunIdOf(new Date('2026-11-05T06:15:02+09:00'))])
+  const effectiveValid = costAttributionOf({
+    entries: [effectiveEntry()], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 시행일부터 계약·가격판·원천·회차·예약·예산 provenance가 완전하면 preflight 비용 표본이다',
+    effectiveValid?.usdPerSlotValidResult === 0.02 && effectiveValid.trialIneligibleRequests === 0,
+    JSON.stringify(effectiveValid))
+  const legacyHumanResolved = costAttributionOf({
+    entries: [{ ...e(hp, 0.02), resolvedBy: 'human' }], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,
+  })
+  check('🔴 시행일 전 행이어도 사람 마감은 대상 cohort의 자연 비용 표본이 아니다',
+    legacyHumanResolved?.usdPerSlotValidResult === null
+    && legacyHumanResolved.trialIneligibleRequests === 1
+    && legacyHumanResolved.unlinkedUsd === 0.02,
+    JSON.stringify(legacyHumanResolved))
+  const sidecarEntries: readonly LedgerEntry[] = [
+    effectiveEntry({ stage: 'commentGen', runId: 'manual-comment', settledUsd: 0.001 }),
+    effectiveEntry({ stage: 'commentFollowupGen', runId: 'manual-followup', settledUsd: 0.002 }),
+    effectiveEntry({ stage: 'semanticAudit', runId: 'manual-audit', settledUsd: 0.003 }),
+  ]
+  const withSidecars = costAttributionOf({
+    entries: [effectiveEntry(), ...sidecarEntries], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 댓글·후속 댓글·감사는 whole-day 비용에는 남지만 본문 preflight cohort를 오염시키지 않는다',
+    tallyOf(sidecarEntries).settledUsd === 0.006
+    && withSidecars?.usdPerSlotValidResult === effectiveValid?.usdPerSlotValidResult
+    && withSidecars?.trialIneligibleRequests === 0
+    && withSidecars?.unlinkedUsd === 0,
+    JSON.stringify(withSidecars))
+  for (const [name, row] of [
+    ['가격판 누락', effectiveEntry({ pricingVersion: null })],
+    ['예산 출처 누락', effectiveEntry({ budgetSource: null })],
+    ['옛 계약 혼입', effectiveEntry({ supplyContract: SUPPLY_JIT_CONTRACT_LEGACY })],
+    ['event 실행 token', effectiveEntry({
+      runTokenShadow: {
+        ok: true, code: null, tokenId: 'token-event', trigger: 'event', launchTrigger: 'event',
+        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-11-05 06:15',
+      },
+    })],
+    ['사람이 사후 정산한 행', effectiveEntry({ resolvedBy: 'human' })],
+    ['슬롯 시작 1ms 전 요청', effectiveEntry({ startedAt: '2026-11-04T21:14:59.999Z' })],
+    ['정확히 45분 경계에서 시작한 요청', effectiveEntry({ startedAt: '2026-11-04T22:00:00.000Z' })],
+  ] as const) {
+    const invalid = costAttributionOf({
+      entries: [row], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+    })
+    check(`🔴 시행일부터 ${name}은 preflight에서도 비용 UNKNOWN — 밤 proof와 같은 계약`,
+      invalid?.usdPerSlotValidResult === null && invalid?.trialIneligibleRequests === 1,
+      JSON.stringify(invalid))
+  }
+  const finalValidMillisecond = costAttributionOf({
+    entries: [effectiveEntry({ startedAt: '2026-11-04T21:59:59.999Z' })], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 06:15 자연 슬롯의 마지막 유효 시각(06:59:59.999 KST)은 preflight 비용 표본이다',
+    finalValidMillisecond?.usdPerSlotValidResult === 0.02
+    && finalValidMillisecond.trialIneligibleRequests === 0,
+    JSON.stringify(finalValidMillisecond))
+  const ineligibleOverrun = costAttributionOf({
+    entries: [effectiveEntry({ pricingVersion: null, settledUsd: 0.04, reservedUsd: 0.01 })],
+    fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🔴 metadata 부적격 행이어도 실제 정산이 예약을 넘으면 hard overrun을 숨기지 않는다',
+    ineligibleOverrun?.trialOverrunRequests === 1 && ineligibleOverrun.trialIneligibleRequests === 1,
+    JSON.stringify(ineligibleOverrun))
+  const otherSlot = '2026-11-05 08:15'
+  const outOfCohortOverrun = costAttributionOf({
+    entries: [effectiveEntry({
+      runId: `${supplyRunIdOf(new Date('2026-11-05T08:15:02+09:00'))}-j`,
+      runSlot: otherSlot,
+      startedAt: '2026-11-04T23:15:03.000Z',
+      endedAt: '2026-11-04T23:15:10.000Z',
+      settledUsd: 0.04,
+      reservedUsd: 0.01,
+      runTokenShadow: {
+        ok: true, code: null, tokenId: 'token-0815', trigger: 'scheduled', launchTrigger: 'scheduled',
+        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: otherSlot,
+      },
+    })],
+    fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 다른 cohort의 예약 초과는 whole-day 브레이크가 맡고 현재 preflight를 거짓 차단하지 않는다',
+    outOfCohortOverrun?.trialOverrunRequests === 0 && outOfCohortOverrun.otherCohortUsd === 0.04,
+    JSON.stringify(outOfCohortOverrun))
+  const overrunPreflight = judgeNextPreflight('d5', {
+    proofKstDate: '2026-11-05', slotValidOpportunities: 5,
+    readyCohort: {
+      sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0,
+      usdPerSlotValidResult: null,
+      trialCost: {
+        settledRequests: 20, usageUnknownRequests: 0,
+        overrunRequests: ineligibleOverrun?.trialOverrunRequests ?? 0,
+        ineligibleRequests: ineligibleOverrun?.trialIneligibleRequests ?? 0,
+        riskUsdPerSlotValidResult: 0.01,
+      },
+    },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2,
+    auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
+    supplyDailyUsdCap: 1.2, runnerHealth: 'ok',
+  }, RUNNER_GRID)
+  check('🔴 hard overrun이 하나라도 있으면 preflight는 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
+    overrunPreflight.codes.includes('SUPPLY_COST_SHORT')
+      && !overrunPreflight.codes.includes('SUPPLY_COST_UNKNOWN'),
+    JSON.stringify(overrunPreflight.codes))
   const linked = costAttributionOf({
     entries: [e(hp, 0.02), e(hs, 0.02), e(hl, 0.02), e(articleIdHashOf('fx', 'hold'), 0.04)],
     fateByKey, counts: { published: 1, scheduled: 1 }, cohortRuns: COHORT,
@@ -404,8 +532,12 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 🔴 옛 장부 $0.939 만 → legacy $0.939 · 결과당 비용 모름(null)',
     legacyOnly !== null && Math.abs(legacyOnly.legacyUsd - 0.939) < 1e-12 && legacyOnly.usdPerSlotValidResult === null, JSON.stringify(legacyOnly))
   const legacyFacts: PreflightFacts = {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: 5,
-    readyCohort: { sources: 160, published: 5, lost: 0, scheduled: 0, unknown: 9, usdPerSlotValidResult: legacyOnly?.usdPerSlotValidResult ?? null },
+    readyCohort: {
+      sources: 160, published: 5, lost: 0, scheduled: 0, unknown: 9,
+      usdPerSlotValidResult: legacyOnly?.usdPerSlotValidResult ?? null, trialCost: null,
+    },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
@@ -454,7 +586,17 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 🔴 **실제 정산 $0.03 > 추정 예약 $0.01 (overran) — 정산 계약 그대로 · 분자는 실제 $0.03**',
     over.status === 'settled' && over.overran && over.settledUsd === 0.03 && cOver !== null && Math.abs((cOver.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12)
   const unkV = judgeNextPreflight('d5', {
-    slotValidOpportunities: 5, readyCohort: { sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: cUu?.usdPerSlotValidResult ?? null },
+    proofKstDate: '2026-11-05',
+    slotValidOpportunities: 5, readyCohort: {
+      sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0,
+      usdPerSlotValidResult: cUu?.usdPerSlotValidResult ?? null,
+      trialCost: cUu === null ? null : {
+        settledRequests: cUu.settledRequests, usageUnknownRequests: cUu.usageUnknownRequests,
+        overrunRequests: cUu.trialOverrunRequests,
+        ineligibleRequests: cUu.trialIneligibleRequests,
+        riskUsdPerSlotValidResult: cUu.trialRiskUsdPerSlotValidResult,
+      },
+    },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }, RUNNER_GRID)
@@ -468,10 +610,12 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const trialCostOf = (c: NonNullable<typeof liveCost>) => ({
     settledRequests: c.settledRequests,
     usageUnknownRequests: c.usageUnknownRequests,
-    ineligibleOpenRequests: c.trialIneligibleOpenRequests,
+    overrunRequests: c.trialOverrunRequests,
+    ineligibleRequests: c.trialIneligibleRequests,
     riskUsdPerSlotValidResult: c.trialRiskUsdPerSlotValidResult,
   })
   const trialVerdict = (cost: NonNullable<typeof liveCost>, cap = 0.5) => judgeNextPreflight('d5', {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: 5,
     readyCohort: {
       sources: 10, published: 3, lost: 0, scheduled: 0, unknown: 0,
@@ -484,7 +628,7 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const liveTrial = liveCost === null ? null : trialVerdict(liveCost)
   check('🟢 제한 trial — 정산 34 + usageUnknown 1(예약 양수) · 비율 97.1% · 위험액 D5 상한 안 → PASS + 명시 경고',
     liveCost !== null && liveCost.usdPerSlotValidResult === null && liveCost.settledRequests === 34
-    && liveCost.usageUnknownRequests === 1 && liveCost.trialIneligibleOpenRequests === 0
+    && liveCost.usageUnknownRequests === 1 && liveCost.trialIneligibleRequests === 0
     && liveTrial?.verdict === 'PASS' && liveTrial.warnings.includes('SUPPLY_COST_TRIAL_RISK')
     && !liveTrial.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify({ liveCost, liveTrial }))
   const tooSmall = costAttributionOf({
@@ -496,14 +640,14 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     entries: [...liveSettled, liveUnknown, { ...liveUnknown, attemptId: 'u2' }], fateByKey,
     counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
-  check('🔴 usageUnknown 2건은 제한 trial 불가 → SUPPLY_COST_UNKNOWN',
+  check('🔴 정산 34 + usageUnknown 2는 정산 비율 95% 미만 → SUPPLY_COST_UNKNOWN',
     twoUnknown !== null && trialVerdict(twoUnknown).codes.includes('SUPPLY_COST_UNKNOWN'))
   const noReservationTrial = costAttributionOf({
     entries: [...liveSettled, { ...liveUnknown, reservedUsd: null }], fateByKey,
     counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
   check('🔴 양수 예약 없는 usageUnknown은 위험 envelope를 만들지 않는다 → SUPPLY_COST_UNKNOWN',
-    noReservationTrial !== null && noReservationTrial.trialIneligibleOpenRequests === 1
+    noReservationTrial !== null && noReservationTrial.trialIneligibleRequests === 1
     && trialVerdict(noReservationTrial).codes.includes('SUPPLY_COST_UNKNOWN'))
   check('🔴 제한 trial 위험액이 공급 상한을 넘으면 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
     liveCost !== null && trialVerdict(liveCost, 0.1).codes.includes('SUPPLY_COST_SHORT'))
@@ -515,16 +659,24 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 3 }, cohortRuns: COHORT,
   })
   const currentShape = judgeNextPreflight('d5', {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: 5,
     readyCohort: {
       sources: 42, published: 1, lost: 1, scheduled: 3, unknown: 4,
       usdPerSlotValidResult: currentShapeCost?.usdPerSlotValidResult ?? null,
+      trialCost: currentShapeCost === null ? null : {
+        settledRequests: currentShapeCost.settledRequests,
+        usageUnknownRequests: currentShapeCost.usageUnknownRequests,
+        overrunRequests: currentShapeCost.trialOverrunRequests,
+        ineligibleRequests: currentShapeCost.trialIneligibleRequests,
+        riskUsdPerSlotValidResult: currentShapeCost.trialRiskUsdPerSlotValidResult,
+      },
     },
     latencyP50H: 57.14, latencyP90H: 70.59, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }, RUNNER_GRID)
-  check('🟢 운영 모양 — 전체 $0.220191 ÷ 확인 결과 4 × D5 = $0.27523875, 비용 UNKNOWN·SHORT 아님',
+  check('🟢 운영 모양 표본 5건 — 전부 정산·귀속 완전·예산 안이면 clean 비용 PASS',
     currentShapeCost !== null && Math.abs((currentShapeCost.usdPerSlotValidResult ?? 0) - 0.05504775) < 1e-12
     && !currentShape.codes.includes('SUPPLY_COST_UNKNOWN') && !currentShape.codes.includes('SUPPLY_COST_SHORT'),
     JSON.stringify({ cost: currentShapeCost, verdict: currentShape }))

@@ -1567,7 +1567,11 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
   // 스냅샷(생성 가능 원천의 증거) → preflight 기회 — 같은 변환(`sourceOpportunitiesOf`)
   const slots = slotTimesOn('2026-09-21', profileOf('d3'))
   const facts = (opps: number): PreflightFacts => ({
-    slotValidOpportunities: opps, readyCohort: { sources: 30, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.02 },
+    proofKstDate: '2026-11-05',
+    slotValidOpportunities: opps, readyCohort: {
+      sources: 30, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.02,
+      trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.02 },
+    },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',

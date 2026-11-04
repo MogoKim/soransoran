@@ -88,17 +88,14 @@ async function evidenceFor(prisma: PrismaClient, i: {
     const c = readCostSignals(new Date(`${i.kstDate}T12:00:00+09:00`))
     side = {
       cost: [
-        { name: '공급 장부', health: c.supplyLedger.health },
-        { name: '댓글 장부', health: c.commentLedger.health },
-        { name: '감사 장부', health: c.auditLedger.health },
+        { lane: 'supply', name: '공급 장부', health: c.supplyLedger.health },
+        { lane: 'comment', name: '댓글 장부', health: c.commentLedger.health },
+        { lane: 'audit', name: '감사 장부', health: c.auditLedger.health },
       ],
       // 🔴 과거 증명은 그날의 불변 공급 회차 기록만 쓴다. 지금 launchd health 는 오늘 브레이크에만 들어간다.
       errors: proofDaySupplyHealth(readProcessRuns(), i.kstDate),
-      /**
-       * 🔴 §3.4 — proof-day 관련 natural supply 미상 수를 명시적으로 넘긴다 (2026-10-16 D5 보정 B).
-       *    `relevantUsageUnknownCount` 가 KST 날짜 · stage · runKind·manual 제외 규칙으로 센 값이다.
-       */
-      supplyUsageUnknown: c.supplyUsageUnknownRelevant,
+      // §3.4 — 시행일 전 옛 판정과 시행일부터의 자연 proof 슬롯 비용 envelope를 한 입력으로 넘긴다.
+      supplyCostEvidence: c.supplyCostEvidence,
     }
   } catch (e) { log(`   ⬚ 그날 장부를 읽지 못했다 — ${(e as Error).name} (모름 = PASS 아님)`) }
   return judgeStageEvidence(i.kstDate, i.stage, facts, side)

@@ -10,9 +10,10 @@
  *
  *   🔴 발행 시점 재검사는 그대로다 — `scheduled` 는 공개가 아니다. 발행 트랜잭션이 그 시각에 다시 판정한다.
  */
-import type { LedgerEntry } from './llm-ledger'
+import { isSupplyContentCostStage, ledgerDateOf, type LedgerEntry } from './llm-ledger'
 import { judgeSlotRelease, type ReleaseReason } from './source-slot-release'
 import { SUPPLY_JIT_CONTRACT } from './supply-intent'
+import { supplyCostRequestMetadataEligible, usesSupplyCostEnvelope } from './supply-cost-envelope'
 
 // ─────────────────────────────────────────────────────────
 // 🔴 대기 행 결말
@@ -131,7 +132,7 @@ export function pipelineRunOfLedger(ledgerRunId: string): string | null {
 }
 
 export type CostAttribution = {
-  /** 🔴 현재 JIT 계약(`supply-jit-v1`) 정산 합계 — 결과당 단가의 분자는 이것 하나다 */
+  /** 🔴 해당 날짜의 현재 JIT 계약 정산 합계 — 결과당 단가의 분자는 이것 하나다 */
   totalUsd: number
   /** 원천 해시가 없는 현재 계약 정산 — 🔴 0 이 아니면 결과당 단가를 내지 않는다 */
   unlinkedUsd: number
@@ -154,8 +155,10 @@ export type CostAttribution = {
   settledRequests: number
   /** 이 cohort 에 남은 usageUnknown 요청 수 — 장부 상태는 그대로 유지한다 */
   usageUnknownRequests: number
-  /** trial 위험 계산에 쓸 수 없는 열린 요청 수(예약 중 · 잘못된 회차/원천 · 양수 예약 없음) */
-  trialIneligibleOpenRequests: number
+  /** 실제 정산액이 예약액을 넘은 현재 계약 요청 수 */
+  trialOverrunRequests: number
+  /** trial 위험 계산에 쓸 수 없는 요청 수(계약·가격판·원천·회차·예약·예산 provenance 불완전) */
+  trialIneligibleRequests: number
   /**
    * 🔴 **제한 trial 위험 단가** — 정산액 + usageUnknown 예약액을 확인된 결과로 나눈 관측 envelope.
    * 실제 비용도 상한도 아니며 정산 단가를 대신하지 않는다. 다음 단계 trial 허용 여부에만 쓴다.
@@ -208,42 +211,99 @@ export function costAttributionOf(i: {
   let otherCohort = 0
   let settledRequests = 0
   let usageUnknownRequests = 0
-  let trialIneligibleOpenRequests = 0
+  let trialOverrunRequests = 0
+  let trialIneligibleRequests = 0
   for (const e of i.entries) {
-    if (e.stage === 'countTokens' || e.status === 'blocked') continue
-    const current = e.supplyContract === SUPPLY_JIT_CONTRACT
+    if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
+    const started = new Date(e.startedAt)
+    const startedDate = Number.isFinite(started.getTime()) ? ledgerDateOf(started) : null
+    const strictMetadata = startedDate !== null && usesSupplyCostEnvelope(startedDate)
+    const metadataEligible = !strictMetadata
+      || (startedDate !== null && supplyCostRequestMetadataEligible(e, startedDate))
+    // 시행일 이후는 날짜 계약 창이 권위다. 현재 상수로 과거 판을 다시 읽지 않는다.
+    const current = strictMetadata ? metadataEligible : e.supplyContract === SUPPLY_JIT_CONTRACT
     const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
+    const run = pipelineRunOfLedger(e.runId)
+    const belongsToCohort = run === null || i.cohortRuns.has(run)
+    const manuallyResolved = e.resolvedBy !== null && e.resolvedBy !== undefined
+    /**
+     * 예약 초과는 후보 귀속·metadata보다 먼저 보되, 이 preflight가 판정하는 cohort에만
+     * 귀속한다. 다른 회차의 전역 초과는 당일 whole-day 비용 브레이크가 맡는다. 둘을
+     * 섞으면 다음 날 파일에 함께 든 무관한 회차 하나가 목표 cohort를 거짓 차단한다.
+     * run을 읽지 못한 행은 이 cohort가 아니라고 증명할 수 없으므로 보수적으로 포함한다.
+     */
+    const overranReservation = strictMetadata
+      && e.status === 'settled'
+      && e.settledUsd !== null
+      && e.reservedUsd !== null
+      && Number.isFinite(e.reservedUsd)
+      && e.reservedUsd > 0
+      && e.settledUsd > e.reservedUsd
+    if (overranReservation && belongsToCohort) trialOverrunRequests += 1
+    // 사람이 제공사 사용량과 대조해 마감한 행은 whole-day 지출에는 남지만 자연 표본은 아니다.
+    // 행 날짜가 시행일 전이어도 대상 cohort에 속하면 지우거나 legacy로 완화하지 않고 UNKNOWN으로 닫는다.
+    if (manuallyResolved && belongsToCohort) {
+      trialIneligibleRequests += 1
+      if (e.status === 'settled' && e.settledUsd !== null) {
+        total += e.settledUsd
+        unlinked += e.settledUsd
+      } else {
+        open += 1
+        if (e.status === 'usageUnknown') usageUnknownRequests += 1
+        if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0) {
+          openReserved += e.reservedUsd
+        }
+      }
+      continue
+    }
     if (e.status !== 'settled' || e.settledUsd === null) {
       // 🔴 미정산도 같은 cohort 회차 것만 이 cohort 를 막는다 — 다른 회차 · legacy 는 보고만
-      const run = current ? pipelineRunOfLedger(e.runId) : null
-      if (!current) { legacyOpen += 1; continue }
+      if (!current) {
+        if (strictMetadata && belongsToCohort) {
+          open += 1
+          trialIneligibleRequests += 1
+          if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0) openReserved += e.reservedUsd
+        } else legacyOpen += 1
+        continue
+      }
       if (run !== null && !i.cohortRuns.has(run)) continue
       open += 1
       // 🔴 추정 예약액은 보고만 한다 — 실제 비용도 그 한계도 아니다(정산이 예약을 넘을 수 있다). 분자에 넣지 않는다
       const positiveReservation = e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0
       if (positiveReservation && e.reservedUsd !== null) openReserved += e.reservedUsd
       if (e.status === 'usageUnknown') usageUnknownRequests += 1
-      if (e.status !== 'usageUnknown' || run === null || key === null || !positiveReservation) trialIneligibleOpenRequests += 1
+      if (e.status !== 'usageUnknown' || run === null || key === null || !positiveReservation) trialIneligibleRequests += 1
       continue
     }
-    if (!current) { legacy += e.settledUsd; continue }
-    const run = pipelineRunOfLedger(e.runId)
+    if (!current) {
+      if (strictMetadata && belongsToCohort) {
+        total += e.settledUsd
+        unlinked += e.settledUsd
+        trialIneligibleRequests += 1
+      } else legacy += e.settledUsd
+      continue
+    }
     if (run === null) { unlinked += e.settledUsd; continue }
     if (!i.cohortRuns.has(run)) { otherCohort += e.settledUsd; continue }
     settledRequests += 1
     total += e.settledUsd
     if (key === null) { unlinked += e.settledUsd; continue }
+    if (overranReservation) {
+      unlinked += e.settledUsd
+      continue
+    }
     byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
   }
   const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
-  const trialRisk = unlinked === 0 && open > 0 && trialIneligibleOpenRequests === 0
+  const trialRisk = unlinked === 0 && open > 0 && trialIneligibleRequests === 0
     && total > 0 && results > 0
     ? (total + openReserved) / results
     : null
   return {
     totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved,
-    legacyOpenRequests: legacyOpen, settledRequests, usageUnknownRequests, trialIneligibleOpenRequests,
+    legacyOpenRequests: legacyOpen, settledRequests, usageUnknownRequests,
+    trialOverrunRequests, trialIneligibleRequests,
     trialRiskUsdPerSlotValidResult: trialRisk, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,

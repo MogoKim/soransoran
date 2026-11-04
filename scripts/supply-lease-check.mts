@@ -208,8 +208,10 @@ console.log('\n② 예산 판정 불변 — token · lease 표식은 예산 허�
   check('🔴 같은 시각 · 같은 라벨이면 lease · token 표식이 있어도 예산 판정(종류 · 몫 · 천장) 결과가 바이트 단위로 같다', same)
   const call = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
   const code = call.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  const tokenShadowUses = code.match(/\btokenShadow\b/g) ?? []
+  const tokenShadowSpreads = code.match(/\.\.\.tokenShadow,/g) ?? []
   check('🔴 장부 세션 — shadow 는 줄에 나란히 적기만 한다(판정 함수 · 보호 판정 인자에 들어가지 않는다)',
-    (code.match(/tokenShadow/g) ?? []).length === 3 && (code.match(/\.\.\.tokenShadow,/g) ?? []).length === 2
+    tokenShadowSpreads.length >= 2 && tokenShadowUses.length === tokenShadowSpreads.length + 1
     && !/protectAt\([^)]*tokenShadow|judgeSpend\(\{[^}]*tokenShadow/.test(code))
   const reserve = readFileSync('src/lib/supply-scheduled-reserve.ts', 'utf-8')
   check('🔴 예산 판정 정본이 token · lease 를 보지 않는다', !/run-token|runToken|supply-lease|LEASE_|SORAN_SUPPLY_RUN_TOKEN/.test(reserve))

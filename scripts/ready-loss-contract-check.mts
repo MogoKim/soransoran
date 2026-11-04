@@ -37,14 +37,22 @@ const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S
 /** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
 /** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 예정 0 · 모름 0 · 결과당 비용 $0.01(완전 연결) */
-const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
-  sources: RUNS, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.01, ...o,
-})
+const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
+  const usd = o.usdPerSlotValidResult === undefined ? 0.01 : o.usdPerSlotValidResult
+  return {
+    sources: RUNS, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: usd, ...o,
+    trialCost: o.trialCost === undefined ? (usd === null ? null : {
+      settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0,
+      riskUsdPerSlotValidResult: usd,
+    }) : o.trialCost,
+  }
+}
 /** 🔴 raw READY `raw` 건이 하루 용량 `cap` 이 되는 원천 수 */
 const sourcesFor = (raw: number, cap: number): number => Math.floor((raw * RUNS) / cap)
 
 /** 🔴 D3 → D5 preflight — target 5 · opportunities 5. 나머지 칸(비용 · Persona · 러너 · 지연)은 GREEN */
 const D5_FACTS = (o: Partial<PreflightFacts> = {}): PreflightFacts => ({
+  proofKstDate: '2026-11-05',
   slotValidOpportunities: 5, readyCohort: cohort(),
   latencyP50H: 20, latencyP90H: 40, contractValidPersonas: PERSONA_CANARY_FLOOR.d5,
   commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
@@ -147,9 +155,10 @@ console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 �
   check('🔴 처리량은 replenishmentOf 구간 하나 · 비용은 목표 × 결과당 비용 또는 제한 trial 위험 하나 — raw 단가 계산 없음',
     (judge.match(/[=(]\s*replenishmentOf\(/g) ?? []).length === 1
     && /judgeAgainst\(req, \(need\) => capacity >= need\)/.test(judge)
-    && /const proofBudget = supplyProofBudgetUsd\(facts\.supplyDailyUsdCap\)/.test(judge)
-    && /n \* perResult > proofBudget/.test(judge)
-    && /n \* trial\.riskUsdPerSlotValidResult! > supplyProofBudgetUsd\(facts\.supplyDailyUsdCap\)/.test(judge)
+    && /const proofBudget = facts\.proofKstDate === null[\s\S]*supplyCostProofBudgetUsd\(facts\.proofKstDate, facts\.supplyDailyUsdCap\)/.test(judge)
+    && /const riskUsd = perResult !== null && perResult > 0/.test(judge)
+    && /judgeSupplyCostEnvelope\(\{/.test(judge)
+    && /riskUsd,\s*budgetUsd: proofBudget/.test(judge)
     && !/rawUnit|supplyUsd\b/.test(judge))
 }
 

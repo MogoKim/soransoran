@@ -286,6 +286,39 @@ export type SettleHold = {
   reason: string
 }
 
+type SettleHoldRead = { hold: SettleHold | null; message: string | null }
+
+function readSettleHoldRecord(dir: string): SettleHoldRead {
+  const path = settleHoldPathOf(dir)
+  if (!existsSync(path)) return { hold: null, message: null }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown
+  } catch {
+    return { hold: null, message: `정산 보류 표식을 읽지 못했다 — ${path} 을 사람이 확인한다` }
+  }
+  if (typeof parsed !== 'object' || parsed === null
+    || typeof (parsed as Partial<SettleHold>).runId !== 'string'
+    || typeof (parsed as Partial<SettleHold>).attemptId !== 'string'
+    || typeof (parsed as Partial<SettleHold>).date !== 'string'
+    || !((parsed as Partial<SettleHold>).reservedUsd === null
+      || (typeof (parsed as Partial<SettleHold>).reservedUsd === 'number'
+        && Number.isFinite((parsed as Partial<SettleHold>).reservedUsd)))
+    || typeof (parsed as Partial<SettleHold>).at !== 'string'
+    || typeof (parsed as Partial<SettleHold>).reason !== 'string') {
+    return { hold: null, message: `정산 보류 표식을 읽지 못했다 — ${path} 을 사람이 확인한다` }
+  }
+  const hold = parsed as SettleHold
+  return {
+    hold,
+    message: [
+      `정산을 장부에 적지 못한 요청이 있다 (회차 ${String(hold.runId)} · ${String(hold.date)})`,
+      `사유 ${String(hold.reason)}`,
+      `🔴 유료 요청을 보류한다. 제공사 사용량과 대조한 뒤 ${path} 을 지우면 풀린다`,
+    ].join(' · '),
+  }
+}
+
 /**
  * 보류를 읽는다 — 🔴 **읽을 수 없으면 보류로 본다.**
  *
@@ -293,19 +326,19 @@ export type SettleHold = {
  *    모르면 멈춘다는 규칙을 여기에도 적용한다.
  */
 export function readSettleHold(dir: string): string | null {
-  const path = settleHoldPathOf(dir)
-  if (!existsSync(path)) return null
-  let hold: SettleHold
-  try {
-    hold = JSON.parse(readFileSync(path, 'utf-8')) as SettleHold
-  } catch {
-    return `정산 보류 표식을 읽지 못했다 — ${path} 을 사람이 확인한다`
-  }
-  return [
-    `정산을 장부에 적지 못한 요청이 있다 (회차 ${String(hold.runId)} · ${String(hold.date)})`,
-    `사유 ${String(hold.reason)}`,
-    `🔴 유료 요청을 보류한다. 제공사 사용량과 대조한 뒤 ${path} 을 지우면 풀린다`,
-  ].join(' · ')
+  return readSettleHoldRecord(dir).message
+}
+
+/**
+ * 과거 운영 증거를 읽을 때는 그 날짜 뒤에 생긴 보류로 소급 오염시키지 않는다.
+ * 반대로 대상 날짜 이전부터 풀리지 않은 보류는 그날도 유료 요청을 막았으므로 그대로 보류다.
+ * 깨진 표식이나 날짜는 비교할 수 없으므로 전 날짜에서 fail-closed 한다.
+ */
+export function readSettleHoldAsOf(dir: string, ledgerDate: string): string | null {
+  const r = readSettleHoldRecord(dir)
+  if (r.message === null || r.hold === null) return r.message
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ledgerDate) || !/^\d{4}-\d{2}-\d{2}$/.test(r.hold.date)) return r.message
+  return r.hold.date <= ledgerDate ? r.message : null
 }
 
 /**

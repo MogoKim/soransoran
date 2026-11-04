@@ -28,7 +28,9 @@ import {
 import { runTokenShadowFromEnv } from './supply-lease.mjs'
 import { shadowTagOf } from '../../src/lib/supply-run-token'
 import {
-  SCHEDULED_COST_LOOKBACK_DAYS, missingTodayLedgerVerdict, supplySpendProtectAt, type SupplyRunKind,
+  LAUNCHD_LABEL_ENV, SCHEDULED_COST_LOOKBACK_DAYS, SUPPLY_PROCESS_LAUNCHD_LABEL,
+  activeSlotAt, missingTodayLedgerVerdict, supplyRunKindOf,
+  supplySpendProtectAt, type SupplyRunKind,
 } from '../../src/lib/supply-scheduled-reserve'
 import { PRICING_VERSION, costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
@@ -41,10 +43,12 @@ import {
   THINKING_LEVEL_UNSUPPORTED, callProvider, countInputTokens, failure, type LlmResponse, type ProviderModel,
 } from './voice-m3-provider.mjs'
 import { thinkingLevelVerdict, type ThinkingLevel } from '../../src/lib/provider-thinking-contract'
+import { kstDateString } from '../../src/lib/release-canary'
 import { writeSettleHold } from './llm-ledger-store.mjs'
 import { buildMessage, send } from './slack-notify.mjs'
 import { apiModelIdFor } from './voice-m3-contract.mjs'
 import { runClockFrom } from './run-clock.mjs'
+import { usesSupplyCostEnvelope } from '../../src/lib/supply-cost-envelope'
 
 /** 🔴 차단된 요청이 돌려주는 오류 코드 머리 — 호출부가 provider 오류와 구분할 수 있게 한다 */
 export const LEDGER_BLOCKED = 'LEDGER_BLOCKED'
@@ -418,6 +422,16 @@ export class SupplyLlmSession {
   private readonly pastDays = new Map<string, LedgerRead>()
   /** 🔴 세션을 만든 벽시계 시각 — 회차 시작 시각의 근거(잠·늦은 복귀 규칙) */
   private readonly createdAt: Date
+  /**
+   * 🔴 **자연 회차가 출발한 슬롯.** 세션 생성 시각이 아니라 부모 `SORAN_RUN_AT` 을
+   *    포함한 최초 회차 시각으로 한 번 고정한다. 값이 있으면 늦게 생성된 자식도
+   *    수동 실행으로 강등하지 않고, 원래 슬롯 창 밖에서는 provider 호출을 못 한다.
+   */
+  private readonly scheduledRunSlot: string | null
+  /** 부모가 회차 시각을 주었는데 읽을 수 없으면 손 실행으로 우회하지 않고 모든 유료 호출을 막는다. */
+  private readonly scheduledRunOriginError: string | null
+  /** 비용 envelope 시행일 전에는 새 producer 경계를 켜지 않아 한 KST 일자에 옛·새 실행을 섞지 않는다. */
+  private readonly scheduledWindowGuardActive: boolean
   /** 마지막 판정의 실행 종류 — 사람이 읽는 줄에만 쓴다 */
   private lastKind: ProtectDecision | null = null
   /** 🔴 이 세션의 표식 — pid 가 재사용돼도 갈린다 */
@@ -455,6 +469,29 @@ export class SupplyLlmSession {
     this.supply = cfg.dir === undefined
       || sameRealDir(this.dir, defaultLedgerDir())
       || (canonical !== null && sameRealDir(this.dir, canonical))
+    const runStartedAt = runStartedAtOf(process.env, this.createdAt)
+    const rawParentRunAt = (process.env.SORAN_RUN_AT ?? '').trim()
+    // 가짜 provider 시험은 보호 판정의 벽시계를 고정한다. 부모 회차 시각이 없는 시험에 한해
+    // 같은 고정 시각을 세션 출발 시각으로 써야 실제 실행 시각에 따라 fixture가 흔들리지 않는다.
+    // 부모 SORAN_RUN_AT이 있으면 그 값이 계속 우선하므로 늦은 자연 자식 반례는 느슨해지지 않는다.
+    const originAt = rawParentRunAt === '' && SUPPLY_PROTECT_TEST_SEAM.clock !== null
+      ? SUPPLY_PROTECT_TEST_SEAM.clock()
+      : runStartedAt
+    // 시행일 판정은 날짜별 장부 파일 선택과 별개다. 요청 장부 날짜는 아래 `call()`에서
+    // `startedAt`으로 딱 한 번 고정하고, 여기서는 세션 기원의 KST 날짜만 읽는다.
+    this.scheduledWindowGuardActive = usesSupplyCostEnvelope(kstDateString(originAt ?? this.createdAt))
+    const originKind = this.supply && originAt !== null
+      ? supplyRunKindOf(process.env, originAt, undefined, undefined, originAt)
+      : null
+    const launchdSupplyRun = (process.env[LAUNCHD_LABEL_ENV] ?? '').trim() === SUPPLY_PROCESS_LAUNCHD_LABEL
+    // 격리 표식은 가짜 provider를 코드로 설치한 시험 프로세스만 켤 수 있다(env로 켤 수 없음).
+    // 그 fixture는 실제 launchd 기원이 아니므로 늦은 launchd 차단을 적용하지 않는다.
+    this.scheduledRunOriginError = this.supply && rawParentRunAt !== '' && runStartedAt === null
+      ? '부모 자연 회차의 SORAN_RUN_AT 을 읽지 못했다 — 손 실행으로 강등하지 않고 유료 요청을 막는다'
+      : this.supply && !ledgerIsolationActive() && launchdSupplyRun && originKind?.kind !== 'scheduled'
+        ? '공급 launchd 회차가 자연 슬롯 창 밖에서 시작했다 — 수동 실행으로 강등하지 않고 다음 자연 슬롯이 이어받는다'
+        : null
+    this.scheduledRunSlot = originKind?.kind === 'scheduled' ? originKind.slot : null
     // 🔴 알림 — 주입이 이긴다. 없으면 공급 장부만 운영 알림으로 보낸다(시험 · 다른 장부는 보내지 않는다)
     this.notify = cfg.notify ?? (this.supply ? SLACK_USAGE_UNKNOWN_NOTIFY : null)
     this.protectAt = this.supply
@@ -549,6 +586,25 @@ export class SupplyLlmSession {
     this.t.blockedBy.set(code, (this.t.blockedBy.get(code) ?? 0) + 1)
   }
 
+  /** 자연 회차가 원래 슬롯의 45분 창 안에 있는지 요청 경계마다 같은 방식으로 본다. */
+  private scheduledWindowClosedReason(at: Date): string | null {
+    if (!this.scheduledWindowGuardActive) return null
+    if (this.scheduledRunOriginError !== null) return this.scheduledRunOriginError
+    if (this.scheduledRunSlot === null || activeSlotAt(at)?.label === this.scheduledRunSlot) return null
+    return `자연 회차 ${this.scheduledRunSlot} 창이 끝났다 — 새 유료 요청은 다음 자연 슬롯이 이어받는다`
+  }
+
+  /**
+   * 요청의 끝을 장부에 먼저 적고 열린 예약을 지우는 유일한 출구다.
+   * 끝 기록이 실패하면 `clearOpen`에 닿지 않아 예약이 복구 증거로 남는다.
+   */
+  private writeTerminalAndClearOpen(path: string, attemptId: string, entry: LedgerEntry): void {
+    this.io.withLock(this.dir, () => {
+      this.write(path, entry)
+      this.io.clearOpen(this.dir, attemptId)
+    })
+  }
+
   /**
    * 🔴 **요청 하나.** 계산 → 예약 → 생성 → 정산이 전부 여기서 일어난다.
    *
@@ -595,6 +651,23 @@ export class SupplyLlmSession {
     }
     const startedAt = this.now()
     /**
+     * 🔴 **자연 회차의 꼬리 유료 호출을 시작하지 않는다.**
+     *
+     *    과거에는 08:15 자연 회차가 09:00 이후까지 실행되면 이후 요청을 `manual` 로
+     *    재분류해 남은 예산으로 보냈다. 그 요청은 증명 슬롯 밖이라 Dn 재료가 되지 않으면서
+     *    비용과 usageUnknown 만 만들었다. 자연 회차는 자기 슬롯 창 안에서만 새 요청을 시작하고,
+     *    부족분은 다음 자연 슬롯이 이어받는다. 무료 사전 계산과 장부 write보다 먼저 막는다.
+     */
+    const startWindowClosed = this.scheduledWindowClosedReason(startedAt)
+    if (startWindowClosed !== null) {
+      this.bump('SCHEDULED_WINDOW_CLOSED')
+      return {
+        ...blockedResponse('SCHEDULED_WINDOW_CLOSED', startWindowClosed),
+        settledUsd: null,
+        settlementRecorded: false,
+      }
+    }
+    /**
      * 🔴 **날짜는 요청을 시작한 때로 고정한다.** 자정을 넘겨 응답이 와도 정산은
      *    예약과 **같은 파일**에 적힌다. 다른 날에 적으면 그날 예약이 영원히 안 풀린다.
      */
@@ -610,6 +683,16 @@ export class SupplyLlmSession {
       timeoutMs: input.timeoutMs,
     })
     this.t.countTokens += 1
+    // countTokens는 무료지만 비동기다. 그 사이 창이 닫혔으면 장부 예약과 provider 호출로 넘어가지 않는다.
+    const afterCountWindowClosed = this.scheduledWindowClosedReason(this.now())
+    if (afterCountWindowClosed !== null) {
+      this.bump('SCHEDULED_WINDOW_CLOSED')
+      return {
+        ...blockedResponse('SCHEDULED_WINDOW_CLOSED', afterCountWindowClosed),
+        settledUsd: null,
+        settlementRecorded: false,
+      }
+    }
     const seq = this.t.paid + this.t.blocked
     try {
       this.io.withLock(this.dir, () => {
@@ -753,6 +836,44 @@ export class SupplyLlmSession {
       return { ...blockedResponse(verdict.code, verdict.reason), settledUsd: null, settlementRecorded: false }
     }
 
+    /**
+     * 비동기 countTokens와 장부 잠금 사이에 창이 닫힐 수 있다. provider 직전 다시 보고,
+     * 닫혔다면 예약을 blocked 종결 줄로 접은 뒤 열린 예약을 지운다. 이 경계 뒤에는
+     * await가 없으므로 같은 JS turn에서 곧바로 provider 함수로 들어간다.
+     */
+    const providerAt = this.now()
+    const providerWindowClosed = this.scheduledWindowClosedReason(providerAt)
+    if (providerWindowClosed !== null) {
+      try {
+        this.writeTerminalAndClearOpen(path, attemptId, {
+          ...this.base(attemptId, input.stage, input, startedAt, seq),
+          ...(tag ?? {}),
+          ...budget,
+          ...tokenShadow,
+          status: 'blocked',
+          blockCode: 'SCHEDULED_WINDOW_CLOSED',
+          countedInputTokens: counted.inputTokens,
+          reservedUsd: null,
+          endedAt: providerAt.toISOString(),
+          errorCode: `${LEDGER_BLOCKED}:SCHEDULED_WINDOW_CLOSED`,
+        })
+      } catch (e) {
+        this.bump('LEDGER_ERROR')
+        return {
+          ...blockedResponse('LEDGER_ERROR',
+            `닫힌 자연 회차 예약을 종결하지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`),
+          settledUsd: null,
+          settlementRecorded: false,
+        }
+      }
+      this.bump('SCHEDULED_WINDOW_CLOSED')
+      return {
+        ...blockedResponse('SCHEDULED_WINDOW_CLOSED', providerWindowClosed),
+        settledUsd: null,
+        settlementRecorded: false,
+      }
+    }
+
     // ── ④ 🔴 여기서만 유료 요청이 나간다 ──
     this.t.paid += 1
     this.t.reservedUsd += verdict.reservedUsd
@@ -789,32 +910,25 @@ export class SupplyLlmSession {
      *    🔴 그래서 **줄을 적고 열린 예약을 지운 뒤**에만 센다.
      */
     try {
-      this.io.withLock(this.dir, () => {
-        this.write(path, {
-          ...this.base(attemptId, input.stage, input, startedAt, seq),
-          // 🔴 정산 줄도 같은 표식을 싣는다 — 접을 때 이 줄이 이기므로, 빠뜨리면 실측에서 사라진다
-          ...(tag ?? {}),
-          ...budget,
-          ...tokenShadow,
-          status: settled.status,
-          blockCode: null,
-          countedInputTokens: counted.inputTokens,
-          reservedUsd: verdict.reservedUsd,
-          inputTokens: res.usageKnown ? res.inputTokens : null,
-          outputTokens: res.usageKnown ? res.outputTokens : null,
-          cacheWriteTokens: res.cacheWriteTokens,
-          cacheReadTokens: res.cacheReadTokens,
-          usageKeys: res.usageKeys,
-          usageNumbers: res.usageNumbers ?? null,
-          settledUsd: settled.settledUsd,
-          endedAt: this.now().toISOString(),
-          errorCode: res.errorCode,
-        })
-        /**
-         * 🔴 **순서를 지킨다** — 끝을 장부에 적은 뒤에 예약을 지운다.
-         *    거꾸로 하면 끝을 못 적었는데 목록에서 사라져 아무도 모르게 된다.
-         */
-        this.io.clearOpen(this.dir, attemptId)
+      this.writeTerminalAndClearOpen(path, attemptId, {
+        ...this.base(attemptId, input.stage, input, startedAt, seq),
+        // 🔴 정산 줄도 같은 표식을 싣는다 — 접을 때 이 줄이 이기므로, 빠뜨리면 실측에서 사라진다
+        ...(tag ?? {}),
+        ...budget,
+        ...tokenShadow,
+        status: settled.status,
+        blockCode: null,
+        countedInputTokens: counted.inputTokens,
+        reservedUsd: verdict.reservedUsd,
+        inputTokens: res.usageKnown ? res.inputTokens : null,
+        outputTokens: res.usageKnown ? res.outputTokens : null,
+        cacheWriteTokens: res.cacheWriteTokens,
+        cacheReadTokens: res.cacheReadTokens,
+        usageKeys: res.usageKeys,
+        usageNumbers: res.usageNumbers ?? null,
+        settledUsd: settled.settledUsd,
+        endedAt: this.now().toISOString(),
+        errorCode: res.errorCode,
       })
       // 🔴 여기까지 왔다 = 줄이 적혔고 열린 예약도 풀렸다. 그때만 센다
       if (settled.status === 'usageUnknown') this.t.usageUnknown += 1

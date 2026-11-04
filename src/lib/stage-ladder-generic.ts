@@ -27,10 +27,11 @@ import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publis
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { auditTarget } from './auto-ready-v2'
 import { PERSONA_CANARY_FLOOR } from './d100-capacity'
-import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN, supplyProofBudgetUsd } from './supply-schedule-contract'
+import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
 import type { Health } from './ops-status'
 import type { StageBlock } from './stage-decision-contract'
 import type { EvidenceVerdictKind } from './stage-evidence'
+import { judgeSupplyCostEnvelope, supplyCostProofBudgetUsd } from './supply-cost-envelope'
 
 export { HIGHEST_RUNTIME_STAGE, isRuntimeStage }
 
@@ -204,6 +205,8 @@ const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
  * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다(하나라도 모르면 열지 않는다).
  */
 export type PreflightFacts = {
+  /** 다음 시험이 실제로 열릴 KST 날짜 — 날짜별 비용 계약 선택에 쓴다. 모르면 열지 않는다. */
+  proofKstDate: string | null
   /**
    * 🔴 **다음 증명일 전체 슬롯 중 slot-valid 기회로 덮이는 슬롯 수** — 정본 `judgeSlotRelease` 가 **그 슬롯 시각에**
    *    eligible 로 본 READY 와, 아직 초안이 없는 원천 기회(측정 수율로 할인)를 슬롯에 짝지은 수.
@@ -270,17 +273,14 @@ export type ReadyCohortFact = {
    */
   usdPerSlotValidResult: number | null
   /** 실제 단가를 만들지 않고, 다음 단계 제한 trial 에만 쓰는 미상 비용 위험 표본 */
-  trialCost?: {
+  trialCost: {
     settledRequests: number
     usageUnknownRequests: number
-    ineligibleOpenRequests: number
+    overrunRequests: number
+    ineligibleRequests: number
     riskUsdPerSlotValidResult: number | null
   } | null
 }
-
-export const SUPPLY_TRIAL_MIN_SETTLED_REQUESTS = 20
-export const SUPPLY_TRIAL_MAX_USAGE_UNKNOWN_REQUESTS = 1
-export const SUPPLY_TRIAL_MIN_SETTLED_RATIO = 0.95
 export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_TRIAL_RISK'] as const
 export type PreflightWarningCode = (typeof PREFLIGHT_WARNING_CODES)[number]
 
@@ -429,37 +429,45 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
    *   🔴 완전히 연결된 현재 계약 비용이 없으면 모른다 — raw READY 단가로 대신하지 않는다.
    */
   const perResult = c === null ? null : c.usdPerSlotValidResult
-  if (perResult !== null && perResult > 0) { counts.usdPerSlotValidResult = perResult; counts.supplyDailyUsdNeeded = n * perResult }
-  if (facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
-  else if (perResult !== null && perResult > 0) {
-    const proofBudget = supplyProofBudgetUsd(facts.supplyDailyUsdCap)
-    counts.supplyProofBudgetUsd = proofBudget
-    if (n * perResult > proofBudget) codes.add('SUPPLY_COST_SHORT')
-  } else {
-    const trial = c?.trialCost ?? null
-    const observed = trial === null ? 0 : trial.settledRequests + trial.usageUnknownRequests
-    const settledRatio = observed > 0 && trial !== null ? trial.settledRequests / observed : 0
-    if (trial !== null) {
-      counts.supplySettledRequests = trial.settledRequests
-      counts.supplyUsageUnknownRequests = trial.usageUnknownRequests
-      counts.supplyTrialIneligibleOpenRequests = trial.ineligibleOpenRequests
-      counts.supplySettledRatio = settledRatio
-      if (trial.riskUsdPerSlotValidResult !== null) {
-        counts.supplyTrialRiskUsdPerSlotValidResult = trial.riskUsdPerSlotValidResult
-        counts.supplyTrialRiskUsdNeeded = n * trial.riskUsdPerSlotValidResult
-      }
+  const trial = c?.trialCost ?? null
+  const observed = trial === null ? 0 : trial.settledRequests + trial.usageUnknownRequests
+  const settledRatio = observed > 0 && trial !== null ? trial.settledRequests / observed : 0
+  if (perResult !== null && perResult > 0) {
+    counts.usdPerSlotValidResult = perResult
+    counts.supplyDailyUsdNeeded = n * perResult
+  }
+  if (trial !== null) {
+    counts.supplySettledRequests = trial.settledRequests
+    counts.supplyUsageUnknownRequests = trial.usageUnknownRequests
+    counts.supplyTrialIneligibleRequests = trial.ineligibleRequests
+    counts.supplySettledRatio = settledRatio
+    if (trial.riskUsdPerSlotValidResult !== null) {
+      counts.supplyTrialRiskUsdPerSlotValidResult = trial.riskUsdPerSlotValidResult
+      counts.supplyTrialRiskUsdNeeded = n * trial.riskUsdPerSlotValidResult
     }
-    const boundedTrial = trial !== null
-      && trial.settledRequests >= SUPPLY_TRIAL_MIN_SETTLED_REQUESTS
-      && trial.usageUnknownRequests > 0
-      && trial.usageUnknownRequests <= SUPPLY_TRIAL_MAX_USAGE_UNKNOWN_REQUESTS
-      && trial.ineligibleOpenRequests === 0
-      && settledRatio >= SUPPLY_TRIAL_MIN_SETTLED_RATIO
-      && trial.riskUsdPerSlotValidResult !== null
-      && trial.riskUsdPerSlotValidResult > 0
-    if (!boundedTrial) codes.add('SUPPLY_COST_UNKNOWN')
-    else if (n * trial.riskUsdPerSlotValidResult! > supplyProofBudgetUsd(facts.supplyDailyUsdCap)) codes.add('SUPPLY_COST_SHORT')
-    else warnings.add('SUPPLY_COST_TRIAL_RISK')
+  }
+  if (facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
+  else {
+    const proofBudget = facts.proofKstDate === null
+      ? null
+      : supplyCostProofBudgetUsd(facts.proofKstDate, facts.supplyDailyUsdCap)
+    if (proofBudget !== null) counts.supplyProofBudgetUsd = proofBudget
+    const riskUsd = perResult !== null && perResult > 0
+      ? n * perResult
+      : trial?.riskUsdPerSlotValidResult === null || trial?.riskUsdPerSlotValidResult === undefined
+        ? null
+        : n * trial.riskUsdPerSlotValidResult
+    const envelope = trial === null ? null : judgeSupplyCostEnvelope({
+      settledRequests: trial.settledRequests,
+      usageUnknownRequests: trial.usageUnknownRequests,
+      overrunRequests: trial.overrunRequests,
+      ineligibleRequests: trial.ineligibleRequests,
+      riskUsd,
+      budgetUsd: proofBudget,
+    })
+    if (envelope === null || envelope.kind === 'unknown') codes.add('SUPPLY_COST_UNKNOWN')
+    else if (envelope.kind === 'bad') codes.add('SUPPLY_COST_SHORT')
+    else if (envelope.kind === 'bounded') warnings.add('SUPPLY_COST_TRIAL_RISK')
   }
   if (requirementUnknown) codes.add('READY_REQUIREMENT_UNKNOWN')
   // 러너 건강

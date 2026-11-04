@@ -96,7 +96,16 @@ const D0 = '2026-09-29'
 const addDays = (d: string, n: number): string => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10)
 const at0700 = (d: string): string => new Date(`${d}T07:00:00+09:00`).toISOString()
 const SIDE_OK: EvidenceSideSignals = {
-  cost: [{ name: '공급', health: 'ok' }, { name: '댓글', health: 'ok' }, { name: '감사', health: 'ok' }], errors: 'ok',
+  cost: [
+    { lane: 'supply', name: '공급', health: 'ok' },
+    { lane: 'comment', name: '댓글', health: 'ok' },
+    { lane: 'audit', name: '감사', health: 'ok' },
+  ], errors: 'ok',
+  supplyCostEvidence: {
+    legacyUsageUnknownRequests: 0,
+    wholeDayCriticalHealth: 'ok',
+    envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
+  },
 }
 
 // ─────────────────────────────────────────────────────────
@@ -364,7 +373,7 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   for (const date of SAMPLE_DATES.slice(1)) writeDay(twoDays, date, { inflow0815: ids(`${date}-new`, 17) })
   check('🔴 표본 3일 중 하루가 통째로 없으면(기준선 없음) UNKNOWN', futureOf(twoDays) === null)
   check('🔴 하한 수율을 모르거나 kstDate·now 날짜가 어긋나면 UNKNOWN',
-    futureOf(overlap, { y: null }) === null && futureOf(overlap, { kstDate: '2026-11-04' }) === null)
+    futureOf(overlap, { y: null }) === null && futureOf(overlap, { kstDate: '2026-11-05' }) === null)
 
   // ⑤ M2 — 끝난 failed 회차도 snapshot·marker 가 온전하면 표본이다 · running · marker 손상은 모름
   const runPath = (dir: string, date: string, h: number, m: number): string =>
@@ -416,7 +425,7 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
     futureOf(noSnapshot('nosnap-unknown', { status: 'partial' }), { ready: earlyOnly('ready', 3) }) === null)
   check('🔴 M2 — done 이어도 completedAt 이 깨졌거나 판정 시각 뒤면 snapshot 없는 회차는 UNKNOWN',
     futureOf(noSnapshot('nosnap-bad-completed', { completedAt: 'not-a-date' }), { ready: earlyOnly('ready', 3) }) === null
-    && futureOf(noSnapshot('nosnap-future-completed', { completedAt: '2026-11-04T00:00:00.000Z' }), { ready: earlyOnly('ready', 3) }) === null)
+    && futureOf(noSnapshot('nosnap-future-completed', { completedAt: '2026-11-05T00:00:00.000Z' }), { ready: earlyOnly('ready', 3) }) === null)
 
   // ⑥ 기준선 provenance — 07:00 판정의 기준선은 그날 06:15 자연 proof 슬롯 하나다
   /** 표본일 전날 22:15 자연 회차 — 06:15 이 없을 때 앞판이 내려가 읽던 "전날 밤" 기준선 */
@@ -452,11 +461,19 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
     }) === null)
   for (const d of dirs) rmSync(d, { recursive: true, force: true })
 }
-const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => ({
-  sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
-  usdPerSlotValidResult: SUPPLY_USD_PER_READY, ...o,
-})
+const cohortFor = (s: GenericStage, o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
+  const usd = o.usdPerSlotValidResult === undefined ? SUPPLY_USD_PER_READY : o.usdPerSlotValidResult
+  return {
+    sources: RUNS, published: genericDailyTarget(s), lost: 0, scheduled: 0, unknown: 0,
+    usdPerSlotValidResult: usd, ...o,
+    trialCost: o.trialCost === undefined ? (usd === null ? null : {
+      settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0,
+      riskUsdPerSlotValidResult: usd,
+    }) : o.trialCost,
+  }
+}
 const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFacts => ({
+  proofKstDate: '2026-11-05',
   slotValidOpportunities: genericDailyTarget(s), readyCohort: cohortFor(s), latencyP50H: 20, latencyP90H: 60,
   contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
@@ -464,7 +481,7 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
   supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
 })
 const D20_TRANSITION = judgeNextPreflight('d20', factsFor('d20', {
-    readyCohort: { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 },
+    readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
   }), GRID)
 check('🔴 D20 전환일 실측 — READY 21/원천 95 × 20원천 × 당일 5회 = 용량 22 · 최대 필요 21을 채운다',
   D20_TRANSITION.counts.readyCapacity === 22 && D20_TRANSITION.counts.readyNeededMax === 21
@@ -474,10 +491,10 @@ check('🔴 D20 전환일 반례 — 같은 실측에서 묶음 18이면 용량 
   && (readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) ?? 0) < (D20_TRANSITION.counts.readyNeededMax ?? 0))
 check('🔴 비용 변동 경계 — 결과당 실측 비용이 30% 상승하면 D20은 $1.20 증명 예산을 넘어 자동으로 열리지 않는다',
   judgeNextPreflight('d20', factsFor('d20', {
-    readyCohort: {
+    readyCohort: cohortFor('d20', {
       sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1,
       usdPerSlotValidResult: 0.0502934 * 1.3,
-    },
+    }),
   }), GRID).codes.includes('SUPPLY_COST_SHORT'))
 const COST_EDGE_PASS = judgeNextPreflight('d20', factsFor('d20', {
   readyCohort: cohortFor('d20', { usdPerSlotValidResult: 0.058 }),
@@ -498,7 +515,7 @@ check('🔴 저예산 7회 profile은 앞 5회 몫만 비용 용량으로 센다
   supplyProofBudgetUsd(1.19) === 1.19 * 5 / 7
   && judgeNextPreflight('d20', factsFor('d20', {
     supplyDailyUsdCap: 1.19,
-    readyCohort: { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 },
+    readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
   }), GRID).codes.includes('SUPPLY_COST_SHORT')
   && !judgeNextPreflight('d10', factsFor('d10', { supplyDailyUsdCap: 0.5 }), GRID).codes.includes('SUPPLY_COST_SHORT'))
 for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
@@ -637,7 +654,9 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
 }
 const evidenceOfDay = (d: StageDecision, mode: DayMode): StageEvidenceVerdict =>
   judgeStageEvidence(d.kstDate, d.release, factsOfDay(d, mode),
-    mode === 'costUnknown' ? { cost: [{ name: '댓글', health: 'unknown' }], errors: 'ok' } : SIDE_OK)
+    mode === 'costUnknown'
+      ? { cost: [{ lane: 'comment', name: '댓글', health: 'unknown' }], errors: 'ok', supplyCostEvidence: SIDE_OK.supplyCostEvidence }
+      : SIDE_OK)
 
 type DayOpts = {
   facts?: (s: GenericStage) => PreflightFacts

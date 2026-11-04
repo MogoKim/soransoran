@@ -73,6 +73,9 @@ import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
 import type { CommentStage } from './persona-comment-stage'
 import { auditTarget } from './auto-ready-v2'
 import type { Health } from './ops-status'
+import {
+  judgeSupplyCostEnvelope, usesSupplyCostEnvelope, type SupplyCostEvidence,
+} from './supply-cost-envelope'
 
 /** 🔴 왜 PASS 가 아닌가 — 문구가 아니라 코드다 */
 export const STAGE_EVIDENCE_CODES = [
@@ -90,9 +93,9 @@ export const STAGE_EVIDENCE_CODES = [
   // ⑥ 비용 · 러너
   'COST_BAD', 'COST_UNKNOWN', 'RUNNER_BAD', 'RUNNER_UNKNOWN',
   /**
-   * 🔴 **그 KST proof day 의 관련 natural supply 요청에 사용량 미상이 있다** (2026-10-16 D5 보정 B).
-   *    canon §3.4 — 증명일 자체의 운영 PASS 는 `usageUnknown=0` 을 요구한다. 예약은 그대로 미상(§3.4).
-   *    원인은 `scripts/lib/ops-signals.mts` 가 `relevantUsageUnknownCount` 로 센 수를 그대로 받는다.
+   * 시행일 전 증거의 옛 하루 전체 `usageUnknown=0` 계약 코드.
+   * 2026-11-05부터는 `COST_UNKNOWN`·`COST_BAD`와 공용 bounded envelope가 권위다.
+   * 과거 FAIL을 소급 승격하지 않기 위해 목록과 판독 경로를 유지한다.
    */
   'SUPPLY_USAGE_UNKNOWN',
   // ⑦ 공개 증명 행의 release 계약 도장
@@ -346,19 +349,15 @@ export type StageEvidenceFacts = {
 }
 
 export type EvidenceSideSignals = {
-  /** 그날 장부 판정(정본 `judgeCost`) — 공급 · 댓글 · 감사 */
-  cost: readonly { name: string; health: Health }[]
+  /**
+   * 그날 장부 판정(정본 `judgeCost`). 시행일 전 공급은 whole-day health를 쓰고,
+   * 시행일부터 공급은 `supplyCostEvidence`만 쓴다. lane을 명시해 이름 문자열로 구분하지 않는다.
+   */
+  cost: readonly { lane: 'supply' | 'comment' | 'audit'; name: string; health: Health }[]
   /** 발행·공급 러너 최근 회차(정본 `errorSignalOf`) */
   errors: Health
-  /**
-   * 🔴 **그 KST proof day 의 관련 natural supply 요청 중 `usageUnknown` 수** (2026-10-16 D5 보정 B).
-   *    정본 `relevantUsageUnknownCount` 가 센 값. 호출부가 그 날 공급 장부 entries 로 계산해 넘긴다.
-   *    · `undefined`  옛 호출(테스트 fixture 등) — 체크 skip. 운영 경로(`stage-controller`)는 반드시 넘긴다
-   *    · `null`       그 날 공급 장부를 못 읽었다 → `COST_UNKNOWN`(모름 = PASS 아님)
-   *    · `0`          관련 미상 없음 — 통과(§3.4 운영 PASS 조건)
-   *    · `>0`         관련 미상 있음 → `SUPPLY_USAGE_UNKNOWN` FAIL (예약은 미상 그대로 — 정산으로 바꾸지 않는다)
-   */
-  supplyUsageUnknown?: number | null
+  /** 시행일 전 옛 판정과 시행일부터의 자연 proof 비용 envelope. 운영 호출에서 필수다. */
+  supplyCostEvidence: SupplyCostEvidence | null
 }
 
 /**
@@ -501,22 +500,41 @@ export function judgeEvidenceForTarget<S extends string>(
   }
   // ⑥ 비용 · 러너 — 못 받았으면 모른다
   if (side === null) { codes.add('COST_UNKNOWN'); codes.add('RUNNER_UNKNOWN') } else {
-    if (side.cost.length === 0 || side.cost.some((c) => c.health === 'unknown')) codes.add('COST_UNKNOWN')
-    if (side.cost.some((c) => c.health === 'bad')) codes.add('COST_BAD')
+    // 새 공급 envelope 시행일부터 whole-day 공급 health를 다시 읽으면 21:15·22:15 다음날 준비가
+    // 이미 끝난 같은 날 proof를 소급 파괴한다. 댓글·감사 health는 계속 그날 전체 계약을 쓴다.
+    const envelopeEnabled = usesSupplyCostEnvelope(kstDate)
+    const costSignals = envelopeEnabled
+      ? side.cost.filter((c) => c.lane !== 'supply')
+      : side.cost
+    const requiredCostLanes: readonly (typeof side.cost[number]['lane'])[] = envelopeEnabled
+      ? ['comment', 'audit']
+      : ['supply', 'comment', 'audit']
+    // 시행일 이후 supply는 envelope로 분리하지만 댓글·감사 lane은 둘 다 있어야 한다.
+    // 하나만 넘긴 호출이 “나머지도 ok”로 오판되지 않게 누락을 UNKNOWN으로 닫는다.
+    const missingCostLane = requiredCostLanes.some((lane) => !costSignals.some((c) => c.lane === lane))
+    if (missingCostLane || costSignals.some((c) => c.health === 'unknown')) codes.add('COST_UNKNOWN')
+    if (costSignals.some((c) => c.health === 'bad')) codes.add('COST_BAD')
     if (side.errors === 'bad') codes.add('RUNNER_BAD')
     if (side.errors === 'unknown') codes.add('RUNNER_UNKNOWN')
-    /**
-     * 🔴 **proof-day 관련 natural supply 의 `usageUnknown` 수를 명시적으로 본다** (2026-10-16 D5 보정 B).
-     *    `judgeCost` 는 미상을 FAIL 로 올리지 않는다 — 그래서 §3.4 의 "증명일 운영 PASS 는 미상 0" 요구가
-     *    stage-evidence 에서 조용히 넘어갔다(10-16 14:47 재현: 미상 1건이 `AUDIT_DEFECT` 아래 가려짐).
-     *    예약은 그대로 미상(§3.4). 호출부가 넘기지 않았으면(`undefined`) 체크 skip — 옛 호출을 깨지 않는다.
-     */
-    if (side.supplyUsageUnknown !== undefined) {
-      if (side.supplyUsageUnknown === null) codes.add('COST_UNKNOWN')
-      else {
-        counts.supplyUsageUnknown = side.supplyUsageUnknown
-        if (side.supplyUsageUnknown > 0) codes.add('SUPPLY_USAGE_UNKNOWN')
-      }
+    const supplyCost = side.supplyCostEvidence
+    if (supplyCost === null) codes.add('COST_UNKNOWN')
+    else if (!usesSupplyCostEnvelope(kstDate)) {
+      // 시행일 전 증거는 옛 하루 전체·미상 0 계약으로 다시 읽어 소급 승격하지 않는다.
+      counts.supplyUsageUnknown = supplyCost.legacyUsageUnknownRequests
+      if (supplyCost.legacyUsageUnknownRequests > 0) codes.add('SUPPLY_USAGE_UNKNOWN')
+    } else {
+      if (supplyCost.wholeDayCriticalHealth === 'unknown') codes.add('COST_UNKNOWN')
+      if (supplyCost.wholeDayCriticalHealth === 'bad') codes.add('COST_BAD')
+      const envelope = judgeSupplyCostEnvelope(supplyCost.envelope)
+      counts.supplySettledRequests = supplyCost.envelope.settledRequests
+      counts.supplyUsageUnknown = supplyCost.envelope.usageUnknownRequests
+      counts.supplyCostOverrunRequests = supplyCost.envelope.overrunRequests
+      counts.supplyCostIneligibleRequests = supplyCost.envelope.ineligibleRequests
+      if (envelope.settledRatio !== null) counts.supplySettledRatio = envelope.settledRatio
+      if (supplyCost.envelope.riskUsd !== null) counts.supplyCostRiskUsd = supplyCost.envelope.riskUsd
+      if (supplyCost.envelope.budgetUsd !== null) counts.supplyCostBudgetUsd = supplyCost.envelope.budgetUsd
+      if (envelope.kind === 'unknown') codes.add('COST_UNKNOWN')
+      if (envelope.kind === 'bad') codes.add('COST_BAD')
     }
   }
   const ordered = STAGE_EVIDENCE_CODES.filter((c) => codes.has(c))

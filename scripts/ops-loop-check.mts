@@ -18,7 +18,10 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { ledgerDateOf } from '../src/lib/llm-ledger'
+import { PRICING_VERSION } from '../src/lib/llm-pricing'
+import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import { readCostSignals } from './lib/ops-signals.mjs'
+import { settleHoldPathOf, writeSettleHold } from './lib/llm-ledger-store.mjs'
 
 import {
   parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing, collectCapabilityFailing,
@@ -42,7 +45,7 @@ import {
 } from './lib/runner-health.mjs'
 import { createProcessRunRecord, writeProcessRunRecord } from './lib/process-run-record.mjs'
 import type { ProcessRun } from '../src/lib/supply-process'
-import { buildRunToken, judgeRunTokenShadow, shadowTagOf } from '../src/lib/supply-run-token'
+import { buildRunToken, judgeRunTokenShadow, shadowTagOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from './lib/publish-run-record.mjs'
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
@@ -330,6 +333,171 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       c.commentLedger.health === 'bad' && c.commentLedger.codes.includes('DAILY_EXHAUSTED') && c.commentLedger.spentUsd === 0.25)
     check('🔴 댓글 상한은 댓글 계약값 $0.20 이다 (env 미설정 → 기본값)', c.commentLedger.capUsd === 0.2)
     check('댓글 지출이 공급 축을 오염시키지 않는다', c.supplyLedger.spentUsd === 0 && c.supplyLedger.health !== 'bad')
+    rmSync(root, { recursive: true, force: true })
+  }
+
+  /**
+   * 2026-11-03 운영 모양의 파일 왕복: 낮 proof 요청은 당시 장부 예산으로 판정하고,
+   * 21:15 다음 날 준비 미상은 whole-day 비용에는 남되 같은 날 proof 표본에는 섞지 않는다.
+   */
+  {
+    const root = mkdtempSync(join(tmpdir(), 'ops-proof-cost-'))
+    const dirs = { supply: join(root, 's'), audit: join(root, 'a'), comment: join(root, 'c') }
+    for (const d of Object.values(dirs)) mkdirSync(d)
+    const now = new Date('2026-11-05T13:30:00Z') // 22:30 KST
+    const date = ledgerDateOf(now)
+    const entry = (i: number, late = false) => {
+      const slot = `${date} ${late ? '21:15' : '14:15'}`
+      const launchAt = `${date}T${late ? '21:15:03' : '14:15:02'}+09:00`
+      return {
+        runId: `${supplyRunIdOf(new Date(launchAt))}-d`, stage: 'draftGen',
+        attemptId: late ? 'late-u' : `settled-${i}`, requestNo: i, provider: 'google',
+        apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash',
+        status: late ? 'usageUnknown' : 'settled', blockCode: null,
+        countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006,
+        inputTokens: late ? null : 100, outputTokens: late ? null : 200,
+        cacheWriteTokens: late ? null : 0, cacheReadTokens: late ? null : 0, usageKeys: [],
+        settledUsd: late ? null : 0.004, pricingVersion: PRICING_VERSION,
+        startedAt: late ? `${date}T21:16:00+09:00` : `${date}T14:15:30+09:00`,
+        endedAt: late ? `${date}T21:16:25+09:00` : `${date}T14:16:00+09:00`,
+        errorCode: late ? 'TIMEOUT' : null, runKind: 'scheduled',
+        runSlot: slot, budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2,
+        budgetSource: 'process-override',
+        sourceKey: late ? 'src-late' : `src-${i}`, supplyContract: SUPPLY_JIT_CONTRACT,
+        runTokenShadow: {
+          ok: true, code: null, tokenId: `token-${i}-${late}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+          absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+        },
+      }
+    }
+    const rows = [...Array.from({ length: 20 }, (_, i) => entry(i)), entry(20, true)]
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    // 현재 env를 일부러 당시 장부값과 다르게 둬도 과거 proof 예산은 장부의 1.20이어야 한다.
+    const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.50', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30' }
+    const c = readCostSignals(now, env, dirs)
+    check('🟢 proof 비용 파일 왕복 — 낮 정산 20건·늦은 미상 0건·당시 예산 $1.20',
+      c.supplyCostEvidence?.envelope.settledRequests === 20
+      && c.supplyCostEvidence.envelope.usageUnknownRequests === 0
+      && c.supplyCostEvidence.envelope.ineligibleRequests === 0
+      && c.supplyCostEvidence.envelope.budgetUsd === 1.2,
+      JSON.stringify(c.supplyCostEvidence))
+    check('🟢 늦은 미상은 proof 밖이어도 whole-day 장부의 열린 예약·legacy 증거에는 남는다',
+      c.supplyLedger.spentUsd !== null && Math.abs(c.supplyLedger.spentUsd - 0.086) < 1e-9
+      && c.supplyCostEvidence?.legacyUsageUnknownRequests === 1,
+      `${JSON.stringify(c.supplyLedger)} ${JSON.stringify(c.supplyCostEvidence)}`)
+    check('🟢 whole-day와 proof 예산은 현재 env $0.50으로 소급 변경되지 않는다',
+      c.supplyLedger.capUsd === 1.2 && c.supplyCostEvidence?.envelope.budgetUsd === 1.2)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), '{깨진 공급 장부\n')
+    const corrupt = readCostSignals(now, env, dirs)
+    check('🔴 시행일 이후 공급 장부를 못 읽으면 비용 UNKNOWN으로 약화하지 않고 whole-day hard bad를 보존한다',
+      corrupt.supplyLedger.health === 'bad'
+      && corrupt.supplyLedger.codes.includes('LEDGER_ERROR')
+      && corrupt.supplyCostEvidence?.wholeDayCriticalHealth === 'bad'
+      && corrupt.supplyCostEvidence.envelope.riskUsd === null,
+      `${JSON.stringify(corrupt.supplyLedger)} ${JSON.stringify(corrupt.supplyCostEvidence)}`)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const mixedCapRows = rows.map((row, i) => i === 0
+      ? { ...row, budgetDailyUsd: 0.5, budgetCapUsd: 0.5 }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${mixedCapRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const mixedCap = readCostSignals(now, env, dirs)
+    check('🟢 하루 중 승인 cap이 달라도 유효한 기록의 가장 큰 cap $1.20으로 whole-day와 proof를 판정한다',
+      mixedCap.supplyLedger.health === 'ok' && mixedCap.supplyLedger.capUsd === 1.2
+      && mixedCap.supplyCostEvidence?.envelope.budgetUsd === 1.2
+      && mixedCap.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(mixedCap.supplyLedger)} ${JSON.stringify(mixedCap.supplyCostEvidence)}`)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const contractlessLateRows = rows.map((row) => row.attemptId === 'late-u'
+      ? { ...row, supplyContract: undefined }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${contractlessLateRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const contractlessLate = readCostSignals(now, env, dirs)
+    check('🟢 늦은 다음날 준비 행의 계약 표식은 하루 예산을 무효화하지 않는다',
+      contractlessLate.supplyLedger.health === 'ok' && contractlessLate.supplyLedger.capUsd === 1.2
+      && contractlessLate.supplyCostEvidence?.envelope.settledRequests === 20
+      && contractlessLate.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(contractlessLate.supplyLedger)} ${JSON.stringify(contractlessLate.supplyCostEvidence)}`)
+    const unbudgetedLateRows = rows.map((row) => row.attemptId === 'late-u'
+      ? { ...row, budgetSource: undefined }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${unbudgetedLateRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const unbudgetedLate = readCostSignals(now, env, dirs)
+    check('🔴 늦은 준비 행도 whole-day 예산 provenance가 깨지면 당일 proof를 UNKNOWN으로 닫는다',
+      unbudgetedLate.supplyLedger.health === 'unknown'
+      && unbudgetedLate.supplyLedger.capUsd === null
+      && unbudgetedLate.supplyCostEvidence?.wholeDayCriticalHealth === 'unknown'
+      && unbudgetedLate.supplyCostEvidence.envelope.settledRequests === 20
+      && unbudgetedLate.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(unbudgetedLate.supplyLedger)} ${JSON.stringify(unbudgetedLate.supplyCostEvidence)}`)
+    const overBudgetLateRows = rows.map((row) => row.attemptId === 'late-u'
+      ? { ...row, reservedUsd: 1.15 }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${overBudgetLateRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const overBudgetLate = readCostSignals(now, env, dirs)
+    check('🔴 늦은 준비 미상도 whole-day 총위험이 기록 예산을 넘으면 당일 proof를 hard FAIL로 닫는다',
+      overBudgetLate.supplyLedger.health === 'bad'
+      && overBudgetLate.supplyCostEvidence?.wholeDayCriticalHealth === 'bad'
+      && overBudgetLate.supplyCostEvidence.envelope.settledRequests === 20
+      && overBudgetLate.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(overBudgetLate.supplyLedger)} ${JSON.stringify(overBudgetLate.supplyCostEvidence)}`)
+    const manualRow = {
+      ...entry(30), runId: 'manual-cost-row', attemptId: 'manual-cost-row', requestNo: 30,
+      runKind: 'manual', runSlot: null, supplyContract: undefined, settledUsd: 0.004,
+    }
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${[...rows, manualRow].map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const withManual = readCostSignals(now, env, dirs)
+    check('⬚ 증명 시간대 수동 행은 하루 실지출에는 남고 자연 proof는 ineligible로 닫는다',
+      withManual.supplyLedger.health === 'ok'
+      && withManual.supplyCostEvidence?.envelope.settledRequests === 20
+      && withManual.supplyCostEvidence.envelope.ineligibleRequests === 1,
+      `${JSON.stringify(withManual.supplyLedger)} ${JSON.stringify(withManual.supplyCostEvidence)}`)
+    const missingSourceRows = rows.map((row, i) => i === 0 ? { ...row, budgetSource: undefined } : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${missingSourceRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const missingSource = readCostSignals(now, env, dirs)
+    check('⬚ current 요청의 기록 예산 출처가 빠지면 현재 env로 대체하지 않고 UNKNOWN',
+      missingSource.supplyLedger.health === 'unknown' && missingSource.supplyLedger.capUsd === null
+      && missingSource.supplyCostEvidence?.envelope.ineligibleRequests === 1,
+      `${JSON.stringify(missingSource.supplyLedger)} ${JSON.stringify(missingSource.supplyCostEvidence)}`)
+    const legacyDate = '2026-11-03'
+    const legacyRows = rows.map((row) => ({
+      ...row,
+      runId: row.runId.replace('20261105', '20261103'),
+      startedAt: row.startedAt.replace(date, legacyDate),
+      endedAt: row.endedAt.replace(date, legacyDate),
+      runSlot: row.runSlot.replace(date, legacyDate),
+    }))
+    writeFileSync(join(dirs.supply, `${legacyDate}.jsonl`), `${legacyRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const legacy = readCostSignals(new Date('2026-11-03T13:30:00Z'), env, dirs)
+    check('🟢 시행일 전 whole-day 비용은 옛 env 계약을 유지해 과거 판정을 바꾸지 않는다',
+      legacy.supplyLedger.capUsd === 0.5)
+    writeSettleHold(dirs.supply, {
+      runId: 'future-hold', attemptId: 'future-hold', date,
+      reservedUsd: 0.01, at: now.toISOString(), reason: '뒤 날짜 hold',
+    })
+    const legacyWithFutureHold = readCostSignals(new Date('2026-11-03T13:30:00Z'), env, dirs)
+    const currentWithHold = readCostSignals(now, env, dirs)
+    check('🔴 뒤 날짜 settle hold가 과거 proof를 소급 오염시키지 않지만 hold 당일은 hard bad다',
+      legacyWithFutureHold.supplyLedger.health !== 'bad'
+      && legacyWithFutureHold.supplyCostEvidence?.wholeDayCriticalHealth !== 'bad'
+      && currentWithHold.supplyLedger.health === 'bad'
+      && currentWithHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
+      `${JSON.stringify(legacyWithFutureHold)} ${JSON.stringify(currentWithHold)}`)
+    rmSync(settleHoldPathOf(dirs.supply), { force: true })
+    writeSettleHold(dirs.supply, {
+      runId: 'old-hold', attemptId: 'old-hold', date: legacyDate,
+      reservedUsd: 0.01, at: new Date(`${legacyDate}T14:15:00+09:00`).toISOString(), reason: '앞 날짜 hold',
+    })
+    const currentWithOldHold = readCostSignals(now, env, dirs)
+    check('🔴 대상 날짜 이전부터 풀리지 않은 settle hold는 현재 proof를 hard bad로 닫는다',
+      currentWithOldHold.supplyLedger.health === 'bad'
+      && currentWithOldHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
+      JSON.stringify(currentWithOldHold))
+    writeFileSync(settleHoldPathOf(dirs.supply), 'null\n', 'utf-8')
+    const legacyWithBrokenHold = readCostSignals(new Date('2026-11-03T13:30:00Z'), env, dirs)
+    check('🔴 깨진 settle hold는 날짜를 비교하지 못하므로 과거 proof도 hard bad로 닫는다',
+      legacyWithBrokenHold.supplyLedger.health === 'bad'
+      && legacyWithBrokenHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
+      JSON.stringify(legacyWithBrokenHold))
     rmSync(root, { recursive: true, force: true })
   }
 

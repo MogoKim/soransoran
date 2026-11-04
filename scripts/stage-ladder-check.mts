@@ -100,12 +100,27 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
         postId: `pp-${i}`, queueId: `pq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
       })),
     },
-  }, { cost: [{ name: '공급', health: 'ok' }, { name: '댓글', health: 'ok' }, { name: '감사', health: 'ok' }], errors: 'ok' })
+  }, {
+    cost: [
+      { lane: 'supply', name: '공급', health: 'ok' },
+      { lane: 'comment', name: '댓글', health: 'ok' },
+      { lane: 'audit', name: '감사', health: 'ok' },
+    ],
+    errors: 'ok',
+    supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+      settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
+    } },
+  })
 }
 /** 🔴 preflight 는 정본 `judgeNextPreflight` 로만 만든다 — 넉넉한 사실이면 PASS 가 나와야 한다 */
 const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
+  proofKstDate: '2026-11-05',
   slotValidOpportunities: PROFILES[s].dailyTarget * 2,
-  readyCohort: { sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.001 },
+  readyCohort: {
+    sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, scheduled: 0, unknown: 0,
+    usdPerSlotValidResult: 0.001,
+    trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001 },
+  },
   latencyP50H: 20, latencyP90H: 50,
   contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
   supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
@@ -186,6 +201,18 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
     preflight: preflightFor('d5', { contractValidPersonas: null }) })
   check('🔴 🔴 **계약 유효 Persona 모름(null · 오늘 운영) → PREFLIGHT_UNKNOWN · 시험 없음**',
     unkPf.state !== 'TRIAL' && unkPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
+  const missingProofDate = preflightFor('d5', { proofKstDate: null })
+  check('🔴 proof 날짜를 모르면 현재 상수로 대신하지 않고 SUPPLY_COST_UNKNOWN',
+    missingProofDate.verdict === 'UNKNOWN' && missingProofDate.codes.includes('SUPPLY_COST_UNKNOWN'),
+    JSON.stringify(missingProofDate.codes))
+  const baseReady = GOOD_FACTS('d5').readyCohort!
+  const overrunPf = preflightFor('d5', { readyCohort: {
+    ...baseReady,
+    trialCost: { ...baseReady.trialCost!, overrunRequests: 1, ineligibleRequests: 1 },
+  } })
+  check('🔴 예약 초과는 귀속 불명과 함께 있어도 UNKNOWN으로 약화하지 않고 SUPPLY_COST_SHORT',
+    overrunPf.verdict === 'FAIL' && overrunPf.codes.includes('SUPPLY_COST_SHORT')
+    && !overrunPf.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(overrunPf.codes))
   const late = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'),
     decidedAt: new Date(`${DATE}T10:00:00+09:00`).toISOString() })
   check('🔴 첫 슬롯 뒤에 결정하면 조각 하루로 시험하지 않는다 (LATE_START)',

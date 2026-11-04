@@ -45,6 +45,7 @@ fi
 npm run stage:db-check
 npm run stage:preflight-window-check
 npm run stage:preflight-window-mutation
+npm run supply:cost-envelope-mutation
 npm run ops:loop-db-check
 npm run stage:evidence-db-check
 npm run stage:proof-day-db-check

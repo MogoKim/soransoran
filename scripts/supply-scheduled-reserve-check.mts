@@ -664,11 +664,14 @@ console.log('\n⑧ 세션 — 🔴 실제 장부 파일 · 가짜 fetch 로 요�
 const realFetch = globalThis.fetch
 let paidFetches = 0
 let countFetches = 0
+/** 경계 반례가 countTokens 응답 시각을 앞으로 옮길 때만 쓰는 시험 이음매. */
+let afterCountFetch: (() => void) | null = null
 const OUT_TOKENS = 1000
 globalThis.fetch = (async (url: string | URL | Request) => {
   const u = String(url)
   if (u.includes('/count_tokens')) {
     countFetches += 1
+    afterCountFetch?.()
     return new Response(JSON.stringify({ input_tokens: 100 }), { status: 200, headers: { 'content-type': 'application/json' } })
   }
   paidFetches += 1
@@ -1120,13 +1123,259 @@ async function inHome<T>(o: { mark: boolean; label: boolean; clock: string }, fn
     rmSync(home, { recursive: true, force: true })
   }
 }
+const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultiplier: HEAD }
+{
+  const legacyTail = await inHome({ mark: true, label: true, clock: '2026-11-04T08:16:00' }, async () => {
+    const prevRunAt = process.env.SORAN_RUN_AT
+    process.env.SORAN_RUN_AT = kst('2026-11-04T08:15:02').toISOString()
+    let clock = kst('2026-11-04T08:16:00')
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => clock
+    try {
+      const s = new SupplyLlmSession({ runId: 'LEGACY-NATURAL-TAIL', limits: LIM50, now: () => clock })
+      const count0 = countFetches
+      const first = await s.call(ASK)
+      clock = kst('2026-11-04T09:00:01')
+      const resumed = await s.call(ASK)
+      return { first, resumed, counted: countFetches - count0 }
+    } finally {
+      if (prevRunAt === undefined) delete process.env.SORAN_RUN_AT; else process.env.SORAN_RUN_AT = prevRunAt
+    }
+  })
+  check('🟢 [시행일 전 자연 꼬리] 11-04 회차는 45분 뒤에도 새 producer 차단을 적용하지 않는다',
+    legacyTail.first.ok
+      && !(legacyTail.resumed.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && legacyTail.counted === 2,
+    `${legacyTail.resumed.errorCode} count=${legacyTail.counted}`)
+}
+{
+  const prevLabel = process.env[LAUNCHD_LABEL_ENV]
+  const prevRunAt = process.env.SORAN_RUN_AT
+  process.env[LAUNCHD_LABEL_ENV] = SUPPLY_PROCESS_LAUNCHD_LABEL
+  delete process.env.SORAN_RUN_AT
+  setIsolation(false)
+  const legacyLateLaunchd = await (async () => {
+    try {
+      const count0 = countFetches
+      const noDiskIo: LedgerIo = {
+        withLock: (_dir, fn) => fn(),
+        readDay: () => ({ ok: true, entries: [] }),
+        readRun: () => ({ ok: true, entries: [] }),
+        append: () => { throw new Error('fixture: 운영 장부 write 금지') },
+        readHold: () => null,
+        writeHold: () => { throw new Error('fixture: 운영 hold write 금지') },
+        readOpen: () => ({ ok: true, list: [] }),
+        addOpen: () => { throw new Error('fixture: 운영 open write 금지') },
+        clearOpen: () => { throw new Error('fixture: 운영 open clear 금지') },
+        pidAlive: () => false,
+        exists: () => true,
+      }
+      const s = new SupplyLlmSession({
+        runId: 'LEGACY-LATE-LAUNCHD', limits: LIM50, now: at('2026-11-04T09:10:00'), io: noDiskIo,
+      })
+      const r = await s.call(ASK)
+      return { r, counted: countFetches - count0 }
+    } finally {
+      setIsolation(true)
+      if (prevLabel === undefined) delete process.env[LAUNCHD_LABEL_ENV]; else process.env[LAUNCHD_LABEL_ENV] = prevLabel
+      if (prevRunAt === undefined) delete process.env.SORAN_RUN_AT; else process.env.SORAN_RUN_AT = prevRunAt
+    }
+  })()
+  check('🟢 [시행일 전 늦은 launchd] 11-04 09:10 첫 실행은 새 producer 차단을 적용하지 않는다',
+    !(legacyLateLaunchd.r.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && legacyLateLaunchd.counted === 1,
+    `${legacyLateLaunchd.r.errorCode} count=${legacyLateLaunchd.counted}`)
+}
+{
+  const prevLabel = process.env[LAUNCHD_LABEL_ENV]
+  const prevRunAt = process.env.SORAN_RUN_AT
+  process.env[LAUNCHD_LABEL_ENV] = SUPPLY_PROCESS_LAUNCHD_LABEL
+  delete process.env.SORAN_RUN_AT
+  setIsolation(false)
+  const lateLaunchd = await (async () => {
+    try {
+      const paid0 = paidFetches
+      const count0 = countFetches
+      const noDiskIo: LedgerIo = {
+        withLock: (_dir, fn) => fn(),
+        readDay: () => ({ ok: true, entries: [] }),
+        readRun: () => ({ ok: true, entries: [] }),
+        append: () => { throw new Error('fixture: 운영 장부 write 금지') },
+        readHold: () => null,
+        writeHold: () => { throw new Error('fixture: 운영 hold write 금지') },
+        readOpen: () => ({ ok: true, list: [] }),
+        addOpen: () => { throw new Error('fixture: 운영 open write 금지') },
+        clearOpen: () => { throw new Error('fixture: 운영 open clear 금지') },
+        pidAlive: () => false,
+        exists: () => true,
+      }
+      const s = new SupplyLlmSession({
+        runId: 'NATURAL-LATE-LAUNCHD', limits: LIM50, now: at('2026-11-05T09:10:00'), io: noDiskIo,
+      })
+      const r = await s.call(ASK)
+      return {
+        r, paid: paidFetches - paid0, counted: countFetches - count0,
+        blocked: s.tally.blockedBy.get('SCHEDULED_WINDOW_CLOSED') ?? 0,
+      }
+    } finally {
+      setIsolation(true)
+      if (prevLabel === undefined) delete process.env[LAUNCHD_LABEL_ENV]; else process.env[LAUNCHD_LABEL_ENV] = prevLabel
+      if (prevRunAt === undefined) delete process.env.SORAN_RUN_AT; else process.env.SORAN_RUN_AT = prevRunAt
+    }
+  })()
+  check('🔴 [늦게 시작한 launchd] 공급 job이 슬롯 창 밖에서 처음 뜨면 manual로 강등하지 않고 호출 전 차단한다',
+    !lateLaunchd.r.ok && (lateLaunchd.r.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && lateLaunchd.paid === 0 && lateLaunchd.counted === 0 && lateLaunchd.blocked === 1,
+    `${lateLaunchd.r.errorCode} paid=${lateLaunchd.paid} count=${lateLaunchd.counted}`)
+}
+{
+  const lateChild = await inHome({ mark: true, label: true, clock: '2026-11-05T12:18:00' }, async () => {
+    const prevRunAt = process.env.SORAN_RUN_AT
+    process.env.SORAN_RUN_AT = kst('2026-11-05T08:15:02').toISOString()
+    try {
+      const paid0 = paidFetches
+      const count0 = countFetches
+      const s = new SupplyLlmSession({ runId: 'NATURAL-LATE-CHILD', limits: LIM50, now: at('2026-11-05T12:18:00') })
+      const r = await s.call(ASK)
+      return {
+        r, paid: paidFetches - paid0, counted: countFetches - count0,
+        blocked: s.tally.blockedBy.get('SCHEDULED_WINDOW_CLOSED') ?? 0,
+      }
+    } finally {
+      if (prevRunAt === undefined) delete process.env.SORAN_RUN_AT; else process.env.SORAN_RUN_AT = prevRunAt
+    }
+  })
+  check('🔴 [늦게 생성된 자연 자식] 부모 08:15 회차의 12:18 자식은 manual로 강등하지 않고 호출 전 차단한다',
+    !lateChild.r.ok && (lateChild.r.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && lateChild.paid === 0 && lateChild.counted === 0 && lateChild.blocked === 1,
+    `${lateChild.r.errorCode} paid=${lateChild.paid} count=${lateChild.counted}`)
+}
+{
+  const malformedParent = await inHome({ mark: true, label: true, clock: '2026-11-05T08:16:00' }, async () => {
+    const prevRunAt = process.env.SORAN_RUN_AT
+    process.env.SORAN_RUN_AT = 'not-a-time'
+    try {
+      const paid0 = paidFetches
+      const count0 = countFetches
+      const s = new SupplyLlmSession({ runId: 'NATURAL-MALFORMED-PARENT', limits: LIM50, now: at('2026-11-05T08:16:00') })
+      const r = await s.call(ASK)
+      return { r, paid: paidFetches - paid0, counted: countFetches - count0 }
+    } finally {
+      if (prevRunAt === undefined) delete process.env.SORAN_RUN_AT; else process.env.SORAN_RUN_AT = prevRunAt
+    }
+  })
+  check('🔴 [깨진 부모 시각] SORAN_RUN_AT 모양이 틀리면 manual로 우회하지 않고 countTokens·provider 전에 막는다',
+    !malformedParent.r.ok && (malformedParent.r.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && malformedParent.paid === 0 && malformedParent.counted === 0,
+    `${malformedParent.r.errorCode} paid=${malformedParent.paid} count=${malformedParent.counted}`)
+}
+{
+  const tail = await inHome({ mark: true, label: true, clock: '2026-11-05T08:16:00' }, async () => {
+    let clock = kst('2026-11-05T08:16:00')
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => clock
+    const s = new SupplyLlmSession({ runId: 'NATURAL-TAIL', limits: LIM50, now: () => clock })
+    const paid0 = paidFetches
+    const count0 = countFetches
+    const first = await s.call(ASK)
+    clock = kst('2026-11-05T09:00:01')
+    const resumed = await s.call(ASK)
+    return {
+      first,
+      resumed,
+      paid: paidFetches - paid0,
+      counted: countFetches - count0,
+      blocked: s.tally.blockedBy.get('SCHEDULED_WINDOW_CLOSED') ?? 0,
+    }
+  })
+  check('🔴 [자연 회차 꼬리] 08:15 회차는 45분 창 밖에서 새 유료 요청·countTokens를 시작하지 않는다',
+    tail.first.ok && !tail.resumed.ok
+      && (tail.resumed.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && tail.paid === 1 && tail.counted === 1 && tail.blocked === 1,
+    `${tail.resumed.errorCode} paid=${tail.paid} count=${tail.counted} blocked=${tail.blocked}`)
+}
+{
+  const afterCount = await inHome({ mark: true, label: true, clock: '2026-11-05T08:59:58' }, async () => {
+    let clock = kst('2026-11-05T08:59:58')
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => clock
+    const s = new SupplyLlmSession({ runId: 'NATURAL-COUNT-BOUNDARY', limits: LIM50, now: () => clock })
+    const paid0 = paidFetches
+    const count0 = countFetches
+    afterCountFetch = () => { clock = kst('2026-11-05T09:00:00') }
+    try {
+      const r = await s.call(ASK)
+      return { r, paid: paidFetches - paid0, counted: countFetches - count0 }
+    } finally { afterCountFetch = null }
+  })
+  check('🔴 [countTokens 경계] 08:59:58에 시작해 무료 계산 중 09:00이 되면 예약·provider 0',
+    !afterCount.r.ok && (afterCount.r.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && afterCount.paid === 0 && afterCount.counted === 1,
+    `${afterCount.r.errorCode} paid=${afterCount.paid} count=${afterCount.counted}`)
+}
+{
+  const beforeProvider = await inHome({ mark: true, label: true, clock: '2026-11-05T08:59:58' }, async () => {
+    let clock = kst('2026-11-05T08:59:58')
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => clock
+    let locks = 0
+    const io: LedgerIo = {
+      ...REAL_LEDGER_IO,
+      withLock: (dir, fn) => {
+        const result = REAL_LEDGER_IO.withLock(dir, fn)
+        locks += 1
+        if (locks === 2) clock = kst('2026-11-05T09:00:00')
+        return result
+      },
+    }
+    const s = new SupplyLlmSession({ runId: 'NATURAL-PROVIDER-BOUNDARY', limits: LIM50, now: () => clock, io })
+    const paid0 = paidFetches
+    const count0 = countFetches
+    const r = await s.call(ASK)
+    const open = readOpenReservations(defaultLedgerDir())
+    return { r, paid: paidFetches - paid0, counted: countFetches - count0, open: open.ok ? open.list.length : -1 }
+  })
+  check('🔴 [provider 직전 경계] 예약 잠금 중 09:00이 되면 예약을 종결하고 provider 0·열린 예약 0',
+    !beforeProvider.r.ok && (beforeProvider.r.errorCode ?? '').endsWith('SCHEDULED_WINDOW_CLOSED')
+      && beforeProvider.paid === 0 && beforeProvider.counted === 1 && beforeProvider.open === 0,
+    `${beforeProvider.r.errorCode} paid=${beforeProvider.paid} count=${beforeProvider.counted} open=${beforeProvider.open}`)
+}
+{
+  const terminalWriteFails = await inHome({ mark: true, label: true, clock: '2026-11-05T08:59:58' }, async () => {
+    let clock = kst('2026-11-05T08:59:58')
+    SUPPLY_PROTECT_TEST_SEAM.clock = () => clock
+    let locks = 0
+    let clearCalls = 0
+    const io: LedgerIo = {
+      ...REAL_LEDGER_IO,
+      withLock: (dir, fn) => {
+        const result = REAL_LEDGER_IO.withLock(dir, fn)
+        locks += 1
+        if (locks === 2) clock = kst('2026-11-05T09:00:00')
+        return result
+      },
+      append: (path, entry) => {
+        if (entry.blockCode === 'SCHEDULED_WINDOW_CLOSED') throw new Error('terminal write failed')
+        REAL_LEDGER_IO.append(path, entry)
+      },
+      clearOpen: (dir, attemptId) => {
+        clearCalls += 1
+        REAL_LEDGER_IO.clearOpen(dir, attemptId)
+      },
+    }
+    const s = new SupplyLlmSession({ runId: 'NATURAL-TERMINAL-WRITE-FAIL', limits: LIM50, now: () => clock, io })
+    const paid0 = paidFetches
+    const r = await s.call(ASK)
+    const open = readOpenReservations(defaultLedgerDir())
+    return { r, paid: paidFetches - paid0, open: open.ok ? open.list.length : -1, clearCalls }
+  })
+  check('🔴 [종결 기록 실패] provider 0·예약 보존·clear 0 — 기록 실패를 조용히 지우지 않는다',
+    !terminalWriteFails.r.ok && (terminalWriteFails.r.errorCode ?? '').endsWith('LEDGER_ERROR')
+      && terminalWriteFails.paid === 0 && terminalWriteFails.open === 1 && terminalWriteFails.clearCalls === 0,
+    `${terminalWriteFails.r.errorCode} paid=${terminalWriteFails.paid} open=${terminalWriteFails.open} clear=${terminalWriteFails.clearCalls}`)
+}
 const cheapDay = (date: string): LedgerEntry[] => ['08:15', '12:15', '17:15']
   .map((hm) => line({ usd: 0.001, kind: 'scheduled', slot: `${date} ${hm}`, at: `${date}T${hm.slice(0, 2)}:20:00` }))
 const putRows = (dir: string, date: string, rows: LedgerEntry[]): void => {
   mkdirSync(dir, { recursive: true })
   for (const e of rows) appendLedgerLine(ledgerPathOf(dir, date), e)
 }
-const LIM50: BudgetLimits = { dailyUsd: 0.5, runRequestCap: 1000, headroomMultiplier: HEAD }
 {
   // ⓙ-1 🔴 $HOME 바꾸기 — 정본(계정 홈)과 실경로가 다른 공급 장부는 쓰지 않는다
   const t = mkdtempSync(join(tmpdir(), 'reserve-j1-'))
