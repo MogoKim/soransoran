@@ -1,6 +1,6 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-11-04 11:16 KST
+> as-of: 2026-11-04 13:27 KST
 > 마지막 창업자 동기화: 2026-11-04
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
@@ -13,17 +13,18 @@
 
 **11월 3일 D20은 자동 공개 20/20·서로 다른 작성자 20·첫 댓글 20/20·추가 대화 12·감사 4/4·
 release 도장 20을 충족했지만, 21:15 다음날 준비 공급의 `usageUnknown` 1건을 하루 전체로 세는 옛 비용 계약 때문에
-형식상 operating FAIL이다. 이를 소급 PASS로 바꾸지 않는다. 11월 5일부터 preflight와 proof가 공용 bounded cost
-envelope를 쓰고 당일 proof는 앞 5개 자연 공급 슬롯만 보도록 하는 근본 보정은 PR #826으로 main에 병합됐다.
-Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자연 operating 증거가 필요하다.**
+형식상 operating FAIL이다. 이를 소급 PASS로 바꾸지 않는다. bounded 비용 보정 PR #826과 총 댓글 구조 상한 10
+PR #827은 11월 4일 main·Production·D100 runtime에 `0fcc90c180290d0fee4da18216e3457d8849c8e9`로 배포됐다.
+13:24 첫 자연 댓글 loop는 오류 없이 끝났지만 적격 followup이 없어 write 0이었으므로 최대 10 operating PASS는 아직 아니다.
+11월 4일은 첫 proof 슬롯 뒤 runtime SHA가 바뀌어 증명일에서 제외하고, 11월 5일 동일 SHA 자연 D20 증거가 필요하다.**
 
 ## 1. 검증된 운영 기준선
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-11-04 10:53 관측) | `ee2b19fe5fa6660d34f4f29c1deb4298a89ff4d9` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `1f15416ca2976591d7551d59f57d66372adbe434` · 2026-11-03 22:25 관측 · main 차이를 별도 판정 |
-| 보조 Mac D100 job | 9개 loaded · 2026-11-03 D20 자연 운영 owner |
+| 원격 main (2026-11-04 13:20 관측) | `0fcc90c180290d0fee4da18216e3457d8849c8e9` |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `0fcc90c180290d0fee4da18216e3457d8849c8e9` · 2026-11-04 13:20 관측 · main과 동일 SHA |
+| 보조 Mac D100 job | 9개 loaded · 유일한 D100 자연 운영 owner · tracked 변경 0 · active D100 process 0 (13:20 관측) |
 | 회사 Mac D100 job | 0 |
 | 마지막 자연 controller | `TRIAL · 공개 d20 · 준비 d30` · 2026-11-03 |
 | 최신 확정 단계 증거 | 10-28 d10 증거 PASS |
@@ -32,8 +33,8 @@ Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자�
 | Persona | contract-valid 40 · active 40 · 마지막 운영 확인값 |
 | 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 |
 | 현재 댓글 정책 | 첫 댓글 1 + 선택적 0~9 · 총 구조 상한 10 · 일반 Persona 1회 · 글쓴이 답글 최대 3회 · 사슬 최대 6 · automatic provenance |
-| 최대 10 변경 상태 | 별도 branch 검증 중 · 첫 댓글 부트스트랩 기준 5/하루 500과 followup profile 40·$0.08·3·3 불변 · Production/runtime·운영 증거는 아직 옛 계약 |
-| 이번 비용 보정의 운영 변경 | PR #826 main 병합 완료 · Production D100 runtime 0 · 운영 DB write 0 · runtime 변경 0 |
+| 최대 10 변경 상태 | PR #827 code·CI·Production·runtime 배포 PASS · 첫 댓글 1, 일반 planner 기준 5/절대 하루 500, followup profile 40·$0.08·3·3 불변 · 구조 상한 10 operating 증거 대기 |
+| 이번 비용 보정의 운영 변경 | PR #826 포함 SHA를 Production D100 runtime에 배포 · 운영 DB 수동 write 0 · 11월 5일 자연 증명 대기 |
 
 마지막 확정 D10 증거는 자동 공개 10/10, 서로 다른 자동 Persona 10, 첫 댓글 10/10,
 감사 2/2, 공급 `usageUnknown=0`, 수동 stage·READY·게시·댓글·장부 보정 0이었다.
@@ -53,15 +54,15 @@ Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자�
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
 | D10 기준선 | ✅ | ✅ | ✅ 10-28 d10 증거 PASS |
-| D20 비용 판정 정합 보정 | ✅ PR #826 exact-head CI·공식 격리 DB PASS · main 병합 | ❌ D100 runtime 미배포 | ❌ 새 계약 자연 증명 전 |
-| Persona 40 | ✅ | 마지막 확인 ✅ | 마지막 확인 contract-valid 40 · 현재 runtime 재관측 전 UNKNOWN |
-| 첫 댓글·추가 댓글 | 최대 10 별도 branch 검증 중 · 첫 댓글 1과 provenance 불변 | 현재 runtime은 옛 상한 · 새 릴리스 미배포 | 옛 1~5 자연 followup 관측 · 최대 10 자연 검증 전 |
+| D20 비용 판정 정합 보정 | ✅ PR #826 exact-head CI·공식 격리 DB PASS · main 병합 | ✅ runtime exact SHA `0fcc90c1` | ❌ 새 계약 자연 증명 전 |
+| Persona 40 | ✅ | ✅ runtime exact SHA 재관측 | 마지막 확인 contract-valid 40 · 11월 5일 자연 증명 대기 |
+| 첫 댓글·추가 댓글 | ✅ PR #827 · 첫 댓글 1과 provenance 불변 · 총 구조 상한 10 | ✅ Production·runtime exact SHA `0fcc90c1` | 13:24 loop 정상·write 0 · 적격 대화의 최대 10 자연 검증 전 |
 | 실제 조회수 | ✅ 실제 상세 열람·목록 노출 원장 | ✅ | ✅ 실제 행동만 집계 · 가짜 숫자 0 |
 
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
 공개, 자연스러운 대화, 실제 회원 재방문과 실제 열람은 별도로 관측한다.
 
-## 2. 현재 runtime에 배포된 11월 2일 근본 보정
+## 2. 현재 runtime에 배포된 11월 2일·4일 근본 보정
 
 | 경로 | 재현된 문제 | 보정 계약 |
 |---|---|---|
@@ -73,7 +74,8 @@ Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자�
 | Persona 자산 | 같은 코드 SHA에서도 말투 corpus·manifest가 달라질 수 있음 | 배포 전·job 재기동 뒤·rollback에서 실제 자산 digest 재대조 |
 
 비용 보정 PR 자체는 첫 댓글·추가 댓글의 품질 정책이나 글당 댓글 상한을 바꾸지 않는다. 최대 댓글 10은
-그 PR과 파일·배포 순서를 분리한 후속 PR에서 검증한다. 두 변경을 한 커밋이나 같은 exact-head 검증으로 섞지 않는다.
+별도 PR #827에서 검증한 뒤 main에서만 함께 배포했다. 두 변경의 구현 커밋·exact-head 검증은 분리했으며,
+배포 SHA가 같다는 사실이 각 PR의 code PASS를 서로 대신하지 않는다.
 
 ## 3. D20 개방의 정확한 blocker
 
@@ -83,18 +85,17 @@ Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자�
 
 | blocker code | 현재 | 해소 조건 |
 |---|---|---|
-| `SUPPLY_COST_SCOPE_DIVERGENCE` | preflight는 bounded 미상을 허용하지만 proof는 하루 전체 미상 0을 요구 | 공용 `supply-cost-envelope-v2` 판정을 공유하되 preflight는 다음 단계 대상 cohort, 완료 proof는 당일 앞 5회 표본으로 업무 범위를 분리하고 반례·격리 DB·CI PASS |
-| `LATE_PREP_RETROACTIVE_FAILURE` | 21:15·22:15 다음날 준비 회차가 이미 끝난 당일 D20을 뒤집음 | proof 비용 표본을 06:15~17:15 자연 5회로 고정하고 늦은 회차는 일 예산에만 유지 |
-| `COST_EVIDENCE_OMISSION` | 옛 호출은 비용 증거 칸 누락 시 검사를 건너뛸 수 있었음 | `supplyCostEvidence` 필수화 · 누락/귀속 불명은 `COST_UNKNOWN` |
-| `RELIABILITY_PATCH_UNDEPLOYED` | PR #826 main 병합 완료 · D100 runtime 미배포 | 안전 창에 승인된 main SHA를 배포하고 HEAD=pin=manifest 동일성 확인 |
+| `SUPPLY_COST_SCOPE_DIVERGENCE` | ✅ code·deployed 해소 · 공용 `supply-cost-envelope-v2` 사용 | 11월 5일 자연 operating 증명 |
+| `LATE_PREP_RETROACTIVE_FAILURE` | ✅ code·deployed 해소 · proof 비용 표본은 06:15~17:15 자연 5회 | 11월 5일 자연 operating 증명 |
+| `COST_EVIDENCE_OMISSION` | ✅ code·deployed 해소 · `supplyCostEvidence` 필수, 누락/귀속 불명은 `COST_UNKNOWN` | 11월 5일 자연 operating 증명 |
+| `RELIABILITY_PATCH_DEPLOYED` | ✅ PR #826 포함 SHA · HEAD=pin=manifest 동일 | 운영 PASS로 대체하지 않고 자연 증명 대기 |
 | `OPERATING_PROOF_PENDING` | 11월 3일은 옛 계약 FAIL로 고정 | 11월 5일 이후 새 SHA 자연 D20에서 20/20·댓글·감사·비용·provenance PASS |
 | `BRAKE_DEMOTION_PERSISTS` | **READER_READY · 별도 미해소** | D20 비용 보정과 섞지 않고 별도 writer 활성 릴리스에서 replay `GAP_CLOSED` |
 
-새 계약은 2026-11-05 KST부터만 적용한다. 11월 3일 결과를 새 코드로 다시 읽어 PASS로 승격하지 않는다.
-이 시행일은 새 runtime SHA를 11월 5일 안전 배포 마감(05:30 KST) 전에 배포하고
-`HEAD = pin = manifest` 검증까지 끝내는 것을 전제로 한다. 그 시각을 넘기면 시행일을 실제 새 SHA가
-첫 proof 슬롯부터 운영되는 다음 KST 날짜로 함께 옮기고,
-코드·정본·반례를 같은 값으로 다시 검증한다. 옛 producer와 새 판정기를 같은 증명일에 섞지 않는다.
+새 계약의 첫 완결 증명일은 2026-11-05 KST다. 11월 3일 결과를 새 코드로 다시 읽어 PASS로 승격하지 않는다.
+새 runtime SHA는 11월 4일 13:20까지 `HEAD = pin = manifest` 동일성 검증을 끝냈지만 첫 proof 슬롯 뒤에
+배포됐으므로 11월 4일은 증명일에서 제외한다. 11월 5일 첫 proof 슬롯부터 동일 SHA가 운영되어야 하며,
+옛 producer와 새 판정기를 같은 증명일에 섞지 않는다.
 
 ### 3-1. `CERTIFIED` 두 단계 배포 — reader 먼저, writer는 별도 릴리스
 
@@ -126,7 +127,7 @@ Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자�
   알림으로 올라가야 하고, 해소는 운영자 격리(quarantine) 절차(깨진 행의 원인 확인 → 승인된 방법으로 격리 → 다음 예약 재판독)로만 한다.
   이 알림·격리 절차는 아직 코드로 닫히지 않았다(잔여 위험).
 
-## 4. 배포 전 완료 조건
+## 4. 배포 완료 조건과 자연 증명 경계
 
 1. D100 reliability replay에서 다섯 gap이 `GAP_CLOSED`이고, `BRAKE_DEMOTION_PERSISTS`는 이 reader 릴리스에서
    `READER_READY`다(해소로 세지 않는다). writer 활성 릴리스의 완료 조건만 여섯 gap 모두 `GAP_CLOSED`다.
@@ -138,13 +139,13 @@ Production D100 runtime에는 아직 배포하지 않았으며, 11월 5일 자�
 7. diff에는 이번 계약과 무관한 파일·운영 비밀·임시 산출물이 없다.
 8. 창업자 승인 전 commit 이후의 merge·Production·runtime 배포·운영 DB write는 0이다.
 
-배포 승인이 난 뒤에도 code PASS가 operating PASS를 대신하지 않는다. 승인된 main SHA를 유일한
-D100 owner에 배포하고 HEAD=pin=manifest, Persona 자산 식별자, 설치 plist, loaded job을 확인한 뒤
-다음 자연 증명 결과를 기다린다.
+배포 승인이 난 뒤에도 code PASS가 operating PASS를 대신하지 않는다. 승인된 main SHA는 유일한
+D100 owner에 배포됐고 HEAD=pin=manifest, Persona 자산 식별자, 설치 plist, loaded job을 확인했다.
+이제 다음 자연 증명 결과를 기다린다.
 
-배포는 당일 마지막 22:15 자연 공급 회차가 실제로 끝난 뒤부터 다음 날 05:30 전까지, 모든 D100
-runner가 idle인 창에서만 한다. 06:15~22:15 proof 운영 중간에 코드를 바꿔 같은 증명일에 runtime SHA를
-섞지 않는다. 이 창은 배포를 자동 승인하지 않으며, 창업자 승인과 §4 PASS가 먼저다.
+원칙상 배포는 당일 마지막 22:15 자연 공급 회차가 실제로 끝난 뒤부터 다음 날 05:30 전까지, 모든 D100
+runner가 idle인 창에서만 한다. 11월 4일은 창업자의 명시적 당일 배포 승인으로 13시대 idle 창에 배포했으며,
+그 대가로 06:15~22:15에 runtime SHA가 섞인 11월 4일 전체를 증명일에서 제외했다. 이후 배포는 다시 이 원칙을 따른다.
 
 ## 5. 다음 critical path
 
@@ -152,7 +153,7 @@ runner가 idle인 창에서만 한다. 06:15~22:15 proof 운영 중간에 코드
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | **main 병합 완료 · runtime 배포 대기** · proof 슬롯과 bounded 비용 판정을 공용 계약으로 통합 | PR #826 검증 완료 · 안전 창의 main/runtime 동일 SHA | 부분 배포·미상 정산 조작·11월 3일 소급 PASS |
+| D20-FIX | **main·Production·runtime 배포 완료** · proof 슬롯과 bounded 비용 판정을 공용 계약으로 통합 | `0fcc90c1` HEAD=pin=manifest 동일 · 11월 5일 자연 증명 | 미상 정산 조작·11월 3일 소급 PASS |
 | D20 | D10 operating PASS 선행 · 새 계약의 다음 자연 증명 | 자동 20/20·댓글·감사·비용·READY·provenance PASS | stage·READY·게시·댓글·장부 수동 보정 |
 | D30 | D20 operating PASS 선행 | Persona 60·preflight green·자동 30/30 | D30 생략 |
 | D50 | D30 operating PASS 선행 | Persona 100·preflight green·자동 50/50 | D20에서 바로 D50 |
