@@ -306,6 +306,9 @@ console.log('\n══════ ⑦ 🔴 대화 맥락은 참고하되, 말투
       status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
     },
     comments,
+    personaCodesEverOnPost: comments
+      .map((c) => c.personaCode)
+      .filter((code): code is string => code !== null),
   })
 
   /** 🔴 이 Persona 의 발화는 **자기 personaId 로 달린 것**뿐이다 (DB source 와 같은 모양) */

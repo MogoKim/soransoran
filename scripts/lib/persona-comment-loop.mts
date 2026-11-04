@@ -413,7 +413,8 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     } catch { return { measured: false, real: 0, persona: 0, windowDays: RATIO_WINDOW_DAYS } }
   })()
   const publishedToday = await deps.prisma.comment.count({
-    where: { isDeleted: false, commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
+    // 삭제는 화면의 live 수만 줄인다. 이미 쓴 일일 예산은 돌려주지 않는다.
+    where: { commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
   }).catch(() => null)
   const killSwitchOff = await (async (): Promise<boolean | null> => {
     try {

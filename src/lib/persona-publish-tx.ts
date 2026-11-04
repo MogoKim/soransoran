@@ -27,6 +27,7 @@ import {
 } from './stage-evidence'
 import { decisionStageEnv } from './scale-runtime'
 import { OPEN_STATUSES } from './persona-comment-queue'
+import { BOOTSTRAP_DAILY_MAX } from './persona-comment-bootstrap-budget'
 
 /**
  * 후보 발행 트랜잭션 — 🔴 실제 write 가 일어나는 유일한 함수
@@ -148,7 +149,7 @@ export async function publishCandidateTx(
      */
     autoLane?: boolean
     /**
-     * 🔴 **추가 댓글 레인** (2026-10-14 · PR #704 · 기본 OFF). 첫 댓글 뒤 선택적 추가 0~4건.
+     * 🔴 **추가 댓글 레인** (2026-11-04 정본 · 기본 OFF). 첫 댓글 뒤 선택적 추가 0~9건.
      *    `autoLane`(60분 · 글당 1건) 대신 `judgeFollowupPublish`(스위치 · profile · 도장 · 순번 · 대상 · 시간차 · 실회원 우선)를 본다.
      *    기존 재검사는 **하나도 빠지지 않고** 그대로 돈다. 표식은 #707 정본(`FOLLOWUP_LANE_*`)이다 —
      *    단계 증거는 이 댓글을 첫 댓글로 세지 않는다. `autoLane` · `manual-admin` 과 함께 쓸 수 없다.
@@ -228,14 +229,14 @@ export async function publishCandidateTx(
         : 0
       /**
        * 🔴 **이 Persona 가 그 글에 이미 달았는가** — 수와 별개의 질문이다.
-       *    글당 5건을 연 대가로 반드시 지켜야 하는 쪽이 이것이다.
+       *    글당 구조 상한을 10건으로 연 대가로 반드시 지켜야 하는 쪽이 이것이다.
        *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 "한 사람이 여럿인 척하는 것" 이다.
        */
       const personaAlreadyOnPost = row.targetPostId === null
         ? null
         : (await tx.comment.count({
             where: {
-              postId: row.targetPostId, personaId: row.persona.id, isDeleted: false,
+              postId: row.targetPostId, personaId: row.persona.id,
             },
           })) > 0
 
@@ -283,7 +284,7 @@ export async function publishCandidateTx(
         // 🔴 이 트랜잭션 안에서 다시 센다 — 밖에서 센 값은 다른 후보의 발행을 모른다
         tx.comment.count({
           where: {
-            isDeleted: false, commentOrigin: 'PERSONA',
+            commentOrigin: 'PERSONA',
             createdAt: { gte: kstDayStart(now) },
           },
         }),
@@ -376,6 +377,8 @@ export async function publishCandidateTx(
        */
       const followupLane = args.followupLane === true
       let followupParentId: string | null = null
+      let followupPersonaRepeatAllowed = false
+      let followupDailyRemaining: number | null = null
       if (followupLane) {
         if (post === null) return { kind: 'blocked', blocks: [{ code: 'FOLLOWUP_LANE', message: '대상 글이 없다' }] }
         const rows = await tx.comment.findMany({
@@ -453,6 +456,11 @@ export async function publishCandidateTx(
         if (!fu.ok) {
           return { kind: 'blocked', blocks: fu.blockers.map((message): PublishBlock => ({ code: 'FOLLOWUP_LANE', message })) }
         }
+        if (fu.profileDailyRemaining === null) {
+          return { kind: 'blocked', blocks: [{ code: 'FOLLOWUP_LANE', message: '추가 댓글 profile 잔량을 계산하지 못했다(fail-closed)' }] }
+        }
+        followupPersonaRepeatAllowed = fu.personaRepeatAllowed
+        followupDailyRemaining = fu.profileDailyRemaining
         const st = verifyStamp(stampFromEditDiff(row.editDiff), { postId: post.id, dedupKey: row.dedupKey })
         if (!st.ok) return { kind: 'blocked', blocks: [{ code: 'FOLLOWUP_LANE', message: st.reason }] }
         followupParentId = st.stamp.parentCommentId
@@ -483,9 +491,17 @@ export async function publishCandidateTx(
         personaRealMember: realMember.real,
         personaCommentsOnPost,
         personaAlreadyOnPost,
+        personaRepeatAllowed: followupPersonaRepeatAllowed,
         memberCommentsOnPost,
-        // 🔴 **총 상한**을 넘긴다. 남은 수량은 트랜잭션이 사용량으로 다시 뺀다
-        allowanceCap: commentReadiness.allowance.cap,
+        // 🔴 **총 상한**을 넘긴다. 남은 수량은 트랜잭션이 사용량으로 다시 뺀다.
+        // 🔴 첫 댓글과 추가 댓글은 서로 다른 글당 예산이다. 추가 댓글에 bootstrap 예산(글당 5)을
+        // 다시 적용하면 구조 상한 10이어도 오늘 다섯 번째 Persona 댓글에서 영구 정지한다.
+        // profile 잔량을 공통 재검사의 총 상한 모양으로 변환하되, 두 레인이 공유하는 하루 절대 상한 500은 유지한다.
+        allowanceCap: followupLane
+          ? (followupDailyRemaining === null
+              ? Number.NaN
+              : Math.min(BOOTSTRAP_DAILY_MAX, publishedTodayInTx + followupDailyRemaining))
+          : commentReadiness.allowance.cap,
         stage: stage.stage,
         publishedTodayInTx,
         lifeConflict: lifeBlocks.length > 0,

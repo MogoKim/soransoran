@@ -68,7 +68,7 @@ export type EnqueueFacts = {
   /**
    * 🔴 **이 Persona 가 그 글에 이미 댓글을 달았는가.** 모르면 null(fail-closed).
    *
-   *    글당 5건을 연 대가로 반드시 지켜야 하는 쪽이 이것이다 —
+   *    글당 구조 상한을 10건으로 연 대가로 반드시 지켜야 하는 쪽이 이것이다 —
    *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 "한 사람이 여럿인 척하는 것" 이다.
    */
   personaAlreadyOnPost: boolean | null
@@ -274,6 +274,8 @@ export type TxRecheckFacts = {
   personaCommentsOnPost: number | null
   /** 🔴 이 Persona 가 그 글에 이미 댓글을 달았는가. 모르면 null(fail-closed) */
   personaAlreadyOnPost: boolean | null
+  /** 🔴 추가 댓글 판정이 확정한 글쓴이 답글인 경우만 true. 일반 경로는 생략=false 다. */
+  personaRepeatAllowed?: boolean
   /** 그 글의 살아 있는 회원 댓글 수 — 3건 이상이면 끼어들지 않는다 */
   memberCommentsOnPost: number | null
   /** 🔴 오늘 **총 상한**. 남은 수량이 아니다 — 사용량을 여기서 뺀다 */
@@ -362,7 +364,7 @@ export function recheckBeforePublish(f: TxRecheckFacts): TxRecheckVerdict {
   // 🔴 자리가 남아도 **같은 사람**이면 막는다. 적재와 발행 사이에 그 사람이 먼저 달았을 수 있다
   if (f.personaAlreadyOnPost === null) {
     blockers.push('이 Persona 가 그 글에 이미 달았는지 읽지 못했다(fail-closed)')
-  } else if (f.personaAlreadyOnPost) {
+  } else if (f.personaAlreadyOnPost && f.personaRepeatAllowed !== true) {
     blockers.push('🔴 이 Persona 는 그 글에 이미 댓글이 있다 — 한 사람이 두 번 말하지 않는다')
   }
 

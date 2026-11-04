@@ -9,8 +9,8 @@
  *    ② 같은 사람이 같은 글에 두 번 나타나면 안 되고
  *    ③ 사람들끼리 대화가 붙은 자리에는 끼어들지 않아야 한다.
  *
- * 🔴 한 글에 붙는 Persona 댓글은 **1~5건**이다(`PERSONA_COMMENTS_PER_POST_MAX`).
- *    억지로 5건을 채우지 않는다 — 붙일 수 있는 사람이 하나면 1건이고 그것으로 끝이다.
+ * 🔴 한 글의 Persona 댓글은 **최대 10건**이다(`PERSONA_COMMENTS_PER_POST_MAX`).
+ *    첫 댓글 1건 뒤 대화 거리가 있을 때만 선택적으로 잇고, 억지로 10건을 채우지 않는다.
  *
  * 🔴 **판정에 필요한 값이 없으면 그 글·그 Persona 를 뺀다.** 채우지 않는다.
  *    모르는 것을 0 으로 보정하면 가장 위험한 대상이 가장 먼저 뽑힌다.
@@ -28,8 +28,9 @@ import { COMMENT_REACTION_ROLES } from './persona-reaction-roles'
 import { roleRoundVerdict, type RoleHistory } from './persona-reserve'
 import { judgeRealMember, type RealMemberProbe } from './real-member-gate'
 import {
-  judgeTargetPost, PERSONA_COMMENTS_PER_POST_MAX, type TargetPostFacts,
+  judgeTargetPost, type TargetPostFacts,
 } from './persona-target-rules'
+import { BOOTSTRAP_SLOTS_PER_POST } from './persona-comment-bootstrap-budget'
 
 /** 대상 후보 글의 실측 */
 export type PlannerPost = {
@@ -197,7 +198,7 @@ export function priorityOf(post: PlannerPost, nowMs: number): number {
 export function postSlotsOf(post: PlannerPost): number {
   return Math.max(
     0,
-    PERSONA_COMMENTS_PER_POST_MAX - post.personaComments - post.openQueuePersonaCodes.length,
+    BOOTSTRAP_SLOTS_PER_POST - post.personaComments - post.openQueuePersonaCodes.length,
   )
 }
 
@@ -218,7 +219,7 @@ export function judgePlannerPost(post: PlannerPost, nowMs: number): PlanBlock[] 
     blocks.push({
       code: 'POST_SLOTS_FULL',
       message: `댓글 ${post.personaComments}건 + 대기열 ${post.openQueuePersonaCodes.length}건`
-        + ` — ${PERSONA_COMMENTS_PER_POST_MAX}자리가 찼다`,
+        + ` — 첫 댓글·일반 planner 예산 ${BOOTSTRAP_SLOTS_PER_POST}자리가 찼다`,
     })
   }
   if (post.onHold === null) {
@@ -274,7 +275,7 @@ export function judgePlannerPersona(
   /**
    * 🔴 **같은 Persona 가 같은 글에 두 번 달지 않는다.**
    *
-   *    글당 5건을 연 대가로 반드시 지켜야 하는 쪽이 이것이다.
+   *    한 글에 여러 Persona 발화를 연 대가로 반드시 지켜야 하는 쪽이 이것이다.
    *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 **"한 사람이 여럿인 척하는 것"** 이다.
    *    이미 발행된 댓글과 **열려 있는 대기열**을 둘 다 본다 — 대기열을 빼면
    *    승인을 기다리는 사이에 같은 사람이 한 번 더 계획된다.
@@ -367,9 +368,9 @@ export type PlanInput = {
  * 🔴 **같은 Persona 가 같은 글에 두 번 달지 않는다** (2026-09-11 계약 교체).
  *
  *    옛 판은 "한 Persona 는 **한 회차에** 한 번만" 이었다. 글당 1건 시절에는
- *    그 둘이 같은 뜻이었지만, 글당 5건을 열고 나면 완전히 다른 규칙이 된다 —
+ *    그 둘이 같은 뜻이었지만, 한 글에 여러 발화를 열고 나면 완전히 다른 규칙이 된다 —
  *    Persona 가 24명인데 회차당 1회씩만 쓰면 하루 24건이 천장이 되고,
- *    글 100편 × 5자리(=500)는 영원히 닿지 못하는 수가 된다.
+ *    글 100편 × planner 5자리(=500)는 영원히 닿지 못하는 수가 된다.
  *
  *    그래서 제약을 **글 단위**로 옮긴다. 한 사람이 여러 글에 말하는 것은 커뮤니티이고,
  *    한 사람이 한 글에 두 번 말하는 것은 여럿인 척하는 것이다. 막을 것은 뒤엣것이다.
@@ -452,7 +453,7 @@ export function planCommentDistribution(input: PlanInput): PlanResult {
           priority: priorityOf(post, input.nowMs),
           why: total === 0 && taken.size === 0
             ? '아무도 답하지 않은 글이다'
-            : `댓글 ${total + taken.size}건 — 글당 ${PERSONA_COMMENTS_PER_POST_MAX}건 미만이라 아직 자리가 있다`,
+            : `댓글 ${total + taken.size}건 — 첫 댓글·일반 planner 예산 ${BOOTSTRAP_SLOTS_PER_POST}건 미만이라 아직 자리가 있다`,
         }
       }
     }
@@ -462,10 +463,10 @@ export function planCommentDistribution(input: PlanInput): PlanResult {
   }
 
   /**
-   * ③ 🔴 **라운드로빈.** 한 바퀴에 글마다 한 건씩, 최대 `PERSONA_COMMENTS_PER_POST_MAX` 바퀴.
+   * ③ 🔴 **라운드로빈.** 한 바퀴에 글마다 한 건씩, 최대 `BOOTSTRAP_SLOTS_PER_POST` 바퀴.
    *    바퀴 수가 유한하고 한 바퀴가 유한하므로 무한 루프는 없다.
    */
-  outer: for (let pass = 0; pass < PERSONA_COMMENTS_PER_POST_MAX; pass += 1) {
+  outer: for (let pass = 0; pass < BOOTSTRAP_SLOTS_PER_POST; pass += 1) {
     let progressed = false
     for (const post of eligible) {
       if (items.length >= input.limit) break outer

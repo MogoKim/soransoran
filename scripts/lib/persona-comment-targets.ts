@@ -63,6 +63,11 @@ export type SourcePost = {
   visibility: NonNullable<PostAuthorFacts['visibility']>
   /** 🔴 `personaCode` 는 "누가 달았나" 다 — 같은 사람이 두 번 달지 않게 하는 근거다 */
   comments: readonly { origin: string; content: string; personaCode: string | null }[]
+  /**
+   * 🔴 삭제 이력을 포함해 이 글에서 한 번이라도 말한 Persona 코드다.
+   * 삭제는 화면의 빈자리는 돌려주지만 같은 Persona의 발화 자격은 돌려주지 않는다.
+   */
+  personaCodesEverOnPost: readonly string[]
 }
 
 export type SourcePersona = BuildPersona & {
@@ -342,9 +347,7 @@ export async function materializeTargets(args: {
     authorPersonaCode: p.authorPersonaCode,
     memberComments: p.comments.filter((c) => c.origin === 'MEMBER' || c.origin === 'GUEST').length,
     personaComments: p.comments.filter((c) => c.origin === 'PERSONA').length,
-    personaCodesOnPost: p.comments
-      .map((c) => c.personaCode)
-      .filter((code): code is string => code !== null),
+    personaCodesOnPost: p.personaCodesEverOnPost,
     openQueuePersonaCodes: openQueueByPost.get(p.id) ?? [],
     publishedAtMs: p.publishAtMs,
     // 🔴 가입인사는 대화를 여는 자리가 아니다
@@ -520,7 +523,7 @@ export async function materializeTargets(args: {
           hasOpenQueue: openDedupKeys.has(dedupKeyOf(pr.id, pe.code, item.reactionRole)),
           personaCommentsOnPost: pr.comments.filter((c) => c.origin === 'PERSONA').length,
           // 🔴 수가 아니라 "이 사람이 이미 달았나" — 적재 계약이 따로 묻는 축이다
-          personaAlreadyOnPost: pr.comments.some((c) => c.personaCode === pe.code),
+          personaAlreadyOnPost: pr.personaCodesEverOnPost.some((code) => code === pe.code),
           postStatus: pr.visibility.status,
           personaActive: pe.status === 'active',
           personaRealMember: judgeRealMember({

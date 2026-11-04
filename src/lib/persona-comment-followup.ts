@@ -1,11 +1,11 @@
 /**
- * 글당 Persona **추가 댓글**(첫 댓글 뒤 0~4건) 판정 — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
+ * 글당 Persona **추가 댓글**(첫 댓글 뒤 0~9건) 판정 — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
  *
  * 🔴 **왜 생겼나** (2026-10-13 · D100 canon §5 "첫 댓글에서 선택적 다중 턴으로").
  *
  *    무인 레인은 글마다 60분 안 첫 댓글 1건을 보장한다(`persona-comment-auto-lane`). 그 1건은
  *    **증명용 하한**이지 "글마다 정확히 1건" 이라는 제품 정책이 아니다(canon §5). 질문·경험·공감·
- *    가벼운 반론처럼 이어질 거리가 있으면 대화가 한 번 더 이어져야 하고, 인사·맞장구로 끝나는
+ *    가벼운 반론처럼 이어질 거리가 있으면 대화가 자연스럽게 이어져야 하고, 인사·맞장구로 끝나는
  *    대화는 끝나도 된다. 이 파일은 **"지금 이 글에 한 건 더 이어도 되는가"** 하나만 판정한다.
  *
  * 🔴 **첫 댓글 계약을 건드리지 않는다.**
@@ -20,7 +20,7 @@
  *
  * 🔴 **필요성은 대화가 정한다** (2026-10-13 마스터 보정). 추가 댓글은 **아직 답이 없는**
  *    질문·반론·경험·공감이 있을 때만 한 건씩 잇는다. 같은 대상·같은 hook 은 한 번만 쓴다.
- *    근거가 없으면 0건, 근거가 있으면 최대 4건이다. 글 id 해시로 수량을 정하지 않는다 —
+ *    근거가 없으면 0건, 근거가 있어도 총량·profile·비용 상한 안에서만 최대 9건이다. 글 id 해시로 수량을 정하지 않는다 —
  *    결정적 해시는 **동률 순서와 시간차 jitter** 에만 쓴다.
  *    한 회차에 한 글에는 최대 한 건이다 — 한꺼번에 달지 않는다.
  *
@@ -28,7 +28,7 @@
  *    (제한 canary 에서 실회원 댓글 자동 답글은 금지다 — D100 canon §5).
  *
  * 🔴 **글쓴이 답글** (2026-10-24 · canon §5) — 글쓴이 Persona 는 첫 댓글을 달지 않는다. 다만 자기 글의 다른 Persona
- *    댓글이 이어질 거리를 주면 그 댓글에 **답글로 한 번** 답한다. 화자는 `followupSpeakerOf` 하나가 정하고,
+ *    댓글이 이어질 거리를 주면 그 댓글에 **답글로만** 답한다. 화자는 `followupSpeakerOf` 하나가 정하고,
  *    고르기(`pickFollowupPersona`)와 발행 트랜잭션(`judgeFollowupPublish`)이 같은 함수를 쓴다 — 그 자리에 다른 Persona 를 넣지 않는다.
  * 🔴 **첫 댓글도 대화 기능을 쓴다** — 글 hook 에 붙는 새 최상위 댓글은 이미 있는 최상위 Persona 댓글(첫 댓글 포함)의
  *    반응 역할과 같은 기능을 반복하지 않는다(`postHookRolesOf`). 그냥 한마디(other)와 공감(empathy)은 같은 일반 반응이다.
@@ -43,7 +43,11 @@ import { authorKindOf, buildCommentThreads, conversationContextFor, type Context
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { MEMBER_COMMENT_LIMIT_ON_PUBLISH } from './persona-comment-queue'
 import { COMMENT_REACTION_ROLES, isReactionType, type ReactionType } from './persona-reaction-roles'
-import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
+import {
+  PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX,
+  PERSONA_COMMENTS_PER_POST_MAX,
+  PERSONA_REPLY_CHAIN_MAX,
+} from './persona-target-rules'
 import type { PersonaCommentProvenance } from './stage-evidence'
 import type { DecisionStageEnv } from './scale-runtime'
 import { RUNTIME_STAGES, isRuntimeStage, type RuntimeStage } from './scale-profile'
@@ -70,10 +74,16 @@ export function readFollowupSwitch(env: Readonly<Record<string, string | undefin
 // 🔴 수량 · 시간 정본 — 새 숫자는 여기에만 있다
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 글당 Persona 댓글 총량 상한 = 장기 정본 5 (새 숫자 아님) */
+/** 🔴 글당 Persona 댓글 총량 절대 상한 = 10 */
 export const FOLLOWUP_TOTAL_PER_POST_MAX = PERSONA_COMMENTS_PER_POST_MAX
-/** 🔴 첫 댓글 뒤 추가 상한 = 5 − 첫 댓글 1 = 4 */
+/** 🔴 첫 댓글 뒤 추가 절대 상한 = 10 − 첫 댓글 1 = 9 */
 export const FOLLOWUP_EXTRA_PER_POST_MAX = FOLLOWUP_TOTAL_PER_POST_MAX - AUTO_PERSONA_COMMENTS_PER_POST_MAX
+
+/**
+ * 🔴 profile 산출용 운영 예산 기준. 글당 구조 상한(9)과 분리한다.
+ * 이 값은 모든 글에 4건을 채우라는 의무가 아니라 기존 Dn 비용 외피를 보존하는 산출 천장이다.
+ */
+export const FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST = 4
 
 /** 직전 Persona 댓글에서 최소 이만큼 띄운다 */
 export const FOLLOWUP_MIN_GAP_MS = 30 * 60_000
@@ -85,8 +95,8 @@ export const FOLLOWUP_POST_AGE_MAX_MS = 24 * 3_600_000
 /** 실회원 댓글이 1~2건이면 추가 상한을 이만큼으로 줄인다 */
 export const FOLLOWUP_EXTRA_WITH_MEMBERS_MAX = 1
 
-/** 답글 사슬 길이 상한(루트 포함) — 새 답글까지 합쳐 이 길이를 넘지 않는다 */
-export const FOLLOWUP_CHAIN_MAX = 3
+/** 답글 사슬 길이 상한(루트 포함) — 글쓴이와 다른 Persona 가 최대 세 번 왕복할 수 있다. */
+export const FOLLOWUP_CHAIN_MAX = PERSONA_REPLY_CHAIN_MAX
 
 /** 이어질 거리로 보는 반응 — `other`(그냥 한마디) · `information` 은 자연스러운 끝이다 */
 export const FOLLOWUP_HOOKS: readonly ReactionType[] = ['question', 'rebuttal', 'experience', 'empathy']
@@ -288,10 +298,10 @@ export function postHookRolesOf(f: FollowupPostFacts, hook: ReactionType): reado
 }
 
 /**
- * 🔴 **이 답글 자리의 화자** — 글쓴이 Persona 가 자기 글의 **다른 Persona** 댓글에 답글로 **한 번** 답할 자리인가.
+ * 🔴 **이 답글 자리의 화자** — 글쓴이 Persona 가 자기 글의 **다른 Persona** 댓글에 답할 자리인가.
  *    · 새 최상위 댓글 · 글쓴이를 모름 · 대상이 Persona 댓글이 아님 → `other`
- *    · 글쓴이가 이 글에 이미 댓글을 단 적이 있다(지운 것 포함) → `other` — 글쓴이 답글은 한 번뿐이다.
- *      대상이 글쓴이 자신의 댓글이면 글쓴이는 이미 이 글에 쓴 것이므로 이 한 줄이 자기 답글도 막는다(판정 한 벌).
+ *    · 대상이 글쓴이 자신의 댓글 · 글쓴이 답글이 상한에 닿음 → `other`
+ *    대상 하나는 한 번만 소비되므로 글쓴이가 반복해도 서로 다른 말에 답한다.
  *    대상이 지금 답할 수 있는 자리인지(삭제·신고·이미 답함·사슬 깊이)는 `replyTargetOpen` 이 따로 본다.
  */
 export function followupSpeakerOf(f: FollowupPostFacts, parentCommentId: string | null): FollowupSpeaker {
@@ -299,7 +309,9 @@ export function followupSpeakerOf(f: FollowupPostFacts, parentCommentId: string 
   if (parentCommentId === null || author === null || author === undefined) return { kind: 'other' }
   const parent = f.comments.find((c) => c.id === parentCommentId)
   if (parent === undefined || parent.commentOrigin !== 'PERSONA') return { kind: 'other' }
-  if (f.comments.some((c) => c.commentOrigin === 'PERSONA' && c.personaId === author)) return { kind: 'other' }
+  if (parent.personaId === author) return { kind: 'other' }
+  const authorTurns = f.comments.filter((c) => c.commentOrigin === 'PERSONA' && c.personaId === author).length
+  if (authorTurns >= PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) return { kind: 'other' }
   return { kind: 'author', personaId: author }
 }
 
@@ -313,7 +325,7 @@ type FollowupBase =
       cap: number
       ordinal: number
       lastPersonaMs: number
-      /** 이 글에 이미 나온 Persona(지운 댓글 포함) + 글쓴 Persona — 다시 쓰지 않는다 */
+      /** 이 글에 이미 나온 Persona(지운 댓글 포함) + 글쓴 Persona — 일반 화자는 다시 쓰지 않는다 */
       onPost: ReadonlySet<string>
       publishedAtMs: number
     }
@@ -344,6 +356,7 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   }
   const live = f.comments.filter((c) => !c.isDeleted)
   const livePersona = live.filter((c) => c.commentOrigin === 'PERSONA')
+  const historicalPersonaCount = f.comments.filter((c) => c.commentOrigin === 'PERSONA').length
   const liveReal = live.filter((c) => c.commentOrigin === 'MEMBER' || c.commentOrigin === 'GUEST')
 
   // ── 첫 댓글 계약 — 추가 댓글은 자동 출처 첫 댓글 위에서만 ──
@@ -381,7 +394,9 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   for (const c of f.comments) if (c.commentOrigin === 'PERSONA' && c.personaId !== null) onPost.add(c.personaId)
   if (f.authorPersonaId !== null) onPost.add(f.authorPersonaId)
   return {
-    ok: true, live, livePersona, extrasSoFar, cap, ordinal: personaCount + 1,
+    // 🔴 구조 상한은 live 수로 보되, 멱등 순번은 삭제 이력을 포함해 단조 증가한다.
+    // 삭제 뒤 live 수로 순번을 재사용하면 이미 저장된 followup:<post>:N 과 충돌한다.
+    ok: true, live, livePersona, extrasSoFar, cap, ordinal: historicalPersonaCount + 1,
     lastPersonaMs: Math.max(...livePersona.map((c) => c.createdAt.getTime())), onPost, publishedAtMs: f.publishedAtMs,
   }
 }
@@ -700,7 +715,8 @@ export function verifyStamp(raw: unknown, expect: { postId: string; dedupKey: st
   const s = raw as Partial<FollowupStamp>
   if (s.v !== FOLLOWUP_STAMP_VERSION) return { ok: false, reason: `도장 판이 ${String(s.v)} 다` }
   if (s.postId !== expect.postId) return { ok: false, reason: '도장의 글과 대상 글이 다르다' }
-  if (!isCount(s.ordinal) || s.ordinal < 2 || s.ordinal > FOLLOWUP_TOTAL_PER_POST_MAX) return { ok: false, reason: '도장 순번이 범위 밖이다' }
+  // 순번은 구조 상한이 아니라 삭제 이력을 포함한 사건 순서다. live 상한 10은 followupBaseOf가 따로 지킨다.
+  if (!isCount(s.ordinal) || s.ordinal < 2) return { ok: false, reason: '도장 순번이 범위 밖이다' }
   if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey) return { ok: false, reason: '도장 순번과 멱등 열쇠가 다르다' }
   if (s.parentCommentId !== null && (typeof s.parentCommentId !== 'string' || s.parentCommentId === '')) {
     return { ok: false, reason: '답글 대상이 모양이 아니다' }
@@ -795,7 +811,15 @@ export type FollowupPublishFacts = {
  *    기존 재검사(9관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)는
  *    호출부(`publishCandidateTx`)가 **그대로** 돌린다 — 이 판정은 그 위에 더할 뿐이다.
  */
-export function judgeFollowupPublish(f: FollowupPublishFacts): { ok: boolean; blockers: string[] } {
+export type FollowupPublishVerdict = {
+  ok: boolean
+  blockers: string[]
+  personaRepeatAllowed: boolean
+  /** 승인 profile의 오늘 남은 추가 댓글 수. 실패 시 null — bootstrap 예산으로 대체하지 않는다. */
+  profileDailyRemaining: number | null
+}
+
+export function judgeFollowupPublish(f: FollowupPublishFacts): FollowupPublishVerdict {
   const blockers: string[] = []
   if (!f.switch.enabled) blockers.push(f.switch.reason)
   if (f.commentStage !== 'bootstrap-auto') blockers.push(`댓글 단계 ${f.commentStage} — 추가 댓글은 bootstrap-auto 위에서만`)
@@ -813,17 +837,25 @@ export function judgeFollowupPublish(f: FollowupPublishFacts): { ok: boolean; bl
   if (f.otherOpenQueue !== false) blockers.push(f.otherOpenQueue === null ? '다른 열린 후보를 읽지 못했다(fail-closed)' : '이 글에 다른 열린 후보가 있다')
 
   const st = verifyStamp(stampFromEditDiff(f.editDiff), { postId: f.post.postId, dedupKey: f.dedupKey })
-  if (!st.ok) { blockers.push(st.reason); return { ok: false, blockers } }
+  if (!st.ok) {
+    blockers.push(st.reason)
+    return { ok: false, blockers, personaRepeatAllowed: false, profileDailyRemaining: null }
+  }
   const b = followupBaseOf(f.post, f.nowMs)
-  if (!b.ok) { blockers.push(b.verdict.reason); return { ok: false, blockers } }
+  if (!b.ok) {
+    blockers.push(b.verdict.reason)
+    return { ok: false, blockers, personaRepeatAllowed: false, profileDailyRemaining: null }
+  }
   // 🔴 순번 — 적재 뒤 그 글에 다른 Persona 댓글이 생겼으면 이 후보의 자리는 사라졌다
   if (st.stamp.ordinal !== b.ordinal) blockers.push(`도장 순번 ${st.stamp.ordinal} ≠ 지금 자리 ${b.ordinal}`)
   // 🔴 시간차 — jitter 는 고를 때 이미 지났다. 여기서는 최소 간격만 다시 본다
   if (f.nowMs - b.lastPersonaMs < FOLLOWUP_MIN_GAP_MS) blockers.push('직전 Persona 댓글과 간격이 짧다')
   // 🔴 화자는 생성 쪽과 같은 함수가 정한다 — 글쓴이 답글 자리면 글쓴이만, 아니면 이 글에 아직 없는 Persona 만
   const speaker = followupSpeakerOf(f.post, st.stamp.parentCommentId)
+  let personaRepeatAllowed = false
   if (speaker.kind === 'author') {
     if (f.candidatePersonaId !== speaker.personaId) blockers.push('🔴 글쓴이 답글 자리다 — 다른 Persona 로 바꿔 내보내지 않는다')
+    else personaRepeatAllowed = b.onPost.has(f.candidatePersonaId)
   } else if (b.onPost.has(f.candidatePersonaId)) blockers.push('🔴 이 Persona 는 이 글에 이미 썼거나 글쓴이다')
   if (st.stamp.parentCommentId === null) {
     if (!postHookOpen(f.post)) blockers.push('글 hook 은 이미 최상위 추가 댓글로 소비됐다')
@@ -840,5 +872,14 @@ export function judgeFollowupPublish(f: FollowupPublishFacts): { ok: boolean; bl
       if (!open.ok) blockers.push(open.reason)
     }
   }
-  return { ok: blockers.length === 0, blockers }
+  const ok = blockers.length === 0
+  const profileDailyRemaining = ok && prof.ok && isCount(f.followupsTodayInTx)
+    ? Math.max(0, prof.profile.dailyCount - f.followupsTodayInTx)
+    : null
+  return {
+    ok,
+    blockers,
+    personaRepeatAllowed: ok && personaRepeatAllowed,
+    profileDailyRemaining,
+  }
 }

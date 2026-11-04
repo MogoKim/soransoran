@@ -52,7 +52,8 @@ const window: CommentWindow = await (async (): Promise<CommentWindow> => {
 
 const kstDayStart = new Date(Math.floor((nowMs + 9 * 3_600_000) / 86_400_000) * 86_400_000 - 9 * 3_600_000)
 const publishedToday = await prisma.comment.count({
-  where: { isDeleted: false, commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
+  // 🔴 하루 500 절대 상한은 발행 사건 예산이다. 삭제는 화면에서만 숨기고 자리를 돌려주지 않는다.
+  where: { commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
 }).catch(() => null)
 const killSwitchOff = await (async (): Promise<boolean | null> => {
   try {

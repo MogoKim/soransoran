@@ -41,7 +41,7 @@ const MUTATIONS: Mutation[] = [
   M('추가 댓글 표식을 첫 댓글 표식과 같게', "FOLLOWUP_LANE_ACTIVITY_DECIDED_BY = 'auto-followup'", "FOLLOWUP_LANE_ACTIVITY_DECIDED_BY = 'auto'"),
   // 판정 본체 — 단계 증거
   M('추가 댓글을 단계 상한·중복에 다시 넣음', 'p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))', 'p.personaComments.filter(() => true)'),
-  M('상한을 1→5 로 단순 변경', 'if (stage === \'bootstrap-auto\') return AUTO_PERSONA_COMMENTS_PER_POST_MAX', 'if (stage === \'bootstrap-auto\') return PERSONA_COMMENTS_PER_POST_MAX'),
+  M('첫 댓글 상한을 1→10으로 단순 변경', 'if (stage === \'bootstrap-auto\') return AUTO_PERSONA_COMMENTS_PER_POST_MAX', 'if (stage === \'bootstrap-auto\') return PERSONA_COMMENTS_PER_POST_MAX'),
   M('상한 판정을 전체 댓글로', 'if (cap !== null && stageComments.length > cap)', 'if (cap !== null && p.personaComments.length > cap)'),
   M('중복 판정을 전체 댓글로', 'for (const c of stageComments) {\n        const k', 'for (const c of p.personaComments) {\n        const k'),
   M('자기 글 판정을 전체 댓글로', 'const own = stageComments.filter(', 'const own = p.personaComments.filter('),
@@ -54,14 +54,23 @@ const MUTATIONS: Mutation[] = [
   M('대화 감사 — 깨진 출처 무시', "if (broken > 0) codes.add('FOLLOWUP_PROVENANCE_BROKEN')", ''),
   M('대화 감사 — 첫 댓글 없는 추가 허용', "if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt)) codes.add('FOLLOWUP_WITHOUT_FIRST')", ''),
   M('대화 감사 — 첫 댓글보다 앞선 추가 허용', 'if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt))', 'if (firstAt === null)'),
-  M('대화 감사 — 총량 5 초과 허용', "if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')", ''),
+  M('대화 감사 — 총량 10 초과 허용', "if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')", ''),
+  M('대화 감사 — 삭제된 과거 Persona 턴을 제외', "const personaHistory = history.filter((c) => c.commentOrigin === 'PERSONA')", "const personaHistory = history.filter((c) => c.commentOrigin === 'PERSONA' && !c.isDeleted)"),
   M('대화 감사 — 같은 Persona 허용', "codes.add('FOLLOWUP_DUP_PERSONA')", 'void 0'),
-  M('대화 감사 — 자기 글 허용', "codes.add('FOLLOWUP_SELF')", 'void 0'),
+  M('대화 감사 — 글쓴이 답글 상한·최상위 제한 제거', "if (own.some((c) => c.parentId === null) || own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) codes.add('FOLLOWUP_SELF')", 'void 0'),
+  M('대화 감사 — 시간순 장부 누락을 PASS', "if (history === undefined) {", 'if (false) {'),
+  M('대화 감사 — 없는·비 Persona·선행 대상을 허용', "if (parent === undefined || parent.commentOrigin !== 'PERSONA' || parent.createdAtMs > c.createdAtMs\n        || (parent.reportedAtMs !== null && parent.reportedAtMs <= c.createdAtMs)) {", 'if (false) {'),
+  M('대화 감사 — 발행 전 신고를 허용', '(parent.reportedAtMs !== null && parent.reportedAtMs <= c.createdAtMs)', 'false'),
+  M('대화 감사 — 나중 신고도 소급 실패', 'parent.reportedAtMs <= c.createdAtMs', 'parent.reportedAtMs >= 0'),
+  M('대화 감사 — 같은 답글 대상 재소비 허용', 'if (usesAtPublish > 1) {', 'if (false) {'),
+  M('대화 감사 — 나중 답글도 소급 재소비로 판정', 'x.parentId === c.parentId && x.createdAtMs <= c.createdAtMs', 'x.parentId === c.parentId'),
+  M('대화 감사 — 사슬 깊이 상한 제거', 'if (depth > PERSONA_REPLY_CHAIN_MAX) {', 'if (false) {'),
+  M('대화 감사 — 자기 댓글 답글 허용', "} else if (c.personaId !== null && parent.personaId === c.personaId) {", '} else if (false) {'),
   M('대화 감사를 판정에 싣지 않음', '...(conversation === undefined ? {} : { conversation })', ''),
   M('이유 줄에 대화 감사 FAIL 을 남기지 않음', "const conv = v.conversation?.verdict === 'FAIL'", 'const conv = false'),
   // repo — 실제 DB 읽기가 새 분류기를 쓰는가 (격리 DB 가 있을 때만 잴 수 있다)
-  M('repo 가 옛 분류기를 씀', 'const provenanceOf = (c: (typeof comments)[number]) => personaCommentProvenanceOf({',
-    'const provenanceOf = (c: (typeof comments)[number]) => commentProvenanceOf({', REPO, DB),
+  M('repo 가 옛 분류기를 씀', 'const provenanceOf = (c: (typeof allPersonaComments)[number]) => personaCommentProvenanceOf({',
+    'const provenanceOf = (c: (typeof allPersonaComments)[number]) => commentProvenanceOf({', REPO, DB),
 ]
 
 const dir = mkdtempSync(join(tmpdir(), 'stage-ev-mut-'))

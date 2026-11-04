@@ -143,13 +143,13 @@ console.log('\n══════ ⑦ cap — 🔴 NULL 은 무제한이 아니�
   expect('dailyCap 0 → 1건도 불가', has(zero, 'DAILY_CAP_EXCEEDED'), true)
 }
 
-console.log('\n══════ ⑧ 한 글에 페르소나 댓글 1~5건 (2026-09-11 계약 교체)')
+console.log('\n══════ ⑧ 한 글에 Persona 댓글 1~10건 (2026-11-04 계약 교체)')
 {
   // 🔴 경계값만 본다. 같은 **사람**이 두 번 다는 것은 댓글 레인 재검사가 막는다
-  const four = base(); four.personaCommentsOnPost = PERSONA_COMMENTS_PER_POST_MAX - 1
-  expect('4건 → 통과(자리 1개 남음)', has(four, 'PERSONA_POST_SLOTS_FULL'), false)
-  const five = base(); five.personaCommentsOnPost = PERSONA_COMMENTS_PER_POST_MAX
-  expect('5건 → PERSONA_POST_SLOTS_FULL', has(five, 'PERSONA_POST_SLOTS_FULL'), true)
+  const nine = base(); nine.personaCommentsOnPost = PERSONA_COMMENTS_PER_POST_MAX - 1
+  expect('9건 → 통과(자리 1개 남음)', has(nine, 'PERSONA_POST_SLOTS_FULL'), false)
+  const ten = base(); ten.personaCommentsOnPost = PERSONA_COMMENTS_PER_POST_MAX
+  expect('10건 → PERSONA_POST_SLOTS_FULL', has(ten, 'PERSONA_POST_SLOTS_FULL'), true)
   const one = base(); one.personaCommentsOnPost = 1
   expect('🔴 1건은 더 이상 막지 않는다(옛 계약 폐기)', has(one, 'PERSONA_POST_SLOTS_FULL'), false)
   expect('0건 → 통과', has(base(), 'PERSONA_POST_SLOTS_FULL'), false)

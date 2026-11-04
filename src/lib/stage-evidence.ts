@@ -26,10 +26,10 @@
  *                `COMMENT_PROVENANCE_BROKEN` FAIL 이다.
  *         (b) **추가 댓글 계약** — 글당 Persona 댓글 수 ≤ 그 댓글 단계의 상한(`personaCommentCapFor`) ·
  *             같은 Persona 두 번 0 · 자기 글 0. 🔴 "60분 안 2건" 자체는 실패가 아니다 — 상한을 넘을 때만이다.
- *             (bootstrap-auto 의 상한 1 이 "글당 정확히 1건" 을 지금 그대로 지킨다. 장기 1~5 는 상한 5 로 같은 판정이 받는다)
+ *             (bootstrap-auto 의 상한 1 이 "글당 정확히 1건" 을 지금 그대로 지킨다. 장기 구조 상한은 10이다)
  *         (c) 🔴 **추가 댓글은 단계 증거 밖이다** (2026-10-13 · PR #704 E1) — 추가 댓글 표식(`FOLLOWUP_LANE_*`)으로
  *             연결된 댓글(`followup` · `followup-broken`)은 (a) 분자 · (b) 상한 · 중복 · 자기 글 어디에도 세지 않는다.
- *             🔴 상한을 1→5 로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처는 지금 상한 그대로다.
+ *             🔴 첫 댓글 상한을 1→10으로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처는 지금 상한 그대로다.
  *             추가 댓글의 결함은 **대화 감사**(`judgeConversationAudit` · 판정의 `conversation` 칸)에서만 FAIL 이다 —
  *             첫 댓글 성공을 소급해서 지우지 않는다. 두 레인 표식이 섞인 행은 첫 댓글 축의 `broken` 이다(위 FAIL).
  *      ④ 사후 감사 — 🔴 **전수 감사가 아니라 정본 표본 계약이다** (마스터 정본 정정).
@@ -69,7 +69,9 @@ import {
 import {
   AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
 } from './persona-comment-auto-lane'
-import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
+import {
+  PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
+} from './persona-target-rules'
 import type { CommentStage } from './persona-comment-stage'
 import { auditTarget } from './auto-ready-v2'
 import type { Health } from './ops-status'
@@ -131,7 +133,7 @@ export type StageEvidenceVerdict = EvidenceVerdictFor<RuntimeStage>
 /**
  * 🔴 **글당 Persona 댓글 상한 — 댓글 단계의 정본 상수를 그대로 쓴다** (새 숫자 0).
  *    · `bootstrap-auto`             `AUTO_PERSONA_COMMENTS_PER_POST_MAX`(1) — 지금 무인 레인의 "글당 1건"
- *    · `bootstrap-review`·`organic` `PERSONA_COMMENTS_PER_POST_MAX`(5) — 장기 1~5
+ *    · `bootstrap-review`·`organic` `PERSONA_COMMENTS_PER_POST_MAX`(10) — 장기 구조 상한
  *    · `shadow`                     0 — 공개 write 가 없는 단계다
  */
 export function personaCommentCapFor(stage: CommentStage): number {
@@ -189,7 +191,7 @@ export function commentProvenanceOf(f: CommentLinkFacts): CommentProvenance {
 
 /**
  * 🔴 **추가 댓글(followup) 표식 — 첫 댓글 표식과 다른 값이다** (2026-10-13 · PR #704 E1).
- *    첫 댓글 뒤 선택적 추가 댓글 0~4건(`persona-comment-followup`)이 Queue `decidedBy` · ActivityLog `decidedBy` 에 남긴다.
+ *    첫 댓글 뒤 선택적 추가 댓글 0~9건(`persona-comment-followup`)이 Queue `decidedBy` · ActivityLog `decidedBy` 에 남긴다.
  *    🔴 단계 증거가 이 값을 알아야 추가 댓글을 첫 댓글 증거 · 수동 Persona 댓글 · 상한 어디에도 섞지 않는다 —
  *       그래서 정본은 증거 쪽(여기)이다. 추가 댓글 레인은 이 상수를 가져다 쓴다.
  */
@@ -236,6 +238,7 @@ export function personaCommentProvenanceOf(f: CommentLinkFacts): PersonaCommentP
 /** 🔴 대화 감사 코드 — 단계 증거 코드(`STAGE_EVIDENCE_CODES`)와 섞지 않는다 */
 export const CONVERSATION_AUDIT_CODES = [
   'FOLLOWUP_PROVENANCE_BROKEN', 'FOLLOWUP_WITHOUT_FIRST', 'FOLLOWUP_OVER_TOTAL', 'FOLLOWUP_DUP_PERSONA', 'FOLLOWUP_SELF',
+  'FOLLOWUP_TARGET_INVALID', 'FOLLOWUP_TARGET_REUSED', 'FOLLOWUP_CHAIN_OVER_DEPTH',
 ] as const
 export type ConversationAuditCode = (typeof CONVERSATION_AUDIT_CODES)[number]
 
@@ -246,13 +249,34 @@ export type ConversationAudit = {
 }
 
 /**
+ * 대화 감사용 시간순 장부. 현재 화면에 보이는 살아 있는 Persona 댓글과 섞지 않는다.
+ * 삭제된 댓글도 발행 당시의 화자·대상·사슬 사실은 남기고, 나중에 생긴 신고·답글이
+ * 이미 정상 발행된 대화를 소급해서 실패로 바꾸지 않게 시각을 보존한다.
+ */
+export type EvidenceConversationComment = {
+  id: string
+  personaId: string | null
+  parentId: string | null
+  commentOrigin: string
+  isDeleted: boolean
+  createdAtMs: number
+  /** 첫 신고 시각. null 은 신고 없음이다. */
+  reportedAtMs: number | null
+  /** Persona 댓글만 자동 출처를 갖는다. */
+  provenance: PersonaCommentProvenance | null
+}
+
+/**
  * 🔴 **대화 감사 — 추가 댓글만 본다. 단계 증거와 따로 판정한다** (2026-10-13).
  *    추가 댓글의 결함은 여기서 FAIL 이지만 🔴 그 글의 첫 댓글 성공을 소급해서 지우지 않는다(단계 증거는 그대로).
  *    · 출처가 깨진 추가 댓글                                           FOLLOWUP_PROVENANCE_BROKEN
  *    · 자동 첫 댓글(`auto`)이 없는 글 · 첫 댓글보다 앞선 추가 댓글         FOLLOWUP_WITHOUT_FIRST
  *    · 그 글의 Persona 댓글 총수 > 장기 정본 `PERSONA_COMMENTS_PER_POST_MAX` FOLLOWUP_OVER_TOTAL
- *    · 추가 댓글 Persona 가 그 글에 이미 쓴 Persona                       FOLLOWUP_DUP_PERSONA
- *    · 글쓴이의 추가 댓글이 최상위이거나 두 건 이상(답글 한 번만 허용)     FOLLOWUP_SELF
+ *    · 글쓴이가 아닌 추가 댓글 Persona 가 그 글에 이미 쓴 Persona            FOLLOWUP_DUP_PERSONA
+ *    · 글쓴이의 추가 댓글이 최상위이거나 승인 상한을 넘음                  FOLLOWUP_SELF
+ *    · 발행 시점에 대상이 없거나 Persona가 아니거나 이미 신고됨                 FOLLOWUP_TARGET_INVALID
+ *    · 발행 시점까지 한 댓글을 둘 이상이 답글 대상으로 소비함                  FOLLOWUP_TARGET_REUSED
+ *    · 답글 사슬이 정본 상한을 넘음                                         FOLLOWUP_CHAIN_OVER_DEPTH
  *    🔴 추가 댓글이 하나도 없으면 PASS 다(대화를 잇지 않는 글이 정상이다).
  */
 export function judgeConversationAudit(posts: readonly EvidencePost[]): ConversationAudit {
@@ -260,28 +284,101 @@ export function judgeConversationAudit(posts: readonly EvidencePost[]): Conversa
   let followups = 0
   let broken = 0
   let postsWithFollowup = 0
+  let invalidTargets = 0
+  let reusedTargets = 0
+  let overDepth = 0
   for (const p of posts) {
-    const fu = p.personaComments.filter((c) => isFollowupProvenance(c.provenance))
+    const liveFollowups = p.personaComments.filter((c) => isFollowupProvenance(c.provenance))
+    const history = p.conversationComments
+    if (history === undefined) {
+      if (liveFollowups.length === 0) continue
+      invalidTargets += 1
+      codes.add('FOLLOWUP_TARGET_INVALID')
+      followups += liveFollowups.length
+      postsWithFollowup += 1
+      continue
+    }
+    const personaHistory = history.filter((c) => c.commentOrigin === 'PERSONA')
+    const fu = personaHistory.filter((c) => c.provenance !== null && isFollowupProvenance(c.provenance))
     if (fu.length === 0) continue
     followups += fu.length
     postsWithFollowup += 1
     broken += fu.filter((c) => c.provenance === 'followup-broken').length
-    const firsts = p.personaComments.filter((c) => c.provenance === 'auto')
+    const firsts = personaHistory.filter((c) => c.provenance === 'auto')
     const firstAt = firsts.length === 0 ? null : Math.min(...firsts.map((c) => c.createdAtMs))
     if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt)) codes.add('FOLLOWUP_WITHOUT_FIRST')
     if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')
-    const seen = p.personaComments.map((c) => c.personaId ?? '(없음)')
-    if (fu.some((c) => c.personaId === null || seen.filter((x) => x === c.personaId).length > 1)) codes.add('FOLLOWUP_DUP_PERSONA')
-    // 🔴 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 추가 댓글이거나 두 번째부터는 자기 글 결함이다
+    const seen = personaHistory.map((c) => c.personaId ?? '(없음)')
+    if (fu.some((c) => c.personaId === null || (c.personaId !== p.authorPersonaId
+      && seen.filter((x) => x === c.personaId).length > 1))) codes.add('FOLLOWUP_DUP_PERSONA')
+    // 🔴 삭제된 과거 턴도 셌다. 삭제로 글쓴이 3회 상한이 다시 열리면 안 된다.
     const own = p.authorPersonaId === null ? [] : fu.filter((c) => c.personaId === p.authorPersonaId)
-    if (own.some((c) => c.topLevel) || own.length > 1) codes.add('FOLLOWUP_SELF')
+    if (own.some((c) => c.parentId === null) || own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) codes.add('FOLLOWUP_SELF')
+
+    /**
+     * 🔴 발행 트랜잭션만 믿지 않는다. 운영 DB가 우회 write·옛 코드·부분 복구로 깨졌어도
+     *    사후 대화 감사가 같은 구조 계약을 다시 검출해야 한다.
+     */
+    const byId = new Map<string, EvidenceConversationComment>()
+    for (const c of history) {
+      if (c.id.trim() === '' || byId.has(c.id)) {
+        invalidTargets += 1
+        codes.add('FOLLOWUP_TARGET_INVALID')
+        continue
+      }
+      byId.set(c.id, c)
+    }
+    for (const c of fu) {
+      if (c.parentId === null) continue
+      const parent = byId.get(c.parentId)
+      if (parent === undefined || parent.commentOrigin !== 'PERSONA' || parent.createdAtMs > c.createdAtMs
+        || (parent.reportedAtMs !== null && parent.reportedAtMs <= c.createdAtMs)) {
+        invalidTargets += 1
+        codes.add('FOLLOWUP_TARGET_INVALID')
+      } else if (c.personaId !== null && parent.personaId === c.personaId) {
+        codes.add('FOLLOWUP_SELF')
+      }
+      // 🔴 이 댓글이 발행된 시점까지만 본다. 나중에 실회원이 같은 대상에 답해도 과거 발행은 정상이다.
+      const usesAtPublish = history.filter((x) => x.parentId === c.parentId && x.createdAtMs <= c.createdAtMs).length
+      if (usesAtPublish > 1) {
+        reusedTargets += 1
+        codes.add('FOLLOWUP_TARGET_REUSED')
+      }
+
+      let depth = 1
+      let cursor: EvidenceConversationComment | undefined = c
+      const visited = new Set<string>()
+      while (cursor !== undefined && cursor.parentId !== null) {
+        if (visited.has(cursor.id)) {
+          invalidTargets += 1
+          codes.add('FOLLOWUP_TARGET_INVALID')
+          break
+        }
+        visited.add(cursor.id)
+        cursor = byId.get(cursor.parentId)
+        if (cursor === undefined) {
+          invalidTargets += 1
+          codes.add('FOLLOWUP_TARGET_INVALID')
+          break
+        }
+        depth += 1
+        if (depth > PERSONA_REPLY_CHAIN_MAX) {
+          overDepth += 1
+          codes.add('FOLLOWUP_CHAIN_OVER_DEPTH')
+          break
+        }
+      }
+    }
   }
   if (broken > 0) codes.add('FOLLOWUP_PROVENANCE_BROKEN')
   const ordered = CONVERSATION_AUDIT_CODES.filter((c) => codes.has(c))
   return {
     verdict: ordered.length > 0 ? 'FAIL' : 'PASS',
     codes: ordered,
-    counts: { followupComments: followups, followupBroken: broken, postsWithFollowup },
+    counts: {
+      followupComments: followups, followupBroken: broken, postsWithFollowup,
+      followupInvalidTargets: invalidTargets, followupReusedTargets: reusedTargets, followupOverDepth: overDepth,
+    },
   }
 }
 
@@ -310,7 +407,17 @@ export type EvidencePost = {
    * 이 글의 살아 있는 Persona 댓글 전부 — 🔴 `provenance` 는 `personaCommentProvenanceOf` 결과다.
    *    첫 댓글 보장은 `auto` 만 센다 · 추가 댓글(`followup*`)은 단계 증거 밖이고 대화 감사가 본다.
    */
-  personaComments: readonly { personaId: string | null; createdAtMs: number; topLevel: boolean; provenance: PersonaCommentProvenance }[]
+  personaComments: readonly {
+    personaId: string | null
+    createdAtMs: number
+    topLevel: boolean
+    provenance: PersonaCommentProvenance
+  }[]
+  /**
+   * 대화 감사용 전체 시간순 장부. 회원·운영자·삭제된 댓글도 포함한다.
+   * 추가 댓글이 있는데 이 사실을 읽지 못하면 fail-closed 다.
+   */
+  conversationComments?: readonly EvidenceConversationComment[]
   /**
    * 🔴 **발행 트랜잭션이 남긴 release 도장 상태**(`releaseStampStatusOf`) — 조항 ⑦.
    *    Queue 가 없으면 `MISSING` 이다(도장을 확인할 곳이 없다).
@@ -432,7 +539,7 @@ export function judgeEvidenceForTarget<S extends string>(
       if (p.publishLogs !== 1) codes.add('DUP_PUBLISH_LOG')
       /**
        * 🔴 **추가 댓글(`followup*`)은 단계 증거의 분자·상한·중복 밖이다** (2026-10-13 · PR #704 E1).
-       *    상한을 1→5 로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처만 지금 상한으로 센다.
+       *    첫 댓글 상한을 1→10으로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처만 지금 상한으로 센다.
        *    추가 댓글의 결함(출처 · 중복 · 자기 글 · 총량)은 대화 감사(`judgeConversationAudit`)가 따로 본다.
        */
       const stageComments = p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))

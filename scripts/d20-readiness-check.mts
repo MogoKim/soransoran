@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 
 import { deriveFollowupProfile, type FollowupMeasure } from '../src/lib/followup-profile-derive'
 import {
-  FOLLOWUP_EXTRA_PER_POST_MAX, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
+  FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
 } from '../src/lib/persona-comment-followup'
 import { COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import { profileOf } from '../src/lib/scale-profile'
@@ -72,8 +72,8 @@ console.log('\n② 식 — 실측에서만 나온다')
   const d = derive(measure())
   check('정상 실측 → CANDIDATE', d.verdict === 'CANDIDATE' && d.candidate !== null, `${d.verdict} ${d.codes.join(',')}`)
   const c = d.candidate!
-  check('하루 건수 = D20 목표 × 글당 추가 상한', c.dailyCount === D20_POSTS * FOLLOWUP_EXTRA_PER_POST_MAX && c.dailyCount === 80, String(c.dailyCount))
-  check('D10 profile 도 같은 규칙(10 × 4 = 40)', D10_PROFILE.dailyCount === profileOf('d10').dailyTarget * FOLLOWUP_EXTRA_PER_POST_MAX)
+  check('하루 건수 = D20 목표 × 운영 예산 기준 4(구조 상한 9와 분리)', c.dailyCount === D20_POSTS * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST && c.dailyCount === 80, String(c.dailyCount))
+  check('D10 profile 도 같은 운영 예산 기준(10 × 4 = 40)', D10_PROFILE.dailyCount === profileOf('d10').dailyTarget * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST)
   check('🔴 하루 USD = 하루 건수 × (정산 USD / 실제 발행 추가 댓글) — 버린 요청 비용 포함', c.dailyUsd === 0.24, String(c.dailyUsd))
   check('🔴 단가가 바뀌면 하루 USD 도 그만큼 — 상수가 아니다',
     derive(measure({ followup: { settled: 12, settledUsd: 0.06, open: 0 } }), { cap: 1 }).candidate?.dailyUsd === 0.48)

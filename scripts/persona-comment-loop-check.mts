@@ -45,6 +45,7 @@ import {
   type AttemptFsOps, type AttemptStore,
 } from './lib/persona-comment-attempt-store.mjs'
 import { parseAttemptJournal, serializeAttemptJournal } from '../src/lib/persona-comment-attempt-policy'
+import { BOOTSTRAP_SLOTS_PER_POST } from '../src/lib/persona-comment-bootstrap-budget'
 import { lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, LEASE_FD_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
 import { spawn } from 'node:child_process'
 import type { TargetSource, GateContext } from './lib/persona-comment-targets'
@@ -637,7 +638,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     boardType: 'FREE', publishAtMs: publishedAtMs, category: null,
     sourceSite: null, authorPersonaCode: 'P02', authorOperatorWriterId: null, author: null,
     visibility: { status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false },
-    comments: [],
+    comments: [], personaCodesEverOnPost: [],
   })
   const sourceOf = (posts: readonly SourcePost[], personas: readonly SourcePersona[]): TargetSource => ({
     posts: async () => posts,
@@ -659,7 +660,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       }, { get: (t, k) => (k in t ? (t as Record<string | symbol, unknown>)[k] : (bypass.push(`personaApprovalQueue.${String(k)}`), async () => { throw new Error('우회') })) }),
       comment: { findMany: async () => [], count: async () => 0 },
       personaGlobalSwitch: { findUnique: async () => null },
-      // 🔴 오늘 예산(`countManagedPostsToday`)이 읽는 모양 — 관리형 Persona 글 6편 × 빈 자리 5 = 30자리
+      // 🔴 오늘 예산(`countManagedPostsToday`)이 읽는 모양 — 관리형 Persona 글 6편 × 운영 예산 자리 5 = 30자리
       post: { findMany: async () => Array.from({ length: 6 }, () => ({
         source: 'SYSTEM', status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
         persona: { code: 'P02' }, operatorWriterId: null, author: null, comments: [],
@@ -725,6 +726,9 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       ROUND_OFFSETS_MIN.every((m) => m * MIN <= WINDOW_MS) && ROUND_OFFSETS_MIN.every((m, i) => i === 0 || m - ROUND_OFFSETS_MIN[i - 1]! === 20))
     check('🔴 재현 모양 유지 — 이 글의 호출 기회 5 → 3 → 2 (호출 수를 잃지 않고 새 조합으로 채운다)',
       perRound.join(',') === '5,3,2', `호출 ${perRound.join(',')}`)
+    check('🔴 구조 상한 10이 첫 댓글 한 글의 provider 기회를 운영 예산 기준 5보다 크게 만들지 않는다',
+      perRound[0] !== undefined && perRound[0] <= BOOTSTRAP_SLOTS_PER_POST,
+      `첫 회차 ${perRound[0] ?? '없음'} · 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST}`)
     check('🔴 🔴 같은 글 60분 window — provider 로 보낸 post×Persona×role 조합 반복 0 (이전 회차 실패를 기억한다)',
       repeated.length === 0,
       `반복 ${repeated.length}개 — ${repeated.map(([k, rounds]) => `${k}(회차 ${rounds.join('·')})`).join(' · ')}`)

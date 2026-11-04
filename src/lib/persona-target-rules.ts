@@ -40,19 +40,26 @@ export const canSetTarget = (status: CandidateStatus): boolean =>
 export const MEMBER_COMMENT_LIMIT = 3
 
 /**
- * 🔴 **한 글에 Persona 댓글은 최대 이만큼이다** (2026-09-11 정본 교체).
+ * 🔴 **한 글에 Persona 댓글은 최대 이만큼이다** (2026-11-04 정본 교체).
  *
  *    옛 계약은 **글당 1명**이었다. 그 규칙은 "봇끼리 상호작용 금지" 를 지키려 한 것인데,
  *    실제로 막은 것은 상호작용이 아니라 **대화처럼 보이는 것 전부**였다.
  *    댓글이 하나 달린 글은 대화가 아니라 통보다 — 사람은 그런 글에 끼어들지 않는다.
  *
- *    그래서 상한을 1 에서 5 로 올린다. 대신 **같은 Persona 가 같은 글에 두 번 달지 않는다** —
+ *    그래서 상한을 10 으로 연다. 대신 **일반 Persona 가 같은 글에 두 번 달지 않는다** —
  *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 **"한 사람이 여럿인 척하는 것"** 이다.
+ *    글쓴이 Persona 는 자기 글의 서로 다른 답글 대상에 제한된 수만큼 답할 수 있다.
  *
  * 🔴 하한은 강제하지 않는다. 붙일 Persona 가 하나뿐이면 1건이고, 그것으로 끝이다.
- *    억지로 5건을 채우면 그것은 대화가 아니라 자동 응답기다.
+ *    억지로 10건을 채우면 그것은 대화가 아니라 자동 응답기다.
  */
-export const PERSONA_COMMENTS_PER_POST_MAX = 5
+export const PERSONA_COMMENTS_PER_POST_MAX = 10
+
+/** 글쓴이 Persona 가 자기 글에 남길 수 있는 추가 답글 상한. 최상위 댓글은 허용하지 않는다. */
+export const PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX = 3
+
+/** 루트를 포함한 자동 Persona 답글 사슬 상한. 화면은 평면화하므로 모바일 들여쓰기와 분리된다. */
+export const PERSONA_REPLY_CHAIN_MAX = 6
 
 export type TargetBlockCode =
   | 'CANDIDATE_STATUS'
@@ -100,7 +107,7 @@ export function judgeTargetPost(post: TargetPostFacts | null): TargetPostVerdict
     })
   }
 
-  // 🔴 한 글에 페르소나 댓글은 최대 5건이다. 자리가 남아 있으면 더 달 수 있다
+  // 🔴 한 글에 Persona 댓글은 최대 10건이다. 자리가 남아 있어도 대화 거리가 없으면 더 달지 않는다.
   if (post.personaComments >= PERSONA_COMMENTS_PER_POST_MAX) {
     blocks.push({
       code: 'POST_PERSONA_COMMENTS_FULL',

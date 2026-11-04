@@ -64,6 +64,7 @@ const { SupplyLlmSession } = await import('./lib/supply-llm-call.mjs')
 const { judgeCommentCall } = await import('./lib/persona-comment-call.mjs')
 const { readLedgerToday } = await import('./lib/ops-signals.mjs')
 const { commentLoopLimitsFromEnv } = await import('../src/lib/persona-comment-auto-lane')
+const { BOOTSTRAP_DAILY_MAX } = await import('../src/lib/persona-comment-bootstrap-budget')
 type TargetSource = import('./lib/persona-comment-targets').TargetSource
 type FollowupGenerate = import('./lib/persona-comment-followup-run.mjs').FollowupGenerate
 type FollowupPhaseReport = import('./lib/persona-comment-followup-run.mjs').FollowupPhaseReport
@@ -284,11 +285,17 @@ async function provOf(commentId: string): Promise<string> {
   })
 }
 /** 🔴 PENDING 추가 댓글 행을 손으로 넣는다 — planner 를 우회해도 트랜잭션이 막는지 본다 */
-async function injectFollowup(by: P, postId: string, stamp: Record<string, unknown>, ordinal: number): Promise<string> {
+async function injectFollowup(
+  by: P,
+  postId: string,
+  stamp: Record<string, unknown>,
+  ordinal: number,
+  text = '그 시간에 깨면 괜히 생각이 많아지죠. 오늘 밤은 조금 더 편히 주무셨으면 해요.',
+): Promise<string> {
   const q = await prisma.personaApprovalQueue.create({
     data: {
       personaId: by.id, targetPostId: postId, status: 'PENDING',
-      candidateText: '그 시간에 깨면 괜히 생각이 많아지죠. 오늘 밤은 조금 더 편히 주무셨으면 해요.',
+      candidateText: text,
       reactionType: 'experience', gateStatus: 'pass',
       gateResults: GATE_CODES.map((g) => ({ gate: g, outcome: 'pass', detail: 'fx' })),
       dedupKey: F.followupKeyOf(postId, ordinal), editDiff: JSON.parse(JSON.stringify({ [F.FOLLOWUP_STAMP_FIELD]: stamp })),
@@ -408,9 +415,20 @@ async function main(): Promise<void> {
       personaComments: await Promise.all(cs.map(async (c) => {
         const prov = await provOf(c.id)
         // 🔴 대조군 — #707 분리가 없던 것처럼 추가 댓글을 수동(none)으로 보면 상한 1 에 걸려야 한다
-        return { personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null,
+        return { id: c.id, personaId: c.personaId, parentId: c.parentId, reported: false,
+          createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null,
           provenance: (relabel && prov === 'followup' ? 'none' : prov) as never }
       })),
+      // 🔴 대화 감사는 발행 당시 순서·삭제 이력·신고 시각을 본다. 실제 repo 경로와 같은 시간순 장부를 준다.
+      conversationComments: await Promise.all(cs.map(async (c) => {
+        const prov = await provOf(c.id)
+        return {
+          id: c.id, personaId: c.personaId, parentId: c.parentId, commentOrigin: 'PERSONA' as const,
+          isDeleted: false, createdAtMs: c.createdAt.getTime(), reportedAtMs: null,
+          provenance: (relabel && prov === 'followup' ? 'none' : prov) as never,
+        }
+      })),
+      replyParentIds: cs.flatMap((c) => c.parentId === null ? [] : [c.parentId]),
     })
     const factsOf = async (relabel: boolean) => ({
       kstDate, stage: 'd5' as const, decision: null, posts: [await evPost(relabel)], orphanPublishLogs: 0, unloggedPublishes: 0,
@@ -429,26 +447,57 @@ async function main(): Promise<void> {
     followupOn(false)
   }
 
-  console.log('\n④ 글당 총 1~5 — 시간이 흘러도 Persona 댓글 5건을 넘지 않고 같은 Persona 0 · 자기 글 0')
+  console.log('\n④ 글당 총 1~10 — 상한 10 · 일반 Persona 1회 · 글쓴이 답글 최대 3회')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
     const a = await persona('P01'); const b = await persona('P02')
-    for (let i = 3; i <= 9; i += 1) await persona(`P0${i}`)
+    for (let i = 3; i <= 12; i += 1) await persona(`P${String(i).padStart(2, '0')}`)
     const pid = await post(a, 90); await autoFirst(b, pid, 80)
-    // 🔴 모든 답이 질문으로 끝나 거리가 계속 생긴다 — 그래도 5건에서 멈춰야 한다
-    const asks = REPLIES.map((t, i) => `${t.replace(/[.?]$/, '')} 혹시 다른 분들은 어떠세요 ${i}?`)
+    // 🔴 서로 다른 도입·내용의 질문이 계속 생겨도 구조 상한 10에서 멈춰야 한다
+    const asks = [
+      '잠이 깨는 시간이 길어지면 마음도 지치지요. 오늘 밤은 조금 나아지셨을까요?',
+      '새벽 공기가 유난히 무겁게 느껴질 때가 있더라고요. 지금은 괜찮으신가요?',
+      '가만히 누워 있으면 생각만 더 많아져서 힘들지요. 따뜻한 물은 드셔보셨어요?',
+      '아침이 오기만 기다리는 밤이라니 속상하셨겠어요. 낮에는 좀 쉬셨나요?',
+      '뒤척이는 소리까지 크게 들리는 날이 있지요. 요즘 계속 그러신 건가요?',
+      '몸은 피곤한데 잠이 달아나면 참 야속하죠. 오늘은 일찍 누우실 수 있나요?',
+      '비슷한 시간을 보내는 분들이 생각보다 많네요. 방 온도는 괜찮으셨어요?',
+      '긴 밤을 혼자 견딘 느낌이 드셨겠어요. 낮잠은 줄여보신 적 있나요?',
+      '마음을 내려놓으려 해도 쉽지 않은 밤이 있죠. 음악을 작게 틀어보셨나요?',
+      '잠깐이라도 깊이 자는 게 소원처럼 느껴질 때가 있어요. 오늘 컨디션은 어떠세요?',
+      '이야기를 꺼내주셔서 다른 분들도 고개를 끄덕일 것 같아요. 지금도 잠이 부족하신가요?',
+      '밤마다 시계를 보게 되면 더 초조해지지요. 시계를 치워보신 적은 있으세요?',
+    ]
     const g = fakeGen(asks)
-    for (let round = 0; round < 8; round += 1) {
-      await phase(g.gen)
+    const roundLines: string[] = []
+    for (let round = 0; round < 16; round += 1) {
+      const report = await phase(g.gen)
+      roundLines.push(
+        `r${round + 1}:${report.outcome}:${report.reason}:${report.lines.join(' / ')}`
+        + `:before=${report.sweepBefore?.lines.join(' / ') ?? ''}`
+        + `:after=${report.sweepAfter?.lines.join(' / ') ?? ''}`,
+      )
       await ageAll(pid, 75)
     }
     const cs = await personaRows(pid)
-    const ids = cs.map((c) => c.personaId)
-    // 🔴 질문이 계속 이어지는 대화 — 상한까지 실제로 닿아야 "5 를 넘지 않는다" 가 빈말이 아니다
-    check('🔴 Persona 댓글 정확히 5(상한 도달) · 넘지 않음 · 추가 4', cs.length === 5, `${cs.length}`)
-    // 🔴 (2026-10-24) 글쓴이는 다른 Persona 댓글에 답글로 한 번까지 — 최상위 댓글은 0
-    check('🔴 같은 Persona 0 · 글쓴이는 답글 한 번까지(최상위 0)', new Set(ids).size === ids.length
-      && cs.filter((c) => c.personaId === a.id).every((c) => c.parentId !== null))
+    const queueRows = await prisma.personaApprovalQueue.findMany({
+      where: { targetPostId: pid, dedupKey: { startsWith: F.FOLLOWUP_KEY_PREFIX } },
+      orderBy: { createdAt: 'asc' },
+      select: { dedupKey: true, status: true, declineReason: true, persona: { select: { code: true } } },
+    })
+    const authorRows = cs.filter((c) => c.personaId === a.id)
+    const nonAuthorIds = cs.filter((c) => c.personaId !== a.id).map((c) => c.personaId)
+    // 🔴 질문이 계속 이어지는 대화 — 상한까지 실제로 닿아야 "10을 넘지 않는다"가 빈말이 아니다
+    check(
+      '🔴 Persona 댓글 정확히 10(상한 도달) · 넘지 않음 · 추가 9',
+      cs.length === 10,
+      `${cs.length} · queues=${JSON.stringify(queueRows)} · ${roundLines.join(' || ')}`,
+    )
+    check('🔴 일반 Persona는 한 번씩 · 글쓴이는 서로 다른 대상에 답글 최대 3회 · 최상위 0',
+      new Set(nonAuthorIds).size === nonAuthorIds.length
+      && authorRows.length <= 3
+      && authorRows.every((c) => c.parentId !== null),
+      `일반=${nonAuthorIds.length}/${new Set(nonAuthorIds).size} 글쓴이=${authorRows.length}`)
     const parents = cs.filter((c) => c.parentId !== null)
     let orphan = 0; let self = 0
     for (const c of parents) {
@@ -481,7 +530,7 @@ async function main(): Promise<void> {
   console.log('\n⑥ 우회 주입 — planner 를 건너뛴 PENDING 도 트랜잭션이 막는다')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
-    const a = await persona('P01'); const b = await persona('P02'); const c = await persona('P03'); const d = await persona('P04')
+    const a = await persona('P01'); const b = await persona('P02'); const c = await persona('P03'); const d = await persona('P04'); const e = await persona('P05'); const f = await persona('P06')
     // 🔴 실회원 댓글은 첫 댓글보다 **앞에** 둔다 — 뒤에 두면 모든 반례가 "마지막 말 실회원" 하나로 막혀 의도한 사유를 못 본다
     const pid = await post(a, 200); const mem = await member(pid, 190); const first = await autoFirst(b, pid, 180)
     const other = await post(a, 200); const otherFirst = await autoFirst(b, other, 180)
@@ -494,7 +543,7 @@ async function main(): Promise<void> {
     const cases: [string, string, () => Promise<string>][] = [
       ['🔴 다른 글의 댓글에 답글(고아)', '고아', () => injectFollowup(c, pid, stamp(pid, 2, otherFirst), 2)],
       ['🔴 실회원 댓글에 답글', 'Persona 댓글이 아니다', () => injectFollowup(c, pid, stamp(pid, 2, mem), 2)],
-      // 🔴 (2026-10-24) 글쓴이는 다른 Persona 댓글에 답글로 한 번 답할 수 있다 — 최상위(글 hook) 자리는 여전히 자기 글이다
+      // 🔴 글쓴이는 다른 Persona 댓글에 답글로만 말한다 — 최상위(글 hook) 자리는 여전히 자기 글이다
       ['🔴 글쓴 Persona 의 최상위 추가 댓글(자기 글)', '이미 썼거나 글쓴이', () => injectFollowup(a, pid, stamp(pid, 2, null), 2)],
       ['🔴 글쓴이 답글 자리에 다른 Persona(이미 단 Persona)', '글쓴이 답글 자리', () => injectFollowup(b, pid, stamp(pid, 2, first), 2)],
       ['🔴 순번이 지금 자리와 다름', '도장 순번', () => injectFollowup(c, pid, stamp(pid, 3, first), 3)],
@@ -532,7 +581,8 @@ async function main(): Promise<void> {
       && (await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: q2 }, select: { status: true } })).status === 'EXPIRED', w2.detail)
     // 🔴 스위치 · profile 이 트랜잭션 시각에 꺼져 있으면
     await prisma.personaApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: F.FOLLOWUP_KEY_PREFIX } } })
-    const q3 = await injectFollowup(a, pid, stamp(pid, 2, first), 2)
+    // 삭제된 Persona 댓글도 사건 순번을 소비하므로 다음 멱등 순번은 3이다.
+    const q3 = await injectFollowup(a, pid, stamp(pid, 3, first), 3)
     followupOn(false)
     const direct = await publishCandidateTx(prisma, { id: q3, now: new Date(), followupLane: true })
     check('🔴 스위치 OFF 면 트랜잭션을 직접 불러도 막힌다', direct.kind === 'blocked')
@@ -550,6 +600,118 @@ async function main(): Promise<void> {
     check('🔴 추가 댓글 행을 첫 댓글 레인으로 내면 무인 레인 규칙이 막는다', d5.kind === 'blocked' && (await live()) === 1, JSON.stringify(d5))
     const ok = await publishCandidateTx(prisma, { id: q3, now: new Date(), followupLane: true })
     check('🟢 기준선 — 같은 행을 정상 조건에서 내면 발행된다(위 반례가 다른 이유로 막힌 것이 아니다)', ok.kind === 'published' && (await live()) === 2, JSON.stringify(ok))
+    // 🔴 실회원이 있는 위 글은 추가 1건이 정본 상한이다. 글쓴이 두 번째 답글의 원자성은
+    //    실회원 없는 별도 글에서 실제 followup 출처 사슬을 만든 뒤 검증한다.
+    const dialogPid = await post(f, 200)
+    const dialogFirst = await autoFirst(b, dialogPid, 180)
+    const authorQ1 = await injectFollowup(
+      f,
+      dialogPid,
+      stamp(dialogPid, 2, dialogFirst),
+      2,
+      '저도 그런 밤을 보내봐서 마음이 쓰이네요. 오늘은 조금 편히 쉬셨으면 해요.',
+    )
+    const authorR1 = await publishCandidateTx(prisma, { id: authorQ1, now: new Date(), followupLane: true })
+    await ageAll(dialogPid, 75)
+    const authorFirstReply = (await personaRows(dialogPid)).find((x) => x.personaId === f.id)
+    if (authorR1.kind !== 'published' || authorFirstReply === undefined) throw new Error('글쓴이 첫 답글 fixture 실패')
+    const otherQ = await injectFollowup(
+      d,
+      dialogPid,
+      stamp(dialogPid, 3, authorFirstReply.id),
+      3,
+      '저도 읽으면서 계속 마음에 남았어요. 그 뒤에는 조금 나아지셨나요?',
+    )
+    const otherR = await publishCandidateTx(prisma, { id: otherQ, now: new Date(), followupLane: true })
+    await ageAll(dialogPid, 75)
+    const freshTarget = (await personaRows(dialogPid)).find((x) => x.personaId === d.id)
+    if (otherR.kind !== 'published' || freshTarget === undefined) throw new Error('두 번째 질문 fixture 실패')
+    const q4 = await injectFollowup(
+      f,
+      dialogPid,
+      stamp(dialogPid, 4, freshTarget.id),
+      4,
+      '물어봐주셔서 고마워요. 어제보다는 조금 나아져서 마음을 놓고 있어요.',
+    )
+    const ok2 = await publishCandidateTx(prisma, { id: q4, now: new Date(), followupLane: true })
+    const afterSecond = await personaRows(dialogPid)
+    const afterSecondIds = afterSecond.map((x) => x.id)
+    check('🟢 글쓴이 두 번째 답글 — 서로 다른 대상 · Comment/Queue/ActivityLog 원자 저장',
+      ok2.kind === 'published'
+      && afterSecond.filter((x) => x.personaId === f.id).length === 2
+      && await prisma.personaApprovalQueue.count({ where: { id: q4, status: 'PUBLISHED', publishedCommentId: { not: null } } }) === 1
+      && await prisma.personaActivityLog.count({ where: { personaId: f.id, kind: 'comment', targetId: { in: afterSecondIds } } }) === 2,
+      JSON.stringify(ok2))
+
+    // 🔴 글쓴이 3회 상한을 순수 계약만으로 증명하지 않는다. 서로 다른 대상에 3회까지는 실제 저장하고,
+    //    planner 우회 PENDING 으로 들어온 4번째를 최종 transaction 이 다시 막는다.
+    // 상한 반례는 자연 planner 의 “글 hook 한 번” 선호와 분리해 검사한다. 실제 followup 출처 3행을
+    // 직접 만들어 서로 다른 짧은 답글 대상을 추가한다. 이 fixture 자체는 운영 생성 규칙을 시험하지 않고,
+    // 이후 3·4번째 글쓴이 답글의 **최종 transaction 재검사**만 시험한다.
+    const freshAt = new Date(Date.now() - 75 * MIN)
+    const freshTop = await prisma.comment.create({
+      data: {
+        postId: dialogPid, authorId: c.userId,
+        content: '저도 비슷한 밤을 보낸 적이 있어요. 조금 나아지셨다니 다행이에요.',
+        source: 'SYSTEM', commentOrigin: 'PERSONA', personaId: c.id, createdAt: freshAt,
+      },
+      select: { id: true },
+    })
+    await prisma.personaApprovalQueue.create({ data: {
+      personaId: c.id, targetPostId: dialogPid, status: 'PUBLISHED',
+      candidateText: '저도 비슷한 밤을 보낸 적이 있어요. 조금 나아지셨다니 다행이에요.',
+      reactionType: 'experience', gateStatus: 'pass',
+      gateResults: GATE_CODES.map((g) => ({ gate: g, outcome: 'pass', detail: 'fx' })),
+      dedupKey: F.followupKeyOf(dialogPid, 5), editDiff: JSON.parse(JSON.stringify({
+        [F.FOLLOWUP_STAMP_FIELD]: stamp(dialogPid, 5, null, 'experience'),
+      })),
+      generatedModel: PROV.model, canonRunId: PROV.canonRunId, canonDigest: PROV.canonDigest,
+      decidedBy: FOLLOWUP_LANE_DECIDED_BY, decidedAt: freshAt, publishedCommentId: freshTop.id,
+    } })
+    await prisma.personaActivityLog.create({ data: {
+      personaId: c.id, kind: 'comment', targetId: freshTop.id, gateStatus: 'pass',
+      decidedBy: FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, publishedAt: freshAt, createdAt: freshAt,
+    } })
+    await ageAll(dialogPid, 75)
+    const authorThirdQueue = await injectFollowup(
+      f,
+      dialogPid,
+      stamp(dialogPid, 6, freshTop.id),
+      6,
+      '따뜻하게 말해주셔서 고마워요. 오늘은 더 편히 자보려고요.',
+    )
+    const authorThirdResult = await publishCandidateTx(prisma, { id: authorThirdQueue, now: new Date(), followupLane: true })
+    await ageAll(dialogPid, 75)
+    const authorReplies = (await personaRows(dialogPid)).filter((x) => x.personaId === f.id)
+    check('🟢 글쓴이 3번째 답글 — 서로 다른 대상에만 실제 저장',
+      authorThirdResult.kind === 'published' && authorReplies.length === 3,
+      JSON.stringify(authorThirdResult))
+    const authorThird = authorReplies.at(-1)
+    if (authorThird === undefined) throw new Error('글쓴이 3번째 답글 fixture 실패')
+    const fourthTargetQueue = await injectFollowup(
+      e,
+      dialogPid,
+      stamp(dialogPid, 7, authorThird.id),
+      7,
+      '오늘 밤은 더 편안하시길 바랄게요. 나중에도 소식 들려주세요.',
+    )
+    const fourthTargetResult = await publishCandidateTx(prisma, { id: fourthTargetQueue, now: new Date(), followupLane: true })
+    await ageAll(dialogPid, 75)
+    const fourthTarget = (await personaRows(dialogPid)).find((x) => x.personaId === e.id)
+    if (fourthTargetResult.kind !== 'published' || fourthTarget === undefined) throw new Error('4번째 글쓴이 답글 대상 fixture 실패')
+    const authorFourthQueue = await injectFollowup(
+      f,
+      dialogPid,
+      stamp(dialogPid, 8, fourthTarget.id),
+      8,
+      '걱정해주셔서 고마워요. 다음에 또 이야기 드릴게요.',
+    )
+    const authorFourthResult = await publishCandidateTx(prisma, { id: authorFourthQueue, now: new Date(), followupLane: true })
+    check('🔴 글쓴이 4번째 답글 → planner 우회 PENDING 이어도 transaction 차단 · write 0',
+      authorFourthResult.kind === 'blocked'
+      && authorFourthResult.blocks.some((x) => x.message.includes('이미 썼거나 글쓴이'))
+      && (await personaRows(dialogPid)).filter((x) => x.personaId === f.id).length === 3,
+      JSON.stringify(authorFourthResult))
     followupOn(false)
   }
 
@@ -580,6 +742,98 @@ async function main(): Promise<void> {
       publishCandidateTx(prisma, { id: y, now, followupLane: true }),
     ])
     check('🔴 같은 글 두 후보 동시 → 추가 1건 이하', (await personaRows(pid2)).length <= 2 && r2.filter((z) => z.kind === 'published').length <= 1, JSON.stringify(r2.map((z) => z.kind)))
+    followupOn(false)
+  }
+
+  console.log('\n⑦-b 공용 하루 500 상한 · 세 행 원자성 실패 주입')
+  {
+    await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
+    const priorAuthor = await persona('P01'); const priorFirst = await persona('P02'); const priorSpeaker = await persona('P03')
+    const priorPost = await post(priorAuthor, 200); await autoFirst(priorFirst, priorPost, 180)
+    await prisma.comment.create({ data: {
+      postId: priorPost, authorId: priorSpeaker.userId, content: '이전에 달았다가 삭제한 댓글',
+      source: 'SYSTEM', commentOrigin: 'PERSONA', personaId: priorSpeaker.id, isDeleted: true,
+      createdAt: new Date(Date.now() - 190 * MIN),
+    } })
+    const priorSourcePost = (await source().posts()).find((x) => x.id === priorPost)
+    check('🔴 DB source adapter — 삭제 댓글은 공개 문맥에서 빼되 Persona 발화 이력은 보존',
+      priorSourcePost !== undefined
+      && priorSourcePost.comments.every((x) => x.personaCode !== priorSpeaker.code)
+      && priorSourcePost.personaCodesEverOnPost.includes(priorSpeaker.code),
+      JSON.stringify(priorSourcePost))
+    // 🔴 글쓴이 답글 자리가 아닌 새 최상위 자리에서, 삭제한 일반 Persona 재등장을 정확히 검증한다.
+    const priorQueue = await injectFollowup(priorSpeaker, priorPost, stamp(priorPost, 2, null, 'experience'), 2)
+    const priorResult = await publishCandidateTx(prisma, { id: priorQueue, now: new Date(), followupLane: true })
+    check('🔴 일반 Persona는 삭제된 과거 댓글이 있어도 같은 글에 다시 등장하지 않음',
+      priorResult.kind === 'blocked'
+      && priorResult.blocks.some((x) => x.message.includes('이미 썼거나'))
+      && (await prisma.comment.count({ where: { postId: priorPost, personaId: priorSpeaker.id, isDeleted: false } })) === 0,
+      JSON.stringify(priorResult))
+
+    await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
+    const a = await persona('P01'); const b = await persona('P02'); const filler = await persona('P03')
+    const pid = await post(a, 200); const first = await autoFirst(b, pid, 180)
+    const fillerPost = await post(filler, 160)
+    // 삭제된 과거 500건만으로도 오늘 절대 상한은 찼다. 삭제가 자리를 다시 열면 안 된다.
+    await prisma.comment.createMany({ data: Array.from({ length: BOOTSTRAP_DAILY_MAX }, (_, i) => ({
+      postId: fillerPost, authorId: filler.userId, content: `삭제된 하루 상한 fixture ${i}`,
+      source: 'SYSTEM' as const, commentOrigin: 'PERSONA' as const, personaId: filler.id,
+      isDeleted: true, createdAt: new Date(Date.now() - MIN),
+    })) })
+    const cappedQueue = await injectFollowup(a, pid, stamp(pid, 2, first), 2)
+    const capped = await publishCandidateTx(prisma, { id: cappedQueue, now: new Date(), followupLane: true })
+    const cappedRow = await prisma.personaApprovalQueue.findUniqueOrThrow({
+      where: { id: cappedQueue }, select: { status: true, publishedCommentId: true },
+    })
+    check('🔴 첫 댓글·추가 댓글 공용 하루 500 상한 — 삭제된 과거 500건도 재사용하지 않음',
+      capped.kind === 'blocked'
+      && capped.blocks.some((x) => x.message.includes(`오늘 상한 ${BOOTSTRAP_DAILY_MAX}건`))
+      && cappedRow.status === 'PENDING' && cappedRow.publishedCommentId === null
+      && (await personaRows(pid)).length === 1,
+      JSON.stringify(capped))
+
+    await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
+    const aa = await persona('P01'); const bb = await persona('P02')
+    const atomicPost = await post(aa, 200); const atomicFirst = await autoFirst(bb, atomicPost, 180)
+    const atomicQueue = await injectFollowup(aa, atomicPost, stamp(atomicPost, 2, atomicFirst), 2)
+    const triggerName = 'soran_fail_followup_activity_log'
+    const functionName = 'soran_fail_followup_activity_log_fn'
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PersonaActivityLog"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${functionName}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."decidedBy" = '${FOLLOWUP_LANE_ACTIVITY_DECIDED_BY}' THEN
+          RAISE EXCEPTION 'fixture followup activity failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${triggerName}"
+      BEFORE INSERT ON "PersonaActivityLog"
+      FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+    `)
+    let atomicResult: Awaited<ReturnType<typeof publishCandidateTx>>
+    try {
+      atomicResult = await publishCandidateTx(prisma, { id: atomicQueue, now: new Date(), followupLane: true })
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "PersonaActivityLog"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`)
+    }
+    const atomicRow = await prisma.personaApprovalQueue.findUniqueOrThrow({
+      where: { id: atomicQueue }, select: { status: true, publishedCommentId: true },
+    })
+    const atomicComments = await personaRows(atomicPost)
+    check('🔴 ActivityLog insert 실패 → Comment·Queue·ActivityLog 전부 롤백',
+      atomicResult.kind === 'error'
+      && atomicComments.length === 1
+      && atomicRow.status === 'PENDING' && atomicRow.publishedCommentId === null
+      && await prisma.personaActivityLog.count({
+        where: { targetId: { in: atomicComments.map((c) => c.id) }, decidedBy: FOLLOWUP_LANE_ACTIVITY_DECIDED_BY },
+      }) === 0,
+      JSON.stringify({ atomicResult, atomicRow, comments: atomicComments.length }))
     followupOn(false)
   }
 
