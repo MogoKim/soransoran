@@ -742,13 +742,14 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
   const sc = renderStageControllerPlist(input)
   const slots = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
-  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 네 번(마지막 07:55 안전 판정)',
-    slots.length === 4 && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 5
+  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 다섯 번(07:55 최종 + 07:58 fallback)',
+    slots.length === 5 && slots.at(-2) === PUBLISH_WINDOW_START_MINUTE - 5
+    && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 2
     && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE)
     && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
-  check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 네 슬롯 대조가 필수다',
+  check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 다섯 슬롯 대조가 필수다',
     OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('controller plist 는 아직 갱신되지 않는다'))
-    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55 네 슬롯 대조'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55·07:58 다섯 슬롯 대조'))
     && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('runtime deploy 만 하고 끝내지 않는다')))
   check('controller 는 runtime 의 스크립트를 --apply 로 부른다', sc.includes('<string>/r/scripts/stage-controller.mts</string>') && sc.includes('<string>--apply</string>')
     && sc.includes('<key>WorkingDirectory</key><string>/r</string>'))
@@ -887,10 +888,30 @@ console.log('\n⑥ 복구 판정')
     && lastNight.getTime() < kst('2026-10-12T00:00:00').getTime())
   const rr0 = readFileSync('scripts/runner-recover.mts', 'utf-8')
   check('🔴 복구 실행기가 label 의 정책을 판정에 넘긴다', /policy: RECOVERY_POLICY_OF\[label\] \?\? 'stale'/.test(rr0))
-  check('🔴 공급 비예약 복구는 닫혀 있고 recovery 표식으로 예약 회차를 흉내 내지 않는다',
+  check('🔴 일반 runner-recover 공급 복구는 닫혀 있고 recovery 표식으로 예약 회차를 흉내 내지 않는다',
     /supplyRecoveryClosed = label === SUPPLY_PROCESS_LAUNCHD_LABEL && v\.action === 'kickstart'/.test(rr0)
     && /if \(supplyRecoveryClosed \|\| v\.action !== 'kickstart' \|\| !APPLY\) continue/.test(rr0)
     && !/requestFollowUp\([^)]*'recovery'/.test(rr0) && !/withdrawFollowUp\(/.test(rr0))
+  const activeRecovery = readFileSync('src/lib/stage-active-recovery.ts', 'utf-8')
+  const controller = readFileSync('scripts/stage-controller.mts', 'utf-8')
+  const recoveryWorker = readFileSync('scripts/stage-active-recovery.mts', 'utf-8')
+  check('🔴 단계 제한 복구는 sole OPPORTUNITY_SHORT·runtime D20~D50·07:30 전만 연다',
+    /preflight\?\.verdict === 'FAIL'/.test(activeRecovery)
+    && /preflight\.codes\.length === 1/.test(activeRecovery)
+    && /preflight\.codes\[0\] === 'OPPORTUNITY_SHORT'/.test(activeRecovery)
+    && /\['d20', 'd30', 'd50'\]/.test(activeRecovery)
+    && /ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST/.test(activeRecovery))
+  check('🔴 controller가 일일 실행권을 선점하고 07:55 전에는 StageDecision을 쓰지 않는다',
+    /claimStageRecoveryLaunch/.test(controller)
+    && /const finalRecoverySlot = isFinalRecoveryControllerSlot\(NOW\)/.test(controller)
+    && /existingDecision === null && !finalRecoverySlot/.test(controller)
+    && /StageDecision write 0/.test(controller))
+  check('🔴 제한 worker는 기존 수집·공급만 부르고 07:50 종료·07:30 유료 시작 마감을 지킨다',
+    /ACTIVE_RECOVERY_MAX_RUNTIME_MS = 50 \* 60_000/.test(activeRecovery)
+    && /activeRecoveryDeadlineAt/.test(recoveryWorker)
+    && /ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST/.test(recoveryWorker)
+    && /micro-seed-collect-navercafe\.mts/.test(recoveryWorker)
+    && /supply-process\.mts/.test(recoveryWorker))
 }
 
 // ─────────────────────────────────────────────────────────

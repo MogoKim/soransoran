@@ -49,6 +49,35 @@ import { buildMessage, send } from './slack-notify.mjs'
 import { apiModelIdFor } from './voice-m3-contract.mjs'
 import { runClockFrom } from './run-clock.mjs'
 import { usesSupplyCostEnvelope } from '../../src/lib/supply-cost-envelope'
+import {
+  ACTIVE_RECOVERY_DATE_ENV, ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST,
+  ACTIVE_RECOVERY_START_MINUTE_KST, kstMinuteOf,
+} from '../../src/lib/stage-active-recovery'
+import { validateStageRecoveryRuntimeEnv } from './stage-recovery-intent.mjs'
+
+export function stageRecoveryProviderBoundaryReason(i: {
+  env: Readonly<Record<string, string | undefined>>
+  at: Date
+  token: ReturnType<typeof runTokenShadowFromEnv>
+  home?: string
+}): string | null {
+  const recoveryDate = (i.env[ACTIVE_RECOVERY_DATE_ENV] ?? '').trim()
+  if (recoveryDate === '') return null
+  try { validateStageRecoveryRuntimeEnv(i.env, i.at, i.home) } catch (e) {
+    return `제한 복구 intent·nonce·마감 검증 실패 — ${e instanceof Error ? e.message : 'unknown'}`
+  }
+  if (i.token.ok !== true || i.token.trigger !== 'recovery' || i.token.launchTrigger !== 'recovery'
+    || i.token.absorbedTrigger !== null || i.token.pass !== 0) {
+    return '제한 복구 실행 token이 유일한 첫 회차를 증명하지 못한다'
+  }
+  const minute = kstMinuteOf(i.at)
+  if (kstDateString(i.at) !== recoveryDate
+    || minute < ACTIVE_RECOVERY_START_MINUTE_KST
+    || minute >= ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST) {
+    return `제한 복구 ${recoveryDate}의 유료 요청 시작 창 07:00~07:30이 끝났다`
+  }
+  return null
+}
 
 /** 🔴 차단된 요청이 돌려주는 오류 코드 머리 — 호출부가 provider 오류와 구분할 수 있게 한다 */
 export const LEDGER_BLOCKED = 'LEDGER_BLOCKED'
@@ -586,8 +615,16 @@ export class SupplyLlmSession {
     this.t.blockedBy.set(code, (this.t.blockedBy.get(code) ?? 0) + 1)
   }
 
-  /** 자연 회차가 원래 슬롯의 45분 창 안에 있는지 요청 경계마다 같은 방식으로 본다. */
+  /** 자연 회차와 제한 복구가 자기 유료 시작 창 안에 있는지 요청 경계마다 같은 방식으로 본다. */
   private scheduledWindowClosedReason(at: Date): string | null {
+    // 자연 회차 대부분은 recovery env가 없다. 그때는 kernel token shadow를 불필요하게
+    // 다시 읽지 않고 기존 자연 슬롯 판정으로 바로 간다.
+    if ((process.env[ACTIVE_RECOVERY_DATE_ENV] ?? '').trim() !== '') {
+      const recoveryReason = stageRecoveryProviderBoundaryReason({
+        env: process.env, at, token: runTokenShadowFromEnv(process.env, at),
+      })
+      if (recoveryReason !== null) return recoveryReason
+    }
     if (!this.scheduledWindowGuardActive) return null
     if (this.scheduledRunOriginError !== null) return this.scheduledRunOriginError
     if (this.scheduledRunSlot === null || activeSlotAt(at)?.label === this.scheduledRunSlot) return null

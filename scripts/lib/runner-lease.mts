@@ -71,6 +71,8 @@ export function runUnderKernelLease(i: {
    *    남기고 사라지지 않게 하려는 것이다. 살아 있는 holder 를 기다리거나 뺏는 장치가 아니다.
    */
   busyRetryMs?: number
+  /** false면 잠금 경합을 다음 holder의 추가 회차로 바꾸지 않는다. 제한 복구가 기존 자연 회차에 흡수되는 것을 막는다. */
+  followUpOnBusy?: boolean
 }): OuterOutcome {
   const lockf = i.lockf ?? LOCKF_PATH
   if (!lockfUsable(lockf)) return { kind: 'UNAVAILABLE', reason: `${lockf} 를 실행할 수 없다 — 본체를 띄우지 않는다(provider 0 · DB 0)` }
@@ -83,7 +85,10 @@ export function runUnderKernelLease(i: {
     r = spawnSync('/bin/sh', [LEASE_WRAPPER, i.lockPath, lockf, i.command, ...i.args], { stdio: 'inherit', env })
   }
   if (r.error !== undefined) return { kind: 'UNAVAILABLE', reason: `wrapper 실행 실패 — ${(r.error as { code?: string }).code ?? r.error.name}` }
-  if (r.status === LEASE_BUSY_EXIT) return { kind: 'HELD', followUp: requestFollowUp(i.followUpDir, i.nowMs, i.trigger) }
+  if (r.status === LEASE_BUSY_EXIT) return {
+    kind: 'HELD',
+    followUp: i.followUpOnBusy === false ? 'DISABLED' : requestFollowUp(i.followUpDir, i.nowMs, i.trigger),
+  }
   if (r.status !== null && LEASE_UNAVAILABLE_EXITS.includes(r.status)) return { kind: 'UNAVAILABLE', reason: `wrapper exit ${r.status} — 잠금을 걸지 못했다` }
   if (r.status === null) return { kind: 'RAN', code: 1 }
   return { kind: 'RAN', code: r.status }
@@ -119,7 +124,7 @@ export function verifyInKernelLease(i: {
   return { ok: true, proof: { lockPath: i.lockPath, followUpDir: i.followUpDir, lockf, fd: LEASE_FD } }
 }
 
-export type FollowUpRequest = 'REQUESTED' | 'COALESCED' | 'ERROR'
+export type FollowUpRequest = 'REQUESTED' | 'COALESCED' | 'DISABLED' | 'ERROR'
 
 /**
  * 🔴 **잠금을 못 얻은 실행이 남기는 깨움** — `wx` 하나. 이미 있으면 합쳐진 것이다.
@@ -262,6 +267,10 @@ export async function leaseEntry(o: {
   env: NodeJS.ProcessEnv; trigger: LeaseTrigger; lockf?: string
   /** 🔴 생략하면 0 — `runUnderKernelLease.busyRetryMs` */
   busyRetryMs?: number
+  /** 제한 복구처럼 경합 시 조용히 실패해야 하는 실행은 marker를 남기지 않는다. */
+  followUpOnBusy?: boolean
+  /** false면 앞 marker를 흡수하거나 뒤 follow-up pass를 열지 않는다. marker는 다음 자연 holder에 남긴다. */
+  absorbFollowUp?: boolean
   /** 🔴 세 번째 인자는 그 회차를 연 깨움이다(생략해도 된다 — 앞판 본체는 두 인자만 받는다) */
   pass: (pass: number, proof: LeaseProof, ctx: PassContext) => Promise<number>
   log: (line: string) => void
@@ -274,6 +283,7 @@ export async function leaseEntry(o: {
       args: [...loaderArgs(), o.scriptPath, ...o.argv],
       env: o.env, nowMs: Date.now(), trigger: o.trigger, ...(o.lockf === undefined ? {} : { lockf: o.lockf }),
       ...(o.busyRetryMs === undefined ? {} : { busyRetryMs: o.busyRetryMs }),
+      ...(o.followUpOnBusy === undefined ? {} : { followUpOnBusy: o.followUpOnBusy }),
     })
     if (out.kind === 'HELD') {
       o.log(`⏭️  LEASE_HELD — 다른 회차가 커널 잠금을 쥐고 있다 · follow-up ${out.followUp} · 본체에 들어가지 않는다`)
@@ -286,7 +296,9 @@ export async function leaseEntry(o: {
   if (!v.ok) { o.log(`🔴 LEASE_NOT_PROVEN — ${v.reason} · provider 0 · DB 0`); return 1 }
   // 🔴 잠금 수명 = 이 프로세스 수명 — 증명은 한 번이면 된다(회차마다 다시 볼 실패 경로가 없다 · 죽은 게이트를 두지 않는다)
   // 🔴 시작할 때 이미 있던 깨움은 이번 회차가 받는다 — 그 trigger 를 첫 회차에 싣는다
-  const start = takeFollowUpRecord(v.proof)
+  const start = o.absorbFollowUp === false
+    ? { take: 'NONE' as const, trigger: null, at: null }
+    : takeFollowUpRecord(v.proof)
   if (start.take === 'ERROR') {
     o.log('🔴 follow-up 표식을 안전하게 읽거나 보존하지 못했다 — 본체 0 · provider 0 · DB 0')
     return 1
@@ -302,6 +314,7 @@ export async function leaseEntry(o: {
     const code = raw === LEASE_BUSY_EXIT ? 1 : raw
     worst = Math.max(worst, code)
     if (code === 1) break
+    if (o.absorbFollowUp === false) break
     // 🔴 상한에 닿았으면 표식을 거두지 않는다 — 남은 깨움은 다음 holder 가 시작할 때 받는다
     if (pass >= MAX_FOLLOW_UPS) break
     const next = takeFollowUpRecord(v.proof)

@@ -89,6 +89,7 @@
 |---|---|
 | `ALWAYS-ON-HOST.md` | 상시 실행 호스트의 사전 점검·rehearsal·quiesce·cutover·rollback. 단계·콘텐츠·Persona 정책은 정하지 않고 위 권위 문서를 실행한다 |
 | `launchd/README.md` | 보조 Mac의 템플릿·runtime 배포·스케줄 관측·진단 절차. 실제 loaded 상태는 `launchctl`이 정한다 |
+| `2026-11-05-stage-bounded-active-recovery.md` | 시험일의 유일한 `OPPORTUNITY_SHORT`를 하루 한 번 제한 보충하고 07:55에 같은 정본으로 재판정하며 07:58에는 저장 장애만 재시도하는 실행·진단·rollback 절차 |
 
 runbook의 명령은 현재 정본 정책과 현재 상태를 먼저 확인한 뒤 실행한다. 역사 문서에 남은 수동 stage env,
 GitHub 예약, 완성 글 재고 절차를 runbook처럼 사용하지 않는다.

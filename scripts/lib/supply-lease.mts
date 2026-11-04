@@ -1,7 +1,7 @@
 /**
  * 🔴 **공급 러너 진입 — 커널 lease 안에서만 본체를 돈다** (2026-10-12 Batch C1)
  *
- *   launchd · 사람 · (다음) 복구 kickstart
+ *   launchd · 사람 · 검증된 단계 제한 복구
  *     → supply-process.mts (바깥)  — DB · provider 0. 잠금 디렉터리만 만든다
  *     → runner-lease.sh            — 잠금 파일을 fd 9 로 열고 `lockf -s -t 0 9` → Node 로 exec
  *     → supply-process.mts (holder) — 커널 잠금 fd 를 쥔다. 회차(pass)마다 실행 token 을 발급하고
@@ -71,7 +71,8 @@ export function supplyLockfPath(): string {
 
 /**
  * 🔴 **띄운 이유** — 지금 예산 판정과 **같은 함수**(`supplyRunKindOf`)로 정한다: 공급 job 라벨 + 슬롯 창 안이면 `scheduled`,
- *    그 밖은 전부 `manual`. 복구 · 사건 trigger 는 C1 에서 만들지 않는다(follow-up 표식으로만 들어온다).
+ *    그 밖은 전부 `manual`. 일반 사건·복구는 이 함수에서 추정하지 않는다. 단계 제한 복구만
+ *    controller intent를 검증한 호출자가 `trigger: recovery`를 명시한다.
  */
 export function supplyLaunchTrigger(env: Readonly<Record<string, string | undefined>>, now: Date): LeaseTrigger {
   return supplyRunKindOf(env, now).kind === 'scheduled' ? 'scheduled' : 'manual'
@@ -146,6 +147,8 @@ export async function supplyEntry(o: {
   scriptPath: string; argv: readonly string[]; env: NodeJS.ProcessEnv
   body: (proof: LeaseProof) => Promise<number>
   log: (line: string) => void
+  /** 검증된 복구 worker만 명시한다. 일반 실행은 기존 시각 기반 분류를 그대로 쓴다. */
+  trigger?: LeaseTrigger
   now?: () => Date
 }): Promise<number> {
   const now = o.now ?? ((): Date => new Date())
@@ -164,7 +167,8 @@ export async function supplyEntry(o: {
   }
   return leaseEntry({
     lockDir, lockFile: SUPPLY_LOCK_FILE, scriptPath: o.scriptPath, argv: o.argv, env: o.env,
-    trigger: supplyLaunchTrigger(o.env, now()), lockf, busyRetryMs: SUPPLY_BUSY_RETRY_MS, log: o.log,
+    trigger: o.trigger ?? supplyLaunchTrigger(o.env, now()), lockf, busyRetryMs: SUPPLY_BUSY_RETRY_MS, log: o.log,
+    ...(o.trigger === 'recovery' ? { followUpOnBusy: false, absorbFollowUp: false } : {}),
     pass: async (pass: number, _proof: LeaseProof, ctx: PassContext): Promise<number> => {
       // 🔴 회차 시각 — 첫 회차는 부모가 준 값(없으면 지금), follow-up 은 지금. 모양이 틀린 값은 회차를 열지 않는다
       let runAt: Date

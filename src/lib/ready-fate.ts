@@ -13,7 +13,10 @@
 import { isSupplyContentCostStage, ledgerDateOf, type LedgerEntry } from './llm-ledger'
 import { judgeSlotRelease, type ReleaseReason } from './source-slot-release'
 import { SUPPLY_JIT_CONTRACT } from './supply-intent'
-import { supplyCostRequestMetadataEligible, usesSupplyCostEnvelope } from './supply-cost-envelope'
+import {
+  isSupplyCostRecoveryTagged, supplyCostRecoveryRequestMetadataEligible,
+  supplyCostRequestMetadataEligible, usesSupplyCostEnvelope,
+} from './supply-cost-envelope'
 
 // ─────────────────────────────────────────────────────────
 // 🔴 대기 행 결말
@@ -155,6 +158,9 @@ export type CostAttribution = {
   settledRequests: number
   /** 이 cohort 에 남은 usageUnknown 요청 수 — 장부 상태는 그대로 유지한다 */
   usageUnknownRequests: number
+  /** 제한 복구는 자연 정산 표본에서 분리하지만 비용 위험·결과당 비용에는 포함한다. */
+  recoverySettledRequests: number
+  recoveryUsageUnknownRequests: number
   /** 실제 정산액이 예약액을 넘은 현재 계약 요청 수 */
   trialOverrunRequests: number
   /** trial 위험 계산에 쓸 수 없는 요청 수(계약·가격판·원천·회차·예약·예산 provenance 불완전) */
@@ -211,6 +217,8 @@ export function costAttributionOf(i: {
   let otherCohort = 0
   let settledRequests = 0
   let usageUnknownRequests = 0
+  let recoverySettledRequests = 0
+  let recoveryUsageUnknownRequests = 0
   let trialOverrunRequests = 0
   let trialIneligibleRequests = 0
   for (const e of i.entries) {
@@ -220,8 +228,13 @@ export function costAttributionOf(i: {
     const strictMetadata = startedDate !== null && usesSupplyCostEnvelope(startedDate)
     const metadataEligible = !strictMetadata
       || (startedDate !== null && supplyCostRequestMetadataEligible(e, startedDate))
+    const recoveryTagged = strictMetadata && isSupplyCostRecoveryTagged(e.runTokenShadow)
+    const recoveryEligible = strictMetadata && startedDate !== null
+      && supplyCostRecoveryRequestMetadataEligible(e, startedDate)
     // 시행일 이후는 날짜 계약 창이 권위다. 현재 상수로 과거 판을 다시 읽지 않는다.
-    const current = strictMetadata ? metadataEligible : e.supplyContract === SUPPLY_JIT_CONTRACT
+    const current = strictMetadata
+      ? ((!recoveryTagged && metadataEligible) || recoveryEligible)
+      : e.supplyContract === SUPPLY_JIT_CONTRACT
     const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
     const run = pipelineRunOfLedger(e.runId)
     const belongsToCohort = run === null || i.cohortRuns.has(run)
@@ -249,7 +262,10 @@ export function costAttributionOf(i: {
         unlinked += e.settledUsd
       } else {
         open += 1
-        if (e.status === 'usageUnknown') usageUnknownRequests += 1
+        if (e.status === 'usageUnknown') {
+          if (recoveryEligible) recoveryUsageUnknownRequests += 1
+          else usageUnknownRequests += 1
+        }
         if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0) {
           openReserved += e.reservedUsd
         }
@@ -271,7 +287,10 @@ export function costAttributionOf(i: {
       // 🔴 추정 예약액은 보고만 한다 — 실제 비용도 그 한계도 아니다(정산이 예약을 넘을 수 있다). 분자에 넣지 않는다
       const positiveReservation = e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0
       if (positiveReservation && e.reservedUsd !== null) openReserved += e.reservedUsd
-      if (e.status === 'usageUnknown') usageUnknownRequests += 1
+      if (e.status === 'usageUnknown') {
+        if (recoveryEligible) recoveryUsageUnknownRequests += 1
+        else usageUnknownRequests += 1
+      }
       if (e.status !== 'usageUnknown' || run === null || key === null || !positiveReservation) trialIneligibleRequests += 1
       continue
     }
@@ -285,7 +304,8 @@ export function costAttributionOf(i: {
     }
     if (run === null) { unlinked += e.settledUsd; continue }
     if (!i.cohortRuns.has(run)) { otherCohort += e.settledUsd; continue }
-    settledRequests += 1
+    if (recoveryEligible) recoverySettledRequests += 1
+    else settledRequests += 1
     total += e.settledUsd
     if (key === null) { unlinked += e.settledUsd; continue }
     if (overranReservation) {
@@ -303,6 +323,7 @@ export function costAttributionOf(i: {
   return {
     totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved,
     legacyOpenRequests: legacyOpen, settledRequests, usageUnknownRequests,
+    recoverySettledRequests, recoveryUsageUnknownRequests,
     trialOverrunRequests, trialIneligibleRequests,
     trialRiskUsdPerSlotValidResult: trialRisk, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다

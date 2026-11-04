@@ -268,8 +268,13 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     d100Goal.includes('가장 가까운 실제 공개 기회')
     && d100Goal.includes('Persona 여력도 같은')])
   out.push(['canon §3.3 이 공급 자연 예약 · 댓글 event-assisted · 공통 lease · exactly-once 금지를 적는다',
-    ['공급은 하루 7회 고정 schedule만 돈다', '공개 commit 이 첫 댓글을 깨운다', '댓글 회차가 fallback',
-      '실행 lease/token', '공급 recovery도 비예약 회차를', 'exactly-once 시스템을 새로 만들지 않는다']
+    ['일반 공급 owner는 하루 7회 고정 schedule 하나다', '공개 commit 이 첫 댓글을 깨운다', '정기 댓글 회차가 fallback',
+      '실행 lease/token', 'controller-owned 제한 복구 한 번뿐', '일일 intent·원자 실행권',
+      'exactly-once 시스템을 새로 만들지 않는다']
+      .every((t) => d100Goal.includes(t))])
+  out.push(['canon 이 제한 복구의 07:55 판정 · 07:58 저장 fallback · 원천 중복 방지를 함께 고정한다',
+    ['07:00·07:20·07:40·07:55·07:58', '07:58은 07:55 저장의 일시 장애',
+      '원천 identity hash', '기회를 두 번 세지 않는다', '다섯 시각']
       .every((t) => d100Goal.includes(t))])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
     d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')

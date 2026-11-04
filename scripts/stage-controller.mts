@@ -27,6 +27,10 @@
  *    · 🔴 Persona 는 계약 유효 수(Persona 4상태 정본)만 받는다 — 하한 미달이면 FAIL, 읽기 실패면 UNKNOWN. 둘 다 시험을 열지 않는다
  *      (2026-09-30 실측 0 → D1→D3 부터 막힌다).
  */
+import { spawn } from 'node:child_process'
+import { closeSync, openSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { PrismaClient } from '@prisma/client'
 
 import { profileOf, releaseCapsOf, resolveRuntimeStage, type RuntimeStage } from '../src/lib/scale-profile'
@@ -57,6 +61,16 @@ import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage
 import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 import { probeSupplyLease } from './lib/supply-lease.mjs'
 import { stageControllerLeaseDisposition } from './lib/ops-loop-templates'
+import { loaderArgs } from './lib/runner-lease.mjs'
+import {
+  claimStageRecoveryLaunch, createStageRecoveryIntent, readStageRecoveryIntent,
+  stageRecoveryIntentCoversPlan, stageRecoveryLogPath, updateStageRecoveryIntent,
+  type StageRecoveryIntent,
+} from './lib/stage-recovery-intent.mjs'
+import {
+  activeRecoveryDecisionDisposition, isFinalRecoveryControllerSlot, planActiveRecovery,
+  retryFinalStageDecisionWrite,
+} from '../src/lib/stage-active-recovery'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -67,6 +81,34 @@ const NOW = new Date()
 const TODAY = kstDateString(NOW)
 
 const log = (s: string): void => { if (!JSON_OUT) console.log(s) }
+
+function launchActiveRecovery(intent: StageRecoveryIntent): Promise<boolean> {
+  return new Promise((resolveLaunch) => {
+    let settled = false
+    let logFd: number | null = null
+    const finish = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (logFd !== null) { closeSync(logFd); logFd = null }
+      resolveLaunch(ok)
+    }
+    const timer = setTimeout(() => finish(false), 5_000)
+    timer.unref()
+    try {
+      const script = fileURLToPath(new URL('./stage-active-recovery.mts', import.meta.url))
+      logFd = openSync(stageRecoveryLogPath(intent.kstDate), 'a', 0o600)
+      const child = spawn(process.execPath, [
+        ...loaderArgs(), script,
+        `--stage-recovery-date=${intent.kstDate}`,
+        `--stage-recovery-nonce=${intent.nonce}`,
+        `--stage-recovery-deficit=${intent.deficit}`,
+      ], { cwd: process.cwd(), env: process.env, detached: true, stdio: ['ignore', logFd, logFd] })
+      child.once('error', () => finish(false))
+      child.once('spawn', () => { child.unref(); finish(true) })
+    } catch { finish(false) }
+  })
+}
 
 /**
  * 🔴 **KST 날짜 D · 단계 S 의 운영 증거 판정** — 읽기만 한다.
@@ -228,6 +270,7 @@ async function main(): Promise<number> {
    * 🔴 06:15 공급이 아직 Queue 도장을 마치지 않았으면 07:00 결정은 불완전한 재고를 보게 된다.
    *    apply만 커널 lease 뒤로 미룬다. 07:00·07:20·07:40은 DB read/write 0으로 물러나고 07:55가 다시 본다.
    *    마지막 07:55에도 끝나지 않으면 부분 재고로 승격하지 않고, 전날 증거의 지속 단계 HOLD만 기록한다.
+   *    07:58은 07:55 저장 장애로 결정이 없을 때 같은 계산만 재시도한다.
    *    probe 실패도 free로 간주하지 않는다. dry-run은 관측이므로 계속 계산한다.
    */
   if (APPLY) {
@@ -290,6 +333,7 @@ async function main(): Promise<number> {
 
     // ② 시험 대상 preflight — 오늘(증명일) 전체 슬롯 기준
     let nextPreflight: PreflightVerdict | null = null
+    let preflightTarget: RuntimeStage | null = null
     let publishedToday = 0
     let preflightDetail: Record<string, unknown> | null = null
     try {
@@ -303,6 +347,7 @@ async function main(): Promise<number> {
       const target: RuntimeStage | null = previous === null ? null
         : plan !== null ? (plan.base === sustained ? plan.target : null)
           : nextStage(sustained)
+      preflightTarget = target
       if (target !== null && previous !== null) {
         const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
         const r = await readPreflightFacts(prisma, {
@@ -377,12 +422,88 @@ async function main(): Promise<number> {
       return 0
     }
     const io = stageDecisionIo(prisma, TODAY)
-    let out: Awaited<ReturnType<typeof ensureStageDecision>>
-    try {
-      out = await ensureStageDecision({
-        read: io.read, insert: io.insert, validate: io.validate,
-        compute: () => result.decision, by: DECISION_WRITER,
+    /**
+     * 기회 부족만 능동 복구한다. 오늘 결정이 이미 있으면 절대 복구를 시작하지 않고,
+     * 품질·비용·오류·다른 preflight 결함은 기존 결과를 즉시 저장한다.
+     * intent가 있는 정상 복구 흐름은 중간 예약에서 결정을 쓰지 않고 07:55 재판정을 기다린다.
+     * 07:58은 결정 부재만 처리하는 fallback이고 새 복구는 시작하지 않는다.
+     */
+    const existingDecision = await io.read()
+    const finalRecoverySlot = isFinalRecoveryControllerSlot(NOW)
+    if (existingDecision === null && !finalRecoverySlot) {
+      const recoveryPlan = planActiveRecovery({
+        target: preflightTarget, preflight: nextPreflight, signals, failures, now: NOW,
       })
+      let intent = readStageRecoveryIntent(TODAY)
+      const recoveryDisposition = activeRecoveryDecisionDisposition({
+        plan: recoveryPlan, intentState: intent?.state ?? null, preflight: nextPreflight,
+      })
+      if (recoveryDisposition === 'recover' && recoveryPlan.kind === 'recover') {
+        if (intent === null) intent = createStageRecoveryIntent({ kstDate: TODAY, plan: recoveryPlan, now: NOW }).intent
+        if (!stageRecoveryIntentCoversPlan(intent, recoveryPlan)) {
+          log('\n🟡 오늘 제한 복구 intent보다 부족분이 커졌거나 대상이 달라졌다 — 두 번째 복구 0 · 중간 StageDecision write 0')
+          log('   07:55 최종 예약이 같은 정본으로 한 번 결정한다\n')
+          return 0
+        }
+        if (intent.state === 'requested') {
+          const launch = claimStageRecoveryLaunch({ intent, now: new Date(), message: recoveryPlan.reason })
+          intent = launch.intent
+          if (launch.claimed) {
+            if (!await launchActiveRecovery(intent)) {
+              updateStageRecoveryIntent({ intent, state: 'failed', now: new Date(), message: 'worker 시작 실패' })
+              console.error('🔴 제한 복구 worker를 시작하지 못했다 — 오늘 결정을 아직 쓰지 않았다. 다음 예약이 다시 판정한다')
+              return 1
+            }
+            log(`\n🟡 ${recoveryPlan.reason} — 제한 수집 ${intent.collectMax}건 · 공급 묶음 ${intent.worksetLimit}을 한 번 시작했다`)
+          } else {
+            log('\n🟡 오늘 제한 복구 실행권은 이미 다른 controller가 가져갔다 — 두 번째 worker 0')
+          }
+        } else {
+          log(`\n🟡 오늘 제한 복구 intent ${intent.state} — 두 번째 복구를 만들지 않는다`)
+        }
+        log('   StageDecision write 0 · 07:55에 같은 정본으로 최종 재판정한다\n')
+        return 0
+      }
+      if (recoveryDisposition === 'defer') {
+        log(`\n🟡 제한 복구 ${intent === null ? '대기' : `intent ${intent.state}`} · ${recoveryPlan.reason} — 중간 StageDecision write 0`)
+        log('   07:55 최종 예약이 같은 정본으로 한 번 결정한다\n')
+        return 0
+      }
+      if (recoveryDisposition === 'cancel-and-decide' && intent !== null) {
+        try {
+          updateStageRecoveryIntent({
+            intent, state: 'failed', now: new Date(),
+            message: `복구 중 새 중대 차단: ${recoveryPlan.reason}`,
+          })
+        } catch (e) {
+          console.error(`🔴 제한 복구를 취소하지 못해 StageDecision도 쓰지 않는다 — ${(e as Error).message}`)
+          return 1
+        }
+      }
+    } else if (existingDecision === null && finalRecoverySlot) {
+      const intent = readStageRecoveryIntent(TODAY)
+      if (intent !== null && (intent.state === 'requested' || intent.state === 'running')) {
+        try {
+          updateStageRecoveryIntent({
+            intent, state: 'failed', now: new Date(), message: '07:55 최종 판정 마감 — 추가 공급 종료',
+          })
+        } catch (e) {
+          const after = readStageRecoveryIntent(TODAY)
+          const ended = after?.state === 'done' || after?.state === 'failed'
+          console.error(`🔴 최종 판정 전 제한 복구 상태 기록을 닫지 못했다 — ${(e as Error).message}`
+            + (ended ? ` · 재조회 결과 ${after.state}` : ' · 07:50 provider 마감은 이미 닫혔다'))
+          // 07:55에는 provider 경계가 이미 닫혔다. 상태 파일 write 한 번의 실패가 오늘의
+          // 유일한 StageDecision까지 없애면 다음날 또 같은 시험을 반복한다. 같은 정본 계산은 계속한다.
+        }
+      }
+    }
+    let out: Awaited<ReturnType<typeof ensureStageDecision>>
+    const writeDecision = (): ReturnType<typeof ensureStageDecision> => ensureStageDecision({
+      read: io.read, insert: io.insert, validate: io.validate,
+      compute: () => result.decision, by: DECISION_WRITER,
+    })
+    try {
+      out = finalRecoverySlot ? await retryFinalStageDecisionWrite(writeDecision) : await writeDecision()
     } catch (e) {
       console.error(`🔴 저장 경로에 닿지 못했다 — ${(e as Error).name}. 아무것도 쓰지 않았다`)
       return 1

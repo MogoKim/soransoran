@@ -19,8 +19,10 @@ import { type CostVerdict } from './llm-pricing'
 import {
   SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_SLOTS_KST, supplyRunSlotMinuteOf,
 } from './supply-schedule-contract'
+import { parseRunTokenShadowTag } from './supply-run-token'
 import {
-  supplyCostContractOf, supplyCostRecordedBudgetCapOf, supplyCostRequestMetadataEligible,
+  isSupplyCostRecoveryTagged, supplyCostContractOf, supplyCostRecordedBudgetCapOf, supplyCostRequestMetadataEligible,
+  supplyCostRecoveryRequestMetadataEligible,
   usesSupplyCostEnvelope,
 } from './supply-cost-envelope'
 
@@ -287,6 +289,11 @@ export type DayTally = {
 export type SupplyProofCostObservation = {
   settledRequests: number
   usageUnknownRequests: number
+  /** 제한 복구는 자연 정산 비율 표본과 분리하지만 비용 위험에서는 제외하지 않는다. */
+  recoverySettledRequests: number
+  recoveryUsageUnknownRequests: number
+  recoverySettledUsd: number
+  recoveryUsageUnknownReservedUsd: number
   /** proof 귀속 또는 현재 계약·예약 근거가 불완전한 요청 */
   ineligibleRequests: number
   settledUsd: number
@@ -345,8 +352,10 @@ export function supplyProofCostObservationOf(
   entries: readonly LedgerEntry[], kstDate: string,
 ): SupplyProofCostObservation {
   const out: SupplyProofCostObservation = {
-    settledRequests: 0, usageUnknownRequests: 0, ineligibleRequests: 0,
-    settledUsd: 0, usageUnknownReservedUsd: 0, riskUsd: 0, overrunRequests: 0,
+    settledRequests: 0, usageUnknownRequests: 0,
+    recoverySettledRequests: 0, recoveryUsageUnknownRequests: 0,
+    recoverySettledUsd: 0, recoveryUsageUnknownReservedUsd: 0,
+    ineligibleRequests: 0, settledUsd: 0, usageUnknownReservedUsd: 0, riskUsd: 0, overrunRequests: 0,
     recordedDailyCapUsd: null,
   }
   const proofMinutes = new Set(SUPPLY_PROOF_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute))
@@ -359,6 +368,7 @@ export function supplyProofCostObservationOf(
   const proofEndMinute = Math.max(...proofMinutes) + 45
   const expected = supplyCostContractOf(kstDate)
   let recordedCap: number | null = null
+  const recoveryRuns = new Set<string>()
   for (const e of entries) {
     if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
     const started = new Date(e.startedAt)
@@ -373,9 +383,36 @@ export function supplyProofCostObservationOf(
       && e.runKind === 'scheduled'
       && e.runSlot === labelOf(actualSlot)
 
+    const token = parseRunTokenShadowTag(e.runTokenShadow)
+    const recoveryTagged = isSupplyCostRecoveryTagged(e.runTokenShadow)
+
     // 이 함수의 입력은 해당 날짜 장부 파일이다. 시작 시각이 손상됐거나 다른 날짜면
     // 조용히 버리지 않고 proof 귀속 불명으로 닫는다.
     if (startedDate !== kstDate) {
+      out.ineligibleRequests += 1
+      continue
+    }
+    if (recoveryTagged) {
+      const recoveryRun = /^(\d{8}-\d{6})-[jd]$/.exec(e.runId)?.[1] ?? null
+      if (token?.ok !== true || recoveryRun === null
+        || !supplyCostRecoveryRequestMetadataEligible(e, kstDate)) {
+        out.ineligibleRequests += 1
+        continue
+      }
+      recoveryRuns.add(recoveryRun)
+      const requestCap = supplyCostRecordedBudgetCapOf(e, kstDate)!
+      recordedCap = recordedCap === null ? requestCap : Math.max(recordedCap, requestCap)
+      if (e.status === 'settled' && e.settledUsd !== null && Number.isFinite(e.settledUsd) && e.settledUsd >= 0) {
+        out.recoverySettledRequests += 1
+        out.recoverySettledUsd += e.settledUsd
+        if (e.reservedUsd !== null && e.settledUsd > e.reservedUsd) out.overrunRequests += 1
+        continue
+      }
+      if (e.status === 'usageUnknown' && e.reservedUsd !== null) {
+        out.recoveryUsageUnknownRequests += 1
+        out.recoveryUsageUnknownReservedUsd += e.reservedUsd
+        continue
+      }
       out.ineligibleRequests += 1
       continue
     }
@@ -416,7 +453,11 @@ export function supplyProofCostObservationOf(
     }
     out.ineligibleRequests += 1
   }
+  // controller 계약은 하루 intent·공급 본체 하나다. 두 pipeline run이 보이면 비용은
+  // 위험액에 계속 남기되 자연 증거로는 fail-closed 한다.
+  if (recoveryRuns.size > 1) out.ineligibleRequests += recoveryRuns.size
   out.riskUsd = out.settledUsd + out.usageUnknownReservedUsd
+    + out.recoverySettledUsd + out.recoveryUsageUnknownReservedUsd
   out.recordedDailyCapUsd = recordedCap
   return out
 }

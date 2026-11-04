@@ -908,6 +908,8 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run stage:ladder-check
+          # 🔴 D20+ 제한 복구 — OPPORTUNITY_SHORT 하나만 · 하루 1회 · 07:30 유료 시작 마감 · 07:55 판정 · 07:58 저장 fallback
+          npm run stage:active-recovery-check
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
           #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
           npm run stage:evidence-check

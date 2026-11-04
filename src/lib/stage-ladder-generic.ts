@@ -276,6 +276,9 @@ export type ReadyCohortFact = {
   trialCost: {
     settledRequests: number
     usageUnknownRequests: number
+    /** 자연 표본에서는 제외하고 위험액·bounded 판정에만 남기는 제한 복구 요청. */
+    recoverySettledRequests?: number
+    recoveryUsageUnknownRequests?: number
     overrunRequests: number
     ineligibleRequests: number
     riskUsdPerSlotValidResult: number | null
@@ -460,6 +463,7 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
     const envelope = trial === null ? null : judgeSupplyCostEnvelope({
       settledRequests: trial.settledRequests,
       usageUnknownRequests: trial.usageUnknownRequests,
+      recoveryUsageUnknownRequests: trial.recoveryUsageUnknownRequests ?? 0,
       overrunRequests: trial.overrunRequests,
       ineligibleRequests: trial.ineligibleRequests,
       riskUsd,

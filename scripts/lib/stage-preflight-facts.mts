@@ -46,6 +46,7 @@ import {
   supplyRunSlotMinuteOf,
 } from '../../src/lib/supply-schedule-contract'
 import { isNaturalScheduledRunTag, parseRunTokenShadowTag } from '../../src/lib/supply-run-token'
+import { isSupplyCostRecoveryTagged } from '../../src/lib/supply-cost-envelope'
 import {
   judgeSlotRelease, matchOpportunitiesToSlots, publishEventAtOf, readSourceEvidence, releaseStampStatusOf,
   type SlotOpportunity,
@@ -65,6 +66,7 @@ import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
 import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
 import { commentLoopLedgerDir } from './persona-comment-loop.mjs'
 import { readyOpportunitiesOf, type LoadedStock } from './publishable-stock.mjs'
+import { readStageRecoverySourceHashes } from './stage-recovery-source-receipt.mjs'
 
 /** 🔴 정본 러너 사실 — 템플릿 상수 그대로. 여기서 숫자를 다시 적지 않는다 */
 export const RUNNER_GRID: RunnerGrid = {
@@ -305,6 +307,8 @@ export function measuredFutureSourceOpportunities(input: {
   current: readonly SlotOpportunity[]
   readyPerSourceLow: number | null
   sampleDays?: number
+  /** 격리 시험용. 운영에서는 현재 계정의 stage recovery 디렉터리를 읽는다. */
+  recoveryHome?: string
 }): number | null {
   const y = input.readyPerSourceLow
   const sampleDays = input.sampleDays ?? UNIT_COST_DAYS
@@ -385,11 +389,15 @@ export function measuredFutureSourceOpportunities(input: {
     const daySamples = samples.filter((sample) => sample.date === date).sort((a, b) => a.startedAtMs - b.startedAtMs)
     const baseline = baselineEvidenceOf(input.dataDir, date, nowMinute)
     if (baseline === null) return null
+    const recoverySourceHashes = readStageRecoverySourceHashes(date, input.recoveryHome)
+    if (recoverySourceHashes === null) return null
     const seen = new Set<string>()
     for (const ev of baseline) {
       const read = readSourceEvidence({ sourceEvidence: ev })
       if (read.ok && read.record.provenance.articleIdHash !== null) seen.add(read.record.provenance.articleIdHash)
     }
+    // 복구 회차에서 처음 본 원천은 이후 자연 회차에 다시 보여도 자연 순유입이 아니다.
+    for (const hash of recoverySourceHashes) seen.add(hash)
     const inflow: SlotOpportunity[] = []
     for (const sample of daySamples) {
       for (const ev of sample.evidence) {
@@ -468,6 +476,15 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
     const at = runMsOf(m[1]!)
     if (at === null || at < fromMs || at >= toMs) continue
     try {
+      // 제한 복구는 당일 부족을 메우는 실행이지 다음 시험의 자연 수율 표본이 아니다.
+      // 회차 기록이 있는 현재 실행은 recovery 표식을 먼저 보고 분자·분모에서 함께 뺀다.
+      // 옛 fixture처럼 회차 기록이 없는 묶음은 기존 호환을 위해 그대로 판독한다.
+      const runPath = join(dataDir, `supply-process-${m[1]!}.run.json`)
+      if (existsSync(runPath)) {
+        const run = JSON.parse(readFileSync(runPath, 'utf-8')) as Record<string, unknown>
+        if (run.runId !== m[1]!) return null
+        if (isSupplyCostRecoveryTagged(run.runTokenShadow)) continue
+      }
       // 🔴 정본 판독기(`readWorkset`)가 센다 — 두 번째 파서를 두지 않는다
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
       if (!r.ok) return null
@@ -937,6 +954,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
         trialCost: costAttribution === null ? null : {
           settledRequests: costAttribution.settledRequests,
           usageUnknownRequests: costAttribution.usageUnknownRequests,
+          recoverySettledRequests: costAttribution.recoverySettledRequests,
+          recoveryUsageUnknownRequests: costAttribution.recoveryUsageUnknownRequests,
           overrunRequests: costAttribution.trialOverrunRequests,
           ineligibleRequests: costAttribution.trialIneligibleRequests,
           riskUsdPerSlotValidResult: costAttribution.trialRiskUsdPerSlotValidResult,
