@@ -329,7 +329,13 @@ check('🔴 🔴 **700 버퍼 · STOCK_BANDS 를 실행 경로(공급 러너 · 
 })())
 check('🔴 🔴 **공급 러너가 수요를 정본 JIT 함수로 만든다(관제와 같은 함수)**', (() => {
   const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-  return /jit = \{ \.\.\.jitCoverageOf\(view, opts\.now\)/.test(runner) && /const policy = judgeJitDemand\(jitIn\)/.test(runner)
+  const code = runner.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  return /jit = \{ \.\.\.jitCoverageOf\(view, opts\.now\)/.test(code)
+    && /const basePolicy = judgeJitDemand\(jitIn\)/.test(code)
+    && (code.match(/judgeJitDemand\(/g) ?? []).length === 1
+    && /const policy = recoveryIntent === null\s*\? basePolicy\s*: recoveryJitDemand\(basePolicy, recoveryIntent\.deficit, jitIn !== null\)/.test(code)
+    && (code.match(/recoveryJitDemand\(/g) ?? []).length === 1
+    && /recoveryIntent = validateStageRecoveryRuntimeEnv\(process\.env, wallNow\)/.test(code)
 })())
 check('🔴 재고는 회차를 막지 않는다 — judgeProcessRun 이 재고를 인자로 받지 않는다', (() => {
   const src = readFileSync('src/lib/supply-process.ts', 'utf-8')
@@ -396,7 +402,14 @@ check('🔴 잠금 상태를 못 읽으면 통과시키지 않는다(fail-closed
   check('🔴 live 진입은 커널 lease(supplyEntry) 하나 — 쓸 수 있는 실행만 lease 를 지나고 관측 실행은 probe 만 한다',
     (code.match(/supplyEntry\(/g) ?? []).length === 1
     && /return mayWriteRunState\(\{ live: LIVE, killOpen \}\) \? viaLease\(\) : main\(null\)/.test(code)
-    && /body: \(proof\) => main\(proof\)/.test(code) && /probeSupplyLease\(process\.env\)/.test(code))
+    && /body: async \(proof\) => \{\s*if \(recoveryClaim !== null\) \{\s*validateStageRecoveryRuntimeEnv\(process\.env, new Date\(\)\)\s*claimStageRecoverySupplyStart\(\{ claim: recoveryClaim, now: new Date\(\) \}\)\s*\}\s*const code = await main\(proof\)\s*if \(code === 0 && recoveryClaim !== null\) \{\s*writeStageRecoverySupplyReceipt\(\{ claim: recoveryClaim, now: new Date\(\) \}\)\s*\}\s*return code\s*\}/.test(code)
+    && (code.match(/main\(proof\)/g) ?? []).length === 1
+    && (code.match(/claimStageRecoverySupplyStart\(/g) ?? []).length === 1
+    && (code.match(/writeStageRecoverySupplyReceipt\(/g) ?? []).length === 1
+    && /\.\.\.\(recoveryClaim === null \? \{\} : \{ trigger: 'recovery' as const \}\)/.test(code)
+    && /if \(recoveryClaim !== null\) \{\s*const wallNow = new Date\(\)\s*if \(!LIVE \|\| proof === null \|\| !killOpen\) \{\s*throw new Error/.test(code)
+    && code.indexOf('proof === null || !killOpen') < code.indexOf('new PrismaClient()')
+    && /probeSupplyLease\(process\.env\)/.test(code))
   check('🔴 쓸 수 있는 실행인데 lease 증명이 없으면 LOCKED 로 막는다(fail-closed)',
     /\} else if \(proof === null\) \{\s*\n\s*lockView = 'unreadable'/.test(code))
   check('🔴 DB 클라이언트는 본체(main) 안에서만 — 진입부 · 모듈 최상위에 PrismaClient 생성 0',

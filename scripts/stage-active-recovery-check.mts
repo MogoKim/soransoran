@@ -133,9 +133,15 @@ check('절대 마감은 생성+50분과 07:50 중 이른 시각',
   && activeRecoveryDeadlineAt('2026-11-05', atKst('07:25').toISOString())?.getTime() === atKst('07:50').getTime())
 check('재고를 읽었을 때만 증명 부족분 정확히만 연다', (() => {
   const demand = recoveryJitDemand({ upTo: 8 }, 3, true)
+  const covered = { llm: false, fill: false, upTo: 0 }
+  const coveredBefore = JSON.stringify(covered)
+  const recoveredFromCovered = recoveryJitDemand(covered, 3, true)
   let failedClosed = false
   try { recoveryJitDemand({ upTo: 2 }, 3, false) } catch { failedClosed = true }
-  return demand.upTo === 3 && demand.llm && demand.fill && failedClosed
+  return demand.upTo === 3 && demand.llm && demand.fill
+    && recoveredFromCovered.upTo === 3 && recoveredFromCovered.llm && recoveredFromCovered.fill
+    && JSON.stringify(covered) === coveredBefore
+    && failedClosed
 })())
 let finalWriteCalls = 0
 const finalWrite = await retryFinalStageDecisionWrite(async () => {
