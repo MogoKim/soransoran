@@ -814,7 +814,7 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 curre
     /cohortRuns: new Set\(ws\?\.byRun\.keys\(\) \?\? \[\]\)/.test(facts)
     && /const worksetSources = ws\?\.sources \?\? null/.test(facts)
     && /const costCohortRuns = new Set\(cohort\.cohortRuns\)/.test(facts)
-    && /if \(i\.recoveryLineage !== undefined\) costCohortRuns\.add\(i\.recoveryLineage\.supplyRunId\)/.test(facts)
+    && /if \(recoveryCostRunId !== null\) costCohortRuns\.add\(recoveryCostRunId\)/.test(facts)
     && /costAttributionOf\(\{ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns \}\)/.test(facts))
 }
 

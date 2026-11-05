@@ -62,16 +62,11 @@ import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 import { probeSupplyLease } from './lib/supply-lease.mjs'
 import { stageControllerLeaseDisposition } from './lib/ops-loop-templates'
 import { loaderArgs } from './lib/runner-lease.mjs'
+import { stageRecoveryLogPath, type StageRecoveryIntent } from './lib/stage-recovery-intent.mjs'
+import { activeRecoveryPhaseOf, planActiveRecovery } from '../src/lib/stage-active-recovery'
 import {
-  claimStageRecoveryLaunch, createStageRecoveryIntent, readStageRecoveryIntent,
-  readStageRecoverySupplyReceipt, stageRecoveryIntentCoversPlan, stageRecoveryLogPath, updateStageRecoveryIntent,
-  type StageRecoveryIntent,
-} from './lib/stage-recovery-intent.mjs'
-import {
-  activeRecoveryDecisionDisposition, isFinalRecoveryControllerSlot, planActiveRecovery,
-  retryFinalStageDecisionWrite,
-} from '../src/lib/stage-active-recovery'
-import { readStageRecoverySourceReceipt } from './lib/stage-recovery-source-receipt.mjs'
+  recoveryPreflightInputOf, runStageRecoveryStep, type StageRecoveryComputed, type StageRecoveryFactsMode,
+} from './lib/stage-controller-recovery-step.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -293,6 +288,31 @@ async function main(): Promise<number> {
   }
   const prisma = new PrismaClient()
   try {
+    /**
+     * 🔴 recovery 단계는 주입 가능한 실행부 하나가 맡는다(`runStageRecoveryStep`).
+     *    산출물이 있는 날(손상 포함)은 07:00·07:20·07:40에 결정을 쓰지 않고, 07:55·07:58만 lineage·exact 성과·
+     *    exact 비용을 넣어 create-only로 한 번 결정한다. 산출물이 없고 복구 대상도 아니면 즉시 결정한다.
+     */
+    const out = await runStageRecoveryStep({
+      phase: activeRecoveryPhaseOf(NOW), kstDate: TODAY, clock: () => new Date(),
+      writeMode: !APPLY ? 'dry-run' : flagOn ? 'apply' : 'flag-off',
+      io: stageDecisionIo(prisma, TODAY),
+      compute: (mode) => computeToday(prisma, mode, flagOn),
+      launch: launchActiveRecovery,
+      log, error: (s) => console.error(s),
+    })
+    return out.exitCode
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * 오늘 결정 계산 — 전날 권한·증거·계획·preflight·운영 신호. 저장과 recovery 전이는 하지 않는다(`runStageRecoveryStep`).
+ */
+async function computeToday(
+  prisma: PrismaClient, mode: StageRecoveryFactsMode, flagOn: boolean,
+): Promise<StageRecoveryComputed> {
     const decidedAt = NOW.toISOString()
     const failures: string[] = []
 
@@ -301,7 +321,7 @@ async function main(): Promise<number> {
     if (authority.kind === 'stop') {
       if (JSON_OUT) console.log(JSON.stringify({ today: TODAY, apply: APPLY, flagOn, stopped: true, code: authority.code, reason: authority.reason }, null, 2))
       console.error(`🔴 ${authority.code} — ${authority.reason}. 결정 계산 0 · DB write 0 — 다음 예약이 다시 읽는다`)
-      return 1
+      return { kind: 'stop', exitCode: 1 }
     }
     const previous: ValidatedStageDecision | null = authority.kind === 'exact' ? authority.previous : null
     /** 🔴 전날 행이 없을 때만 — 이틀 전 행. 권한만 잇고 시험을 열지 않는다 */
@@ -338,7 +358,6 @@ async function main(): Promise<number> {
     let preflightTarget: RuntimeStage | null = null
     let publishedToday = 0
     let preflightDetail: Record<string, unknown> | null = null
-    const finalRecoverySlot = isFinalRecoveryControllerSlot(NOW)
     try {
       const autoOpen = await auditAwareGate(prisma, readEnvKeys(PREFLIGHT_ENV_KEYS).values, NOW)
       const s = await loadPublishableStock(prisma, NOW, { autoReadyOpen: autoOpen.open })
@@ -353,56 +372,30 @@ async function main(): Promise<number> {
       preflightTarget = target
       if (target !== null && previous !== null) {
         const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
-        const recoveryIntent = finalRecoverySlot ? readStageRecoveryIntent(TODAY) : null
-        const recoveryClaim = recoveryIntent === null ? null : {
-          kstDate: recoveryIntent.kstDate, nonce: recoveryIntent.nonce, deficit: recoveryIntent.deficit,
-        }
-        const recoverySupplyReceipt = recoveryClaim === null ? null
-          : readStageRecoverySupplyReceipt(recoveryClaim)
-        const recoverySourceReceipt = recoveryIntent === null ? null
-          : readStageRecoverySourceReceipt(TODAY, recoveryIntent.nonce)
-        const recoveryReceiptAt = recoverySourceReceipt === null
-          ? Number.NaN : Date.parse(recoverySourceReceipt.writtenAt)
-        const recoveryCreatedAt = recoveryIntent === null
-          ? Number.NaN : Date.parse(recoveryIntent.createdAt)
-        const recoverySupplyCompletedAt = recoverySupplyReceipt === null
-          ? Number.NaN : Date.parse(recoverySupplyReceipt.completedAt)
-        const recoveryLineage = recoveryIntent !== null && recoverySourceReceipt !== null
-          && recoverySupplyReceipt !== null
-          && Number.isFinite(recoveryReceiptAt) && Number.isFinite(recoveryCreatedAt)
-          && Number.isFinite(recoverySupplyCompletedAt)
-          && recoveryReceiptAt >= recoveryCreatedAt && recoveryReceiptAt <= NOW.getTime()
-          && recoverySupplyCompletedAt >= recoveryCreatedAt && recoverySupplyCompletedAt <= NOW.getTime()
-          ? {
-              sourceHashes: new Set(recoverySourceReceipt.sourceHashes),
-              supplyRunId: recoverySupplyReceipt.supplyRunId,
-              createdAt: new Date(recoveryCreatedAt),
-            }
-          : undefined
+        const recovery = recoveryPreflightInputOf(mode, target, NOW)
         const r = await readPreflightFacts(prisma, {
           loaded: s, autoOpen, proofSlots: slotTimesOn(TODAY, profileOf(target)),
           caps: releaseCapsOf(profileOf(target)), evidenceDate: previous.kstDate, env: pe.values,
           dataDir: SUPPLY_DATA_DIR, now: NOW, runnerHealth: errorSignal.health,
-          recoveryLineage,
+          recovery,
           // 🔴 Persona 4상태 정본의 계약 유효 수 — 활성 행 수를 넣지 않는다(읽지 못하면 null = 모름)
           contractValidPersonas: () => readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() }),
         })
+        // 🔴 READY 가산은 final 슬롯 · intent done · lineage 검증을 지난 slot-valid 복구 READY만, 부족분까지
         let boundedRecoveryReadyGain = 0
-        if (finalRecoverySlot) {
+        if (mode.kind === 'evaluate' && mode.final) {
           const recoveryReadyStock = r.facts.slotValidRecoveryReadyStock
-          const receiptOk = recoverySupplyReceipt !== null
-          if (recoveryIntent !== null && recoveryIntent.state === 'done'
-            && recoveryIntent.target === target && receiptOk && recoveryLineage !== undefined
-            && Number.isSafeInteger(recoveryReadyStock) && Number(recoveryReadyStock) >= 0) {
-            boundedRecoveryReadyGain = Math.min(recoveryIntent.deficit, Number(recoveryReadyStock))
-            log(`   제한 복구 READY lineage 검증 sources=${recoveryLineage.sourceHashes.size}`
-              + ` slotValid=${recoveryReadyStock} gain=${boundedRecoveryReadyGain}/${recoveryIntent.deficit}`)
-          } else if (recoveryIntent !== null) {
-            log(`   제한 복구 READY 가산 0 — state=${recoveryIntent.state} target=${recoveryIntent.target}`
-              + ` supplyReceipt=${receiptOk ? 'ok' : 'missing'}`
-              + ` sourceReceipt=${recoveryLineage === undefined ? 'missing-or-invalid' : 'ok'}`
-              + ` slotValidRecovery=${String(recoveryReadyStock)}`)
+          const lineageOk = recovery.kind === 'known' && recovery.lineage !== undefined
+          if (lineageOk && Number.isSafeInteger(recoveryReadyStock) && Number(recoveryReadyStock) >= 0) {
+            boundedRecoveryReadyGain = Math.min(mode.intent.deficit, Number(recoveryReadyStock))
+            log(`   제한 복구 READY lineage 검증 slotValid=${recoveryReadyStock} gain=${boundedRecoveryReadyGain}/${mode.intent.deficit}`)
+          } else {
+            log(`   제한 복구 READY 가산 0 — state=${mode.intent.state} target=${mode.intent.target}`
+              + ` recovery=${recovery.kind === 'unknown' ? `unknown(${recovery.reason})` : `claim ${recovery.claimRunId ?? '없음'}`}`
+              + ` lineage=${lineageOk ? 'ok' : 'missing-or-invalid'} slotValidRecovery=${String(recoveryReadyStock)}`)
           }
+        } else if (mode.kind === 'unknown') {
+          log(`   🔴 제한 복구 산출물 손상 — ${mode.reason} · 비용 신원 모름(SUPPLY_COST_UNKNOWN) · 가산 0`)
         }
         nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID, { boundedRecoveryReadyGain })
         preflightDetail = r.detail
@@ -461,105 +454,14 @@ async function main(): Promise<number> {
       for (const b of d.blocks) log(`      🔴 ${b.code}: ${b.reason}`)
       log(`   검증  ${v.ok ? '🟢 통과' : `🔴 ${v.reason}`}`)
     }
-    if (!v.ok) { console.error(`🔴 계산한 결정이 계약을 지키지 않는다 — 저장하지 않는다: ${v.reason}`); return 1 }
-
-    if (!APPLY) { log('\n🔴 dry-run — DB write 0. 저장은 --apply + 정본 env 의 flag on 일 때만\n'); return 0 }
-    if (!flagOn) {
-      log(`\n🔴 ${CONTROLLER_ENV} 가 on 이 아니다 — 저장하지 않는다 (consumer 는 옛 env/canary 단계로 돌아가지 않고 가장 안전한 d1 로 감속한다)\n`)
-      return 0
-    }
-    const io = stageDecisionIo(prisma, TODAY)
-    /**
-     * 기회 부족만 능동 복구한다. 오늘 결정이 이미 있으면 절대 복구를 시작하지 않고,
-     * 품질·비용·오류·다른 preflight 결함은 기존 결과를 즉시 저장한다.
-     * intent가 있는 정상 복구 흐름은 중간 예약에서 결정을 쓰지 않고 07:55 재판정을 기다린다.
-     * 07:58은 결정 부재만 처리하는 fallback이고 새 복구는 시작하지 않는다.
-     */
-    const existingDecision = await io.read()
-    if (existingDecision === null && !finalRecoverySlot) {
-      const recoveryPlan = planActiveRecovery({
-        target: preflightTarget, preflight: nextPreflight, signals, failures, now: NOW,
-      })
-      let intent = readStageRecoveryIntent(TODAY)
-      const recoveryDisposition = activeRecoveryDecisionDisposition({
-        plan: recoveryPlan, intentState: intent?.state ?? null, preflight: nextPreflight,
-      })
-      if (recoveryDisposition === 'recover' && recoveryPlan.kind === 'recover') {
-        if (intent === null) intent = createStageRecoveryIntent({ kstDate: TODAY, plan: recoveryPlan, now: NOW }).intent
-        if (!stageRecoveryIntentCoversPlan(intent, recoveryPlan)) {
-          log('\n🟡 오늘 제한 복구 intent보다 부족분이 커졌거나 대상이 달라졌다 — 두 번째 복구 0 · 중간 StageDecision write 0')
-          log('   07:55 최종 예약이 같은 정본으로 한 번 결정한다\n')
-          return 0
-        }
-        if (intent.state === 'requested') {
-          const launch = claimStageRecoveryLaunch({ intent, now: new Date(), message: recoveryPlan.reason })
-          intent = launch.intent
-          if (launch.claimed) {
-            if (!await launchActiveRecovery(intent)) {
-              updateStageRecoveryIntent({ intent, state: 'failed', now: new Date(), message: 'worker 시작 실패' })
-              console.error('🔴 제한 복구 worker를 시작하지 못했다 — 오늘 결정을 아직 쓰지 않았다. 다음 예약이 다시 판정한다')
-              return 1
-            }
-            log(`\n🟡 ${recoveryPlan.reason} — 제한 수집 ${intent.collectMax}건 · 공급 묶음 ${intent.worksetLimit}을 한 번 시작했다`)
-          } else {
-            log('\n🟡 오늘 제한 복구 실행권은 이미 다른 controller가 가져갔다 — 두 번째 worker 0')
-          }
-        } else {
-          log(`\n🟡 오늘 제한 복구 intent ${intent.state} — 두 번째 복구를 만들지 않는다`)
-        }
-        log('   StageDecision write 0 · 07:55에 같은 정본으로 최종 재판정한다\n')
-        return 0
-      }
-      if (recoveryDisposition === 'defer') {
-        log(`\n🟡 제한 복구 ${intent === null ? '대기' : `intent ${intent.state}`} · ${recoveryPlan.reason} — 중간 StageDecision write 0`)
-        log('   07:55 최종 예약이 같은 정본으로 한 번 결정한다\n')
-        return 0
-      }
-      if (recoveryDisposition === 'cancel-and-decide' && intent !== null) {
-        try {
-          updateStageRecoveryIntent({
-            intent, state: 'failed', now: new Date(),
-            message: `복구 중 새 중대 차단: ${recoveryPlan.reason}`,
-          })
-        } catch (e) {
-          console.error(`🔴 제한 복구를 취소하지 못해 StageDecision도 쓰지 않는다 — ${(e as Error).message}`)
-          return 1
-        }
-      }
-    } else if (existingDecision === null && finalRecoverySlot) {
-      const intent = readStageRecoveryIntent(TODAY)
-      if (intent !== null && (intent.state === 'requested' || intent.state === 'running')) {
-        try {
-          updateStageRecoveryIntent({
-            intent, state: 'failed', now: new Date(), message: '07:55 최종 판정 마감 — 추가 공급 종료',
-          })
-        } catch (e) {
-          const after = readStageRecoveryIntent(TODAY)
-          const ended = after?.state === 'done' || after?.state === 'failed'
-          console.error(`🔴 최종 판정 전 제한 복구 상태 기록을 닫지 못했다 — ${(e as Error).message}`
-            + (ended ? ` · 재조회 결과 ${after.state}` : ' · 07:50 provider 마감은 이미 닫혔다'))
-          // 07:55에는 provider 경계가 이미 닫혔다. 상태 파일 write 한 번의 실패가 오늘의
-          // 유일한 StageDecision까지 없애면 다음날 또 같은 시험을 반복한다. 같은 정본 계산은 계속한다.
-        }
-      }
-    }
-    let out: Awaited<ReturnType<typeof ensureStageDecision>>
-    const writeDecision = (): ReturnType<typeof ensureStageDecision> => ensureStageDecision({
-      read: io.read, insert: io.insert, validate: io.validate,
-      compute: () => result.decision, by: DECISION_WRITER,
+    // 🔴 복구 계획 — 중간 슬롯 recovery 지시의 입력. 저장·recovery 전이는 runStageRecoveryStep 이 한다
+    const recoveryPlan = planActiveRecovery({
+      target: preflightTarget, preflight: nextPreflight, signals, failures, now: NOW,
     })
-    try {
-      out = finalRecoverySlot ? await retryFinalStageDecisionWrite(writeDecision) : await writeDecision()
-    } catch (e) {
-      console.error(`🔴 저장 경로에 닿지 못했다 — ${(e as Error).name}. 아무것도 쓰지 않았다`)
-      return 1
+    return {
+      kind: 'computed', result, plan: recoveryPlan,
+      valid: v.ok ? { ok: true } : { ok: false, reason: v.reason },
     }
-    if (!out.ok) { console.error(`🔴 저장 실패 ${out.code} — ${out.reason}`); return 1 }
-    log(`\n   ${out.created ? '🟢 저장했다' : '🟢 이미 있어 읽었다(덮지 않는다)'} — ${out.decision.state} · 공개 ${out.decision.release} · 준비 ${out.decision.capacity}\n`)
-    return 0
-  } finally {
-    await prisma.$disconnect()
-  }
 }
 
 process.exit(await main())

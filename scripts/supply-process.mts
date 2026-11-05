@@ -1411,7 +1411,7 @@ async function entry(): Promise<number> {
     body: async (proof) => {
       if (recoveryClaim !== null) {
         validateStageRecoveryRuntimeEnv(process.env, new Date())
-        claimStageRecoverySupplyStart({ claim: recoveryClaim, now: new Date() })
+        claimStageRecoverySupplyStart({ claim: recoveryClaim, supplyRunId: runIdOf(RUN_AT), now: new Date() })
       }
       const code = await main(proof)
       if (code === 0 && recoveryClaim !== null) {

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  closeSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -7,11 +9,11 @@ import {
   ACTIVE_RECOVERY_DATE_ENV, ACTIVE_RECOVERY_DEADLINE_ENV, ACTIVE_RECOVERY_DEFICIT_ENV,
   ACTIVE_RECOVERY_COLLECTOR_MAX, ACTIVE_RECOVERY_MAX_DEFICIT,
   ACTIVE_RECOVERY_NONCE_ENV, ACTIVE_RECOVERY_VERSION, ACTIVE_RECOVERY_WORKSET_LIMIT,
-  type ActiveRecoveryPlan,
+  type ActiveRecoveryIntentState, type ActiveRecoveryPlan,
 } from '../../src/lib/stage-active-recovery'
 import type { RuntimeStage } from '../../src/lib/scale-profile'
 
-export type StageRecoveryIntentState = 'requested' | 'running' | 'done' | 'failed'
+export type StageRecoveryIntentState = ActiveRecoveryIntentState
 export type StageRecoveryIntent = {
   version: typeof ACTIVE_RECOVERY_VERSION
   kstDate: string
@@ -99,8 +101,67 @@ export function parseStageRecoveryIntent(raw: string): StageRecoveryIntent | nul
   return o as StageRecoveryIntent
 }
 
-export function readStageRecoveryIntent(kstDate: string, home?: string): StageRecoveryIntent | null {
-  try { return parseStageRecoveryIntent(readFileSync(stageRecoveryIntentPath(kstDate, home), 'utf-8')) } catch { return null }
+/** 오늘 recovery 산출물 판독 — 손상을 없음으로 읽지 않는다(`ActiveRecoveryArtifact`의 실제 값). */
+export type StageRecoveryArtifactRead =
+  | { kind: 'absent' }
+  | { kind: 'valid'; intent: StageRecoveryIntent }
+  | { kind: 'corrupt'; reason: string }
+
+const SOURCE_RECEIPT_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.[0-9a-f]{16}\.sources\.json$/
+
+const errorCode = (e: unknown): string | undefined => (e as { code?: string }).code
+
+/** intent가 없을 때 남아 있으면 안 되는 같은 날짜의 실행권·시작 claim·완주 영수증·원천 영수증. */
+function orphanArtifactsOf(kstDate: string, home?: string): { names: string[] } | { error: string } {
+  const names: string[] = []
+  for (const path of [
+    stageRecoveryLaunchClaimPath(kstDate, home),
+    stageRecoverySupplyStartClaimPath(kstDate, home),
+    stageRecoverySupplyReceiptPath(kstDate, home),
+  ]) {
+    try {
+      lstatSync(path)
+      names.push(path.slice(path.lastIndexOf('/') + 1))
+    } catch (e) {
+      if (errorCode(e) !== 'ENOENT') return { error: `${path.slice(path.lastIndexOf('/') + 1)} 확인 실패 ${errorCode(e) ?? 'unknown'}` }
+    }
+  }
+  let entries: string[]
+  try { entries = readdirSync(stageRecoveryDir(home)) } catch (e) {
+    if (errorCode(e) === 'ENOENT') return { names }
+    return { error: `recovery 디렉터리 읽기 실패 ${errorCode(e) ?? 'unknown'}` }
+  }
+  for (const name of entries) {
+    if (SOURCE_RECEIPT_NAME_RE.exec(name)?.[1] === kstDate) names.push(name)
+  }
+  return { names }
+}
+
+/**
+ * 🔴 **recovery 판독의 유일한 문.** `absent`는 intent가 ENOENT이고 같은 날짜 claim·영수증도 없을 때뿐이다.
+ *    다른 읽기 오류 · 파싱 실패 · 다른 날짜 본문 · intent 없이 남은 claim/영수증은 `corrupt`다.
+ */
+export function readStageRecoveryArtifact(kstDate: string, home?: string): StageRecoveryArtifactRead {
+  let raw: string
+  try {
+    raw = readFileSync(stageRecoveryIntentPath(kstDate, home), 'utf-8')
+  } catch (e) {
+    if (errorCode(e) !== 'ENOENT') return { kind: 'corrupt', reason: `intent 읽기 실패 ${errorCode(e) ?? 'unknown'}` }
+    const orphans = orphanArtifactsOf(kstDate, home)
+    if ('error' in orphans) return { kind: 'corrupt', reason: orphans.error }
+    if (orphans.names.length > 0) return { kind: 'corrupt', reason: `intent 없이 남은 산출물: ${orphans.names.join(',')}` }
+    return { kind: 'absent' }
+  }
+  const intent = parseStageRecoveryIntent(raw)
+  if (intent === null) return { kind: 'corrupt', reason: 'intent 형식이 계약과 다르다' }
+  if (intent.kstDate !== kstDate) return { kind: 'corrupt', reason: `intent 날짜 ${intent.kstDate} ≠ ${kstDate}` }
+  return { kind: 'valid', intent }
+}
+
+/** 상태 전이·실행권 검증처럼 정상 intent만 받는 내부 경로. 없음·손상은 모두 진행 불가다(fail-closed). */
+function validIntentOf(kstDate: string, home?: string): StageRecoveryIntent | null {
+  const read = readStageRecoveryArtifact(kstDate, home)
+  return read.kind === 'valid' ? read.intent : null
 }
 
 export function createStageRecoveryIntent(i: {
@@ -125,9 +186,9 @@ export function createStageRecoveryIntent(i: {
     return { created: true, intent }
   } catch (e) {
     if ((e as { code?: string }).code !== 'EEXIST') throw e
-    const existing = readStageRecoveryIntent(i.kstDate, i.home)
-    if (existing === null) throw new Error('기존 stage recovery intent가 손상됐다')
-    return { created: false, intent: existing }
+    const existing = readStageRecoveryArtifact(i.kstDate, i.home)
+    if (existing.kind !== 'valid') throw new Error(`기존 stage recovery intent가 손상됐다 — ${existing.kind === 'corrupt' ? existing.reason : 'absent'}`)
+    return { created: false, intent: existing.intent }
   }
 }
 
@@ -139,7 +200,7 @@ export function updateStageRecoveryIntent(i: {
   home?: string
 }): StageRecoveryIntent {
   return withIntentUpdateLock(i.intent.kstDate, i.home, () => {
-    const current = readStageRecoveryIntent(i.intent.kstDate, i.home)
+    const current = validIntentOf(i.intent.kstDate, i.home)
     if (current === null || current.nonce !== i.intent.nonce) throw new Error('stage recovery intent 소유권이 달라졌다')
     const allowed = current.state === i.state
       || (current.state === 'requested' && (i.state === 'running' || i.state === 'failed'))
@@ -187,6 +248,7 @@ export function stageRecoveryIntentCoversPlan(
 /**
  * controller가 겹쳐도 worker 실행권은 하루 한 프로세스만 얻는다. claim 생성과 intent
  * 전이 사이에 죽으면 재실행보다 안전 정지를 택한다. 07:55 controller와 07:58 fallback이 최종 결정을 맡는다.
+ * 실행권이 이미 있을 때 intent를 다시 읽지 못하면 메모리의 옛 intent로 대신하지 않고 멈춘다.
  */
 export function claimStageRecoveryLaunch(i: {
   intent: StageRecoveryIntent
@@ -205,7 +267,11 @@ export function claimStageRecoveryLaunch(i: {
     writeFileSync(path, `${JSON.stringify(claim, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   } catch (e) {
     if ((e as { code?: string }).code !== 'EEXIST') throw e
-    return { claimed: false, intent: readStageRecoveryIntent(i.intent.kstDate, i.home) ?? i.intent }
+    const current = readStageRecoveryArtifact(i.intent.kstDate, i.home)
+    if (current.kind !== 'valid' || current.intent.nonce !== i.intent.nonce) {
+      throw new Error(`stage recovery 실행권은 이미 있으나 intent를 확인하지 못했다 — ${current.kind === 'corrupt' ? current.reason : current.kind === 'absent' ? 'absent' : 'nonce 불일치'}`)
+    }
+    return { claimed: false, intent: current.intent }
   }
   try {
     return {
@@ -236,7 +302,7 @@ export function stageRecoveryClaimFromArgv(argv: readonly string[]): StageRecove
 }
 
 export function validateStageRecoveryClaim(claim: StageRecoveryClaim, home?: string): StageRecoveryIntent {
-  const intent = readStageRecoveryIntent(claim.kstDate, home)
+  const intent = validIntentOf(claim.kstDate, home)
   if (intent === null || intent.nonce !== claim.nonce || intent.deficit !== claim.deficit || intent.state !== 'running') {
     throw new Error('실행 중인 stage recovery intent와 인자가 일치하지 않는다')
   }
@@ -255,7 +321,7 @@ export function failStageRecoveryClaimBestEffort(i: {
   home?: string
 }): boolean {
   try {
-    const current = readStageRecoveryIntent(i.claim.kstDate, i.home)
+    const current = validIntentOf(i.claim.kstDate, i.home)
     if (current === null || current.nonce !== i.claim.nonce || current.deficit !== i.claim.deficit) return false
     if (current.state === 'done' || current.state === 'failed') return true
     updateStageRecoveryIntent({
@@ -267,20 +333,39 @@ export function failStageRecoveryClaimBestEffort(i: {
   }
 }
 
-/** 같은 nonce의 공급 본체는 커널 lease 안에서도 단 한 번만 시작한다. */
+/** 공급 회차 id 모양(`supplyRunIdOf`) — 장부 줄의 `pipelineRunOfLedger`와 같은 값이다. */
+const SUPPLY_RUN_ID_RE = /^\d{8}-\d{6}$/
+
+export type StageRecoverySupplyStartClaim = {
+  version: typeof ACTIVE_RECOVERY_VERSION
+  kstDate: string
+  nonce: string
+  deficit: number
+  /** 이 nonce의 공급 본체 회차 id — 첫 provider 요청 전에 기록돼 성공·실패 모두의 exact 비용 신원이 된다 */
+  supplyRunId: string
+  startedAt: string
+}
+
+/**
+ * 같은 nonce의 공급 본체는 커널 lease 안에서도 단 한 번만 시작한다.
+ * `main()`보다 먼저 `wx`로 쓰므로, 이 회차가 provider를 부르기 전에 runId 신원이 남는다.
+ */
 export function claimStageRecoverySupplyStart(i: {
   claim: StageRecoveryClaim
+  supplyRunId: string
   now: Date
   home?: string
 }): void {
+  if (!SUPPLY_RUN_ID_RE.test(i.supplyRunId)) throw new Error(`stage recovery supply runId 모양이 잘못됐다: ${i.supplyRunId}`)
   const intent = validateStageRecoveryClaim(i.claim, i.home)
   mkdirSync(stageRecoveryDir(i.home), { recursive: true, mode: 0o700 })
   const path = stageRecoverySupplyStartClaimPath(i.claim.kstDate, i.home)
-  const value = {
+  const value: StageRecoverySupplyStartClaim = {
     version: ACTIVE_RECOVERY_VERSION,
     kstDate: intent.kstDate,
     nonce: intent.nonce,
     deficit: intent.deficit,
+    supplyRunId: i.supplyRunId,
     startedAt: i.now.toISOString(),
   }
   try {
@@ -291,6 +376,35 @@ export function claimStageRecoverySupplyStart(i: {
     }
     throw e
   }
+}
+
+/**
+ * 시작 claim 판독 — 없음·정상·손상. 옛 형식(`supplyRunId` 없음)·다른 nonce/부족분·날짜 불일치는
+ * 비용 신원을 증명하지 못하므로 손상이다. 정상 claim만 final 비용 cohort의 runId가 된다.
+ */
+export function readStageRecoverySupplyStartClaim(
+  intent: Pick<StageRecoveryIntent, 'kstDate' | 'nonce' | 'deficit'>,
+  home?: string,
+): { kind: 'absent' } | { kind: 'valid'; claim: StageRecoverySupplyStartClaim } | { kind: 'corrupt'; reason: string } {
+  let raw: string
+  try { raw = readFileSync(stageRecoverySupplyStartClaimPath(intent.kstDate, home), 'utf-8') } catch (e) {
+    return errorCode(e) === 'ENOENT' ? { kind: 'absent' }
+      : { kind: 'corrupt', reason: `공급 시작 claim 읽기 실패 ${errorCode(e) ?? 'unknown'}` }
+  }
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { return { kind: 'corrupt', reason: '공급 시작 claim JSON 손상' } }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return { kind: 'corrupt', reason: '공급 시작 claim 모양 손상' }
+  const o = value as Record<string, unknown>
+  if (o.version !== ACTIVE_RECOVERY_VERSION || !validDate(o.kstDate)
+    || typeof o.nonce !== 'string' || o.nonce === '' || !positive(o.deficit)
+    || typeof o.supplyRunId !== 'string' || !SUPPLY_RUN_ID_RE.test(o.supplyRunId)
+    || typeof o.startedAt !== 'string' || !Number.isFinite(Date.parse(o.startedAt))) {
+    return { kind: 'corrupt', reason: '공급 시작 claim이 옛 형식이거나 계약과 다르다' }
+  }
+  if (o.kstDate !== intent.kstDate || o.nonce !== intent.nonce || o.deficit !== intent.deficit) {
+    return { kind: 'corrupt', reason: '공급 시작 claim이 오늘 intent와 다르다' }
+  }
+  return { kind: 'valid', claim: o as StageRecoverySupplyStartClaim }
 }
 
 /** provider 요청 경계가 intent 취소·nonce 위조·절대 마감을 매번 다시 확인한다. */
@@ -332,7 +446,7 @@ export function validateStageRecoveryReceiptIdentityEnv(
     throw new Error('stage recovery receipt identity env가 불완전하다')
   }
   const deficit = Number(deficitRaw)
-  const intent = readStageRecoveryIntent(kstDate, home)
+  const intent = validIntentOf(kstDate, home)
   if (!positive(deficit) || intent === null || intent.nonce !== nonce || intent.deficit !== deficit) {
     throw new Error('stage recovery receipt identity가 intent와 일치하지 않는다')
   }

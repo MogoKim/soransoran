@@ -36,9 +36,14 @@
 6. 부족분이 1~10건이다.
 7. 07:00 이상 07:30 미만 KST다.
 
-하나라도 다르면 새 유료 공급을 시작하지 않는다. 이미 requested/running intent가 있으면 07:55 최종 슬롯까지
-기다린다. active intent가 없거나 done/failed로 끝났으면 현재 controller 슬롯에서 같은 정본 결정을 저장한다.
-다른 결함은 기존 controller의 fail-closed 결정을 따른다.
+하나라도 다르면 새 유료 공급을 시작하지 않는다.
+
+**오늘 recovery 산출물이 하나라도 있으면(손상 포함) 07:00·07:20·07:40은 `StageDecision`을 쓰지 않는다.**
+intent가 requested·running·done·failed 어느 상태든, intent 파일이 깨졌든 같다. 07:55 controller만 lineage·exact
+READY 가산·exact 비용을 넣어 한 번 저장한다(canon §3.2.1). 복구 중 품질·비용·오류·입력 같은 중대 결함이
+생기면 active intent를 failed로 닫아 다음 provider 요청을 막되, 결정은 역시 07:55에 한 번만 쓴다.
+산출물이 전혀 없고 복구 대상도 아니면(이미 PASS · 복구 범위 밖 결함 · 07:30 이후) 그 슬롯이 기존 정본 결정을
+바로 저장한다. 모든 날을 07:55까지 미루지 않는다.
 
 ## 3. 실행 순서와 마감
 
@@ -52,16 +57,19 @@
   → 공급 완주 receipt 기록
   → worker done/failed
 
-07:40 controller
-  → requested/running intent만 두 번째 worker·중간 StageDecision 모두 0
-  → done/failed intent면 같은 슬롯에서 현재 정본으로 StageDecision 저장
+07:20/07:40 controller
+  → 산출물이 있으면(requested·running·done·failed·손상) 두 번째 worker·중간 StageDecision 모두 0
+  → requested이고 실행권이 아직 없으면 07:30 전에만 실행권을 잡는다
+  → 중대 결함이면 active intent를 failed로 닫고 StageDecision 0
 
 07:50
   → worker 절대 종료 마감(07:00 시작도 최대 50분 안에서 이 시각에 종료)
 
 07:55 controller
-  → 남은 requested/running intent를 failed로 닫음
-  → 기존 정본으로 preflight와 운영 신호 재계산
+  → 오늘 결정이 이미 있으면 읽기만 한다(계산·recovery 변경 0)
+  → 남은 requested/running intent를 failed로 닫음(닫기 실패는 결정을 막지 않는다)
+  → 기존 정본으로 preflight와 운영 신호 재계산 — 시작 claim 회차의 비용을 성공·실패 무관하게 포함,
+    intent done일 때만 exact lineage READY 가산
   → StageDecision을 create-only로 저장(동일 계산의 짧은 write retry 최대 3회)
 
 07:58 controller
@@ -84,6 +92,12 @@ requested → running → done
 ```
 
 - 날짜별 intent, launch claim, supply-start claim은 모두 `wx` 원자 생성이다.
+- recovery 판독은 `absent`·`valid`·`corrupt` 셋뿐이다. `absent`는 intent 파일이 없고(ENOENT) 같은 날짜의 실행권·
+  시작 claim·완주/원천 영수증도 없을 때만이다. 다른 읽기 오류·파싱 실패·intent 없이 남은 claim/영수증은 `corrupt`다.
+  손상을 없음으로 읽지 않는다. 손상은 중간 결정 0, 07:55에는 비용 신원 모름(`SUPPLY_COST_UNKNOWN`)으로 승급하지 않는다.
+  손상만으로 지속 공개 단계를 낮추지는 않는다.
+- supply-start claim은 `main()` 전, 첫 provider 요청 전에 그 회차 id(`supplyRunId`)를 남긴다. 옛 형식(회차 id 없음)·
+  다른 nonce/부족분은 손상이다.
 - 같은 nonce의 worker와 공급 본체는 각각 한 번만 시작할 수 있다.
 - 공급 본체는 kernel lease 안에서 claim을 다시 검증한다.
 - recovery 공급은 저장·검증된 `recovery` run token이 있어야만 자식 collector·공급 본체를 시작한다.
@@ -119,8 +133,19 @@ preflight는 그 hash를 자연 기회에서 제외해 recovery와 자연 공급
 recovery provider 사용량은 공급 일일 정산액, 미상 예약액, overrun, 예산 위험에 포함한다. 다만 recovery를
 자연 scheduled 공급으로 세지 않는다. 자연 증명의 분자·분모, 자연 회차 수율, 자연 Dn PASS는 기존
 scheduled run token만 사용한다.
-비용 판정에는 자연 비용 cohort와 함께 intent에 연결된 exact recovery `supplyRunId` 하나만 추가한다.
+비용 판정에는 자연 비용 cohort와 함께 supply-start claim에 기록된 exact recovery `supplyRunId` 하나만 추가한다.
+성공·실패 무관하게 같은 회차다. 이 추가는 07:55·07:58 final 판정에서만 한다 — 중간 슬롯에서 넣으면 진행 중인
+미정산 요청이 trial 비용을 모름으로 만들어 controller가 자기 복구를 중대 결함으로 취소한다.
+모든 슬롯은 오늘 장부의 recovery 요청 회차 집합이 {claim 회차}의 부분집합인지 본다. claim이 있는데 장부가 비어
+있는 것은 정상이다(provider 전 종료). claim 없이 recovery 요청이 있거나 claim 밖 회차가 있으면 `SUPPLY_COST_UNKNOWN`이다.
 따라서 recovery의 정산액·미상 사용량은 빠지지 않지만, recovery READY나 원천을 자연 수율로 승격하지 않는다.
+recovery 요청도 하루 전체 비용 신호에서 빠지지 않는다. overrun·일일 상한 초과·정산 보류가 생기면 기존 비용 브레이크와
+감속이 그대로 걸린다.
+
+공급 건강도 분리한다. 엄격 파싱에 성공한 recovery 회차의 실패는 자연 공급 오류 신호(`supplyFailing`)에서 빠지고,
+READY 가산 0과 exact 비용으로만 반영된다 — 그것만으로 이미 인증된 공개 단계를 낮추지 않는다. recovery를 주장하지만
+tag가 손상된 회차가 마지막이면 성패를 모름으로 두어 승급만 막는다. 파서의 `ok:false` tag는 recovery 신원을 증명하지
+못하므로 자연 회차로 남는다. 자연 예약 회차 실패는 지금처럼 오류 신호 bad다.
 
 따라서 아래 둘은 별개다.
 
@@ -130,6 +155,12 @@ scheduled run token만 사용한다.
 ## 6. 관측과 진단
 
 코드·계약 검사는 다음을 실행한다.
+
+`stage:active-recovery-check`는 실제 실행부(`scripts/lib/stage-controller-recovery-step.mts`)를 고정 시계·임시 home·
+결정 IO spy로 07:00→07:20→07:40→07:55(→07:58) 순서대로 돌려 write 횟수를 세고, 이어서 변이 하네스
+(`stage-active-recovery-mutation`)가 보호 단언을 하나씩 지운 임시 사본에서 같은 검사가 FAIL하는지 본다.
+`SORAN_ISOLATED_DB=yes-throwaway`와 localhost `soran_test`를 주면 같은 순서를 실제 `StageDecision` 표에서 돌리고
+07:55·07:58 동시 실행이 create-only 1행인지 본다. 운영 controller에는 시각을 바꾸는 플래그가 없다.
 
 ```bash
 npm run stage:active-recovery-check
