@@ -402,7 +402,7 @@ check('🔴 잠금 상태를 못 읽으면 통과시키지 않는다(fail-closed
   check('🔴 live 진입은 커널 lease(supplyEntry) 하나 — 쓸 수 있는 실행만 lease 를 지나고 관측 실행은 probe 만 한다',
     (code.match(/supplyEntry\(/g) ?? []).length === 1
     && /return mayWriteRunState\(\{ live: LIVE, killOpen \}\) \? viaLease\(\) : main\(null\)/.test(code)
-    && /body: async \(proof\) => \{\s*if \(recoveryClaim !== null\) \{\s*validateStageRecoveryRuntimeEnv\(process\.env, new Date\(\)\)\s*claimStageRecoverySupplyStart\(\{ claim: recoveryClaim, now: new Date\(\) \}\)\s*\}\s*const code = await main\(proof\)\s*if \(code === 0 && recoveryClaim !== null\) \{\s*writeStageRecoverySupplyReceipt\(\{ claim: recoveryClaim, now: new Date\(\) \}\)\s*\}\s*return code\s*\}/.test(code)
+    && /body: async \(proof\) => \{\s*if \(recoveryClaim !== null\) \{\s*validateStageRecoveryRuntimeEnv\(process\.env, new Date\(\)\)\s*claimStageRecoverySupplyStart\(\{ claim: recoveryClaim, now: new Date\(\) \}\)\s*\}\s*const code = await main\(proof\)\s*if \(code === 0 && recoveryClaim !== null\) \{\s*writeStageRecoverySupplyReceipt\(\{\s*claim: recoveryClaim, supplyRunId: runIdOf\(RUN_AT\), now: new Date\(\),\s*\}\)\s*\}\s*return code\s*\}/.test(code)
     && (code.match(/main\(proof\)/g) ?? []).length === 1
     && (code.match(/claimStageRecoverySupplyStart\(/g) ?? []).length === 1
     && (code.match(/writeStageRecoverySupplyReceipt\(/g) ?? []).length === 1

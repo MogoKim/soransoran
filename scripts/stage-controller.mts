@@ -64,13 +64,14 @@ import { stageControllerLeaseDisposition } from './lib/ops-loop-templates'
 import { loaderArgs } from './lib/runner-lease.mjs'
 import {
   claimStageRecoveryLaunch, createStageRecoveryIntent, readStageRecoveryIntent,
-  stageRecoveryIntentCoversPlan, stageRecoveryLogPath, updateStageRecoveryIntent,
+  readStageRecoverySupplyReceipt, stageRecoveryIntentCoversPlan, stageRecoveryLogPath, updateStageRecoveryIntent,
   type StageRecoveryIntent,
 } from './lib/stage-recovery-intent.mjs'
 import {
   activeRecoveryDecisionDisposition, isFinalRecoveryControllerSlot, planActiveRecovery,
   retryFinalStageDecisionWrite,
 } from '../src/lib/stage-active-recovery'
+import { readStageRecoverySourceReceipt } from './lib/stage-recovery-source-receipt.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -270,7 +271,8 @@ async function main(): Promise<number> {
    * 🔴 06:15 공급이 아직 Queue 도장을 마치지 않았으면 07:00 결정은 불완전한 재고를 보게 된다.
    *    apply만 커널 lease 뒤로 미룬다. 07:00·07:20·07:40은 DB read/write 0으로 물러나고 07:55가 다시 본다.
    *    마지막 07:55에도 끝나지 않으면 부분 재고로 승격하지 않고, 전날 증거의 지속 단계 HOLD만 기록한다.
-   *    07:58은 07:55 저장 장애로 결정이 없을 때 같은 계산만 재시도한다.
+   *    07:58은 07:55 뒤에도 결정이 없을 때 정본 read-only 사실을 다시 계산한다. 새 recovery/provider는
+   *    열지 않고 create-only 저장만 하므로 07:55 결정이 뒤늦게 생겨도 덮어쓰지 않는다.
    *    probe 실패도 free로 간주하지 않는다. dry-run은 관측이므로 계속 계산한다.
    */
   if (APPLY) {
@@ -336,6 +338,7 @@ async function main(): Promise<number> {
     let preflightTarget: RuntimeStage | null = null
     let publishedToday = 0
     let preflightDetail: Record<string, unknown> | null = null
+    const finalRecoverySlot = isFinalRecoveryControllerSlot(NOW)
     try {
       const autoOpen = await auditAwareGate(prisma, readEnvKeys(PREFLIGHT_ENV_KEYS).values, NOW)
       const s = await loadPublishableStock(prisma, NOW, { autoReadyOpen: autoOpen.open })
@@ -350,14 +353,58 @@ async function main(): Promise<number> {
       preflightTarget = target
       if (target !== null && previous !== null) {
         const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
+        const recoveryIntent = finalRecoverySlot ? readStageRecoveryIntent(TODAY) : null
+        const recoveryClaim = recoveryIntent === null ? null : {
+          kstDate: recoveryIntent.kstDate, nonce: recoveryIntent.nonce, deficit: recoveryIntent.deficit,
+        }
+        const recoverySupplyReceipt = recoveryClaim === null ? null
+          : readStageRecoverySupplyReceipt(recoveryClaim)
+        const recoverySourceReceipt = recoveryIntent === null ? null
+          : readStageRecoverySourceReceipt(TODAY, recoveryIntent.nonce)
+        const recoveryReceiptAt = recoverySourceReceipt === null
+          ? Number.NaN : Date.parse(recoverySourceReceipt.writtenAt)
+        const recoveryCreatedAt = recoveryIntent === null
+          ? Number.NaN : Date.parse(recoveryIntent.createdAt)
+        const recoverySupplyCompletedAt = recoverySupplyReceipt === null
+          ? Number.NaN : Date.parse(recoverySupplyReceipt.completedAt)
+        const recoveryLineage = recoveryIntent !== null && recoverySourceReceipt !== null
+          && recoverySupplyReceipt !== null
+          && Number.isFinite(recoveryReceiptAt) && Number.isFinite(recoveryCreatedAt)
+          && Number.isFinite(recoverySupplyCompletedAt)
+          && recoveryReceiptAt >= recoveryCreatedAt && recoveryReceiptAt <= NOW.getTime()
+          && recoverySupplyCompletedAt >= recoveryCreatedAt && recoverySupplyCompletedAt <= NOW.getTime()
+          ? {
+              sourceHashes: new Set(recoverySourceReceipt.sourceHashes),
+              supplyRunId: recoverySupplyReceipt.supplyRunId,
+              createdAt: new Date(recoveryCreatedAt),
+            }
+          : undefined
         const r = await readPreflightFacts(prisma, {
           loaded: s, autoOpen, proofSlots: slotTimesOn(TODAY, profileOf(target)),
           caps: releaseCapsOf(profileOf(target)), evidenceDate: previous.kstDate, env: pe.values,
           dataDir: SUPPLY_DATA_DIR, now: NOW, runnerHealth: errorSignal.health,
+          recoveryLineage,
           // 🔴 Persona 4상태 정본의 계약 유효 수 — 활성 행 수를 넣지 않는다(읽지 못하면 null = 모름)
           contractValidPersonas: () => readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() }),
         })
-        nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID)
+        let boundedRecoveryReadyGain = 0
+        if (finalRecoverySlot) {
+          const recoveryReadyStock = r.facts.slotValidRecoveryReadyStock
+          const receiptOk = recoverySupplyReceipt !== null
+          if (recoveryIntent !== null && recoveryIntent.state === 'done'
+            && recoveryIntent.target === target && receiptOk && recoveryLineage !== undefined
+            && Number.isSafeInteger(recoveryReadyStock) && Number(recoveryReadyStock) >= 0) {
+            boundedRecoveryReadyGain = Math.min(recoveryIntent.deficit, Number(recoveryReadyStock))
+            log(`   제한 복구 READY lineage 검증 sources=${recoveryLineage.sourceHashes.size}`
+              + ` slotValid=${recoveryReadyStock} gain=${boundedRecoveryReadyGain}/${recoveryIntent.deficit}`)
+          } else if (recoveryIntent !== null) {
+            log(`   제한 복구 READY 가산 0 — state=${recoveryIntent.state} target=${recoveryIntent.target}`
+              + ` supplyReceipt=${receiptOk ? 'ok' : 'missing'}`
+              + ` sourceReceipt=${recoveryLineage === undefined ? 'missing-or-invalid' : 'ok'}`
+              + ` slotValidRecovery=${String(recoveryReadyStock)}`)
+          }
+        }
+        nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID, { boundedRecoveryReadyGain })
         preflightDetail = r.detail
         log(`   ${target} preflight ${nextPreflight.verdict}${nextPreflight.codes.length > 0 ? ` [${nextPreflight.codes.join(',')}]` : ''}`
           + `${nextPreflight.warnings.length > 0 ? ` WARN [${nextPreflight.warnings.join(',')}]` : ''}`
@@ -429,7 +476,6 @@ async function main(): Promise<number> {
      * 07:58은 결정 부재만 처리하는 fallback이고 새 복구는 시작하지 않는다.
      */
     const existingDecision = await io.read()
-    const finalRecoverySlot = isFinalRecoveryControllerSlot(NOW)
     if (existingDecision === null && !finalRecoverySlot) {
       const recoveryPlan = planActiveRecovery({
         target: preflightTarget, preflight: nextPreflight, signals, failures, now: NOW,

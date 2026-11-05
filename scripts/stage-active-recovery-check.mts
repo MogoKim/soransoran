@@ -2,8 +2,8 @@
 /**
  * D20+ 아침 제한 복구의 순수 계약 검사.
  *
- * StageDecision을 우회하지 않고, 유일한 OPPORTUNITY_SHORT만 하루 한 번 복구하며,
- * 품질·비용·오류·시간·범위가 어긋나면 추가 공급을 열지 않는지 본다.
+ * StageDecision을 우회하지 않고, 기회·처리량 부족만 하루 한 번 제한 복구하며,
+ * 복구 supply run에 귀속된 slot-valid READY가 없거나 품질·비용·오류·시간·범위가 어긋나면 열지 않는지 본다.
  */
 import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -18,6 +18,8 @@ import {
 } from '../src/lib/stage-active-recovery'
 import type { HealthSignal } from '../src/lib/stage-controller'
 import type { PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { buildSourceEvidence } from '../src/lib/source-slot-release'
+import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import {
   claimStageRecoveryLaunch, claimStageRecoverySupplyStart, createStageRecoveryIntent,
   failStageRecoveryClaimBestEffort,
@@ -31,8 +33,10 @@ import {
 import { runDetachedProcessGroup } from './lib/detached-process-group.mjs'
 import { runCollectorTerminationCleanup } from './lib/micro-seed-navercafe.mjs'
 import { stageRecoveryProviderBoundaryReason } from './lib/supply-llm-call.mjs'
+import { slotValidRecoveryReadyStockOf } from './lib/stage-preflight-facts.mjs'
 import {
-  readStageRecoverySourceHashes, stageRecoverySourceReceiptPath, writeStageRecoverySourceReceipt,
+  readStageRecoverySourceHashes, readStageRecoverySourceReceipt,
+  stageRecoverySourceReceiptPath, writeStageRecoverySourceReceipt,
 } from './lib/stage-recovery-source-receipt.mjs'
 
 let pass = 0
@@ -50,20 +54,31 @@ const signals: HealthSignal[] = [
 const preflight = (i: {
   opportunities?: number
   target?: number
+  readyStock?: number
+  readyCapacityNatural?: number
+  readyNeededMax?: number
   codes?: PreflightVerdict['codes']
   verdict?: PreflightVerdict['verdict']
 } = {}): PreflightVerdict => ({
   stage: 'd20', verdict: i.verdict ?? 'FAIL',
   codes: i.codes ?? ['OPPORTUNITY_SHORT'], warnings: [],
-  counts: { target: i.target ?? 20, opportunities: i.opportunities ?? 17 },
+  counts: {
+    target: i.target ?? 20,
+    opportunities: i.opportunities ?? 17,
+    opportunitiesCurrent: i.opportunities ?? 17,
+    readyStock: i.readyStock ?? 5,
+    readyCapacityNatural: i.readyCapacityNatural ?? 20,
+    readyNeededMax: i.readyNeededMax ?? 20,
+  },
 })
 const plan = (p: PreflightVerdict, now = atKst('07:00'), s = signals): ActiveRecoveryPlan =>
   planActiveRecovery({ target: 'd20', preflight: p, signals: s, failures: [], now })
 
-console.log('\n① 복구 대상 — 기회 부족 하나만')
+console.log('\n① 복구 대상 — 기회·처리량 부족만')
 const good = plan(preflight())
 check('17/20이면 부족 3건·분류 전 상세는 안전 상한 10건·유료 묶음은 별도 수율 계약으로 복구',
-  good.kind === 'recover' && good.deficit === 3 && good.collectMax === 10 && good.worksetLimit > 0,
+  good.kind === 'recover' && good.deficit === 3 && good.baselineReadyStock === 5
+  && good.collectMax === 10 && good.worksetLimit > 0,
   JSON.stringify(good))
 check('부족 1건도 raw 상세와 최종 기회를 1:1로 보지 않고 안전 상한 10건을 본다',
   (() => { const p = plan(preflight({ opportunities: 19 })); return p.kind === 'recover' && p.collectMax === 10 })())
@@ -73,8 +88,34 @@ check('품질 비정상은 기회 부족이어도 열지 않는다',
   plan(preflight(), atKst('07:00'), [{ axis: 'quality', health: 'bad', reasons: ['x'] }, ...signals.slice(1)]).kind === 'none')
 check('비용 모름은 기회 부족이어도 열지 않는다',
   plan(preflight(), atKst('07:00'), [signals[0]!, { axis: 'cost', health: 'unknown', reasons: ['x'] }, signals[2]!]).kind === 'none')
-check('다른 결함이 섞이면 열지 않는다',
-  plan(preflight({ codes: ['OPPORTUNITY_SHORT', 'THROUGHPUT_SHORT'] })).kind === 'none')
+check('기회 불확실 17/20 + 처리량 19/20은 실제 부족 최대치 3건으로 한 번 복구', (() => {
+  const p = plan(preflight({
+    codes: ['OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT'], verdict: 'UNKNOWN',
+    opportunities: 17, readyCapacityNatural: 19, readyNeededMax: 20,
+  }))
+  return p.kind === 'recover' && p.deficit === 3 && p.baselineReadyStock === 5
+})())
+check('기회 부족과 처리량 부족이 함께 있어도 더 큰 실제 부족량만 복구', (() => {
+  const p = plan(preflight({
+    codes: ['OPPORTUNITY_SHORT', 'THROUGHPUT_SHORT'], opportunities: 18,
+    readyCapacityNatural: 19, readyNeededMax: 20,
+  }))
+  return p.kind === 'recover' && p.deficit === 2
+})())
+check('처리량만 1건 부족하면 1건만 복구', (() => {
+  const p = plan(preflight({
+    codes: ['THROUGHPUT_SHORT'], opportunities: 20,
+    readyCapacityNatural: 19, readyNeededMax: 20,
+  }))
+  return p.kind === 'recover' && p.deficit === 1
+})())
+check('READY 기준 재고가 없으면 intent 신원·감사 기준선을 만들 수 없어 열지 않는다', (() => {
+  const p = preflight()
+  const { readyStock: _readyStock, ...counts } = p.counts
+  return plan({ ...p, counts }).kind === 'none'
+})())
+check('러너·품질 같은 다른 결함이 섞이면 열지 않는다',
+  plan(preflight({ codes: ['OPPORTUNITY_SHORT', 'RUNNER_BAD'] })).kind === 'none')
 check('PASS를 다시 실행하지 않는다', plan(preflight({ verdict: 'PASS', codes: [] })).kind === 'none')
 check('D10 이하는 새 복구 경로를 열지 않는다',
   planActiveRecovery({ target: 'd10', preflight: preflight(), signals, failures: [], now: atKst('07:00') }).kind === 'none')
@@ -127,7 +168,7 @@ check('07:30에는 새 유료 실행을 열지 않고 non-hard-block plan으로 
 })())
 check('07:54는 중간 슬롯', !isFinalRecoveryControllerSlot(atKst('07:54')))
 check('07:55는 최종 슬롯', isFinalRecoveryControllerSlot(atKst('07:55')))
-check('07:58은 같은 최종 판정 경로의 저장 fallback 슬롯', isFinalRecoveryControllerSlot(atKst('07:58')))
+check('07:58은 결정 부재만 다시 읽는 최종 fallback 슬롯', isFinalRecoveryControllerSlot(atKst('07:58')))
 check('절대 마감은 생성+50분과 07:50 중 이른 시각',
   activeRecoveryDeadlineAt('2026-11-05', atKst('07:00').toISOString())?.getTime() === atKst('07:50').getTime()
   && activeRecoveryDeadlineAt('2026-11-05', atKst('07:25').toISOString())?.getTime() === atKst('07:50').getTime())
@@ -149,7 +190,7 @@ const finalWrite = await retryFinalStageDecisionWrite(async () => {
   if (finalWriteCalls < 3) throw new Error('transient')
   return 'stored'
 }, async () => {})
-check('07:55·07:58 최종 저장은 같은 계산으로 최대 3회 안에서 일시 장애를 흡수',
+check('한 controller의 최종 저장은 같은 계산으로 최대 3회 안에서 일시 장애를 흡수',
   finalWrite === 'stored' && finalWriteCalls === 3)
 
 console.log('\n③ intent — 하루 한 번·엄격한 모양·종료 상태 불변')
@@ -159,7 +200,8 @@ try {
   const first = createStageRecoveryIntent({ kstDate: '2026-11-05', plan: good, now: atKst('07:00'), home })
   const second = createStageRecoveryIntent({ kstDate: '2026-11-05', plan: good, now: atKst('07:01'), home })
   check('같은 날짜 intent는 정확히 하나', first.created && !second.created && first.intent.nonce === second.intent.nonce)
-  check('현재 plan과 intent가 같은지 네 축을 모두 대조', stageRecoveryIntentMatchesPlan(first.intent, good))
+  check('현재 plan과 intent가 기준 READY를 포함한 다섯 축에서 일치',
+    stageRecoveryIntentMatchesPlan(first.intent, good) && first.intent.baselineReadyStock === 5)
   check('복구 중 부족분 감소는 같은 intent의 정상 진전으로 읽는다',
     (() => { const p = plan(preflight({ opportunities: 18 })); return p.kind === 'recover' && stageRecoveryIntentCoversPlan(first.intent, p) })())
   check('복구 중 부족분이 최초보다 늘면 같은 intent로 덮지 않는다',
@@ -207,8 +249,8 @@ try {
   try { updateStageRecoveryIntent({ intent: running, state: 'requested', now: atKst('07:03'), home }) } catch { reversed = true }
   check('running에서 requested로 되돌릴 수 없다', reversed)
   check('공급 전에는 완주 영수증이 없다', !hasStageRecoverySupplyReceipt(claim, home))
-  writeStageRecoverySupplyReceipt({ claim, now: atKst('07:10'), home })
-  writeStageRecoverySupplyReceipt({ claim, now: atKst('07:11'), home })
+  writeStageRecoverySupplyReceipt({ claim, supplyRunId: 'recovery-run', now: atKst('07:10'), home })
+  writeStageRecoverySupplyReceipt({ claim, supplyRunId: 'recovery-run', now: atKst('07:11'), home })
   check('같은 claim 영수증은 멱등이고 다른 성공을 지어내지 않는다', hasStageRecoverySupplyReceipt(claim, home))
   const done = updateStageRecoveryIntent({ intent: running, state: 'done', now: atKst('07:12'), home })
   check('상세 조회 뒤 intent가 종료돼도 receipt 신원은 검증해 원천 hash를 먼저 남길 수 있다',
@@ -259,6 +301,9 @@ try {
   raw.deficit = 999
   check('손상·과대 intent는 엄격 파서가 거절', parseStageRecoveryIntent(JSON.stringify(raw)) === null)
   raw.deficit = done.deficit
+  raw.baselineReadyStock = -1
+  check('음수 READY 기준 재고는 엄격 파서가 거절', parseStageRecoveryIntent(JSON.stringify(raw)) === null)
+  raw.baselineReadyStock = done.baselineReadyStock
   raw.target = 'd100'
   check('runtime에 배선되지 않은 d100 intent는 파서에서 거절', parseStageRecoveryIntent(JSON.stringify(raw)) === null)
   raw.target = 'd10'
@@ -274,6 +319,9 @@ try {
   check('복구 원천 영수증은 raw ID 없이 정렬·중복 제거된 hash만 읽는다',
     readStageRecoverySourceHashes('2026-11-05', home)?.size === 1
     && !readFileSync(stageRecoverySourceReceiptPath('2026-11-05', done.nonce, home), 'utf-8').includes('sourceArticleId'))
+  check('최종 판정은 날짜 전체가 아니라 현재 nonce의 원천 영수증만 읽는다',
+    readStageRecoverySourceReceipt('2026-11-05', done.nonce, home)?.sourceHashes[0] === sourceHash
+    && readStageRecoverySourceReceipt('2026-11-05', 'other-nonce', home) === null)
   check('복구 원천 영수증은 완성된 임시 파일을 원자적으로 공개하고 임시 파일을 남기지 않는다',
     !readdirSync(stageRecoveryDir(home)).some((name) => name.endsWith('.tmp')))
   const receiptPath = stageRecoverySourceReceiptPath('2026-11-05', done.nonce, home)
@@ -284,6 +332,48 @@ try {
     readStageRecoverySourceHashes('2026-11-05', home) === null)
 } finally {
   rmSync(home, { recursive: true, force: true })
+}
+
+console.log('\n③-1 READY lineage — 자연 공급과 복구 공급을 섞지 않는다')
+{
+  const intentAt = atKst('07:00')
+  const recoveryHash = 'a'.repeat(64)
+  const naturalHash = 'b'.repeat(64)
+  const evidence = (hash: string, runId = 'recovery-run'): Record<string, unknown> => ({
+    sourceEvidence: {
+      ...buildSourceEvidence({ sourceSite: 'navercafe:fixture', sourceArticleId: 'fixture' }),
+      provenance: {
+        ...buildSourceEvidence({ sourceSite: 'navercafe:fixture', sourceArticleId: 'fixture' }).provenance,
+        articleIdHash: hash,
+      },
+    },
+    supplyIntent: {
+      contract: SUPPLY_JIT_CONTRACT,
+      runId,
+      sourceHash: hash,
+      intendedSlotAt: atKst('08:00').toISOString(),
+      ageAtSlotH: 1,
+      qualityContract: { version: 'fixture-v1', digest: 'c'.repeat(64) },
+    },
+  })
+  const rows = [
+    { id: 'recovery', createdAt: atKst('07:10'), gateResults: evidence(recoveryHash) },
+    { id: 'recovery-duplicate', createdAt: atKst('07:11'), gateResults: evidence(recoveryHash) },
+    { id: 'natural', createdAt: atKst('07:12'), gateResults: evidence(naturalHash) },
+    { id: 'wrong-run', createdAt: atKst('07:12'), gateResults: evidence(recoveryHash, 'natural-run') },
+    { id: 'before-intent', createdAt: atKst('06:59'), gateResults: evidence(recoveryHash) },
+    { id: 'not-slot-matched', createdAt: atKst('07:13'), gateResults: evidence(recoveryHash) },
+  ]
+  const matchedReady = new Set(['recovery', 'recovery-duplicate', 'natural', 'wrong-run', 'before-intent'])
+  const count = slotValidRecoveryReadyStockOf({
+    rows, matchedReady, sourceHashes: new Set([recoveryHash]), supplyRunId: 'recovery-run', createdAt: intentAt,
+  })
+  check('exact source·supply run·intent 이후·slot matching을 모두 만족한 고유 원천만 1건으로 센다', count === 1, String(count))
+  check('같은 시간 자연 READY나 다른 supply run이 늘어도 복구 성과로 가산하지 않는다',
+    slotValidRecoveryReadyStockOf({
+      rows: [rows[2]!, rows[3]!], matchedReady: new Set(['natural', 'wrong-run']),
+      sourceHashes: new Set([recoveryHash]), supplyRunId: 'recovery-run', createdAt: intentAt,
+    }) === 0)
 }
 
 console.log('\n④ collector 종료 — 외부 종료도 전역 lock을 먼저 놓는다')
@@ -337,8 +427,19 @@ console.log('\n⑤ 소스 배선 — 실행 경계와 자연 증거 분리')
     return /catch \(e\)/.test(finalBranch) && /07:50 provider 마감은 이미 닫혔다/.test(finalBranch)
       && !/return 1/.test(finalBranch)
   })())
+  check('최종 controller는 exact nonce 원천·supply run·intent 시각·slot-valid READY lineage만 정본 판정기에 전달',
+    /readStageRecoverySupplyReceipt/.test(controller)
+    && /readStageRecoverySourceReceipt/.test(controller)
+    && /supplyRunId: recoverySupplyReceipt\.supplyRunId/.test(controller)
+    && /slotValidRecoveryReadyStock/.test(controller)
+    && !/finalStock\) - intent\.baselineReadyStock/.test(controller)
+    && /boundedRecoveryReadyGain/.test(controller))
   check('recovery-tagged workset은 다음 시험의 자연 수율 분자·분모에서 뺀다',
     /isSupplyCostRecoveryTagged\(run\.runTokenShadow\)/.test(facts))
+  check('최종 재판정 비용은 자연 cohort에 exact 복구 supply run 하나만 합쳐 미정산·overrun을 숨기지 않는다',
+    /const costCohortRuns = new Set\(cohort\.cohortRuns\)/.test(facts)
+    && /costCohortRuns\.add\(i\.recoveryLineage\.supplyRunId\)/.test(facts)
+    && /cohortRuns: costCohortRuns/.test(facts))
 }
 
 console.log('\n⑥ process group — timeout 후 SIGTERM을 무시한 후손도 남기지 않는다')

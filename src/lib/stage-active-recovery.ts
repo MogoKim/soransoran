@@ -7,11 +7,11 @@ import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
  * 아침 단계 판정의 제한 복구 계약.
  *
  * 이것은 FAIL을 PASS로 바꾸는 우회로가 아니다. 오늘 결정을 아직 쓰지 않았고,
- * 품질·비용·오류가 모두 정상이며, 유일한 preflight 결함이 기회 수 부족일 때만
- * 한 번의 추가 수집·공급을 요청한다. 최종 단계 결정은 기존 controller가 같은
- * 정본으로 다시 계산해 한 번만 저장한다.
+ * 품질·비용·오류가 모두 정상이며, 결함이 기회·처리량 부족 범위 안에만 있을 때
+ * 한 번의 추가 수집·공급을 요청한다. 최종 단계 결정은 기존 controller가 실제
+ * 복구 supply run에 귀속된 slot-valid READY를 확인한 뒤 같은 정본으로 다시 계산해 한 번만 저장한다.
  */
-export const ACTIVE_RECOVERY_VERSION = 'stage-active-recovery-v1' as const
+export const ACTIVE_RECOVERY_VERSION = 'stage-active-recovery-v2' as const
 /** 검증된 recovery claim을 소비한 공급 본체만 자식 provider에 전파한다. */
 export const ACTIVE_RECOVERY_DATE_ENV = 'SORAN_STAGE_ACTIVE_RECOVERY_DATE' as const
 export const ACTIVE_RECOVERY_NONCE_ENV = 'SORAN_STAGE_ACTIVE_RECOVERY_NONCE' as const
@@ -49,7 +49,11 @@ export function activeRecoveryDeadlineAt(kstDate: string, createdAt: string): Da
   return new Date(Math.min(created.getTime() + ACTIVE_RECOVERY_MAX_RUNTIME_MS, final.getTime()))
 }
 
-/** 07:55와 07:58 fallback의 짧은 저장 장애는 같은 계산으로만 재시도한다. 판정 자체는 다시 만들지 않는다. */
+/**
+ * 한 controller 프로세스가 계산한 최종 StageDecision의 짧은 저장 장애만 같은 값으로 재시도한다.
+ * 07:58 별도 fallback 프로세스는 이 함수의 연장이 아니다. 결정이 여전히 없을 때 정본 read-only
+ * 사실을 다시 계산하되 새 recovery/provider를 열지 않고 create-only 저장으로 기존 결정을 덮지 않는다.
+ */
 export async function retryFinalStageDecisionWrite<T>(
   write: () => Promise<T>,
   wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -64,10 +68,15 @@ export async function retryFinalStageDecisionWrite<T>(
   throw last
 }
 
-export function isSoleOpportunityShort(preflight: PreflightVerdict | null): boolean {
-  return preflight?.verdict === 'FAIL'
-    && preflight.codes.length === 1
-    && preflight.codes[0] === 'OPPORTUNITY_SHORT'
+const ACTIVE_RECOVERY_SHORTAGE_CODES = new Set([
+  'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT',
+])
+
+export function isBoundedSupplyShortage(preflight: PreflightVerdict | null): boolean {
+  return preflight !== null
+    && preflight.verdict !== 'PASS'
+    && preflight.codes.length > 0
+    && preflight.codes.every((code) => ACTIVE_RECOVERY_SHORTAGE_CODES.has(code))
 }
 
 /** 재고를 읽지 못한 복구는 부족분을 추정해 유료 요청을 열지 않고 닫는다. */
@@ -86,6 +95,7 @@ export type ActiveRecoveryPlan =
       kind: 'recover'
       target: RuntimeStage
       deficit: number
+      baselineReadyStock: number
       collectMax: number
       worksetLimit: number
       reason: string
@@ -97,7 +107,7 @@ export type ActiveRecoveryDecisionDisposition = 'recover' | 'defer' | 'cancel-an
 /**
  * 07:55 최종 판정 전 controller의 StageDecision 처리 하나.
  *
- * recovery를 시작하거나 같은 날 intent가 sole opportunity short를 처리 중인 동안에는
+ * recovery를 시작하거나 같은 날 intent가 제한된 공급 부족을 처리 중인 동안에는
  * 오늘의 중간 FAIL/PASS를 저장하지 않는다. 복구 중 다른 중대 결함이 생긴 경우에만
  * intent를 닫고 기존 결정 authority로 돌아간다.
  */
@@ -138,15 +148,29 @@ export function planActiveRecovery(i: {
     return { kind: 'none', reason: `운영 신호 비정상: ${badSignals.map((s) => s.axis).join(',')}`, hardBlock: true }
   }
   if (i.preflight.verdict === 'PASS') return { kind: 'none', reason: '이미 preflight PASS', hardBlock: false }
-  if (!isSoleOpportunityShort(i.preflight)) {
+  if (!isBoundedSupplyShortage(i.preflight)) {
     return { kind: 'none', reason: `복구 대상이 아닌 preflight: ${i.preflight.codes.join(',') || i.preflight.verdict}`, hardBlock: true }
   }
   const target = i.preflight.counts.target
-  const opportunities = i.preflight.counts.opportunities
-  if (!Number.isInteger(target) || !Number.isInteger(opportunities)) {
+  const opportunities = i.preflight.counts.opportunitiesCurrent ?? i.preflight.counts.opportunities
+  const baselineReadyStock = i.preflight.counts.readyStock
+  if (!Number.isInteger(target) || !Number.isInteger(baselineReadyStock) || baselineReadyStock < 0) {
+    return { kind: 'none', reason: '목표 또는 READY 기준 재고 근거가 불완전함', hardBlock: true }
+  }
+  const opportunityBlocked = i.preflight.codes.some((code) => code === 'OPPORTUNITY_SHORT' || code === 'OPPORTUNITY_UNKNOWN')
+  if (opportunityBlocked && (!Number.isInteger(opportunities) || opportunities < 0)) {
     return { kind: 'none', reason: '기회 수 근거가 불완전함', hardBlock: true }
   }
-  const deficit = target - opportunities
+  const opportunityGap = opportunityBlocked ? Math.max(0, target - opportunities) : 0
+  const throughputBlocked = i.preflight.codes.includes('THROUGHPUT_SHORT')
+  const readyNeeded = i.preflight.counts.readyNeededMax
+  const naturalCapacity = i.preflight.counts.readyCapacityNatural
+  if (throughputBlocked && (!Number.isInteger(readyNeeded) || !Number.isInteger(naturalCapacity)
+    || readyNeeded < 0 || naturalCapacity < 0)) {
+    return { kind: 'none', reason: '처리량 부족 근거가 불완전함', hardBlock: true }
+  }
+  const throughputGap = throughputBlocked ? Math.max(0, readyNeeded - naturalCapacity) : 0
+  const deficit = Math.max(opportunityGap, throughputGap)
   if (deficit <= 0 || deficit > ACTIVE_RECOVERY_MAX_DEFICIT) {
     return { kind: 'none', reason: `복구 부족분 범위 밖: ${deficit}`, hardBlock: true }
   }
@@ -157,13 +181,13 @@ export function planActiveRecovery(i: {
     return { kind: 'none', reason: `추가 유료 공급 시작 창 밖: ${minute}`, hardBlock: false }
   }
   return {
-    kind: 'recover', target: i.target, deficit,
+    kind: 'recover', target: i.target, deficit, baselineReadyStock,
     // `deficit`은 최종 slot-valid 기회 수이고 collector의 `--max`는 분류 전 상세 조회 수다.
     // 둘을 1:1로 두면 수집 뒤 drop/HOLD/생성 손실 때문에 복구가 구조적으로 모자란다.
     // 무료 수집은 승인된 작은 상한 10건을 충분히 보고, 유료 단계는 아래와 별개로
     // `paidSourcesFor(deficit, measuredYield)`가 부족분·수율·workset 천장 안에서 다시 제한한다.
     collectMax: ACTIVE_RECOVERY_COLLECTOR_MAX,
     worksetLimit: ACTIVE_RECOVERY_WORKSET_LIMIT,
-    reason: `유일한 결함 OPPORTUNITY_SHORT ${opportunities}/${target} — 부족 ${deficit}`,
+    reason: `제한 공급 부족 ${i.preflight.codes.join('+')} — 기회 ${opportunityGap}, 처리량 ${throughputGap}, 복구 ${deficit}`,
   }
 }

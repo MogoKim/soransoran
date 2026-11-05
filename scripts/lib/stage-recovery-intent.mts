@@ -17,6 +17,7 @@ export type StageRecoveryIntent = {
   kstDate: string
   target: RuntimeStage
   deficit: number
+  baselineReadyStock: number
   collectMax: number
   worksetLimit: number
   nonce: string
@@ -75,6 +76,7 @@ export function stageRecoverySupplyStartClaimPath(kstDate: string, home?: string
 
 const validDate = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
 const positive = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) > 0
+const nonnegative = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0
 
 export function parseStageRecoveryIntent(raw: string): StageRecoveryIntent | null {
   let value: unknown
@@ -83,7 +85,8 @@ export function parseStageRecoveryIntent(raw: string): StageRecoveryIntent | nul
   const o = value as Record<string, unknown>
   if (o.version !== ACTIVE_RECOVERY_VERSION || !validDate(o.kstDate)
     || typeof o.target !== 'string' || !/^d(?:20|30|50)$/.test(o.target)
-    || !positive(o.deficit) || !positive(o.collectMax) || !positive(o.worksetLimit)
+    || !positive(o.deficit) || !nonnegative(o.baselineReadyStock)
+    || !positive(o.collectMax) || !positive(o.worksetLimit)
     || Number(o.deficit) > ACTIVE_RECOVERY_MAX_DEFICIT
     || Number(o.collectMax) > ACTIVE_RECOVERY_COLLECTOR_MAX
     || Number(o.collectMax) !== ACTIVE_RECOVERY_COLLECTOR_MAX
@@ -111,7 +114,8 @@ export function createStageRecoveryIntent(i: {
   const at = i.now.toISOString()
   const intent: StageRecoveryIntent = {
     version: ACTIVE_RECOVERY_VERSION, kstDate: i.kstDate,
-    target: i.plan.target, deficit: i.plan.deficit, collectMax: i.plan.collectMax,
+    target: i.plan.target, deficit: i.plan.deficit, baselineReadyStock: i.plan.baselineReadyStock,
+    collectMax: i.plan.collectMax,
     worksetLimit: i.plan.worksetLimit, nonce: randomUUID(), state: 'requested',
     createdAt: at, updatedAt: at, message: null,
   }
@@ -162,6 +166,7 @@ export function stageRecoveryIntentMatchesPlan(
 ): boolean {
   return intent.target === plan.target
     && intent.deficit === plan.deficit
+    && intent.baselineReadyStock === plan.baselineReadyStock
     && intent.collectMax === plan.collectMax
     && intent.worksetLimit === plan.worksetLimit
 }
@@ -334,11 +339,13 @@ export function validateStageRecoveryReceiptIdentityEnv(
   return intent
 }
 
-type StageRecoverySupplyReceipt = {
+export type StageRecoverySupplyReceipt = {
   version: typeof ACTIVE_RECOVERY_VERSION
   kstDate: string
   nonce: string
   deficit: number
+  /** 이 복구가 실제로 실행한 supply-process 회차 id */
+  supplyRunId: string
   completedAt: string
 }
 
@@ -349,6 +356,7 @@ function parseSupplyReceipt(raw: string): StageRecoverySupplyReceipt | null {
   const o = value as Record<string, unknown>
   if (o.version !== ACTIVE_RECOVERY_VERSION || !validDate(o.kstDate)
     || typeof o.nonce !== 'string' || o.nonce === '' || !positive(o.deficit)
+    || typeof o.supplyRunId !== 'string' || o.supplyRunId === ''
     || typeof o.completedAt !== 'string' || !Number.isFinite(Date.parse(o.completedAt))) return null
   return o as StageRecoverySupplyReceipt
 }
@@ -356,29 +364,40 @@ function parseSupplyReceipt(raw: string): StageRecoverySupplyReceipt | null {
 /** 공급 본체가 실제로 완주했음을 worker 종료코드와 별도로 증명한다. */
 export function writeStageRecoverySupplyReceipt(i: {
   claim: StageRecoveryClaim
+  supplyRunId: string
   now: Date
   home?: string
 }): void {
+  if (i.supplyRunId.trim() === '') throw new Error('stage recovery supply runId가 비었다')
   const path = stageRecoverySupplyReceiptPath(i.claim.kstDate, i.home)
   const receipt: StageRecoverySupplyReceipt = {
     version: ACTIVE_RECOVERY_VERSION,
     kstDate: i.claim.kstDate,
     nonce: i.claim.nonce,
     deficit: i.claim.deficit,
+    supplyRunId: i.supplyRunId,
     completedAt: i.now.toISOString(),
   }
   try {
     writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   } catch (e) {
-    if ((e as { code?: string }).code === 'EEXIST' && hasStageRecoverySupplyReceipt(i.claim, i.home)) return
+    const existing = readStageRecoverySupplyReceipt(i.claim, i.home)
+    if ((e as { code?: string }).code === 'EEXIST' && existing?.supplyRunId === i.supplyRunId) return
     throw e
   }
 }
 
-export function hasStageRecoverySupplyReceipt(claim: StageRecoveryClaim, home?: string): boolean {
+/** exact claim의 공급 완주 영수증. 다른 nonce·부족량·옛 형식은 인정하지 않는다. */
+export function readStageRecoverySupplyReceipt(
+  claim: StageRecoveryClaim, home?: string,
+): StageRecoverySupplyReceipt | null {
   try {
     const receipt = parseSupplyReceipt(readFileSync(stageRecoverySupplyReceiptPath(claim.kstDate, home), 'utf-8'))
     return receipt !== null && receipt.kstDate === claim.kstDate
-      && receipt.nonce === claim.nonce && receipt.deficit === claim.deficit
-  } catch { return false }
+      && receipt.nonce === claim.nonce && receipt.deficit === claim.deficit ? receipt : null
+  } catch { return null }
+}
+
+export function hasStageRecoverySupplyReceipt(claim: StageRecoveryClaim, home?: string): boolean {
+  return readStageRecoverySupplyReceipt(claim, home) !== null
 }

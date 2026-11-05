@@ -267,7 +267,10 @@ try {
     const controllerSource = readFileSync('scripts/stage-controller.mts', 'utf-8')
     const preflightFactsCurrentOnly = !/measuredFutureSourceOpportunities\(\{/.test(preflightFactsSource)
     const opportunityGateCurrentOnly = /facts\.slotValidOpportunities < n\) codes\.add\('OPPORTUNITY_SHORT'\)/.test(preflightGateSource)
-    const controllerPassesFactsDirectly = /nextPreflight = judgeNextPreflight\(target, r\.facts, RUNNER_GRID\)/.test(controllerSource)
+    // controller 는 preflight 사실을 복사·보정하지 않고 `r.facts` 그대로 넘겨야 한다.
+    // 단, 최종 복구 슬롯에서 실제 READY 재고 증가로 검증된 bounded gain 은 별도 options 인자로만 전달한다.
+    const controllerPassesFactsDirectly = /nextPreflight\s*=\s*judgeNextPreflight\(\s*target,\s*r\.facts,\s*RUNNER_GRID,\s*\{\s*boundedRecoveryReadyGain\s*\}\s*\)/
+      .test(controllerSource)
     const currentKeys = new Set(currentSources.map((x) => x.key))
     const distinctFuture = futureSources.every((x) => !currentKeys.has(x.key))
     const shortfall = n - opp.total
@@ -285,7 +288,7 @@ try {
       && unknownFuture.codes.includes('OPPORTUNITY_UNKNOWN'))
     check('실제 preflight facts는 현재 snapshot뿐 아니라 측정된 3일 하한을 읽는다', !preflightFactsCurrentOnly)
     check('실제 기회 gate는 현재와 측정된 추가 기회를 합쳐 판정한다', !opportunityGateCurrentOnly)
-    check('실제 controller는 facts를 보정하지 않고 그대로 기회 gate에 넘긴다', controllerPassesFactsDirectly)
+    check('실제 controller는 facts를 보정하지 않고 그대로 넘기며 검증된 복구량만 별도 옵션으로 전달한다', controllerPassesFactsDirectly)
     observations.set('PREFLIGHT_FULL_DAY_OPPORTUNITY', {
       verdict: pf.verdict,
       onlyOpportunityShort: pf.codes.length === 1 && pf.codes[0] === 'OPPORTUNITY_SHORT',

@@ -25,7 +25,7 @@ import {
 } from './lib/runner-lease.mjs'
 import {
   FAKE_LOCKF_MARK, SUPPLY_LOCK_FILE, SUPPLY_PASS_ENV, SUPPLY_RUN_TOKEN_ENV, SUPPLY_RUN_TOKEN_FILE,
-  stageSpawnOf, supplyLaunchTrigger, supplyLockDir, supplyLockfPath, writeRunTokenAtomic,
+  mayStartSupplyPass, stageSpawnOf, supplyLaunchTrigger, supplyLockDir, supplyLockfPath, writeRunTokenAtomic,
 } from './lib/supply-lease.mjs'
 import {
   RUN_TOKEN_TTL_MS, RUN_TOKEN_VERSION, budgetWindowShadowOf, buildRunToken, judgeRunTokenShadow, parseRunToken,
@@ -130,6 +130,9 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
     mergePassTrigger('manual', 'event') === 'event' && mergePassTrigger('scheduled', 'manual') === 'scheduled'
     && mergePassTrigger('manual', 'unknown') === 'manual' && mergePassTrigger('recovery', null) === 'recovery'
     && mergePassTrigger('event', 'scheduled') === 'scheduled')
+  check('🔴 제한 복구는 token 발급 실패면 시작 0 · 기존 자연·event·수동 shadow 계약은 유지',
+    !mayStartSupplyPass('recovery', null) && mayStartSupplyPass('recovery', 'token-1')
+    && mayStartSupplyPass('scheduled', null) && mayStartSupplyPass('event', null) && mayStartSupplyPass('manual', null))
   check('follow-up 상한 — 첫 회차 뒤 한 번', MAX_FOLLOW_UPS === 1 && shouldRunFollowUp(0, 'TAKEN') && !shouldRunFollowUp(1, 'TAKEN'))
   {
     const dir = mkdtempSync(join(tmpdir(), 'follow-up-read-error-'))
@@ -184,6 +187,29 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
       /globalThis\[Symbol\.for\('soransoran\.test\.fake-runner-lockf'\)\] = process\.env\.FAKE_RUNNER_LOCKF/.test(hook)
       && JSON.stringify(users) === JSON.stringify(['scripts/lib/fake-provider-hook.mjs', 'scripts/lib/supply-lease.mts']), users.join(','))
     const leaseSrc = readFileSync('scripts/lib/supply-lease.mts', 'utf-8')
+    check('🔴 holder가 제한 복구 token 실패를 자식 spawn 전에 fail-closed 한다', (() => {
+      const issued = leaseSrc.indexOf('const tokenId = issueRunToken')
+      const guarded = leaseSrc.indexOf('if (!mayStartSupplyPass(ctx.trigger, tokenId))', issued)
+      const spawned = leaseSrc.indexOf('return runPassChild(', issued)
+      return issued >= 0 && guarded > issued && spawned > guarded
+        && leaseSrc.slice(guarded, spawned).includes('provider 0 · DB 0')
+    })())
+    check('🔴 회차 자식은 제한 복구 token을 body 전에 강제 검증한다', (() => {
+      const child = leaseSrc.indexOf('if (o.env[SUPPLY_PASS_ENV] !== undefined)')
+      const guarded = leaseSrc.indexOf("if (o.trigger === 'recovery')", child)
+      const gate = leaseSrc.indexOf('recoveryRunTokenGateFromEnv(o.env, now())', guarded)
+      const body = leaseSrc.indexOf('return o.body(v.proof)', child)
+      return child >= 0 && guarded > child && gate > guarded && body > gate
+        && leaseSrc.slice(gate, body).includes('intent claim 0 · provider 0 · DB 0')
+    })())
+    check('🔴 제한 복구 token gate는 trigger·pass·runId를 회차 env와 다시 묶는다', (() => {
+      const start = leaseSrc.indexOf('export function recoveryRunTokenGateFromEnv')
+      const end = leaseSrc.indexOf('\n}\n', start)
+      const gate = leaseSrc.slice(start, end)
+      return start >= 0 && gate.includes("shadow.trigger !== 'recovery'") && gate.includes("shadow.launchTrigger !== 'recovery'")
+        && gate.includes('shadow.absorbedTrigger !== null') && gate.includes('shadow.pass !== Number(passRaw)')
+        && gate.includes('supplyRunIdOf(runClockFrom(env).at)') && gate.includes('shadow.runId !== expectedRunId')
+    })())
     check('🔴 supply-lease 는 가짜 provider 격리 표식 · FAKE_RUNNER_LOCKF env 를 읽지 않는다', !/fake-provider-ledger-isolation|env\[FAKE_LOCKF_ENV\]/.test(leaseSrc))
   }
   check('잠금 디렉터리 — Application Support 아래 공급 전용', supplyLockDir('/h') === '/h/Library/Application Support/soransoran/supply-process'
@@ -239,13 +265,32 @@ writeFileSync(LEAF, [
 ].join('\n'))
 /** 🔴 실제 진입 함수(`supplyEntry`)와 실제 자식 띄우기(`stageSpawnOf`)를 그대로 쓰는 하네스 — 본체만 시작 · 끝을 적고 잔다 */
 writeFileSync(HARNESS, [
-  "import { appendFileSync, writeFileSync } from 'node:fs'",
+  "import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'",
   "import { spawnSync } from 'node:child_process'",
   "import { join } from 'node:path'",
   "import { fileURLToPath } from 'node:url'",
   `import { supplyEntry, stageSpawnOf, runTokenShadowFromEnv, supplyLockDir, SUPPLY_RUN_TOKEN_FILE, FAKE_LOCKF_MARK } from ${lib('scripts/lib/supply-lease.mjs')}`,
   'const [log, holdMs, leaf] = process.argv.slice(2)',
   "if ((process.env.HARNESS_FAKE_LOCKF ?? '') !== '') (globalThis as Record<symbol, unknown>)[FAKE_LOCKF_MARK] = process.env.HARNESS_FAKE_LOCKF",
+  "if (process.env.SORAN_SUPPLY_PASS !== undefined && (process.env.HARNESS_RECOVERY_TOKEN_FAULT ?? '') !== '') {",
+  "  const tokenPath = join(supplyLockDir(), SUPPLY_RUN_TOKEN_FILE)",
+  "  const fault = process.env.HARNESS_RECOVERY_TOKEN_FAULT",
+  "  if (fault === 'missing') rmSync(tokenPath, { force: true })",
+  "  else if (fault === 'env-id') process.env.SORAN_SUPPLY_RUN_TOKEN = 'not-the-token'",
+  "  else {",
+  "    const token = JSON.parse(readFileSync(tokenPath, 'utf-8')) as Record<string, unknown>",
+  "    if (fault === 'corrupt') writeFileSync(tokenPath, '{broken')",
+  "    else if (fault === 'expired') {",
+  "      const ttl = Date.parse(String(token.expiresAt)) - Date.parse(String(token.issuedAt))",
+  "      const expiresAt = Date.now() - 1",
+  "      token.issuedAt = new Date(expiresAt - ttl).toISOString()",
+  "      token.expiresAt = new Date(expiresAt).toISOString()",
+  "      writeFileSync(tokenPath, JSON.stringify(token))",
+  "    } else if (fault === 'trigger') { token.trigger = 'manual'; writeFileSync(tokenPath, JSON.stringify(token)) }",
+  "    else if (fault === 'pass') { token.pass = Number(token.pass) + 1; writeFileSync(tokenPath, JSON.stringify(token)) }",
+  "    else if (fault === 'run-id') { token.runId = 'wrong-run'; writeFileSync(tokenPath, JSON.stringify(token)) }",
+  "  }",
+  "}",
   'const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))',
   'const code = await supplyEntry({ scriptPath: fileURLToPath(import.meta.url), argv: process.argv.slice(2), env: process.env, log: () => undefined,',
   "  ...((process.env.HARNESS_TRIGGER ?? '') === 'recovery' ? { trigger: 'recovery' as const } : {}),",
@@ -326,7 +371,7 @@ try {
 
   const REAL_CASES = [
     '최초 실행(디렉터리 없음) · 0700 · token 0600', 'holder 1 + contender 5 → 본체 1 · follow-up 1 · 상한', '시작 전 event 표식 → pass0 event · pass1 없음',
-    '제한 복구 경합 → marker 0 · 기존 marker 흡수 0',
+    '제한 복구 경합 → marker 0 · 기존 marker 흡수 0', '제한 복구 token 누락·손상·불일치·만료 → 본체 0',
     '깨진 표식 → unknown 기록 · 올리지 않음', 'holder SIGKILL → 즉시 재획득', '부모 종료 뒤 자식 생존 → 자식 끝까지 진입 0',
     'fd 9 실제 자식 전달 · token 일치', 'fd 미전달 · npx 경유 → 증명 실패', '자식 token 위조 · corrupt', '바깥 위조(fd 없음 · 같은 파일 · 다른 파일)',
     '회차 자식 위조 → 본체 0', 'busy 재시도 — probe 순간 충돌 구제', 'probe free/busy · 파일 생성 0', 'token 원자 쓰기(새 inode · 0600)', '실제 러너 진입',
@@ -402,6 +447,13 @@ try {
       && recoveryToken?.trigger === 'recovery' && recoveryToken.launchTrigger === 'recovery'
       && recoveryToken.absorbedTrigger === null && existsSync(join(LOCKD, FOLLOW_UP_FILE)),
       JSON.stringify(recoveryToken))
+
+    // ── 제한 복구는 회차 자식이 token을 본체 전에 다시 증명한다 ──
+    for (const fault of ['missing', 'corrupt', 'env-id', 'expired', 'trigger', 'pass', 'run-id']) {
+      reset()
+      const exit = await exitOf(run(0, { env: { ...baseEnv(), HARNESS_TRIGGER: 'recovery', HARNESS_RECOVERY_TOKEN_FAULT: fault } }))
+      check(`🔴 🔴 제한 복구 token ${fault} → exit 1 · 본체 0(intent claim · provider · DB 0)`, exit === 1 && starts().length === 0, `${exit}`)
+    }
 
     // ── 시작 전에 있던 event 표식 ──
     reset()
