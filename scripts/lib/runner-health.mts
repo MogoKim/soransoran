@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { judgeJobState, type JobState } from '../../src/lib/runtime-isolation'
 import {
   parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing, failingFromPublishRun,
-  type LaunchdRunInfo, type PublishRunRead,
+  recoveryRunClassOf, type LaunchdRunInfo, type PublishRunRead, type RecoveryRunClass,
 } from '../../src/lib/job-health'
 import { RUN_FILE_RE } from '../../src/lib/supply-process'
 import {
@@ -37,6 +37,11 @@ export type ProcessRunLite = {
   runtimeSha: string | null
   /** 회차 token이 증명한 전체 기원. 옛·손상 tag면 null(최종 trigger만으로 추정 0). */
   runTokenShadow: RunTokenShadowTag | null
+  /**
+   * 원본 tag 기준 recovery 신원 — 파싱이 손상 tag를 `null`로 버리기 **전에** 정한다. `readProcessRuns`는 언제나 채운다.
+   * 없는 기록(수동·옛 시험 리터럴)은 `other`로 보고 자연 실패 판정에 남긴다(`failingFromProcessRuns`).
+   */
+  recoveryClass?: RecoveryRunClass
   /** 실패한 단계 요약 — 원문·비밀값 없이 단계·공급원·종료 코드만 */
   failedStages: string[]
 }
@@ -68,6 +73,7 @@ export function readProcessRuns(dir: string = SUPPLY_DATA_DIR): ProcessRunRead {
         completedAt: typeof j.completedAt === 'string' && Number.isFinite(Date.parse(j.completedAt)) ? j.completedAt : null,
         runtimeSha: typeof j.runtimeSha === 'string' && j.runtimeSha.trim() !== '' ? j.runtimeSha : null,
         runTokenShadow,
+        recoveryClass: recoveryRunClassOf(j.runTokenShadow),
         failedStages: stages.filter((s) => s.status === 'failed').map((s) =>
           `${String(s.stage)}${s.source ? `:${String(s.source)}` : ''} exit ${String(s.exitCode ?? '?')}`),
       })

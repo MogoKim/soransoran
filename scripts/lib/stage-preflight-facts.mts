@@ -31,7 +31,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
 import type { PreflightFacts, ReadyCohortFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
 import {
-  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, terminalYieldOf,
+  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, pipelineRunOfLedger, terminalYieldOf,
   type CostAttribution, type CostFate, type FateCounts, type PendingFate,
 } from '../../src/lib/ready-fate'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
@@ -146,6 +146,78 @@ export function slotValidRecoveryReadyStockOf(i: {
     }
   }
   return recoveryReadyHashes.size
+}
+
+/**
+ * 🔴 **오늘 제한 복구 입력 — 신원·비용·성과를 한 값으로 받는다.**
+ *  · `unknown` — intent·시작 claim·영수증이 손상됐거나 신원을 확정하지 못했다 → trial 비용 모름(SUPPLY_COST_UNKNOWN) · 성과 0
+ *  · `known`   — `claimRunId`: 오늘 공급 본체 시작 claim의 회차 id(없으면 `null`)
+ *                `includeCost`: final 슬롯만 `true`. 중간 슬롯은 진행 중 미정산 요청이 trial 비용을 모름으로 만들어
+ *                               자기 복구를 중대 결함으로 취소하지 않도록 넣지 않는다
+ *                `lineage`: final 슬롯 · intent done · 완주/원천 영수증이 claim 회차와 맞을 때만
+ */
+export type StagePreflightRecoveryInput =
+  | { kind: 'unknown'; reason: string }
+  | {
+      kind: 'known'
+      claimRunId: string | null
+      includeCost: boolean
+      lineage?: { sourceHashes: ReadonlySet<string>; createdAt: Date }
+    }
+
+export const NO_RECOVERY_CLAIM: StagePreflightRecoveryInput = { kind: 'known', claimRunId: null, includeCost: false }
+
+export type RecoveryIdentity = {
+  /** 신원을 확정하지 못한 이유 — 있으면 trial 비용은 모름이고 성과는 0이다 */
+  issue: string | null
+  claimRunId: string | null
+  /** final 슬롯에서 비용 cohort에 넣을 회차 — 성공·실패 무관하게 시작 claim의 회차다 */
+  costRunId: string | null
+  /** 오늘 장부에서 recovery로 표시된 요청의 회차 집합 */
+  ledgerRuns: string[]
+  lineage: { sourceHashes: ReadonlySet<string>; supplyRunId: string; createdAt: Date } | null
+}
+
+/**
+ * 오늘 장부의 recovery 요청은 오늘 시작 claim 회차 **하나에만** 귀속돼야 한다: 장부 회차 집합 ⊆ {claim 회차}.
+ * claim이 있는데 장부가 비어 있는 것은 정상이다(provider 호출 전 종료). claim이 없는데 recovery 요청이 있거나,
+ * claim 밖 회차·회차를 읽지 못하는 요청이 있으면 신원 불명이다. 손상된 recovery 표식도 recovery로 센다.
+ */
+export function recoveryIdentityOf(
+  input: StagePreflightRecoveryInput,
+  entries: readonly LedgerEntry[] | null,
+  kstDate: string,
+): RecoveryIdentity {
+  if (input.kind === 'unknown') {
+    return { issue: input.reason, claimRunId: null, costRunId: null, ledgerRuns: [], lineage: null }
+  }
+  const runs = new Set<string>()
+  let issue: string | null = input.lineage !== undefined && input.claimRunId === null
+    ? '완주 lineage가 있는데 공급 시작 claim이 없다' : null
+  for (const e of entries ?? []) {
+    if (!isSupplyCostRecoveryTagged(e.runTokenShadow)) continue
+    const started = new Date(e.startedAt)
+    if (!Number.isFinite(started.getTime())) { issue ??= 'recovery 요청의 시작 시각이 손상됐다'; continue }
+    if (kstDateString(started) !== kstDate) continue
+    const run = pipelineRunOfLedger(e.runId)
+    if (run === null) { issue ??= `recovery 요청의 회차를 읽지 못했다: ${e.runId}`; continue }
+    runs.add(run)
+  }
+  const outside = [...runs].filter((run) => run !== input.claimRunId)
+  if (outside.length > 0) {
+    issue ??= input.claimRunId === null
+      ? `공급 시작 claim 없이 recovery 요청 회차가 있다: ${outside.join(',')}`
+      : `claim 회차 ${input.claimRunId} 밖의 recovery 요청 회차: ${outside.join(',')}`
+  }
+  const ok = issue === null
+  return {
+    issue,
+    claimRunId: input.claimRunId,
+    costRunId: ok && input.includeCost ? input.claimRunId : null,
+    ledgerRuns: [...runs].sort(),
+    lineage: ok && input.lineage !== undefined && input.claimRunId !== null
+      ? { ...input.lineage, supplyRunId: input.claimRunId } : null,
+  }
 }
 
 /** 🔴 증거일부터 거슬러 `n` 일(오래된 날 먼저) */
@@ -882,11 +954,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   dataDir: string
   now: Date
   runnerHealth: Health | null
-  /**
-   * 최종 복구 판정에서만 주는 정확한 lineage. 날짜 전체 READY 증분을 복구 성과로 오인하지 않도록
-   * exact nonce 원천과 intent 이후 생성된 행만 슬롯 매칭 결과에서 센다.
-   */
-  recoveryLineage?: { sourceHashes: ReadonlySet<string>; supplyRunId: string; createdAt: Date }
+  /** 오늘 제한 복구의 신원·비용·성과 입력(`StagePreflightRecoveryInput`). 주지 않으면 오늘 claim이 없는 것으로 본다. */
+  recovery?: StagePreflightRecoveryInput
   /**
    * 🔴 **Persona 레인 주입 자리** — 계약 유효 Persona 수. 주지 않으면 `null`(모름 → UNKNOWN).
    *    🔴 활성 행 수를 넣지 않는다.
@@ -903,16 +972,6 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     ? readyOpportunitiesOf(i.loaded, { caps: i.caps, now: i.now, autoOnly: true }) : []
   if (!i.autoOpen.open) notes.push(`자동 READY 닫힘 — ${i.autoOpen.reasons.join(' · ') || '이유 없음'} (READY 기회 0 · 대기는 예정 슬롯에 걸리지 않는다)`)
   const matchedReady = new Set(matchOpportunitiesToSlots(i.proofSlots, readyOpps).bySlot.filter((k): k is string => k !== null))
-  let slotValidRecoveryReadyStock: number | null = null
-  if (i.recoveryLineage !== undefined) {
-    slotValidRecoveryReadyStock = slotValidRecoveryReadyStockOf({
-      rows: i.loaded.allRows,
-      matchedReady,
-      sourceHashes: i.recoveryLineage.sourceHashes,
-      supplyRunId: i.recoveryLineage.supplyRunId,
-      createdAt: i.recoveryLineage.createdAt,
-    })
-  }
 
   // READY cohort — 공급 러너와 같은 판독(`readReadyCohort`)
   const cohort = await readReadyCohort(prisma, {
@@ -989,12 +1048,22 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const fateByKey = new Map<string, CostFate>()
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
-  // 최종 복구 판정은 검증된 exact supply run의 비용도 같은 trial envelope에 넣는다.
-  // READY 수율의 자연 cohort는 바꾸지 않고, 복구의 미정산·예약 초과 비용만 숨지 못하게 한다.
+  // 복구 신원 — 오늘 장부의 recovery 회차는 오늘 시작 claim 하나에만 귀속돼야 한다(모든 슬롯).
+  // final 슬롯만 그 회차 비용을 trial envelope에 넣는다. READY 수율의 자연 cohort는 바꾸지 않는다.
+  const recovery = recoveryIdentityOf(i.recovery ?? NO_RECOVERY_CLAIM, supplyEntries, kstDateString(i.now))
+  if (recovery.issue !== null) notes.push(`제한 복구 비용 신원을 확정하지 못했다 — ${recovery.issue} (SUPPLY_COST_UNKNOWN)`)
+  const recoveryCostRunId = recovery.costRunId
   const costCohortRuns = new Set(cohort.cohortRuns)
-  if (i.recoveryLineage !== undefined) costCohortRuns.add(i.recoveryLineage.supplyRunId)
+  if (recoveryCostRunId !== null) costCohortRuns.add(recoveryCostRunId)
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
     : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns })
+  const slotValidRecoveryReadyStock = recovery.lineage === null ? null : slotValidRecoveryReadyStockOf({
+    rows: i.loaded.allRows,
+    matchedReady,
+    sourceHashes: recovery.lineage.sourceHashes,
+    supplyRunId: recovery.lineage.supplyRunId,
+    createdAt: recovery.lineage.createdAt,
+  })
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
@@ -1004,7 +1073,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     : {
         sources: worksetSources, ...fates,
         usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null,
-        trialCost: costAttribution === null ? null : {
+        // 🔴 복구 비용 신원을 모르면 trial 비용도 모른다 — 기존 SUPPLY_COST_UNKNOWN 경로로 승급하지 않는다
+        trialCost: costAttribution === null || recovery.issue !== null ? null : {
           settledRequests: costAttribution.settledRequests,
           usageUnknownRequests: costAttribution.usageUnknownRequests,
           recoverySettledRequests: costAttribution.recoverySettledRequests,
@@ -1046,6 +1116,10 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
+      recoveryIdentity: {
+        claimRunId: recovery.claimRunId, costRunId: recoveryCostRunId,
+        ledgerRecoveryRuns: recovery.ledgerRuns, issue: recovery.issue,
+      },
       // 🔴 두 시계를 그대로 보고한다 — 증명(전날 KST 달력일 3일) · 용량(`now` 에서 거슬러 72h)
       proofWindow: { from: win.proof.from.toISOString(), to: win.proof.to.toISOString() },
       // 🔴 댓글 · 감사 단가를 모은 날 — 증명 달력일이다(오늘이 끼면 전날 증명이 오염된 것)

@@ -641,7 +641,9 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
     && errorSignalOf([{ label: 'p', loaded: true, failing: false }]).health === 'ok')
 
   const cli = readFileSync('scripts/stage-controller.mts', 'utf-8')
-  check('🔴 저장은 --apply 이면서 flag on 일 때만', /if \(!APPLY\)[\s\S]{0,200}return 0/.test(cli) && /if \(!flagOn\)[\s\S]{0,200}return 0/.test(cli))
+  // 배선만 본다. dry-run·flag off에서 write 0은 stage:active-recovery-check ⑦이 실행부를 돌려 증명한다.
+  check('🔴 저장은 --apply 이면서 flag on 일 때만',
+    /writeMode: !APPLY \? 'dry-run' : flagOn \? 'apply' : 'flag-off'/.test(cli))
   check('🔴 쓰는 길은 ensureStageDecision 하나 — create/update/upsert/delete 직접 호출 0',
     /ensureStageDecision\(/.test(cli) && !/stageDecision\.(create|update|upsert|delete)/.test(cli))
   const mainSrc = cli.slice(cli.indexOf('async function main()'))
@@ -901,11 +903,14 @@ console.log('\n⑥ 복구 판정')
     && /badSignals\.length > 0/.test(activeRecovery)
     && /\['d20', 'd30', 'd50'\]/.test(activeRecovery)
     && /ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST/.test(activeRecovery))
-  check('🔴 controller가 일일 실행권을 선점하고 07:55 전에는 StageDecision을 쓰지 않는다',
-    /claimStageRecoveryLaunch/.test(controller)
-    && /const finalRecoverySlot = isFinalRecoveryControllerSlot\(NOW\)/.test(controller)
-    && /existingDecision === null && !finalRecoverySlot/.test(controller)
-    && /StageDecision write 0/.test(controller))
+  // 배선만 본다. "recovery 산출물이 있는 날 07:55 전 write 0"은 stage:active-recovery-check ⑦이
+  // 실제 실행부(runStageRecoveryStep)를 07:00→07:20→07:40→07:55 순서로 돌려 증명한다.
+  const recoveryStep = readFileSync('scripts/lib/stage-controller-recovery-step.mts', 'utf-8')
+  check('🔴 controller는 recovery 단계를 주입 실행부 하나에 맡기고, 실행권 선점은 그 실행부만 한다',
+    /phase: activeRecoveryPhaseOf\(NOW\)/.test(controller)
+    && (controller.match(/runStageRecoveryStep\(/g) ?? []).length === 1
+    && !/claimStageRecoveryLaunch|createStageRecoveryIntent/.test(controller)
+    && /claimStageRecoveryLaunch\(/.test(recoveryStep) && /activeRecoveryDirective\(/.test(recoveryStep))
   check('🔴 제한 worker는 기존 수집·공급만 부르고 07:50 종료·07:30 유료 시작 마감을 지킨다',
     /ACTIVE_RECOVERY_MAX_RUNTIME_MS = 50 \* 60_000/.test(activeRecovery)
     && /activeRecoveryDeadlineAt/.test(recoveryWorker)

@@ -56,6 +56,13 @@ import { observeJob } from './lib/runner-health.mjs'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { judgeSlotRelease, publishEventAtOf, releaseStampOf, releaseStampStatusOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
+import { appendLedgerLine, ledgerDirForHome, ledgerPathOf } from './lib/llm-ledger-store.mjs'
+import type { LedgerEntry } from '../src/lib/llm-ledger'
+import { PRICING_VERSION } from '../src/lib/llm-pricing'
+import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
+import { supplyRunIdOf } from '../src/lib/supply-run-token'
+import { SUPPLY_PROOF_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
+import { usesSupplyCostEnvelope } from '../src/lib/supply-cost-envelope'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -758,6 +765,37 @@ try {
      *    launchd 가 없는 곳(CI · Linux)에서는 러너 신호가 모름이다 → 증거는 PASS 가 될 수 없고,
      *    그때는 **모름 → 머문다(재시험)** 를 검사한다. launchd 가 있는 곳에서는 PASS → d5 를 검사한다.
      */
+    /**
+     * 🔴 **비용 증거도 완전해야 "launchd 만 없음"이 참이다** (2026-11-06).
+     *    2026-11-05 시행 bounded 계약부터 증거일 공급 비용은 envelope(자연 proof 슬롯의 정산 표본)로만 판정한다.
+     *    장부가 비면 정산 0건 → COST_UNKNOWN 이 붙어, 실제 시계가 시행일을 넘는 날부터 이 fixture가 깨졌다.
+     *    요약값을 controller 에 주입하지 않고, 운영과 같은 정본 장부 줄(예약 proof 슬롯 · 기록 예산 · 자연 token)을
+     *    생산 writer(`appendLedgerLine`)로 가짜 HOME 장부에 쓴다. controller 는 `readCostSignals` 로 그대로 읽는다.
+     *    시행일 전 증거일이어도 같은 줄은 옛 계약에서 미상 0 이므로 날짜와 무관하게 비용 축은 깨끗하다.
+     */
+    const ledgerDir = ledgerDirForHome(HOME)
+    mkdirSync(ledgerDir, { recursive: true })
+    const proofSlotLabel = (s: { hour: number; minute: number }): string =>
+      `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`
+    for (const [i, s] of SUPPLY_PROOF_RUN_SLOTS_KST.entries()) {
+      const hm = proofSlotLabel(s)
+      const slot = `${D} ${hm}`
+      appendLedgerLine(ledgerPathOf(ledgerDir, D), {
+        runId: `${supplyRunIdOf(new Date(`${D}T${hm}:02+09:00`))}-d`, stage: 'draftGen',
+        attemptId: `evidence-cost-${i}`, requestNo: 0, provider: 'google',
+        apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash', status: 'settled', blockCode: null,
+        countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006,
+        inputTokens: 100, outputTokens: 200, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
+        settledUsd: 0.004, pricingVersion: PRICING_VERSION,
+        startedAt: `${D}T${hm}:30+09:00`, endedAt: `${D}T${hm}:50+09:00`, errorCode: null,
+        runKind: 'scheduled', runSlot: slot, budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2,
+        budgetSource: 'process-override', sourceKey: `evidence-src-${i}`, supplyContract: SUPPLY_JIT_CONTRACT,
+        runTokenShadow: {
+          ok: true, code: null, tokenId: `evidence-token-${i}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+          absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+        },
+      } as LedgerEntry)
+    }
     const dataDir = join(APP, 'microseed-data')
     mkdirSync(dataDir, { recursive: true })
     writeFileSync(join(dataDir, 'supply-process-evidence-fixture.run.json'), JSON.stringify({
@@ -817,6 +855,13 @@ try {
     const passRun = runController()
     console.log(`   (나) 전날 PASS → ${show(passRun.out)}`)
     check('exit 0 (dry-run)', passRun.code === 0, passRun.raw)
+    check('🔴 비용 축은 가짜 HOME 정본 장부에서 읽었다 — 시행일 이후면 proof 슬롯 정산 표본 전부 · 미상·귀속불명 0',
+      !usesSupplyCostEnvelope(D) || (
+        passRun.out?.evidence?.counts.supplySettledRequests === SUPPLY_PROOF_RUN_SLOTS_KST.length
+        && passRun.out.evidence.counts.supplyUsageUnknown === 0
+        && passRun.out.evidence.counts.supplyCostIneligibleRequests === 0
+        && !passRun.out.evidence.codes.some((c) => c === 'COST_UNKNOWN' || c === 'COST_BAD')),
+      JSON.stringify(passRun.out?.evidence?.counts))
     if (launchdOk) {
       check('🟢 전날 증거 PASS', passRun.out?.evidence?.verdict === 'PASS', JSON.stringify(passRun.out?.evidence))
       check('🟢 시험 계획 = d5 (기반 d3 · PASS)', passRun.out?.plan?.target === 'd5' && passRun.out.plan.base === 'd3' && passRun.out.plan.basis === 'PASS')

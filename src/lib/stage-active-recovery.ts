@@ -8,8 +8,9 @@ import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
  *
  * 이것은 FAIL을 PASS로 바꾸는 우회로가 아니다. 오늘 결정을 아직 쓰지 않았고,
  * 품질·비용·오류가 모두 정상이며, 결함이 기회·처리량 부족 범위 안에만 있을 때
- * 한 번의 추가 수집·공급을 요청한다. 최종 단계 결정은 기존 controller가 실제
- * 복구 supply run에 귀속된 slot-valid READY를 확인한 뒤 같은 정본으로 다시 계산해 한 번만 저장한다.
+ * 한 번의 추가 수집·공급을 요청한다. recovery 산출물이 생긴 날은 중간 슬롯(07:00·07:20·07:40)이
+ * 결정을 쓰지 않고, final 슬롯(07:55·07:58)만 실제 복구 supply run에 귀속된 slot-valid READY와
+ * 그 회차의 exact 비용을 확인해 같은 정본으로 한 번 저장한다(canon §3.2.1).
  */
 export const ACTIVE_RECOVERY_VERSION = 'stage-active-recovery-v2' as const
 /** 검증된 recovery claim을 소비한 공급 본체만 자식 provider에 전파한다. */
@@ -102,31 +103,61 @@ export type ActiveRecoveryPlan =
     }
   | { kind: 'none'; reason: string; hardBlock: boolean }
 
-export type ActiveRecoveryDecisionDisposition = 'recover' | 'defer' | 'cancel-and-decide' | 'decide'
+export type ActiveRecoveryIntentState = 'requested' | 'running' | 'done' | 'failed'
 
 /**
- * 07:55 최종 판정 전 controller의 StageDecision 처리 하나.
- *
- * recovery를 시작하거나 같은 날 intent가 제한된 공급 부족을 처리 중인 동안에는
- * 오늘의 중간 FAIL/PASS를 저장하지 않는다. 복구 중 다른 중대 결함이 생긴 경우에만
- * intent를 닫고 기존 결정 authority로 돌아간다.
+ * 오늘 recovery 산출물의 판독 결과 — 세 상태뿐이다.
+ * `absent`는 intent와 실행권·시작 claim·영수증이 **하나도 없을 때만**이다. 읽기 오류·파싱 실패·
+ * intent 없이 남은 claim/영수증은 `corrupt`다. 손상을 없음으로 읽으면 복구 비용·READY를 자연분처럼 센다.
  */
-export function activeRecoveryDecisionDisposition(i: {
-  plan: ActiveRecoveryPlan
-  intentState: 'requested' | 'running' | 'done' | 'failed' | null
-  preflight: PreflightVerdict | null
-}): ActiveRecoveryDecisionDisposition {
-  // 종료된 intent는 다시 열지 않는다. 같은 슬롯에서 현재 정본으로 결정해야
-  // 실패·완료 뒤에도 다음 controller 예약까지 결정을 불필요하게 미루지 않는다.
-  if (i.intentState === 'done' || i.intentState === 'failed') return 'decide'
-  if (i.plan.kind === 'recover') return 'recover'
-  const active = i.intentState === 'requested' || i.intentState === 'running'
-  // 품질·비용·러너·입력 손상은 기회 부족보다 먼저 닫는다. preflight 표면이 아직
-  // OPPORTUNITY_SHORT이거나 이미 PASS여도 다른 중대 신호를 07:55까지 숨기지 않는다.
-  if (active && i.plan.hardBlock) return 'cancel-and-decide'
-  if (i.plan.hardBlock) return 'decide'
-  if (active) return 'defer'
-  return 'decide'
+export type ActiveRecoveryArtifact =
+  | { kind: 'absent' }
+  | { kind: 'valid'; state: ActiveRecoveryIntentState }
+  | { kind: 'corrupt'; reason: string }
+
+export type ActiveRecoveryPhase = 'intermediate' | 'final'
+
+export function activeRecoveryPhaseOf(d: Date): ActiveRecoveryPhase {
+  return isFinalRecoveryControllerSlot(d) ? 'final' : 'intermediate'
+}
+
+/**
+ * controller 한 슬롯이 recovery에 대해 할 일 하나.
+ *  · `decide-now`            — 산출물이 없고 복구 대상도 아니다. 기존 즉시 결정(07:55까지 미루지 않는다)
+ *  · `start-recovery`        — 복구를 시작하거나(산출물 없음) requested intent의 실행권을 잡는다. StageDecision write 0
+ *  · `wait-final`            — 산출물이 있다(손상 포함). StageDecision write 0
+ *  · `cancel-and-wait-final` — active intent 중 중대 결함. intent를 failed로 닫고 write 0
+ *  · `finalize`              — final 슬롯. 이 판정에서만 lineage·exact READY gain·exact 비용을 넣어 한 번 결정한다
+ * 기존 결정 읽기·lease·create-only 저장은 이 함수 밖(`stage-controller-recovery-step`)이 소유한다.
+ */
+export type ActiveRecoveryDirective =
+  | { kind: 'decide-now' }
+  | { kind: 'start-recovery' }
+  | { kind: 'wait-final' }
+  | { kind: 'cancel-and-wait-final' }
+  | { kind: 'finalize'; closeActive: boolean; recoveryFacts: 'none' | 'evaluate' | 'unknown' }
+
+export function activeRecoveryDirective(
+  i: { phase: 'final'; artifact: ActiveRecoveryArtifact }
+    | { phase: 'intermediate'; artifact: ActiveRecoveryArtifact; plan: ActiveRecoveryPlan },
+): ActiveRecoveryDirective {
+  const a = i.artifact
+  if (i.phase === 'final') {
+    if (a.kind === 'absent') return { kind: 'finalize', closeActive: false, recoveryFacts: 'none' }
+    if (a.kind === 'corrupt') return { kind: 'finalize', closeActive: false, recoveryFacts: 'unknown' }
+    return {
+      kind: 'finalize',
+      closeActive: a.state === 'requested' || a.state === 'running',
+      recoveryFacts: 'evaluate',
+    }
+  }
+  if (a.kind === 'absent') return i.plan.kind === 'recover' ? { kind: 'start-recovery' } : { kind: 'decide-now' }
+  if (a.kind === 'corrupt') return { kind: 'wait-final' }
+  if (a.state === 'requested' || a.state === 'running') {
+    if (i.plan.kind === 'none' && i.plan.hardBlock) return { kind: 'cancel-and-wait-final' }
+    if (a.state === 'requested' && i.plan.kind === 'recover') return { kind: 'start-recovery' }
+  }
+  return { kind: 'wait-final' }
 }
 
 export function planActiveRecovery(i: {
