@@ -173,6 +173,7 @@ export function readCostSignals(
       envelope: {
         settledRequests: proof.settledRequests,
         usageUnknownRequests: proof.usageUnknownRequests,
+        recoveryUsageUnknownRequests: proof.recoveryUsageUnknownRequests,
         overrunRequests: proof.overrunRequests,
         ineligibleRequests: proof.ineligibleRequests,
         riskUsd: proof.riskUsd,

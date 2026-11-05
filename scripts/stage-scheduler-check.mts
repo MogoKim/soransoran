@@ -70,6 +70,10 @@ import {
 } from './lib/stage-preflight-facts.mjs'
 import { settledUnitUsd, settledTotalUsd, cappedBy } from './lib/stage-preflight-facts.mjs'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
+import { articleIdHashOf } from '../src/lib/source-slot-release'
+import {
+  stageRecoverySourceReceiptPath, writeStageRecoverySourceReceipt,
+} from './lib/stage-recovery-source-receipt.mjs'
 import { OPPORTUNITY_INVENTORY_AXIS, OPPORTUNITY_INVENTORY_BASIS, OPPORTUNITY_KIND, OPPORTUNITY_VERSION } from '../src/lib/supply-workset'
 import { COMMENT_RUNNER_SLOTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 import { readEnvKeys } from './lib/ops-signals.mjs'
@@ -293,9 +297,11 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   const earlyOnly = (prefix: string, n: number) => ids(prefix, n).map((k) => opp(k, (m) => m < LATE))
   const futureOf = (dataDir: string, o: {
     ready?: ReturnType<typeof opp>[]; current?: ReturnType<typeof opp>[]; y?: number | null; kstDate?: string
+    recoveryHome?: string
   } = {}): number | null => measuredFutureSourceOpportunities({
     dataDir, kstDate: o.kstDate ?? target, now, proofSlots: PROOF20,
     ready: o.ready ?? [], current: o.current ?? [], readyPerSourceLow: o.y === undefined ? 1 : o.y,
+    recoveryHome: o.recoveryHome,
   })
   const scenario = (name: string, plans: (date: string) => DayPlan): string => {
     const d = mkdtempSync(join(tmpdir(), `future-inflow-${name}-`))
@@ -326,6 +332,23 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   const noInflow = keep(scenario('flat', (date) => ({ baseline: ids(`${date}-old`, 17), inflow0815: [] })))
   check('🔴 재고가 많아도(기준선 17 을 다시 봄) 새로 들어온 원천이 없으면 추가 0 — 재고 수준은 유입이 아니다',
     futureOf(noInflow, { ready: earlyOnly('ready', 3) }) === 0)
+  const recoveredThenNatural = keep(scenario('recovered-then-natural', (date) => ({
+    inflow0815: ids(`${date}-recovered`, 17),
+  })))
+  const recoveryHome = mkdtempSync(join(tmpdir(), 'future-inflow-recovery-home-'))
+  dirs.push(recoveryHome)
+  for (const date of SAMPLE_DATES) {
+    writeStageRecoverySourceReceipt({
+      kstDate: date, nonce: `nonce-${date}`, runId: `recovery-${date}`,
+      sourceHashes: ids(`${date}-recovered`, 17).map((id) => articleIdHashOf('navercafe:fixture', id)).slice(0, 10),
+      now: new Date(`${date}T07:10:00+09:00`), home: recoveryHome,
+    })
+  }
+  check('🔴🔴 복구에서 먼저 본 원천은 뒤 자연 snapshot에 나타나도 자연 순유입으로 다시 세지 않는다',
+    futureOf(recoveredThenNatural, { recoveryHome }) === 7)
+  writeFileSync(stageRecoverySourceReceiptPath(SAMPLE_DATES[1]!, `nonce-${SAMPLE_DATES[1]}`, recoveryHome), '{')
+  check('🔴 복구 원천 영수증이 손상되면 순유입을 부풀리지 않고 UNKNOWN',
+    futureOf(recoveredThenNatural, { recoveryHome }) === null)
   const weakDay = keep(scenario('weak', (date) => ({ inflow0815: ids(`${date}-new`, date === '2026-11-01' ? 12 : 17) })))
   check('🔴 3일 중 가장 약한 날의 추가분을 쓴다(17·12·17 → 12)', futureOf(weakDay, { ready: earlyOnly('ready', 3) }) === 12)
   check('🔴 하한 수율로 할인한다 — 순유입 17 × 0.5 → 8(현재 0)', futureOf(overlap, { y: 0.5 }) === 8)

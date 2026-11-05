@@ -10,7 +10,10 @@
 import {
   SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, supplyRunSlotMinuteOf,
 } from './supply-schedule-contract'
-import { isNaturalScheduledRunTag, parseRunTokenShadowTag } from './supply-run-token'
+import { budgetWindowShadowOf, isNaturalScheduledRunTag, parseRunTokenShadowTag } from './supply-run-token'
+import {
+  ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST, ACTIVE_RECOVERY_START_MINUTE_KST, kstMinuteOf,
+} from './stage-active-recovery'
 
 export const SUPPLY_COST_ENVELOPE_VERSION = 'supply-cost-envelope-v2' as const
 export const SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE = '2026-11-05' as const
@@ -245,9 +248,63 @@ export function supplyCostRequestMetadataEligible(i: {
     && recordedBudget !== null
 }
 
+/**
+ * 제한 복구 요청은 자연 표본 수에는 넣지 않되, 같은 날 비용 위험과 예산에는 반드시 넣는다.
+ * recovery token·07:00~07:30·manual ledger 모양·현재 계약이 모두 맞을 때만 인정한다.
+ */
+export function supplyCostRecoveryRequestMetadataEligible(i: {
+  startedAt: string
+  supplyContract?: string | null
+  pricingVersion?: string | null
+  sourceKey?: string | null
+  reservedUsd: number | null
+  budgetDailyUsd?: number | null
+  budgetCeilingUsd?: number | null
+  budgetCapUsd?: number | null
+  budgetSource?: string | null
+  runKind?: 'scheduled' | 'manual' | null
+  runSlot?: string | null
+  runTokenShadow?: unknown
+  resolvedBy?: string | null
+}, kstDate: string): boolean {
+  const expected = supplyCostContractOf(kstDate)
+  const started = new Date(i.startedAt)
+  const runToken = parseRunTokenShadowTag(i.runTokenShadow)
+  if (expected === null || !Number.isFinite(started.getTime())) return false
+  return ledgerDateForRecovery(started) === kstDate
+    && kstMinuteOf(started) >= ACTIVE_RECOVERY_START_MINUTE_KST
+    && kstMinuteOf(started) < ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST
+    && i.supplyContract === expected.supplyContract
+    && i.pricingVersion === expected.pricingVersion
+    && i.runKind === 'manual' && (i.runSlot === null || i.runSlot === undefined)
+    && runToken?.ok === true
+    && runToken.trigger === 'recovery' && runToken.launchTrigger === 'recovery'
+    && runToken.absorbedTrigger === null && runToken.absorbedAt === null && runToken.pass === 0
+    && runToken.budgetWindow === budgetWindowShadowOf(started)
+    && (i.resolvedBy === null || i.resolvedBy === undefined)
+    && typeof i.sourceKey === 'string' && i.sourceKey !== ''
+    && i.reservedUsd !== null && Number.isFinite(i.reservedUsd) && i.reservedUsd > 0
+    && supplyCostRecordedBudgetCapOf(i, kstDate) !== null
+}
+
+/** 손상된 recovery 표식도 자연 요청으로 떨어뜨리지 않고 fail-closed 하기 위한 분류다. */
+export function isSupplyCostRecoveryTagged(value: unknown): boolean {
+  const parsed = parseRunTokenShadowTag(value)
+  if (parsed !== null && (parsed.trigger === 'recovery' || parsed.launchTrigger === 'recovery')) return true
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const raw = value as { trigger?: unknown; launchTrigger?: unknown }
+  return raw.trigger === 'recovery' || raw.launchTrigger === 'recovery'
+}
+
+function ledgerDateForRecovery(at: Date): string {
+  return new Date(at.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
 export type SupplyCostEnvelopeInput = {
   settledRequests: number
   usageUnknownRequests: number
+  /** 제한 복구의 미상 사용량. 자연 정산 비율 표본에서는 빼되 전체 위험액과 bounded 판정에는 남긴다. */
+  recoveryUsageUnknownRequests?: number
   /** 실제 정산액이 요청 전 예약액을 넘은 요청 — 1건이라도 알려진 비용 결함이다 */
   overrunRequests: number
   /** 현재 계약·원천·자연 proof 회차·양수 예약을 증명하지 못한 요청 수 */
@@ -287,7 +344,9 @@ export function usesSupplyCostEnvelope(kstDate: string): boolean {
 
 export function judgeSupplyCostEnvelope(input: SupplyCostEnvelopeInput): SupplyCostEnvelopeVerdict {
   const reasons: string[] = []
+  const recoveryUsageUnknownRequests = input.recoveryUsageUnknownRequests ?? 0
   if (!count(input.settledRequests) || !count(input.usageUnknownRequests)
+    || !count(recoveryUsageUnknownRequests)
     || !count(input.overrunRequests) || !count(input.ineligibleRequests)) {
     return { version: SUPPLY_COST_ENVELOPE_VERSION, kind: 'unknown', settledRatio: null, reasons: ['요청 수 모양이 올바르지 않다'] }
   }
@@ -331,10 +390,12 @@ export function judgeSupplyCostEnvelope(input: SupplyCostEnvelopeInput): SupplyC
   }
   return {
     version: SUPPLY_COST_ENVELOPE_VERSION,
-    kind: input.usageUnknownRequests === 0 ? 'clean' : 'bounded',
+    kind: input.usageUnknownRequests === 0 && recoveryUsageUnknownRequests === 0 ? 'clean' : 'bounded',
     settledRatio,
-    reasons: input.usageUnknownRequests === 0
+    reasons: input.usageUnknownRequests === 0 && recoveryUsageUnknownRequests === 0
       ? ['정산 표본·귀속·예산이 완전하고 전체 위험액이 승인 예산 안이다']
-      : ['미상 사용량은 열린 예약으로 유지되고 전체 위험액이 승인 예산 안이다'],
+      : [recoveryUsageUnknownRequests > 0
+          ? `자연 정산 표본은 유지하고 제한 복구 미상 ${recoveryUsageUnknownRequests}건을 위험액에 포함했다`
+          : '미상 사용량은 열린 예약으로 유지되고 전체 위험액이 승인 예산 안이다'],
   }
 }

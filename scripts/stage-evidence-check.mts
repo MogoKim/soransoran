@@ -48,7 +48,7 @@ import {
   SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_FIRST_DAILY_USD,
   SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_RUNS_PER_DAY,
 } from '../src/lib/supply-schedule-contract'
-import { supplyRunIdOf } from '../src/lib/supply-run-token'
+import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -630,9 +630,86 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
         },
       },
     ], EFFECTIVE)
-    check('🔴 event·recovery token은 scheduled 라벨을 흉내 내도 자연 proof를 얻지 못한다',
+    check('🔴 event token은 scheduled 라벨을 흉내 내도 자연 proof를 얻지 못한다',
       eventProof.usageUnknownRequests === 0 && eventProof.ineligibleRequests === 1,
       JSON.stringify(eventProof))
+    const recoveryStartedAt = `${EFFECTIVE}T07:05:00+09:00`
+    const recoveryRunId = ledgerRunIdAt(recoveryStartedAt)
+    const recoveryShadow = {
+      ok: true as const, code: null, tokenId: 'token-recovery',
+      trigger: 'recovery' as const, launchTrigger: 'recovery' as const,
+      absorbedTrigger: null, absorbedAt: null, pass: 0,
+      budgetWindow: budgetWindowShadowOf(new Date(recoveryStartedAt)),
+    }
+    const recoveryProof = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery', runKind: 'manual', runSlot: null,
+        runId: recoveryRunId,
+        startedAt: recoveryStartedAt, endedAt: `${EFFECTIVE}T07:05:10+09:00`,
+        sourceKey: 'src-u-recovery', runTokenShadow: recoveryShadow,
+      },
+    ], EFFECTIVE)
+    check('🟢 제한 복구 비용은 자연 정산 표본을 바꾸지 않고 당일 위험액에는 들어간다',
+      recoveryProof.settledRequests === 20 && recoveryProof.usageUnknownRequests === 0
+      && recoveryProof.recoverySettledRequests === 0 && recoveryProof.recoveryUsageUnknownRequests === 1
+      && recoveryProof.recoveryUsageUnknownReservedUsd === proofUnknown.reservedUsd
+      && recoveryProof.ineligibleRequests === 0
+      && recoveryProof.riskUsd === recoveryProof.settledUsd + recoveryProof.recoveryUsageUnknownReservedUsd,
+      JSON.stringify(recoveryProof))
+    const duplicateRecoveryRuns = supplyProofCostObservationOf([
+      ...settled,
+      {
+        ...proofUnknown, attemptId: 'u-recovery-1', runId: recoveryRunId,
+        runKind: 'manual', runSlot: null, startedAt: recoveryStartedAt,
+        endedAt: `${EFFECTIVE}T07:05:10+09:00`, sourceKey: 'src-u-recovery-1',
+        runTokenShadow: recoveryShadow,
+      },
+      {
+        ...proofUnknown, attemptId: 'u-recovery-2',
+        runId: ledgerRunIdAt(`${EFFECTIVE}T07:06:00+09:00`),
+        runKind: 'manual', runSlot: null, startedAt: `${EFFECTIVE}T07:06:00+09:00`,
+        endedAt: `${EFFECTIVE}T07:06:10+09:00`, sourceKey: 'src-u-recovery-2',
+        runTokenShadow: { ...recoveryShadow, tokenId: 'token-recovery-2' },
+      },
+    ], EFFECTIVE)
+    check('🔴 하루 복구 pipeline run이 둘이면 비용 위험은 보존하되 증거는 fail-closed',
+      duplicateRecoveryRuns.recoveryUsageUnknownRequests === 2
+      && duplicateRecoveryRuns.ineligibleRequests === 2,
+      JSON.stringify(duplicateRecoveryRuns))
+    const malformedRecovery = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery-malformed', runId: recoveryRunId,
+        runKind: 'manual', runSlot: null, startedAt: recoveryStartedAt,
+        endedAt: `${EFFECTIVE}T07:05:10+09:00`, sourceKey: 'src-u-recovery-malformed',
+        runTokenShadow: { ...recoveryShadow, tokenId: '' },
+      },
+    ], EFFECTIVE)
+    check('🔴 손상된 recovery tag는 자연 요청으로 떨어지지 않고 ineligible',
+      malformedRecovery.recoveryUsageUnknownRequests === 0
+      && malformedRecovery.ineligibleRequests === 1,
+      JSON.stringify(malformedRecovery))
+    const recoveryFollowup = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery-followup', runKind: 'manual', runSlot: null,
+        runId: recoveryRunId,
+        startedAt: recoveryStartedAt, endedAt: `${EFFECTIVE}T07:05:10+09:00`,
+        sourceKey: 'src-u-recovery-followup', runTokenShadow: { ...recoveryShadow, pass: 1 },
+      },
+    ], EFFECTIVE)
+    check('🔴 제한 복구 follow-up은 비용 귀속을 얻지 못하고 ineligible로 닫힌다',
+      recoveryFollowup.recoveryUsageUnknownRequests === 0 && recoveryFollowup.ineligibleRequests === 1,
+      JSON.stringify(recoveryFollowup))
+    const recoveryLate = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery-late', runKind: 'manual', runSlot: null,
+        runId: ledgerRunIdAt(`${EFFECTIVE}T07:30:00+09:00`),
+        startedAt: `${EFFECTIVE}T07:30:00+09:00`, endedAt: `${EFFECTIVE}T07:30:10+09:00`,
+        sourceKey: 'src-u-recovery-late', runTokenShadow: recoveryShadow,
+      },
+    ], EFFECTIVE)
+    check('🔴 07:30 이후 recovery tag는 비용 귀속을 얻지 못하고 ineligible로 닫힌다',
+      recoveryLate.recoveryUsageUnknownRequests === 0 && recoveryLate.ineligibleRequests === 1,
+      JSON.stringify(recoveryLate))
     const humanProof = supplyProofCostObservationOf([
       ...settled, { ...proofUnknown, resolvedBy: 'human' },
     ], EFFECTIVE)
@@ -645,6 +722,13 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     })
     check('🟢 정산 38 + 미상 2 = 정확히 95%이고 위험액=예산이면 bounded',
       ratio95.kind === 'bounded' && ratio95.settledRatio === 0.95, JSON.stringify(ratio95))
+    const recoveryBounded = judgeSupplyCostEnvelope({
+      settledRequests: 20, usageUnknownRequests: 0, recoveryUsageUnknownRequests: 1,
+      overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.09, budgetUsd: 1,
+    })
+    check('🟢 복구 미상은 자연 정산 비율 100%를 유지하되 clean이 아닌 bounded로 남는다',
+      recoveryBounded.kind === 'bounded' && recoveryBounded.settledRatio === 1,
+      JSON.stringify(recoveryBounded))
     const ratioBelow = judgeSupplyCostEnvelope({
       settledRequests: 37, usageUnknownRequests: 2, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.19, budgetUsd: 1.2,
     })

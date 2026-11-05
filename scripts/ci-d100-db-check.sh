@@ -43,6 +43,7 @@ if ! npx prisma migrate deploy >/tmp/d100-ci-migrate.log 2>&1; then
 fi
 
 npm run stage:db-check
+npm run stage:active-recovery-check
 npm run stage:preflight-window-check
 npm run stage:preflight-window-mutation
 npm run supply:cost-envelope-mutation

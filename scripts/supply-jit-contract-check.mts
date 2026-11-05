@@ -42,7 +42,7 @@ import { claimsJitContract, intentLinkIssue, type SupplyIntent } from '../src/li
 import { currentQualityContract } from '../src/lib/quality-contract'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 import { PRICING_VERSION } from '../src/lib/llm-pricing'
-import { supplyRunIdOf } from '../src/lib/supply-run-token'
+import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import {
   pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
 } from './lib/stage-preflight-facts.mjs'
@@ -239,6 +239,18 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     const from = Date.parse('2026-10-02T15:00:00Z')
     const to = Date.parse('2026-10-03T15:00:00Z')
     check('🔴 JIT 묶음 2개 + legacy 1개 → JIT 원천 20 만', worksetSourcesIn(dir, from, to) === 20)
+    w('20261003-071500', 10)
+    writeFileSync(join(dir, runFileName('20261003-071500')), JSON.stringify({
+      runId: '20261003-071500',
+      runTokenShadow: { trigger: 'recovery', launchTrigger: 'recovery' },
+    }))
+    check('🟢 제한 복구 묶음 10개는 다음 시험의 자연 수율 분자·분모에 섞이지 않는다',
+      worksetSourcesIn(dir, from, to) === 20)
+    writeFileSync(join(dir, runFileName('20261003-071500')), '{ 손상')
+    check('🔴 제한 복구 여부를 읽을 회차 기록이 손상되면 자연 수율을 낙관하지 않고 모름(null)',
+      worksetSourcesIn(dir, from, to) === null)
+    rmSync(join(dir, runFileName('20261003-071500')))
+    rmSync(join(dir, worksetFileName('20261003-071500')))
     writeFileSync(join(dir, worksetFileName('20261003-101500')), JSON.stringify({
       kind: WORKSET_KIND, version: WORKSET_VERSION_JIT_LEGACY, contract: SUPPLY_JIT_CONTRACT_LEGACY,
       runId: '20261003-101500', takenAt: '2026-10-03T10:15:00.000Z', limit: 10,
@@ -413,6 +425,42 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🟢 시행일부터 계약·가격판·원천·회차·예약·예산 provenance가 완전하면 preflight 비용 표본이다',
     effectiveValid?.usdPerSlotValidResult === 0.02 && effectiveValid.trialIneligibleRequests === 0,
     JSON.stringify(effectiveValid))
+  const recoveryAt = new Date('2026-11-05T07:05:00+09:00')
+  const recoveryPipelineRun = supplyRunIdOf(recoveryAt)
+  const recoveryEntry = effectiveEntry({
+    attemptId: 'recovery-u-1', runId: `${recoveryPipelineRun}-d`,
+    startedAt: recoveryAt.toISOString(), endedAt: new Date(recoveryAt.getTime() + 5_000).toISOString(),
+    status: 'usageUnknown', settledUsd: null, reservedUsd: 0.03,
+    runKind: 'manual', runSlot: null,
+    runTokenShadow: {
+      ok: true, code: null, tokenId: 'recovery-token-1', trigger: 'recovery', launchTrigger: 'recovery',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: budgetWindowShadowOf(recoveryAt),
+    },
+  })
+  const effectiveWithRecovery = costAttributionOf({
+    entries: [effectiveEntry(), recoveryEntry], fateByKey,
+    counts: { published: 1, scheduled: 0 },
+    cohortRuns: new Set([...effectiveCohort, recoveryPipelineRun]),
+  })
+  check('🟢 제한 복구 미상은 자연 정산 표본에서 분리되고 위험 단가에는 포함된다',
+    effectiveWithRecovery?.settledRequests === 1
+    && effectiveWithRecovery.usageUnknownRequests === 0
+    && effectiveWithRecovery.recoveryUsageUnknownRequests === 1
+    && effectiveWithRecovery.trialIneligibleRequests === 0
+    && Math.abs((effectiveWithRecovery.trialRiskUsdPerSlotValidResult ?? 0) - 0.05) < 1e-12,
+    JSON.stringify(effectiveWithRecovery))
+  const malformedRecovery = costAttributionOf({
+    entries: [effectiveEntry(), {
+      ...recoveryEntry,
+      runTokenShadow: { ...recoveryEntry.runTokenShadow!, tokenId: '' },
+    }],
+    fateByKey, counts: { published: 1, scheduled: 0 },
+    cohortRuns: new Set([...effectiveCohort, recoveryPipelineRun]),
+  })
+  check('🔴 손상된 recovery tag는 자연 표본으로 강등되지 않고 preflight 귀속 불명',
+    malformedRecovery?.recoveryUsageUnknownRequests === 0
+    && malformedRecovery?.trialIneligibleRequests === 1,
+    JSON.stringify(malformedRecovery))
   const legacyHumanResolved = costAttributionOf({
     entries: [{ ...e(hp, 0.02), resolvedBy: 'human' }], fateByKey,
     counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,

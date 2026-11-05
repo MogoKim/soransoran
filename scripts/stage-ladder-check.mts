@@ -1022,7 +1022,7 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
       && /if \(!flagOn\) \{[^}]*consumerEnvOf\(\{ ok: false, code: 'NO_DECISION', fallback: 'safest'/.test(exec)
       && /env: \{ \.\.\.process\.env, \.\.\.overrides \}/.test(exec)
   })())
-  check('🔴 🔴 **controller 진입점은 단계 결정을 위해 kill switch 하나만 읽는다 — env 단계·canary·window 는 입력원이 아니다**', (() => {
+  check('🔴 🔴 **controller 단계 결정은 기존 허용 env만 읽고 복구 worker env 상속은 권위가 아니다**', (() => {
     const code = readFileSync('scripts/stage-controller.mts', 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n')
     // 🔴 실제로 메모리에 올리는 키 전부 — readEnvKeys 의 인자를 그대로 모은다
@@ -1037,9 +1037,12 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
     if (args.length === 0 || !args.every((a) => a in ARG_KEYS)) return false
     const keys = args.flatMap((a) => ARG_KEYS[a]!)
     const FORBIDDEN = [RELEASE_ENV, CAPACITY_ENV]
+    const workerEnv = /env: process\.env, detached: true, stdio: \['ignore', logFd, logFd\]/.test(code)
+    const withoutWorkerEnv = code.replace('env: process.env', '')
     return keys.includes(CONTROLLER_ENV)
       && !keys.some((k) => FORBIDDEN.includes(k) || /CANARY|WINDOW/.test(k))
-      && !/process\.env/.test(code)
+      && workerEnv
+      && !/process\.env/.test(withoutWorkerEnv)
       && !FORBIDDEN.some((k) => code.includes(k)) && !/\b(RELEASE_ENV|CAPACITY_ENV)\b/.test(code)
   })())
   /**

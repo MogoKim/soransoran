@@ -132,12 +132,22 @@ import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
 import { readStock } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
+import {
+  ACTIVE_RECOVERY_DATE_ENV, ACTIVE_RECOVERY_DEADLINE_ENV, ACTIVE_RECOVERY_DEFICIT_ENV,
+  ACTIVE_RECOVERY_NONCE_ENV, ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST,
+  ACTIVE_RECOVERY_START_MINUTE_KST, kstMinuteOf, recoveryJitDemand,
+} from '../src/lib/stage-active-recovery'
+import {
+  claimStageRecoverySupplyStart, stageRecoveryClaimFromArgv, validateStageRecoveryClaim,
+  validateStageRecoveryRuntimeEnv, writeStageRecoverySupplyReceipt,
+  type StageRecoveryClaim, type StageRecoveryIntent,
+} from './lib/stage-recovery-intent.mjs'
 
 /** 🔴 정본은 lib 하나다 — 여기서 문자열을 다시 쓰지 않는다 */
 const DATA_DIR = DATA_DIR_NAME
 const argv = process.argv.slice(2)
 /**
- * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 정본 값(10)이다 —
+ * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 공급 스케줄 정본 값이다 —
  *    올리면 유료 요청도 그만큼 는다(judge N · draft 3N · 전체 4N).
  * 🔴 천장(`WORKSET_MAX_LIMIT`)을 넘기면 `-1` 이고 `judgeStageBudget` 이 실행 전에 멈춘다 — 무제한 호출 없음.
  */
@@ -652,6 +662,31 @@ async function main(proof: LeaseProof | null): Promise<number> {
   // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
   const now = RUN_AT
   const runId = runIdOf(now)
+  const recoveryClaim = stageRecoveryClaimFromArgv(argv)
+  let recoveryIntent: StageRecoveryIntent | null = null
+  if (recoveryClaim !== null) {
+    const wallNow = new Date()
+    if (!LIVE || proof === null || !killOpen) {
+      throw new Error('stage recovery는 live·커널 lease·공급 스위치가 모두 열린 실행만 허용한다')
+    }
+    recoveryIntent = validateStageRecoveryRuntimeEnv(process.env, wallNow)
+    if (recoveryIntent === null) throw new Error('stage recovery runtime env가 없다')
+    if (kstDateString(wallNow) !== recoveryClaim.kstDate
+      || kstMinuteOf(wallNow) < ACTIVE_RECOVERY_START_MINUTE_KST
+      || kstMinuteOf(wallNow) >= ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST) {
+      throw new Error('stage recovery 날짜 또는 유료 시작 창이 끝났다')
+    }
+    if (WORKSET_LIMIT !== recoveryIntent.worksetLimit) {
+      throw new Error(`stage recovery 작업 묶음이 intent와 다르다: ${WORKSET_LIMIT}/${recoveryIntent.worksetLimit}`)
+    }
+    // provider 자식이 각 요청 직전 같은 nonce·intent 상태·절대 마감을 다시 확인한다.
+    process.env[ACTIVE_RECOVERY_DATE_ENV] = recoveryClaim.kstDate
+    process.env[ACTIVE_RECOVERY_NONCE_ENV] = recoveryClaim.nonce
+    process.env[ACTIVE_RECOVERY_DEFICIT_ENV] = String(recoveryClaim.deficit)
+    if ((process.env[ACTIVE_RECOVERY_DEADLINE_ENV] ?? '').trim() === '') {
+      throw new Error('stage recovery 절대 마감 env가 없다')
+    }
+  }
 
   console.log(`\n══ 공급 처리(drain) — ${LIVE ? '🔴 live' : 'dry-run (네트워크 0 · LLM 0 · DB write 0)'} ══\n`)
   console.log(`  runId ${runId}`)
@@ -749,7 +784,10 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const jitIn = SIM !== null
     ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile }).length, readyFilled: SIM }
     : before?.jit ?? null
-  const policy = judgeJitDemand(jitIn)
+  const basePolicy = judgeJitDemand(jitIn)
+  const policy = recoveryIntent === null
+    ? basePolicy
+    : recoveryJitDemand(basePolicy, recoveryIntent.deficit, jitIn !== null)
   /**
    * 🔴 **유료 원천 수 = 부족분에서만** (2026-10-04 P0-2). 앞판은 수요가 1 이어도 고정 묶음 상한(`WORKSET_LIMIT`)만큼
    *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면
@@ -1366,9 +1404,23 @@ const isDirectRun = process.argv[1] !== undefined
  *    · holder · 회차 자식은 바깥이 읽은 env 를 물려받았다 — 다시 판정하지 않고 lease 로 간다
  */
 async function entry(): Promise<number> {
+  const recoveryClaim: StageRecoveryClaim | null = stageRecoveryClaimFromArgv(argv)
+  if (recoveryClaim !== null) validateStageRecoveryClaim(recoveryClaim)
   const viaLease = (): Promise<number> => supplyEntry({
     scriptPath: fileURLToPath(import.meta.url), argv, env: process.env,
-    body: (proof) => main(proof), log: (l) => console.log(l),
+    body: async (proof) => {
+      if (recoveryClaim !== null) {
+        validateStageRecoveryRuntimeEnv(process.env, new Date())
+        claimStageRecoverySupplyStart({ claim: recoveryClaim, now: new Date() })
+      }
+      const code = await main(proof)
+      if (code === 0 && recoveryClaim !== null) {
+        writeStageRecoverySupplyReceipt({ claim: recoveryClaim, now: new Date() })
+      }
+      return code
+    },
+    log: (l) => console.log(l),
+    ...(recoveryClaim === null ? {} : { trigger: 'recovery' as const }),
   })
   if (process.env[SUPPLY_PASS_ENV] !== undefined || process.env[LEASE_INNER_ENV] !== undefined) return viaLease()
   await loadEnvLocal()

@@ -248,6 +248,7 @@ writeFileSync(HARNESS, [
   "if ((process.env.HARNESS_FAKE_LOCKF ?? '') !== '') (globalThis as Record<symbol, unknown>)[FAKE_LOCKF_MARK] = process.env.HARNESS_FAKE_LOCKF",
   'const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))',
   'const code = await supplyEntry({ scriptPath: fileURLToPath(import.meta.url), argv: process.argv.slice(2), env: process.env, log: () => undefined,',
+  "  ...((process.env.HARNESS_TRIGGER ?? '') === 'recovery' ? { trigger: 'recovery' as const } : {}),",
   '  body: async (proof) => {',
   "    const pass = Number(process.env.SORAN_SUPPLY_PASS)",
   "    const token = process.env.SORAN_SUPPLY_RUN_TOKEN ?? null",
@@ -325,6 +326,7 @@ try {
 
   const REAL_CASES = [
     '최초 실행(디렉터리 없음) · 0700 · token 0600', 'holder 1 + contender 5 → 본체 1 · follow-up 1 · 상한', '시작 전 event 표식 → pass0 event · pass1 없음',
+    '제한 복구 경합 → marker 0 · 기존 marker 흡수 0',
     '깨진 표식 → unknown 기록 · 올리지 않음', 'holder SIGKILL → 즉시 재획득', '부모 종료 뒤 자식 생존 → 자식 끝까지 진입 0',
     'fd 9 실제 자식 전달 · token 일치', 'fd 미전달 · npx 경유 → 증명 실패', '자식 token 위조 · corrupt', '바깥 위조(fd 없음 · 같은 파일 · 다른 파일)',
     '회차 자식 위조 → 본체 0', 'busy 재시도 — probe 순간 충돌 구제', 'probe free/busy · 파일 생성 0', 'token 원자 쓰기(새 inode · 0600)', '실제 러너 진입',
@@ -380,6 +382,26 @@ try {
     check('🔴 probe — holder 가 끝나면 free(남은 잠금 파일은 잠금이 아니다)', pr === 'free', pr)
     check('🔴 🔴 반례 probe 가 잠금 파일을 지우거나 바꾸지 않는다(-k) — 지우면 holder 의 inode 와 새 실행의 inode 가 갈라져 두 본체가 겹친다',
       existsSync(LOCKP) && statSync(LOCKP).ino === inoBefore)
+
+    // ── 단계 제한 복구는 자연 follow-up marker와 완전히 격리 ──
+    reset()
+    const recoveryBlocker = run(6_000)
+    const recoveryBlockerExit = exitOf(recoveryBlocker)
+    check('제한 복구 경합용 holder가 본체에 들어갔다', await waitFor(() => starts().length === 1))
+    const heldRecovery = await exitOf(run(0, { env: { ...baseEnv(), HARNESS_TRIGGER: 'recovery' } }))
+    check('🔴 🔴 제한 복구가 lease 경합하면 본체 0 · follow-up marker 0',
+      heldRecovery === 0 && starts().length === 1 && !existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+    await recoveryBlockerExit
+
+    reset()
+    writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'event' }), { mode: 0o600 })
+    const isolatedRecovery = await exitOf(run(200, { env: { ...baseEnv(), HARNESS_TRIGGER: 'recovery' } }))
+    const recoveryToken = tokenNow()
+    check('🔴 🔴 제한 복구 holder는 기존 marker를 흡수하지 않고 pass 0 한 번만 실행한다',
+      isolatedRecovery === 0 && starts().length === 1 && starts()[0]?.pass === 0
+      && recoveryToken?.trigger === 'recovery' && recoveryToken.launchTrigger === 'recovery'
+      && recoveryToken.absorbedTrigger === null && existsSync(join(LOCKD, FOLLOW_UP_FILE)),
+      JSON.stringify(recoveryToken))
 
     // ── 시작 전에 있던 event 표식 ──
     reset()

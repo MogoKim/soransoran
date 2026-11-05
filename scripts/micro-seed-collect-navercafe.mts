@@ -62,6 +62,7 @@ import {
   SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions, normalizeCount,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease, type FrameProbe,
+  runCollectorTerminationCleanup, type CollectorTerminationSignal,
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, maxPagesFor,
   detectRowLabel, judgePoliticsTitle, activeCafes,
@@ -90,10 +91,12 @@ import {
 } from './lib/voice-evidence-capture.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
-import { postedWindowOfKstDay } from '../src/lib/source-slot-release'
+import { articleIdHashOf, postedWindowOfKstDay } from '../src/lib/source-slot-release'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 import { guardedNavigate, readGuard, type NavigationResponse } from './lib/collect-guard-store.mjs'
 import { budgetOf, describeGuard, type SourceId } from '../src/lib/collect-guard'
+import { validateStageRecoveryReceiptIdentityEnv } from './lib/stage-recovery-intent.mjs'
+import { writeStageRecoverySourceReceipt } from './lib/stage-recovery-source-receipt.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => {
@@ -211,6 +214,20 @@ const fail = (msg: string, code: CollectFailureCode = 'OTHER'): never => {
   console.error(`\n🛑 ${msg}\n`)
   process.exit(1)
 }
+
+let terminationStarted = false
+const terminateSafely = (signal: CollectorTerminationSignal): void => {
+  if (terminationStarted) return
+  terminationStarted = true
+  runCollectorTerminationCleanup({
+    signal,
+    finish: () => { finishRun('failed', 'OTHER') },
+    release: releaseOwnLock,
+    exit: (code) => { process.exit(code) },
+  })
+}
+process.once('SIGTERM', () => { terminateSafely('SIGTERM') })
+process.once('SIGINT', () => { terminateSafely('SIGINT') })
 
 /**
  * 🔴 **세션 알림 — 같은 알림은 하루 한 번** (2026-10-07).
@@ -889,6 +906,26 @@ async function main() {
      *    저장이 실패하면 원장에 아무것도 남지 않고, 다음 회차가 그 글을 다시 연다 —
      *    되찾을 수 있는 상태로 남기는 것이 영구 유실보다 낫다.
      */
+    /**
+     * 🔴 복구 원천 provenance는 thin 저장보다 먼저 남긴다. 상세 조회 뒤 intent가 취소되거나
+     * 마감돼도 이미 본 원천을 다음 자연 회차의 새 기회로 다시 세면 안 된다. 이후 저장이
+     * 실패해 hash만 남는 과소 계상은, 영수증 없이 중복 계상하는 것보다 안전하다.
+     */
+    const recoveryIntent = validateStageRecoveryReceiptIdentityEnv(process.env)
+    if (recoveryIntent !== null) {
+      const hashes = thinRows.flatMap((row) => {
+        const site = typeof row.sourceSite === 'string' ? row.sourceSite : null
+        const id = typeof row.sourceArticleId === 'string' ? row.sourceArticleId : null
+        return site === null || id === null ? [] : [articleIdHashOf(site, id)]
+      })
+      writeStageRecoverySourceReceipt({
+        kstDate: recoveryIntent.kstDate,
+        nonce: recoveryIntent.nonce,
+        runId: RUN_ID,
+        sourceHashes: hashes,
+        now: new Date(),
+      })
+    }
     writeJsonl(thinPath, thinRows)
     if (!existsSync(thinPath)) {
       fail(`THIN_WRITE_FAILED — 산출물을 저장하지 못했다 (${thinPath})\n`
