@@ -449,6 +449,26 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     && effectiveWithRecovery.trialIneligibleRequests === 0
     && Math.abs((effectiveWithRecovery.trialRiskUsdPerSlotValidResult ?? 0) - 0.05) < 1e-12,
     JSON.stringify(effectiveWithRecovery))
+  const recoveryWithoutExactRun = costAttributionOf({
+    entries: [effectiveEntry(), recoveryEntry], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🔴 exact 복구 supply run을 비용 cohort에 넣지 않으면 복구 미상 비용이 trial에서 빠지는 반례를 고정',
+    recoveryWithoutExactRun?.recoveryUsageUnknownRequests === 0
+    && recoveryWithoutExactRun?.openRequests === 0
+    && recoveryWithoutExactRun?.totalUsd === 0.02
+    && recoveryWithoutExactRun?.trialRiskUsdPerSlotValidResult === null,
+    JSON.stringify(recoveryWithoutExactRun))
+  const recoveryOverrun = costAttributionOf({
+    entries: [effectiveEntry(), {
+      ...recoveryEntry, status: 'settled', settledUsd: 0.04, reservedUsd: 0.01,
+    }],
+    fateByKey, counts: { published: 1, scheduled: 0 },
+    cohortRuns: new Set([...effectiveCohort, recoveryPipelineRun]),
+  })
+  check('🔴 exact 복구 supply run의 정산·예약 초과는 recovery 비용과 hard overrun으로 함께 귀속',
+    recoveryOverrun?.recoverySettledRequests === 1 && recoveryOverrun.trialOverrunRequests === 1,
+    JSON.stringify(recoveryOverrun))
   const malformedRecovery = costAttributionOf({
     entries: [effectiveEntry(), {
       ...recoveryEntry,
@@ -793,7 +813,9 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 curre
   check('🔴 🔴 cohort 불변식 — 큐 결과 · worksetSources · 현재 계약 비용이 같은 창 묶음 회차 집합 하나에서 나온다',
     /cohortRuns: new Set\(ws\?\.byRun\.keys\(\) \?\? \[\]\)/.test(facts)
     && /const worksetSources = ws\?\.sources \?\? null/.test(facts)
-    && /costAttributionOf\(\{ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort\.cohortRuns \}\)/.test(facts))
+    && /const costCohortRuns = new Set\(cohort\.cohortRuns\)/.test(facts)
+    && /if \(i\.recoveryLineage !== undefined\) costCohortRuns\.add\(i\.recoveryLineage\.supplyRunId\)/.test(facts)
+    && /costAttributionOf\(\{ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns \}\)/.test(facts))
 }
 
 console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')

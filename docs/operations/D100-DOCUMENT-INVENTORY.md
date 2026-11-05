@@ -60,7 +60,7 @@
 | `launchd/README.md` | 템플릿·runtime 배포·스케줄 관측·수동 진단 | `launchctl`, `runtime:deploy`, stage wrapper |
 | `2026-10-13-persona-expansion-runbook.md` | Persona 30 → 40 → 60 → 300 확장 판정·단계별 활성화 순서 | `persona:expansion -- --db`, `persona:expansion-check` |
 | `2026-10-15-persona-voice-evidence-capture.md` | 신규 Persona용 공개 댓글 말투 근거의 최소수집·익명화·보존·삭제 절차 | `persona:voice-evidence-status -- --db`, `persona:voice-evidence-check` |
-| `2026-11-05-stage-bounded-active-recovery.md` | 유일한 `OPPORTUNITY_SHORT` 제한 보충의 실행·진단·rollback 절차 | `stage:active-recovery-check`, 날짜별 intent·source receipt·로그, 07:55 판정·07:58 저장 fallback |
+| `2026-11-05-stage-bounded-active-recovery.md` | 기회·처리량 공급 한정 blocker의 제한 보충 실행·진단·rollback 절차 | `stage:active-recovery-check`, 날짜별 intent·source/supply receipt·로그, 07:55 판정·07:58 저장 fallback |
 
 runbook의 오래된 실측 절은 `📜` 또는 “작성 당시 스냅샷”으로 분리한다. 등록 템플릿이 있다는 사실과
 현재 loaded 상태를 합치지 않는다.

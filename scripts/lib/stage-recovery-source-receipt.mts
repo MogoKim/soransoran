@@ -7,7 +7,7 @@ import { stageRecoveryDir } from './stage-recovery-intent.mjs'
 
 export const STAGE_RECOVERY_SOURCE_RECEIPT_VERSION = 'stage-recovery-source-receipt-v1' as const
 
-type StageRecoverySourceReceipt = {
+export type StageRecoverySourceReceipt = {
   version: typeof STAGE_RECOVERY_SOURCE_RECEIPT_VERSION
   kstDate: string
   nonce: string
@@ -44,6 +44,24 @@ function parseReceipt(raw: string): StageRecoverySourceReceipt | null {
   if (canonical.length !== hashes.length || canonical.some((hash, index) => hash !== hashes[index])
     || o.digest !== digestOf(canonical)) return null
   return { ...o, sourceHashes: canonical } as StageRecoverySourceReceipt
+}
+
+/**
+ * 현재 intent 하나가 실제로 수집한 원천만 읽는다. 날짜 전체 영수증을 합치지 않는다.
+ * 파일이 없거나 이름·본문·nonce가 어긋나면 복구 성과를 증명할 수 없으므로 `null`이다.
+ */
+export function readStageRecoverySourceReceipt(
+  kstDate: string,
+  nonce: string,
+  home?: string,
+): StageRecoverySourceReceipt | null {
+  if (!DATE_RE.test(kstDate) || nonce.length === 0) return null
+  try {
+    const receipt = parseReceipt(readFileSync(stageRecoverySourceReceiptPath(kstDate, nonce, home), 'utf-8'))
+    return receipt !== null && receipt.kstDate === kstDate && receipt.nonce === nonce ? receipt : null
+  } catch {
+    return null
+  }
 }
 
 /**

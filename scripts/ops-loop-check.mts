@@ -895,10 +895,10 @@ console.log('\n⑥ 복구 판정')
   const activeRecovery = readFileSync('src/lib/stage-active-recovery.ts', 'utf-8')
   const controller = readFileSync('scripts/stage-controller.mts', 'utf-8')
   const recoveryWorker = readFileSync('scripts/stage-active-recovery.mts', 'utf-8')
-  check('🔴 단계 제한 복구는 sole OPPORTUNITY_SHORT·runtime D20~D50·07:30 전만 연다',
-    /preflight\?\.verdict === 'FAIL'/.test(activeRecovery)
-    && /preflight\.codes\.length === 1/.test(activeRecovery)
-    && /preflight\.codes\[0\] === 'OPPORTUNITY_SHORT'/.test(activeRecovery)
+  check('🔴 단계 제한 복구는 공급으로 해소 가능한 기회·처리량 복합 부족만, runtime D20~D50·07:30 전에 연다',
+    /'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT'/.test(activeRecovery)
+    && /preflight\.codes\.every\(\(code\) => ACTIVE_RECOVERY_SHORTAGE_CODES\.has\(code\)\)/.test(activeRecovery)
+    && /badSignals\.length > 0/.test(activeRecovery)
     && /\['d20', 'd30', 'd50'\]/.test(activeRecovery)
     && /ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST/.test(activeRecovery))
   check('🔴 controller가 일일 실행권을 선점하고 07:55 전에는 StageDecision을 쓰지 않는다',

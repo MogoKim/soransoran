@@ -30,7 +30,7 @@ import {
 import { RUNTIME_PROFILES as PROFILES, RELEASE_ENV, CAPACITY_ENV, type RuntimeStage } from '../src/lib/scale-profile'
 import { consumerEnvOf } from '../src/lib/stage-controller'
 import { COMMENT_STAGE_ENV } from '../src/lib/persona-comment-stage'
-import { judgeNextPreflight, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { judgeNextPreflight, readyCapacityOf, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID, PREFLIGHT_ENV_KEYS } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
@@ -116,6 +116,7 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
 const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
   proofKstDate: '2026-11-05',
   slotValidOpportunities: PROFILES[s].dailyTarget * 2,
+  slotValidReadyStock: PROFILES[s].dailyTarget,
   readyCohort: {
     sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, scheduled: 0, unknown: 0,
     usdPerSlotValidResult: 0.001,
@@ -213,6 +214,37 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
   check('🔴 예약 초과는 귀속 불명과 함께 있어도 UNKNOWN으로 약화하지 않고 SUPPLY_COST_SHORT',
     overrunPf.verdict === 'FAIL' && overrunPf.codes.includes('SUPPLY_COST_SHORT')
     && !overrunPf.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(overrunPf.codes))
+  const cohortForCapacity = (capacity: number): NonNullable<PreflightFacts['readyCohort']> => {
+    for (let sources = 1; sources <= 200; sources += 1) {
+      for (let raw = 0; raw <= 200; raw += 1) {
+        if (readyCapacityOf(raw, sources) === capacity) {
+          return {
+            sources, published: raw, lost: 0, scheduled: 0, unknown: 0,
+            usdPerSlotValidResult: 0.001,
+            trialCost: {
+              settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0,
+              ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001,
+            },
+          }
+        }
+      }
+    }
+    throw new Error(`capacity fixture를 만들지 못했다: ${capacity}`)
+  }
+  const shortFacts = { ...GOOD_FACTS('d20'), readyCohort: cohortForCapacity(19), slotValidReadyStock: 5 }
+  const naturalShort = judgeNextPreflight('d20', shortFacts, RUNNER_GRID)
+  const stockOnly = judgeNextPreflight('d20', { ...shortFacts, slotValidReadyStock: 99 }, RUNNER_GRID)
+  const recovered = judgeNextPreflight('d20', shortFacts, RUNNER_GRID, { boundedRecoveryReadyGain: 1 })
+  const invalidGain = judgeNextPreflight('d20', shortFacts, RUNNER_GRID, { boundedRecoveryReadyGain: -1 })
+  check('🔴 실제 READY 재고 숫자만으로 자연 처리량 부족을 우회하지 않는다',
+    naturalShort.codes.includes('THROUGHPUT_SHORT') && stockOnly.codes.includes('THROUGHPUT_SHORT'))
+  check('🟢 exact lineage로 검증된 복구 READY 1건만 자연 처리량 19에 더해 D20 처리량을 채운다',
+    recovered.counts.readyCapacityNatural === 19
+    && recovered.counts.readyCapacityRecoveryGain === 1
+    && recovered.counts.readyCapacity === 20
+    && !recovered.codes.includes('THROUGHPUT_SHORT'))
+  check('🔴 음수·비정상 복구 가산은 무시하고 기존 부족 판정을 보존한다',
+    invalidGain.codes.includes('THROUGHPUT_SHORT') && invalidGain.counts.readyCapacity === 19)
   const late = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'),
     decidedAt: new Date(`${DATE}T10:00:00+09:00`).toISOString() })
   check('🔴 첫 슬롯 뒤에 결정하면 조각 하루로 시험하지 않는다 (LATE_START)',

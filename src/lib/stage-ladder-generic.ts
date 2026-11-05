@@ -214,6 +214,18 @@ export type PreflightFacts = {
    */
   slotValidOpportunities: number | null
   /**
+   * 🔴 **현재 DB에서 다시 읽은 증명 슬롯 유효 자동 READY 재고 수.** 자연 공급 수율을 추정한 값이 아니라,
+   *    `judgeSlotRelease`와 같은 슬롯 짝짓기로 실제 READY가 덮은 슬롯 수다. 복구 시작 시점의 값은
+   *    intent 신원·감사용 기준선이며, 복구 성과 숫자는 아래 exact lineage 사실에서만 얻는다.
+   */
+  slotValidReadyStock?: number | null
+  /**
+   * 🔴 **현재 복구 intent가 수집한 원천에서 새로 생겨 슬롯에 실제 매칭된 READY 수.**
+   *    날짜 전체 READY 증분이 아니다. intent의 정확한 nonce 영수증, intent 이후 생성 시각,
+   *    source identity, 슬롯 매칭을 모두 통과한 고유 원천만 센다. lineage를 주지 않으면 `null`이다.
+   */
+  slotValidRecoveryReadyStock?: number | null
+  /**
    * 🔴 **아직 시작하지 않은 당일 정기 공급의 보수 추가 기회.** READY 재고가 아니다.
    *    과거 3일 같은 공급 시각에 기준선 뒤 새로 관측된 고유 원천을, 오늘 READY·현재 원천이 못 채운 슬롯에만
    *    짝지은 합집합 추가분의 최솟값이다(`measuredFutureSourceOpportunities`). 그래서 `slotValidOpportunities` 에
@@ -326,6 +338,15 @@ export type PreflightVerdict = {
   counts: Readonly<Record<string, number>>
 }
 
+export type PreflightJudgeOptions = {
+  /**
+   * 검증된 제한 복구가 완주한 뒤 exact nonce·supply run·원천 hash로 귀속되고 실제 proof slot에
+   * 매칭된 READY 수. 날짜 전체 또는 baseline 대비 READY 증분은 쓰지 않는다. 나머지
+   * 품질·비용·Persona·러너 관문은 하나도 완화하지 않는다.
+   */
+  boundedRecoveryReadyGain?: number | null
+}
+
 /** current-quality 원천 수와 READY 수를 같은 날 공급 계약으로 환산한 보수 용량. */
 export function readyCapacityOf(
   rawReady: number,
@@ -349,7 +370,12 @@ export function readyCapacityOf(
  *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 승인 천장 $1.20 으로 누른다)
  *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
  */
-export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, grid: RunnerGrid): PreflightVerdict {
+export function judgeNextPreflight(
+  stage: GenericStage,
+  facts: PreflightFacts,
+  grid: RunnerGrid,
+  options: PreflightJudgeOptions = {},
+): PreflightVerdict {
   const codes = new Set<PreflightCode>()
   const warnings = new Set<PreflightWarningCode>()
   const n = genericDailyTarget(stage)
@@ -384,16 +410,25 @@ export function judgeNextPreflight(stage: GenericStage, facts: PreflightFacts, g
       readyScheduled: c.scheduled, readyUnknown: c.unknown, readySources: c.sources,
     })
   }
+  const readyStock = facts.slotValidReadyStock
+  if (readyStock !== null && readyStock !== undefined && isCount(readyStock)) counts.readyStock = readyStock
   if (req.min !== null) counts.readyNeededMin = req.min
   if (req.max !== null) counts.readyNeededMax = req.max
   if (req.min !== null && req.min === req.max) counts.readyNeeded = req.min
   let requirementUnknown = false
   if (c === null || raw === null || !(c.sources > 0)) codes.add('THROUGHPUT_UNKNOWN')
   else {
-    const capacity = readyCapacityOf(raw, c.sources)
-    if (capacity === null) {
+    const naturalCapacity = readyCapacityOf(raw, c.sources)
+    if (naturalCapacity === null) {
       codes.add('THROUGHPUT_UNKNOWN')
     } else {
+      counts.readyCapacityNatural = naturalCapacity
+      const requestedGain = options.boundedRecoveryReadyGain
+      const recoveryGain = requestedGain !== null && requestedGain !== undefined && isCount(requestedGain)
+        ? Math.min(requestedGain, n)
+        : 0
+      if (recoveryGain > 0) counts.readyCapacityRecoveryGain = recoveryGain
+      const capacity = naturalCapacity + recoveryGain
       counts.readyCapacity = capacity
       const t = judgeAgainst(req, (need) => capacity >= need)
       if (t === 'short') codes.add('THROUGHPUT_SHORT')

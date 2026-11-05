@@ -114,6 +114,40 @@ export const cappedBy = (env: number | null, canon: number | null): number | nul
  */
 export const UNIT_COST_DAYS = 3
 
+type RecoveryReadyRow = {
+  id: string
+  createdAt?: Date
+  gateResults?: unknown
+}
+
+/**
+ * 정확한 복구 intent가 만든 slot-valid READY만 센다.
+ * 날짜 전체 READY 증분이나 같은 시각의 자연 공급을 복구 성과로 섞지 않고,
+ * 같은 원천이 중복 적재돼도 원천 하나로만 센다.
+ */
+export function slotValidRecoveryReadyStockOf(i: {
+  rows: readonly RecoveryReadyRow[]
+  matchedReady: ReadonlySet<string>
+  sourceHashes: ReadonlySet<string>
+  supplyRunId: string
+  createdAt: Date
+}): number {
+  const recoveryReadyHashes = new Set<string>()
+  for (const row of i.rows) {
+    if (row.createdAt === undefined
+      || !i.matchedReady.has(row.id)
+      || row.createdAt.getTime() < i.createdAt.getTime()) continue
+    const ev = readSourceEvidence(row.gateResults)
+    const sourceHash = ev.ok ? ev.record.provenance.articleIdHash : null
+    const intent = readSupplyIntent(row.gateResults)
+    if (sourceHash !== null && i.sourceHashes.has(sourceHash)
+      && intent !== null && intent.runId === i.supplyRunId && intent.sourceHash === sourceHash) {
+      recoveryReadyHashes.add(sourceHash)
+    }
+  }
+  return recoveryReadyHashes.size
+}
+
 /** 🔴 증거일부터 거슬러 `n` 일(오래된 날 먼저) */
 export function recentDates(evidenceDate: string, n: number = UNIT_COST_DAYS): string[] {
   const t = Date.parse(`${evidenceDate}T00:00:00Z`)
@@ -849,6 +883,11 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   now: Date
   runnerHealth: Health | null
   /**
+   * 최종 복구 판정에서만 주는 정확한 lineage. 날짜 전체 READY 증분을 복구 성과로 오인하지 않도록
+   * exact nonce 원천과 intent 이후 생성된 행만 슬롯 매칭 결과에서 센다.
+   */
+  recoveryLineage?: { sourceHashes: ReadonlySet<string>; supplyRunId: string; createdAt: Date }
+  /**
    * 🔴 **Persona 레인 주입 자리** — 계약 유효 Persona 수. 주지 않으면 `null`(모름 → UNKNOWN).
    *    🔴 활성 행 수를 넣지 않는다.
    */
@@ -864,6 +903,16 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     ? readyOpportunitiesOf(i.loaded, { caps: i.caps, now: i.now, autoOnly: true }) : []
   if (!i.autoOpen.open) notes.push(`자동 READY 닫힘 — ${i.autoOpen.reasons.join(' · ') || '이유 없음'} (READY 기회 0 · 대기는 예정 슬롯에 걸리지 않는다)`)
   const matchedReady = new Set(matchOpportunitiesToSlots(i.proofSlots, readyOpps).bySlot.filter((k): k is string => k !== null))
+  let slotValidRecoveryReadyStock: number | null = null
+  if (i.recoveryLineage !== undefined) {
+    slotValidRecoveryReadyStock = slotValidRecoveryReadyStockOf({
+      rows: i.loaded.allRows,
+      matchedReady,
+      sourceHashes: i.recoveryLineage.sourceHashes,
+      supplyRunId: i.recoveryLineage.supplyRunId,
+      createdAt: i.recoveryLineage.createdAt,
+    })
+  }
 
   // READY cohort — 공급 러너와 같은 판독(`readReadyCohort`)
   const cohort = await readReadyCohort(prisma, {
@@ -940,8 +989,12 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const fateByKey = new Map<string, CostFate>()
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
+  // 최종 복구 판정은 검증된 exact supply run의 비용도 같은 trial envelope에 넣는다.
+  // READY 수율의 자연 cohort는 바꾸지 않고, 복구의 미정산·예약 초과 비용만 숨지 못하게 한다.
+  const costCohortRuns = new Set(cohort.cohortRuns)
+  if (i.recoveryLineage !== undefined) costCohortRuns.add(i.recoveryLineage.supplyRunId)
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
-    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort.cohortRuns })
+    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns })
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
@@ -968,6 +1021,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       return proofDates.size === 1 ? [...proofDates][0]! : null
     })(),
     slotValidOpportunities,
+    slotValidReadyStock: opp.readyFilled,
+    slotValidRecoveryReadyStock,
     futureSupplyCapacity,
     readyCohort,
     latencyP50H, latencyP90H,
@@ -982,7 +1037,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   return {
     facts, notes,
     detail: {
-      readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
+      readyFilled: opp.readyFilled, slotValidRecoveryReadyStock,
+      sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
       futureSupplyCapacity,
       opportunitySnapshotAt: snap.takenAt, opportunitySnapshotRunId: snap.runId,

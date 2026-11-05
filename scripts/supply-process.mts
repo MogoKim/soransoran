@@ -1415,7 +1415,9 @@ async function entry(): Promise<number> {
       }
       const code = await main(proof)
       if (code === 0 && recoveryClaim !== null) {
-        writeStageRecoverySupplyReceipt({ claim: recoveryClaim, now: new Date() })
+        writeStageRecoverySupplyReceipt({
+          claim: recoveryClaim, supplyRunId: runIdOf(RUN_AT), now: new Date(),
+        })
       }
       return code
     },

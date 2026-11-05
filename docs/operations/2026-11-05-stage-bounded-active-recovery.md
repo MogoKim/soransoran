@@ -4,20 +4,20 @@
 > 정책 권위: [`2026-09-21-d100-goal-canon.md`](./2026-09-21-d100-goal-canon.md)
 > 현재 상태: [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md)
 
-이 문서는 단계 시험일 아침에 **기회 수만 조금 부족한 경우** 기존 공급망을 한 번 더 호출하고,
+이 문서는 단계 시험일 아침에 **기회 또는 처리량이 조금 부족하고 다른 운영 결함은 없는 경우** 기존 공급망을 한 번 더 호출하고,
 같은 controller가 같은 정책으로 최종 판정하는 절차를 설명한다. 이 문서는 단계 정책이나 PASS 기준을
 새로 정하지 않는다.
 
 ## 1. 목적과 비목적
 
-목적은 오전 첫 판정 시점의 작은 기회 수 부족을 그날 안에 보충하는 것이다. 복구가 성공해도
+목적은 오전 첫 판정 시점의 작은 공급 부족을 그날 안에 보충하는 것이다. 복구가 성공해도
 `StageDecision`을 직접 바꾸거나 PASS를 강제하지 않는다. 07:55 KST controller가 기존 preflight,
-품질, 비용, 오류 신호를 다시 읽어 오늘 결정을 한 번만 저장한다. 07:58은 07:55 저장이 일시 장애로
-남긴 결정 부재만 같은 계산으로 다시 저장하는 fallback이며, 새 복구나 provider 호출을 시작하지 않는다.
+품질, 비용, 오류 신호를 다시 읽어 오늘 결정을 한 번만 저장한다. 07:58은 결정이 여전히 없을 때
+정본 read-only 사실을 다시 계산하는 fallback이며, 새 복구나 provider 호출을 시작하지 않고 기존 결정을 덮지 않는다.
 
 다음은 이 경로의 목적이 아니다.
 
-- 품질·비용·오류·처리량·Persona 부족을 우회하기
+- 품질·비용·오류·Persona 부족을 우회하기
 - 이미 저장된 `StageDecision`을 수정하거나 삭제하기
 - 수동 READY, 수동 게시, 수동 단계 변경으로 증거를 만들기
 - 자연 공급·자연 발행 증거에 recovery 실행을 섞기
@@ -25,13 +25,14 @@
 
 ## 2. 열리는 정확한 조건
 
-다음 조건을 모두 만족할 때만 `stage-active-recovery-v1` intent를 하루 한 번 만든다.
+다음 조건을 모두 만족할 때만 `stage-active-recovery-v2` intent를 하루 한 번 만든다.
 
 1. 오늘 `StageDecision`이 아직 없다.
 2. 대상 단계가 runtime에 배선된 `d20`, `d30`, `d50` 중 하나다.
 3. controller 입력 실패가 없다.
 4. 품질·비용·오류 신호가 모두 `ok`다.
-5. preflight가 `FAIL`이고 code가 정확히 `OPPORTUNITY_SHORT` 하나뿐이다.
+5. preflight가 `FAIL` 또는 `UNKNOWN`이고 모든 code가 `OPPORTUNITY_SHORT`, `OPPORTUNITY_UNKNOWN`,
+   `THROUGHPUT_SHORT` 중 하나다.
 6. 부족분이 1~10건이다.
 7. 07:00 이상 07:30 미만 KST다.
 
@@ -65,7 +66,7 @@
 
 07:58 controller
   → 07:55가 이미 저장했으면 기존 결정을 읽고 종료
-  → 저장 일시 장애로 결정이 없을 때만 같은 계산을 다시 create-only로 저장
+  → 결정이 없을 때 정본 read-only 사실을 다시 계산해 create-only로 저장
   → 새 recovery·collector·provider 호출 0
 ```
 
@@ -85,6 +86,10 @@ requested → running → done
 - 날짜별 intent, launch claim, supply-start claim은 모두 `wx` 원자 생성이다.
 - 같은 nonce의 worker와 공급 본체는 각각 한 번만 시작할 수 있다.
 - 공급 본체는 kernel lease 안에서 claim을 다시 검증한다.
+- recovery 공급은 저장·검증된 `recovery` run token이 있어야만 자식 collector·공급 본체를 시작한다.
+  token 발급이 실패하거나 비어 있으면 collector·provider·DB write를 모두 0으로 닫으며, 일반 shadow token 경로로 강등하지 않는다.
+- 회차 자식은 공급 본체에 들어가기 직전에 token을 다시 읽어 `trigger=recovery`, pass, run ID, 만료 시각을 현재 env·회차와 대조한다.
+  token이 누락·손상·불일치·만료된 경우 본체를 호출하지 않으므로 provider·DB write는 0이다.
 - 각 provider 요청 직전에도 날짜, nonce, deficit, running 상태, 절대 마감을 다시 검증한다.
 - recovery trigger는 follow-up marker를 만들거나 기존 marker를 흡수하지 않는다.
 - intent나 claim이 손상되면 추정 복구하지 않고 provider 0·DB write 0으로 닫는다.
@@ -101,19 +106,25 @@ runtime 파일은 보조 Mac의 다음 경로에 날짜별로 남는다.
   YYYY-MM-DD.log
 ```
 
-원천 영수증에는 raw 원문 ID나 본문을 쓰지 않고 정렬·중복 제거된 source identity hash만 쓴다. 같은 원천이
-뒤의 자연 수집 snapshot에도 나타나면 preflight는 그 hash를 자연 기회에서 제외해 recovery와 자연 공급을
-두 번 세지 않는다. 영수증이 손상되면 빈 집합으로 간주하지 않고 `UNKNOWN`으로 닫는다.
+원천 영수증에는 raw 원문 ID나 본문을 쓰지 않고 정렬·중복 제거된 source identity hash만 쓴다. 최종 판정은
+날짜 전체 READY 증가량을 recovery 성과로 보지 않는다. exact nonce 영수증의 원천이고 exact supply run에서
+intent 생성 뒤 생겼으며 해당 proof slot과 연결된 고유 READY만 recovery 성과로 센다. 같은 시각 자연 READY,
+다른 supply run, intent 이전 READY, slot과 연결되지 않은 READY, 같은 원천의 중복 READY는 가산하지 않는다.
+같은 원천이 뒤의 자연 수집 snapshot에도 나타나면
+preflight는 그 hash를 자연 기회에서 제외해 recovery와 자연 공급을 두 번 세지 않는다. 영수증이 손상되면 빈 집합으로
+간주하지 않고 `UNKNOWN`으로 닫는다.
 
 ## 5. 비용과 증거 경계
 
 recovery provider 사용량은 공급 일일 정산액, 미상 예약액, overrun, 예산 위험에 포함한다. 다만 recovery를
 자연 scheduled 공급으로 세지 않는다. 자연 증명의 분자·분모, 자연 회차 수율, 자연 Dn PASS는 기존
 scheduled run token만 사용한다.
+비용 판정에는 자연 비용 cohort와 함께 intent에 연결된 exact recovery `supplyRunId` 하나만 추가한다.
+따라서 recovery의 정산액·미상 사용량은 빠지지 않지만, recovery READY나 원천을 자연 수율로 승격하지 않는다.
 
 따라서 아래 둘은 별개다.
 
-- **단계 개방 판단**: recovery 뒤 07:55 controller의 같은 정본 재판정과 07:58 저장 장애 fallback
+- **단계 개방 판단**: recovery 뒤 07:55 controller의 정본 재판정과 07:58 결정 부재 fallback
 - **자연 운영 증명**: 자연 scheduled 공급·발행·댓글·감사 결과만 사용
 
 ## 6. 관측과 진단

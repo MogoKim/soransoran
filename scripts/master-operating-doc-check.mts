@@ -273,7 +273,8 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
       'exactly-once 시스템을 새로 만들지 않는다']
       .every((t) => d100Goal.includes(t))])
   out.push(['canon 이 제한 복구의 07:55 판정 · 07:58 저장 fallback · 원천 중복 방지를 함께 고정한다',
-    ['07:00·07:20·07:40·07:55·07:58', '07:58은 07:55 저장의 일시 장애',
+    ['07:00·07:20·07:40·07:55·07:58', '별도 07:58 fallback은 결정이 여전히 없을 때',
+      '새 복구·provider를 열지 않으며 create-only 저장',
       '원천 identity hash', '기회를 두 번 세지 않는다', '다섯 시각']
       .every((t) => d100Goal.includes(t))])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
