@@ -19,6 +19,9 @@
  * 새 축은 화면 경로와 **같은 함수**(withRealReactions)로 센다 — replay 용으로 다시 적지 않는다.
  * 조회 모양은 queries/posts.ts pickPopularByScore · getHomePopularPosts 와 같다
  * (게시판별 DISCOVERY 최신 60 → 점수 → 갱년기톡 최소 7 → 여유 2배 → 홈 노출 예외 → 20).
+ *
+ * 지금 시점은 홈 편성(composeHomePopularViews)도 같은 후보로 돌려 — mobile 이 위 20 과 id·순서가 같은지 대조하고
+ * (다르면 exit 1), 데스크톱 게시판별 10|10 을 같은 해시로 보여준다.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { PrismaClient, type BoardType, type CommentOrigin, type Prisma } from '@prisma/client'
@@ -26,7 +29,13 @@ import { PrismaClient, type BoardType, type CommentOrigin, type Prisma } from '@
 import { withRealReactions } from '../src/lib/popularity-db'
 import { pickHomePopular } from '../src/lib/popularity'
 import { applyHomeExposure } from '../src/lib/home-exposure-rules'
-import { HOME_POPULAR_COUNT } from '../src/lib/home-exposure'
+import {
+  HOME_OVERRIDE_HEADROOM,
+  HOME_POPULAR_CANDIDATES_PER_BOARD,
+  HOME_POPULAR_COUNT,
+  HOME_POPULAR_MIN_MENOPAUSE,
+} from '../src/lib/home-exposure'
+import { composeHomePopularViews } from '../src/lib/home-popular-views'
 import { DISCOVERY_ELIGIBLE_WHERE } from '../src/lib/post-visibility'
 
 const READ_OPS = new Set([
@@ -71,10 +80,10 @@ async function proveWriteBlocked(): Promise<void> {
 
 const argv = process.argv.slice(2)
 const DAYS = Number(argv[argv.indexOf('--days') + 1]) || 7
-// 운영 상수와 같다 (queries/posts.ts)
-const PER_BOARD = 60
-const MIN_MENOPAUSE = 7
-const HEADROOM = 2
+// 운영 상수 정본(home-exposure.ts)을 그대로 쓴다 — 옮겨 적으면 한쪽만 바뀐다
+const PER_BOARD = HOME_POPULAR_CANDIDATES_PER_BOARD
+const MIN_MENOPAUSE = HOME_POPULAR_MIN_MENOPAUSE
+const HEADROOM = HOME_OVERRIDE_HEADROOM
 
 const SALT = randomBytes(16)
 const tag = (id: string) => 'h' + createHash('sha256').update(SALT).update(id).digest('hex').slice(0, 8)
@@ -178,6 +187,26 @@ async function main(): Promise<void> {
   console.log(`\n  실반응 ≥ 1 인 글: 옛 홈 ${oldHome.filter((c) => c.realReactions > 0).length} → 새 홈 ${newHome.filter((c) => c.realReactions > 0).length}`)
   console.log(`  상위 5 겹침: ${top5(newHome).filter((id) => top5(oldHome).includes(id)).length}/${Math.min(5, newHome.length)}`)
   console.log(`  화면 댓글 합(홈에 실린 글): 옛 ${sum(oldHome, 'shown')} → 새 ${sum(newHome, 'shown')}  ※ 표시 숫자는 바꾸지 않는다 — 어떤 글이 실리느냐만 바뀐다`)
+
+  // ── 홈 편성: mobile 대조 · 데스크톱 10|10 ──
+  const views = composeHomePopularViews({
+    menopause: cands.filter((c) => c.boardType === 'MENOPAUSE'),
+    free: cands.filter((c) => c.boardType === 'FREE'),
+    pinnedPosts: pinned,
+    overrides,
+  }, now)
+  const sameMobile = JSON.stringify(views.mobile.map((c) => c.id)) === JSON.stringify(newHome.map((c) => c.id))
+  console.log(`\n  편성 mobile ${views.mobile.length} = 위 홈 ${newHome.length} id·순서 동일: ${sameMobile ? '✅' : '🔴'}`)
+  if (!sameMobile) process.exitCode = 1
+  const cross = views.desktop.MENOPAUSE.filter((c) => views.desktop.FREE.some((f) => f.id === c.id)).length
+  console.log(`  데스크톱 갱년기톡 ${views.desktop.MENOPAUSE.length} · 자유게시판 ${views.desktop.FREE.length} · 교집합 ${cross} · mobile 갱년기톡 ${views.mobile.filter((c) => c.boardType === 'MENOPAUSE').length}`)
+  console.log('  | # | 갱년기톡(해시) | 경과h | 실반응 | 자유게시판(해시) | 경과h | 실반응 |')
+  for (let i = 0; i < Math.max(views.desktop.MENOPAUSE.length, views.desktop.FREE.length); i += 1) {
+    const m = views.desktop.MENOPAUSE[i]
+    const f = views.desktop.FREE[i]
+    const cell = (c: Cand | undefined) => (c ? `${tag(c.id)} | ${ageH(c, now)} | ${c.realReactions}` : '- | - | -')
+    console.log(`  | ${i + 1} | ${cell(m)} | ${cell(f)} |`)
+  }
 
   // ── 지난 시점: 예외 없이 점수 순서 20 (근사) ──
   console.log(`\n[2] 지난 ${DAYS}일 · 매일 21:00 KST · 예외 미적용 · 근사`)
