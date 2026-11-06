@@ -14,7 +14,7 @@
 **11월 6일 자연 결정은 `PREPARE · 공개 d10 · 준비 d20`이고, 공급·발행·댓글·감사 건강은 ok, Persona는 40/40이다.
 main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공했지만, 보조 Mac D100 runtime은 아직 #832
 `c6142e34`(#833 미포함)다. 옛 runtime의 11월 7일 준비 판정은 공급·READY 예측 코드와 preflight 결정일 결속 결함으로
-막힌다. 이 결함들은 PR1b branch에서 고치고 있으며 main 병합·배포 전이다 — code·deployed·operating PASS 어느 것도 아니다.
+막힌다. 이 결함들은 PR1b가 코드로 고친다 — runtime 설치 여부는 §1, code·deployed·operating PASS는 §1.2가 정본이다.
 11월 3일 D20 operating FAIL(옛 하루 전체 비용 계약)은 소급 PASS로 바꾸지 않는다.**
 
 ## 1. 검증된 운영 기준선
@@ -61,7 +61,7 @@ main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공�
 | Persona 40 | ✅ | ✅ | contract-valid 40 · active 40 (11-06 관측) · D20 자연 증명 전 |
 | 첫 댓글·추가 댓글 | ✅ PR #827 · 첫 댓글 1과 provenance 불변 · 총 구조 상한 10 | ✅ Production·현재 runtime `c6142e34`에 포함 | 11-04 13:24 loop 정상·write 0 · 적격 대화의 최대 10 자연 검증 전 |
 | 정책 문서·원천 순위 정본·v6 reader (#833) | ✅ exact-head CI · main 병합(§1 원격 main) | web Production ✅ (Vercel id 7598477580) · 보조 Mac runtime ❌ 미배포 | — 판정 경로 변화 없음(reader) |
-| 예측 경고화·v6 writer·결정일 결속 (PR1b) | branch 구현 · 미병합 | ❌ | ❌ |
+| 예측 경고화·v6 writer·결정일 결속 (PR1b) | PR1b exact-head CI·공식 격리 DB로 판정 | 보조 Mac runtime 미설치 (§1 runtime 행) | ❌ 자연 관측 전 |
 | 실제 조회수 | ✅ 실제 상세 열람·목록 노출 원장 | ✅ | ✅ 실제 행동만 집계 · 가짜 숫자 0 |
 
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
@@ -69,19 +69,18 @@ main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공�
 
 ### 1.3 승인된 target 정책과 구현 상태 (2026-11-06 창업자 승인)
 
-이 절은 정책 승인 상태와 **저장소 코드**의 차이만 적는다. 배포 상태는 §1·§1.2가 정본이다: PR #833(정책 문서·원천 순위
-정본·v6 reader)은 main에 병합됐고 web Production은 그 SHA로 성공했지만, 보조 Mac D100 runtime에는 아직 배포되지 않았다.
-PR1b(예측 경고화·v6 writer·결정일 결속)는 branch에서 구현 중이며 main에 없다 — 그래서 main 코드와 runtime은 아직
-예측으로 시험을 막는 옛 경로다. 이 차이를 정책 위반으로 고쳐 쓰거나 운영 증거로 보정하지 않는다.
+이 절은 정책과 **코드**의 차이만 적는다. 무엇이 어디에 설치됐는지는 §1·§1.2가 정본이다. 가운데 칸은 옛 구현
+(보조 Mac runtime `c6142e34`가 실행하는 코드)이고, 오른쪽 칸은 그 차이를 닫는 코드 변경이다. 이 차이를 정책 위반으로
+고쳐 쓰거나 운영 증거로 보정하지 않는다.
 
-| target 정책 (canon) | 저장소 main 코드의 현재 구현 | 해소 단계 |
+| target 정책 (canon) | 옛 구현 | 코드 해소 |
 |---|---|---|
-| 공급·READY 예측은 경고·계획 입력 (§3.1·§3.2) | `judgeNextPreflight`(`src/lib/stage-ladder-generic.ts`)가 `OPPORTUNITY_SHORT`·`OPPORTUNITY_UNKNOWN`·`THROUGHPUT_SHORT`·`THROUGHPUT_UNKNOWN`·`READY_REQUIREMENT_UNKNOWN`·`LATENCY_UNKNOWN`으로 시험을 막는다 | PR1b (branch 구현 · 미병합): 예측 5코드는 `forecastWarnings`, 지연 관측은 막지 않는 `warnings` |
-| 평상일·증명일 같은 실행 경로, 공급 부족 제한 복구 없음 (§3.3) | `stage-active-recovery-v2` 경로(`src/lib/stage-active-recovery.ts`·`scripts/stage-active-recovery.mts`·controller 복구 단계)와 07:00~07:58 controller 다섯 시각이 남아 있다. 남은 동안의 회계 경계는 canon §11.1 📜 전환기 호환 | PR1b 뒤 예측만 있는 판정은 PASS라 복구가 열리지 않는다(코드는 한 릴리스 rollback 호환으로 유지) → rollback·의존성 감사 뒤 별도 삭제 |
-| 공급 부족으로 `N` 미달인 증명일은 결함 아님 · 다음 운영일 재시험 (§6) | 재시험 계획(`trialPlanOf` RETEST)은 있으나 다음 날 예측 부족이 다시 시험을 막는다 | PR1b (branch 구현 · 미병합) |
-| `sourceAge` 오름차순 단일 정본 비교 (§2.3) | `compareReleaseRank` 하나 · 판정·생성 순서는 묶음 순위 (#833) | 해소 — main 병합 |
-| StageDecision v6 계약 | v6 reader (#833 · main) · writer는 v5 | PR1b writer v6 (branch · 미병합) — #833 runtime 배포·rollback 판독 확인 뒤에만 배포 |
-| preflight 결정일 결속 | recovery 신원 판정 날짜를 판정 시각 `now`에서 가져와, 다음 날 리허설이 오늘 아침 복구 회차를 claim 없는 복구로 읽는다 | PR1b (branch 구현 · 미병합): 증명 슬롯의 단일 KST 날짜 |
+| 공급·READY 예측은 경고·계획 입력 (§3.1·§3.2) | `judgeNextPreflight`가 `OPPORTUNITY_SHORT`·`OPPORTUNITY_UNKNOWN`·`THROUGHPUT_SHORT`·`THROUGHPUT_UNKNOWN`·`READY_REQUIREMENT_UNKNOWN`·`LATENCY_UNKNOWN`으로 시험을 막는다 | PR1b: 예측 5코드는 막지 않는 `forecastWarnings`, 지연 관측은 막지 않는 `warnings` |
+| 평상일·증명일 같은 실행 경로, 공급 부족 제한 복구 없음 (§3.3) | `stage-active-recovery-v2` 경로(`src/lib/stage-active-recovery.ts`·`scripts/stage-active-recovery.mts`·controller 복구 단계)와 07:00~07:58 controller 다섯 시각. 회계 경계는 canon §11.1 📜 전환기 호환 | PR1b: 예측만 있는 판정은 PASS라 복구가 열리지 않는다(코드는 한 릴리스 rollback 호환) → rollback·의존성 감사 뒤 별도 삭제 |
+| 공급 부족으로 `N` 미달인 증명일은 결함 아님 · 다음 운영일 재시험 (§6) | 재시험 계획(`trialPlanOf` RETEST)은 있으나 다음 날 예측 부족이 다시 시험을 막는다 | PR1b |
+| `sourceAge` 오름차순 단일 정본 비교 (§2.3) | 생산 비교 함수가 여럿이었다 | #833: `compareReleaseRank` 하나 · 판정·생성 순서는 묶음 순위 |
+| StageDecision v6 계약 | writer v5 · reader v4 legacy | 코드: reader v5+v6 (#833) · writer v6 (PR1b). runtime 설치 순서는 #833 reader 먼저·rollback 판독 확인 → 그 뒤 PR1b writer |
+| preflight 결정일 결속 | recovery 신원 판정 날짜를 판정 시각 `now`에서 가져와, 다음 날 리허설이 오늘 아침 복구 회차를 claim 없는 복구로 읽는다 | PR1b: 증명 슬롯의 단일 KST 날짜(비면·섞이면·깨지면 fail-closed) |
 | 자동 일정 owner launchd 하나 (§6) | 수동 `workflow_dispatch` 전용 `auto-publish.yml`·`supply-collect.yml`이 남아 있다 (예약 실행 없음 · 수동 실행은 commissioning) | rollback·의존성 감사 뒤 별도 삭제 |
 
 ## 2. 현재 runtime에 배포된 11월 2일·4일 근본 보정
@@ -105,9 +104,9 @@ PR1b(예측 경고화·v6 writer·결정일 결속)는 branch에서 구현 중�
 
 | blocker code | 현재 (옛 runtime) | 해소 |
 |---|---|---|
-| `OPPORTUNITY_SHORT` | 공급 기회 예측이 시험을 막는다 (예측 gate) | PR1b branch: 막지 않는 `forecastWarnings` → 배포 후 readiness 재관측 |
+| `OPPORTUNITY_SHORT` | 공급 기회 예측이 시험을 막는다 (예측 gate) | PR1b: 막지 않는 `forecastWarnings` → runtime 설치 후 readiness 재관측 |
 | `THROUGHPUT_SHORT` | READY 처리량 예측이 시험을 막는다 (예측 gate) | 위와 같음 |
-| `SUPPLY_COST_UNKNOWN` | preflight 결정일을 판정 시각에서 잡아 오늘 아침 회차를 다음 날 비용 신원에 섞는다 (결정일 오결속) | PR1b branch: 증명 슬롯의 단일 KST 날짜로 결속 → 배포 후 readiness 재관측 |
+| `SUPPLY_COST_UNKNOWN` | preflight 결정일을 판정 시각에서 잡아 오늘 아침 회차를 다음 날 비용 신원에 섞는다 (결정일 오결속) | PR1b: 증명 슬롯의 단일 KST 날짜로 결속 → runtime 설치 후 readiness 재관측 |
 | `OPERATING_PROOF_PENDING` | 자연 D20 operating PASS 없음 | 11-07 이후 자연 D20 증명 (20/20·댓글·감사·비용·provenance) |
 
 📜 역사: 11-03 D20은 콘텐츠·대화·감사 20/20을 채웠지만 늦은 준비 회차 `usageUnknown` 1건을 하루 전체로 센 옛 비용 계약으로
@@ -169,7 +168,7 @@ runner가 idle인 창에서만 한다. 11월 4일은 창업자의 명시적 당�
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | **PR1b (branch 구현 · 미병합)** · 공급·READY 예측을 경고로 · v6 writer · preflight 결정일 결속 | #833 runtime 설치·HEAD=pin=manifest·v6 reader 판독 확인 뒤 22:15 공급 종료~05:30 idle 창에 병합·배포 | 수동 stage·READY·장부 보정 · 실제 비용 상한 완화 · 11월 3일 소급 PASS |
+| D20-FIX | **PR1b** · 공급·READY 예측을 경고로 · v6 writer · preflight 결정일 결속 | #833 runtime 설치·HEAD=pin=manifest·v6 reader 판독 확인 뒤 22:15 공급 종료~05:30 idle 창에 병합·배포 | 수동 stage·READY·장부 보정 · 실제 비용 상한 완화 · 11월 3일 소급 PASS |
 | D20 | D10 operating PASS 선행 · 새 계약의 다음 자연 증명 | 자동 20/20·댓글·감사·비용·READY·provenance PASS | stage·READY·게시·댓글·장부 수동 보정 |
 | D30 | D20 operating PASS 선행 | Persona 60·preflight green·자동 30/30 | D30 생략 |
 | D50 | D30 operating PASS 선행 | Persona 100·preflight green·자동 50/50 | D20에서 바로 D50 |
