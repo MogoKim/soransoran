@@ -37,7 +37,8 @@ import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { observeJob, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
-import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import { readPreflightFacts, preflightCostSummaryOf, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import type { CostAttribution } from '../src/lib/ready-fate'
 import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 import { commentLoopLedgerDir } from './lib/persona-comment-loop.mjs'
 import { ledgerPathOf, readLedgerDay } from './lib/llm-ledger-store.mjs'
@@ -108,7 +109,12 @@ try {
     contractValidPersonas: async () => personas,
   })
   const pf = judgeNextPreflight(TARGET, r.facts, RUNNER_GRID)
-  out.preflight = { verdict: pf.verdict, codes: pf.codes, counts: pf.counts, notes: r.notes }
+  // 🔴 막지 않는 경고도 그대로 싣는다 — 경고로 내린 축이 증거에서 사라지지 않게(관측 · 판정 아님)
+  out.preflight = {
+    verdict: pf.verdict, codes: pf.codes, forecastWarnings: pf.forecastWarnings, warnings: pf.warnings,
+    counts: pf.counts, costSummary: preflightCostSummaryOf((r.detail.costAttribution ?? null) as CostAttribution | null),
+    notes: r.notes,
+  }
 
   // ── ③ 추가 댓글 — 지금 설치된 profile · D20 후보 ──
   const env = readEnvKeys([FOLLOWUP_PROFILE_ENV])
