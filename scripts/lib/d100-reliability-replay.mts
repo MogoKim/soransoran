@@ -38,15 +38,16 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
   {
     code: 'PREFLIGHT_FULL_DAY_OPPORTUNITY',
     scenario: 1,
-    summary: '07:00 preflight 가 그 시각의 READY + 원천 기회만으로 하루 전체 N 슬롯을 요구한다 — 당일 뒤 공급 회차가 새 원천으로 보충할 부족도 OPPORTUNITY_SHORT 다',
+    summary: '07:00 preflight 가 그 시각의 READY + 원천 기회만으로 하루 전체 N 슬롯을 요구한다 — 당일 뒤 공급 회차가 새 원천으로 보충할 부족도 OPPORTUNITY_SHORT 다'
+      + ' (PR1b · 2026-11-06: 기회 예측은 막지 않는 forecastWarnings — 미래 공급 0·모름은 지어내지 않고 경고로 남는다)',
     current: {
       verdict: 'FAIL', onlyOpportunityShort: true, distinctFutureCapacityCoversShortfall: true,
-      usesFutureSupplyCapacity: false, zeroFutureCapacityBlocked: true, unknownYieldBlocked: true,
+      usesFutureSupplyCapacity: false, zeroFutureCapacityWarned: false, unknownYieldWarned: false,
       preflightFactsCurrentOnly: true, opportunityGateCurrentOnly: true, controllerPassesFactsDirectly: true,
     },
     target: {
       verdict: 'PASS', hasOpportunityShort: false, distinctFutureCapacityCoversShortfall: true,
-      usesFutureSupplyCapacity: true, zeroFutureCapacityBlocked: true, unknownYieldBlocked: true,
+      usesFutureSupplyCapacity: true, zeroFutureCapacityWarned: true, unknownYieldWarned: true,
       preflightFactsCurrentOnly: false, opportunityGateCurrentOnly: false, controllerPassesFactsDirectly: true,
     },
   },

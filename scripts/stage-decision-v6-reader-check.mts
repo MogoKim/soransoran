@@ -1,16 +1,17 @@
 /**
- * 🔴 **StageDecision v6 reader 검사** (2026-11-06 · 두 릴리스의 첫 번째 — reader 먼저, writer 는 v5 그대로)
+ * 🔴 **StageDecision v6 판 검사** (2026-11-06 · PR #833 reader → PR1b writer v6)
  *
  *    v6 = admission 계약 판이다(공급·READY 예측은 hard gate 가 아니라 경고 — canon §3.1·§3.2). release(증명) 계약은
  *    바뀌지 않았으므로 v5 증거는 v6 아래에서도 현재 계열이다. legacy 는 v4 하나뿐이다.
+ *    writer 는 v6 이고, reader 는 v5·v6 를 함께 읽는다 — 전환일 아침 전날 v5 행 · rollback 대상(#833)의 v6 행 판독.
  *
- *    ① 판 상수 — v4·v5·v6 는 고정 이름 · writer alias 는 v5 · reader 목록은 writer alias 와 독립
+ *    ① 판 상수 — v4·v5·v6 는 고정 이름 · writer alias 는 v6 · reader 목록은 writer alias 와 독립(v5 를 계속 읽는다)
  *    ② legacy 승격 금지 — v4 만 legacy · v5/v6 은 현재 계열
  *    ③ 판별 supply 모양 — v4/v5: null | {eligibleSpeakers, excluded} · v6: null | 정확히 {forecastWarnings}
  *       (운영 결정은 supply 를 채우지 않는다 — eligibleSpeakers 를 지어내지 않는다) · 판을 가로지른 모양은 거절
  *    ④ v6 도 v5 와 같은 구조 규칙(SUSTAIN 금지 · CERTIFIED 허용 · TRIAL fatal block)
  *    ⑤ 경고 enum 은 preflight 의 예측 코드만 — hard gate 코드가 섞이지 않는다
- *    ⑥ rollback 호환 — writer 가 아직 v5 를 쓰므로 이 reader 를 되돌려도 옛 reader 가 모든 새 행을 읽는다
+ *    ⑥ writer 와 rollback — 사다리·안전 결정은 v6 · supply 는 예측 투영뿐 · 전날 v5 행은 계속 유효하다
  *
  *    🔴 DB · 네트워크 · 파일 write 0.
  */
@@ -47,7 +48,7 @@ const trial = { kind: 'TRIAL', trialBase: 'd10', previousKstDate: '2026-11-06', 
 console.log('\n① 판 상수 — reader 목록은 writer alias 와 독립')
 check('판 상수는 고정 문자열이다',
   STAGE_DECISION_V4 === 'stage-decision-v4' && STAGE_DECISION_V5 === 'stage-decision-v5' && STAGE_DECISION_V6 === 'stage-decision-v6')
-check('🔴 writer alias 는 그대로 v5 다 (reader 릴리스는 쓰기를 바꾸지 않는다)', STAGE_DECISION_VERSION === STAGE_DECISION_V5)
+check('🔴 writer alias 는 v6 이다 (PR1b — #833 reader 배포·rollback 판독 확인 뒤)', STAGE_DECISION_VERSION === STAGE_DECISION_V6)
 check('reader 판은 v5 · v6 (+ legacy v4)',
   JSON.stringify(STAGE_DECISION_READER_VERSIONS) === JSON.stringify(['stage-decision-v5', 'stage-decision-v6'])
   && JSON.stringify(LEGACY_STAGE_DECISION_VERSIONS) === JSON.stringify(['stage-decision-v4']))
@@ -63,11 +64,11 @@ check('reader 판은 v5 · v6 (+ legacy v4)',
     def !== '' && legacyDef !== '' && !/STAGE_DECISION_VERSION\b/.test(def + legacyDef), `${def} | ${legacyDef}`)
   check('🔴 reader 목록이 v5 · v6 고정 상수로 정의된다',
     /STAGE_DECISION_V5/.test(def) && /STAGE_DECISION_V6/.test(def))
-  const flipped: string = STAGE_DECISION_V6 // 개념상 다음 writer
-  check('🔴 개념상 writer 를 v6 으로 뒤집어도 v5 · v6 둘 다 reader 다',
-    flipped !== (STAGE_DECISION_V5 as string)
-    && (STAGE_DECISION_READER_VERSIONS as readonly string[]).includes(STAGE_DECISION_V5)
-    && (STAGE_DECISION_READER_VERSIONS as readonly string[]).includes(flipped))
+  const readers = STAGE_DECISION_READER_VERSIONS as readonly string[]
+  check('🔴 writer 가 v6 인 지금도 v5 · v6 둘 다 reader 다 — 전환일 전날 v5 행을 읽는다',
+    (STAGE_DECISION_VERSION as string) !== STAGE_DECISION_V5 && readers.includes(STAGE_DECISION_V5) && readers.includes(STAGE_DECISION_VERSION))
+  check('🔴 rollback 대상(#833 · writer v5)의 판도 이 reader 목록 안이다 — 어느 쪽 writer 의 행도 서로 읽는다',
+    readers.includes(STAGE_DECISION_V5) && readers.includes(STAGE_DECISION_V6))
 }
 check('v5 행을 읽는다', okOf({}))
 check('🟢 v6 행을 읽는다', okOf(v6(fw([]))))
@@ -123,21 +124,25 @@ check('🔴 경고 enum 은 정확히 원천 기회·처리량·READY 필요량 
   JSON.stringify([...FORECAST_WARNING_CODES].sort()) === JSON.stringify(
     ['OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN', 'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN']))
 
-console.log('\n⑥ rollback 호환 — 이 릴리스의 writer 는 v5 만 쓴다')
+console.log('\n⑥ writer v6 · rollback — 새 결정은 v6 · 전날 v5 행도 유효')
 {
   const d = planStageDecision({
     kstDate: D, sustainedRelease: 'd10', previousDecision: null, nextPreflight: null, publishedToday: 0,
-    supply: { eligibleSpeakers: 40, excluded: [] }, decidedAt: '2026-11-06T22:55:00.000Z',
+    decidedAt: '2026-11-06T22:55:00.000Z',
   })
   const s = safestDecision(D, '2026-11-06T22:55:00.000Z')
-  check('🔴 사다리·안전 결정이 쓰는 판은 v5 이고 경고 칸이 없다',
-    d.contractVersion === STAGE_DECISION_V5 && s.contractVersion === STAGE_DECISION_V5
-    && (d.supply === null || !('forecastWarnings' in d.supply)))
+  check('🔴 사다리·안전 결정이 쓰는 판은 v6 이고 preflight 미평가면 supply null',
+    d.contractVersion === STAGE_DECISION_V6 && s.contractVersion === STAGE_DECISION_V6 && d.supply === null && s.supply === null)
+  for (const x of [d, s]) {
+    const r = validateStoredDecision({ row: x, expectKstDate: D })
+    check(`🔴 새 writer 결정(${x.state})이 v6 validator 를 통과한다`, r.ok, r.ok ? '' : r.reason)
+  }
+  check('🔴 같은 reader 가 전날 writer(v5)의 행을 계속 읽는다', okOf({}))
   const controller = readFileSync('src/lib/stage-controller.ts', 'utf8')
   const ladder = readFileSync('src/lib/stage-ladder.ts', 'utf8')
-  check('🔴 writer 경로에 v6 판이 없다 (reader 먼저 · writer 는 별도 릴리스)',
-    !controller.includes('stage-decision-v6') && !ladder.includes('stage-decision-v6')
-    && !/STAGE_DECISION_V6|STAGE_DECISION_READER_VERSIONS/.test(controller + ladder))
+  check('🔴 writer 경로는 판 문자열·고정 상수를 직접 쓰지 않고 writer alias 하나만 쓴다',
+    !controller.includes('stage-decision-v') && !ladder.includes('stage-decision-v')
+    && !/STAGE_DECISION_V[456]|STAGE_DECISION_READER_VERSIONS/.test(controller + ladder))
 }
 
 console.log(`\nStageDecision v6 reader 검사: ${pass} pass, ${fail} fail`)

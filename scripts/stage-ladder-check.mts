@@ -27,10 +27,11 @@ import {
   controllerEnabled, CONTROLLER_ENV, ENSURE_STEPS, DECISION_CONSUMERS,
   STORED_COLUMNS, decisionToRow, rowToDecisionInput, decisionKeyOf,
 } from '../src/lib/stage-decision-store'
+import { STAGE_DECISION_V5 } from '../src/lib/stage-decision-contract'
 import { RUNTIME_PROFILES as PROFILES, RELEASE_ENV, CAPACITY_ENV, type RuntimeStage } from '../src/lib/scale-profile'
 import { consumerEnvOf } from '../src/lib/stage-controller'
 import { COMMENT_STAGE_ENV } from '../src/lib/persona-comment-stage'
-import { judgeNextPreflight, readyCapacityOf, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { judgeNextPreflight, readyCapacityOf, forecastSupplyOf, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID, PREFLIGHT_ENV_KEYS } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
@@ -195,9 +196,10 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
   const wrongPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d10') })
   check('🔴 🔴 **다른 단계의 초록 preflight 로 열지 않는다**',
     wrongPf.state !== 'TRIAL' && wrongPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
+  // 🔴 (PR1b) 막는 원인은 hard gate 다 — 기회 부족(예측)은 더 이상 막지 않는다(㉑ 예측 경고 TRIAL 사례)
   const failPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
-    preflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
-  check('🔴 preflight FAIL(기회 부족) → PREFLIGHT_FAIL · 시험 없음', failPf.state !== 'TRIAL' && failPf.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
+    preflight: preflightFor('d5', { contractValidPersonas: 1 }) })
+  check('🔴 preflight FAIL(hard gate · Persona 하한 미달) → PREFLIGHT_FAIL · 시험 없음', failPf.state !== 'TRIAL' && failPf.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
   const unkPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
     preflight: preflightFor('d5', { contractValidPersonas: null }) })
   check('🔴 🔴 **계약 유효 Persona 모름(null · 오늘 운영) → PREFLIGHT_UNKNOWN · 시험 없음**',
@@ -236,15 +238,16 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
   const stockOnly = judgeNextPreflight('d20', { ...shortFacts, slotValidReadyStock: 99 }, RUNNER_GRID)
   const recovered = judgeNextPreflight('d20', shortFacts, RUNNER_GRID, { boundedRecoveryReadyGain: 1 })
   const invalidGain = judgeNextPreflight('d20', shortFacts, RUNNER_GRID, { boundedRecoveryReadyGain: -1 })
-  check('🔴 실제 READY 재고 숫자만으로 자연 처리량 부족을 우회하지 않는다',
-    naturalShort.codes.includes('THROUGHPUT_SHORT') && stockOnly.codes.includes('THROUGHPUT_SHORT'))
+  // 🔴 (PR1b) 처리량 결론은 막지 않는 예측 경고다. 복구 가산 산술은 한 릴리스 rollback 호환 경로라 그대로 검사한다
+  check('🔴 실제 READY 재고 숫자만으로 자연 처리량 부족(예측 경고)을 지우지 않는다',
+    naturalShort.forecastWarnings.includes('THROUGHPUT_SHORT') && stockOnly.forecastWarnings.includes('THROUGHPUT_SHORT'))
   check('🟢 exact lineage로 검증된 복구 READY 1건만 자연 처리량 19에 더해 D20 처리량을 채운다',
     recovered.counts.readyCapacityNatural === 19
     && recovered.counts.readyCapacityRecoveryGain === 1
     && recovered.counts.readyCapacity === 20
-    && !recovered.codes.includes('THROUGHPUT_SHORT'))
-  check('🔴 음수·비정상 복구 가산은 무시하고 기존 부족 판정을 보존한다',
-    invalidGain.codes.includes('THROUGHPUT_SHORT') && invalidGain.counts.readyCapacity === 19)
+    && !recovered.forecastWarnings.includes('THROUGHPUT_SHORT'))
+  check('🔴 음수·비정상 복구 가산은 무시하고 기존 부족 결론을 보존한다',
+    invalidGain.forecastWarnings.includes('THROUGHPUT_SHORT') && invalidGain.counts.readyCapacity === 19)
   const late = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'),
     decidedAt: new Date(`${DATE}T10:00:00+09:00`).toISOString() })
   check('🔴 첫 슬롯 뒤에 결정하면 조각 하루로 시험하지 않는다 (LATE_START)',
@@ -270,7 +273,7 @@ console.log('\n③ 🔴 🔴 PASS 가 아니면 같은 단계를 다시 · 바�
   const hold3 = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5') })
   check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS · 첫 슬롯 전 → REPROVE d3 = 현재 단계 재인증(오르지 않는다)',
     hold3.state === 'REPROVE' && hold3.release === 'd3' && hold3.transition === null)
-  const hold3Blocked = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
+  const hold3Blocked = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { contractValidPersonas: 1 }) })
   check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (REPROVE 아님 · 0..3)',
     hold3Blocked.state === 'PREPARE' && hold3Blocked.release === 'd3' && hold3Blocked.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
     `${hold3Blocked.state} ${hold3Blocked.release}`)
@@ -619,7 +622,8 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
     dayPinned: true,
     supply: { eligibleSpeakers: 3, excluded: [{ reason: 'noOpenDay', codes: ['P01', 'P02'] }] },
     decidedAt: `${DATE}T02:15:00.000Z`,
-    contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
+    // 🔴 v5 모양(화자 수 supply)의 전체 왕복 — writer 가 v6 이 된 뒤에도 전환일 전날 v5 행을 손실 없이 읽어야 한다
+    contractVersion: STAGE_DECISION_V5, decidedBy: DECISION_WRITER,
     transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5', basis: 'PASS' },
   }
   /** 🔴 제안 모델의 칸이 validator 가 보는 키를 전부 덮는가 */
@@ -696,8 +700,9 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
 
 console.log('\n⑲ 🔴 🔴 supply · blocks 모양 검증')
 {
+  // 🔴 화자 수 supply 는 v5 행의 모양이다 — 그 판으로 검증한다(v6 모양은 stage:v6-reader-check ③)
   const V = (o: Record<string, unknown>) => validateStoredDecision({
-    row: { ...safestDecision(DATE, AT), capacity: 'd10', ...o },
+    row: { ...safestDecision(DATE, AT), capacity: 'd10', contractVersion: STAGE_DECISION_V5, ...o },
     expectKstDate: DATE
   })
   check('🔴 정상 supply 는 통과',
@@ -766,6 +771,7 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
     reasons: ['처음'],
     blocks: [{ code: 'PROVENANCE_NEXT', reason: '어긋남' }],
     supply: { eligibleSpeakers: 2, excluded: [{ reason: 'noOpenDay', codes: ['P01'] }] },
+    contractVersion: STAGE_DECISION_V5,
   })
   const got = V(mutable)
   check('🔴 기준선 — 그 행은 통과한다', got.ok, got.ok ? '' : got.reason)
@@ -891,18 +897,31 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
 
 console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 validator 를 통과한다')
 {
-  const cases: { label: string; d: ReturnType<typeof planStageDecision> }[] = [
-    { label: 'TRIAL (전날 d3 PASS → 오늘 d5)', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }) },
-    { label: 'TRIAL RETEST (d3)', d: plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), preflight: preflightFor('d3') }) },
-    { label: 'TRIAL FLOOR (d1 → d3)', d: plan({ sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') }) },
-    { label: '평상일 PREPARE (preflight UNKNOWN)', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) }) },
-    { label: '평상일 PREPARE (증거 없는 d5 유지 날 · preflight 없음)', d: plan({ sustained: 'd5', prev: prevDecision('d5') }) },
-    { label: 'REPROVE (증명 기반 없는 d5 유지 날 · d10 preflight PASS · 현재 단계 재인증)', d: plan({ sustained: 'd5', prev: prevDecision('d5'), preflight: preflightFor('d10') }) },
-    { label: 'PREPARE (전날 결정 없음)', d: plan({ sustained: 'd1', prev: null }) },
-    { label: 'PROVENANCE_STAGE (기반 ≠ 지속)', d: plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }) },
-    { label: 'LATE_START', d: plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'), decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() }) },
-    { label: '맨 위 d50 유지', d: plan({ sustained: 'd50', prev: prevDecision('d50') }) },
+  type PlanInput = Parameters<typeof plan>[0]
+  const at = (label: string, i: PlanInput): { label: string; pf: PreflightVerdict | null; d: ReturnType<typeof planStageDecision> } =>
+    ({ label, pf: i.preflight ?? null, d: plan(i) })
+  const cases = [
+    at('TRIAL (전날 d3 PASS → 오늘 d5)', { sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }),
+    // 🔴 예측 경고(기회·처리량)만 있는 날도 TRIAL 이 열리고, 경고는 결정 행의 v6 supply 에 남는다 (PR1b)
+    at('TRIAL + 예측 경고 (기회 모름 · 처리량 부족)', {
+      sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
+      preflight: preflightFor('d5', { slotValidOpportunities: null, readyCohort: { ...GOOD_FACTS('d5').readyCohort!, sources: 400, published: 1 } }),
+    }),
+    at('TRIAL RETEST (d3)', { sustained: 'd1', prev: prevTrial('d1', 'd3'), preflight: preflightFor('d3') }),
+    at('TRIAL FLOOR (d1 → d3)', { sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') }),
+    at('평상일 PREPARE (preflight UNKNOWN)', { sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) }),
+    at('평상일 PREPARE (증거 없는 d5 유지 날 · preflight 없음)', { sustained: 'd5', prev: prevDecision('d5') }),
+    at('REPROVE (증명 기반 없는 d5 유지 날 · d10 preflight PASS · 현재 단계 재인증)', { sustained: 'd5', prev: prevDecision('d5'), preflight: preflightFor('d10') }),
+    at('PREPARE (전날 결정 없음)', { sustained: 'd1', prev: null }),
+    at('PROVENANCE_STAGE (기반 ≠ 지속)', { sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }),
+    at('LATE_START', { sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'), decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() }),
+    at('맨 위 d50 유지', { sustained: 'd50', prev: prevDecision('d50') }),
   ]
+  const forecastTrial = cases[1]!
+  check('🔴 🔴 **예측 경고만 있는 날 TRIAL 이 열리고 경고가 supply 에 남는다**',
+    forecastTrial.d.state === 'TRIAL' && forecastTrial.d.supply !== null && 'forecastWarnings' in forecastTrial.d.supply
+    && forecastTrial.d.supply.forecastWarnings.includes('OPPORTUNITY_UNKNOWN') && forecastTrial.d.supply.forecastWarnings.includes('THROUGHPUT_SHORT'),
+    JSON.stringify({ s: forecastTrial.d.state, supply: forecastTrial.d.supply }))
   const states = new Set(cases.map((c) => c.d.state))
   check('🔴 시나리오가 여러 상태를 실제로 만든다 — 한 가지만 보고 통과시키지 않는다',
     states.has('TRIAL') && states.has('REPROVE') && states.has('PREPARE'), [...states].join(','))
@@ -913,7 +932,10 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
   }
   check('🔴 🔴 **TRIAL 결과에 치명 block 이 실제로 붙지 않는다**',
     cases.filter((c) => c.d.state === 'TRIAL').every((c) => c.d.blocks.every((b) => !TRANSITION_FATAL_BLOCKS.TRIAL.includes(b.code))))
-  check('🔴 사다리가 만든 결정은 전부 v5 다', cases.every((c) => c.d.contractVersion === STAGE_DECISION_VERSION) && TRANSITION_STATES.includes('REPROVE'))
+  check('🔴 사다리가 만든 결정은 전부 writer 판(v6)이다', cases.every((c) => c.d.contractVersion === STAGE_DECISION_VERSION && c.d.contractVersion === 'stage-decision-v6') && TRANSITION_STATES.includes('REPROVE'))
+  check('🔴 🔴 **모든 결정의 supply = 그 사례 preflight 의 예측 투영(없으면 null)**',
+    cases.every((c) => JSON.stringify(c.d.supply) === JSON.stringify(forecastSupplyOf(c.pf))),
+    cases.filter((c) => JSON.stringify(c.d.supply) !== JSON.stringify(forecastSupplyOf(c.pf))).map((c) => c.label).join(' | '))
 }
 
 console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag 는 꺼져 있다')

@@ -508,7 +508,7 @@ const D20_TRANSITION = judgeNextPreflight('d20', factsFor('d20', {
   }), GRID)
 check('🔴 D20 전환일 실측 — READY 21/원천 95 × 20원천 × 당일 5회 = 용량 22 · 최대 필요 21을 채운다',
   D20_TRANSITION.counts.readyCapacity === 22 && D20_TRANSITION.counts.readyNeededMax === 21
-  && !D20_TRANSITION.codes.includes('THROUGHPUT_SHORT'))
+  && !D20_TRANSITION.forecastWarnings.includes('THROUGHPUT_SHORT') && !D20_TRANSITION.codes.includes('THROUGHPUT_SHORT'))
 check('🔴 D20 전환일 반례 — 같은 실측에서 묶음 18이면 용량 19라 최대 필요 21을 못 채운다',
   readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) === 19
   && (readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) ?? 0) < (D20_TRANSITION.counts.readyNeededMax ?? 0))
@@ -528,7 +528,7 @@ const COST_EDGE_FAIL = judgeNextPreflight('d20', factsFor('d20', {
 check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0.058은 용량 20·$1.16으로 PASS, $0.060001은 $1.20 초과 FAIL',
   COST_EDGE_PASS.counts.readyCapacity === 20
   && Math.abs((COST_EDGE_PASS.counts.supplyDailyUsdNeeded ?? 0) - 1.16) < 1e-9
-  && !COST_EDGE_PASS.codes.includes('THROUGHPUT_SHORT')
+  && !COST_EDGE_PASS.forecastWarnings.includes('THROUGHPUT_SHORT')
   && !COST_EDGE_PASS.codes.includes('SUPPLY_COST_SHORT')
   && COST_EDGE_FAIL.codes.includes('SUPPLY_COST_SHORT'))
 check('비용 상한 정본 — 공급 승인 천장 $1.20 · 댓글 기본 $0.20 / 승인 천장 $0.50',
@@ -562,27 +562,29 @@ for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
   check('🔴 현재 16 + 보수 미래 4 = D20 기회 PASS (미래를 READY 재고로 세지 않고 opportunity 축만 보완)',
     enough.verdict === 'PASS' && enough.counts.opportunitiesCurrent === 16
     && enough.counts.opportunitiesFuture === 4 && enough.counts.opportunities === 20)
-  check('🔴 현재 16 + 미래 3이면 SHORT, 미래 수율 모름이면 UNKNOWN',
-    short.codes.includes('OPPORTUNITY_SHORT') && unknown.codes.includes('OPPORTUNITY_UNKNOWN'))
+  check('🔴 현재 16 + 미래 3이면 SHORT, 미래 수율 모름이면 UNKNOWN — 둘 다 막지 않는 예측 경고(판정 PASS)',
+    short.forecastWarnings.includes('OPPORTUNITY_SHORT') && unknown.forecastWarnings.includes('OPPORTUNITY_UNKNOWN')
+    && short.verdict === 'PASS' && unknown.verdict === 'PASS')
   const oldArithmetic = judgeNextPreflight('d20', factsFor('d20', { slotValidOpportunities: 10, futureSupplyCapacity: 17 }), GRID)
   const unionVerdict = judgeNextPreflight('d20', factsFor('d20', { slotValidOpportunities: 10, futureSupplyCapacity: FUTURE_UNION.overlap }), GRID)
   const distinctVerdict = judgeNextPreflight('d20', factsFor('d20', { slotValidOpportunities: 3, futureSupplyCapacity: FUTURE_UNION.distinct }), GRID)
   check('🔴 반례 고정 — 고치기 전 산식(재고 17 − 현재 원천 0 = 17)은 READY 10 + 17 → D20 기회 20 PASS 였다',
-    oldArithmetic.counts.opportunities === 20 && !oldArithmetic.codes.includes('OPPORTUNITY_SHORT'))
-  check('🔴🔴 합집합 산출(READY 10 + 추가 7)을 넣으면 D20 기회 17/20 → OPPORTUNITY_SHORT · 시험을 열지 않는다',
-    unionVerdict.counts.opportunities === 17 && unionVerdict.codes.includes('OPPORTUNITY_SHORT'),
-    `opp=${String(unionVerdict.counts.opportunities)} [${unionVerdict.codes.join(',')}]`)
-  check('🟢 서로 다른 슬롯 산출(READY 3 + 추가 17)이면 D20 기회 20 — 실시간 JIT 순유입만으로 연다',
-    distinctVerdict.counts.opportunities === 20 && !distinctVerdict.codes.includes('OPPORTUNITY_SHORT'))
+    oldArithmetic.counts.opportunities === 20 && !oldArithmetic.forecastWarnings.includes('OPPORTUNITY_SHORT'))
+  check('🔴🔴 합집합 산출(READY 10 + 추가 7)을 넣으면 D20 기회 17/20 → OPPORTUNITY_SHORT 예측 경고(산술 그대로 · 시험은 막지 않는다)',
+    unionVerdict.counts.opportunities === 17 && unionVerdict.forecastWarnings.includes('OPPORTUNITY_SHORT')
+    && !unionVerdict.codes.includes('OPPORTUNITY_SHORT'),
+    `opp=${String(unionVerdict.counts.opportunities)} [${unionVerdict.forecastWarnings.join(',')}]`)
+  check('🟢 서로 다른 슬롯 산출(READY 3 + 추가 17)이면 D20 기회 20 — 예측 경고 없음',
+    distinctVerdict.counts.opportunities === 20 && !distinctVerdict.forecastWarnings.includes('OPPORTUNITY_SHORT'))
   const pooledVerdict = judgeNextPreflight('d20', factsFor('d20', {
     slotValidOpportunities: FUTURE_UNION.pooledCurrent, futureSupplyCapacity: FUTURE_UNION.pooled,
   }), GRID)
-  check('🔴🔴 H1 — 같은 사실로 D20 은 OPPORTUNITY_SHORT(4/20) · 고치기 전 합집합 단독 산식은 추가 17 → 20/20 거짓 PASS 였다',
-    pooledVerdict.counts.opportunities === 4 && pooledVerdict.codes.includes('OPPORTUNITY_SHORT')
+  check('🔴🔴 H1 — 같은 사실로 D20 은 OPPORTUNITY_SHORT(4/20) 예측 경고 · 고치기 전 합집합 단독 산식은 추가 17 → 20/20 거짓 green 이었다',
+    pooledVerdict.counts.opportunities === 4 && pooledVerdict.forecastWarnings.includes('OPPORTUNITY_SHORT')
     && FUTURE_UNION.oldPooled === 17,
-    `opp=${String(pooledVerdict.counts.opportunities)} old=${String(FUTURE_UNION.oldPooled)} [${pooledVerdict.codes.join(',')}]`)
-  check('🟢 현재 기회가 이미 목표면 미래를 몰라도 기존 PASS를 훼손하지 않는다',
-    alreadyEnough.verdict === 'PASS' && !alreadyEnough.codes.includes('OPPORTUNITY_UNKNOWN'))
+    `opp=${String(pooledVerdict.counts.opportunities)} old=${String(FUTURE_UNION.oldPooled)} [${pooledVerdict.forecastWarnings.join(',')}]`)
+  check('🟢 현재 기회가 이미 목표면 미래를 몰라도 예측 경고가 없다',
+    alreadyEnough.verdict === 'PASS' && !alreadyEnough.forecastWarnings.includes('OPPORTUNITY_UNKNOWN'))
 }
 {
   const s20 = judgeNextPreflight('d20', factsFor('d20'), GRID)
@@ -595,13 +597,21 @@ const pf100 = judgeNextPreflight('d100', factsFor('d100'), GRID)
 console.log(`   d100: ${pf100.verdict} [${pf100.codes.join(',')}] · 댓글 감당 ${pf100.counts.commentAffordable}건/day`)
 check('🔴 [blocker 실측] d100 — 상한을 D20까지만 열어도 발행 용량·슬롯이 부족해 자동 통과하지 않는다',
   pf100.verdict === 'FAIL' && pf100.codes.includes('PUBLISH_CAPACITY_SHORT') && pf100.codes.includes('SLOTS_INFEASIBLE'))
-const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want: 'FAIL' | 'UNKNOWN'; code: PreflightCode }[] = [
-  { name: 'slot-valid 기회 19 < 20', s: 'd20', o: { slotValidOpportunities: 19 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
-  { name: '기회 모름', s: 'd20', o: { slotValidOpportunities: null }, want: 'UNKNOWN', code: 'OPPORTUNITY_UNKNOWN' },
-  { name: 'D3 도 같은 관문 — 기회 2 < 3', s: 'd3', o: { slotValidOpportunities: 2 }, want: 'FAIL', code: 'OPPORTUNITY_SHORT' },
-  { name: '수율이 필요량 아래(처리량 부족)', s: 'd20', o: { readyCohort: cohortFor('d20', { sources: Math.ceil(RUNS / 0.9) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
-  { name: 'cohort 모름', s: 'd20', o: { readyCohort: null }, want: 'UNKNOWN', code: 'THROUGHPUT_UNKNOWN' },
-  { name: '지연 미관측', s: 'd5', o: { latencyP90H: null }, want: 'UNKNOWN', code: 'LATENCY_UNKNOWN' },
+/**
+ * 🔴 **세 갈래** (PR1b · 2026-11-06 · canon §3.1·§3.2·§9):
+ *    · `block`    — hard gate. 막는 `codes` 에 있고 판정을 FAIL/UNKNOWN 으로 만든다
+ *    · `forecast` — 원천 기회·처리량·READY 필요량 예측. `forecastWarnings` 에만 있고 막지 않는다
+ *    · `observe`  — 지연 관측 같은 막지 않는 경고. `warnings` 에만 있다
+ *    `want` 는 최종 판정이다 — 예측 사례도 같은 사실이 hard gate 를 함께 모르게 하면(cohort 모름 → 비용 모름) UNKNOWN 이다.
+ */
+type PfLane = 'block' | 'forecast' | 'observe'
+const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want: 'PASS' | 'FAIL' | 'UNKNOWN'; code: string; lane?: PfLane }[] = [
+  { name: 'slot-valid 기회 19 < 20 — 예측 경고(막지 않는다)', s: 'd20', o: { slotValidOpportunities: 19 }, want: 'PASS', code: 'OPPORTUNITY_SHORT', lane: 'forecast' },
+  { name: '기회 모름 — 예측 경고', s: 'd20', o: { slotValidOpportunities: null }, want: 'PASS', code: 'OPPORTUNITY_UNKNOWN', lane: 'forecast' },
+  { name: 'D3 도 같은 관문 — 기회 2 < 3 · 예측 경고', s: 'd3', o: { slotValidOpportunities: 2 }, want: 'PASS', code: 'OPPORTUNITY_SHORT', lane: 'forecast' },
+  { name: '수율이 필요량 아래(처리량 부족) — 예측 경고', s: 'd20', o: { readyCohort: cohortFor('d20', { sources: Math.ceil(RUNS / 0.9) }) }, want: 'PASS', code: 'THROUGHPUT_SHORT', lane: 'forecast' },
+  { name: 'cohort 모름 — 처리량 예측 경고 · 같은 사실로 비용 hard gate 도 모름', s: 'd20', o: { readyCohort: null }, want: 'UNKNOWN', code: 'THROUGHPUT_UNKNOWN', lane: 'forecast' },
+  { name: '지연 미관측 — 막지 않는 관측 경고(canon §9)', s: 'd5', o: { latencyP90H: null }, want: 'PASS', code: 'LATENCY_UNKNOWN', lane: 'observe' },
   { name: '🔴 계약 유효 Persona 모름(읽기 실패)', s: 'd3', o: { contractValidPersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
   { name: '🔴 계약 유효 Persona 0 < D3 하한 24 (2026-09-30 운영 실측) — D1→D3 부터 막힌다', s: 'd3', o: { contractValidPersonas: 0 }, want: 'FAIL', code: 'PERSONA_SHORT' },
   { name: '러너 최근 회차 실패', s: 'd5', o: { runnerHealth: 'bad' }, want: 'FAIL', code: 'RUNNER_BAD' },
@@ -613,14 +623,22 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
   { name: '공급 결과당 비용 $0.025 × 목표 50 > $1.20', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.025 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
-  { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → UNKNOWN', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'UNKNOWN', code: 'READY_REQUIREMENT_UNKNOWN' },
-  { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'FAIL', code: 'THROUGHPUT_SHORT' },
+  { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → 예측 경고', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'PASS', code: 'READY_REQUIREMENT_UNKNOWN', lane: 'forecast' },
+  { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족(예측 경고 · 산술은 그대로)', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'PASS', code: 'THROUGHPUT_SHORT', lane: 'forecast' },
   { name: '결과당 공급 비용 모름(미연결 · legacy)', s: 'd20', o: { readyCohort: cohortFor('d20', { usdPerSlotValidResult: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
 ]
 for (const c of pfCases) {
   const v = judgeNextPreflight(c.s, factsFor(c.s, c.o), GRID)
-  check(`${c.s} ${c.name} → ${c.want} ${c.code}`, v.verdict === c.want && v.codes.includes(c.code), `${v.verdict} [${v.codes.join(',')}]`)
+  const lane = c.lane ?? 'block'
+  const inBlock = (v.codes as readonly string[]).includes(c.code)
+  const inForecast = (v.forecastWarnings as readonly string[]).includes(c.code)
+  const inObserve = (v.warnings as readonly string[]).includes(c.code)
+  const placed = lane === 'block' ? inBlock && !inForecast && !inObserve
+    : lane === 'forecast' ? inForecast && !inBlock && !inObserve
+      : inObserve && !inBlock && !inForecast
+  check(`${c.s} ${c.name} → ${c.want} · ${lane} ${c.code}`, v.verdict === c.want && placed,
+    `${v.verdict} codes=[${v.codes.join(',')}] forecast=[${v.forecastWarnings.join(',')}] warn=[${v.warnings.join(',')}]`)
 }
 check('댓글 러너 용량 부족 → FAIL', judgeNextPreflight('d50', factsFor('d50'), { ...GRID, commentRunRequestCap: 1, commentSlots: GRID.commentSlots.slice(0, 40) }).codes.includes('COMMENT_RUNNER_SHORT'))
 check(`감사 표본 = 정본 auditTarget 20% (d20 → ${auditTarget(20)} · d50 → ${auditTarget(50)})`,
@@ -1191,9 +1209,19 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   const base = (o: DayOpts): Day => runDay(addDays(D0, 1), startRow('d10', 'REPROVE'), 'perfect', o)
   const green = base({})
   check('S7 기준선 — REPROVE d10 PASS · preflight 초록 → TRIAL d20', tr(green) === 'TRIAL:d20' && green.valid !== null)
+  // 🔴 (PR1b · 2026-11-06) 기회·처리량 예측 부족은 시험을 막지 않는다 — TRIAL 이 열리고 경고가 결정의 v6 supply 에 남는다
+  const forecastOnly: { name: string; o: DayOpts; warning: string }[] = [
+    { name: 'slot-valid 기회 모자람', o: { facts: (s) => factsFor(s, { slotValidOpportunities: 5 }) }, warning: 'OPPORTUNITY_SHORT' },
+    { name: '처리량 모자람', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { sources: 10_000 }) }) }, warning: 'THROUGHPUT_SHORT' },
+  ]
+  for (const c of forecastOnly) {
+    const d = base(c.o)
+    const sup = d.decision.supply
+    check(`🔴 S7 ${c.name}(예측) → d20 TRIAL 이 열리고 ${c.warning} 가 supply 예측 경고로 남는다`,
+      tr(d) === 'TRIAL:d20' && d.valid !== null && sup !== null && 'forecastWarnings' in sup && sup.forecastWarnings.includes(c.warning as never),
+      `${tr(d)} ${JSON.stringify(sup)}`)
+  }
   const cases: { name: string; o: DayOpts; code: string }[] = [
-    { name: 'slot-valid 기회 모자람', o: { facts: (s) => factsFor(s, { slotValidOpportunities: 5 }) }, code: 'PREFLIGHT_FAIL' },
-    { name: '처리량 모자람', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { sources: 10_000 }) }) }, code: 'PREFLIGHT_FAIL' },
     { name: 'Persona canary 하한 미달', o: { facts: (s) => factsFor(s, { contractValidPersonas: 10 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '댓글 비용 초과', o: { facts: (s) => factsFor(s, { commentUsdPerRequest: 0.05 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { usdPerSlotValidResult: null }) }) }, code: 'PREFLIGHT_UNKNOWN' },
@@ -1220,7 +1248,8 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
 
 // S12 — 🔴 평상일 0..Dn vs 증명일 exact N (2026-10-11 Batch A1 반례 ①③ · 증명 기반 없음 + 다음 단계 PASS → 현재 단계 재인증)
 {
-  const blockedD10 = (s: GenericStage): PreflightFacts => factsFor(s, s === 'd10' ? { readyCohort: cohortFor(s, { sources: 10_000 }) } : {})
+  // 🔴 d10 preflight 를 hard gate(Persona canary 하한 미달)로 막는다 — 예측 부족은 PR1b 이후 시험을 막지 않는다
+  const blockedD10 = (s: GenericStage): PreflightFacts => factsFor(s, s === 'd10' ? { contractValidPersonas: 10 } : {})
   // 반례 ① d5 지속 · d10 막힘 — 날마다 평상일. 증명일 env 없음(자동 5편 강제 없음)
   const w = walk(startRow('d5', 'HOLD'), Array.from({ length: 5 }, () => 'perfect' as const), { facts: blockedD10 })
   check('🔴 🔴 S12 반례① d5 지속 · d10 preflight 막힘 5일 → 날마다 PREPARE d5(평상일) · REPROVE 0',

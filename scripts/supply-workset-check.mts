@@ -1583,9 +1583,9 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
   const done = worksetEligibility(input({ allProcessed: true }))
   const doneOpp = oppOf(done.eligible)
   const doneVerdict = judgeNextPreflight('d3', facts(doneOpp.total), RUNNER_GRID)
-  check('🔴 🔴 **이미 처리된 원천만 있으면(221 전부) 기회 0 → d3 preflight 가 green 이 아니다(OPPORTUNITY_SHORT)**',
-    done.eligible.length === 0 && doneOpp.total === 0 && doneVerdict.verdict === 'FAIL'
-    && doneVerdict.codes.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: doneOpp, codes: doneVerdict.codes }))
+  check('🔴 🔴 **이미 처리된 원천만 있으면(221 전부) 기회 0 → OPPORTUNITY_SHORT 예측 경고 (처리된 원천을 기회로 세지 않는다)**',
+    done.eligible.length === 0 && doneOpp.total === 0
+    && doneVerdict.forecastWarnings.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: doneOpp, forecast: doneVerdict.forecastWarnings }))
   const fresh30 = worksetEligibility({
     ...input(), rows: Array.from({ length: 30 }, (_, k) => ROW({ sourceArticleId: `q${k}`, commentCount: 40 })),
   })
@@ -1593,7 +1593,7 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
   const v30 = judgeNextPreflight('d3', facts(opp30.total), RUNNER_GRID)
   check('🔴 🔴 **실제 가용 원천 30 × 수율 0.1 → d3 기회 3 · 기회 축 통과**',
     fresh30.eligible.length === 30 && opp30.total === 3 && opp30.sourceExpected === 3
-    && !v30.codes.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: opp30, codes: v30.codes }))
+    && !v30.forecastWarnings.includes('OPPORTUNITY_SHORT'), JSON.stringify({ opp: opp30, forecast: v30.forecastWarnings }))
 
   const transitionRows = Array.from({ length: 20 }, (_, k) => ROW({ sourceArticleId: `transition-${k}`, commentCount: 40 }))
   const transitionLifecycle = {

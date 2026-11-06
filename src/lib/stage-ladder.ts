@@ -40,7 +40,7 @@ import {
   type ValidatedStageDecision, type ValidateResult,
 } from './stage-decision-contract'
 import { trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type TrialPlan } from './stage-evidence'
-import { trialBlocks, lateStartBlocks, type PreflightVerdict } from './stage-ladder-generic'
+import { trialBlocks, lateStartBlocks, forecastSupplyOf, type PreflightVerdict } from './stage-ladder-generic'
 
 /**
  * 🔴 **계약 정의는 `stage-decision-contract` 하나다** (2026-09-24 7차) — 호출부 호환을 위해 그대로 재수출한다.
@@ -74,7 +74,6 @@ export type StageInputs = {
    */
   nextPreflight: PreflightVerdict | null
   publishedToday: number
-  supply?: SupplySignal
   decidedAt: string
 }
 
@@ -120,7 +119,8 @@ function authoritativeTrialPlan(input: StageInputs, out: StageBlock[]): TrialPla
 export function planStageDecision(input: StageInputs): StageDecision {
   const base = {
     kstDate: input.kstDate,
-    supply: input.supply ?? null,
+    // 🔴 v6 supply 는 이 preflight 의 예측 경고 투영 하나다 — 주입 입력이 없다(운영 호출자도 없었다)
+    supply: forecastSupplyOf(input.nextPreflight),
     decidedAt: input.decidedAt,
     contractVersion: STAGE_DECISION_VERSION,
     decidedBy: DECISION_WRITER as string,

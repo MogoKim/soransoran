@@ -33,10 +33,11 @@ export const STAGE_DECISION_V4 = 'stage-decision-v4'
 export const STAGE_DECISION_V5 = 'stage-decision-v5'
 export const STAGE_DECISION_V6 = 'stage-decision-v6'
 /**
- * 🔴 **writer alias — 이 릴리스가 새로 쓰는 판.** reader 릴리스라 v5 그대로다. 두 판을 한 배포로 켜면 rollback 한
- *    옛 reader 가 v6 행을 깨진 행으로 읽는다(`CERTIFIED` 와 같은 reader → writer 순서).
+ * 🔴 **writer alias — 이 릴리스가 새로 쓰는 판: v6** (PR1b · 2026-11-06). v6 reader(PR #833)가 main·runtime 에 먼저
+ *    배포되어 rollback 대상이 v6 행을 읽는다는 것이 확인된 뒤에만 이 판을 배포한다. v6 `supply` 는
+ *    `forecastSupplyOf` 투영과 **같은 커밋**에서 바뀐다 — v5 writer 가 v6 모양을 쓰면 v5 validator 가 거절한다.
  */
-export const STAGE_DECISION_VERSION = STAGE_DECISION_V5
+export const STAGE_DECISION_VERSION = STAGE_DECISION_V6
 /**
  * 🔴 현재 계열 — 읽고 근거로 쓴다. legacy 가 아니다.
  *    🔴 **writer alias 를 참조하지 않는다.** 참조하면 writer 를 v6 으로 뒤집는 날 목록이 `[v6, v6]` 이 되어
@@ -171,7 +172,7 @@ export type StageDecision = {
    */
   readonly supply: DecisionSupply | null
   readonly decidedAt: string
-  /** 🔴 이 릴리스의 새 결정은 언제나 v5 다 — v6 · v4 는 저장된 행을 읽을 때만 나온다 */
+  /** 🔴 이 릴리스의 새 결정은 언제나 v6 이다(writer alias) — v5 · v4 는 저장된 행을 읽을 때만 나온다 */
   readonly contractVersion: StageDecisionVersion
   /** 🔴 누가 썼나 — controller 하나뿐이다 */
   readonly decidedBy: string

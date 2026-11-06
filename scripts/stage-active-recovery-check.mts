@@ -64,6 +64,12 @@ const signals: HealthSignal[] = [
   { axis: 'cost', health: 'ok', reasons: [] },
   { axis: 'errors', health: 'ok', reasons: [] },
 ]
+/**
+ * 🔴 **rollback 호환 fixture** (PR1b · 2026-11-06). 아래 판정은 예측 코드를 막는 `codes` 에 담은 **옛 모양**이다 —
+ *    현재 `judgeNextPreflight` 는 예측 5코드를 `forecastWarnings` 로 보내 PASS 를 내므로 이 모양을 만들지 않는다.
+ *    이 검사는 한 릴리스 동안 남긴 복구 코드가 옛 runtime 으로 되돌렸을 때 그대로 도는지를 본다.
+ *    예측만 있는 현재 판정에서 복구가 열리지 않는 것은 `stage:forecast-warning-check` ⑤ 가 본다.
+ */
 const preflight = (i: {
   opportunities?: number
   target?: number
@@ -74,7 +80,7 @@ const preflight = (i: {
   verdict?: PreflightVerdict['verdict']
 } = {}): PreflightVerdict => ({
   stage: 'd20', verdict: i.verdict ?? 'FAIL',
-  codes: i.codes ?? ['OPPORTUNITY_SHORT'], warnings: [],
+  codes: i.codes ?? ['OPPORTUNITY_SHORT'], forecastWarnings: [], warnings: [],
   counts: {
     target: i.target ?? 20,
     opportunities: i.opportunities ?? 17,

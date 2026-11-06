@@ -571,9 +571,12 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
   const noPersona = judgeNextPreflight('d3', { ...facts, contractValidPersonas: null }, RUNNER_GRID)
   check('🔴 🔴 **계약 유효 Persona 제공자가 없으면(null) UNKNOWN — 활성 행 수로 대체하지 않는다 · 열지 않는다**',
     noPersona.verdict === 'UNKNOWN' && noPersona.codes.includes('PERSONA_UNKNOWN'))
-  check('🔴 기회 부족 → FAIL OPPORTUNITY_SHORT (완성 글 며칠치가 아니라 증명일 슬롯 수)',
-    judgeNextPreflight('d5', { ...facts, contractValidPersonas: 40 }, RUNNER_GRID).codes.includes('OPPORTUNITY_SHORT'))
-  check('🔴 지연 관측 없음 → UNKNOWN', judgeNextPreflight('d3', { ...facts, latencyP50H: null, latencyP90H: null }, RUNNER_GRID).codes.includes('LATENCY_UNKNOWN'))
+  check('🔴 기회 부족 → OPPORTUNITY_SHORT 예측 경고 (완성 글 며칠치가 아니라 증명일 슬롯 수 · 막지 않는다)',
+    judgeNextPreflight('d5', { ...facts, contractValidPersonas: 40 }, RUNNER_GRID).forecastWarnings.includes('OPPORTUNITY_SHORT'))
+  check('🔴 지연 관측 없음 → 막지 않는 LATENCY_UNKNOWN 관측 경고 (판정 PASS)', (() => {
+    const v = judgeNextPreflight('d3', { ...facts, latencyP50H: null, latencyP90H: null }, RUNNER_GRID)
+    return v.verdict === 'PASS' && v.warnings.includes('LATENCY_UNKNOWN')
+  })())
   check('🔴 러너 모름 → UNKNOWN · 나쁨 → FAIL',
     judgeNextPreflight('d3', { ...facts, runnerHealth: 'unknown' }, RUNNER_GRID).codes.includes('RUNNER_UNKNOWN')
     && judgeNextPreflight('d3', { ...facts, runnerHealth: 'bad' }, RUNNER_GRID).verdict === 'FAIL')
