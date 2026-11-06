@@ -249,7 +249,7 @@ async function main(): Promise<void> {
       && got.result.decision.supply === null && got.result.decision.transition === null)
   }
 
-  console.log('\n②-b 🔴 v6 판별 supply 왕복 — {forecastWarnings} · null · 판을 가로지른 행 거절')
+  console.log('\n②-v6 🔴 v6 판별 supply 왕복 — {forecastWarnings} · null · 판을 가로지른 행 거절')
   {
     for (const supply of [{ forecastWarnings: ['THROUGHPUT_SHORT', 'OPPORTUNITY_UNKNOWN'] }, { forecastWarnings: [] }, null] as const) {
       await wipe()
