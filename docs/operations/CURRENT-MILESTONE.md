@@ -29,7 +29,7 @@ main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공�
 | 회사 Mac D100 job | 0 |
 | 오늘 자연 결정 (2026-11-06) | `PREPARE · 공개 d10 · 준비 d20` |
 | 운영 건강 (2026-11-06 관측) | 공급·발행·댓글·감사 ok |
-| 다음 날 준비 판정 (2026-11-06 관측 · 옛 runtime) | 11-07 D20 준비 판정 차단 — 공급·READY 예측 코드가 시험을 막고, preflight 결정일을 판정 시각에서 가져와 오늘 아침 회차를 다음 날 판정에 섞는다. 보정은 PR1b branch(미병합·미배포) |
+| 다음 날 준비 판정 (2026-11-06 관측 · 옛 runtime) | 11-07 D20 준비 판정 차단 — 공급·READY 예측 코드가 시험을 막고, preflight 결정일을 판정 시각에서 가져와 오늘 아침 회차를 다음 날 판정에 섞는다. 보정 코드는 PR1b, 설치 상태는 §1.2 |
 | 최신 확정 단계 증거 | 10-28 d10 증거 PASS |
 | 최신 시험 단계 증거 | 11-03 d20 증거 FAIL · 늦은 다음날 준비 공급 비용 1건 외 실질 축 충족 · 그 뒤 증거 행은 이 갱신에서 따로 읽지 않았다 |
 | D20 operating | **FAIL (11-03)** · 콘텐츠·대화·감사 20/20은 충족, 옛 하루 전체 비용 계약이 늦은 준비 회차 미상 1건으로 차단 · D20 operating PASS 없음 |
@@ -79,7 +79,7 @@ main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공�
 | 평상일·증명일 같은 실행 경로, 공급 부족 제한 복구 없음 (§3.3) | `stage-active-recovery-v2` 경로(`src/lib/stage-active-recovery.ts`·`scripts/stage-active-recovery.mts`·controller 복구 단계)와 07:00~07:58 controller 다섯 시각. 회계 경계는 canon §11.1 📜 전환기 호환 | PR1b: 예측만 있는 판정은 PASS라 복구가 열리지 않는다(코드는 한 릴리스 rollback 호환) → rollback·의존성 감사 뒤 별도 삭제 |
 | 공급 부족으로 `N` 미달인 증명일은 결함 아님 · 다음 운영일 재시험 (§6) | 재시험 계획(`trialPlanOf` RETEST)은 있으나 다음 날 예측 부족이 다시 시험을 막는다 | PR1b |
 | `sourceAge` 오름차순 단일 정본 비교 (§2.3) | 생산 비교 함수가 여럿이었다 | #833: `compareReleaseRank` 하나 · 판정·생성 순서는 묶음 순위 |
-| StageDecision v6 계약 | writer v5 · reader v4 legacy | 코드: reader v5+v6 (#833) · writer v6 (PR1b). runtime 설치 순서는 #833 reader 먼저·rollback 판독 확인 → 그 뒤 PR1b writer |
+| StageDecision v6 계약 | writer v5 · reader v5 + v4 legacy | 코드: reader v5+v6 (#833) · writer v6 (PR1b). runtime 설치 순서는 #833 reader 먼저·rollback 판독 확인 → 그 뒤 PR1b writer |
 | preflight 결정일 결속 | recovery 신원 판정 날짜를 판정 시각 `now`에서 가져와, 다음 날 리허설이 오늘 아침 복구 회차를 claim 없는 복구로 읽는다 | PR1b: 증명 슬롯의 단일 KST 날짜(비면·섞이면·깨지면 fail-closed) |
 | 자동 일정 owner launchd 하나 (§6) | 수동 `workflow_dispatch` 전용 `auto-publish.yml`·`supply-collect.yml`이 남아 있다 (예약 실행 없음 · 수동 실행은 commissioning) | rollback·의존성 감사 뒤 별도 삭제 |
 
