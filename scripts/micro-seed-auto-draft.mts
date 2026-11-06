@@ -31,7 +31,9 @@
  */
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
-import { readWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent } from '../src/lib/supply-workset'
+import {
+  orderByWorksetRank, readWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent,
+} from '../src/lib/supply-workset'
 import { sameSupplyQualityContract } from '../src/lib/supply-intent'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -504,19 +506,25 @@ let COST_KEY: string | null = null
 /** 🔴 지금 원천이 이 회차 current-quality JIT 묶음(`workset-v4`)에 있으면 그 계약 — 장부 줄의 `supplyContract`. 아니면 null(legacy) */
 let COST_CONTRACT: string | null = null
 let RUN_INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
-/** 🔴 같은 회차 묶음의 원천 → 의도 — 회차 id 로 찾는다. 옛 판 · 없음 · 손상이면 null */
-function runIntents(runId: string | null): ReadonlyMap<string, SupplyIntent> | null {
-  if (runId === null) return null
+/** 🔴 같은 회차 묶음의 정본 순위 순서(`rankedKeys`) — 생성 순서가 화자 시도 여력의 배분이다. 모르면 null */
+let RUN_RANKED_KEYS: readonly string[] | null = null
+/** 🔴 같은 회차 묶음의 원천 → 의도 · 순위 — 회차 id 로 찾는다. 옛 판 · 없음 · 손상이면 둘 다 null */
+function runWorkset(runId: string | null): {
+  intents: ReadonlyMap<string, SupplyIntent> | null
+  rankedKeys: readonly string[] | null
+} {
+  const none = { intents: null, rankedKeys: null }
+  if (runId === null) return none
   const ws = join(DATA_DIR, worksetFileName(runId))
-  if (!existsSync(ws)) return null
+  if (!existsSync(ws)) return none
   try {
     const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), runId)
-    if (!r.ok) return null
+    if (!r.ok) return none
     if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, currentQualityContract())) {
       fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 생성을 시작하지 않는다')
     }
-    return r.intents
-  } catch { return null }
+    return { intents: r.intents, rankedKeys: r.rankedKeys }
+  } catch { return none }
 }
 
 /**
@@ -859,7 +867,9 @@ async function main(): Promise<void> {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 판정 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
   // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
-  RUN_INTENTS = runIntents(RUN_ID)
+  const runWs = runWorkset(RUN_ID)
+  RUN_INTENTS = runWs.intents
+  RUN_RANKED_KEYS = runWs.rankedKeys
   LEDGER = new SupplyLlmSession({
     runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
   })
@@ -982,7 +992,10 @@ async function main(): Promise<void> {
    *    🔴 미리 나누지 않는다 — 원천을 순서대로 처리하며 매 원천에 `시도 가능 전체 − 이번 회차 선택됨` 을 준다
    *       (`createAttemptPool`). 앞판은 27명을 원천마다 2~3명으로 미리 쪼개 묶음 밖 자격자를 못 봤다(2026-10-14 12:15).
    *    🔴 계약이 없는 파일(옛 계약)은 앞판 그대로 공개 자리 몫 − WIP 로 좁게 돈다.
+   *    🔴 그래서 처리 순서가 곧 화자 배분이다 — 판정 파일 순서(이름순)가 아니라 묶음의 정본 순위로 세운다
+   *       (2026-11-06 반례: 이름순 레몬테라스 7.95h 원천이 유일한 화자 자리를 2.633h 원천보다 먼저 가져갔다).
    */
+  seeds = orderByWorksetRank(seeds, (j) => intentKeyOf(j.sourceSite, j.sourceArticleId), RUN_RANKED_KEYS)
   const attemptOf = speakerLoad.loaded ? speakerLoad.attemptCapacityOf : null
   const attemptPool = attemptOf === null ? null : createAttemptPool({
     attemptCapacity: voice.candidates.map((c) => ({ code: c.code, attemptCapacity: attemptOf(c.code) })),

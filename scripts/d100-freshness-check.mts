@@ -31,7 +31,7 @@ import { toDetailRecord, toRawDetailRecord } from '../src/lib/micro-seed-82cook-
 import { sourceEvidenceOf, type Candidate } from '../src/lib/micro-seed-supply-autofill'
 import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY } from '../src/lib/collect-schedule'
 import { buildCollected, parsePostedLabel, postedDayOfLabel, BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
-import { compareFreshFirst, planAutoFetch, SLOT_QUOTA, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
+import { planAutoFetch, SLOT_QUOTA, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
 import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { evidenceMaterialFor, postedOfListRow, readListObservations, type ListObservationIndex } from './lib/source-list-observations.mjs'
 import { worksetRows } from './supply-process.mjs'
@@ -378,7 +378,9 @@ console.log('\n⑥ 수집 상세 선별 — 신선도 1순위 (2026-10-19 창업
   ], { max: 1 })
   check('🔴 모두 시각이 없으면 lex 순 — 숫자 id 를 time proxy 로 쓰지 않는다 ("100" < "99")',
     noTime.picked[0] === '100', noTime.picked.join())
-  check('숫자가 아닌 열쇠는 옛 결정적 순서', compareFreshFirst({ sourceArticleId: 'a1', score: 0, flags: [] }, { sourceArticleId: 'a2', score: 0, flags: [] }) < 0)
+  check('숫자가 아닌 열쇠도 결정적 순서', planAutoFetch([
+    { sourceArticleId: 'a2', score: 0, flags: [] }, { sourceArticleId: 'a1', score: 0, flags: [] },
+  ], { max: 1 }).picked[0] === 'a1')
 
   // 🔴 무작위 대조 — 고른 순서는 **신선도 내림차순**을 지킨다. 옛 판(점수 1순위 → 글 번호)과는 **적어도 한 벌 이상** 다르다
   //    (점수가 신선도를 더 이상 이기지 않는 운영이 복원되지 않았는지 검증)
@@ -455,13 +457,14 @@ console.log('\n⑧ 신선도 1순위 (2026-10-19 창업자) — 자격 gate 뒤�
   const release = strip(readFileSync('src/lib/source-slot-release.ts', 'utf8'))
   check('🔴 판정 정본에 갱년기 · wgang · 가중치 · quota 가 없다', !/menopause|wgang|WEIGHT|weight|quota/i.test(release))
   const workset = strip(readFileSync('src/lib/supply-workset.ts', 'utf8'))
-  const sr = workset.slice(workset.indexOf('export function compareSupplyRank'), workset.indexOf('export function compareSupplyRank') + 400)
+  const sr = workset.slice(workset.indexOf('export function compareSupplyRank'), workset.indexOf('export function orderByWorksetRank'))
   check('🔴 공급 순위도 compareReleaseRank + 열쇠 — 주제 · 출처 · 가중치 없음',
     sr.length > 0 && !/menopause|wgang|WEIGHT|weight|quota|bonus/i.test(sr))
   const supply = strip(readFileSync('scripts/lib/micro-seed-supply.mts', 'utf8'))
-  const fresh = supply.slice(supply.indexOf('export function compareFreshFirst'), supply.indexOf('export function planAutoFetch'))
-  check('🔴 수집 동률 비교는 게시 시각 · 글 번호만 본다 — 주제·출처·가중치 없음',
-    fresh.length > 0 && !/flags|menopause|wgang|weight|quota/i.test(fresh))
+  const plan = supply.slice(supply.indexOf('export function planAutoFetch'))
+  const order = plan.slice(plan.indexOf('const ordered = sortBySourceRank('), plan.indexOf('}))') + 3)
+  check('🔴 수집 순서는 정본 정렬에 게시 시각 · 글 번호만 넘긴다 — 점수·주제·출처·가중치 없음',
+    order.startsWith('const ordered = sortBySourceRank(') && !/score|flags|menopause|wgang|weight|quota/i.test(order), order)
 }
 
 // ─────────────────────────────────────────────────────────

@@ -224,9 +224,9 @@ export async function ensureStageDecision(io: {
  *    그 키는 **같은 날 판을 올리면 두 번째 행**을 허용한다. 그러면 하루 결정이 둘이 되고,
  *    아침에 옛 판으로 낸 글과 낮에 새 판으로 낸 글이 서로 다른 상한 아래 놓인다.
  *    🔴 `kstDate` 를 기본키로 둬 **KST 날짜당 하나**를 DB 가 강제한다.
- *    같은 날 판이 달라지면 두 번째 행을 만들지 않는다 — 읽은 행의 판이 현재 판과
- *    다르므로 `validateStoredDecision` 이 거절하고, `ensureStageDecision` 은 `BROKEN`,
- *    consumer 는 가장 안전한 단계로 간다(fail-closed).
+ *    같은 날 판이 달라져도 두 번째 행을 만들지 않는다 — 먼저 저장된 행이 그날의 결정이다.
+ *    그 행의 판이 이 runtime 이 읽을 수 있는 판(v4 legacy · v5 · v6)이 아니면 `validateStoredDecision` 이
+ *    거절하고, `ensureStageDecision` 은 `BROKEN`, consumer 는 가장 안전한 단계로 간다(fail-closed).
  *
  * 🔴 **JSON 왕복이 검증을 통과해야 한다.** `decidedAt` 은 DateTime 이므로 읽을 때
  *    `toISOString()` 으로 되돌린다 — 그 문자열의 KST 날짜가 `kstDate` 와 같아야 한다.
