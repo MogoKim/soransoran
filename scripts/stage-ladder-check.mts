@@ -791,7 +791,7 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
       try {
         (d.blocks as unknown as { code: string }[])[0]!.code = 'EVIL'
         ;(d.reasons as unknown as string[]).push('침입')
-        ;(d.supply?.excluded[0]?.codes as unknown as string[])?.push('P99')
+        ;((d.supply !== null && 'excluded' in d.supply ? d.supply.excluded[0]?.codes : undefined) as unknown as string[])?.push('P99')
       } catch { /* strict mode 에서는 던진다 — 그것도 막힌 것이다 */ }
       return JSON.stringify(d) === before
         && Object.isFrozen(d) && Object.isFrozen(d.blocks) && Object.isFrozen(d.supply)

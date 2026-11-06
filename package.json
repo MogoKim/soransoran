@@ -258,6 +258,7 @@
     "publish:trigger-preflight": "tsx scripts/publish-trigger-preflight.mts",
     "stage:ladder-check": "tsx scripts/stage-ladder-check.mts",
     "stage:v6-reader-check": "tsx scripts/stage-decision-v6-reader-check.mts",
+    "stage:one-day-check": "tsx scripts/stage-one-day-one-stage-check.mts",
     "stage:ready-loss-check": "tsx scripts/ready-loss-contract-check.mts",
     "supply:jit-contract-check": "tsx scripts/supply-jit-contract-check.mts",
     "supply:selection-trace-check": "tsx scripts/supply-selection-trace-check.mts",

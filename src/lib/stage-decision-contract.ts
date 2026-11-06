@@ -22,24 +22,29 @@
 import { RUNTIME_STAGES, SAFEST_STAGE, type RuntimeStage } from './scale-profile'
 
 /**
- * 🔴 **결정 판 v5 — 원천 기회 → 슬롯 계약(`source-slot-v1`)으로 운영한 결정** (2026-09-30).
- *    판을 올리는 이유는 행 모양이 아니라 **증거 계약**이다: 그 이전(v4) 결정은 약한 release 계약 아래에서
- *    나왔고, 그 위의 PASS · 지속 단계 · 이어진 계획은 승급 근거가 될 수 없다(정본: old proof cannot open
- *    a higher stage after the contract changes). 그래서 v4 행은 **읽기만** 한다 — 검증은 통과하지만
- *    `sustainedReleaseOf` · `trialPlanOf` 가 바닥(d1)에서 다시 증명하게 만든다(`isLegacyDecision`).
+ * 🔴 **판 상수 — 고정 이름이다.** writer alias 가 바뀌어도 이 값들은 바뀌지 않는다.
+ *    · v4 — 약한 release 계약 아래의 옛 결정. **읽기만** 한다 — 검증은 통과하지만 `sustainedReleaseOf` ·
+ *      `trialPlanOf` 가 바닥(d1)에서 다시 증명하게 만든다(`isLegacyDecision`).
+ *    · v5 — 원천 기회 → 슬롯 계약(`source-slot-v1`)으로 운영한 결정 (2026-09-30).
+ *    · v6 — admission 계약 판 (2026-11-06 · canon §3.1·§3.2). 공급·READY 예측은 hard gate 가 아니라 경고이며
+ *      `supply` 에 `{forecastWarnings}` 로만 남는다. release(증명) 계약은 그대로라 v5 증거도 현재 계열이다.
  */
-export const STAGE_DECISION_VERSION = 'stage-decision-v5'
+export const STAGE_DECISION_V4 = 'stage-decision-v4'
+export const STAGE_DECISION_V5 = 'stage-decision-v5'
+export const STAGE_DECISION_V6 = 'stage-decision-v6'
 /**
- * 🔴 **판 v6 — admission 계약 판** (2026-11-06 · canon §3.1·§3.2). 공급·READY 예측은 hard gate 가 아니라 경고이며
- *    경고는 `supply.forecastWarnings` 에 닫힌 코드로 남는다. release(증명) 계약은 그대로라 v5 증거도 현재 계열이다.
- *    🔴 **이 릴리스는 reader 다.** writer(`STAGE_DECISION_VERSION`)는 v5 그대로 — 두 판을 한 배포로 켜면
- *       rollback 한 옛 reader 가 v6 행을 깨진 행으로 읽는다(`CERTIFIED` 와 같은 reader → writer 순서).
+ * 🔴 **writer alias — 이 릴리스가 새로 쓰는 판.** reader 릴리스라 v5 그대로다. 두 판을 한 배포로 켜면 rollback 한
+ *    옛 reader 가 v6 행을 깨진 행으로 읽는다(`CERTIFIED` 와 같은 reader → writer 순서).
  */
-export const STAGE_DECISION_VERSION_V6 = 'stage-decision-v6'
-/** 🔴 현재 계열 — 읽고 근거로 쓴다. legacy 가 아니다 */
-export const STAGE_DECISION_READER_VERSIONS = [STAGE_DECISION_VERSION, STAGE_DECISION_VERSION_V6] as const
+export const STAGE_DECISION_VERSION = STAGE_DECISION_V5
+/**
+ * 🔴 현재 계열 — 읽고 근거로 쓴다. legacy 가 아니다.
+ *    🔴 **writer alias 를 참조하지 않는다.** 참조하면 writer 를 v6 으로 뒤집는 날 목록이 `[v6, v6]` 이 되어
+ *       전날 v5 행이 깨진 행(PREVIOUS_BROKEN)이 되고 controller 가 멈춘다.
+ */
+export const STAGE_DECISION_READER_VERSIONS = [STAGE_DECISION_V5, STAGE_DECISION_V6] as const
 /** 🔴 읽기만 하는 옛 판 — 새로 쓰지 않는다 · 근거로 쓰지 않는다 */
-export const LEGACY_STAGE_DECISION_VERSIONS = ['stage-decision-v4'] as const
+export const LEGACY_STAGE_DECISION_VERSIONS = [STAGE_DECISION_V4] as const
 export type StageDecisionVersion =
   | (typeof STAGE_DECISION_READER_VERSIONS)[number] | (typeof LEGACY_STAGE_DECISION_VERSIONS)[number]
 
@@ -91,15 +96,21 @@ export type StageBlock = { readonly code: BlockCode; readonly reason: string }
 /** 🔴 보고용 신호 — 결정에 쓰지 않는다 */
 export const SUPPLY_EXCLUDE_REASONS = ['noOpenDay', 'holdingStock'] as const
 export type SupplyExcludeReason = (typeof SUPPLY_EXCLUDE_REASONS)[number]
+/** 🔴 v4 · v5 행의 `supply` — `null` 이거나 이 모양이다(옛 계약 그대로) */
 export type SupplySignal = {
   readonly eligibleSpeakers: number
   readonly excluded: readonly {
     readonly reason: SupplyExcludeReason
     readonly codes: readonly string[]
   }[]
-  /** 🔴 v6 행에만 있다(필수 키 · 빈 배열 가능). v4/v5 행에는 없다 — 옛 행에 경고를 소급하지 않는다 */
-  readonly forecastWarnings?: readonly ForecastWarningCode[]
 }
+/**
+ * 🔴 v6 행의 `supply` — `null` 은 그날 preflight 를 평가하지 않았다는 뜻, 이 모양은 평가했다는 뜻이다
+ *    (빈 배열 = 평가했고 예측 경고 없음). 운영 결정은 화자 수를 계산하지 않으므로 `eligibleSpeakers` 를 싣지 않는다.
+ */
+export type ForecastSupplySignal = { readonly forecastWarnings: readonly ForecastWarningCode[] }
+/** 🔴 판별 supply — 어느 모양인지는 `contractVersion` 이 정한다(validator 가 판을 먼저 가른다) */
+export type DecisionSupply = SupplySignal | ForecastSupplySignal
 
 /**
  * 🔴 **시험을 연 근거** (2026-09-29 P0 · 운영 증거 게이트).
@@ -154,8 +165,11 @@ export type StageDecision = {
   readonly reasons: readonly string[]
   readonly blocks: readonly StageBlock[]
   readonly dayPinned: boolean
-  /** 🔴 **필수 키다.** `null` 이거나 완전한 구조다 — `undefined`·키 누락은 거절한다 */
-  readonly supply: SupplySignal | null
+  /**
+   * 🔴 **필수 키다.** `null` 이거나 그 판의 완전한 구조다 — `undefined`·키 누락은 거절한다.
+   *    v4/v5 → `SupplySignal` · v6 → `ForecastSupplySignal`. 판을 가로지른 모양은 validator 가 거절한다.
+   */
+  readonly supply: DecisionSupply | null
   readonly decidedAt: string
   /** 🔴 이 릴리스의 새 결정은 언제나 v5 다 — v6 · v4 는 저장된 행을 읽을 때만 나온다 */
   readonly contractVersion: StageDecisionVersion
@@ -380,42 +394,50 @@ export function validateStoredDecision(input: {
   if (typeof r.dayPinned !== 'boolean') return no(`dayPinned 가 boolean 이 아니다 — ${typeof r.dayPinned}`)
   const dayPinned = r.dayPinned
 
-  let supply: SupplySignal | null = null
+  /**
+   * 🔴 **supply 는 판이 먼저 가른다** — 두 모양이 섞이지 않게 판 분기 뒤에 각 판의 칸만 본다.
+   *    · v6 → `null`(preflight 미평가) | 정확히 `{forecastWarnings}`(닫힌 코드 · 중복 금지 · 빈 배열 = 평가·경고 없음).
+   *      화자 수 칸이 있으면 거절한다 — 운영 결정은 그 값을 계산하지 않으므로 지어낸 값이다.
+   *    · v4/v5 → `null` | `{eligibleSpeakers, excluded}` 옛 계약 그대로. 경고 칸이 있으면 거절한다
+   *      (옛 행에 경고를 소급해 그날의 시험 개방 근거를 바꿔 읽지 않는다).
+   */
+  let supply: DecisionSupply | null = null
   if (r.supply !== null) {
     const sp = r.supply
     if (!isRec(sp)) return no('supply 가 객체도 null 도 아니다')
-    if (!nonNegInt(sp.eligibleSpeakers)) {
-      return no(`supply.eligibleSpeakers 가 유한한 비음수 정수가 아니다 — ${String(sp.eligibleSpeakers)}`)
-    }
-    if (!Array.isArray(sp.excluded)) return no('supply.excluded 가 배열이 아니다')
-    const excluded: { reason: SupplyExcludeReason; codes: string[] }[] = []
-    for (const e of sp.excluded) {
-      if (!isRec(e)) return no('supply.excluded 항목이 객체가 아니다')
-      const reason = e.reason
-      if (typeof reason !== 'string'
-        || !(SUPPLY_EXCLUDE_REASONS as readonly string[]).includes(reason)) {
-        return no(`모르는 supply 제외 사유 — ${String(e.reason)}`)
+    if (contractVersion === STAGE_DECISION_V6) {
+      const keys = Object.keys(sp)
+      if (keys.length !== 1 || keys[0] !== 'forecastWarnings') {
+        return no(`v6 supply 는 {forecastWarnings} 하나다 — 칸 ${keys.join(',') || '(없음)'}`)
       }
-      if (!Array.isArray(e.codes) || e.codes.some((c) => typeof c !== 'string')) {
-        return no('supply.excluded[].codes 가 문자열 배열이 아니다')
-      }
-      excluded.push({ reason: reason as SupplyExcludeReason, codes: [...(e.codes as string[])] })
-    }
-    /**
-     * 🔴 예측 경고 — v6 행은 키가 반드시 있고(빈 배열 가능) 닫힌 코드만 한 번씩. v4/v5 행에 있으면 거절한다
-     *    (옛 행에 경고를 소급해 그날의 시험 개방 근거를 바꿔 읽지 않는다).
-     */
-    const hasWarnings = Object.prototype.hasOwnProperty.call(sp, 'forecastWarnings')
-    if (contractVersion === STAGE_DECISION_VERSION_V6) {
       const w = sp.forecastWarnings
-      if (!hasWarnings || !Array.isArray(w)) return no('v6 supply 에 forecastWarnings 배열이 없다')
+      if (!Array.isArray(w)) return no('v6 supply.forecastWarnings 가 배열이 아니다')
       if (w.some((c) => typeof c !== 'string' || !(FORECAST_WARNING_CODES as readonly string[]).includes(c))) {
         return no(`모르는 예측 경고 — ${w.map(String).join(',')}`)
       }
       if (new Set(w).size !== w.length) return no('같은 예측 경고가 두 번 있다')
-      supply = { eligibleSpeakers: sp.eligibleSpeakers as number, excluded, forecastWarnings: [...(w as ForecastWarningCode[])] }
+      supply = { forecastWarnings: [...(w as ForecastWarningCode[])] }
     } else {
-      if (hasWarnings) return no(`${contractVersion} 행에는 예측 경고 칸이 없다 — v6 만 싣는다`)
+      if (Object.prototype.hasOwnProperty.call(sp, 'forecastWarnings')) {
+        return no(`${contractVersion} 행에는 예측 경고 칸이 없다 — v6 만 싣는다`)
+      }
+      if (!nonNegInt(sp.eligibleSpeakers)) {
+        return no(`supply.eligibleSpeakers 가 유한한 비음수 정수가 아니다 — ${String(sp.eligibleSpeakers)}`)
+      }
+      if (!Array.isArray(sp.excluded)) return no('supply.excluded 가 배열이 아니다')
+      const excluded: { reason: SupplyExcludeReason; codes: string[] }[] = []
+      for (const e of sp.excluded) {
+        if (!isRec(e)) return no('supply.excluded 항목이 객체가 아니다')
+        const reason = e.reason
+        if (typeof reason !== 'string'
+          || !(SUPPLY_EXCLUDE_REASONS as readonly string[]).includes(reason)) {
+          return no(`모르는 supply 제외 사유 — ${String(e.reason)}`)
+        }
+        if (!Array.isArray(e.codes) || e.codes.some((c) => typeof c !== 'string')) {
+          return no('supply.excluded[].codes 가 문자열 배열이 아니다')
+        }
+        excluded.push({ reason: reason as SupplyExcludeReason, codes: [...(e.codes as string[])] })
+      }
       supply = { eligibleSpeakers: sp.eligibleSpeakers as number, excluded }
     }
   }

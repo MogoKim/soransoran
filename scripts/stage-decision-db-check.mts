@@ -36,7 +36,7 @@ import {
   decisionToCreateInput,
 } from '../src/lib/stage-decision-repo'
 import {
-  validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER,
+  validateStoredDecision, STAGE_DECISION_VERSION, STAGE_DECISION_V6, DECISION_WRITER,
   type StageDecision, type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, consumeStageDecision } from '../src/lib/stage-decision-store'
@@ -55,7 +55,6 @@ import { currentQualityContract } from '../src/lib/quality-contract'
 
 const QUALITY = currentQualityContract()
 
-/** 🔴 JIT 계약 묶음(workset-v4) — 원천마다 예정 슬롯 · 슬롯 시점 나이 · 품질 계약 필수 */
 /** 🔴 JIT 계약 묶음(workset-v4) — 원천마다 예정 슬롯 · 슬롯 시점 나이 · 품질 계약 필수. `ids` 는 큐 행과 연결되는 원천(앞쪽), 나머지는 채움 */
 const wsV4 = (runId: string, site: string, n: number, ids: readonly string[] = []): string => JSON.stringify({
   kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, qualityContract: QUALITY, runId,
@@ -183,7 +182,8 @@ async function main(): Promise<void> {
         `${norm(got.result.decision).slice(0, 180)}`)
       check('🔴 dayPinned · supply · transition 이 살아서 돌아온다',
         got.result.decision.dayPinned === true
-        && got.result.decision.supply?.excluded[0]?.codes.join(',') === 'P01,P02'
+        && got.result.decision.supply !== null && 'excluded' in got.result.decision.supply
+        && got.result.decision.supply.excluded[0]?.codes.join(',') === 'P01,P02'
         && got.result.decision.transition?.kind === 'TRIAL')
       check('🔴 decidedAt 이 DateTime 왕복 뒤에도 그날 안이다',
         got.result.decision.decidedAt === d.decidedAt,
@@ -247,6 +247,32 @@ async function main(): Promise<void> {
     check('🔴 null 이 `undefined` 로 오지 않는다 — 필수 키 누락이 되지 않는다',
       got.found && got.result.ok
       && got.result.decision.supply === null && got.result.decision.transition === null)
+  }
+
+  console.log('\n②-b 🔴 v6 판별 supply 왕복 — {forecastWarnings} · null · 판을 가로지른 행 거절')
+  {
+    for (const supply of [{ forecastWarnings: ['THROUGHPUT_SHORT', 'OPPORTUNITY_UNKNOWN'] }, { forecastWarnings: [] }, null] as const) {
+      await wipe()
+      const d = decision({ contractVersion: STAGE_DECISION_V6, supply: supply as StageDecision['supply'] })
+      await createStageDecision(prisma, d)
+      const got = await readStageDecision(prisma, DATE)
+      check(`🔴 v6 supply ${JSON.stringify(supply)} 가 값 그대로 돌아오고 validator 를 통과한다`,
+        got.found && got.result.ok && got.result.decision.contractVersion === STAGE_DECISION_V6
+        && JSON.stringify(got.result.decision.supply) === JSON.stringify(supply),
+        got.found && !got.result.ok ? got.result.reason : JSON.stringify(got.found && got.result.ok ? got.result.decision.supply : null))
+    }
+    // 🔴 저장된 행이 판과 다른 모양이면 읽을 때 깨진 행이다 — v5 행에 v6 경고 · v6 행에 화자 수
+    const cross: readonly [string, Record<string, unknown>][] = [
+      ['v5 행에 {forecastWarnings}', { supply: { forecastWarnings: [] } }],
+      ['v6 행에 {eligibleSpeakers, excluded}', { contractVersion: STAGE_DECISION_V6, supply: { eligibleSpeakers: 3, excluded: [] } }],
+    ]
+    for (const [label, patch] of cross) {
+      await wipe()
+      await prisma.stageDecision.create({ data: { ...decisionToCreateInput(decision()), ...patch } as never })
+      const got = await readStageDecision(prisma, DATE)
+      check(`🔴 ${label} 저장 행은 validator 가 거절한다`, got.found && !got.result.ok,
+        got.found && got.result.ok ? '🔴 통과해 버림' : '')
+    }
   }
 
   console.log('\n②-b 🔴 SQL NULL 은 DB 가 거절한다 (JSONB NOT NULL)')

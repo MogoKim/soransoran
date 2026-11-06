@@ -912,6 +912,8 @@ jobs:
           npm run stage:ladder-check
           # 🔴 StageDecision v6 reader — writer 는 v5 그대로 · legacy 는 v4 뿐 · 예측 경고는 v6 만. 새 step 이 아니다
           npm run stage:v6-reader-check
+          # 🔴 하루 = 결정 하나 = 단계 하나 — 같은 날 D20→D30 · 조각 하루 증명 반례. 새 step 이 아니다
+          npm run stage:one-day-check
           # 🔴 D20+ 제한 복구 — OPPORTUNITY_SHORT 하나만 · 하루 1회 · 07:30 유료 시작 마감 · 07:55 판정 · 07:58 저장 fallback
           npm run stage:active-recovery-check
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
