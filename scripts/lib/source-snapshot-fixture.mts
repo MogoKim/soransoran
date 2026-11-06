@@ -53,7 +53,8 @@ function isSubsequence(needles: readonly string[], haystack: readonly string[]):
 /**
  * 옛 runtime 코드가 현재 Prisma Client를 빌려 써도 되는 additive schema인지 판정한다.
  * 기존 datasource·generator·model·enum은 그대로여야 한다. 예외는 새 model로 향하는
- * 역관계 배열뿐이다. 새 scalar나 기존 필드 변경은 계속 fail-closed다.
+ * 역관계 배열 또는 optional 1:1 역관계뿐이다. 둘 다 기존 테이블의 DB 칼럼을 만들지 않는다.
+ * 새 scalar·필수 관계·기존 필드 변경은 계속 fail-closed다.
  */
 export function schemaCompatibleForBorrowedClient(runtimeSource: string, currentSource: string): boolean {
   if (withoutBlocks(runtimeSource) !== withoutBlocks(currentSource)) return false
@@ -77,8 +78,11 @@ export function schemaCompatibleForBorrowedClient(runtimeSource: string, current
     const extras = next.lines.filter((line) => !oldBlock.lines.includes(line))
     if (!isSubsequence(oldBlock.lines, next.lines)) return false
     if (extras.some((line) => {
-      const field = /^(\w+)\s+(\w+)\[\](?:\s+.*)?$/.exec(line)
-      return field === null || !newModels.has(field[2]!)
+      const field = /^(\w+)\s+(\w+)(\[\]|\?)(?:\s+.*)?$/.exec(line)
+      // 기존 model에 DB scalar/FK를 더하는 forward relation은 `NewModel?`처럼 보여도
+      // additive reverse relation이 아니다. fields:를 가진 관계는 반드시 차단한다.
+      const ownsForeignKey = /@relation\s*\([^)]*\bfields\s*:/.test(line)
+      return field === null || !newModels.has(field[2]!) || ownsForeignKey
     })) return false
   }
   return true
