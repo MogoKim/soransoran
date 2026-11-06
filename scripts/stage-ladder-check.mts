@@ -684,10 +684,10 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
   check('🔴 🔴 **그때 consumer 는 fail-closed 로 간다 (가장 안전한 단계 d1)**',
     !consumed.ok && consumed.code === 'BROKEN' && consumed.fallback === 'safest',
     JSON.stringify(consumed))
-  check('🔴 🔴 **제안 모델이 kstDate 를 기본키로 둔다 — DB 가 하루 하나를 강제한다**', (() => {
-    const store = readFileSync('src/lib/stage-decision-store.ts', 'utf-8')
-    // 🔴 설명 문장이 아니라 **모델 블록 안**을 본다
-    const model = store.match(/```prisma([\s\S]*?)```/)?.[1] ?? ''
+  check('🔴 🔴 **정본 모델이 kstDate 를 기본키로 둔다 — DB 가 하루 하나를 강제한다**', (() => {
+    // 🔴 주석 속 사본이 아니라 **정본 schema 의 모델 블록**을 본다(2026-11-06: 사본이 낡아 사본을 지웠다)
+    const schema = readFileSync('prisma/schema.prisma', 'utf-8')
+    const model = schema.match(/\nmodel StageDecision \{([\s\S]*?)\n\}/)?.[1] ?? ''
     return /kstDate\s+String\s+@id/.test(model) && !/@@unique\(/.test(model)
       // 🔴 모델이 validator 가 요구하는 칸을 전부 갖는다
       && STORED_COLUMNS.every((c) => new RegExp(`\\b${c}\\s+\\w`).test(model))
