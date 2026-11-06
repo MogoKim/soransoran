@@ -231,7 +231,9 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
     'Dn 최대 용량', '가까운 수요 지평', '댓글 event-assisted·공급 자연 예약', '원천 순위 하나', '날짜 정밀도 보존',
     'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수',
-    '자동 품질 생명주기', 'bounded creativity']) {
+    '자동 품질 생명주기', 'bounded creativity',
+    // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
+    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -269,14 +271,34 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('Persona 여력도 같은')])
   out.push(['canon §3.3 이 공급 자연 예약 · 댓글 event-assisted · 공통 lease · exactly-once 금지를 적는다',
     ['일반 공급 owner는 하루 7회 고정 schedule 하나다', '공개 commit 이 첫 댓글을 깨운다', '정기 댓글 회차가 fallback',
-      '실행 lease/token', 'controller-owned 제한 복구 한 번뿐', '일일 intent·원자 실행권',
+      '실행 lease/token', '예외 공급 경로는 없다',
       'exactly-once 시스템을 새로 만들지 않는다']
       .every((t) => d100Goal.includes(t))])
-  out.push(['canon 이 제한 복구의 07:55 판정 · 07:58 저장 fallback · 원천 중복 방지를 함께 고정한다',
-    ['07:00·07:20·07:40·07:55·07:58', '별도 07:58 fallback은 결정이 여전히 없을 때',
-      '새 복구·provider를 열지 않으며 create-only 저장',
-      '원천 identity hash', '기회를 두 번 세지 않는다', '다섯 시각']
-      .every((t) => d100Goal.includes(t))])
+  /**
+   * 🔴 2026-11-06 창업자 결정 — 아침 공급·READY 예측은 경고이고, 평상일과 증명일은 같은 실행 경로다.
+   *    대체한 제한 복구는 §11 📜 표와 §11.1 📜 전환기 호환에만 남는다. 현재 정책 본문(📜 밖)에 다시 나오면 실패한다.
+   */
+  const goalLive = activeTextOf(d100Goal)
+  out.push(['canon 이 공급·READY 예측을 경고·계획 입력으로, hard gate 를 승인된 목록으로 정한다',
+    ['공급·READY 예측은 경고·계획 입력이다', '단계 시험을 FAIL로 막지 않는다',
+      'hard gate는 승인 상한(capacity) · 올라갈 단계의 Persona canary 하한 · 비용(§3.4) · runtime/provider/수집 session 건강',
+      '남은 운영 시간의 발행 슬롯이 물리적으로 목표 `N`편을 담는다',
+      '평상일과 증명일은 같은 실행 경로를 쓴다', '실제 원천·READY 공급이 모자라 `N`에 못 미친 날은 결함이']
+      .every((t) => goalLive.includes(t))])
+  out.push(['🔴 canon 현재 정책 본문에 대체된 제한 복구·07:55/07:58 복구 사슬이 다시 나오지 않는다',
+    !['stage-active-recovery-v2', '제한 복구', '07:58 fallback', '07:00·07:20·07:40·07:55·07:58',
+      'controller-owned']
+      .some((t) => goalLive.includes(t))])
+  out.push(['canon 이 대체된 복구의 회계 경계를 📜 전환기 호환 절에만 격리한다',
+    d100Goal.includes('### 11.1 📜 전환기 호환 — 대체됐지만 코드에 남은 경로 (정책 아님)')
+    && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('`stage-active-recovery-v2`')
+    && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('해당 코드를 지우는 변경에서 이 절의 항목도 함께 지운다')])
+  out.push(['canon §2.3 이 sourceAge 를 원문 게시 시각 기준 한 줄 정렬로 정의하고 나이 bucket·quota 를 금지한다',
+    goalLive.includes('**`sourceAge` = 예정 공개 시각 − 원문 게시 시각**')
+    && goalLive.includes('적격 후보 **전부**를 `sourceAge` 오름차순 한 줄로 세운다')
+    && goalLive.includes('runtime bucket·quota·예약석을 만들지 않는다')
+    && goalLive.includes('72시간이 지난 원문은 자격 밖이다(hard exclusion)')
+    && goalLive.includes('24h 는 관측·조사 목표이지 자격 문턱이 아니다')])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
     d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
     && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')

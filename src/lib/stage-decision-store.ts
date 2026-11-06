@@ -216,35 +216,9 @@ export async function ensureStageDecision(io: {
 /**
  * 🔴 **구현된 모델** (`prisma/schema.prisma` · migration `0028_stage_decision`)
  *
- *   🔴 아래는 **정본이 아니라 읽기용 사본**이다. 정본은 `schema.prisma` 이고,
- *      검사가 그 파일을 직접 읽어 칸이 빠지지 않았는지 본다.
- *
- *   🔴 **validator 가 요구하는 값을 손실 없이 담는다.** 앞판 제안에는
- *      `dayPinned`·`supply`·`transition` 칸이 없었다 — 그 모델로 저장하면
- *      다시 읽을 때 `validateStoredDecision` 이 **전부 거절**한다.
- *      저장할 수 없는 계약은 계약이 아니다.
- *
- * ```prisma
- * model StageDecision {
- *   /// 🔴 유일키다 — 하루에 결정은 하나뿐이다
- *   kstDate         String   @id
- *   contractVersion String
- *   capacity        String   // 승인 천장 그대로 (d1|d3|d5|d10)
- *   release         String   // 🔴 release rank <= capacity rank
- *   state           String   // SUSTAIN|TRIAL|PREPARE|HOLD|REPROVE (REPROVE 는 2026-09-29 추가 · 판 v4 그대로)
- *   reasons         Json     // string[]
- *   blocks          Json     // { code: BlockCode, reason: string }[]
- *   /// 🔴 그날 단계를 고정했는가 — 없으면 읽을 때 검증이 막힌다
- *   dayPinned       Boolean
- *   /// 🔴 **필수 칼럼이다.** 값이 없으면 JSON `null` — SQL NULL 은 DB 가 거절한다
- *   supply          Json
- *   /// 🔴 필수 칼럼. TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON `null`
- *   transition      Json
- *   decidedBy       String   // 🔴 언제나 'controller'
- *   decidedAt       DateTime // 🔴 그 KST 날짜 안이어야 한다
- *   createdAt       DateTime @default(now())
- * }
- * ```
+ *   🔴 칸과 뜻의 정본은 `schema.prisma` 의 `StageDecision` 주석과 `stage-decision-contract.ts` validator 다.
+ *      여기에 모델 사본을 두지 않는다 — 사본은 낡는다(2026-11-06 실측: 천장 주석이 d1~d10 에 머물러 있었다).
+ *      모델은 validator 가 요구하는 값(`dayPinned`·`supply`·`transition` 포함)을 손실 없이 담는다.
  *
  * 🔴 **유일키가 `@@unique([kstDate, contractVersion])` 이 아니다.**
  *    그 키는 **같은 날 판을 올리면 두 번째 행**을 허용한다. 그러면 하루 결정이 둘이 되고,

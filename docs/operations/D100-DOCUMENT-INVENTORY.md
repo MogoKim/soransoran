@@ -60,7 +60,7 @@
 | `launchd/README.md` | 템플릿·runtime 배포·스케줄 관측·수동 진단 | `launchctl`, `runtime:deploy`, stage wrapper |
 | `2026-10-13-persona-expansion-runbook.md` | Persona 30 → 40 → 60 → 300 확장 판정·단계별 활성화 순서 | `persona:expansion -- --db`, `persona:expansion-check` |
 | `2026-10-15-persona-voice-evidence-capture.md` | 신규 Persona용 공개 댓글 말투 근거의 최소수집·익명화·보존·삭제 절차 | `persona:voice-evidence-status -- --db`, `persona:voice-evidence-check` |
-| `2026-11-05-stage-bounded-active-recovery.md` | 기회·처리량 공급 한정 blocker의 제한 보충 실행·진단·rollback 절차 | `stage:active-recovery-check`, 날짜별 intent·source/supply receipt·로그, 07:55 판정·07:58 저장 fallback |
+| `2026-11-05-stage-bounded-active-recovery.md` | 전환기 runbook — canon이 2026-11-06에 대체한 제한 복구가 코드에서 지워지기 전까지 배포된 경로의 진단·quiesce·rollback 절차. 정책 근거 아님 (canon §11.1) | `stage:active-recovery-check`, 날짜별 intent·source/supply receipt·로그, `CURRENT-MILESTONE.md` §1.3 구현 gap |
 
 runbook의 오래된 실측 절은 `📜` 또는 “작성 당시 스냅샷”으로 분리한다. 등록 템플릿이 있다는 사실과
 현재 loaded 상태를 합치지 않는다.

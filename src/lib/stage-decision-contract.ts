@@ -126,7 +126,7 @@ export type TransitionProvenance =
  */
 export type StageDecision = {
   readonly kstDate: string
-  /** 🔴 승인 천장 그대로 — 어떤 판정도 이 값을 올리지 않는다 */
+  /** 🔴 준비 단계 — controller 가 계산한 "다음에 증명할 단계". 사람이 올리는 값이 아니다. 공개가 이것을 넘지 못한다 */
   readonly capacity: RuntimeStage
   readonly release: RuntimeStage
   readonly state: TransitionState
