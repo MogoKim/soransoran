@@ -281,10 +281,18 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   const goalLive = activeTextOf(d100Goal)
   out.push(['canon 이 공급·READY 예측을 경고·계획 입력으로, hard gate 를 승인된 목록으로 정한다',
     ['공급·READY 예측은 경고·계획 입력이다', '단계 시험을 FAIL로 막지 않는다',
-      'hard gate는 승인 상한(capacity) · 올라갈 단계의 Persona canary 하한 · 비용(§3.4) · runtime/provider/수집 session 건강',
-      '남은 운영 시간의 발행 슬롯이 물리적으로 목표 `N`편을 담는다',
+      'hard gate는 대상 단계의 runtime scheduler/profile 지원·남은 슬롯의 물리 발행 용량·Persona·비용·',
+      'hard gate는 대상 단계의 runtime scheduler/profile 지원 ·',
+      '남은 운영 시간의 발행 슬롯이 목표 `N`편을 물리적으로 담는 발행 용량',
+      '이 문서는 별도의 단계 승인 천장을 두지 않는다',
       '평상일과 증명일은 같은 실행 경로를 쓴다', '실제 원천·READY 공급이 모자라 `N`에 못 미친 날은 결함이']
       .every((t) => goalLive.includes(t))])
+  /**
+   * 🔴 2026-11-06 교차 검토 — `StageDecision.capacity` 는 controller 가 계산한 다음 증명 준비 단계다.
+   *    단계 hard gate 를 "승인 상한(capacity)" 로 부르면 존재하지 않는 승인 천장을 지어낸다. (비용 예산 천장은 별개다)
+   */
+  out.push(['🔴 canon 현재 정책 본문이 단계 hard gate 를 "승인 상한" 으로 부르지 않는다',
+    !goalLive.includes('승인 상한') && !goalLive.includes('승인 상한(capacity)')])
   out.push(['🔴 canon 현재 정책 본문에 대체된 제한 복구·07:55/07:58 복구 사슬이 다시 나오지 않는다',
     !['stage-active-recovery-v2', '제한 복구', '07:58 fallback', '07:00·07:20·07:40·07:55·07:58',
       'controller-owned']

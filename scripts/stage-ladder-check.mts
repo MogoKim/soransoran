@@ -486,7 +486,7 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
     verdicts2.every((v) => !v.ok), `통과해 버린 것 ${verdicts2.filter((v) => v.ok).length}건`)
 
   /** ── 🔴 저장 행 불변식 ── */
-  check('🔴 🔴 **공개가 승인 천장을 넘으면 거절**',
+  check('🔴 🔴 **공개가 준비 단계(capacity)를 넘으면 거절**',
     !V({ release: 'd10', capacity: 'd3' }).ok, JSON.stringify(V({ release: 'd10', capacity: 'd3' })))
   check('🔴 🔴 **decidedAt 의 KST 날짜가 kstDate 와 다르면 거절**',
     !V({ decidedAt: `${PREV_DATE}T01:00:00.000Z` }).ok)
@@ -549,7 +549,7 @@ console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 �
       d.state !== 'TRIAL' && d.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS'),
       `${d.state} release=${d.release} blocks=${JSON.stringify(d.blocks.map((b) => b.code))}`)
   }
-  rot('전날 천장 < 공개', { capacity: 'd1' }, '승인 천장')
+  rot('전날 준비 단계 < 공개', { capacity: 'd1' }, '준비 단계')
   rot('전날 decidedAt 이 그 날짜가 아니다', { decidedAt: '2020-01-01T00:00:00.000Z' }, 'decidedAt')
   rot('전날 전이 근거가 상태와 어긋난다', { state: 'TRIAL', transition: { kind: 'SUSTAIN', from: 'd1', to: 'd10' } }, '시험 근거')
   rot('전날 상태가 정본 enum 이 아니다', { state: 'NOPE' }, '모르는 상태')

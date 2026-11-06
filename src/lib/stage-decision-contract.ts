@@ -45,7 +45,7 @@ export type StageDecisionVersion =
 
 /**
  * 🔴 **예측 경고 — v6 만 싣는다** (canon §3.1). 원천 기회 · 처리량 · READY 필요량 예측이다.
- *    hard gate(상한 · Persona · 비용 · runner · 댓글·감사 용량 · 슬롯 물리 가능성)는 여기 들어오지 않는다.
+ *    hard gate(scheduler/profile 지원 · 슬롯 물리 발행 용량 · Persona · 비용 · runner · 댓글·감사 용량)는 여기 들어오지 않는다.
  */
 export const FORECAST_WARNING_CODES = [
   'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN',
@@ -251,7 +251,9 @@ export function previousKstDate(kstDate: string): string | null {
 /**
  * 🔴 다음 칸 — 여기가 정본이다. 다른 파일이 다시 적지 않는다.
  *    러너 단계(`RUNTIME_STAGES`) 위의 다음 칸이다 — d10 다음은 d20, d50 다음은 없다(D100 은 러너 밖).
- *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 승인 천장이 막는다(사다리 `CEILING`).
+ *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 대상 단계의 scheduler/profile 지원 · 남은 슬롯의 물리 발행 용량 ·
+ *       나머지 hard gate 를 preflight(`judgeNextPreflight` · `LATE_START`)가 막는다. 별도의 단계 승인 천장은 없다
+ *       (`CEILING` 코드는 옛 env 천장의 legacy 행을 읽으려고 enum 에만 남았다).
  */
 export function nextStage(s: RuntimeStage): RuntimeStage | null {
   const i = RUNTIME_STAGES.indexOf(s)
@@ -355,9 +357,9 @@ export function validateStoredDecision(input: {
   if (!isStage(r.release)) return no(`모르는 공개 단계 — ${String(r.release)}`)
   const capacity = r.capacity
   const release = r.release
-  /** 🔴 공개가 승인 천장을 넘은 행은 쓰지 않는다 — 승인되지 않은 양이 나간다 */
+  /** 🔴 공개가 그날의 준비 단계(`capacity`)를 넘은 행은 쓰지 않는다 — 준비되지 않은 양이 나간다 */
   if (rank(release) > rank(capacity)) {
-    return no(`공개 ${release} 가 승인 천장 ${capacity} 를 넘는다`)
+    return no(`공개 ${release} 가 준비 단계 ${capacity} 를 넘는다`)
   }
   if (!isState(r.state)) return no(`모르는 상태 — ${String(r.state)}`)
   const state = r.state
