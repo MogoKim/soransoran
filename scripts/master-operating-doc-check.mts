@@ -233,7 +233,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수',
     '자동 품질 생명주기', 'bounded creativity',
     // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
-    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬']) {
+    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -523,10 +523,27 @@ check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
 check('D100 목표가 M0~M7을 날짜가 아니라 완료 증거로 정의한다',
   d100Goal.includes('마일스톤 — 날짜가 아니라 증거로 이동한다')
   && Array.from({ length: 8 }, (_, i) => `| M${i} |`).every((t) => d100Goal.includes(t)))
-check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
-  d100Goal.includes('같은 날 남은 유효 슬롯')
-  && d100Goal.includes('다음 KST 운영일의 첫 유효 슬롯')
+/**
+ * 🔴 2026-11-06 정정 — 하루는 create-only StageDecision 하나 · 공개 단계 하나 · 정확 N 증명 최대 한 번이다.
+ *    PASS 확정 뒤 다음 단계는 다음 KST 운영일 첫 슬롯 전 결정으로만 연다. "같은 날 남은 슬롯" 시작은 현재 정책 본문에서 금지.
+ */
+check('D100 목표가 PASS 확정 뒤 다음 KST 운영일에 다음 자동 시험을 연다 (임의 대기 없음)',
+  d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정으로 다음 단계를 시험한다')
+  && d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정이다')
+  && d100Goal.includes('KST 하루에는 create-only `StageDecision` 하나, 공개 단계 하나,')
+  && d100Goal.includes('임의의 달력 대기를 넣지 않는다')
   && d100Goal.includes('사람이 env나 stage를 바꾸지 않는다'))
+check('🔴 D100 목표 현재 정책 본문이 같은 날 다음 단계 시작을 말하지 않는다',
+  !activeTextOf(d100Goal).includes('같은 날 남은 유효 슬롯으로')
+  && !activeTextOf(d100Goal).includes('같은 날 남은 슬롯 또는'))
+/** 🔴 시간 근거는 슬롯이다 — 60분 첫 댓글은 마감이지 가장 이른 확인 시각이 아니다(즉시 달릴 수 있다) */
+check('🔴 D100 목표가 같은 날 불가의 시간 근거를 슬롯으로 적고 첫 댓글 마감을 확인 시각으로 쓰지 않는다',
+  activeTextOf(d100Goal).includes('정확 `N`번째 글은 그 단계의 마지막 슬롯에서야 생기므로')
+  && activeTextOf(d100Goal).includes('그 마지막 슬롯보다 늦은 예약 슬롯이 없다')
+  && !activeTextOf(d100Goal).includes('첫 댓글 확인 22:10'))
+check('🔴 D100 목표가 마지막 예약의 공급 lease busy·unknown 을 무결성 안전 HOLD 로 적는다(예측 경고가 아니다)',
+  activeTextOf(d100Goal).includes('마지막 controller 예약까지 공급 lease가 busy·unknown이면 무결성 안전 HOLD다')
+  && !activeTextOf(d100Goal).includes('공급 상태를 모르면 그 사실은 예측 경고'))
 /**
  * 🔴 2026-09-30: 첫 canary 2일치 · 지속 14일치 **완성 글 재고** 검사를 뒤집었다.
  *    옛 판은 그 문구를 **강제**했다 — 검사가 폐기된 정책의 편에 서 있었다.
