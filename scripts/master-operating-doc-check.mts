@@ -231,7 +231,9 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
     'Dn 최대 용량', '가까운 수요 지평', '댓글 event-assisted·공급 자연 예약', '원천 순위 하나', '날짜 정밀도 보존',
     'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수',
-    '자동 품질 생명주기', 'bounded creativity']) {
+    '자동 품질 생명주기', 'bounded creativity',
+    // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
+    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -269,14 +271,42 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('Persona 여력도 같은')])
   out.push(['canon §3.3 이 공급 자연 예약 · 댓글 event-assisted · 공통 lease · exactly-once 금지를 적는다',
     ['일반 공급 owner는 하루 7회 고정 schedule 하나다', '공개 commit 이 첫 댓글을 깨운다', '정기 댓글 회차가 fallback',
-      '실행 lease/token', 'controller-owned 제한 복구 한 번뿐', '일일 intent·원자 실행권',
+      '실행 lease/token', '예외 공급 경로는 없다',
       'exactly-once 시스템을 새로 만들지 않는다']
       .every((t) => d100Goal.includes(t))])
-  out.push(['canon 이 제한 복구의 07:55 판정 · 07:58 저장 fallback · 원천 중복 방지를 함께 고정한다',
-    ['07:00·07:20·07:40·07:55·07:58', '별도 07:58 fallback은 결정이 여전히 없을 때',
-      '새 복구·provider를 열지 않으며 create-only 저장',
-      '원천 identity hash', '기회를 두 번 세지 않는다', '다섯 시각']
-      .every((t) => d100Goal.includes(t))])
+  /**
+   * 🔴 2026-11-06 창업자 결정 — 아침 공급·READY 예측은 경고이고, 평상일과 증명일은 같은 실행 경로다.
+   *    대체한 제한 복구는 §11 📜 표와 §11.1 📜 전환기 호환에만 남는다. 현재 정책 본문(📜 밖)에 다시 나오면 실패한다.
+   */
+  const goalLive = activeTextOf(d100Goal)
+  out.push(['canon 이 공급·READY 예측을 경고·계획 입력으로, hard gate 를 승인된 목록으로 정한다',
+    ['공급·READY 예측은 경고·계획 입력이다', '단계 시험을 FAIL로 막지 않는다',
+      'hard gate는 대상 단계의 runtime scheduler/profile 지원·남은 슬롯의 물리 발행 용량·Persona·비용·',
+      'hard gate는 대상 단계의 runtime scheduler/profile 지원 ·',
+      '남은 운영 시간의 발행 슬롯이 목표 `N`편을 물리적으로 담는 발행 용량',
+      '이 문서는 별도의 단계 승인 천장을 두지 않는다',
+      '평상일과 증명일은 같은 실행 경로를 쓴다', '실제 원천·READY 공급이 모자라 `N`에 못 미친 날은 결함이']
+      .every((t) => goalLive.includes(t))])
+  /**
+   * 🔴 2026-11-06 교차 검토 — `StageDecision.capacity` 는 controller 가 계산한 다음 증명 준비 단계다.
+   *    단계 hard gate 를 "승인 상한(capacity)" 로 부르면 존재하지 않는 승인 천장을 지어낸다. (비용 예산 천장은 별개다)
+   */
+  out.push(['🔴 canon 현재 정책 본문이 단계 hard gate 를 "승인 상한" 으로 부르지 않는다',
+    !goalLive.includes('승인 상한') && !goalLive.includes('승인 상한(capacity)')])
+  out.push(['🔴 canon 현재 정책 본문에 대체된 제한 복구·07:55/07:58 복구 사슬이 다시 나오지 않는다',
+    !['stage-active-recovery-v2', '제한 복구', '07:58 fallback', '07:00·07:20·07:40·07:55·07:58',
+      'controller-owned']
+      .some((t) => goalLive.includes(t))])
+  out.push(['canon 이 대체된 복구의 회계 경계를 📜 전환기 호환 절에만 격리한다',
+    d100Goal.includes('### 11.1 📜 전환기 호환 — 대체됐지만 코드에 남은 경로 (정책 아님)')
+    && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('`stage-active-recovery-v2`')
+    && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('해당 코드를 지우는 변경에서 이 절의 항목도 함께 지운다')])
+  out.push(['canon §2.3 이 sourceAge 를 원문 게시 시각 기준 한 줄 정렬로 정의하고 나이 bucket·quota 를 금지한다',
+    goalLive.includes('**`sourceAge` = 예정 공개 시각 − 원문 게시 시각**')
+    && goalLive.includes('적격 후보 **전부**를 `sourceAge` 오름차순 한 줄로 세운다')
+    && goalLive.includes('runtime bucket·quota·예약석을 만들지 않는다')
+    && goalLive.includes('72시간이 지난 원문은 자격 밖이다(hard exclusion)')
+    && goalLive.includes('24h 는 관측·조사 목표이지 자격 문턱이 아니다')])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
     d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
     && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')
@@ -493,10 +523,27 @@ check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
 check('D100 목표가 M0~M7을 날짜가 아니라 완료 증거로 정의한다',
   d100Goal.includes('마일스톤 — 날짜가 아니라 증거로 이동한다')
   && Array.from({ length: 8 }, (_, i) => `| M${i} |`).every((t) => d100Goal.includes(t)))
-check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
-  d100Goal.includes('같은 날 남은 유효 슬롯')
-  && d100Goal.includes('다음 KST 운영일의 첫 유효 슬롯')
+/**
+ * 🔴 2026-11-06 정정 — 하루는 create-only StageDecision 하나 · 공개 단계 하나 · 정확 N 증명 최대 한 번이다.
+ *    PASS 확정 뒤 다음 단계는 다음 KST 운영일 첫 슬롯 전 결정으로만 연다. "같은 날 남은 슬롯" 시작은 현재 정책 본문에서 금지.
+ */
+check('D100 목표가 PASS 확정 뒤 다음 KST 운영일에 다음 자동 시험을 연다 (임의 대기 없음)',
+  d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정으로 다음 단계를 시험한다')
+  && d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정이다')
+  && d100Goal.includes('KST 하루에는 create-only `StageDecision` 하나, 공개 단계 하나,')
+  && d100Goal.includes('임의의 달력 대기를 넣지 않는다')
   && d100Goal.includes('사람이 env나 stage를 바꾸지 않는다'))
+check('🔴 D100 목표 현재 정책 본문이 같은 날 다음 단계 시작을 말하지 않는다',
+  !activeTextOf(d100Goal).includes('같은 날 남은 유효 슬롯으로')
+  && !activeTextOf(d100Goal).includes('같은 날 남은 슬롯 또는'))
+/** 🔴 시간 근거는 슬롯이다 — 60분 첫 댓글은 마감이지 가장 이른 확인 시각이 아니다(즉시 달릴 수 있다) */
+check('🔴 D100 목표가 같은 날 불가의 시간 근거를 슬롯으로 적고 첫 댓글 마감을 확인 시각으로 쓰지 않는다',
+  activeTextOf(d100Goal).includes('정확 `N`번째 글은 그 단계의 마지막 슬롯에서야 생기므로')
+  && activeTextOf(d100Goal).includes('그 마지막 슬롯보다 늦은 예약 슬롯이 없다')
+  && !activeTextOf(d100Goal).includes('첫 댓글 확인 22:10'))
+check('🔴 D100 목표가 마지막 예약의 공급 lease busy·unknown 을 무결성 안전 HOLD 로 적는다(예측 경고가 아니다)',
+  activeTextOf(d100Goal).includes('마지막 controller 예약까지 공급 lease가 busy·unknown이면 무결성 안전 HOLD다')
+  && !activeTextOf(d100Goal).includes('공급 상태를 모르면 그 사실은 예측 경고'))
 /**
  * 🔴 2026-09-30: 첫 canary 2일치 · 지속 14일치 **완성 글 재고** 검사를 뒤집었다.
  *    옛 판은 그 문구를 **강제**했다 — 검사가 폐기된 정책의 편에 서 있었다.

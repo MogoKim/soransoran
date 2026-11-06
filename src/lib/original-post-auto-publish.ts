@@ -31,8 +31,8 @@ import { isCurrentQualityContract } from './quality-contract'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
-// 🔴 2026-10-19 창업자/Codex — compareAutoRow 가 source evidence 정본 판독으로 ordering 하도록
-import { readSourceEvidence, velocityOf } from './source-slot-release'
+// 🔴 후보 줄 순서는 원천 순위 정본 하나(canon §2.3)로 세운다 — 여기서 비교·게시 시각 파싱을 다시 쓰지 않는다
+import { sortBySourceRank, sourceRankSignalOf } from './source-slot-release'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
 // 🔴 판 값의 정본은 초안 lib 하나다
@@ -386,64 +386,11 @@ export function selectAutoTargets(
     if (safetyOf(r.title, r.body) !== 'pass') { push(r.id, 'SAFETY'); continue }
     targets.push(r)
   }
-  targets.sort(compareAutoRow)
-  return { targets, rejected }
-}
-
-/**
- * 줄 세우기 — 🔴 **실제 원문 게시 시각이 최신인 것이 먼저다** (2026-10-19 창업자/Codex 결정).
- *
- *    자격 gate 를 통과한 뒤 수집→생성→READY→발행이 같은 순서를 흐르게 한다. **큐 적재 시각
- *    (decidedAt/createdAt) 은 ordering 에 쓰지 않는다** — recovery/lane 우선 없음.
- *    - 원천 시각은 `readSourceEvidence(gateResults)` 정본 판독으로만 얻는다 (malformed 는 unknown 으로).
- *    - known > unknown. known 둘 다면 최신 먼저. exact/effective tie(ms 동일) 에서만 반응(정규화 백분위) → velocity → id.
- *    - 모두 unknown 이면 **결정적 id** 로 간다 (큐 적재 시각 없이).
- */
-/**
- * 🔴 queue row 의 `gateResults.sourceEvidence` 를 **정본 판독기** 로 읽어
- *    { postedMs, rank } 를 돌려준다. malformed 는 unknown 으로 떨어뜨린다 — 느슨한 파싱으로 known 을 만들지 않는다.
- */
-export function autoRowSourceSignalOf(gateResults: unknown): {
-  postedMs: number | null
-  commentsPct: number | null
-  viewsPct: number | null
-  velocity: number | null
-} {
-  const read = readSourceEvidence(gateResults)
-  if (!read.ok) return { postedMs: null, commentsPct: null, viewsPct: null, velocity: null }
-  const ev = read.record
-  const toMs = (iso: string | null): number | null => {
-    if (iso === null) return null
-    const t = Date.parse(iso)
-    return Number.isFinite(t) ? t : null
-  }
-  const postedMs = toMs(ev.postedAt)
-    ?? (ev.postedWindow != null && typeof ev.postedWindow === 'object' && !Array.isArray(ev.postedWindow)
-      ? toMs((ev.postedWindow as { from?: string }).from ?? null)
-      : null)
-  const stats = ev.sourceStats
-  return {
-    postedMs,
-    commentsPct: stats?.commentsPct ?? null,
-    viewsPct: stats?.viewsPct ?? null,
-    velocity: velocityOf(ev.observations),
-  }
-}
-const descN = (a: number | null, b: number | null): number =>
-  (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : b - a)
-export function compareAutoRow(a: AutoRow, b: AutoRow): number {
-  const sa = autoRowSourceSignalOf(a.gateResults)
-  const sb = autoRowSourceSignalOf(b.gateResults)
-  // 🔴 known 이 unknown 을 이긴다 · 둘 다 known 이면 최신 먼저
-  if (sa.postedMs !== null && sb.postedMs !== null && sa.postedMs !== sb.postedMs) return sb.postedMs - sa.postedMs
-  if (sa.postedMs !== null && sb.postedMs === null) return -1
-  if (sa.postedMs === null && sb.postedMs !== null) return 1
-  // 🔴 exact/effective tie — 정규화 반응(commentsPct desc → viewsPct desc) → velocity desc → 결정적 id
-  //    큐 적재 시각(decidedAt/createdAt)은 쓰지 않는다 (recovery/lane 우선 없음)
-  return descN(sa.commentsPct, sb.commentsPct)
-    || descN(sa.viewsPct, sb.viewsPct)
-    || descN(sa.velocity, sb.velocity)
-    || a.id.localeCompare(b.id)
+  /**
+   * 🔴 줄 순서 = 원천 순위 정본(`sortBySourceRank`) — 게시 시각은 판정과 같은 판독기로 읽고, 큐 적재·검토 시각은
+   *    쓰지 않는다. 실제 발행 계획(`planPublishBatch`)은 예정 슬롯 판정 rank 로 다시 세우지만 같은 비교 함수다.
+   */
+  return { targets: sortBySourceRank(targets, (r) => sourceRankSignalOf(r.gateResults, r.id)), rejected }
 }
 
 export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: string }
@@ -573,7 +520,8 @@ export function judgeApply(input: {
  *    배정되지 않으면 **그날 하루를 통째로 버렸다** — 뒤에 배정된 글이 있어도 나가지 않았다.
  *    실측: 최희소 후보 하나가 막혀 09-20 · 21 · 22 사흘이 연속으로 비었다.
  *
- *    그래서 줄 순서(= compareAutoRow — source time 최신 순)는 그대로 두되, **배정이 있는 첫 글**을 집는다.
+ *    그래서 줄 순서(= 원천 순위 정본 `compareReleaseRank` — `planPublishBatch` 가 예정 슬롯 판정 rank 로 세운다)는
+ *    그대로 두되, **배정이 있는 첫 글**을 집는다.
  *    건너뛴 글은 지우지도 상태를 바꾸지도 않는다 — 다음 회차에 다시 맨 앞이고,
  *    왜 건너뛰었는지는 `skipped` 로 화면과 관제에 남는다.
  *
@@ -586,7 +534,7 @@ export function judgeApply(input: {
  *    persona 의 주간 여력 문제는 cap/lease 가 다루지 ordering 이 아니다.
  */
 export function pickPublishTarget<T extends { id: string }>(input: {
-  /** 🔴 이미 `compareAutoRow` 로 정렬된 줄 — 2026-10-19 창업자/Codex: source time 최신 순 */
+  /** 🔴 이미 원천 순위 정본으로 정렬된 줄 — 이 함수는 순서를 바꾸지 않는다 */
   ordered: readonly T[]
   /** 그 글에 배정된 persona code. 없으면 null */
   assignedOf: (id: string) => string | null
@@ -596,8 +544,7 @@ export function pickPublishTarget<T extends { id: string }>(input: {
   const has = (t: T): boolean => input.assignedOf(t.id) !== null
   const isRec = input.isRecovery ?? ((): boolean => false)
 
-  // 🔴 2026-10-19 창업자/Codex: recovery-first pre-pick 제거 — compareAutoRow 가 source time 최신 순으로
-  //    세워 둔 줄에서 **배정이 살아 있는 가장 앞 행**을 집는다. recovery 여부는 보고용 신호다.
+  // 🔴 정본 순위로 세워 둔 줄에서 **배정이 살아 있는 가장 앞 행**을 집는다. recovery 여부는 보고용 신호다.
   const at = input.ordered.findIndex((t) => has(t))
   if (at === -1) return { picked: null, recovered: false, skipped: [...input.ordered], waiting: [] }
   const picked = input.ordered[at]!

@@ -161,8 +161,9 @@ export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
  *    담고, 댓글 하루 상한 $0.20 은 첫 댓글 100건을 사지 못한다. 천장으로 **표현**은 되지만
  *    (`stage-ladder-generic.resolveCeiling`) 열 수 있는 천장은 d50 이다.
  *
- * 🔴 **승인 천장은 그대로다.** 이 목록에 있다고 열리는 것이 아니다 — controller 는 승인 천장
- *    (`SORAN_CAPACITY_STAGE`) 위로 어떤 단계도 열지 않는다. 지금 운영값은 d10 이다.
+ * 🔴 **이 목록에 있다고 열리는 것이 아니다.** 목록은 scheduler/profile 지원일 뿐이고, 시험은 preflight 의 hard gate
+ *    (남은 슬롯의 물리 발행 용량 · Persona · 비용 · runner 등)가 연다. `SORAN_CAPACITY_STAGE` 는 사람이 정하는 천장이
+ *    아니라 controller 가 결정의 준비 단계(`capacity`)를 consumer 에 넘기는 env 다.
  */
 export const RUNTIME_STAGES = ['d1', 'd3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const
 export type RuntimeStage = (typeof RUNTIME_STAGES)[number]

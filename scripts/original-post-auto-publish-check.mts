@@ -12,7 +12,7 @@ import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 
 import { SOURCE_TITLE_CHECK_VERSION } from '../src/lib/draft-originality'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, compareAutoRow,
+  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget,
   sourceTitleCheckOf, founderRetitled,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT, REJECT_LABEL,
   type AutoRow,
@@ -20,7 +20,7 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_GATE_MARKS,
   MACHINE_REVIEWED_BY, machineReviewedByHuman, judgeReviewSnapshot, type ReviewSnapshot,
 } from '../src/lib/original-post-auto-publish'
-import { buildSourceEvidence } from '../src/lib/source-slot-release'
+import { buildSourceEvidence, sourceRankSignalOf } from '../src/lib/source-slot-release'
 import { DRAFT_PROVENANCE, DRAFT_RULE_VERSION } from '../src/lib/micro-seed-auto-draft'
 import { MACHINE_DECIDED_BY, HUMAN_ONLY_VALUES } from '../src/lib/micro-seed-supply-autofill'
 import { kstDayStart, DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
@@ -185,11 +185,12 @@ console.log('\n③ 줄 세우기 — 실제 원문 게시 시각이 최신인 �
   const g2 = judgeApply({ targets: t2, picked: t2[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
   check('🔴 입력 순서가 바뀌어도 같은 1건을 고른다', g2.ok && g2.target.id === 'zzz')
 
-  check('source time이 같으면 결정적 id로 가른다', compareAutoRow(
-    ok({ id: 'a', gateResults: sourceGate('a', '2026-09-05T00:00:00Z') }),
+  check('source time이 같으면 결정적 id로 가른다', selectAutoTargets([
     ok({ id: 'b', gateResults: sourceGate('b', '2026-09-05T00:00:00Z') }),
-  ) < 0)
-  check('source time known이 unknown보다 앞선다', compareAutoRow(fresh, ok({ id: '000' })) < 0)
+    ok({ id: 'a', gateResults: sourceGate('a', '2026-09-05T00:00:00Z') }),
+  ], allPass).targets.map((t) => t.id).join() === 'a,b')
+  check('source time known이 unknown보다 앞선다',
+    selectAutoTargets([ok({ id: '000' }), fresh], allPass).targets[0]?.id === fresh.id)
 
   const sp = pickPublishTarget({ ordered: r.targets, assignedOf: () => 'PXX' })
   check('선택 1건 + 대기 N건으로 나뉜다', sp.picked?.id === 'zzz' && sp.waiting.length === 1)
@@ -721,7 +722,8 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
     const gate = { autoDraft: MACHINE_GATE2, ...sourceGate('same-source', '2026-09-12T00:00:00Z') }
     const before = m2({ id: 'same', decidedAt: new Date('2026-09-01T00:00:00Z'), gateResults: gate })
     const after = m2({ id: 'same', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z'), gateResults: gate })
-    return compareAutoRow(before, after) === 0
+    return JSON.stringify(sourceRankSignalOf(before.gateResults, before.id))
+      === JSON.stringify(sourceRankSignalOf(after.gateResults, after.id))
   })())
   check('🟢 [요구] founder 검토 시각이 늦어도 더 최신 원문이 먼저다', (() => {
     const a = m2({

@@ -486,7 +486,7 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
     verdicts2.every((v) => !v.ok), `통과해 버린 것 ${verdicts2.filter((v) => v.ok).length}건`)
 
   /** ── 🔴 저장 행 불변식 ── */
-  check('🔴 🔴 **공개가 승인 천장을 넘으면 거절**',
+  check('🔴 🔴 **공개가 준비 단계(capacity)를 넘으면 거절**',
     !V({ release: 'd10', capacity: 'd3' }).ok, JSON.stringify(V({ release: 'd10', capacity: 'd3' })))
   check('🔴 🔴 **decidedAt 의 KST 날짜가 kstDate 와 다르면 거절**',
     !V({ decidedAt: `${PREV_DATE}T01:00:00.000Z` }).ok)
@@ -549,7 +549,7 @@ console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 �
       d.state !== 'TRIAL' && d.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS'),
       `${d.state} release=${d.release} blocks=${JSON.stringify(d.blocks.map((b) => b.code))}`)
   }
-  rot('전날 천장 < 공개', { capacity: 'd1' }, '승인 천장')
+  rot('전날 준비 단계 < 공개', { capacity: 'd1' }, '준비 단계')
   rot('전날 decidedAt 이 그 날짜가 아니다', { decidedAt: '2020-01-01T00:00:00.000Z' }, 'decidedAt')
   rot('전날 전이 근거가 상태와 어긋난다', { state: 'TRIAL', transition: { kind: 'SUSTAIN', from: 'd1', to: 'd10' } }, '시험 근거')
   rot('전날 상태가 정본 enum 이 아니다', { state: 'NOPE' }, '모르는 상태')
@@ -684,10 +684,10 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
   check('🔴 🔴 **그때 consumer 는 fail-closed 로 간다 (가장 안전한 단계 d1)**',
     !consumed.ok && consumed.code === 'BROKEN' && consumed.fallback === 'safest',
     JSON.stringify(consumed))
-  check('🔴 🔴 **제안 모델이 kstDate 를 기본키로 둔다 — DB 가 하루 하나를 강제한다**', (() => {
-    const store = readFileSync('src/lib/stage-decision-store.ts', 'utf-8')
-    // 🔴 설명 문장이 아니라 **모델 블록 안**을 본다
-    const model = store.match(/```prisma([\s\S]*?)```/)?.[1] ?? ''
+  check('🔴 🔴 **정본 모델이 kstDate 를 기본키로 둔다 — DB 가 하루 하나를 강제한다**', (() => {
+    // 🔴 주석 속 사본이 아니라 **정본 schema 의 모델 블록**을 본다(2026-11-06: 사본이 낡아 사본을 지웠다)
+    const schema = readFileSync('prisma/schema.prisma', 'utf-8')
+    const model = schema.match(/\nmodel StageDecision \{([\s\S]*?)\n\}/)?.[1] ?? ''
     return /kstDate\s+String\s+@id/.test(model) && !/@@unique\(/.test(model)
       // 🔴 모델이 validator 가 요구하는 칸을 전부 갖는다
       && STORED_COLUMNS.every((c) => new RegExp(`\\b${c}\\s+\\w`).test(model))
@@ -791,7 +791,7 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
       try {
         (d.blocks as unknown as { code: string }[])[0]!.code = 'EVIL'
         ;(d.reasons as unknown as string[]).push('침입')
-        ;(d.supply?.excluded[0]?.codes as unknown as string[])?.push('P99')
+        ;((d.supply !== null && 'excluded' in d.supply ? d.supply.excluded[0]?.codes : undefined) as unknown as string[])?.push('P99')
       } catch { /* strict mode 에서는 던진다 — 그것도 막힌 것이다 */ }
       return JSON.stringify(d) === before
         && Object.isFrozen(d) && Object.isFrozen(d.blocks) && Object.isFrozen(d.supply)

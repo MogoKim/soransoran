@@ -301,9 +301,9 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
 // ── ⑬ 임의 점수 · 보너스 · 품질 구간 · 주제·출처 우대 없음 (2026-10-19 창업자 결정) ──
 {
   const src = readFileSync('src/lib/supply-workset.ts', 'utf-8')
-  const cmp = src.slice(src.indexOf('export function compareSupplyRank'), src.indexOf('export function compareSupplyRank') + 600)
-  check('⑬ 공급 순위는 정본 compareReleaseRank + 결정적 열쇠뿐 — 가산 · 곱셈 · 상수 · menopause · wgang 없음',
-    /compareReleaseRank\(\{ \.\.\.a\.rank, tieBreak: '' \}, \{ \.\.\.b\.rank, tieBreak: '' \}\)/.test(cmp)
+  const cmp = src.slice(src.indexOf('export function compareSupplyRank'), src.indexOf('export function orderByWorksetRank'))
+  check('⑬ 공급 순위는 정본 compareReleaseRank 에 결정적 열쇠만 넘긴다 — 가산 · 곱셈 · 상수 · menopause · wgang 없음',
+    /compareReleaseRank\(\{ \.\.\.a\.rank, tieBreak: a\.key \}, \{ \.\.\.b\.rank, tieBreak: b\.key \}\)/.test(cmp)
     && !/[0-9]\.[0-9]|\*\s*[0-9]|\+\s*0\.|score|weight|bonus|band|menopause|wgang/i.test(cmp.replace(/\/\*\*[\s\S]*?\*\//g, '')))
 }
 

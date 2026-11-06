@@ -64,7 +64,8 @@ export const worksetFileName = (runId: string): string => `supply-workset-${runI
 /** 🔴 JIT 공급 계약 · 의도 — 정본은 `supply-intent`(적재 모듈과 순환하지 않게 따로 둔다). 여기서 다시 내보낸다 */
 import {
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
-  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, type SupplyIntent, type SupplyQualityContractMark,
+  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, sameSupplyQualityContract,
+  type SupplyIntent, type SupplyQualityContractMark,
 } from './supply-intent'
 export {
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
@@ -1260,14 +1261,31 @@ export type SupplyRankKey = { rank: ReleaseRank; key: string }
 export const WGANG_SOURCE_SITE = 'navercafe:wgang'
 
 /**
- * 🔴 **공급 순위 — 정본 `compareReleaseRank` 그대로**(신선도 → 댓글 백분위 → 조회 백분위 → velocity),
- *    그것이 동률이면 원천 열쇠(코드 포인트 순). 🔴 **출처 우대·주제 우대 없음** (2026-10-19 창업자 결정) —
- *    옛 판은 동률에서 갱년기 → wgang 을 세웠지만, 숫자형 보너스를 운영에 넣지 않는다. 중심 주제는
- *    게시판 라우팅이 다룬다(공급 순위가 아니다).
+ * 🔴 **공급 순위 — 정본 `compareReleaseRank` 에 원천 열쇠를 결정적 열쇠로 넘길 뿐이다**(canon §2.3).
+ *    출처·주제 우대 없음 — 중심 주제는 게시판 라우팅이 다룬다.
  */
 export function compareSupplyRank(a: SupplyRankKey, b: SupplyRankKey): number {
-  return compareReleaseRank({ ...a.rank, tieBreak: '' }, { ...b.rank, tieBreak: '' })
-    || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  return compareReleaseRank({ ...a.rank, tieBreak: a.key }, { ...b.rank, tieBreak: b.key })
+}
+
+/**
+ * 🔴 **묶음 순위를 소비자 순서로** — `rankedKeys`(묶음 파일에 쓴 정본 순위 순서)대로 세우고, 묶음 밖 행은 뒤에
+ *    원래 순서 그대로 둔다(지우지 않는다). 순위가 없으면(`null`) 입력 순서 그대로다.
+ *    판정·생성 러너는 유료 요청 상한과 화자 시도 여력을 앞에서부터 쓰므로 이 순서가 곧 배분이다
+ *    (2026-11-06 반례: 이름순 판정 파일이 영수증 밖 7.95h 원천에 유일한 화자 자리를 줬다).
+ */
+export function orderByWorksetRank<T>(
+  rows: readonly T[], keyOf: (row: T) => string | null, rankedKeys: readonly string[] | null,
+): T[] {
+  if (rankedKeys === null) return [...rows]
+  const pos = new Map(rankedKeys.map((k, i) => [k, i]))
+  const at = (row: T): number => {
+    const k = keyOf(row)
+    return k === null ? Number.MAX_SAFE_INTEGER : pos.get(k) ?? Number.MAX_SAFE_INTEGER
+  }
+  return rows.map((row, i) => ({ row, i, p: at(row) }))
+    .sort((a, b) => a.p - b.p || a.i - b.i)
+    .map((x) => x.row)
 }
 
 /**
@@ -1429,6 +1447,11 @@ export type WorksetRead =
        *    옛 판(v1 · 사이트 없음)이면 `null` — 개수만 믿을 수 있다. 판정 게이트로 쓰지 않는다
        */
       sourceKeys: ReadonlySet<string> | null
+      /**
+       * 🔴 같은 열쇠를 **파일에 쓴 순서 그대로** — 공급이 정본 순위(`compareSupplyRank`)로 쓴 순서다.
+       *    판정 · 생성은 `orderByWorksetRank` 로 이 순서를 지킨다. 옛 판(v1)이면 `null` — 순위를 지어내지 않는다
+       */
+      rankedKeys: readonly string[] | null
       /** 🔴 묶음의 원천 수 — 관제 · 수율 창이 센다 */
       count: number
       limit: number
@@ -1519,8 +1542,32 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
     return { ok: false, code: 'SHAPE', reason: `takenAt 을 읽을 수 없다 (${String(o.takenAt)})` }
   }
   return {
-    ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs, intents, qualityContract,
+    ok: true, sourceKeys: legacy ? null : new Set(ids), rankedKeys: legacy ? null : [...ids],
+    count: ids.length, limit, takenAtMs, intents, qualityContract,
   }
+}
+
+export type RunWorksetRead =
+  | { kind: 'ok'; intents: ReadonlyMap<string, SupplyIntent> | null; rankedKeys: readonly string[] | null }
+  | { kind: 'qualityMismatch' }
+  | { kind: 'none'; reason: 'MISSING' | 'UNREADABLE' | 'INVALID' }
+
+/**
+ * 🔴 **생성 러너의 회차 묶음 판독 — 순수 함수.** 파일 내용(`raw`, 없으면 null)만 받는다.
+ *    판독 실패는 `none`(사유 포함) — 묶음 없이 종전 경로로 돈다.
+ *    🔴 JIT 묶음의 품질 계약이 지금 코드와 다르면 `qualityMismatch` 다 — "묶음 없음" 과 섞지 않는다.
+ *       호출자가 유료 생성을 시작하지 않고 멈춘다. 옛 판은 같은 try 가 이 중단까지 감쌌다(2026-11-06 교차 검토).
+ */
+export function readRunWorkset(
+  raw: string | null, runId: string, quality: SupplyQualityContractMark,
+): RunWorksetRead {
+  if (raw === null) return { kind: 'none', reason: 'MISSING' }
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return { kind: 'none', reason: 'UNREADABLE' } }
+  const r = readWorkset(parsed, runId)
+  if (!r.ok) return { kind: 'none', reason: 'INVALID' }
+  if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, quality)) return { kind: 'qualityMismatch' }
+  return { kind: 'ok', intents: r.intents, rankedKeys: r.rankedKeys }
 }
 
 export type StageBudget = {

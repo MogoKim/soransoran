@@ -22,16 +22,40 @@
 import { RUNTIME_STAGES, SAFEST_STAGE, type RuntimeStage } from './scale-profile'
 
 /**
- * 🔴 **결정 판 v5 — 원천 기회 → 슬롯 계약(`source-slot-v1`)으로 운영한 결정** (2026-09-30).
- *    판을 올리는 이유는 행 모양이 아니라 **증거 계약**이다: 그 이전(v4) 결정은 약한 release 계약 아래에서
- *    나왔고, 그 위의 PASS · 지속 단계 · 이어진 계획은 승급 근거가 될 수 없다(정본: old proof cannot open
- *    a higher stage after the contract changes). 그래서 v4 행은 **읽기만** 한다 — 검증은 통과하지만
- *    `sustainedReleaseOf` · `trialPlanOf` 가 바닥(d1)에서 다시 증명하게 만든다(`isLegacyDecision`).
+ * 🔴 **판 상수 — 고정 이름이다.** writer alias 가 바뀌어도 이 값들은 바뀌지 않는다.
+ *    · v4 — 약한 release 계약 아래의 옛 결정. **읽기만** 한다 — 검증은 통과하지만 `sustainedReleaseOf` ·
+ *      `trialPlanOf` 가 바닥(d1)에서 다시 증명하게 만든다(`isLegacyDecision`).
+ *    · v5 — 원천 기회 → 슬롯 계약(`source-slot-v1`)으로 운영한 결정 (2026-09-30).
+ *    · v6 — admission 계약 판 (2026-11-06 · canon §3.1·§3.2). 공급·READY 예측은 hard gate 가 아니라 경고이며
+ *      `supply` 에 `{forecastWarnings}` 로만 남는다. release(증명) 계약은 그대로라 v5 증거도 현재 계열이다.
  */
-export const STAGE_DECISION_VERSION = 'stage-decision-v5'
+export const STAGE_DECISION_V4 = 'stage-decision-v4'
+export const STAGE_DECISION_V5 = 'stage-decision-v5'
+export const STAGE_DECISION_V6 = 'stage-decision-v6'
+/**
+ * 🔴 **writer alias — 이 릴리스가 새로 쓰는 판.** reader 릴리스라 v5 그대로다. 두 판을 한 배포로 켜면 rollback 한
+ *    옛 reader 가 v6 행을 깨진 행으로 읽는다(`CERTIFIED` 와 같은 reader → writer 순서).
+ */
+export const STAGE_DECISION_VERSION = STAGE_DECISION_V5
+/**
+ * 🔴 현재 계열 — 읽고 근거로 쓴다. legacy 가 아니다.
+ *    🔴 **writer alias 를 참조하지 않는다.** 참조하면 writer 를 v6 으로 뒤집는 날 목록이 `[v6, v6]` 이 되어
+ *       전날 v5 행이 깨진 행(PREVIOUS_BROKEN)이 되고 controller 가 멈춘다.
+ */
+export const STAGE_DECISION_READER_VERSIONS = [STAGE_DECISION_V5, STAGE_DECISION_V6] as const
 /** 🔴 읽기만 하는 옛 판 — 새로 쓰지 않는다 · 근거로 쓰지 않는다 */
-export const LEGACY_STAGE_DECISION_VERSIONS = ['stage-decision-v4'] as const
-export type StageDecisionVersion = typeof STAGE_DECISION_VERSION | (typeof LEGACY_STAGE_DECISION_VERSIONS)[number]
+export const LEGACY_STAGE_DECISION_VERSIONS = [STAGE_DECISION_V4] as const
+export type StageDecisionVersion =
+  | (typeof STAGE_DECISION_READER_VERSIONS)[number] | (typeof LEGACY_STAGE_DECISION_VERSIONS)[number]
+
+/**
+ * 🔴 **예측 경고 — v6 만 싣는다** (canon §3.1). 원천 기회 · 처리량 · READY 필요량 예측이다.
+ *    hard gate(scheduler/profile 지원 · 슬롯 물리 발행 용량 · Persona · 비용 · runner · 댓글·감사 용량)는 여기 들어오지 않는다.
+ */
+export const FORECAST_WARNING_CODES = [
+  'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN',
+] as const
+export type ForecastWarningCode = (typeof FORECAST_WARNING_CODES)[number]
 
 /**
  * 🔴 **결정을 쓰는 주체는 하나다** — 전용 daily controller 뿐이다.
@@ -72,6 +96,7 @@ export type StageBlock = { readonly code: BlockCode; readonly reason: string }
 /** 🔴 보고용 신호 — 결정에 쓰지 않는다 */
 export const SUPPLY_EXCLUDE_REASONS = ['noOpenDay', 'holdingStock'] as const
 export type SupplyExcludeReason = (typeof SUPPLY_EXCLUDE_REASONS)[number]
+/** 🔴 v4 · v5 행의 `supply` — `null` 이거나 이 모양이다(옛 계약 그대로) */
 export type SupplySignal = {
   readonly eligibleSpeakers: number
   readonly excluded: readonly {
@@ -79,6 +104,13 @@ export type SupplySignal = {
     readonly codes: readonly string[]
   }[]
 }
+/**
+ * 🔴 v6 행의 `supply` — `null` 은 그날 preflight 를 평가하지 않았다는 뜻, 이 모양은 평가했다는 뜻이다
+ *    (빈 배열 = 평가했고 예측 경고 없음). 운영 결정은 화자 수를 계산하지 않으므로 `eligibleSpeakers` 를 싣지 않는다.
+ */
+export type ForecastSupplySignal = { readonly forecastWarnings: readonly ForecastWarningCode[] }
+/** 🔴 판별 supply — 어느 모양인지는 `contractVersion` 이 정한다(validator 가 판을 먼저 가른다) */
+export type DecisionSupply = SupplySignal | ForecastSupplySignal
 
 /**
  * 🔴 **시험을 연 근거** (2026-09-29 P0 · 운영 증거 게이트).
@@ -126,17 +158,20 @@ export type TransitionProvenance =
  */
 export type StageDecision = {
   readonly kstDate: string
-  /** 🔴 승인 천장 그대로 — 어떤 판정도 이 값을 올리지 않는다 */
+  /** 🔴 준비 단계 — controller 가 계산한 "다음에 증명할 단계". 사람이 올리는 값이 아니다. 공개가 이것을 넘지 못한다 */
   readonly capacity: RuntimeStage
   readonly release: RuntimeStage
   readonly state: TransitionState
   readonly reasons: readonly string[]
   readonly blocks: readonly StageBlock[]
   readonly dayPinned: boolean
-  /** 🔴 **필수 키다.** `null` 이거나 완전한 구조다 — `undefined`·키 누락은 거절한다 */
-  readonly supply: SupplySignal | null
+  /**
+   * 🔴 **필수 키다.** `null` 이거나 그 판의 완전한 구조다 — `undefined`·키 누락은 거절한다.
+   *    v4/v5 → `SupplySignal` · v6 → `ForecastSupplySignal`. 판을 가로지른 모양은 validator 가 거절한다.
+   */
+  readonly supply: DecisionSupply | null
   readonly decidedAt: string
-  /** 🔴 새 결정은 언제나 v5 다 — v4 는 저장된 옛 행을 읽을 때만 나온다 */
+  /** 🔴 이 릴리스의 새 결정은 언제나 v5 다 — v6 · v4 는 저장된 행을 읽을 때만 나온다 */
   readonly contractVersion: StageDecisionVersion
   /** 🔴 누가 썼나 — controller 하나뿐이다 */
   readonly decidedBy: string
@@ -190,10 +225,17 @@ export type ValidatedStageDecision = StageDecision & { readonly [VALIDATED]: tru
 /**
  * 🔴 **이 결정이 지금 증거 계약 이전의 것인가** — 그렇다면 그 위의 지속 단계 · 계획 · PASS 를 근거로 쓰지 않는다.
  *    (행은 유효하다 — 모양은 같다. 쓰지 않는 것은 **그 결정이 증명한 것**이다.)
+ *    🔴 legacy 는 명시한 옛 판(v4)뿐이다. "writer 판이 아니면 legacy" 로 두면 writer 를 v6 으로 올리는 날 v5 증거
+ *       전부가 바닥(d1)으로 떨어진다 — admission 판 변경은 release 증거를 지우지 않는다(2026-11-06).
+ *       모르는 판은 여기 오기 전에 validator 가 거절한다.
  */
 export function isLegacyDecision(d: { contractVersion: string }): boolean {
-  return d.contractVersion !== STAGE_DECISION_VERSION
+  return (LEGACY_STAGE_DECISION_VERSIONS as readonly string[]).includes(d.contractVersion)
 }
+
+/** 🔴 v5 · v6 — 지속 승격(SUSTAIN) 금지 · `CERTIFIED` 허용 같은 현재 계열 규칙을 함께 받는다 */
+const isCurrentFamily = (v: StageDecisionVersion): boolean =>
+  (STAGE_DECISION_READER_VERSIONS as readonly string[]).includes(v)
 
 /** 🔴 ISO 시각의 KST 날짜 — 정본과 같은 경계다 */
 export function kstDateOfIso(iso: string): string | null {
@@ -223,7 +265,9 @@ export function previousKstDate(kstDate: string): string | null {
 /**
  * 🔴 다음 칸 — 여기가 정본이다. 다른 파일이 다시 적지 않는다.
  *    러너 단계(`RUNTIME_STAGES`) 위의 다음 칸이다 — d10 다음은 d20, d50 다음은 없다(D100 은 러너 밖).
- *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 승인 천장이 막는다(사다리 `CEILING`).
+ *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 대상 단계의 scheduler/profile 지원 · 남은 슬롯의 물리 발행 용량 ·
+ *       나머지 hard gate 를 preflight(`judgeNextPreflight` · `LATE_START`)가 막는다. 별도의 단계 승인 천장은 없다
+ *       (`CEILING` 코드는 옛 env 천장의 legacy 행을 읽으려고 enum 에만 남았다).
  */
 export function nextStage(s: RuntimeStage): RuntimeStage | null {
   const i = RUNTIME_STAGES.indexOf(s)
@@ -299,9 +343,9 @@ export function validateStoredDecision(input: {
   }
 
   const version = r.contractVersion
-  if (version !== STAGE_DECISION_VERSION
+  if (!(STAGE_DECISION_READER_VERSIONS as readonly unknown[]).includes(version)
     && !(LEGACY_STAGE_DECISION_VERSIONS as readonly unknown[]).includes(version)) {
-    return no(`계약 판 ${String(r.contractVersion)} ≠ ${STAGE_DECISION_VERSION}`)
+    return no(`계약 판 ${String(r.contractVersion)} 은 읽을 수 있는 판(${STAGE_DECISION_READER_VERSIONS.join('·')}·legacy v4)이 아니다`)
   }
   const contractVersion = version as StageDecisionVersion
   if (!isCalendarDate(r.kstDate)) return no(`달력에 없는 날짜다 — ${String(r.kstDate)}`)
@@ -327,9 +371,9 @@ export function validateStoredDecision(input: {
   if (!isStage(r.release)) return no(`모르는 공개 단계 — ${String(r.release)}`)
   const capacity = r.capacity
   const release = r.release
-  /** 🔴 공개가 승인 천장을 넘은 행은 쓰지 않는다 — 승인되지 않은 양이 나간다 */
+  /** 🔴 공개가 그날의 준비 단계(`capacity`)를 넘은 행은 쓰지 않는다 — 준비되지 않은 양이 나간다 */
   if (rank(release) > rank(capacity)) {
-    return no(`공개 ${release} 가 승인 천장 ${capacity} 를 넘는다`)
+    return no(`공개 ${release} 가 준비 단계 ${capacity} 를 넘는다`)
   }
   if (!isState(r.state)) return no(`모르는 상태 — ${String(r.state)}`)
   const state = r.state
@@ -350,28 +394,52 @@ export function validateStoredDecision(input: {
   if (typeof r.dayPinned !== 'boolean') return no(`dayPinned 가 boolean 이 아니다 — ${typeof r.dayPinned}`)
   const dayPinned = r.dayPinned
 
-  let supply: SupplySignal | null = null
+  /**
+   * 🔴 **supply 는 판이 먼저 가른다** — 두 모양이 섞이지 않게 판 분기 뒤에 각 판의 칸만 본다.
+   *    · v6 → `null`(preflight 미평가) | 정확히 `{forecastWarnings}`(닫힌 코드 · 중복 금지 · 빈 배열 = 평가·경고 없음).
+   *      화자 수 칸이 있으면 거절한다 — 운영 결정은 그 값을 계산하지 않으므로 지어낸 값이다.
+   *    · v4/v5 → `null` | `{eligibleSpeakers, excluded}` 옛 계약 그대로. 경고 칸이 있으면 거절한다
+   *      (옛 행에 경고를 소급해 그날의 시험 개방 근거를 바꿔 읽지 않는다).
+   */
+  let supply: DecisionSupply | null = null
   if (r.supply !== null) {
     const sp = r.supply
     if (!isRec(sp)) return no('supply 가 객체도 null 도 아니다')
-    if (!nonNegInt(sp.eligibleSpeakers)) {
-      return no(`supply.eligibleSpeakers 가 유한한 비음수 정수가 아니다 — ${String(sp.eligibleSpeakers)}`)
-    }
-    if (!Array.isArray(sp.excluded)) return no('supply.excluded 가 배열이 아니다')
-    const excluded: { reason: SupplyExcludeReason; codes: string[] }[] = []
-    for (const e of sp.excluded) {
-      if (!isRec(e)) return no('supply.excluded 항목이 객체가 아니다')
-      const reason = e.reason
-      if (typeof reason !== 'string'
-        || !(SUPPLY_EXCLUDE_REASONS as readonly string[]).includes(reason)) {
-        return no(`모르는 supply 제외 사유 — ${String(e.reason)}`)
+    if (contractVersion === STAGE_DECISION_V6) {
+      const keys = Object.keys(sp)
+      if (keys.length !== 1 || keys[0] !== 'forecastWarnings') {
+        return no(`v6 supply 는 {forecastWarnings} 하나다 — 칸 ${keys.join(',') || '(없음)'}`)
       }
-      if (!Array.isArray(e.codes) || e.codes.some((c) => typeof c !== 'string')) {
-        return no('supply.excluded[].codes 가 문자열 배열이 아니다')
+      const w = sp.forecastWarnings
+      if (!Array.isArray(w)) return no('v6 supply.forecastWarnings 가 배열이 아니다')
+      if (w.some((c) => typeof c !== 'string' || !(FORECAST_WARNING_CODES as readonly string[]).includes(c))) {
+        return no(`모르는 예측 경고 — ${w.map(String).join(',')}`)
       }
-      excluded.push({ reason: reason as SupplyExcludeReason, codes: [...(e.codes as string[])] })
+      if (new Set(w).size !== w.length) return no('같은 예측 경고가 두 번 있다')
+      supply = { forecastWarnings: [...(w as ForecastWarningCode[])] }
+    } else {
+      if (Object.prototype.hasOwnProperty.call(sp, 'forecastWarnings')) {
+        return no(`${contractVersion} 행에는 예측 경고 칸이 없다 — v6 만 싣는다`)
+      }
+      if (!nonNegInt(sp.eligibleSpeakers)) {
+        return no(`supply.eligibleSpeakers 가 유한한 비음수 정수가 아니다 — ${String(sp.eligibleSpeakers)}`)
+      }
+      if (!Array.isArray(sp.excluded)) return no('supply.excluded 가 배열이 아니다')
+      const excluded: { reason: SupplyExcludeReason; codes: string[] }[] = []
+      for (const e of sp.excluded) {
+        if (!isRec(e)) return no('supply.excluded 항목이 객체가 아니다')
+        const reason = e.reason
+        if (typeof reason !== 'string'
+          || !(SUPPLY_EXCLUDE_REASONS as readonly string[]).includes(reason)) {
+          return no(`모르는 supply 제외 사유 — ${String(e.reason)}`)
+        }
+        if (!Array.isArray(e.codes) || e.codes.some((c) => typeof c !== 'string')) {
+          return no('supply.excluded[].codes 가 문자열 배열이 아니다')
+        }
+        excluded.push({ reason: reason as SupplyExcludeReason, codes: [...(e.codes as string[])] })
+      }
+      supply = { eligibleSpeakers: sp.eligibleSpeakers as number, excluded }
     }
-    supply = { eligibleSpeakers: sp.eligibleSpeakers as number, excluded }
   }
 
   /** ── 🔴 상태와 전이 근거의 대조 — **문구가 아니라 구조화된 값** ── */
@@ -417,7 +485,7 @@ export function validateStoredDecision(input: {
      *    PASS 에서만 나온다(`sustainedReleaseOf`) — 날짜 · 연속 일수로 올리는 승격 경로(`judgePromotion`)를 지웠다.
      *    옛 v4 행은 읽되 `isLegacyDecision` 이 지속 d1 · 시험 계획 FLOOR 로 다룬다.
      */
-    if (contractVersion === STAGE_DECISION_VERSION) return no('v5 결정은 SUSTAIN 을 쓰지 않는다 — 지속 승격 경로를 지웠다')
+    if (isCurrentFamily(contractVersion)) return no(`${contractVersion} 결정은 SUSTAIN 을 쓰지 않는다 — 지속 승격 경로를 지웠다`)
     if (!isRec(t) || t.kind !== 'SUSTAIN') return no('SUSTAIN 인데 구조화된 승격 근거가 없다')
     if (!isStage(t.from)) return no(`승격 출발이 정본이 아니다 — ${String(t.from)}`)
     if (t.to !== release) return no(`승격 도착 ${String(t.to)} ≠ 공개 ${release}`)
@@ -432,7 +500,7 @@ export function validateStoredDecision(input: {
      *    HOLD·PREPARE 는 공개가 인증보다 낮을 때만 `CERTIFIED` 를 들고, 그 밖에는 전이 근거가 없다.
      */
     if (t !== null && (state === 'HOLD' || state === 'PREPARE')
-      && contractVersion === STAGE_DECISION_VERSION && isRec(t) && t.kind === 'CERTIFIED') {
+      && isCurrentFamily(contractVersion) && isRec(t) && t.kind === 'CERTIFIED') {
       if (!isStage(t.certified)) return no(`인증 단계가 정본이 아니다 — ${String(t.certified)}`)
       if (rank(t.certified) <= rank(release)) {
         return no(`인증 ${t.certified} 가 공개 ${release} 보다 높지 않다 — 낮춘 날만 인증을 따로 적는다`)

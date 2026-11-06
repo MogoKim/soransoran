@@ -38,7 +38,9 @@ import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-
 import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
-import { humanDecisionFor, humanDecisionIndexOf, readWorkset, sourceIdentityOf, type HumanDecisionIndex } from '../src/lib/supply-workset'
+import {
+  humanDecisionFor, humanDecisionIndexOf, orderByWorksetRank, readWorkset, sourceIdentityOf, type HumanDecisionIndex,
+} from '../src/lib/supply-workset'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
 import { sameSupplyQualityContract, type SupplyIntent } from '../src/lib/supply-intent'
 import { currentQualityContract } from '../src/lib/quality-contract'
@@ -420,6 +422,8 @@ async function main(): Promise<void> {
     INTENTS = ws.intents
     // 🔴 묶음은 원천 열쇠(사이트, id) 집합이다 — 같은 번호 다른 사이트 글이 묶음을 빌려 타지 않는다
     all = all0.filter((t) => { const k = sourceIdentityOf(t.sourceSite, t.sourceArticleId); return k !== null && wsKeys.has(k) })
+    // 🔴 판정 순서 = 묶음의 정본 순위 — 파일 이름순으로 두면 유료 요청 상한에 닿을 때 늙은 원천이 먼저 판정된다
+    all = orderByWorksetRank(all, (t) => sourceIdentityOf(t.sourceSite, t.sourceArticleId), ws.rankedKeys)
     console.log(`  🔴 작업 묶음 ${wsKeys.size}건만 판정한다 (상한 ${ws.limit}) — ${WORKSET_PATH}`)
     console.log(`     고르지 않은 ${all0.length - all.length}건은 **그대로 남는다** — 다음 회차가 집는다\n`)
   }

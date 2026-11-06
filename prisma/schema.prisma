@@ -1988,9 +1988,9 @@ model OperatorWriteLog {
 
 /// 🔴 **하루 단계 결정 — KST 날짜당 하나** (2026-09-25)
 ///
-///    공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른 env 원천을 읽는다.
-///    2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
-///    두 러너가 **같은 행 하나**를 읽어야 그 일이 다시 나지 않는다.
+///    2026-09-24 에는 공급(로컬 launchd)과 발행(GitHub Actions)이 서로 다른 env 원천을 읽어
+///    canonical d3 · GitHub d5 로 갈려 하루가 갔다. 그래서 모든 D100 러너는 **같은 행 하나**를 읽는다.
+///    쓰는 쪽은 daily controller 하나다(`decidedBy`).
 ///
 /// 🔴 **불변은 app-level 계약이다.** Postgres 는 이 표를 append-only 로 알지 못한다 —
 ///    `src/lib/stage-decision-repo.ts` 가 create/read 만 내주는 것으로 지킨다.
@@ -2005,11 +2005,12 @@ model StageDecision {
   /// 🔴 계약 판. 현재 판이 아닌 행은 validator 가 거절한다(fail-closed)
   contractVersion String
 
-  /// 사람이 승인한 천장. 어떤 판정도 이 값을 올리지 않는다 (d1|d3|d5|d10)
+  /// 준비 단계 — controller 가 계산한 "다음에 증명할 단계"(JIT 공급의 준비 눈금). 사람이 올리는 값이 아니다.
+  /// 러너 단계(`RUNTIME_STAGES`) 중 하나 — validator 정본은 `src/lib/stage-decision-contract.ts`
   capacity String
   /// 실제 공개 단계. 🔴 release rank <= capacity rank
   release  String
-  /// SUSTAIN|TRIAL|PREPARE|HOLD
+  /// SUSTAIN|TRIAL|PREPARE|HOLD|REPROVE (SUSTAIN 은 legacy v4 행에만 있다)
   state    String
 
   /// string[]
@@ -2027,8 +2028,9 @@ model StageDecision {
   ///    `{ eligibleSpeakers, excluded: [{reason, codes}] }` 또는 JSON `null`
   supply Json
 
-  /// 🔴 필수 칼럼이다. 전이 근거 — TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON `null`.
-  ///    `{kind:'TRIAL',trialBase,previousKstDate,target}` | `{kind:'SUSTAIN',from,to}`
+  /// 🔴 필수 칼럼이다. 전이 근거 — TRIAL/SUSTAIN 이면 구조가 있고, 공개를 인증보다 낮춘 HOLD/PREPARE 는
+  ///    `CERTIFIED`, 나머지는 JSON `null`.
+  ///    `{kind:'TRIAL',trialBase,previousKstDate,target,basis?}` | `{kind:'SUSTAIN',from,to}` | `{kind:'CERTIFIED',certified}`
   transition Json
 
   /// 🔴 언제나 `controller` — supply/publish 는 읽기만 한다

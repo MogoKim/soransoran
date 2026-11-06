@@ -62,6 +62,21 @@ PR #827은 11월 4일 main·Production·D100 runtime에 `0fcc90c180290d0fee4da18
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
 공개, 자연스러운 대화, 실제 회원 재방문과 실제 열람은 별도로 관측한다.
 
+### 1.3 승인된 target 정책과 구현 gap (2026-11-06 창업자 승인 · 미구현·미배포)
+
+이 절은 정책 승인 상태와 **저장소 코드**의 차이만 적는다. 위 §1의 volatile 상태 행(main·runtime·job·controller·증거)은
+이 갱신에서 재관측하지 않았으므로 as-of 시각의 값 그대로다. 아래 target을 구현한 코드는 아직 main에 병합되지 않았으므로,
+main 코드와 배포된 runtime은 **모두 아직 옛 경로**를 실행한다. 이 차이를 정책 위반으로 고쳐 쓰거나 운영 증거로 보정하지 않는다.
+
+| target 정책 (canon) | 저장소 main 코드의 현재 구현 | 해소 단계 |
+|---|---|---|
+| 공급·READY 예측은 경고·계획 입력 (§3.1·§3.2) | `judgeNextPreflight`(`src/lib/stage-ladder-generic.ts`)가 `OPPORTUNITY_SHORT`·`OPPORTUNITY_UNKNOWN`·`THROUGHPUT_SHORT`로 시험을 막고, `readyCapacityOf`가 고정 proof 공급 회차 수를 곱한 예측을 쓴다 | PR1b (미착수) |
+| 평상일·증명일 같은 실행 경로, 공급 부족 제한 복구 없음 (§3.3) | `stage-active-recovery-v2` 경로(`src/lib/stage-active-recovery.ts`·`scripts/stage-active-recovery.mts`·controller 복구 단계)와 07:00~07:58 controller 다섯 시각이 남아 있다. 남은 동안의 회계 경계는 canon §11.1 📜 전환기 호환 | PR1b 판정 교체 → rollback·의존성 감사 뒤 별도 삭제 |
+| 공급 부족으로 `N` 미달인 증명일은 결함 아님 · 다음 운영일 재시험 (§6) | controller 재시험 경로의 코드 대조 전 — `UNKNOWN` | PR1b |
+| `sourceAge` 오름차순 단일 정본 비교 (§2.3) | 생산 비교 함수가 여럿이다(`compareReleaseRank`·`compareSupplyRank`·`compareFreshFirst`·`compareAutoRow`) | PR1a (branch 작업 중 · 미병합) |
+| StageDecision v6 계약 | validator는 v5 writer · v4 legacy reader | PR1a reader → PR1b writer (두 릴리스) |
+| 자동 일정 owner launchd 하나 (§6) | 수동 `workflow_dispatch` 전용 `auto-publish.yml`·`supply-collect.yml`이 남아 있다 (예약 실행 없음 · 수동 실행은 commissioning) | rollback·의존성 감사 뒤 별도 삭제 |
+
 ## 2. 현재 runtime에 배포된 11월 2일·4일 근본 보정
 
 | 경로 | 재현된 문제 | 보정 계약 |
