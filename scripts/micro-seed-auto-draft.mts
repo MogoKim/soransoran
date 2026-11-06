@@ -32,9 +32,8 @@
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
 import {
-  orderByWorksetRank, readWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent,
+  orderByWorksetRank, readRunWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent,
 } from '../src/lib/supply-workset'
-import { sameSupplyQualityContract } from '../src/lib/supply-intent'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
@@ -508,7 +507,10 @@ let COST_CONTRACT: string | null = null
 let RUN_INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
 /** 🔴 같은 회차 묶음의 정본 순위 순서(`rankedKeys`) — 생성 순서가 화자 시도 여력의 배분이다. 모르면 null */
 let RUN_RANKED_KEYS: readonly string[] | null = null
-/** 🔴 같은 회차 묶음의 원천 → 의도 · 순위 — 회차 id 로 찾는다. 옛 판 · 없음 · 손상이면 둘 다 null */
+/**
+ * 🔴 같은 회차 묶음의 원천 → 의도 · 순위 — 회차 id 로 찾는다. 없음 · 판독 실패 · 옛 판이면 둘 다 null.
+ *    🔴 try 는 **파일 읽기만** 감싼다. 품질 계약 불일치 중단은 그 밖에서 한다 — catch 가 안전 중단을 삼키지 않는다.
+ */
 function runWorkset(runId: string | null): {
   intents: ReadonlyMap<string, SupplyIntent> | null
   rankedKeys: readonly string[] | null
@@ -516,15 +518,13 @@ function runWorkset(runId: string | null): {
   const none = { intents: null, rankedKeys: null }
   if (runId === null) return none
   const ws = join(DATA_DIR, worksetFileName(runId))
-  if (!existsSync(ws)) return none
+  let raw: string | null = null
   try {
-    const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), runId)
-    if (!r.ok) return none
-    if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, currentQualityContract())) {
-      fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 생성을 시작하지 않는다')
-    }
-    return { intents: r.intents, rankedKeys: r.rankedKeys }
-  } catch { return none }
+    raw = existsSync(ws) ? readFileSync(ws, 'utf-8') : null
+  } catch { raw = null }
+  const r = readRunWorkset(raw, runId, currentQualityContract())
+  if (r.kind === 'qualityMismatch') fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 생성을 시작하지 않는다')
+  return r.kind === 'ok' ? { intents: r.intents, rankedKeys: r.rankedKeys } : none
 }
 
 /**

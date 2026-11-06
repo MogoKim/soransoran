@@ -21,7 +21,7 @@ import {
   compareReleaseRank, sortBySourceRank, sourceRankSignalOf, sourceAgeHoursAt, judgeSlotRelease,
   buildSourceEvidence, postedLowerBoundOf, articleIdHashOf, type ReleaseRank, type SourceRankSignal,
 } from '../src/lib/source-slot-release'
-import { readWorkset, orderByWorksetRank, WORKSET_KIND, WORKSET_VERSION } from '../src/lib/supply-workset'
+import { readWorkset, readRunWorkset, orderByWorksetRank, WORKSET_KIND, WORKSET_VERSION } from '../src/lib/supply-workset'
 import { SUPPLY_JIT_CONTRACT, WORKSET_VERSION_JIT } from '../src/lib/supply-intent'
 import { sourceIdentityOf } from '../src/lib/source-identity'
 import { createAttemptPool } from '../src/lib/content-core/speaker-availability'
@@ -256,6 +256,38 @@ console.log('\n⑧ 배선 — 판정·생성 러너가 묶음 순위를 실제�
   const iPool = draft.indexOf('createAttemptPool({')
   const iOrder = draft.indexOf('seeds = orderByWorksetRank(')
   check('🔴 생성 러너가 화자 시도 풀을 만들기 전에 묶음 순위로 원천을 세운다', iOrder > 0 && iPool > iOrder)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 생성 러너의 묶음 판독 — 품질 계약 불일치는 "묶음 없음" 으로 삼켜지지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const src3 = [{ site: 'navercafe:a', id: '1', age: 1 }, { site: 'navercafe:b', id: '2', age: 2 }]
+  const raw = JSON.stringify(jitFile('rq', src3))
+  const ok = readRunWorkset(raw, 'rq', QC)
+  check('같은 품질 계약이면 의도·순위를 준다',
+    ok.kind === 'ok' && ok.intents?.size === 2 && ok.rankedKeys?.join('|') === src3.map((s) => sourceIdentityOf(s.site, s.id)).join('|'))
+  check('🔴 품질 계약이 다르면 `qualityMismatch` 다 — "묶음 없음" 이 아니다',
+    readRunWorkset(raw, 'rq', { version: 'other-quality', digest: 'b'.repeat(64) }).kind === 'qualityMismatch')
+  const m = readRunWorkset(null, 'rq', QC)
+  const u = readRunWorkset('{not json', 'rq', QC)
+  const i = readRunWorkset(JSON.stringify({ kind: 'other' }), 'rq', QC)
+  check('파일 없음 · 깨진 JSON · 계약 밖 모양은 각자 사유가 있는 `none` 이다',
+    m.kind === 'none' && m.reason === 'MISSING' && u.kind === 'none' && u.reason === 'UNREADABLE'
+    && i.kind === 'none' && i.reason === 'INVALID')
+  const v2 = readRunWorkset(JSON.stringify({
+    kind: WORKSET_KIND, version: WORKSET_VERSION, runId: 'rv', takenAt: '2026-11-05T22:02:20.000Z', limit: 5,
+    sources: src3.map((s) => ({ sourceSite: s.site, sourceArticleId: s.id })),
+  }), 'rv', { version: 'other-quality', digest: 'b'.repeat(64) })
+  check('품질 계약 표식이 없는 v2 묶음은 대조 대상이 아니다(종전과 같다)', v2.kind === 'ok' && v2.intents === null)
+  // 🔴 배선 — 판독 실패만 try 안에서 잡고, 불일치 중단은 try 밖에서 한다
+  const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf8')
+  const fn = draft.slice(draft.indexOf('function runWorkset('), draft.indexOf('\n}\n', draft.indexOf('function runWorkset(')))
+  const tryBlock = fn.includes('try {') ? fn.slice(fn.indexOf('try {'), fn.indexOf('} catch')) : ''
+  check('🔴 생성 러너가 `readRunWorkset` 결과의 `qualityMismatch` 에서 중단한다',
+    fn.includes('readRunWorkset(') && /if \(r\.kind === 'qualityMismatch'\) fail\(/.test(fn), fn.slice(0, 300))
+  check('🔴 그 중단과 판독은 파일 읽기 try 블록 밖에 있다 (catch 가 안전 중단을 삼키지 않는다)',
+    tryBlock !== '' && !tryBlock.includes('fail(') && !tryBlock.includes('readRunWorkset(') && !tryBlock.includes('JSON.parse'), tryBlock)
 }
 
 console.log(`\n원천 순위 정본 검사: ${pass} pass, ${fail} fail`)

@@ -64,7 +64,8 @@ export const worksetFileName = (runId: string): string => `supply-workset-${runI
 /** 🔴 JIT 공급 계약 · 의도 — 정본은 `supply-intent`(적재 모듈과 순환하지 않게 따로 둔다). 여기서 다시 내보낸다 */
 import {
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
-  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, type SupplyIntent, type SupplyQualityContractMark,
+  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, sameSupplyQualityContract,
+  type SupplyIntent, type SupplyQualityContractMark,
 } from './supply-intent'
 export {
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
@@ -1544,6 +1545,29 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
     ok: true, sourceKeys: legacy ? null : new Set(ids), rankedKeys: legacy ? null : [...ids],
     count: ids.length, limit, takenAtMs, intents, qualityContract,
   }
+}
+
+export type RunWorksetRead =
+  | { kind: 'ok'; intents: ReadonlyMap<string, SupplyIntent> | null; rankedKeys: readonly string[] | null }
+  | { kind: 'qualityMismatch' }
+  | { kind: 'none'; reason: 'MISSING' | 'UNREADABLE' | 'INVALID' }
+
+/**
+ * 🔴 **생성 러너의 회차 묶음 판독 — 순수 함수.** 파일 내용(`raw`, 없으면 null)만 받는다.
+ *    판독 실패는 `none`(사유 포함) — 묶음 없이 종전 경로로 돈다.
+ *    🔴 JIT 묶음의 품질 계약이 지금 코드와 다르면 `qualityMismatch` 다 — "묶음 없음" 과 섞지 않는다.
+ *       호출자가 유료 생성을 시작하지 않고 멈춘다. 옛 판은 같은 try 가 이 중단까지 감쌌다(2026-11-06 교차 검토).
+ */
+export function readRunWorkset(
+  raw: string | null, runId: string, quality: SupplyQualityContractMark,
+): RunWorksetRead {
+  if (raw === null) return { kind: 'none', reason: 'MISSING' }
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return { kind: 'none', reason: 'UNREADABLE' } }
+  const r = readWorkset(parsed, runId)
+  if (!r.ok) return { kind: 'none', reason: 'INVALID' }
+  if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, quality)) return { kind: 'qualityMismatch' }
+  return { kind: 'ok', intents: r.intents, rankedKeys: r.rankedKeys }
 }
 
 export type StageBudget = {
