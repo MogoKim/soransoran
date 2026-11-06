@@ -1,7 +1,7 @@
 # 현재 실행 - 자동 D100 커뮤니티
 
-> as-of: 2026-11-04 13:27 KST
-> 마지막 창업자 동기화: 2026-11-04
+> as-of: 2026-11-06 20:19 KST
+> 마지막 창업자 동기화: 2026-11-06 (D100 continuous-flow target 정책 승인)
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
 > [`NORTH-STAR.md`](./NORTH-STAR.md)와
@@ -11,30 +11,33 @@
 
 ## 0. 창업자용 한 문장
 
-**11월 3일 D20은 자동 공개 20/20·서로 다른 작성자 20·첫 댓글 20/20·추가 대화 12·감사 4/4·
-release 도장 20을 충족했지만, 21:15 다음날 준비 공급의 `usageUnknown` 1건을 하루 전체로 세는 옛 비용 계약 때문에
-형식상 operating FAIL이다. 이를 소급 PASS로 바꾸지 않는다. bounded 비용 보정 PR #826과 총 댓글 구조 상한 10
-PR #827은 11월 4일 main·Production·D100 runtime에 `0fcc90c180290d0fee4da18216e3457d8849c8e9`로 배포됐다.
-13:24 첫 자연 댓글 loop는 오류 없이 끝났지만 적격 followup이 없어 write 0이었으므로 최대 10 operating PASS는 아직 아니다.
-11월 4일은 첫 proof 슬롯 뒤 runtime SHA가 바뀌어 증명일에서 제외하고, 11월 5일 동일 SHA 자연 D20 증거가 필요하다.**
+**11월 6일 자연 결정은 `PREPARE · 공개 d10 · 준비 d20`이고, 공급·발행·댓글·감사 건강은 ok, Persona는 40/40이다.
+main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공했지만, 보조 Mac D100 runtime은 아직 #832
+`c6142e34`(#833 미포함)다. 옛 runtime의 11월 7일 준비 판정은 공급·READY 예측 코드와 preflight 결정일 결속 결함으로
+막힌다. 이 결함들은 PR1b가 코드로 고친다 — runtime 설치 여부는 §1, code·deployed·operating PASS는 §1.2가 정본이다.
+11월 3일 D20 operating FAIL(옛 하루 전체 비용 계약)은 소급 PASS로 바꾸지 않는다.**
 
 ## 1. 검증된 운영 기준선
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-11-04 13:20 관측) | `0fcc90c180290d0fee4da18216e3457d8849c8e9` |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `0fcc90c180290d0fee4da18216e3457d8849c8e9` · 2026-11-04 13:20 관측 · main과 동일 SHA |
-| 보조 Mac D100 job | 9개 loaded · 유일한 D100 자연 운영 owner · tracked 변경 0 · active D100 process 0 (13:20 관측) |
+| 원격 main (2026-11-06 20:19 관측) | `903c14e07084fa854d1ddeca3f57b7cb1d960f08` |
+| 원격 main 내용 | PR #833(정책 문서·원천 순위 정본·v6 reader) 병합 · `git ls-remote` read-only 관측 |
+| web Production (2026-11-06 관측) | Vercel 배포 성공 · id 7598477580 · 위 main SHA |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `c6142e340adc2742a49647f72b7fd8616e4bb6a8` · 2026-11-06 20:19 관측 · tracked 변경 0 · main 차이를 별도 판정: PR #832까지이고 **#833(v6 reader)은 runtime 미배포** — 의도된 차이이며 #833 설치는 22:15 공급 종료 뒤 idle 창 |
+| 보조 Mac D100 job | 9개 loaded · 유일한 D100 자연 운영 owner — 2026-11-04 13:20 관측값 · 11-06 재관측 안 함 |
 | 회사 Mac D100 job | 0 |
-| 마지막 자연 controller | `TRIAL · 공개 d20 · 준비 d30` · 2026-11-03 |
+| 오늘 자연 결정 (2026-11-06) | `PREPARE · 공개 d10 · 준비 d20` |
+| 운영 건강 (2026-11-06 관측) | 공급·발행·댓글·감사 ok |
+| 다음 날 준비 판정 (2026-11-06 관측 · 옛 runtime) | 11-07 D20 준비 판정 차단 — 공급·READY 예측 코드가 시험을 막고, preflight 결정일을 판정 시각에서 가져와 오늘 아침 회차를 다음 날 판정에 섞는다. 보정 코드는 PR1b, 설치 상태는 §1.2 |
 | 최신 확정 단계 증거 | 10-28 d10 증거 PASS |
-| 최신 시험 단계 증거 | 11-03 d20 증거 FAIL · 늦은 다음날 준비 공급 비용 1건 외 실질 축 충족 |
-| D20 operating | **FAIL** · 콘텐츠·대화·감사 20/20은 충족, 옛 하루 전체 비용 계약이 늦은 준비 회차 미상 1건으로 차단 |
-| Persona | contract-valid 40 · active 40 · 마지막 운영 확인값 |
-| 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 |
+| 최신 시험 단계 증거 | 11-03 d20 증거 FAIL · 늦은 다음날 준비 공급 비용 1건 외 실질 축 충족 · 그 뒤 증거 행은 이 갱신에서 따로 읽지 않았다 |
+| D20 operating | **FAIL (11-03)** · 콘텐츠·대화·감사 20/20은 충족, 옛 하루 전체 비용 계약이 늦은 준비 회차 미상 1건으로 차단 · D20 operating PASS 없음 |
+| Persona (2026-11-06 관측) | contract-valid 40 · active 40 |
+| 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 (11-04 관측값) |
 | 현재 댓글 정책 | 첫 댓글 1 + 선택적 0~9 · 총 구조 상한 10 · 일반 Persona 1회 · 글쓴이 답글 최대 3회 · 사슬 최대 6 · automatic provenance |
-| 최대 10 변경 상태 | PR #827 code·CI·Production·runtime 배포 PASS · 첫 댓글 1, 일반 planner 기준 5/절대 하루 500, followup profile 40·$0.08·3·3 불변 · 구조 상한 10 operating 증거 대기 |
-| 이번 비용 보정의 운영 변경 | PR #826 포함 SHA를 Production D100 runtime에 배포 · 운영 DB 수동 write 0 · 11월 5일 자연 증명 대기 |
+| 최대 10 변경 상태 | PR #827 code·CI·Production·runtime 배포 PASS(runtime `c6142e34`에 포함) · 첫 댓글 1, 일반 planner 기준 5/절대 하루 500, followup profile 40·$0.08·3·3 불변 · 구조 상한 10 operating 증거 대기 |
+| 비용 보정의 운영 상태 | PR #826 bounded 비용 계약은 runtime `c6142e34`에 포함 · D20 자연 operating PASS 전 |
 
 마지막 확정 D10 증거는 자동 공개 10/10, 서로 다른 자동 Persona 10, 첫 댓글 10/10,
 감사 2/2, 공급 `usageUnknown=0`, 수동 stage·READY·게시·댓글·장부 보정 0이었다.
@@ -54,27 +57,30 @@ PR #827은 11월 4일 main·Production·D100 runtime에 `0fcc90c180290d0fee4da18
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
 | D10 기준선 | ✅ | ✅ | ✅ 10-28 d10 증거 PASS |
-| D20 비용 판정 정합 보정 | ✅ PR #826 exact-head CI·공식 격리 DB PASS · main 병합 | ✅ runtime exact SHA `0fcc90c1` | ❌ 새 계약 자연 증명 전 |
-| Persona 40 | ✅ | ✅ runtime exact SHA 재관측 | 마지막 확인 contract-valid 40 · 11월 5일 자연 증명 대기 |
-| 첫 댓글·추가 댓글 | ✅ PR #827 · 첫 댓글 1과 provenance 불변 · 총 구조 상한 10 | ✅ Production·runtime exact SHA `0fcc90c1` | 13:24 loop 정상·write 0 · 적격 대화의 최대 10 자연 검증 전 |
+| D20 비용 판정 정합 보정 | ✅ PR #826 exact-head CI·공식 격리 DB PASS · main 병합 | ✅ 현재 runtime `c6142e34`에 포함 | ❌ 새 계약 D20 자연 증명 전 |
+| Persona 40 | ✅ | ✅ | contract-valid 40 · active 40 (11-06 관측) · D20 자연 증명 전 |
+| 첫 댓글·추가 댓글 | ✅ PR #827 · 첫 댓글 1과 provenance 불변 · 총 구조 상한 10 | ✅ Production·현재 runtime `c6142e34`에 포함 | 11-04 13:24 loop 정상·write 0 · 적격 대화의 최대 10 자연 검증 전 |
+| 정책 문서·원천 순위 정본·v6 reader (#833) | ✅ exact-head CI · main 병합(§1 원격 main) | web Production ✅ (Vercel id 7598477580) · 보조 Mac runtime ❌ 미배포 | — 판정 경로 변화 없음(reader) |
+| 예측 경고화·v6 writer·결정일 결속 (PR1b) | PR1b exact-head CI·공식 격리 DB로 판정 | 보조 Mac runtime 미설치 (§1 runtime 행) | ❌ 자연 관측 전 |
 | 실제 조회수 | ✅ 실제 상세 열람·목록 노출 원장 | ✅ | ✅ 실제 행동만 집계 · 가짜 숫자 0 |
 
 단계 PASS는 무인 운영 계약의 증거이지 제품 건강 전체의 PASS가 아니다. 같은 KST 운영일
 공개, 자연스러운 대화, 실제 회원 재방문과 실제 열람은 별도로 관측한다.
 
-### 1.3 승인된 target 정책과 구현 gap (2026-11-06 창업자 승인 · 미구현·미배포)
+### 1.3 승인된 target 정책과 구현 상태 (2026-11-06 창업자 승인)
 
-이 절은 정책 승인 상태와 **저장소 코드**의 차이만 적는다. 위 §1의 volatile 상태 행(main·runtime·job·controller·증거)은
-이 갱신에서 재관측하지 않았으므로 as-of 시각의 값 그대로다. 아래 target을 구현한 코드는 아직 main에 병합되지 않았으므로,
-main 코드와 배포된 runtime은 **모두 아직 옛 경로**를 실행한다. 이 차이를 정책 위반으로 고쳐 쓰거나 운영 증거로 보정하지 않는다.
+이 절은 정책과 **코드**의 차이만 적는다. 무엇이 어디에 설치됐는지는 §1·§1.2가 정본이다. 가운데 칸은 옛 구현
+(보조 Mac runtime `c6142e34`가 실행하는 코드)이고, 오른쪽 칸은 그 차이를 닫는 코드 변경이다. 이 차이를 정책 위반으로
+고쳐 쓰거나 운영 증거로 보정하지 않는다.
 
-| target 정책 (canon) | 저장소 main 코드의 현재 구현 | 해소 단계 |
+| target 정책 (canon) | 옛 구현 | 코드 해소 |
 |---|---|---|
-| 공급·READY 예측은 경고·계획 입력 (§3.1·§3.2) | `judgeNextPreflight`(`src/lib/stage-ladder-generic.ts`)가 `OPPORTUNITY_SHORT`·`OPPORTUNITY_UNKNOWN`·`THROUGHPUT_SHORT`로 시험을 막고, `readyCapacityOf`가 고정 proof 공급 회차 수를 곱한 예측을 쓴다 | PR1b (미착수) |
-| 평상일·증명일 같은 실행 경로, 공급 부족 제한 복구 없음 (§3.3) | `stage-active-recovery-v2` 경로(`src/lib/stage-active-recovery.ts`·`scripts/stage-active-recovery.mts`·controller 복구 단계)와 07:00~07:58 controller 다섯 시각이 남아 있다. 남은 동안의 회계 경계는 canon §11.1 📜 전환기 호환 | PR1b 판정 교체 → rollback·의존성 감사 뒤 별도 삭제 |
-| 공급 부족으로 `N` 미달인 증명일은 결함 아님 · 다음 운영일 재시험 (§6) | controller 재시험 경로의 코드 대조 전 — `UNKNOWN` | PR1b |
-| `sourceAge` 오름차순 단일 정본 비교 (§2.3) | 생산 비교 함수가 여럿이다(`compareReleaseRank`·`compareSupplyRank`·`compareFreshFirst`·`compareAutoRow`) | PR1a (branch 작업 중 · 미병합) |
-| StageDecision v6 계약 | validator는 v5 writer · v4 legacy reader | PR1a reader → PR1b writer (두 릴리스) |
+| 공급·READY 예측은 경고·계획 입력 (§3.1·§3.2) | `judgeNextPreflight`가 `OPPORTUNITY_SHORT`·`OPPORTUNITY_UNKNOWN`·`THROUGHPUT_SHORT`·`THROUGHPUT_UNKNOWN`·`READY_REQUIREMENT_UNKNOWN`·`LATENCY_UNKNOWN`으로 시험을 막는다 | PR1b: 예측 5코드는 막지 않는 `forecastWarnings`, 지연 관측은 막지 않는 `warnings` |
+| 평상일·증명일 같은 실행 경로, 공급 부족 제한 복구 없음 (§3.3) | `stage-active-recovery-v2` 경로(`src/lib/stage-active-recovery.ts`·`scripts/stage-active-recovery.mts`·controller 복구 단계)와 07:00~07:58 controller 다섯 시각. 회계 경계는 canon §11.1 📜 전환기 호환 | PR1b: 예측만 있는 판정은 PASS라 복구가 열리지 않는다(코드는 한 릴리스 rollback 호환) → rollback·의존성 감사 뒤 별도 삭제 |
+| 공급 부족으로 `N` 미달인 증명일은 결함 아님 · 다음 운영일 재시험 (§6) | 재시험 계획(`trialPlanOf` RETEST)은 있으나 다음 날 예측 부족이 다시 시험을 막는다 | PR1b |
+| `sourceAge` 오름차순 단일 정본 비교 (§2.3) | 생산 비교 함수가 여럿이었다 | #833: `compareReleaseRank` 하나 · 판정·생성 순서는 묶음 순위 |
+| StageDecision v6 계약 | writer v5 · reader v5 + v4 legacy | 코드: reader v5+v6 (#833) · writer v6 (PR1b). runtime 설치 순서는 #833 reader 먼저·rollback 판독 확인 → 그 뒤 PR1b writer |
+| preflight 결정일 결속 | recovery 신원 판정 날짜를 판정 시각 `now`에서 가져와, 다음 날 리허설이 오늘 아침 복구 회차를 claim 없는 복구로 읽는다 | PR1b: 증명 슬롯의 단일 KST 날짜(비면·섞이면·깨지면 fail-closed) |
 | 자동 일정 owner launchd 하나 (§6) | 수동 `workflow_dispatch` 전용 `auto-publish.yml`·`supply-collect.yml`이 남아 있다 (예약 실행 없음 · 수동 실행은 commissioning) | rollback·의존성 감사 뒤 별도 삭제 |
 
 ## 2. 현재 runtime에 배포된 11월 2일·4일 근본 보정
@@ -94,23 +100,17 @@ main 코드와 배포된 runtime은 **모두 아직 옛 경로**를 실행한다
 
 ## 3. D20 개방의 정확한 blocker
 
-아침 선행 재고가 부족해서 실패한 것이 아니다. D20 생산·발행·대화는 20편을 완주했다. 유일한 형식상 실패는
-21:15 다음날 준비 공급의 provider timeout 1건이 `usageUnknown`으로 남았고, 옛 proof 판정이 당일 앞 5회와
-늦은 준비 2회를 구분하지 않은 것이다. 같은 요청의 재시도는 정산됐지만 원 미상 요청을 정산으로 바꾸지 않는다.
+2026-11-06 기준 옛 runtime `c6142e34`의 11-07 준비 판정이다. 운영 DB·장부·stage 수동 보정으로 우회하지 않는다.
 
-| blocker code | 현재 | 해소 조건 |
+| blocker code | 현재 (옛 runtime) | 해소 |
 |---|---|---|
-| `SUPPLY_COST_SCOPE_DIVERGENCE` | ✅ code·deployed 해소 · 공용 `supply-cost-envelope-v2` 사용 | 11월 5일 자연 operating 증명 |
-| `LATE_PREP_RETROACTIVE_FAILURE` | ✅ code·deployed 해소 · proof 비용 표본은 06:15~17:15 자연 5회 | 11월 5일 자연 operating 증명 |
-| `COST_EVIDENCE_OMISSION` | ✅ code·deployed 해소 · `supplyCostEvidence` 필수, 누락/귀속 불명은 `COST_UNKNOWN` | 11월 5일 자연 operating 증명 |
-| `RELIABILITY_PATCH_DEPLOYED` | ✅ PR #826 포함 SHA · HEAD=pin=manifest 동일 | 운영 PASS로 대체하지 않고 자연 증명 대기 |
-| `OPERATING_PROOF_PENDING` | 11월 3일은 옛 계약 FAIL로 고정 | 11월 5일 이후 새 SHA 자연 D20에서 20/20·댓글·감사·비용·provenance PASS |
-| `BRAKE_DEMOTION_PERSISTS` | **READER_READY · 별도 미해소** | D20 비용 보정과 섞지 않고 별도 writer 활성 릴리스에서 replay `GAP_CLOSED` |
+| `OPPORTUNITY_SHORT` | 공급 기회 예측이 시험을 막는다 (예측 gate) | PR1b: 막지 않는 `forecastWarnings` → runtime 설치 후 readiness 재관측 |
+| `THROUGHPUT_SHORT` | READY 처리량 예측이 시험을 막는다 (예측 gate) | 위와 같음 |
+| `SUPPLY_COST_UNKNOWN` | preflight 결정일을 판정 시각에서 잡아 오늘 아침 회차를 다음 날 비용 신원에 섞는다 (결정일 오결속) | PR1b: 증명 슬롯의 단일 KST 날짜로 결속 → runtime 설치 후 readiness 재관측 |
+| `OPERATING_PROOF_PENDING` | 자연 D20 operating PASS 없음 | 11-07 이후 자연 D20 증명 (20/20·댓글·감사·비용·provenance) |
 
-새 계약의 첫 완결 증명일은 2026-11-05 KST다. 11월 3일 결과를 새 코드로 다시 읽어 PASS로 승격하지 않는다.
-새 runtime SHA는 11월 4일 13:20까지 `HEAD = pin = manifest` 동일성 검증을 끝냈지만 첫 proof 슬롯 뒤에
-배포됐으므로 11월 4일은 증명일에서 제외한다. 11월 5일 첫 proof 슬롯부터 동일 SHA가 운영되어야 하며,
-옛 producer와 새 판정기를 같은 증명일에 섞지 않는다.
+📜 역사: 11-03 D20은 콘텐츠·대화·감사 20/20을 채웠지만 늦은 준비 회차 `usageUnknown` 1건을 하루 전체로 센 옛 비용 계약으로
+FAIL이다. 새 코드로 다시 읽어 소급 PASS로 바꾸지 않는다.
 
 ### 3-1. `CERTIFIED` 두 단계 배포 — reader 먼저, writer는 별도 릴리스
 
@@ -168,7 +168,7 @@ runner가 idle인 창에서만 한다. 11월 4일은 창업자의 명시적 당�
 
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
-| D20-FIX | **main·Production·runtime 배포 완료** · proof 슬롯과 bounded 비용 판정을 공용 계약으로 통합 | `0fcc90c1` HEAD=pin=manifest 동일 · 11월 5일 자연 증명 | 미상 정산 조작·11월 3일 소급 PASS |
+| D20-FIX | **PR1b** · 공급·READY 예측을 경고로 · v6 writer · preflight 결정일 결속 | #833 runtime 설치·HEAD=pin=manifest·v6 reader 판독 확인 뒤 22:15 공급 종료~05:30 idle 창에 병합·배포 | 수동 stage·READY·장부 보정 · 실제 비용 상한 완화 · 11월 3일 소급 PASS |
 | D20 | D10 operating PASS 선행 · 새 계약의 다음 자연 증명 | 자동 20/20·댓글·감사·비용·READY·provenance PASS | stage·READY·게시·댓글·장부 수동 보정 |
 | D30 | D20 operating PASS 선행 | Persona 60·preflight green·자동 30/30 | D30 생략 |
 | D50 | D30 operating PASS 선행 | Persona 100·preflight green·자동 50/50 | D20에서 바로 D50 |

@@ -282,22 +282,27 @@ try {
     check('보충 원천은 07:00 원천과 다른 key 이고 실측 수율로 부족분을 덮는다', distinctFutureCapacityCoversShortfall)
     check('측정된 3일 하한의 추가 기회로 부족 1을 덮으면 PASS',
       pf.verdict === 'PASS' && futureAdditional !== null && futureAdditional >= shortfall)
-    check('새 원천 0이면 보충 기대량은 0이고 별도 preflight도 계속 막는다', zeroFuture.sourceExpected === 0
-      && zeroFutureAdditional === 0 && zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'))
-    check('실측 하한을 모르면 보충 가능으로 지어내지 않는다', unknownAdditional === null
-      && unknownFuture.codes.includes('OPPORTUNITY_UNKNOWN'))
+    // 🔴 (PR1b) 기회 예측은 막지 않는다 — 그래도 부족·모름을 지어내 덮지 않고 예측 경고로 남긴다
+    check('새 원천 0이면 보충 기대량은 0이고 OPPORTUNITY_SHORT 예측 경고가 남는다', zeroFuture.sourceExpected === 0
+      && zeroFutureAdditional === 0 && zeroFutureVerdict.forecastWarnings.includes('OPPORTUNITY_SHORT')
+      && !zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'))
+    check('실측 하한을 모르면 보충 가능으로 지어내지 않는다(OPPORTUNITY_UNKNOWN 예측 경고)', unknownAdditional === null
+      && unknownFuture.forecastWarnings.includes('OPPORTUNITY_UNKNOWN'))
     check('실제 preflight facts는 현재 snapshot뿐 아니라 측정된 3일 하한을 읽는다', !preflightFactsCurrentOnly)
     check('실제 기회 gate는 현재와 측정된 추가 기회를 합쳐 판정한다', !opportunityGateCurrentOnly)
     check('실제 controller는 facts를 보정하지 않고 그대로 넘기며 검증된 복구량만 별도 옵션으로 전달한다', controllerPassesFactsDirectly)
     observations.set('PREFLIGHT_FULL_DAY_OPPORTUNITY', {
       verdict: pf.verdict,
       onlyOpportunityShort: pf.codes.length === 1 && pf.codes[0] === 'OPPORTUNITY_SHORT',
-      hasOpportunityShort: pf.codes.includes('OPPORTUNITY_SHORT'),
+      // 🔴 PR1b: 막는 codes 와 예측 경고 둘 다 본다 — codes 만 보면 경고로 옮긴 뒤 늘 false 인 죽은 칸이 된다
+      hasOpportunityShort: pf.codes.includes('OPPORTUNITY_SHORT') || pf.forecastWarnings.includes('OPPORTUNITY_SHORT'),
       opportunities: opp.total, target: n, futureExpected: future.sourceExpected,
       distinctFutureCapacityCoversShortfall,
       usesFutureSupplyCapacity: pf.verdict === 'PASS' && opp.total < n && futureAdditional !== null,
-      zeroFutureCapacityBlocked: zeroFuture.sourceExpected === 0 && zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'),
-      unknownYieldBlocked: unknownFuture.verdict !== 'PASS' && unknownFuture.codes.includes('OPPORTUNITY_UNKNOWN'),
+      zeroFutureCapacityWarned: zeroFuture.sourceExpected === 0 && zeroFutureVerdict.forecastWarnings.includes('OPPORTUNITY_SHORT')
+        && !zeroFutureVerdict.codes.includes('OPPORTUNITY_SHORT'),
+      unknownYieldWarned: unknownFuture.forecastWarnings.includes('OPPORTUNITY_UNKNOWN')
+        && !unknownFuture.codes.includes('OPPORTUNITY_UNKNOWN'),
       preflightFactsCurrentOnly, opportunityGateCurrentOnly, controllerPassesFactsDirectly,
     })
   }

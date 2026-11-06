@@ -14,7 +14,9 @@
  *
  * 🔴 **전이 규칙** — 날짜로 기다리지 않는다 · 사람이 env 를 고치지 않는다.
  *    다음 단계 시험은 지금 단계의 완전한 자동 운영 PASS 뒤, 이 preflight 가 PASS 일 때만 열린다.
- *    FAIL · UNKNOWN 은 **어느 하나라도** 열지 않는다(같은 단계 재증명).
+ *    막는 `codes`(hard gate)의 FAIL · UNKNOWN 은 **어느 하나라도** 열지 않는다(같은 단계 재증명).
+ *    🔴 예외(PR1b · 2026-11-06 · canon §3.1·§3.2): 공급·READY **예측** 5코드(`FORECAST_WARNING_CODES`)는 막는
+ *    `codes` 가 아니라 `forecastWarnings` 로 가고, 지연 관측 부재(`LATENCY_UNKNOWN`)는 `warnings` 로 간다 — 둘 다 판정을 바꾸지 않는다.
  *
  * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자 · 댓글 예약표 · 비용 · 기회 사실은 호출부가 주입한다.
  */
@@ -29,7 +31,9 @@ import { auditTarget } from './auto-ready-v2'
 import { PERSONA_CANARY_FLOOR } from './d100-capacity'
 import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
 import type { Health } from './ops-status'
-import type { StageBlock } from './stage-decision-contract'
+import {
+  FORECAST_WARNING_CODES, type ForecastSupplySignal, type ForecastWarningCode, type StageBlock,
+} from './stage-decision-contract'
 import type { EvidenceVerdictKind } from './stage-evidence'
 import { judgeSupplyCostEnvelope, supplyCostProofBudgetUsd } from './supply-cost-envelope'
 
@@ -184,11 +188,14 @@ export function verifyGenericProfile(p: ScaleProfile, grid: RunnerGrid): string[
 // 🔴 다음 단계 preflight — 시험을 열어도 되는가 (D3 ~ D100 한 함수)
 // ─────────────────────────────────────────────────────────
 
+/**
+ * 🔴 preflight 코드 어휘. 원천 기회·처리량·READY 필요량 **예측 5코드**(`FORECAST_WARNING_CODES`)는 계산은 여기서 하지만
+ *    판정을 막지 않는다 — 판정 직전에 `forecastWarnings` 로 분리된다(canon §3.1 · 2026-11-06). 나머지가 hard gate 다.
+ */
 export const PREFLIGHT_CODES = [
   'SLOTS_INFEASIBLE', 'PUBLISH_CAPACITY_SHORT',
   'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN',
   'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN',
-  'LATENCY_UNKNOWN',
   'PERSONA_SHORT', 'PERSONA_UNKNOWN',
   'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT',
   'AUDIT_COST_SHORT', 'AUDIT_COST_UNKNOWN',
@@ -197,12 +204,12 @@ export const PREFLIGHT_CODES = [
 ] as const
 export type PreflightCode = (typeof PREFLIGHT_CODES)[number]
 const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
-  'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN', 'LATENCY_UNKNOWN', 'PERSONA_UNKNOWN',
-  'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
+  'PERSONA_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
 ]
 
 /**
- * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다(하나라도 모르면 열지 않는다).
+ * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다. hard gate 사실을 하나라도 모르면 열지 않고,
+ *    공급·READY 예측 사실(기회·처리량·필요 READY)을 모르면 막지 않는 `forecastWarnings` 로 남는다(지어내 초록으로 만들지 않는다).
  */
 export type PreflightFacts = {
   /** 다음 시험이 실제로 열릴 KST 날짜 — 날짜별 비용 계약 선택에 쓴다. 모르면 열지 않는다. */
@@ -296,7 +303,13 @@ export type ReadyCohortFact = {
     riskUsdPerSlotValidResult: number | null
   } | null
 }
-export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_TRIAL_RISK'] as const
+/**
+ * 🔴 **막지 않는 관측 경고** — 판정에 들어가지 않고 결정 로그·readiness 에만 남는다. v6 `supply` 에도 들어가지 않는다.
+ *    · `SUPPLY_COST_TRIAL_RISK` — 비용 envelope 가 bounded(미상 소수 · 위험액이 예산 안)
+ *    · `LATENCY_UNKNOWN` — 직전 증명 창의 원문→공개 지연 표본이 없거나 읽지 못했다. 이미 공개된 글의 사후 관측일 뿐
+ *      판정 엔진이 아니다(canon §9). 원천 자격은 발행 tx 의 `judgeSlotRelease`, 도장은 단계 증거가 따로 막는다
+ */
+export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_TRIAL_RISK', 'LATENCY_UNKNOWN'] as const
 export type PreflightWarningCode = (typeof PREFLIGHT_WARNING_CODES)[number]
 
 /**
@@ -333,9 +346,34 @@ export function judgeAgainst(r: Replenishment, fits: (need: number) => boolean):
 export type PreflightVerdict = {
   stage: GenericStage
   verdict: EvidenceVerdictKind
+  /** 🔴 막는 코드 — hard gate 뿐이다. 예측 5코드는 여기 오지 않는다 */
   codes: readonly PreflightCode[]
+  /** 🔴 원천 기회·처리량·READY 필요량 예측 — 판정을 막지 않는다. v6 결정 행에 남는 유일한 경고다(`forecastSupplyOf`) */
+  forecastWarnings: readonly ForecastWarningCode[]
+  /** 🔴 막지 않는 관측 경고 — 결정 행에 넣지 않는다 */
   warnings: readonly PreflightWarningCode[]
   counts: Readonly<Record<string, number>>
+}
+
+/**
+ * 🔴 **v6 결정 행의 `supply` 투영 — 하나뿐이다.** preflight 를 평가하지 않았으면 `null`, 평가했으면 정확히
+ *    `{forecastWarnings}` 다(빈 배열 = 경고 없음). `warnings`(비용 시험 위험 · 지연 관측)는 넣지 않는다 —
+ *    rollback reader 가 닫힌 5코드만 받는다.
+ */
+export function forecastSupplyOf(pf: PreflightVerdict | null): ForecastSupplySignal | null {
+  return pf === null ? null : { forecastWarnings: [...pf.forecastWarnings] }
+}
+
+/**
+ * 🔴 controller 운영 로그의 preflight 한 줄 — 세 갈래를 **따로** 보인다.
+ *    막는 `codes`(`[...]`) · 막지 않는 운영 경고 `WARN [...]` · 막지 않는 공급·READY 예측 `FORECAST [...]`.
+ *    예측 경고를 판정 PASS 뒤에 숨기지 않는다(canon §3.1·§3.2 — 경고는 보여야 계획 입력이 된다).
+ */
+export function preflightLogLine(target: string, pf: PreflightVerdict): string {
+  return `   ${target} preflight ${pf.verdict}${pf.codes.length > 0 ? ` [${pf.codes.join(',')}]` : ''}`
+    + `${pf.warnings.length > 0 ? ` WARN [${pf.warnings.join(',')}]` : ''}`
+    + `${pf.forecastWarnings.length > 0 ? ` FORECAST [${pf.forecastWarnings.join(',')}]` : ''}`
+    + ` (${Object.entries(pf.counts).map(([k, x]) => `${k}=${x}`).join(',')})`
 }
 
 export type PreflightJudgeOptions = {
@@ -361,8 +399,9 @@ export function readyCapacityOf(
 }
 
 /**
- * 🔴 **다음 단계 preflight — D3~D100 같은 구조.** FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면 UNKNOWN.
- *    둘 다 시험을 열지 않는다. 숫자는 기존 정본뿐이다:
+ * 🔴 **다음 단계 preflight — D3~D100 같은 구조.** 막는 `codes` 에 FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면
+ *    UNKNOWN. 둘 다 시험을 열지 않는다. 공급·READY 예측 5코드는 같은 산술로 계산하되 `forecastWarnings` 로만 내고,
+ *    `LATENCY_UNKNOWN` 은 `warnings` 로 낸다 — 판정(verdict)에는 들지 않는다(PR1b · canon §3.1·§3.2). 숫자는 기존 정본뿐이다:
  *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`)
  *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간 · 고정 할증 없음) · Persona canary 하한 `PERSONA_CANARY_FLOOR`
  *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 당일 증명 회차(`SUPPLY_PROOF_RUNS_PER_DAY`)
@@ -436,7 +475,7 @@ export function judgeNextPreflight(
     }
   }
   // 지연 — 관측됐는가
-  if (facts.latencyP50H === null || facts.latencyP90H === null) codes.add('LATENCY_UNKNOWN')
+  if (facts.latencyP50H === null || facts.latencyP90H === null) warnings.add('LATENCY_UNKNOWN')
   else { counts.latencyP50H = facts.latencyP50H; counts.latencyP90H = facts.latencyP90H }
   // Persona — 계약 유효 reserve 가 canary 하한 이상인가(행 수로 대체하지 않는다)
   const floor = stage === 'd1' ? 1 : PERSONA_CANARY_FLOOR[stage]
@@ -512,10 +551,19 @@ export function judgeNextPreflight(
   // 러너 건강
   if (facts.runnerHealth === null || facts.runnerHealth === 'unknown') codes.add('RUNNER_UNKNOWN')
   else if (facts.runnerHealth === 'bad') codes.add('RUNNER_BAD')
-  const ordered = PREFLIGHT_CODES.filter((c) => codes.has(c))
+  /**
+   * 🔴 **분리는 여기 한 곳이다** (2026-11-06 · canon §3.1). 예측 5코드는 막는 코드에서 빼 `forecastWarnings` 로 보낸다 —
+   *    판정·`trialBlocks`·제한 복구 계획은 막는 코드만 본다. 계산·counts 는 그대로 남아 계획 입력으로 쓰인다.
+   */
+  const isForecast = (c: PreflightCode): c is ForecastWarningCode => (FORECAST_WARNING_CODES as readonly string[]).includes(c)
+  const ordered = PREFLIGHT_CODES.filter((c) => codes.has(c) && !isForecast(c))
+  const forecastWarnings = FORECAST_WARNING_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !PREFLIGHT_UNKNOWN.includes(c))
   const verdict: EvidenceVerdictKind = failing.length > 0 ? 'FAIL' : ordered.length > 0 ? 'UNKNOWN' : 'PASS'
-  return { stage, verdict, codes: ordered, warnings: PREFLIGHT_WARNING_CODES.filter((c) => warnings.has(c)), counts }
+  return {
+    stage, verdict, codes: ordered, forecastWarnings,
+    warnings: PREFLIGHT_WARNING_CODES.filter((c) => warnings.has(c)), counts,
+  }
 }
 
 // ─────────────────────────────────────────────────────────

@@ -186,10 +186,14 @@ export type RecoveryIdentity = {
 export function recoveryIdentityOf(
   input: StagePreflightRecoveryInput,
   entries: readonly LedgerEntry[] | null,
-  kstDate: string,
+  /** 🔴 이 preflight 의 결정일(`recoveryIdentityDateOf`) — 판정 시각 `now` 가 아니다. 모르면 신원 불명(fail-closed) */
+  kstDate: string | null,
 ): RecoveryIdentity {
   if (input.kind === 'unknown') {
     return { issue: input.reason, claimRunId: null, costRunId: null, ledgerRuns: [], lineage: null }
+  }
+  if (kstDate === null) {
+    return { issue: 'preflight 결정일을 확정하지 못했다(증명 슬롯 날짜가 하나가 아니다)', claimRunId: null, costRunId: null, ledgerRuns: [], lineage: null }
   }
   const runs = new Set<string>()
   let issue: string | null = input.lineage !== undefined && input.claimRunId === null
@@ -217,6 +221,33 @@ export function recoveryIdentityOf(
     ledgerRuns: [...runs].sort(),
     lineage: ok && input.lineage !== undefined && input.claimRunId !== null
       ? { ...input.lineage, supplyRunId: input.claimRunId } : null,
+  }
+}
+
+/**
+ * 🔴 **preflight 결정일 — 증명 슬롯의 단일 KST 날짜** (2026-11-06). 비었거나 · 시각이 아닌 값이 섞였거나 · 날짜가
+ *    둘 이상이면 `null`(모름)이다. `now` 로 대신하지 않는다 — 다음 날 리허설(`now` = 오늘)이 오늘 아침 복구 회차를
+ *    "claim 없는 내일 복구" 로 잘못 읽어 SUPPLY_COST_UNKNOWN 을 지어냈다(11-07 리허설 반례).
+ */
+export function recoveryIdentityDateOf(proofSlots: readonly Date[]): string | null {
+  if (proofSlots.length === 0 || proofSlots.some((d) => !Number.isFinite(d.getTime()))) return null
+  const dates = new Set(proofSlots.map((d) => kstDateString(d)))
+  return dates.size === 1 ? [...dates][0]! : null
+}
+
+/**
+ * 🔴 **readiness 출력용 비용 요약 — 기존 귀속 값에서 고른 칸뿐이다.** 판정에 쓰지 않는다(관측).
+ *    문구 메모만으로는 남은 차단이 정직한 미정산인지 귀속 결함인지 가를 수 없어 수를 그대로 싣는다.
+ */
+export function preflightCostSummaryOf(c: CostAttribution | null): {
+  settledRequests: number; usageUnknownRequests: number; recoveryUsageUnknownRequests: number
+  trialIneligibleRequests: number; openRequests: number; openReservedUsd: number
+} | null {
+  if (c === null) return null
+  return {
+    settledRequests: c.settledRequests, usageUnknownRequests: c.usageUnknownRequests,
+    recoveryUsageUnknownRequests: c.recoveryUsageUnknownRequests, trialIneligibleRequests: c.trialIneligibleRequests,
+    openRequests: c.openRequests, openReservedUsd: c.openReservedUsd,
   }
 }
 
@@ -963,6 +994,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   contractValidPersonas?: () => Promise<number | null>
 }): Promise<{ facts: PreflightFacts; notes: string[]; detail: Record<string, unknown> }> {
   const notes: string[] = []
+  /** 🔴 결정일 — 한 번만 계산해 recovery 신원 판정과 `facts.proofKstDate` 에 같이 쓴다(`now` 가 아니다) */
+  const decisionDate = recoveryIdentityDateOf(i.proofSlots)
   const win = preflightWindowsOf(i.evidenceDate, i.now)
   const dates = win.proof.dates
   const pooled = (dir: string): LedgerEntry[] | null => pooledEntries(dates.map((d) => readDay(dir, d)))
@@ -1010,7 +1043,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     ready: readyOpps, current: sourceOpps, readyPerSourceLow: yieldBounds?.low ?? null,
   })
   if (futureSupplyCapacity === null) {
-    notes.push('남은 당일 공급 기회를 모른다 — 하한 수율 · 3일 기준선 · 남은 공급 슬롯 자연 표본 중 하나가 없거나 깨졌다. 현재 기회가 목표 미만이면 시험을 열지 않는다')
+    notes.push('남은 당일 공급 기회를 모른다 — 하한 수율 · 3일 기준선 · 남은 공급 슬롯 자연 표본 중 하나가 없거나 깨졌다. 현재 기회가 목표 미만이면 OPPORTUNITY_UNKNOWN 예측 경고로 남는다(시험은 막지 않는다 · 보충 가능으로 지어내지 않는다)')
   }
 
   // 지연 — 지금 계약 도장으로 나간 글 · 원천 게시 → 공개
@@ -1050,7 +1083,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
   // 복구 신원 — 오늘 장부의 recovery 회차는 오늘 시작 claim 하나에만 귀속돼야 한다(모든 슬롯).
   // final 슬롯만 그 회차 비용을 trial envelope에 넣는다. READY 수율의 자연 cohort는 바꾸지 않는다.
-  const recovery = recoveryIdentityOf(i.recovery ?? NO_RECOVERY_CLAIM, supplyEntries, kstDateString(i.now))
+  const recovery = recoveryIdentityOf(i.recovery ?? NO_RECOVERY_CLAIM, supplyEntries, decisionDate)
   if (recovery.issue !== null) notes.push(`제한 복구 비용 신원을 확정하지 못했다 — ${recovery.issue} (SUPPLY_COST_UNKNOWN)`)
   const recoveryCostRunId = recovery.costRunId
   const costCohortRuns = new Set(cohort.cohortRuns)
@@ -1086,10 +1119,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       }
 
   const facts: PreflightFacts = {
-    proofKstDate: (() => {
-      const proofDates = new Set(i.proofSlots.map((slot) => kstDateString(slot)))
-      return proofDates.size === 1 ? [...proofDates][0]! : null
-    })(),
+    proofKstDate: decisionDate,
     slotValidOpportunities,
     slotValidReadyStock: opp.readyFilled,
     slotValidRecoveryReadyStock,

@@ -910,11 +910,13 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run stage:ladder-check
-          # 🔴 StageDecision v6 reader — writer 는 v5 그대로 · legacy 는 v4 뿐 · 예측 경고는 v6 만. 새 step 이 아니다
+          # 🔴 StageDecision v6 — writer v6 · reader v5+v6(전날 v5 · rollback) · legacy v4 뿐 · 예측 경고는 v6 만. 새 step 이 아니다
           npm run stage:v6-reader-check
+          # 🔴 예측 경고(기회·처리량·READY 필요량)·지연 관측은 막지 않는다 · hard gate 만 막는다 · 결정일 결속 · 복구 도달 불가. 새 step 이 아니다
+          npm run stage:forecast-warning-check
           # 🔴 하루 = 결정 하나 = 단계 하나 — 같은 날 D20→D30 · 조각 하루 증명 반례. 새 step 이 아니다
           npm run stage:one-day-check
-          # 🔴 D20+ 제한 복구 — OPPORTUNITY_SHORT 하나만 · 하루 1회 · 07:30 유료 시작 마감 · 07:55 판정 · 07:58 저장 fallback
+          # 🔴 D20+ 제한 복구 — 한 릴리스 rollback 호환 코드. 예측만 있는 날은 preflight PASS 라 도달 불가(stage:forecast-warning-check ⑤)
           npm run stage:active-recovery-check
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
           #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다

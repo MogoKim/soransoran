@@ -36,7 +36,7 @@ import {
   decisionToCreateInput,
 } from '../src/lib/stage-decision-repo'
 import {
-  validateStoredDecision, STAGE_DECISION_VERSION, STAGE_DECISION_V6, DECISION_WRITER,
+  validateStoredDecision, STAGE_DECISION_VERSION, STAGE_DECISION_V5, STAGE_DECISION_V6, DECISION_WRITER, FORECAST_WARNING_CODES,
   type StageDecision, type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
 import { ensureStageDecision, consumeStageDecision } from '../src/lib/stage-decision-store'
@@ -131,26 +131,41 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 
 const DATE = '2026-09-25'
 const PREV = '2026-09-24'
+/**
+ * 🔴 **새 writer 경로의 행** — 지금 controller 가 쓰는 판(`STAGE_DECISION_VERSION` = v6)과 그 supply 모양
+ *    (`{forecastWarnings}`)이다. 판에 따라 supply 모양을 바꿔 주지 않는다 — 과거 판은 아래 helper 가 따로 만든다.
+ */
 const rawDecision = (o: Partial<StageDecision> = {}): StageDecision => ({
   kstDate: DATE, capacity: 'd10', release: 'd5', state: 'TRIAL',
   reasons: ['🟢 오늘 하루 d5 로 낸다'],
   blocks: [{ code: 'PROVENANCE_NEXT', reason: '승격 출처가 어긋났다' }],
   dayPinned: true,
-  supply: { eligibleSpeakers: 3, excluded: [{ reason: 'noOpenDay', codes: ['P01', 'P02'] }] },
+  supply: { forecastWarnings: ['THROUGHPUT_SHORT'] },
   decidedAt: `${DATE}T02:15:00.000Z`,
   contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
   transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV, target: 'd5', basis: 'PASS' },  // 🔴 d3 위 시험은 운영 증거 근거가 있어야 한다
   ...o,
 })
 /**
+ * 🔴 **과거 reader 경로의 행** — 옛 writer(v5)가 남긴 행이다(supply = 화자 수 · 제외 코드). rollback·전환일에
+ *    v6 reader 가 그 행을 값 그대로·얼린 채 읽는지를 본다. 판과 모양을 둘 다 명시한다.
+ */
+const rawLegacyV5Decision = (o: Partial<StageDecision> = {}): StageDecision => rawDecision({
+  contractVersion: STAGE_DECISION_V5,
+  supply: { eligibleSpeakers: 3, excluded: [{ reason: 'noOpenDay', codes: ['P01', 'P02'] }] },
+  ...o,
+})
+/**
  * 🔴 **검사도 운영과 같은 문을 지난다.** `ValidatedStageDecision` 은 validator 를
  *    지나야만 만들어진다 — 여기서 손으로 지어낼 수 없다.
  */
-const decision = (o: Partial<StageDecision> = {}): ValidatedStageDecision => {
-  const v = validateStoredDecision({ row: rawDecision(o), expectKstDate: rawDecision(o).kstDate })
+const validated = (raw: StageDecision): ValidatedStageDecision => {
+  const v = validateStoredDecision({ row: raw, expectKstDate: raw.kstDate })
   if (!v.ok) throw new Error(`fixture 가 계약을 지키지 않는다 — ${v.reason}`)
   return v.decision
 }
+const decision = (o: Partial<StageDecision> = {}): ValidatedStageDecision => validated(rawDecision(o))
+const legacyV5Decision = (o: Partial<StageDecision> = {}): ValidatedStageDecision => validated(rawLegacyV5Decision(o))
 
 async function main(): Promise<void> {
   const prisma = new PrismaClient()
@@ -180,16 +195,38 @@ async function main(): Promise<void> {
       check('🔴 🔴 **값이 하나도 사라지지 않는다**',
         norm(got.result.decision) === norm(d),
         `${norm(got.result.decision).slice(0, 180)}`)
-      check('🔴 dayPinned · supply · transition 이 살아서 돌아온다',
-        got.result.decision.dayPinned === true
-        && got.result.decision.supply !== null && 'excluded' in got.result.decision.supply
-        && got.result.decision.supply.excluded[0]?.codes.join(',') === 'P01,P02'
-        && got.result.decision.transition?.kind === 'TRIAL')
+      check('🔴 writer 판(v6) · dayPinned · supply{forecastWarnings} · transition 이 살아서 돌아온다',
+        got.result.decision.contractVersion === STAGE_DECISION_V6 && got.result.decision.dayPinned === true
+        && got.result.decision.supply !== null && 'forecastWarnings' in got.result.decision.supply
+        && JSON.stringify(got.result.decision.supply.forecastWarnings) === JSON.stringify(['THROUGHPUT_SHORT'])
+        && got.result.decision.transition?.kind === 'TRIAL',
+        JSON.stringify(got.result.decision.supply))
       check('🔴 decidedAt 이 DateTime 왕복 뒤에도 그날 안이다',
         got.result.decision.decidedAt === d.decidedAt,
         `${got.result.decision.decidedAt} vs ${d.decidedAt}`)
       check('🔴 읽은 값은 얼어 있다 — 받은 쪽이 못 고친다',
-        Object.isFrozen(got.result.decision) && Object.isFrozen(got.result.decision.blocks))
+        Object.isFrozen(got.result.decision) && Object.isFrozen(got.result.decision.blocks)
+        && got.result.decision.supply !== null && Object.isFrozen(got.result.decision.supply)
+        && 'forecastWarnings' in got.result.decision.supply && Object.isFrozen(got.result.decision.supply.forecastWarnings))
+    }
+  }
+
+  console.log('\n①-v5 🔴 과거 reader 경로 — 옛 writer(v5)가 남긴 행을 rollback·전환일에 값 그대로 · 얼린 채 읽는다')
+  {
+    await wipe()
+    const d = legacyV5Decision()
+    check('v5 행을 만든다(옛 writer 가 남긴 전날 행 모사)', await createStageDecision(prisma, d) === 'inserted')
+    const got = await readStageDecision(prisma, DATE)
+    check('🔴 v5 행이 validator 를 통과하고 판이 v5 로 남는다',
+      got.found && got.result.ok && got.result.decision.contractVersion === STAGE_DECISION_V5,
+      got.found && !got.result.ok ? got.result.reason : '')
+    if (got.found && got.result.ok) {
+      const s = got.result.decision.supply
+      check('🔴 v5 supply(화자 수 · 제외 코드)가 살아서 돌아온다',
+        s !== null && 'excluded' in s && s.eligibleSpeakers === 3 && s.excluded[0]?.codes.join(',') === 'P01,P02')
+      check('🔴 🔴 **v5 supply 도 깊게 얼어 있다 — 제외 코드 배열까지**',
+        s !== null && 'excluded' in s && Object.isFrozen(s) && Object.isFrozen(s.excluded)
+        && Object.isFrozen(s.excluded[0]) && Object.isFrozen(s.excluded[0]?.codes))
     }
   }
 
@@ -262,13 +299,13 @@ async function main(): Promise<void> {
         got.found && !got.result.ok ? got.result.reason : JSON.stringify(got.found && got.result.ok ? got.result.decision.supply : null))
     }
     // 🔴 저장된 행이 판과 다른 모양이면 읽을 때 깨진 행이다 — v5 행에 v6 경고 · v6 행에 화자 수
-    const cross: readonly [string, Record<string, unknown>][] = [
-      ['v5 행에 {forecastWarnings}', { supply: { forecastWarnings: [] } }],
-      ['v6 행에 {eligibleSpeakers, excluded}', { contractVersion: STAGE_DECISION_V6, supply: { eligibleSpeakers: 3, excluded: [] } }],
+    const cross: readonly [string, ValidatedStageDecision, Record<string, unknown>][] = [
+      ['v5 행에 {forecastWarnings}', legacyV5Decision(), { supply: { forecastWarnings: [] } }],
+      ['v6 행에 {eligibleSpeakers, excluded}', decision({ contractVersion: STAGE_DECISION_V6 }), { supply: { eligibleSpeakers: 3, excluded: [] } }],
     ]
-    for (const [label, patch] of cross) {
+    for (const [label, base, patch] of cross) {
       await wipe()
-      await prisma.stageDecision.create({ data: { ...decisionToCreateInput(decision()), ...patch } as never })
+      await prisma.stageDecision.create({ data: { ...decisionToCreateInput(base), ...patch } as never })
       const got = await readStageDecision(prisma, DATE)
       check(`🔴 ${label} 저장 행은 validator 가 거절한다`, got.found && !got.result.ok,
         got.found && got.result.ok ? '🔴 통과해 버림' : '')
@@ -615,10 +652,11 @@ async function main(): Promise<void> {
           runnerHealth: 'ok', contractValidPersonas: async () => 30,
         })
         const lv = judgeNextPreflight('d3', leg.facts, RUNNER_GRID)
-        check('🔴 🔴 **legacy-only(의도 없는 READY 3 · v2 묶음) → cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN (FAIL 아님)**',
-          leg.facts.readyCohort === null && leg.detail.legacyExcluded === 3 && lv.codes.includes('THROUGHPUT_UNKNOWN')
-          && lv.codes.includes('SUPPLY_COST_UNKNOWN') && !lv.codes.includes('THROUGHPUT_SHORT') && !lv.codes.includes('SUPPLY_COST_SHORT'),
-          JSON.stringify({ detail: leg.detail, codes: lv.codes }))
+        check('🔴 🔴 **legacy-only(의도 없는 READY 3 · v2 묶음) → cohort 없음 · 예측 경고 THROUGHPUT_UNKNOWN · hard SUPPLY_COST_UNKNOWN (FAIL 아님)**',
+          leg.facts.readyCohort === null && leg.detail.legacyExcluded === 3 && lv.forecastWarnings.includes('THROUGHPUT_UNKNOWN')
+          && !lv.codes.includes('THROUGHPUT_UNKNOWN')
+          && lv.codes.includes('SUPPLY_COST_UNKNOWN') && !lv.forecastWarnings.includes('THROUGHPUT_SHORT') && !lv.codes.includes('SUPPLY_COST_SHORT'),
+          JSON.stringify({ detail: leg.detail, codes: lv.codes, forecastWarnings: lv.forecastWarnings }))
       } finally { rmSync(legacyDir, { recursive: true, force: true }) }
       // 🔴 손상된 최신 기회 스냅샷 · 묶음 → 조용히 건너뛰지 않고 모른다
       writeFileSync(join(dir, opportunitiesFileName('20260930-231500')), '{ 손상')
@@ -730,7 +768,7 @@ async function main(): Promise<void> {
         const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
         check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) bounded recovery 포함 용량 33 이 채운다 → 처리량 확정',
           d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 33
-          && !d3.codes.includes('THROUGHPUT_SHORT') && !d3.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
+          && !d3.forecastWarnings.includes('THROUGHPUT_SHORT') && !d3.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
         const d5 = judgeNextPreflight('d5', {
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60,
           commentUsdPerRequest: 0.003, commentDailyUsdCap: 0.2,
@@ -739,7 +777,7 @@ async function main(): Promise<void> {
         }, RUNNER_GRID)
         check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 33 → 처리량은 확정, 시행일 전 비용 증거는 UNKNOWN**',
           d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
-          && !d5.codes.includes('READY_REQUIREMENT_UNKNOWN')
+          && !d5.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN')
           && d5.counts.supplyProofBudgetUsd === undefined
           && JSON.stringify(d5.codes) === JSON.stringify(['SUPPLY_COST_UNKNOWN']) && d5.verdict === 'UNKNOWN',
           JSON.stringify({ counts: d5.counts, codes: d5.codes }))
@@ -765,9 +803,10 @@ async function main(): Promise<void> {
           auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, sources: 50, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
-        check('🔴 d5 경계 반례 — 용량 20이 필요 9~25 사이이면 결말 전에는 READY_REQUIREMENT_UNKNOWN',
-          d5Boundary.counts.readyCapacity === 20 && d5Boundary.codes.includes('READY_REQUIREMENT_UNKNOWN')
-          && d5Boundary.verdict === 'UNKNOWN', JSON.stringify({ counts: d5Boundary.counts, codes: d5Boundary.codes }))
+        check('🔴 d5 경계 반례 — 용량 20이 필요 9~25 사이이면 결말 전에는 READY_REQUIREMENT_UNKNOWN (PR1b: 막지 않는 예측 경고)',
+          d5Boundary.counts.readyCapacity === 20 && d5Boundary.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN')
+          && !d5Boundary.codes.includes('READY_REQUIREMENT_UNKNOWN'),
+          JSON.stringify({ counts: d5Boundary.counts, codes: d5Boundary.codes, forecastWarnings: d5Boundary.forecastWarnings }))
         check('🔴 공급 비용 = 목표 5 × 결과당 $0.01 — raw READY 단가 · 공개 단가 칸 없음',
           Math.abs((d5.counts.supplyDailyUsdNeeded ?? 0) - 0.05) < 1e-12
           && !('rawReadyUsd' in d5.counts) && !('publicPostUsd' in d5.counts), JSON.stringify(d5.counts))
@@ -800,7 +839,7 @@ async function main(): Promise<void> {
       const oc = outside.facts.readyCohort
       check('🔴 🔴 **창 밖 회차 — 묶음 runAt 창 시작 1초 전 · 큐 decidedAt 창 안 → 그 행은 cohort 밖(제외) · 불일치 0 · 모름 3 · 원천 30 그대로 · 처리량 판정 가능**',
         oc !== null && oc.unknown === 3 && oc.published === 2 && oc.lost === 4 && oc.sources === 30
-        && (outside.detail.intentMismatches as unknown[]).length === 0 && outside.detail.readyCount === 9 && !ov.codes.includes('THROUGHPUT_UNKNOWN'),
+        && (outside.detail.intentMismatches as unknown[]).length === 0 && outside.detail.readyCount === 9 && !ov.forecastWarnings.includes('THROUGHPUT_UNKNOWN'),
         JSON.stringify({ oc, m: outside.detail.intentMismatches, codes: ov.codes }))
       await moveTo('20260927-220000')
       const inside = await factsAgain()
@@ -819,8 +858,9 @@ async function main(): Promise<void> {
       const bv = judgeNextPreflight('d5', bad.facts, RUNNER_GRID)
       check('🔴 🔴 **E 큐 의도 ageAtSlotH ≠ v3 묶음 → AGE_MISMATCH · cohort 없음 · THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN**',
         bad.facts.readyCohort === null && JSON.stringify(bad.detail.intentMismatches) === JSON.stringify(['AGE_MISMATCH'])
-        && bv.codes.includes('THROUGHPUT_UNKNOWN') && bv.codes.includes('SUPPLY_COST_UNKNOWN') && bad.detail.legacyExcluded === 2,
-        JSON.stringify({ m: bad.detail.intentMismatches, codes: bv.codes }))
+        && bv.forecastWarnings.includes('THROUGHPUT_UNKNOWN') && !bv.codes.includes('THROUGHPUT_UNKNOWN')
+        && bv.codes.includes('SUPPLY_COST_UNKNOWN') && bad.detail.legacyExcluded === 2,
+        JSON.stringify({ m: bad.detail.intentMismatches, codes: bv.codes, forecastWarnings: bv.forecastWarnings }))
       await prisma.originalPostApprovalQueue.update({
         where: { id: one.id },
         data: { gateResults: { ...g, sourceEvidence: buildSourceEvidence({ sourceSite: site, sourceArticleId: 'pfc-other' }) } as Prisma.InputJsonValue },
@@ -984,7 +1024,7 @@ async function main(): Promise<void> {
       }, RUNNER_GRID)
       check('🔴 앞판 07:00 사실을 현재 D20 처리량으로 재판정 — readyCapacity 15 · readyNeeded 12 · 처리량 해소 · SUPPLY_COST_UNKNOWN',
         old0700.counts.readyCapacity === 15 && old0700.counts.readyNeeded === 12
-        && !old0700.codes.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
+        && !old0700.forecastWarnings.includes('THROUGHPUT_SHORT') && old0700.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(old0700.counts))
       process.env.HOME = home
       const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.5', SORAN_LLM_RUN_REQUEST_CAP: '40', SORAN_LLM_RESERVE_HEADROOM: '1.2' }
       const factsNow = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
@@ -1005,10 +1045,11 @@ async function main(): Promise<void> {
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
       const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
-      check('🔴 🔴 **보정 후 공급 능력 19 · 필요 하한 12 → 처리량 부족은 해소하되 과거 원천 inventory 부재로 D10은 UNKNOWN**',
+      check('🔴 🔴 **보정 후 공급 능력 19 · 필요 하한 12 → 처리량 부족은 해소 · 과거 원천 inventory 부재는 예측 경고 OPPORTUNITY_UNKNOWN (PR1b: 막지 않는다)**',
         v.counts.readyCapacity === 19 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
-        && !v.codes.includes('THROUGHPUT_SHORT') && v.codes.includes('OPPORTUNITY_UNKNOWN') && v.verdict === 'UNKNOWN',
-        JSON.stringify({ counts: v.counts, codes: v.codes }))
+        && !v.forecastWarnings.includes('THROUGHPUT_SHORT') && v.forecastWarnings.includes('OPPORTUNITY_UNKNOWN')
+        && !v.codes.includes('OPPORTUNITY_UNKNOWN'),
+        JSON.stringify({ counts: v.counts, codes: v.codes, forecastWarnings: v.forecastWarnings }))
       // 🔴 도장 전 행이 예정 슬롯에 짝지어져도 성공(예정)으로 세지 않는다 — 짝지은 열쇠를 직접 준다
       const lateIds = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: `p0r-${LATE}-r` } }, select: { id: true } })).map((x) => x.id)
       const stampedPending = (await prisma.originalPostApprovalQueue.findMany({ where: { dedupKey: { startsWith: 'p0r-' }, status: 'APPROVED', decidedBy: AUTO_DECIDER }, select: { id: true } })).map((x) => x.id)
@@ -1021,9 +1062,11 @@ async function main(): Promise<void> {
       check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
         c !== null && c.usdPerSlotValidResult === null && v.codes.includes('SUPPLY_COST_UNKNOWN') && !v.codes.includes('SUPPLY_COST_SHORT'),
         JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
-      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소됐지만 원천·비용 미상 축으로 D10 BLOCK (UNKNOWN)**',
-        v.verdict === 'UNKNOWN' && !v.codes.includes('THROUGHPUT_SHORT')
-        && v.codes.includes('OPPORTUNITY_UNKNOWN') && v.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(v.codes))
+      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소 · 원천 미상은 예측 경고 · 비용 미상(hard) 하나로 D10 BLOCK (UNKNOWN)**',
+        v.verdict === 'UNKNOWN' && v.codes.includes('SUPPLY_COST_UNKNOWN')
+        && v.forecastWarnings.includes('OPPORTUNITY_UNKNOWN') && !v.forecastWarnings.includes('THROUGHPUT_SHORT')
+        && !v.codes.some((code) => (FORECAST_WARNING_CODES as readonly string[]).includes(code)),
+        JSON.stringify({ codes: v.codes, forecastWarnings: v.forecastWarnings }))
       check('preflight 메모 — 미정산 2건 · 추정 예약액 $0.0172 · 실제 비용 아님',
         (r.notes as string[]).some((x) => /미정산 2건 \(추정 예약액 \$0\.0172 — 실제 비용 아님\)/.test(x)), JSON.stringify(r.notes))
       // 🔴 예약이 없는 미상이어도 같다 — SUPPLY_COST_UNKNOWN
@@ -1178,10 +1221,15 @@ async function main(): Promise<void> {
         usdPerSlotValidResult: 0.01, trialCost: cleanTrial,
       } }, RUNNER_GRID)
       check('🔴 🔴 **부적격만 남은 미도장 → 모름 0 · raw 2 · 공급 능력 2 · 필요 3 → THROUGHPUT_SHORT 로 확정 (앞판처럼 READY_REQUIREMENT_UNKNOWN 으로 부풀지 않는다)**',
-        only.fates?.unknown === 0 && only.readyCount === 2 && vNow.counts.readyCapacity === 2 && vNow.codes.includes('THROUGHPUT_SHORT')
-        && !vNow.codes.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify({ counts: vNow.counts, codes: vNow.codes }))
+        only.fates?.unknown === 0 && only.readyCount === 2 && vNow.counts.readyCapacity === 2 && vNow.forecastWarnings.includes('THROUGHPUT_SHORT')
+        && !vNow.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN'),
+        JSON.stringify({ counts: vNow.counts, codes: vNow.codes, forecastWarnings: vNow.forecastWarnings }))
       check('대조 — 같은 행을 앞판처럼 모름 3 으로 세면 공급 능력 5 · 필요 3~8 → READY_REQUIREMENT_UNKNOWN (부풀음)',
-        vOld.counts.readyCapacity === 5 && vOld.codes.includes('READY_REQUIREMENT_UNKNOWN') && !vOld.codes.includes('THROUGHPUT_SHORT'), JSON.stringify(vOld.counts))
+        vOld.counts.readyCapacity === 5 && vOld.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN') && !vOld.forecastWarnings.includes('THROUGHPUT_SHORT'), JSON.stringify(vOld.counts))
+      check('🔴 PR1b — 처리량 예측(SHORT·REQUIREMENT_UNKNOWN)은 막는 codes 에 없다 · 이 fixture 의 hard gate 는 없다',
+        !vNow.codes.includes('THROUGHPUT_SHORT') && !vOld.codes.includes('READY_REQUIREMENT_UNKNOWN')
+        && vNow.verdict === 'PASS' && vOld.verdict === 'PASS',
+        JSON.stringify({ now: [vNow.verdict, vNow.codes], old: [vOld.verdict, vOld.codes] }))
     } finally {
       rmSync(dir, { recursive: true, force: true })
       await wipeA()

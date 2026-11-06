@@ -69,6 +69,12 @@ export async function retryFinalStageDecisionWrite<T>(
   throw last
 }
 
+/**
+ * 🔴 **한 릴리스 rollback 호환 경로** (PR1b · 2026-11-06 · canon §11 · §11.1). 현재 `judgeNextPreflight` 는 이 예측
+ *    코드들을 막는 `codes` 가 아니라 `forecastWarnings` 로 보내 PASS 를 낸다 — 그래서 `planActiveRecovery` 는
+ *    `이미 preflight PASS` 로 끝나고 이 판정에 도달하지 않는다(`stage:forecast-warning-check` ⑤). 옛 runtime 으로
+ *    되돌렸을 때만 다시 쓰인다. 다음 릴리스에서 이 경로를 지운다.
+ */
 const ACTIVE_RECOVERY_SHORTAGE_CODES = new Set([
   'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT',
 ])

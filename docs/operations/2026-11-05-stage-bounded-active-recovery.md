@@ -8,6 +8,11 @@
 > (canon §3.3 · §11 · §11.1). 이 문서는 그 경로가 코드·runtime에서 지워지기 전까지 이미 배포된 실행을 진단·quiesce·
 > rollback하는 데만 쓴다. 아래 "열리는 조건"은 남은 코드의 동작 설명이지 현재 정책이 아니며, 복구를 새로 넓히는
 > 근거로 쓰지 않는다. 경로를 지우는 변경에서 이 문서를 📜 역사로 옮긴다.
+>
+> 🔴 **PR1b 뒤 도달 조건.** 예측 코드(`OPPORTUNITY_*`·`THROUGHPUT_*`·`READY_REQUIREMENT_UNKNOWN`)는 막는 `codes`가 아니라
+> `forecastWarnings`로 가고 판정은 PASS다. 그래서 예측만 있는 판정에서는 복구가 열리지 않는다
+> (`stage:forecast-warning-check` ⑤). 코드는 옛 runtime으로 되돌렸을 때를 위한 **한 릴리스 rollback 호환**으로만 남고,
+> 다음 릴리스에서 지운다. PR1b가 runtime에 배포됐는지는 [`CURRENT-MILESTONE.md`](./CURRENT-MILESTONE.md)로 확인한다.
 
 이 문서는 단계 시험일 아침에 **기회 또는 처리량이 조금 부족하고 다른 운영 결함은 없는 경우** 기존 공급망을 한 번 더 호출하고,
 같은 controller가 같은 정책으로 최종 판정하는 절차를 설명한다. 이 문서는 단계 정책이나 PASS 기준을

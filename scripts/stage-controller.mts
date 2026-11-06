@@ -56,7 +56,7 @@ import {
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
-import { judgeNextPreflight, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { judgeNextPreflight, preflightLogLine, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
 import { probeSupplyLease } from './lib/supply-lease.mjs'
@@ -399,9 +399,7 @@ async function computeToday(
         }
         nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID, { boundedRecoveryReadyGain })
         preflightDetail = r.detail
-        log(`   ${target} preflight ${nextPreflight.verdict}${nextPreflight.codes.length > 0 ? ` [${nextPreflight.codes.join(',')}]` : ''}`
-          + `${nextPreflight.warnings.length > 0 ? ` WARN [${nextPreflight.warnings.join(',')}]` : ''}`
-          + ` (${Object.entries(nextPreflight.counts).map(([k, x]) => `${k}=${x}`).join(',')})`)
+        log(preflightLogLine(target, nextPreflight))
         for (const n of r.notes) log(`      ⬚ ${n}`)
       }
     } catch (e) { failures.push(`재고·preflight 를 읽지 못했다 — ${(e as Error).name}`) }

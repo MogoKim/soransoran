@@ -1215,7 +1215,8 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   const hold3 = run(PREV_HOLD_D3, null)
   check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS → d3 재인증(REPROVE = 현재 단계 RETEST · 내리지 않는다)',
     hold3.decision.release === 'd3' && hold3.decision.state === 'REPROVE', `${hold3.decision.state} ${hold3.decision.release}`)
-  const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
+  /** 🔴 PR1b(2026-11-06): 기회 부족은 이제 막지 않는 예측 경고다 — "막힘"은 실제 hard gate(Persona 부족)로 만든다 */
+  const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { contractValidPersonas: 1 }) })
   check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (매일 REPROVE 없음 · 0..3)',
     hold3Blocked.decision.release === 'd3' && hold3Blocked.decision.state === 'PREPARE',
     `${hold3Blocked.decision.state} ${hold3Blocked.decision.release}`)
@@ -1232,7 +1233,16 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
     noPersona.release === 'd3' && noPersona.state !== 'TRIAL' && noPersona.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN')
     && noPersona.reasons.some((r) => r.includes('PERSONA_UNKNOWN')), `${noPersona.state} ${noPersona.release}`)
   const shortOpp = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 2 }) }).decision
-  check('🔴 slot-valid 기회가 d5 목표(5)보다 적으면 PREFLIGHT_FAIL', shortOpp.release === 'd3' && shortOpp.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
+  /** 🔴 PR1b(2026-11-06 · canon §3.1·§3.2): 기회 예측은 시험을 막지 않고 v6 `supply.forecastWarnings` 로 남는다 */
+  check('🟢 slot-valid 기회가 d5 목표(5)보다 적어도 시험은 열리고 OPPORTUNITY_SHORT 는 예측 경고로 남는다',
+    shortOpp.state === 'TRIAL' && shortOpp.release === 'd5' && !shortOpp.blocks.some((b) => b.code === 'PREFLIGHT_FAIL')
+    && shortOpp.supply !== null && 'forecastWarnings' in shortOpp.supply
+    && shortOpp.supply.forecastWarnings.includes('OPPORTUNITY_SHORT'),
+    `${shortOpp.state} ${shortOpp.release} ${JSON.stringify(shortOpp.supply)}`)
+  const shortPersona = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { contractValidPersonas: 2 }) }).decision
+  check('🔴 계약 유효 Persona 가 d5 목표(5)보다 적으면 여전히 PREFLIGHT_FAIL (hard gate)',
+    shortPersona.release === 'd3' && shortPersona.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
+    `${shortPersona.state} ${shortPersona.release} ${shortPersona.blocks.map((b) => b.code).join(',')}`)
   /** 🔴 계약 경계 — 옛 판(v4) 전날 결정은 PASS 여도 근거가 아니다 */
   const legacyPrev = validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL', contractVersion: 'stage-decision-v4',
     transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV2, target: 'd3' } }), expectKstDate: PREV })

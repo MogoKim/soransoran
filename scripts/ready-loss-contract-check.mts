@@ -31,7 +31,8 @@ let fail = 0
 function check(name: string, ok: boolean, detail = ''): void {
   if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { fail += 1; console.log(`  🔴 FAIL ${name}${detail ? ` — ${detail}` : ''}`) }
 }
-const show = (v: PreflightVerdict): string => `${v.verdict} [${v.codes.join(',')}] ${JSON.stringify(v.counts)}`
+const show = (v: PreflightVerdict): string =>
+  `${v.verdict} [${v.codes.join(',')}] forecast=[${v.forecastWarnings.join(',')}] warn=[${v.warnings.join(',')}] ${JSON.stringify(v.counts)}`
 const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
 
 /** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
@@ -60,6 +61,11 @@ const D5_FACTS = (o: Partial<PreflightFacts> = {}): PreflightFacts => ({
 })
 const d5 = (c: Partial<ReadyCohortFact> = {}, o: Partial<PreflightFacts> = {}): PreflightVerdict =>
   judgeNextPreflight('d5', D5_FACTS({ readyCohort: cohort(c), ...o }), RUNNER_GRID)
+/**
+ * 🔴 (PR1b · 2026-11-06) 처리량·필요량·기회 결론은 막지 않는 예측 경고(`forecastWarnings`)다. 산술(필요량·용량)은
+ *    그대로 검사하고, 결론은 그 칸에서 읽는다. 같은 사실이 비용 hard gate 를 함께 모르게 하면 판정은 여전히 UNKNOWN 이다.
+ */
+const fw = (v: PreflightVerdict, c: string): boolean => (v.forecastWarnings as readonly string[]).includes(c)
 
 console.log('\n① 반례 1 · 2 — 손실 0 이면 목표만 · 손실 1 이면 +1 (대기 0)')
 {
@@ -67,8 +73,8 @@ console.log('\n① 반례 1 · 2 — 손실 0 이면 목표만 · 손실 1 이�
   check('🔴 반례1 공개 5 · 손실 0 · 대기 0 · 같은 cohort 용량 5 → PASS (6번째 READY 를 요구하지 않는다)',
     v.verdict === 'PASS' && v.counts.readyNeeded === 5 && v.counts.readyCapacity === 5, show(v))
   const v2 = d5({ lost: 1, sources: sourcesFor(6, 5) })
-  check('🔴 반례2 공개 5 · 손실 1 → 필요 6 · 용량 5 → FAIL THROUGHPUT_SHORT',
-    v2.verdict === 'FAIL' && v2.codes.includes('THROUGHPUT_SHORT') && v2.counts.readyNeeded === 6 && v2.counts.readyCapacity === 5, show(v2))
+  check('🔴 반례2 공개 5 · 손실 1 → 필요 6 · 용량 5 → THROUGHPUT_SHORT 예측 경고(막지 않음)',
+    v2.verdict === 'PASS' && fw(v2, 'THROUGHPUT_SHORT') && v2.counts.readyNeeded === 6 && v2.counts.readyCapacity === 5, show(v2))
   const v3 = d5({ lost: 1, sources: sourcesFor(6, 6) })
   check('🔴 반례2 같은 손실 1 · 용량 6 → 처리량 PASS',
     v3.verdict === 'PASS' && v3.counts.readyNeeded === 6 && v3.counts.readyCapacity === 6, show(v3))
@@ -81,20 +87,20 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
 {
   // 🔴 slot-valid 결과 0 이면 결과당 비용도 없다(비용 귀속이 null) — 현실 모양 그대로
   const v = d5({ published: 0, lost: 3, sources: sourcesFor(3, 5), usdPerSlotValidResult: null })
-  check('🔴 반례3 공개 0 · 손실 3 · 용량 5 → UNKNOWN READY_REQUIREMENT_UNKNOWN · FAIL 코드 없음',
-    v.verdict === 'UNKNOWN' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')
-    && !v.codes.includes('THROUGHPUT_SHORT') && !v.codes.includes('SUPPLY_COST_SHORT'), show(v))
-  check('🔴 반례3 공급 비용도 UNKNOWN (결과 0 → 결과당 비용 없음)', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
+  check('🔴 반례3 공개 0 · 손실 3 · 용량 5 → READY_REQUIREMENT_UNKNOWN 예측 경고 · 부족(SHORT) 단정 없음 · 비용 SHORT 없음',
+    v.verdict === 'UNKNOWN' && fw(v, 'READY_REQUIREMENT_UNKNOWN')
+    && !fw(v, 'THROUGHPUT_SHORT') && !v.codes.includes('SUPPLY_COST_SHORT'), show(v))
+  check('🔴 반례3 공급 비용은 hard gate UNKNOWN 그대로 (결과 0 → 결과당 비용 없음)', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
   const hard = d5({ published: 0, lost: 3, sources: sourcesFor(3, 4) })
-  check('🔴 실제 hard failure 는 남는다 — 필요량은 목표 아래로 내려가지 않으므로 용량 4 < 목표 5 → FAIL',
-    hard.verdict === 'FAIL' && hard.codes.includes('THROUGHPUT_SHORT'), show(hard))
+  check('🔴 필요량은 목표 아래로 내려가지 않으므로 용량 4 < 목표 5 → THROUGHPUT_SHORT 예측 경고는 사라지지 않는다',
+    fw(hard, 'THROUGHPUT_SHORT') && hard.counts.readyCapacity === 4, show(hard))
   const none = d5({}, { readyCohort: null })
-  check('🔴 cohort 모름 → THROUGHPUT_UNKNOWN · SUPPLY_COST_UNKNOWN (0 으로 읽지 않는다)',
-    none.verdict === 'UNKNOWN' && none.codes.includes('THROUGHPUT_UNKNOWN') && none.codes.includes('SUPPLY_COST_UNKNOWN')
+  check('🔴 cohort 모름 → THROUGHPUT_UNKNOWN 예측 경고 · SUPPLY_COST_UNKNOWN hard gate (0 으로 읽지 않는다)',
+    none.verdict === 'UNKNOWN' && fw(none, 'THROUGHPUT_UNKNOWN') && none.codes.includes('SUPPLY_COST_UNKNOWN')
     && !('readyNeeded' in none.counts), show(none))
   const empty = d5({ published: 0, lost: 0, unknown: 0 })
-  check('🔴 결말 0 · 대기 0(READY 0) → 용량 0 < 목표 → FAIL (관측된 0 생산)',
-    empty.verdict === 'FAIL' && empty.codes.includes('THROUGHPUT_SHORT'), show(empty))
+  check('🔴 결말 0 · 대기 0(READY 0) → 용량 0 < 목표 → THROUGHPUT_SHORT 예측 경고 (관측된 0 생산)',
+    fw(empty, 'THROUGHPUT_SHORT') && empty.counts.readyCapacity === 0, show(empty))
   check('🔴 손상된 사실(음수 · 소수)은 구간을 만들지 않는다',
     replenishmentOf(5, cohort({ published: -1 })).max === null && replenishmentOf(5, cohort({ unknown: 0.5 })).max === null)
 }
@@ -102,33 +108,34 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
 console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
   const op = d5({ published: 4, lost: 0, unknown: 10, sources: 160 })
-  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 8 · 필요 5~18 → UNKNOWN (PASS 로 확정하지 않는다)',
-    op.verdict === 'UNKNOWN' && op.codes.includes('READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 8
+  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 8 · 필요 5~18 → READY_REQUIREMENT_UNKNOWN (충분으로 확정하지 않는다)',
+    fw(op, 'READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 8
     && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
   const base = d5({ published: 4, lost: 0, unknown: 0, sources: 160 })
-  check('🔴 반례5 대기 0 이면 같은 원천에서 용량 2 → FAIL', base.verdict === 'FAIL' && base.codes.includes('THROUGHPUT_SHORT'), show(base))
+  check('🔴 반례5 대기 0 이면 같은 원천에서 용량 2 → THROUGHPUT_SHORT 예측 경고', fw(base, 'THROUGHPUT_SHORT') && base.counts.readyCapacity === 2, show(base))
   const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, unknown: pending, sources: 160 }))
-  check('🔴 🔴 반례5 대기만 늘려(10 · 100 · 1000) 용량을 올려도 PASS 가 되지 않는다',
-    inflated.every((v) => v.verdict !== 'PASS' && v.codes.includes('READY_REQUIREMENT_UNKNOWN')),
-    inflated.map((v) => `${v.verdict}:${v.counts.readyCapacity}`).join(','))
+  check('🔴 🔴 반례5 대기만 늘려(10 · 100 · 1000) 용량을 올려도 처리량이 충분으로 확정되지 않는다(예측 경고 남음)',
+    inflated.every((v) => fw(v, 'READY_REQUIREMENT_UNKNOWN')),
+    inflated.map((v) => `${v.verdict}:${v.counts.readyCapacity}:${v.forecastWarnings.join('+')}`).join(','))
   const resolved = d5({ published: 14, lost: 0, unknown: 0, sources: 160 })
   check('🔴 같은 행이 전부 공개로 결말 나면(공개 14) PASS — 결말이 판정을 연다', resolved.verdict === 'PASS', show(resolved))
   const lostAll = d5({ published: 4, lost: 10, unknown: 0, sources: 160 })
-  check('🔴 같은 행이 전부 손실로 결말 나면(손실 10) 필요 18 > 용량 5 → FAIL', lostAll.verdict === 'FAIL'
+  check('🔴 같은 행이 전부 손실로 결말 나면(손실 10) 필요 18 > 용량 5 → THROUGHPUT_SHORT 예측 경고', fw(lostAll, 'THROUGHPUT_SHORT')
     && lostAll.counts.readyNeeded === 18, show(lostAll))
   const covered = d5({ published: 4, lost: 0, unknown: 10, sources: sourcesFor(14, 18) })
-  check('🔴 대기를 전부 손실로 봐도 용량(18)이 채우면 대기는 결과를 못 바꾼다 → PASS (현재 증명된 것을 손실 처리하지 않는다)',
-    covered.verdict === 'PASS' && covered.counts.readyCapacity === 18, show(covered))
+  check('🔴 대기를 전부 손실로 봐도 용량(18)이 채우면 대기는 결과를 못 바꾼다 → 처리량 예측 경고 없음 (현재 증명된 것을 손실 처리하지 않는다)',
+    covered.verdict === 'PASS' && covered.counts.readyCapacity === 18
+    && !fw(covered, 'READY_REQUIREMENT_UNKNOWN') && !fw(covered, 'THROUGHPUT_SHORT'), show(covered))
   const opOpp = d5({ published: 4, lost: 0, unknown: 10, sources: 160 }, { slotValidOpportunities: 5 })
-  check('🔴 현재 슬롯 기회 5 가 충분해도 보충 처리량 UNKNOWN 은 남는다 (기회 ≠ 지속 보충)',
-    opOpp.verdict === 'UNKNOWN' && !opOpp.codes.includes('OPPORTUNITY_SHORT'), show(opOpp))
+  check('🔴 현재 슬롯 기회 5 가 충분해도 보충 처리량 예측 경고는 남는다 (기회 ≠ 지속 보충)',
+    fw(opOpp, 'READY_REQUIREMENT_UNKNOWN') && !fw(opOpp, 'OPPORTUNITY_SHORT'), show(opOpp))
 }
 
 console.log('\n④ 반례 6 — 상세 원천은 authority 가 아니다')
 {
   const v = d5({ sources: sourcesFor(5, 50) }, { slotValidOpportunities: 4 })
-  check('🔴 공급 용량 50 이어도 슬롯 유효 기회 4 < 5 → FAIL OPPORTUNITY_SHORT',
-    v.verdict === 'FAIL' && v.codes.includes('OPPORTUNITY_SHORT'), show(v))
+  check('🔴 공급 용량 50 이어도 슬롯 유효 기회 4 < 5 → OPPORTUNITY_SHORT 예측 경고(상세 원천 수로 덮지 않는다)',
+    fw(v, 'OPPORTUNITY_SHORT') && !v.codes.includes('OPPORTUNITY_SHORT'), show(v))
   const judgePaths = ['src/lib/stage-ladder-generic.ts', 'scripts/lib/stage-preflight-facts.mts']
   const detailAuthority = /PLANNED_DETAIL_PER_PUBLIC_POST|plannedDetailedSourcesPerDay|detailedSourcesRequiredPerDay|d100Plan\b|allD100Plans\b/
   check('🔴 반례6 preflight 판정·사실 경로가 상세 계획값을 읽지 않는다 — 계획값을 바꿔도 결과 불변',
