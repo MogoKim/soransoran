@@ -782,13 +782,18 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
   check('🔴 manual-live 는 사람이 부르는 publish-live 만 쓴다', /mode: \{ kind: 'manual-live', dailyCap: RELEASE_DAILY_CAP \}/.test(live))
   check('🔴 🔴 **운영 호출자는 시계를 주입하지 않는다 — 두 호출 모두 인자 둘**',
     [runner, live].every((c) => { const m = c.match(/publishOriginalPostTx\(prisma, \{[\s\S]*?\}\)/); return m !== null && !/\}, \{ now/.test(m[0]) }))
-  // 🔴 (2026-10-01) 두 번째 충돌 뒤엔 write 없는 다시 읽기 하나 — 소비 증거(SLOT_CONSUMED · TARGET_RACE_LOST)만 정상 무발행
-  check('🔴 🔴 **직렬화 충돌은 한 번만 재시도 — 재시도도 처음부터 다시 센다 · 두 번째 충돌 뒤엔 write 없는 다시 읽기 · 소비 증거 아니면 실패**',
+  // 🔴 (2026-10-01 · 2026-11-08 PR #835) 두 번째 충돌 뒤엔 write 없는 다시 읽기를 유한 고정 일정으로 되풀이한다 — 소비 증거
+  //    (SLOT_CONSUMED · TARGET_RACE_LOST)만 정상 무발행. 이 검사는 **통합 배선만** 본다: write 2회 · 두 번째 충돌 뒤에만 다시 읽기
+  //    단계(`'recheck'`)를 `settleAfterConflicts` 에 넘긴다 · 소비 증거 상수 · 증거 없음은 실패. 대기 일정 · recheck-open · 즉시 실패 분기
+  //    같은 상세 알고리즘은 `publish:catchup-check`(구조) · `publish:slot-db-check` ⑫ · `publish-recheck-mutation`(동작)이 소유한다 — 여기 복제하지 않는다.
+  const settleSrc = tx.slice(tx.indexOf('export async function settleAfterConflicts'), tx.indexOf('const CONSUMED_AFTER_CONFLICT'))
+  check('🔴 🔴 **직렬화 충돌은 한 번만 재시도(write 2회) — 두 번째 충돌 뒤엔 write 없는 다시 읽기를 유한 일정으로 · 소비 증거 아니면 실패**',
     (tx.match(/await publishAttempt\(prisma, input, deps, (1|2)\)/g) ?? []).length === 2
-    && (tx.match(/await publishAttempt\(prisma, input, deps, 'recheck'\)/g) ?? []).length === 1
-    && /if \(second\.kind !== 'conflict'\) return second\s*const recheck = await publishAttempt/.test(tx)
+    && (tx.match(/publishAttempt\(prisma, input, deps, 'recheck'\)/g) ?? []).length === 1
+    && /if \(second\.kind !== 'conflict'\) return second\s*return settleAfterConflicts\(\(\) => publishAttempt\(prisma, input, deps, 'recheck'\), deps\.sleep \?\? realSleep\)/.test(tx)
     && /const CONSUMED_AFTER_CONFLICT = \['SLOT_CONSUMED', 'TARGET_RACE_LOST'\] as const/.test(tx)
-    && /return \{\s*kind: 'error',\s*message: `다른 발행과 두 번 연속 부딪혔고/.test(tx))
+    && /\(CONSUMED_AFTER_CONFLICT as readonly string\[\]\)\.includes\(r\.code\)/.test(settleSrc)
+    && /return \{\s*kind: 'error',\s*message: `다른 발행과 두 번 연속 부딪혔고/.test(settleSrc))
   check('🔴 슬롯 소비 기록 시각도 트랜잭션 시계 — ActivityLog.createdAt = txNow', /publishedAt: txNow,[\s\S]{0,400}createdAt: txNow,/.test(tx))
 }
 
