@@ -1082,6 +1082,9 @@ jobs:
           # 🔴 무인 댓글 루프(2026-09-28 · Track B) — 60분 · 글당 1건 · 자기 글 · 실사용자 3건 · 단계·주체·상태 ·
           #    댓글 전용 장부 하루 $0.20(실제 세션 · 가짜 fetch) · 9관문 정본 그대로. DB · 네트워크 0. 새 step 이 아니다
           npm run persona:comment-loop-check
+          # 🔴 Gate ⑧ 후보 귀속(2026-11-07 D20) — 옛 판정 oracle 비교 · 잠긴 5명 · n=4/n=60 · 섞인 단계 · 글 × Persona 시도 기억 ·
+          #    고정 잠금 · 회피 표지 · readiness 관측 + 변이(방어를 지우면 FAIL · 원본 해시 복원). DB · 네트워크 0
+          npm run persona:voice-repeat-check
 
       - name: Persona 생성 계약
         run: npm run persona:generate-check

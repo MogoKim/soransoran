@@ -45,6 +45,7 @@ import { gateInputOf, sourceTextsOf, type GateContext, type SourcePost, type Tar
 import { runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
+import { judgeStaticVoiceCapability } from '../../src/lib/persona-voice-repeat'
 import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 
 /**
@@ -352,13 +353,22 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     go: Extract<FollowupPostVerdict, { verdict: 'GO' }>; existing: { text: string; persona: boolean }[] }
   const planned: Planned[] = []
   const usedPersonas = new Set<string>()
+  /**
+   * 🔴 **후보와 무관하게 ⑧ 이 막는 Persona 는 고르지 않는다** (2026-11-07 · 첫 댓글과 같은 함수).
+   *    seed 공유 수는 고정 배정 값이라 한 번 읽는다 — 고를 때와 판정할 때 같은 값이다. 반복 이력만으로는 빼지 않는다.
+   */
+  const seedShareByCode = new Map<string, number | null>()
+  for (const pe of personas) if (pe.status === 'active') seedShareByCode.set(pe.code, await deps.source.seedUseCount(pe.code))
+  const staticLocked = [...seedShareByCode].filter(([, n]) => !judgeStaticVoiceCapability({ seedShare: n }).capable).map(([c]) => c)
+  if (staticLocked.length > 0) lines.push(`planner skip 고정 잠금 ${staticLocked.join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
   for (const { postId, go, facts } of orderFollowupGo(eligibleReady)) {
     if (planned.length >= allowed) break
     const src = srcById.get(postId)
     if (src === undefined) continue
     const eligible = personas.filter((pe) => pe.status === 'active'
       && !judgeRealMember({ accountCount: pe.user?.accountCount ?? null, providerId: pe.user?.providerId ?? null }).real
-      && pe.identity !== null && pe.voiceCore !== null && pe.lifeStage !== null && pe.lifeStage.trim() !== '')
+      && pe.identity !== null && pe.voiceCore !== null && pe.lifeStage !== null && pe.lifeStage.trim() !== ''
+      && judgeStaticVoiceCapability({ seedShare: seedShareByCode.get(pe.code) ?? null }).capable)
     const pick = pickFollowupPersona(go, postId, eligible.flatMap((pe) => {
       const id = personaIdByCode.get(pe.code)
       // 🔴 같은 회차에 한 Persona 는 한 글만
@@ -401,7 +411,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       ],
       gate: {
         sourceTexts: sourceTextsOf(built.input), knownNames, frequency: frequencyRead.corpus, priorTexts: recentTexts,
-        seedUseCount: await deps.source.seedUseCount(pe.code), adviceForbidden: isAdviceForbidden(pe.forbiddenReactionRoles),
+        seedUseCount: seedShareByCode.get(pe.code) ?? null, adviceForbidden: isAdviceForbidden(pe.forbiddenReactionRoles),
         sourceIsCafeOperational: ctx.operational, sourceContextReason: ctx.reason,
       },
       target: {
@@ -423,6 +433,8 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   if (knownNames === undefined) providerBlockers.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
   if (frequencyRead.corpus === null) providerBlockers.push(`frequencyLookup — ${frequencyRead.reason}`)
   for (const p of planned) if (p.gate.sourceIsCafeOperational === null) providerBlockers.push(`sourceIsCafeOperational — ${p.gate.sourceContextReason}`)
+  // 🔴 seed 공유 수를 못 셌으면 회차 전체 유료 호출 0 — 첫 댓글 materializer 와 같은 정본(그 사람만 빼고 계속하지 않는다)
+  for (const [code, n] of seedShareByCode) if (n === null) providerBlockers.push(`seedUseCount (${code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
 
   const byKey = new Map(planned.map((p) => [`${p.target.facts.postId}\u0000${p.target.facts.personaCode}`, p]))
   const planOf = (input: CommentInput) => byKey.get(`${input.post.id}\u0000${input.personaCode}`)

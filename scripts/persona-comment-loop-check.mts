@@ -37,6 +37,7 @@ import {
   autoLaneTargetSource,
 } from './lib/persona-comment-loop.mjs'
 import { materializeTargets, type SourcePersona, type SourcePost } from './lib/persona-comment-targets'
+import { legacyRepeatBand } from './lib/persona-voice-legacy-oracle.mjs'
 import { RATIO_WINDOW_DAYS } from '../src/lib/persona-comment-governor'
 import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
 import { dedupKeyOf } from '../src/lib/persona-comment-queue'
@@ -647,7 +648,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
     frequency: async () => ({ corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스' }),
-    seedUseCount: async () => 3,
+    seedUseCount: async () => 1,
   })
 
   /** 🔴 DB 는 읽기 몇 개만 안다. create · $transaction 등 그 밖의 접근은 `bypass` 에 남는다 — 0 이어야 한다 */
@@ -750,6 +751,153 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       && !readFileSync(store.path, 'utf-8').includes(BODY.slice(0, 10))
       && (statSync(store.path).mode & 0o777) === 0o600 && readdirSync(dir).length === 1,
       read.ok ? JSON.stringify(read.entries[0]) : read.reason)
+  }
+
+  // ── A-2. 🔴 2026-11-07 D20 COMMENT_MISSING 재현 — 혼자 공개된 글 · 이력이 잠긴 Persona 5명이 매 회차 맨 앞 ──
+  {
+    /**
+     * 운영 모양(본문은 합성):
+     *   · 12:10 KST 공개된 글 하나 · 경쟁 글 없음 · 정기 회차 12:25 · 12:45 · 13:05(+15 · +35 · +55분)
+     *   · P14 · P24(3-gram 4/4) · P17 · P26(시작어절 2/4) · P39(말끝 2/4)는 이력 4건 — 최근 댓글이 가장 적어 planner 맨 앞
+     *   · 나머지는 이력 5~6건 · 서로 겹치지 않는 말투
+     *   · 옛 판정은 이 5명에게 어떤 후보에도 ⑧ regenerate 였다(실측 11회 중 10회) → 60분 동안 적재 0
+     */
+    const PUB = Date.parse('2026-11-07T03:10:00.000Z')
+    const LONELY = 'cmw5tsxvh0001xm1z7dddww50'
+    const u = (j: number): string => String.fromCharCode(0xAC00 + j)
+    /** 서로 겹치지 않는 발화 — 시작 · 말끝 · 3글자 조각이 전부 다르다 */
+    const distinct = (base: number, k: number): string[] =>
+      Array.from({ length: k }, (_, i) => `${u(base + i * 9)}${u(base + i * 9 + 1)} ${u(base + i * 9 + 2)}${u(base + i * 9 + 3)}${u(base + i * 9 + 4)}`)
+    const LOCKED_PRIOR: Record<string, string[]> = {
+      P14: ['아침에 저도요 걸었어요', '점심엔 국수 먹고 저도요 쉬었네요', '비가 와서 저도요 집에 있었죠', '주말엔 저도요 시장 가요'],
+      P24: ['커피 한잔 맞는말 이에요', '그 말이 맞는말 같네요', '다들 맞는말 하시네', '역시 맞는말 이지요'],
+      P17: ['저는 산책이 좋아요', '저는 오늘 쉬어요', '요즘 무릎이 아파서요', '날이 추워졌네요'],
+      P26: ['그냥 웃고 말아요', '그냥 넘기셔도 돼요', '시장 다녀왔어요', '바람이 차네요'],
+      P39: ['오늘 비 오는 것 같아요', '내일은 맑을 것 같아요', '산책 다녀왔어요', '점심은 김밥이에요'],
+    }
+    const LOCKED_CODES = Object.keys(LOCKED_PRIOR)
+    const withHistory = (code: string, texts: readonly string[]): SourcePersona => ({
+      ...persona(code),
+      comments: texts.map((content, i) => ({ content, createdAtMs: PUB - (i + 1) * 3_600_000 })),
+    })
+    const pool: SourcePersona[] = [
+      ...LOCKED_CODES.map((c) => withHistory(c, LOCKED_PRIOR[c]!)),
+      withHistory('P37', distinct(3000, 5)),
+      // 🔴 P02 는 글쓴이다 — 자기 글에 첫 댓글을 달지 않으므로 pool 에 넣지 않는다
+      ...['P01', 'P03', 'P04', 'P05', 'P06'].map((c, i) => withHistory(c, distinct(4000 + i * 200, 6))),
+    ]
+    // 🔴 ② 가 흔한 말로 보도록 — 이 재현은 ⑧ 만 본다(다른 관문은 진짜 정본이 그대로 돈다)
+    const replaySource = (): TargetSource => ({
+      ...sourceOf([postAt(LONELY, PUB, '대구공항 주정차 라인이 궁금해서 여쭤봐요')], pool),
+      frequency: async () => ({ corpus: { lookup: () => 10_000, size: 100_000, corpusName: 'comment' }, reason: '시험 코퍼스' }),
+    })
+    /** PENDING 쓰기까지 받는 가짜 DB — 잠금(findUnique · updateMany)과 create 만 안다. 그 밖은 bypass */
+    const makeWriteDb = () => {
+      const base = makeDb()
+      const created: { dedupKey: string; personaCode: string }[] = []
+      const tx = {
+        post: {
+          findUnique: async () => ({ id: LONELY, boardType: 'FREE', status: 'PUBLISHED', updatedAt: new Date(PUB) }),
+          updateMany: async () => ({ count: 1 }),
+        },
+        personaApprovalQueue: {
+          create: async ({ data }: { data: { dedupKey: string; persona: { connect: { code: string } } } }) => {
+            created.push({ dedupKey: data.dedupKey, personaCode: data.persona.connect.code })
+            return { id: `q${created.length}` }
+          },
+        },
+      }
+      const prisma = new Proxy(base.prisma as unknown as Record<string, unknown>, {
+        get: (t, k) => (k === '$transaction' ? async (fn: (x: typeof tx) => Promise<unknown>) => fn(tx) : t[k as string]),
+      }) as unknown as PrismaClient
+      return { ...base, prisma, created }
+    }
+    const CLEAN = '이런 얘기 들으니 마음이 편해지네'
+    /** 잠긴 5명은 자기 말버릇을 다시 쓰는 생성(최악) · 나머지는 깨끗한 생성 */
+    const TIC: Record<string, string> = {
+      P14: '오늘도 저도요 그랬어', P24: '오늘도 맞는말 이네', P17: '저는 이번에도 그래', P26: '그냥 그렇게 해요', P39: '이번에도 그럴 것 같아요',
+    }
+    type Out = { round: number; persona: string; step: string; line: string }
+    const replay = async (gen: (code: string) => string) => {
+      const store = createAttemptStore({ dir: freshDir() })
+      const db = makeWriteDb()
+      const sent: Sent[] = []
+      const outs: Out[] = []
+      const reports = []
+      for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
+        const r = await runCommentLoop({
+          prisma: db.prisma, now: new Date(PUB + offsetMin * MIN), env: ENV, live: true, source: replaySource(), canon,
+          makeGenerate: () => async ({ input }) => {
+            sent.push({ round: i + 1, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
+            return { ok: true, text: gen(input.personaCode), errorCode: null }
+          },
+          generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          attemptStore: store,
+        })
+        reports.push(r)
+        for (const o of r.outcomes) outs.push({ round: i + 1, persona: o.personaCode, step: o.step, line: r.lines.find((l) => l.includes(`${o.personaCode} → 글`)) ?? '' })
+        if (db.created.length > 0) break // 🔴 적재되면 그 글은 끝 — 다음 회차의 대상이 아니다(운영은 열린 Queue 가 막는다)
+      }
+      return { sent, outs, reports, created: db.created }
+    }
+
+    // S1 — 깨끗한 생성: 잠긴 5명도 첫 회차에 통과한다(옛 판정은 막았다)
+    const s1 = await replay(() => CLEAN)
+    const first1 = s1.outs[0]
+    console.log(`     S1 깨끗한 생성 — 첫 시도 ${first1?.persona ?? '없음'} ${first1?.step ?? ''} · 적재 ${s1.created.map((c) => c.personaCode).join(',')}`)
+    check('🔴 재현 — planner 가 이력 4건인 잠긴 Persona 를 맨 앞에 세운다(정렬은 바꾸지 않았다)',
+      first1 !== undefined && LOCKED_CODES.includes(first1.persona))
+    // 🔴 같은 3회차에 옛 판정을 실제로 적용한다 — planner · 회차 상한 · 조합 범위 시도 기억은 그대로, ⑧ 반복 축만 옛 oracle.
+    //    다른 관문은 S1 에서 실제로 통과한 같은 문장이라 같다(이 비교는 ⑧ 의 차이만 잰다).
+    const legacy = await (async () => {
+      const attempted = new Set<string>()
+      const sentL: { round: number; persona: string; band: string }[] = []
+      let firstEnqueueRound: number | null = null
+      for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
+        const nowMs = PUB + offsetMin * MIN
+        const mat = await materializeTargets({
+          source: autoLaneTargetSource(replaySource(), nowMs), limit: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          nowMs, windowMs: RATIO_WINDOW_DAYS * 86_400_000, attemptedCombos: attempted,
+        })
+        for (const t of mat.targets) {
+          const prior = pool.find((x) => x.code === t.target.facts.personaCode)!.comments.map((c) => c.content)
+          const band = legacyRepeatBand(prior, CLEAN)
+          sentL.push({ round: i + 1, persona: t.target.facts.personaCode, band })
+          attempted.add(dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole))
+          if (band === 'pass') { firstEnqueueRound = i + 1; break }
+        }
+        if (firstEnqueueRound !== null) break
+      }
+      return { sentL, firstEnqueueRound }
+    })()
+    console.log(`     옛 판정 같은 3회차 — ${legacy.sentL.map((x) => `${x.round}:${x.persona}:${x.band}`).join(' ')} · 첫 적재 회차 ${legacy.firstEnqueueRound ?? '없음(60분 0)'}`)
+    check('🔴 🔴 옛 판정(같은 planner · 같은 회차 · 조합 범위 기억)은 1회차를 잠긴 5명에게 모두 쓰고 전부 막는다',
+      legacy.sentL.filter((x) => x.round === 1).length > 0
+      && legacy.sentL.filter((x) => x.round === 1).every((x) => LOCKED_CODES.includes(x.persona) && x.band !== 'pass'),
+      legacy.sentL.map((x) => `${x.round}:${x.persona}:${x.band}`).join(' '))
+    check(`🔴 옛 판정의 첫 적재는 ${legacy.firstEnqueueRound === null ? '60분 안에 없다' : `${legacy.firstEnqueueRound}회차(+${ROUND_OFFSETS_MIN[legacy.firstEnqueueRound - 1]}분)`} — 새 판정은 1회차`,
+      legacy.firstEnqueueRound === null || legacy.firstEnqueueRound > 1)
+    check('🔴 🔴 S1 — 혼자 공개된 글이 첫 회차(+15분)에 첫 댓글 후보를 적재한다',
+      s1.created.length === 1 && s1.outs.filter((o) => o.round === 1).some((o) => o.step === 'ENQUEUED'),
+      s1.outs.map((o) => `${o.round}:${o.persona}:${o.step}`).join(' '))
+    check('🔴 S1 — 잠긴 Persona 의 통과는 기준선 초과(후보 무관)로 로그에 남는다',
+      s1.outs.some((o) => o.step === 'ENQUEUED' && o.line.includes('기준선 초과(후보 무관 · 통과)')))
+
+    // S2 — 최악: 잠긴 5명이 자기 말버릇을 다시 쓴다 → ⑧ 이 막고 · 다음 회차에는 그 글에서 그 5명을 다시 부르지 않는다
+    const s2 = await replay((code) => TIC[code] ?? CLEAN)
+    const r1 = s2.sent.filter((x) => x.round === 1)
+    const later = s2.sent.filter((x) => x.round > 1)
+    console.log(`     S2 말버릇 재사용 — 1회차 ${r1.map((x) => `${x.personaCode}/${x.role}`).join(' · ')} | 이후 ${later.map((x) => `${x.round}:${x.personaCode}/${x.role}`).join(' · ')} · 적재 ${s2.created.map((c) => c.personaCode).join(',')}`)
+    check('🔴 S2 — 우세 패턴을 다시 쓴 후보는 ⑧ 후보 원인으로 막힌다(완화 0)',
+      s2.outs.filter((o) => o.round === 1 && LOCKED_CODES.includes(o.persona)).every((o) => o.step === 'ENQUEUE_BLOCKED' && o.line.includes('⑧ 후보 원인'))
+      && s2.outs.some((o) => o.round === 1 && LOCKED_CODES.includes(o.persona)))
+    const blockedR1 = new Set(s2.outs.filter((o) => o.round === 1 && o.step === 'ENQUEUE_BLOCKED' && o.line.includes('⑧ 후보 원인')).map((o) => o.persona))
+    check('🔴 🔴 S2 — ⑧ 로 막힌 Persona 는 그 글에서 역할만 바꿔 다시 부르지 않는다(post × Persona)',
+      blockedR1.size > 0 && later.every((x) => !blockedR1.has(x.personaCode)), [...blockedR1].join(','))
+    check('🔴 S2 — 다음 회차가 다른 Persona 로 이어 60분 안에 적재한다',
+      s2.created.length === 1 && !blockedR1.has(s2.created[0]!.personaCode))
+    check('🔴 S2 — planner skip 이 원인별로 로그에 남는다(⑧ 시도)',
+      s2.reports.slice(1).some((r) => r.lines.some((l) => l.startsWith('planner skip ⑧ 시도'))))
   }
 
   // ── 같은 Persona 의 다른 허용 role 은 별 조합 — planner feasible 단계에서 정확한 조합만 뺀다 ──

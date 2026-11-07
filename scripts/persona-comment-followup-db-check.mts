@@ -447,6 +447,21 @@ async function main(): Promise<void> {
     followupOn(false)
   }
 
+  console.log('\n③-b 🔴 seed 공유 수를 못 셌다 — 첫 댓글과 같은 정본: 회차 전체 유료 호출 0 (2026-11-07)')
+  {
+    await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
+    const a = await persona('P01'); const b = await persona('P02'); await persona('P03'); await persona('P04')
+    const pid = await post(a, 200); await autoFirst(b, pid, 180)
+    const f = fakeGen()
+    const r = await phase(f.gen, { source: { ...source(), seedUseCount: async (code: string) => (code === 'P04' ? null : 1) } })
+    check('🔴 🔴 다른 active Persona 하나의 seed 공유 수를 몰라도 회차 전체 유료 호출 0 · 추가 댓글 0 · 사유를 남긴다',
+      f.calls() === 0 && r.providerCalls === 0 && (await personaRows(pid)).length === 1 && r.lines.some((l) => l.includes('seedUseCount')),
+      `${f.calls()} · ${JSON.stringify(r.lines)}`)
+    const f2 = fakeGen()
+    const r2 = await phase(f2.gen)
+    check('🟢 대조 — 같은 상태에서 seed 를 다 세면 추가 댓글 유료 호출이 난다', f2.calls() > 0 && r2.providerCalls > 0, JSON.stringify(r2.lines))
+  }
+
   console.log('\n④ 글당 총 1~10 — 상한 10 · 일반 Persona 1회 · 글쓴이 답글 최대 3회')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)

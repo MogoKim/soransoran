@@ -4,7 +4,7 @@
  *
  *   npx tsx scripts/event-wake-check.mts
  *
- * ① 순수 — kill switch(off|comment|all · 미설정 = off) · 댓글 범위 · 고아 표식 복구 판정(표식당 1회)
+ * ① 순수 — kill switch(off|comment · 미설정 · 모르는 값 · 폐지된 all = off) · 댓글 범위 · 설치 상태 · 고아 표식 복구 판정(표식당 1회)
  * ② 깨움 helper — 임시 HOME · launchctl 대역: off 면 표식 · kickstart 0 · 합치기 · 실패 · 매달림 · 디렉터리 없음 · 던지지 않는다
  * ③ 배선 — 발행만 댓글을 깨우며 결과가 종료 코드에 들어가지 않는다 · 공급 비예약 깨움은 닫힌다
  * ④ 실제 OS 프로세스(macOS + /usr/bin/lockf · 그 밖은 SKIP 이고 PASS 가 아니다) — 댓글 러너와 같은 진입(leaseEntry) ·
@@ -19,7 +19,7 @@ import { join } from 'node:path'
 
 import {
   EVENT_WAKE_ENV, FAKE_LAUNCHCTL_MARK, KICKSTART_TIMEOUT_MS, LAUNCHCTL_PATH, WAKE_TARGETS,
-  describeWake, eventWakeModeOf, launchctlPath, publishWakeGate, wakeAllowed, wakeRunner,
+  describeWake, eventWakeModeOf, judgeEventWakeInstall, launchctlPath, publishWakeGate, wakeAllowed, wakeRunner,
 } from './lib/runner-wake.mjs'
 import {
   FOLLOW_UP_FILE, LOCKF_PATH, MAX_FOLLOW_UPS, followUpTriggerOf, lockfUsable,
@@ -45,10 +45,17 @@ try {
   const mode = (v: string | undefined): string => eventWakeModeOf(v === undefined ? {} : { [EVENT_WAKE_ENV]: v }).mode
   check('🔴 kill switch — 미설정 · 빈 값 · off · 모르는 값(ON · true · comments)은 전부 off',
     [undefined, '', '  ', 'off', 'ON', 'true', 'comments', 'Comment'].every((v) => mode(v) === 'off'))
-  check('kill switch — comment · all 만 켜진다', mode('comment') === 'comment' && mode('all') === 'all' && mode(' comment ') === 'comment')
-  check('🔴 행동 범위 — comment·all은 댓글만 · 공급 사건 깨움과 off는 닫힘',
-    wakeAllowed('comment', 'comment') && wakeAllowed('all', 'comment') && !wakeAllowed('off', 'comment')
-    && !wakeAllowed('all', 'supply') && !wakeAllowed('comment', 'supply') && !wakeAllowed('off', 'supply'))
+  check('🔴 켜는 값은 comment 하나 — 폐지된 all 은 모르는 값(off)이다', mode('comment') === 'comment' && mode(' comment ') === 'comment'
+    && mode('all') === 'off' && mode('ALL') === 'off')
+  check('🔴 행동 범위 — comment 는 댓글만 · 공급 사건 깨움과 off 는 닫힘',
+    wakeAllowed('comment', 'comment') && !wakeAllowed('off', 'comment')
+    && !wakeAllowed('comment', 'supply') && !wakeAllowed('off', 'supply'))
+  const inst = (envReadable: boolean, v: string | undefined, commentRunnerLoaded: boolean): string =>
+    judgeEventWakeInstall({ envReadable, env: v === undefined ? {} : { [EVENT_WAKE_ENV]: v }, commentRunnerLoaded }).state
+  check('🔴 설치 상태 — 정본 env comment + 댓글 러너 등록일 때만 ON',
+    inst(true, 'comment', true) === 'ON' && inst(true, 'comment', false) === 'TARGET_NOT_LOADED'
+    && inst(true, undefined, true) === 'OFF' && inst(true, 'off', true) === 'OFF' && inst(true, 'all', true) === 'OFF'
+    && inst(false, 'comment', true) === 'UNREADABLE')
   check('대상 — 댓글 러너 label · 잠금 디렉터리는 정본 하나',
     WAKE_TARGETS.comment.label === COMMENT_RUNNER_LABEL && WAKE_TARGETS.comment.lockDir('/h') === commentLoopLockDir('/h')
     && loopReExport('/h') === commentLoopLockDir('/h') && commentLoopLockDir('/h') === '/h/Library/Application Support/soransoran/persona-comment-loop')
@@ -127,14 +134,14 @@ try {
   check('🔴 운영 경로 launchctl — 대역 표식이 없으면 언제나 /bin/launchctl', launchctlPath() === LAUNCHCTL_PATH)
   g[FAKE_LAUNCHCTL_MARK] = ok
   mkdirSync(dir, { recursive: true })
-  for (const env of [{}, { [EVENT_WAKE_ENV]: 'off' }, { [EVENT_WAKE_ENV]: 'yes' }]) {
+  for (const env of [{}, { [EVENT_WAKE_ENV]: 'off' }, { [EVENT_WAKE_ENV]: 'yes' }, { [EVENT_WAKE_ENV]: 'all' }]) {
     reset()
     const o = wake(env)
     check(`🔴 🔴 반례 kill switch ${JSON.stringify(env)} → OFF · 표식 0 · kickstart 0`, o.kind === 'OFF' && marker() === null && calls().length === 0, JSON.stringify(o))
   }
   reset()
   const sup = wake({ [EVENT_WAKE_ENV]: 'all' }, 'supply')
-  check('🔴 all이어도 공급 사건 깨움은 OFF — 실행시간 상한 없는 비예약 회차·표식·kickstart 0',
+  check('🔴 폐지된 all 이어도 공급 사건 깨움은 OFF — 실행시간 상한 없는 비예약 회차·표식·kickstart 0',
     sup.kind === 'OFF' && marker() === null && calls().length === 0, JSON.stringify(sup))
   reset()
   const supOff = wake({ [EVENT_WAKE_ENV]: 'comment' }, 'supply')
@@ -146,7 +153,7 @@ try {
   check('🔴 comment — 표식 REQUESTED(trigger=event · 시각) · kickstart 1회 · 대상 = 댓글 러너 label · -k 없음',
     w1.kind === 'SENT' && w1.marker === 'REQUESTED' && w1.kick === 'OK' && m1 !== null && followUpTriggerOf(m1).trigger === 'event'
     && followUpTriggerOf(m1).at === now.toISOString() && JSON.stringify(calls()) === JSON.stringify([KICK]), JSON.stringify([w1, calls()]))
-  const w2 = wake({ [EVENT_WAKE_ENV]: 'all' })
+  const w2 = wake({ [EVENT_WAKE_ENV]: 'comment' })
   const w3 = wake({ [EVENT_WAKE_ENV]: 'comment' })
   check('🔴 🔴 반례 깨움 여러 개 — 표식은 하나로 합쳐진다(COALESCED · 첫 표식 그대로) · kickstart 는 launchd 가 하나로 합친다',
     w2.kind === 'SENT' && w2.marker === 'COALESCED' && w3.kind === 'SENT' && w3.marker === 'COALESCED' && marker() === m1 && calls().length === 3)
@@ -186,7 +193,7 @@ try {
     iTx > 0 && iTx < iGuard && iGuard < iPersona && iPersona < iVerify && iVerify < iAudit && iAudit < iGate && iGate < iWake && iWake < iExit
     && (pub.match(/wakeRunner\(/g) ?? []).length === 1, JSON.stringify({ iTx, iGuard, iPersona, iVerify, iAudit, iGate, iWake, iExit }))
   check('🔴 🔴 깨움 문이 닫히면 wakeRunner 를 부르지 않는다 · 결과가 종료 코드에 들어가지 않는다',
-    /console\.log\(`   \$\{wakeGate\.ok \? describeWake\('comment', wakeRunner\(\{ target: 'comment', env: process\.env, nowMs: Date\.now\(\) \}\)\) : `깨움\(comment\) 0 — \$\{wakeGate\.why\}`\}`\)/.test(pub)
+    /console\.log\(`   \$\{wakeGate\.ok \? describeWake\('comment', wakeRunner\(\{ target: 'comment', env: readEnvKeys\(\[EVENT_WAKE_ENV\]\)\.values, nowMs: Date\.now\(\) \}\)\) : `깨움\(comment\) 0 — \$\{wakeGate\.why\}`\}`\)/.test(pub)
     && /process\.exit\(v\.ok && auditIntegrityOk \? 0 : 1\)/.test(pub))
   check('🔴 🔴 반례 깨움 문 — 정합 PASS + 감사 무결성 PASS 만 열린다(정합 실패 · 감사 무결성 실패 · 둘 다 실패 → 닫힘)',
     publishWakeGate({ verifyOk: true, auditIntegrityOk: true }).ok && !publishWakeGate({ verifyOk: false, auditIntegrityOk: true }).ok
@@ -198,6 +205,29 @@ try {
     .filter((f) => /wakeRunner\(/.test(strip(f)))
   check('🔴 깨움 배선 — 발행 뒤 댓글 한 곳만 남고, 수집기에는 공급 깨움 호출 자체가 없다',
     JSON.stringify(users) === JSON.stringify(['scripts/original-post-auto-publish.mts']), users.join(','))
+  check('🔴 🔴 깨움 모드 출처는 정본 env 하나 — 발행 러너 · 고아 복구가 같은 키를 readEnvKeys 로 읽고 process.env 로 깨우지 않는다',
+    /wakeRunner\(\{ target: 'comment', env: readEnvKeys\(\[EVENT_WAKE_ENV\]\)\.values/.test(pub) && !/wakeRunner\(\{[^}]*env: process\.env/.test(pub)
+    && /eventWakeModeOf\(readEnvKeys\(\[EVENT_WAKE_ENV\]\)\.values\)/.test(strip('scripts/runner-recover.mts')))
+  // 🔴 문서 재발 방지 — `all` 을 켜는 값처럼 설명하는 문장 0 (2026-11-07 폐지 · 정본 env 하나)
+  //    `all` 과 깨움(SORAN_EVENT_WAKE · `comment`)이 같은 줄(또는 바로 앞 줄)에 나오면 그 줄에 폐지·역사 표지가 있어야 한다
+  const docLines = (() => {
+    const out: { file: string; line: number; text: string }[] = []
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (e.name.endsWith('.md')) readFileSync(p, 'utf-8').split('\n').forEach((text, i, all) => out.push({ file: p, line: i + 1, text: `${all[i - 1] ?? ''}\n${text}` }))
+      }
+    }
+    walk(join(REPO, 'docs'))
+    return out
+  })()
+  const activeAll = docLines.filter(({ text }) => {
+    const cur = text.split('\n')[1] ?? ''
+    return /`all`|EVENT_WAKE=all/.test(cur) && /SORAN_EVENT_WAKE|`comment`/.test(text) && !/폐지|열던/.test(cur)
+  })
+  check('🔴 🔴 문서가 폐지된 SORAN_EVENT_WAKE=all 을 켜는 값으로 설명하지 않는다(켜는 값은 comment 하나 · 정본 env 하나)',
+    activeAll.length === 0, activeAll.map((x) => `${x.file.replace(`${REPO}/`, '')}:${x.line}`).join(' · '))
   const rec = strip('scripts/runner-recover.mts')
   check('🔴 처리 기록 읽기 — 없음 · 읽음 · 못 읽음을 구조로 가른다(읽기 실패도 unreadable · 문자열 표식 0)',
     /if \(!existsSync\(p\)\) return \{ kind: 'missing' \}/.test(rec) && /try \{ return parseHandledWake\(readFileSync\(p, 'utf-8'\)\) \} catch \{ return \{ kind: 'unreadable' \} \}/.test(rec)

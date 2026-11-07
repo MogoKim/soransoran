@@ -500,6 +500,96 @@ async function main(): Promise<void> {
     check('기준선 — 빈 장부(오늘 0원)는 생성 문이 열린다', okGate.ok, okGate.reason)
   }
 
+  console.log('\n⑫ 🔴 2026-11-07 D20 — 혼자 공개된 글 · 이력이 잠긴 Persona(n=4 · 3-gram 4/4) — 실제 트랜잭션')
+  {
+    await wipe()
+    const author = await persona('P02')
+    const locked = await persona('P14')
+    const free = await persona('P30')
+    // 이력은 45일 전 글에 단다 — 60분 대상 창 · 30일 역할 창 밖이다(Queue 행 없는 이력이 역할 '모름'으로 사람을 빼지 않게).
+    //    ⑧ 의 prior 는 창 없이 삭제되지 않은 전체 댓글이라 이 이력을 그대로 본다(운영과 같다)
+    const OLD = new Date(Date.now() - 45 * 86_400_000)
+    const holder = await post(author, 45 * 24 * 60)
+    const history = async (p: { id: string; userId: string }, texts: readonly string[]): Promise<void> => {
+      for (const content of texts) {
+        await prisma.comment.create({ data: { postId: holder, authorId: p.userId, personaId: p.id, content, commentOrigin: 'PERSONA', source: 'SYSTEM', createdAt: OLD } })
+      }
+    }
+    // 🔴 실측 P14 모양(합성 본문) — 4건 모두 같은 3-gram. 옛 판정은 이 Persona 에게 어떤 후보에도 regenerate 였다
+    await history(locked, ['아침에 저도요 걸었어요', '점심엔 국수 먹고 저도요 쉬었네요', '비가 와서 저도요 집에 있었죠', '주말엔 저도요 시장 가요'])
+    await history(free, ['가을 하늘이 높네요', '김장 준비는 하셨어요', '무릎엔 찜질이 최고죠', '시장 구경 다녀왔어요', '오랜만에 친구 만났어요', '손주 사진 보며 웃었네'])
+    const lonely = await post(author, 10)
+    const store = createAttemptStore({ dir: mkdtempSync(join(HOME, 'attempts-d20-')) })
+    const TIC = '오늘도 저도요 그랬어요'
+    const run = async (textOf: (code: string) => string | Error) => {
+      const sent: { postId: string; code: string; role: string }[] = []
+      const gen: CommentGenerate = async ({ input }) => {
+        sent.push({ postId: input.post.id, code: input.personaCode, role: input.reactionRole })
+        const t = textOf(input.personaCode)
+        if (t instanceof Error) throw t
+        return { ok: true, text: t, errorCode: null }
+      }
+      const r = await runCommentLoop({
+        prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
+        makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: store,
+      })
+      await auditReplies()
+      return { r, sent }
+    }
+
+    // A — 잠긴 Persona 가 자기 말버릇을 다시 쓴다(최악) · 다른 Persona 는 provider 오류 → 적재 0
+    const a = await run((code) => (code === 'P14' ? TIC : new Error('일시 오류')))
+    const aLocked = a.r.outcomes.find((o) => o.personaCode === 'P14' && o.postId === lonely)
+    const aLine = a.r.lines.find((l) => l.includes('P14 → 글')) ?? ''
+    check('🔴 A — planner 가 이력이 가장 적은 잠긴 P14 를 먼저 고른다', a.sent[0]?.code === 'P14', `${JSON.stringify(a.sent)} · ${a.r.generationSkipped ?? ''} · ${a.r.lines.slice(0, 6).join(' / ')}`)
+    check('🔴 A — 우세 3-gram 을 다시 쓴 후보는 실제 9관문에서 ⑧ 후보 원인으로 막힌다',
+      aLocked?.step === 'ENQUEUE_BLOCKED' && aLine.includes('⑧ 후보 원인'), aLine)
+    check('🔴 A — 이 글 댓글 0 · Queue 0', (await personaComments(lonely)).length === 0
+      && (await prisma.personaApprovalQueue.count({ where: { targetPostId: lonely } })) === 0)
+    const memA = store.read(Date.now())
+    check('🔴 A — 시도 기억에 ⑧ 실패가 남는다(본문 없이 관문 코드만)',
+      memA.ok && memA.entries.some((e) => e.postId === lonely && e.personaCode === 'P14' && e.failedGates.some((g) => g.startsWith('⑧:') && g !== '⑧:notRun')))
+
+    // B — 이제는 깨끗하게 쓸 수 있어도, 이 글에서 ⑧ 로 막힌 P14 는 다시 부르지 않는다(역할만 바꾼 재호출 0) → 다른 Persona 가 낸다
+    const b = await run(() => GOOD)
+    check('🔴 🔴 B — 같은 글에서 ⑧ 로 막힌 P14 는 어떤 역할로도 다시 부르지 않는다(post × Persona)',
+      !b.sent.some((x) => x.postId === lonely && x.code === 'P14') && b.r.lines.some((l) => l.startsWith('planner skip ⑧ 시도')), JSON.stringify(b.sent))
+    const cs = await personaComments(lonely)
+    const pub = await prisma.post.findUniqueOrThrow({ where: { id: lonely }, select: { publishAt: true } })
+    const q = await prisma.personaApprovalQueue.findMany({ where: { targetPostId: lonely }, select: { status: true, personaId: true, publishedCommentId: true } })
+    check('🔴 🔴 B — 혼자 공개된 글 PENDING → PUBLISHED · 첫 댓글 정확히 1건(P30)',
+      cs.length === 1 && cs[0]!.personaId === free.id && q.length === 1 && q[0]!.status === 'PUBLISHED' && q[0]!.publishedCommentId === cs[0]!.id,
+      `${cs.length} · ${JSON.stringify(q)} · ${JSON.stringify(b.r.outcomes.map((o) => `${o.personaCode}:${o.step}`))}`)
+    const c0 = cs[0]
+    const qs = c0 === undefined ? [] : await prisma.personaApprovalQueue.findMany({ where: { publishedCommentId: c0.id },
+      select: { targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true } })
+    const ls = c0 === undefined ? [] : await prisma.personaActivityLog.findMany({ where: { kind: 'comment', targetId: c0.id },
+      select: { personaId: true, decidedBy: true, publishedAt: true } })
+    const prov = c0 === undefined ? 'none' : commentProvenanceOf({
+      comment: { postId: c0.postId, personaId: c0.personaId, createdAtMs: c0.createdAt.getTime(), topLevel: c0.parentId === null },
+      queues: qs.map((x) => ({ ...x, decidedAtMs: x.decidedAt?.getTime() ?? null })),
+      logs: ls.map((x) => ({ ...x, publishedAtMs: x.publishedAt?.getTime() ?? null })),
+    })
+    check('🔴 🔴 B — firstCommentOk 구성 — 자동 provenance(auto) · 공개 60분 안 · 최상위 · 글쓴이 아님',
+      c0 !== undefined && prov === 'auto' && c0.createdAt.getTime() - pub.publishAt!.getTime() <= 60 * 60_000
+      && c0.parentId === null && c0.personaId !== author.id, `${prov}`)
+
+    // C — 다른 글에서는 P14 가 회복한다(영구 잠금 없음 · ⑧ 기억은 그 글에만)
+    const other = await post(author, 5)
+    const c = await run(() => GOOD)
+    const oc = await personaComments(other)
+    check('🔴 🔴 C — 다른 글에서는 같은 P14 가 깨끗한 후보로 통과해 발행된다(BASELINE_ONLY · 회복)',
+      c.sent.some((x) => x.postId === other && x.code === 'P14') && oc.length === 1 && oc[0]!.personaId === locked.id
+      && c.r.lines.some((l) => l.includes('P14 → 글') && l.includes('기준선 초과(후보 무관 · 통과)')), `${JSON.stringify(c.sent)} · ${oc.length}`)
+
+    // 자기 · 중복 0 — 두 글 모두
+    for (const pid of [lonely, other]) {
+      const xs = await personaComments(pid)
+      check(`🔴 자기 댓글 0 · 같은 Persona 중복 0 · 글당 첫 댓글 1 (${pid === lonely ? '혼자 글' : '다른 글'})`,
+        xs.length === 1 && xs.every((x) => x.personaId !== author.id) && new Set(xs.map((x) => x.personaId)).size === xs.length)
+    }
+  }
+
   await auditReplies()
   check('🔴 🔴 **전 시나리오에서 Persona 답글(부모가 있는 Persona 댓글) 0** — Persona 끼리 답글 사슬이 생길 자리가 없다',
     personaRepliesSeen === 0, `${personaRepliesSeen}`)
