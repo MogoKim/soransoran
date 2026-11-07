@@ -130,6 +130,59 @@ export type PublishTxDeps = {
    *    던지면 실제 예외와 같은 분류(직렬화 충돌 · 그 밖의 오류)를 거친다. 충돌 뒤 다시 읽기에서는 부르지 않는다.
    */
   fault?: (at: { attempt: 1 | 2; point: 'begin' | 'written' }) => Promise<void>
+  /**
+   * 🔴 **대기 주입점 — 검사 전용이다** (2026-11-08 · PR #835 CI ⑧). 운영 호출자는 넘기지 않는다(소스 검사가 막는다) —
+   *    운영 기본은 실제 대기(`setTimeout`)다. 두 번째 충돌 뒤 다시 읽기 사이의 대기(`RECHECK_DELAYS_MS`)에만 쓴다.
+   */
+  sleep?: (ms: number) => Promise<void>
+}
+
+/**
+ * 🔴 **두 번째 충돌 뒤 다시 읽기의 대기 일정 — 고정 · 유한** (2026-11-08 · PR #835 CI D100 ⑧).
+ *    충돌 상대는 아직 commit 하지 않았을 수 있다 — Serializable(SSI)은 진행 중인 상대 때문에도 한쪽을 무르고,
+ *    양쪽이 함께 실패한 뒤 상대가 다시 시도하는 중일 수도 있다. 다시 읽기는 새 스냅샷이라 **그 순간 commit 된 것**만 본다.
+ *    앞판은 한 번만 읽어 상대의 commit 직전을 "아직 낼 수 있다" 로 보고 실패(exit 1)했다 — 승자는 정확히 1건을 냈다.
+ *    누적 대기 31.75초 — 트랜잭션 timeout(`TX_TIMEOUT_MS` 30초) 한 창 이상을 관측한다. 상대의 commit 을 **보장하는 값은 아니다**
+ *    (잠금 대기 `TX_MAX_WAIT_MS` · 상대의 재시작이 더 늦출 수 있다). 소비 증거가 나오면 그 즉시 끝나고,
+ *    일정이 끝나도 없으면 실패다(fail-closed 그대로 — 모르는 것을 정상 무발행으로 바꾸지 않는다).
+ */
+export const RECHECK_DELAYS_MS: readonly number[] = Object.freeze([0, 250, 500, 1000, 2000, 4000, 8000, 16000])
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+
+/** 🔴 다시 읽기 한 번의 결과 — `recheck-open` 은 "write 직전까지 왔다(아직 낼 수 있다)" 다. 문자열로 흐름을 정하지 않는다 */
+export type RecheckResult = PublishResult | { kind: 'conflict' } | { kind: 'recheck-open' }
+
+/**
+ * 🔴 **두 번째 충돌 뒤의 결론** — 다시 읽기를 일정대로 되풀이한다. write 는 없다(다시 읽기는 write 직전에 멈춘다).
+ *    · `SLOT_CONSUMED` · `TARGET_RACE_LOST`              → 그 즉시 정상 무발행(소비 증거)
+ *    · `recheck-open`(아직 낼 수 있다) · 다시 읽기의 충돌 → 다음 대기 뒤 다시 읽는다
+ *    · 그 밖의 차단(ALREADY_PUBLISHED · AUTO_READY_RECHECK …) · 직렬화가 아닌 오류 → 그 즉시 실패
+ *    · 일정이 끝나도 소비 증거가 없다                      → 실패
+ */
+export async function settleAfterConflicts(
+  recheck: () => Promise<RecheckResult>, sleep: (ms: number) => Promise<void>,
+): Promise<PublishResult> {
+  let seen = '다시 읽기 0회'
+  for (const delay of RECHECK_DELAYS_MS) {
+    if (delay > 0) await sleep(delay)
+    const r = await recheck()
+    if (r.kind === 'blocked' && (CONSUMED_AFTER_CONFLICT as readonly string[]).includes(r.code)) {
+      return { ...r, detail: `충돌 2회 뒤 다시 읽음 — ${r.detail}` }
+    }
+    if (r.kind === 'recheck-open' || r.kind === 'conflict') {
+      seen = r.kind === 'recheck-open' ? '다시 읽으니 아직 낼 수 있다 — 소비 증거 없음' : '다시 읽기도 충돌'
+      continue
+    }
+    const why = r.kind === 'blocked' ? r.code : r.kind === 'error' ? r.message : r.kind
+    return {
+      kind: 'error',
+      message: `다른 발행과 두 번 연속 부딪혔고, 다시 읽어도 소비 증거가 없다(${why}) — 이 회차는 실패다. 공개 write 는 남지 않았다.`,
+    }
+  }
+  return {
+    kind: 'error',
+    message: `다른 발행과 두 번 연속 부딪혔고, 다시 읽어도 소비 증거가 없다(${seen} · 다시 읽기 ${RECHECK_DELAYS_MS.length}회 · 대기 일정 종료) — 이 회차는 실패다. 공개 write 는 남지 않았다.`,
+  }
 }
 
 /**
@@ -202,35 +255,32 @@ export async function publishOriginalPostTx(
    *    다시 시도해도 슬롯·오늘 발행 수·상태를 **처음부터 다시 센다** — 이미 소비됐으면
    *    `SLOT_CONSUMED`(정상 무발행)이다. 상한을 넘기려는 재시도가 아니다.
    *
-   * 🔴 **두 번째도 충돌하면 write 없이 한 번 다시 읽는다** (2026-10-01 · PR #647 CI 동시 러너 ⑧).
+   * 🔴 **두 번째도 충돌하면 write 없이 다시 읽는다** (2026-10-01 · PR #647 CI 동시 러너 ⑧ · 2026-11-08 PR #835 CI ⑧).
    *    두 러너가 같은 슬롯을 노리면 패자는 승자의 발행 트랜잭션과 · 이어지는 승자의 사후 write 와
    *    연달아 부딪힐 수 있다. 승자는 정확히 1건을 냈는데 패자가 "실패(exit 1)" 로 끝났다.
-   *    재시도를 늘리지 않는다 — **세 번째 write 시도는 없다**. 새 트랜잭션에서 같은 판정 경로
+   *    재시도를 늘리지 않는다 — **세 번째 write 시도는 없다**. 매번 새 트랜잭션에서 같은 판정 경로
    *    (`publishAttempt` 의 `recheck` — 같은 행 읽기 · 같은 `judgeCatchUp` · 같은 경합 판정 · 같은 `judgePublish`)를
    *    write 직전까지만 돌리고, **소비 증거**(`CONSUMED_AFTER_CONFLICT`)가 나올 때만 정상 무발행이다.
-   *    증거가 없거나(다시 읽으니 낼 수 있다 · 다른 차단) 오류면 그대로 실패다.
+   *    충돌 상대가 아직 commit 전일 수 있어 고정 일정(`RECHECK_DELAYS_MS`)으로 되풀이한다 — `settleAfterConflicts`.
    */
   const first = await publishAttempt(prisma, input, deps, 1)
+  if (first.kind === 'recheck-open') return writePhaseOpen()
   if (first.kind !== 'conflict') return first
   const second = await publishAttempt(prisma, input, deps, 2)
+  if (second.kind === 'recheck-open') return writePhaseOpen()
   if (second.kind !== 'conflict') return second
-  const recheck = await publishAttempt(prisma, input, deps, 'recheck')
-  if (recheck.kind === 'blocked' && (CONSUMED_AFTER_CONFLICT as readonly string[]).includes(recheck.code)) {
-    return { ...recheck, detail: `충돌 2회 뒤 다시 읽음 — ${recheck.detail}` }
-  }
-  const seen = recheck.kind === 'blocked' ? recheck.code : recheck.kind === 'error' ? recheck.message : recheck.kind
-  return {
-    kind: 'error',
-    message: `다른 발행과 두 번 연속 부딪혔고, 다시 읽어도 소비 증거가 없다(${seen}) — 이 회차는 실패다. 공개 write 는 남지 않았다.`,
-  }
+  return settleAfterConflicts(() => publishAttempt(prisma, input, deps, 'recheck'), deps.sleep ?? realSleep)
 }
+
+/** 🔴 write 시도는 `recheck-open` 을 낼 수 없다(그 멈춤은 recheck 단계에만 있다) — 나오면 판정부 결함으로 닫는다 */
+const writePhaseOpen = (): PublishResult => ({ kind: 'error', message: '판정부 결함 — write 시도가 다시 읽기 멈춤을 돌려줬다 · 공개 write 는 남지 않았다' })
 
 /** 🔴 write 시도 1 · 2 와 충돌 뒤 다시 읽기(`recheck` — 판정만 · write 0) */
 type AttemptPhase = 1 | 2 | 'recheck'
 
 async function publishAttempt(
   prisma: PrismaClient, input: PublishTxInput, deps: PublishTxDeps, phase: AttemptPhase,
-): Promise<PublishResult | { kind: 'conflict' }> {
+): Promise<RecheckResult> {
   try {
     return await prisma.$transaction(async (tx) => {
       if (phase !== 'recheck') await deps.fault?.({ attempt: phase, point: 'begin' })
@@ -438,7 +488,7 @@ async function publishAttempt(
        * 🔴 **충돌 뒤 다시 읽기는 여기서 멈춘다 — 이 아래는 전부 write 다**(만료 전환 · 배정 · Post · Queue · ActivityLog).
        *    여기까지 왔다 = 슬롯도 후보도 아직 소비되지 않았다(낼 수 있다) → 소비 증거 없음. 부르는 쪽이 실패로 만든다.
        */
-      if (phase === 'recheck') return { kind: 'error', message: '다시 읽으니 아직 낼 수 있다 — 소비 증거 없음' }
+      if (phase === 'recheck') return { kind: 'recheck-open' }
 
       const persona = personaRow!
 
@@ -553,8 +603,8 @@ async function publishAttempt(
        *    두 번째 트랜잭션은 직렬화 실패(P2034)로 되돌아간다.
        */
       /**
-       *    🔴 충돌 뒤 다시 읽기는 write 가 없다 — 한 스냅샷(RepeatableRead)이면 충분하고, 읽기 전용 스냅샷은
-       *    PostgreSQL 에서 직렬화 실패로 되돌아가지 않는다(세 번째 충돌로 다시 실패하지 않는다).
+       *    🔴 충돌 뒤 다시 읽기는 write 가 없다 — 매번 새 트랜잭션 · 한 스냅샷(RepeatableRead)이면 충분하다.
+       *    드물게 그래도 충돌로 끝나면 `settleAfterConflicts` 가 다음 대기 뒤 다시 읽는다(세 번째 write 는 아니다).
        */
       isolationLevel: phase === 'recheck' ? 'RepeatableRead' : 'Serializable',
       maxWait: TX_MAX_WAIT_MS,
@@ -567,7 +617,7 @@ async function publishAttempt(
     /**
      * 🔴 **직렬화 실패 — 부르는 쪽이 한 번만 다시 시도한다.** 공개 write 는 남지 않았다.
      *    다시 시도는 슬롯·오늘 발행 수를 처음부터 다시 세므로, 이미 소비됐으면 정상 무발행이 된다.
-     *    두 번째도 충돌이면 write 없는 다시 읽기(`recheck`)가 소비 증거를 찾는다 — 없으면 실패다.
+     *    두 번째도 충돌이면 write 없는 다시 읽기(`recheck`)를 일정대로 되풀이해 소비 증거를 찾는다 — 끝까지 없으면 실패다.
      */
     if (isSerializationConflict(err)) return { kind: 'conflict' }
     // 🔴 예외 원문을 호출부로 흘리지 않는다
