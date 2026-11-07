@@ -51,9 +51,10 @@ import {
   runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter,
 } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
+import { voiceCauseNote } from '../../src/lib/persona-voice-repeat'
 import { FOLLOWUP_KEY_PREFIX } from '../../src/lib/persona-comment-followup'
 import {
-  attemptedComboKeys, attemptKeyOf, attemptOutcomeOf, type AttemptEntry, type AttemptOutcomeUpdate,
+  attemptedComboKeys, attemptKeyOf, attemptOutcomeOf, voiceFailedPostPersonaKeys, type AttemptEntry, type AttemptOutcomeUpdate,
 } from '../../src/lib/persona-comment-attempt-policy'
 import type { AttemptStore } from './persona-comment-attempt-store.mjs'
 import type { FollowupPhaseReport } from './persona-comment-followup-run.mjs'
@@ -387,7 +388,10 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
       : [attemptReadWarning(previewMemory)]
     const preview = await materializeTargets({
       source: autoLaneTargetSource(deps.source, nowMs), limit: COMMENT_LOOP_PREVIEW, nowMs, windowMs,
-      ...(previewMemory.ok ? { attemptedCombos: attemptedComboKeys(previewMemory.entries, nowMs) } : {}),
+      ...(previewMemory.ok ? {
+        attemptedCombos: attemptedComboKeys(previewMemory.entries, nowMs),
+        voiceFailedPostPersonas: voiceFailedPostPersonaKeys(previewMemory.entries, nowMs),
+      } : {}),
     })
     const picked = firstPerPost(preview.targets, (t) => t.target.facts.postId)
     for (const t of picked) {
@@ -462,6 +466,7 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     const material = await materializeTargets({
       source: autoLaneTargetSource(deps.source, nowMs), limit, nowMs, windowMs,
       attemptedCombos: attemptedComboKeys(memory.entries, nowMs),
+      voiceFailedPostPersonas: voiceFailedPostPersonaKeys(memory.entries, nowMs),
     })
     attemptExcluded = material.counts.attemptExcluded
     // 🔴 같은 글의 후보를 모두 넘긴다. 첫 후보가 Gate 에서 막히면 다음 Persona 로 넘어가고,
@@ -471,6 +476,13 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     lines.push(`대상 글 ${targets}편 · 후보 ${candidates.length}건 (planner ${material.counts.planned} · 입력 ${material.counts.built})`)
     for (const b of material.providerBlockers) lines.push(`유료 호출 차단 사유: ${b}`)
     if (attemptExcluded > 0) lines.push(`이미 보낸 조합 ${attemptExcluded}건 제외 — 같은 글 60분 window 안에서는 다시 보내지 않는다`)
+    // 🔴 planner skip 은 원인별로 따로 찍는다 — 고정 잠금(후보 무관) · ⑧ 시도(그 글만)
+    if (material.counts.voiceAttemptExcluded > 0) {
+      lines.push(`planner skip ⑧ 시도 ${material.counts.voiceAttemptExcluded}건 — 그 글에서 ⑧ 로 막힌 Persona 는 다른 역할로 다시 보내지 않는다`)
+    }
+    if (material.voiceStaticLocked.length > 0) {
+      lines.push(`planner skip 고정 잠금 ${material.voiceStaticLocked.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
+    }
     if (candidates.length === 0 && attemptExcluded > 0) {
       generationSkipped = `이 60분 window 의 새 조합이 없다 — 이미 보낸 ${attemptExcluded}건 제외 · 유료 호출 0`
     }
@@ -546,7 +558,11 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     enqueued = result.created
     outcomes = result.outcomes
     if (result.stoppedReason !== null) lines.push(`생성 멈춤: ${result.stoppedReason}`)
-    for (const o of result.outcomes) lines.push(`   ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}`)
+    for (const o of result.outcomes) {
+      // 🔴 ⑧ 원인을 가른다 — 후보 원인(막음) · 기준선 초과(후보 무관 · 통과). 축 이름만
+      const cause = voiceCauseNote(o.plan?.gates ?? [])
+      lines.push(`   ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}${cause === '' ? '' : ` · ${cause}`}`)
+    }
   }
 
   const sweepAfter = await sweepAutoLane(deps.prisma, deps.now)

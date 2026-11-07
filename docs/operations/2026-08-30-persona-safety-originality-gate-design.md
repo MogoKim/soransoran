@@ -437,15 +437,32 @@ Mood State · Activity Rhythm 과 직접 연결된다.
 **②는 "이 표현을 써도 되는가" 를 보고, ⑧은 "이 표현을 또 쓰는가" 를 본다.**
 두 관문이 같은 seed 를 다른 각도에서 본다 — 어느 하나로 합칠 수 없다.
 
-```
-검사 축 (seed 재사용)
-  같은 seed 의 최근 N건 내 사용 횟수
-  여러 페르소나에 걸친 동일 seed 배분율      🔴 persona 단위가 아니라 전체 단위로 본다
-  같은 hookType · ending 의 반복             기존 축과 함께 본다
+🔴 **반복 축은 후보 귀속으로 판정한다** (2026-11-07 · 구현 `src/lib/persona-voice-repeat.ts`).
 
-🔴 수치 기본값은 **구현 시 결정**한다.
-   운영 데이터 없이 임계를 정하면 오탐이거나 무력하다.
-   조정 손잡이가 있다는 것만 여기서 고정한다.
+```
+표본      prior(같은 Persona 의 삭제되지 않은 공개 댓글) + 후보 · 크기 n+1 (minSamples 미만이면 notRun)
+over_L    { 패턴 p : after(p) / (n+1) ≥ 임계_L }        L = regenerate → review 순 · 임계는 바꾸지 않는다
+막음      over_L 에 후보가 속한 패턴이 있다 → L (CANDIDATE)      ← 우세 패턴 재사용 · 점유율 악화
+통과      over_L 이 있으나 후보가 속한 것이 없다 → BASELINE_ONLY  ← prior 만의 반복. 관측 · 회복 신호
+```
+
+- 막는 단계는 **후보가 속한 임계 패턴 가운데 가장 높은 단계**다. prior 만 넘은 더 높은 단계는 후보에게 지우지 않는다
+  (말끝 `같아요` 3/6 regenerate · 후보 무관 + 후보가 쓴 `좋아요` 2/6 review → review 로 막는다. 옛 판은 regenerate).
+  막느냐 마느냐만 보면 후보가 임계 패턴에 속하는 한 옛 판과 같고, 통과로 바뀌는 것은 후보가 어느 임계 패턴에도 속하지 않을 때뿐이다 —
+  그 경우 옛 판은 어떤 후보에도 regenerate 를 내 Persona 를 영구히 잠갔다(2026-11-07 D20 · P14·P17·P24·P26·P39).
+- seed 재사용은 후보와 무관한 Persona 단위 값이라 planner 가 유료 호출 전에 뺀다(공유 2 이상 · `VOICE_STATIC_LOCKED`).
+  구조화 나열(TIDY)은 후보 자체의 위반이라 그대로 막는다.
+- 첫 댓글 lane 은 ⑧ 로 막힌 글 × Persona 를 그 글의 60분 window 동안 다른 역할로 다시 보내지 않는다. 다른 글은 막지 않는다.
+- 프롬프트는 "다시 쓰면 막히는" 우세 시작어절 · 말끝 · 3글자 조각만 회피 표지로 받는다(같은 추출 · 같은 임계).
+
+```
+검사 축 (seed 재사용) — 현재 계약 (2026-11-07)
+  seed 공유 수 = 고정 배정(stableAssignment)에서 이 Persona 와 같은 voice seed 를 받은 Persona 수(자기 포함)
+                 🔴 persona 단위가 아니라 전체 단위 · 발화 이력 수가 아니다 · 후보와 무관한 고정값
+  임계         공유 2 → review · 공유 3 → regenerate   (src/lib/persona-fingerprint-thresholds.ts · seedReuseReview 2 / seedReuseRegen 3)
+  처리         review 도 적재를 막으므로 공유 2 이상은 어떤 후보로도 ⑧ 을 통과하지 못한다 →
+               planner 가 유료 호출 전에 뺀다(VOICE_STATIC_LOCKED · 모르면 SEED_SHARE_UNKNOWN 으로 회차 전체 유료 호출 0)
+  같은 hookType · ending 의 반복은 반복 축(후보 귀속)이 본다
 ```
 
 🔴 **`seedReuseRate` 는 AI 티가 났을 때 낮추는 손잡이다.**
@@ -1013,7 +1030,7 @@ VE-M3 에서 terminal skip 33건이 나온 것이 가드가 일한 증거였다.
 |---|---|---|---|
 | ② | **희귀도 사전 2벌** + n-gram 추출기 | 중 | 🔴 본문 2,504건 · 댓글 59,252건을 **따로** 구축 |
 | ② | comment seed **등급 판정부** | 중 | 빈도축 + 내용안전축, 더 엄격한 쪽 |
-| ⑧ | **seed 사용 이력 저장 · 재사용 판정** | 중 | `seedReuseRate` 임계는 구현 시 결정 |
+| ⑧ | **seed 사용 이력 저장 · 재사용 판정** | 중 | ✅ 결정됨 — seed 공유 수(같은 seed 를 받은 Persona 수) · review 2 / regenerate 3 (2026-11-07 현재 계약) |
 | ③ | 식별 디테일 카테고리 분류기 | 중 | 9종 카테고리 · 결합 판정 |
 | ④ | 전개 단위 추출 · 순서 비교 | 🔴 높음 | **가장 어렵다.** 일반 구조 사전 필요 |
 | ⑥ | 회원 닉네임 실시간 대조 | 낮음 | |
@@ -1054,7 +1071,7 @@ VE-M3 에서 terminal skip 33건이 나온 것이 가드가 일한 증거였다.
 | ⑮ | 🔴 **⑤ 가 `BRAND_BANNED_WORDS` 를 함께 보는가** | 🟡 **권고: 본다.** 페르소나 생성물은 회원 글 예외 대상이 아니다 (§3-⑤) |
 | ⑯ | **댓글 코퍼스의 갱신 주기** | 59,252건은 수집 시점 고정. 새 출처가 늘면 재구축 |
 | ⑰ | **comment seed 내용안전축 판정 방식** | 규칙 기반인가 ③·§5 재사용인가 |
-| ⑱ | 🔴 **`seedReuseRate` 기본값** | 🟡 **구현 시 결정.** 운영 데이터 없이 정하지 않는다 (§3-⑧) |
+| ⑱ | 🔴 **`seedReuseRate` 기본값** | ✅ **결정됨** — seed 공유 수 기준 review 2 / regenerate 3 (`persona-fingerprint-thresholds.ts` · §3-⑧ 현재 계약) |
 
 ---
 

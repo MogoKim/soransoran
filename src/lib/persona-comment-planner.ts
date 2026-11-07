@@ -146,6 +146,10 @@ export type PlanBlockCode =
   | 'PERSONA_ALREADY_ON_POST'
   /** 🔴 같은 글 60분 window 안에서 이미 provider 로 보낸 정확한 조합이다 — `feasible` 이 제외한다(첫 댓글 lane 전용) */
   | 'COMBO_ALREADY_ATTEMPTED'
+  /** 🔴 후보와 무관하게 Gate ⑧ 이 막는 Persona(seed 공유) — `feasible` 이 유료 호출 전에 뺀다 */
+  | 'VOICE_STATIC_LOCKED'
+  /** 🔴 같은 글 60분 window 안에서 이 Persona 가 이미 ⑧ 로 막혔다 — 역할만 바꿔 다시 보내지 않는다(첫 댓글 lane 전용) */
+  | 'PERSONA_VOICE_ATTEMPTED'
   | 'NO_ELIGIBLE_PERSONA'
   | 'LIMIT_EXHAUSTED'
 

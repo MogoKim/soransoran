@@ -3934,7 +3934,7 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     frequency: async () => ({
       corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
     }),
-    seedUseCount: async () => 3,
+    seedUseCount: async () => 1,
     ...over,
   })
 
@@ -4035,8 +4035,16 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
       source: makeSource({ seedUseCount: async () => null }),
       limit: 5, nowMs: NOW, windowMs: 7 * DAY,
     })
-    check('🔴 seed 사용 횟수를 못 세면 미완이다',
-      !noSeed.gateInputsComplete && noSeed.gaps.some((g) => g.startsWith('seedUseCount')))
+    check('🔴 seed 사용 횟수를 못 세면 미완이다 · 그 사람은 고르지 않는다',
+      !noSeed.gateInputsComplete && !noSeed.providerAllowed && noSeed.gaps.some((g) => g.startsWith('seedUseCount'))
+      && noSeed.targets.length === 0 && noSeed.voiceStaticLocked.some((x) => x.codes.includes('SEED_SHARE_UNKNOWN')))
+    // 🔴 실측 증명 — 소스가 공유 3 을 말하면 고정 잠금으로 빠진다(값을 1 로 적어 넣었다면 빠지지 않는다)
+    for (const shared of [2, 3]) {
+      const locked = await materializeTargets({ source: makeSource({ seedUseCount: async () => shared }), limit: 5, nowMs: NOW, windowMs: 7 * DAY })
+      check(`🔴 seed 공유 ${shared} — 후보와 무관하게 ⑧ 이 막으므로 유료 호출 전에 뺀다(VOICE_STATIC_LOCKED · 대상 0)`,
+        locked.targets.length === 0 && locked.voiceStaticLocked.some((x) => x.codes.includes('SEED_REUSE_LOCKED'))
+        && locked.plan.skipped.some((s) => s.blocks.some((b) => b.code === 'VOICE_STATIC_LOCKED')))
+    }
     const shortPrior = await materializeTargets({
       source: makeSource({
         personas: async () => [{ ...persona, comments: persona.comments.slice(0, 1) }],
@@ -4090,7 +4098,7 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     check('🔴 ② 코퍼스 조회가 들어간다',
       typeof gi.frequencyLookup === 'function' && gi.corpusName === 'comment')
     check('🔴 ⑧ 이전 발화가 실제 발화다', (gi.priorTexts?.length ?? 0) === 5)
-    check('🔴 ⑧ seed 사용 횟수가 실측이다 (1 로 적어 넣지 않는다)', gi.seedUseCount === 3)
+    check('🔴 ⑧ seed 사용 횟수가 소스에서 온 값이다', gi.seedUseCount === 1)
     check('🔴 ⑨ 카페 운영 문맥 여부를 명시한다', gi.sourceIsCafeOperational === false)
   }
 }
@@ -4521,7 +4529,7 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     frequency: async () => ({
       corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
     }),
-    seedUseCount: async () => 3,
+    seedUseCount: async () => 1,
     ...over,
   })
   const mat = (over: Partial<TargetSource> = {}): Promise<Awaited<ReturnType<typeof materializeTargets>>> =>

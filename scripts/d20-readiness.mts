@@ -39,7 +39,9 @@ import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import { readPreflightFacts, preflightCostSummaryOf, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import type { CostAttribution } from '../src/lib/ready-fate'
-import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
+import { readCommentCapablePersonas } from './lib/persona-reserve-facts.mjs'
+import { EVENT_WAKE_ENV, judgeEventWakeInstall } from './lib/runner-wake.mjs'
+import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { commentLoopLedgerDir } from './lib/persona-comment-loop.mjs'
 import { ledgerPathOf, readLedgerDay } from './lib/llm-ledger-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -93,8 +95,21 @@ const prisma = new PrismaClient()
 const out: Record<string, unknown> = { date: DATE, target: TARGET }
 try {
   // ── ① Persona ──
-  const personas = await readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() })
-  out.persona = { contractValid: personas, canaryFloor: PERSONA_CANARY_FLOOR[TARGET], sustainedTarget: PERSONA_SUSTAINED_TARGET[TARGET] }
+  const cap = await readCommentCapablePersonas(prisma, { now: NOW, repoRoot: process.cwd() })
+  // 🔴 controller preflight 입력은 그대로 계약 유효 수다(같은 판독기 · 같은 값). 첫 댓글 가능 수는 관측으로 따로 싣는다
+  const personas = cap.contractValid
+  out.persona = {
+    contractValid: personas, commentCapable: cap.commentCapable, staticLocked: cap.staticLocked,
+    canaryFloor: PERSONA_CANARY_FLOOR[TARGET], sustainedTarget: PERSONA_SUSTAINED_TARGET[TARGET],
+    // 🔴 막는 코드가 아니다 — 첫 댓글을 쓸 수 있는 사람이 하한보다 적으면 증명일 첫 댓글이 비는 원인이 된다
+    commentCapableShort: cap.commentCapable === null ? null : cap.commentCapable < PERSONA_CANARY_FLOOR[TARGET],
+  }
+
+  // ── ①-b 사건 깨움 설치 — 정본 env 의 같은 키 · 댓글 러너 등록 ──
+  const wakeEnv = readEnvKeys([EVENT_WAKE_ENV])
+  out.eventWake = judgeEventWakeInstall({
+    envReadable: wakeEnv.ok, env: wakeEnv.values, commentRunnerLoaded: observeJob(COMMENT_RUNNER_LABEL).state === 'loaded',
+  })
 
   // ── ② D20 preflight — controller 와 같은 조립 ──
   const evidenceDate = previousKstDate(DATE) ?? fail('전날을 계산하지 못했다')
@@ -178,6 +193,11 @@ if (JSON_OUT) {
   const c = p.counts
   console.log(`\n══ D20 준비도 — read-only · 증명일 ${DATE} · DB write 0 ══`)
   console.log(`\n① Persona  계약 유효 ${String(per.contractValid)} · canary 하한 ${per.canaryFloor} · 지속 목표 ${per.sustainedTarget}`)
+  const pc = out.persona as { commentCapable: number | null; staticLocked: { code: string; codes: string[] }[]; commentCapableShort: boolean | null }
+  console.log(`   첫 댓글 가능 ${String(pc.commentCapable)}${pc.commentCapableShort === true ? ' 🔴 하한 미달' : ''}`
+    + (pc.staticLocked.length === 0 ? ' · 고정 잠금 0' : ` · 고정 잠금 ${pc.staticLocked.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')}`))
+  const ew = out.eventWake as { state: string; note: string }
+  console.log(`   사건 깨움 ${ew.state === 'ON' ? '🟢' : '🔴'} ${ew.state} — ${ew.note}`)
   console.log(`\n② D20 preflight ${p.verdict}${p.codes.length > 0 ? ` [${p.codes.join(',')}]` : ''}`)
   console.log(`   목표 ${c.target}/일 · 발행 용량 ${String(c.publishCapacity)} · slot-valid 기회 ${String(c.opportunities ?? '모름')}`)
   console.log(`   READY 필요 ${String(c.readyNeededMin ?? '모름')}~${String(c.readyNeededMax ?? '모름')} · 공급 용량 ${String(c.readyCapacity ?? '모름')}`

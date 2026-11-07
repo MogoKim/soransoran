@@ -268,22 +268,31 @@ console.log('\n⑨ 배선 — 🔴 판정이 실제 쓰기 경로에 닿는가')
    */
   const outer = tx.slice(tx.indexOf('export async function publishOriginalPostTx'), tx.indexOf('async function publishAttempt'))
   /**
-   * 🔴 (2026-10-01 개정) 두 번째 충돌 뒤에는 **write 없는 다시 읽기 한 번**(`'recheck'`)만 있다 — 세 번째 write 시도가 아니다.
-   *    다시 읽기는 소비 증거(SLOT_CONSUMED · TARGET_RACE_LOST)일 때만 정상 무발행이고, 그 밖은 error 다.
+   * 🔴 (2026-10-01 개정 · 2026-11-08 PR #835 CI ⑧ 개정) write 시도는 **정확히 2회**다. 두 번째 충돌 뒤에는 write 없는
+   *    다시 읽기를 고정 일정(`RECHECK_DELAYS_MS`)으로 되풀이한다 — 소비 증거(SLOT_CONSUMED · TARGET_RACE_LOST)면 즉시 정상 무발행,
+   *    `recheck-open`(아직 낼 수 있다)과 다시 읽기의 충돌만 다음 대기로, 그 밖은 즉시 실패, 일정이 끝나도 없으면 실패다.
    */
-  check('🔴 🔴 **직렬화 충돌은 정확히 한 번 재시도 — 두 번째 충돌 뒤엔 write 없는 다시 읽기 하나 · 소비 증거 아니면 실패**',
+  const settle = tx.slice(tx.indexOf('export async function settleAfterConflicts'), tx.indexOf('const CONSUMED_AFTER_CONFLICT'))
+  check('🔴 🔴 **write 시도는 정확히 2회 — 두 번째 충돌 뒤엔 write 없는 다시 읽기를 고정 일정으로만 되풀이 · 소비 증거 아니면 실패**',
     /if \(isSerializationConflict\(err\)\) return \{ kind: 'conflict' \}/.test(tx)
     && (outer.match(/await publishAttempt\(prisma, input, deps, (1|2)\)/g) ?? []).length === 2
-    && (outer.match(/await publishAttempt\(/g) ?? []).length === 3
-    && /const first = await publishAttempt\(prisma, input, deps, 1\)\s*if \(first\.kind !== 'conflict'\) return first\s*const second = await publishAttempt\(prisma, input, deps, 2\)\s*if \(second\.kind !== 'conflict'\) return second\s*const recheck = await publishAttempt\(prisma, input, deps, 'recheck'\)/.test(outer)
+    && (outer.match(/publishAttempt\(/g) ?? []).length === 3
+    && /const first = await publishAttempt\(prisma, input, deps, 1\)[\s\S]*const second = await publishAttempt\(prisma, input, deps, 2\)[\s\S]*return settleAfterConflicts\(\(\) => publishAttempt\(prisma, input, deps, 'recheck'\), deps\.sleep \?\? realSleep\)/.test(outer)
+    && /export const RECHECK_DELAYS_MS: readonly number\[\] = Object\.freeze\(\[0, 250, 500, 1000, 2000, 4000, 8000, 16000\]\)/.test(tx)
     && /const CONSUMED_AFTER_CONFLICT = \['SLOT_CONSUMED', 'TARGET_RACE_LOST'\] as const/.test(tx)
-    && /if \(phase === 'recheck'\) return \{ kind: 'error'/.test(tx)
-    // 🔴 다시 읽기의 멈춤은 첫 write(만료 전환 updateMany) 앞이다
+    // 🔴 되풀이는 일정 하나 · write 시도 0(다시 읽기는 부르는 쪽이 넘긴 recheck 뿐) · 끝없는 반복 없음
+    && /for \(const delay of RECHECK_DELAYS_MS\)/.test(settle) && !/while\s*\(/.test(settle) && !/publishAttempt\(/.test(settle)
+    && !/for\s*\(|while\s*\(/.test(outer)
+    && /if \(phase === 'recheck'\) return \{ kind: 'recheck-open' \}/.test(tx)
+    // 🔴 문자열로 흐름을 정하지 않는다 — 다시 읽기 판정은 kind 로만
+    && !/\.message\s*===|\.test\(r\.message\)|includes\(r\.message\)/.test(settle)
+    // 🔴 다시 읽기의 멈춤은 첫 write(만료 전환 updateMany) 앞이다 · 다시 읽기에는 결함 주입점이 불리지 않는다
     && tx.indexOf("if (phase === 'recheck') return") < tx.indexOf('const expired = await tx.originalPostApprovalQueue.updateMany')
-    && !/while\s*\(|for\s*\(/.test(outer))
-  // 🔴 결함 주입점은 검사 전용 — 운영 호출자(러너 · 수동 단건)는 넘기지 않는다
+    && /if \(phase !== 'recheck'\) await deps\.fault\?\.\(\{ attempt: phase, point: 'begin' \}\)/.test(tx))
+  // 🔴 결함 · 대기 주입점은 검사 전용 — 운영 호출자(러너 · 수동 단건)는 넘기지 않는다(운영 기본은 실제 대기)
   for (const f of ['scripts/original-post-auto-publish.mts', 'scripts/original-post-publish-live.mts', 'src/lib/original-post-auto-publish.ts', 'src/lib/publish-slot-catchup.ts']) {
-    check(`🔴 운영 호출자 ${f} 는 결함 주입점(fault)을 넘기지 않는다`, !/\bfault\b/.test(codeOf(f)))
+    // 🔴 단어 자체를 금지한다 — `sleep:` 표기만 찾으면 shorthand(`{ fault, sleep }`)를 놓친다
+    check(`🔴 운영 호출자 ${f} 는 결함 · 대기 주입점(fault · sleep)을 넘기지 않는다`, !/\bfault\b/.test(codeOf(f)) && !/\bsleep\b/.test(codeOf(f)))
   }
   check('🔴 조건부 UPDATE 가 그대로 있다',
     /status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null/.test(tx))

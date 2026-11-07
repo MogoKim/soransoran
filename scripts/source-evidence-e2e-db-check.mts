@@ -20,7 +20,7 @@ import {
 } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { markedStageEnv } from './lib/stage-decision-fixture'
 /** 🔴 Linux 에는 `/usr/bin/lockf` 가 없다 — 공급 러너 live 회차의 커널 lease 를 flock 대역으로 연다(2026-10-12 Batch C1) */
 import { fakeLockfEnv } from './lib/fake-lockf.mjs'
@@ -248,10 +248,18 @@ const { publishOriginalPostTx } = await import('../src/lib/original-post-publish
 const { safetyFilter } = await import('./lib/micro-seed-safety-filter.mjs')
 
 /**
- * 🔴 **commit 뒤 댓글 깨움 관측** (2026-10-12 Batch C2) — 발행 러너는 언제나 `SORAN_EVENT_WAKE=comment` 로 띄우고,
+ * 🔴 **commit 뒤 댓글 깨움 관측** (2026-10-12 Batch C2 · 2026-11-07 정본 env 하나) — 깨움 모드는 발행 러너가
+ *    **정본 env**(`$HOME/Library/Application Support/soransoran/env.local`)에서만 읽는다. 그래서 회차마다 임시 HOME(HM)
+ *    아래 그 파일에 `SORAN_EVENT_WAKE=comment|off` 를 0600 으로 쓴다 — 프로세스 env 의 `SORAN_EVENT_WAKE` 로는 제어하지 않는다.
  *    launchctl 은 가짜 provider 훅이 거는 대역(호출 인자만 적는 셸)만 쓴다 — 운영 launchd job 을 깨우지 않는다.
- *    🔴 훅 · 대역 · 깨움 env 는 언제나 함께 넣는다(깨움만 켜고 대역이 없으면 진짜 launchctl 을 부른다).
+ *    🔴 훅 · 대역은 언제나 함께 넣는다(깨움만 켜고 대역이 없으면 진짜 launchctl 을 부른다).
  */
+const CANON_ENV = join(HM, 'Library', 'Application Support', 'soransoran', 'env.local')
+const writeWakeMode = (mode: 'comment' | 'off'): void => {
+  mkdirSync(dirname(CANON_ENV), { recursive: true, mode: 0o700 })
+  writeFileSync(CANON_ENV, `SORAN_EVENT_WAKE=${mode}\n`, { mode: 0o600 })
+  chmodSync(CANON_ENV, 0o600)
+}
 const WAKE_DIR = join(HM, 'Library', 'Application Support', 'soransoran', 'persona-comment-loop')
 const LCTL_LOG = join(HM, 'launchctl.log')
 const LCTL_OK = join(HM, 'fake-launchctl-ok.sh')
@@ -264,12 +272,13 @@ const wakeMarker = (): { trigger?: string } | null => {
 }
 const resetWake = (): void => { rmSync(LCTL_LOG, { force: true }); rmSync(join(WAKE_DIR, 'follow-up.request'), { force: true }); mkdirSync(WAKE_DIR, { recursive: true }) }
 const KICK = `kickstart gui/${process.getuid?.() ?? 0}/com.soransoran.persona-comment-runner`
-function runPublish(at: Date, extra: Record<string, string> = {}): Promise<{ code: number; out: string }> {
+function runPublish(at: Date, extra: Record<string, string> = {}, wake: 'comment' | 'off' = 'comment'): Promise<{ code: number; out: string }> {
+  writeWakeMode(wake)
   return new Promise((resolve) => {
     const c = spawn(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T, 'scripts', 'original-post-auto-publish.mts'), '--apply', '--limit=1', '--trigger=local'], {
       cwd: T, env: {
         ...baseEnv(), SORAN_RUN_AT: iso(at), SORAN_AUTO_READY_ENABLED: 'on',
-        NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`, FAKE_LAUNCHCTL: LCTL_OK, SORAN_EVENT_WAKE: 'comment',
+        NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`, FAKE_LAUNCHCTL: LCTL_OK,
         ...extra,
       },
     })
@@ -484,7 +493,7 @@ async function main(): Promise<void> {
     await patchGate(order[0]!.id, (g) => ({ ...g, [SOURCE_EVIDENCE_KEY]: { ...(g[SOURCE_EVIDENCE_KEY] as object), observations: [null] } }))
     await patchGate(order[1]!.id, (g) => ({ ...g, [SOURCE_EVIDENCE_KEY]: { ...(g[SOURCE_EVIDENCE_KEY] as object), response: 'x' } }))
     // 🔴 C2 kill switch — 이 회차는 깨움을 끈다(off). 발행은 정상이어도 표식 · kickstart 0
-    const pub = await runPublish(PUBLISH_AT, { SORAN_EVENT_WAKE: 'off' })
+    const pub = await runPublish(PUBLISH_AT, {}, 'off')
     dump('pub-4', pub.out)
     check('🔴 🔴 **C2 kill switch off — 발행은 됐어도 표식 0 · kickstart 0**', /✅ Post /.test(pub.out) && wakeCalls().length === 0 && wakeMarker() === null
       && /깨움\(comment\) 0 — SORAN_EVENT_WAKE=off/.test(pub.out), JSON.stringify(wakeCalls()))

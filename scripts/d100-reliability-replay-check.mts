@@ -455,20 +455,20 @@ try {
     const nowMs = kstAt(D, '09:00').getTime()
     const wake = (target: 'comment' | 'supply', mode: string) => wakeRunner({ target, env: { [EVENT_WAKE_ENV]: mode }, nowMs, home: sb.home })
 
-    const supply = wake('supply', 'all')
+    const supply = wake('supply', 'comment')
     const supplyMarker = supply.kind === 'SENT' ? supply.marker : null
     const supplyKicks = sb.launchctlCalls().length
     const supplyWakeImplemented = supply.kind === 'SENT' && supply.marker === 'REQUESTED' && supply.kick === 'OK'
     const supplyAgain = wakeRunner({
-      target: 'supply', env: { [EVENT_WAKE_ENV]: 'all' }, nowMs: kstAt(D, '12:00').getTime(), home: sb.home,
+      target: 'supply', env: { [EVENT_WAKE_ENV]: 'comment' }, nowMs: kstAt(D, '12:00').getTime(), home: sb.home,
     })
-    check('🔴 공급 비예약 깨움은 시각과 all 설정에 관계없이 OFF · 표식 0 · kickstart 0',
+    check('🔴 공급 비예약 깨움은 시각과 comment 설정에 관계없이 OFF · 표식 0 · kickstart 0',
       supply.kind === 'OFF' && supplyAgain.kind === 'OFF' && supplyMarker === null && supplyKicks === 0
       && sb.launchctlCalls().length === 0 && Object.keys(WAKE_TARGETS).join(',') === 'comment')
     // 공급 호출과 댓글 호출 수를 섞지 않는다. 댓글 3회 반례는 그대로다.
     sb.resetLaunchctlCalls()
     // 같은 순간 댓글 깨움 3번 — 표식 하나 · kickstart 는 launchd 가 합친다
-    const comments = [wake('comment', 'comment'), wake('comment', 'all'), wake('comment', 'comment')]
+    const comments = [wake('comment', 'comment'), wake('comment', 'comment'), wake('comment', 'comment')]
     const markerKinds = comments.map((w) => (w.kind === 'SENT' ? w.marker : w.kind)).join(',')
     const marker = existsSync(markerPath) ? followUpTriggerOf(readFileSync(markerPath, 'utf-8')) : null
     console.log(`   공급 ${supply.kind} · 표식 ${String(supplyMarker)} · kickstart ${supplyKicks} | 댓글 ${markerKinds} · kickstart ${sb.launchctlCalls().length}`)
@@ -567,7 +567,7 @@ try {
       posts: async () => [post], personas: async () => [persona], openDedupKeys: async () => [],
       recentRoleCounts: async () => ({}), knownNames: async () => ['홍길동'],
       frequency: async () => ({ corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: 'replay corpus' }),
-      seedUseCount: async () => 3,
+      seedUseCount: async () => 1,
     }
     const makeDb = (): { prisma: PrismaClient; bypass: string[] } => {
       const bypass: string[] = []

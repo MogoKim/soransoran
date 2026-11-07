@@ -336,7 +336,9 @@ console.log('\n══════ ⑦ 🔴 대화 맥락은 참고하되, 말투
     frequency: async () => ({
       corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
     }),
-    seedUseCount: async () => 3,
+    // 🔴 seed 공유 1 = 아무와도 voice seed 를 공유하지 않는다(⑧ seed 축 통과 · 운영 실측값). 이 절은 대화 맥락 계약만 본다 —
+    //    공유 2 이상은 후보와 무관하게 ⑧ 이 막는 고정 잠금이라 planner 가 유료 호출 전에 빼고(VOICE_STATIC_LOCKED) 대상이 0 이 된다
+    seedUseCount: async () => 1,
   })
 
   const memberOnly = [{ origin: 'MEMBER', content: MEMBER_TEXT, personaCode: null }]

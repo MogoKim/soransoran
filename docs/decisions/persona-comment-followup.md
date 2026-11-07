@@ -12,7 +12,8 @@
   E6 consumer 경유 plist, 스위치 `on`, 승인된 D10 전용 profile이 설치돼 있었다.
 - 2026-10-19부터 기능 사용 가능 여부를 단계와 분리한다. 승인된 운영 공통 profile(`stage: all`)은 d5부터 D100까지
   같은 안전 관문을 쓰고, 공개량·Persona·예산·회차 상한만 실측에 맞춰 조정한다. 모든 글을 10건으로 채우지는 않는다.
-- `SORAN_EVENT_WAKE`는 공개 직후 댓글 첫 반응만 재촉한다. `comment`와 `all` 모두 댓글만 열며, 공급 event wake와
+- `SORAN_EVENT_WAKE`는 공개 직후 댓글 첫 반응만 재촉한다. 켜는 값은 `comment` 하나다. 옛 `all`은 2026-11-07 폐지되어
+  모르는 값(off)으로 읽는다. 켜짐 출처는 정본 env 한 곳이다(발행 러너·고아 복구·readiness가 같은 키를 읽는다). 공급 event wake와
   공급 recovery kickstart는 실행시간 상한 없는 비예약 owner가 자연 증명과 충돌하지 않도록 닫혀 있다.
   공급은 하루 7회 자연 예약만 사용한다. 이 결정은 댓글 event-assisted 실행을 바꾸지 않는다.
 

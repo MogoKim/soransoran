@@ -16,6 +16,11 @@
  * 🔴 **기억하는 것은 조합과 결과 코드뿐이다.** 후보 댓글 본문 · prompt · 원문 · detail 은 이 타입에 자리가 없다 —
  *    스키마가 그 밖의 키를 거절한다(파일이 손으로 고쳐져도 본문이 들어올 길이 없다).
  *
+ * 🔴 **Gate ⑧ 실패는 글 × Persona 범위다** (2026-11-07 D20). ⑧ 의 원인은 역할이 아니라 그 Persona 의 말투다 —
+ *    같은 글에 역할만 바꿔 다시 보내면 같은 말버릇으로 다시 막혔다(P14 · P17 · P24 · P26 · P39, 혼자 공개된 글의 60분 소진).
+ *    그래서 `failedGates` 에 `⑧:*` 가 남은 항목은 그 글에서 **그 Persona 의 모든 역할**을 뺀다. 다른 글은 막지 않는다.
+ *    파일 모양(v1)은 바꾸지 않는다 — 이미 적고 있는 `failedGates` 에서 파생한다(옛 reader 와 rollback 이 같은 파일을 읽는다).
+ *
  * 🔴 이 모듈은 Gate · threshold · 상수 · 비용 · Queue · 발행을 건드리지 않는다. 첫 댓글 lane 만 쓴다(추가 댓글은 쓰지 않는다).
  */
 import { AUTO_FIRST_COMMENT_WINDOW_MS } from './persona-comment-auto-lane'
@@ -64,9 +69,28 @@ export function activeAttempts(entries: readonly AttemptEntry[], nowMs: number):
   return entries.filter((e) => isAttemptActive(e, nowMs))
 }
 
-/** 🔴 planner 의 feasible 단계가 제외할 **정확한 조합** 집합 — 같은 Persona 의 다른 역할은 다른 조합이다 */
+/** 🔴 planner 의 feasible 단계가 제외할 **정확한 조합** 집합 — ⑧ 밖의 실패는 조합 범위다(다른 역할은 다른 조합) */
 export function attemptedComboKeys(entries: readonly AttemptEntry[], nowMs: number): Set<string> {
   return new Set(activeAttempts(entries, nowMs).map(attemptKeyOf))
+}
+
+/** 글 × Persona 열쇠 — 역할을 뺀다 */
+export function postPersonaKeyOf(c: { postId: string; personaCode: string }): string {
+  return `${c.postId}:${c.personaCode}`
+}
+
+/**
+ * 🔴 Gate ⑧(말투 반복 · seed · 구조화 나열)이 **막은** 시도인가 — `failedGates` 의 `⑧:<막는 결과>` 로만 본다.
+ *    `failedGates` 는 pass 가 아닌 것을 다 적으므로 `⑧:notRun`(표본 부족 · ⑧ 이 돌지 않았다)도 들어온다.
+ *    그것은 ⑧ 이 막은 것이 아니다 — 다른 관문 실패를 글 × Persona 로 올리지 않는다.
+ */
+const VOICE_BLOCKING_GATES: ReadonlySet<string> = new Set(['⑧:review', '⑧:regenerate', '⑧:reject'])
+export const isVoiceFailure = (e: Pick<AttemptEntry, 'failedGates'>): boolean =>
+  e.failedGates.some((g) => VOICE_BLOCKING_GATES.has(g))
+
+/** 🔴 이 60분 window 안에서 ⑧ 로 막혀 **그 글에서는** 다시 부르지 않는 글 × Persona */
+export function voiceFailedPostPersonaKeys(entries: readonly AttemptEntry[], nowMs: number): Set<string> {
+  return new Set(activeAttempts(entries, nowMs).filter(isVoiceFailure).map(postPersonaKeyOf))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -156,6 +180,10 @@ export function withAttemptStarted(entries: readonly AttemptEntry[], e: AttemptE
   const key = attemptKeyOf(e)
   if (live.some((x) => attemptKeyOf(x) === key)) {
     return { ok: false, reason: '같은 조합이 이 60분 window 안에서 이미 전송 기록에 있다' }
+  }
+  // 🔴 마지막 방어선 — ⑧ 로 막힌 글 × Persona 는 역할만 바꿔 다시 보내지 않는다
+  if (live.some((x) => isVoiceFailure(x) && postPersonaKeyOf(x) === postPersonaKeyOf(e))) {
+    return { ok: false, reason: '이 글에서 같은 Persona 가 이 60분 window 안에 이미 ⑧ 로 막혔다 — 역할만 바꿔 다시 보내지 않는다' }
   }
   if (e.step !== 'STARTED') return { ok: false, reason: '시작 기록의 step 은 STARTED 여야 한다' }
   return { ok: true, entries: [...live, e] }

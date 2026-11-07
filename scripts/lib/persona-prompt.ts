@@ -37,6 +37,9 @@ import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference
  */
 export { REACTION_TYPES, isReactionType, type ReactionType } from '../../src/lib/persona-reaction-roles'
 import { REACTION_TYPES, isReactionType, type ReactionType } from '../../src/lib/persona-reaction-roles'
+import {
+  dominantRepeatMarks, endingOf, hookOf, type DominantRepeatMarks,
+} from '../../src/lib/persona-voice-repeat'
 
 /** 사람 말로 옮긴 반응 지침. 🔴 모델에게 코드값을 그대로 주지 않는다 */
 const REACTION_GUIDE: Record<ReactionType, string> = {
@@ -139,18 +142,20 @@ export type RecentVoiceMarks = {
    * **빈도는 지우기 전에 따로 남긴다.**
    */
   openerInitials: readonly OpenerInitialCount[]
+  /**
+   * 🔴 **다시 쓰면 Gate ⑧ 이 막는 패턴** (2026-11-07) — `dominantRepeatMarks` 그대로다(같은 추출 · 같은 임계 · 같은 표본).
+   *    최근 목록(`openers` · `endings`)은 중복을 지우고 뒤에서 자르므로 오래된 우세 패턴이 빠질 수 있고,
+   *    3-gram 은 아예 실리지 않았다. 그래서 막히는 것만 따로 정확히 넘긴다. 표본이 모자라면 비어 있다.
+   */
+  dominant: DominantRepeatMarks
 }
 
 export type OpenerInitialCount = { initial: string; count: number }
 
 /**
- * 🔴 추출 규칙은 Gate ⑧ 과 **같아야 한다.**
- *    persona-gate-78.mts 의 `endingOf` · `hookOf` 와 같은 규칙이다.
- *    그쪽이 export 하지 않아 여기서 같은 규칙을 쓰고, fixture 가 동등성을 잠근다 —
- *    두 규칙이 갈리면 "피하라고 준 말"과 "잡히는 말"이 달라져 아무 효과가 없다.
+ * 🔴 추출 규칙은 Gate ⑧ 과 **같은 함수**다(`src/lib/persona-voice-repeat`).
+ *    두 규칙이 갈리면 "피하라고 준 말"과 "잡히는 말"이 달라져 아무 효과가 없다 — 그래서 사본을 두지 않는다.
  */
-const endingOf = (t: string): string => t.replace(/[\s.!?~ㅋㅎ,]+$/u, '').slice(-3)
-const hookOf = (t: string): string => t.trim().split(/\s+/)[0] ?? ''
 
 /** 프롬프트에 실을 최대 개수 — 너무 많으면 지시가 아니라 목록이 된다 */
 export const MAX_RECENT_MARKS = 6
@@ -176,6 +181,7 @@ export function extractVoiceMarks(texts: readonly string[]): RecentVoiceMarks {
   return {
     openers: openers.slice(-MAX_RECENT_MARKS),
     endings: endings.slice(-MAX_RECENT_MARKS),
+    dominant: dominantRepeatMarks(texts),
     // 🔴 빈도는 자르지 않는다. 잘라 내면 최빈값이 목록 밖으로 밀려날 수 있고,
     //    그러면 Gate ⑧ 이 잡는 바로 그 글자를 프롬프트가 말하지 못한다.
     //    많은 순 · 같으면 글자순 — 순서를 고정해야 fixture 가 잠글 수 있다
@@ -315,6 +321,13 @@ export function buildPrompt(input: {
   const reaction = input.reactionType as ReactionType
   const recentOpeners = input.recentMarks?.openers ?? []
   const recentEndings = input.recentMarks?.endings ?? []
+  /** 🔴 이미 여러 번 써서 **또 쓰면 막히는** 말 — 최소 주입(도입 · 말끝 · 3글자 조각만) */
+  const dom = input.recentMarks?.dominant ?? { endings: [], hooks: [], grams: [] }
+  const dominantLines = [
+    ...(dom.hooks.length > 0 ? [`- 이 말로는 시작하지 않습니다(이미 여러 번 썼습니다): ${dom.hooks.join(' · ')}`] : []),
+    ...(dom.endings.length > 0 ? [`- 이 말로는 끝내지 않습니다(이미 여러 번 썼습니다): ${dom.endings.join(' · ')}`] : []),
+    ...(dom.grams.length > 0 ? [`- 이 글자 묶음은 이번에 쓰지 않습니다(띄어쓰기 무시): ${dom.grams.join(' · ')}`] : []),
+  ]
   const ref = input.reference
   /**
    * 🔴 **길이는 관찰값으로 전한다.** 목표를 숫자 하나로 주면 전부 그 길이가 된다 —
@@ -421,11 +434,12 @@ export function buildPrompt(input: {
     `  ${CLICHE_COMFORT_PHRASES.join(' · ')}`,
     '',
     // 🔴 자기 반복만 남긴다. 첫 글자 회피·어미 미세 통제는 지웠다(실측 근거는 파일 머리 주석)
-    ...(recentOpeners.length > 0 || recentEndings.length > 0
+    ...(recentOpeners.length > 0 || recentEndings.length > 0 || dominantLines.length > 0
       ? [
         '## 직전에 쓴 말과 겹치지 않게',
         ...(recentOpeners.length > 0 ? [`- 최근에 이렇게 시작했습니다: ${recentOpeners.join(' · ')}`] : []),
         ...(recentEndings.length > 0 ? [`- 최근에 이렇게 끝냈습니다: ${recentEndings.join(' · ')}`] : []),
+        ...dominantLines,
         '  같은 말로 또 열거나 닫지만 않으면 됩니다. 그 밖에는 자유롭게 씁니다.',
         '',
       ]
