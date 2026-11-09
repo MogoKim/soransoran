@@ -187,7 +187,7 @@ const MUTATIONS = [
   { name: 'D9 DIRECT publishAt ↔ 등록 예약일 관문 제거', scenarios: 'S15P', edits: [{ file: F.register,
     find: '    if (publishAt && directSpec.publication.publishAt.slice(0, 10) !== publishAt) {', replace: '    if (false) {' }] },
   { name: 'D10 hero 를 미리 배치해 provider 호출 우회', scenarios: 'S15', edits: [{ file: F.orch,
-    find: '      return prepareDirect(repo, { variant })\n', replace: '      const p = await prepareDirect(repo, { variant })\n      placeHero({ repo, slug: p.target })\n      return p\n' }] },
+    find: '      const p = await prepareDirect(repo, { variant })\n', replace: '      const p = await prepareDirect(repo, { variant })\n      placeHero({ repo, slug: p.target })\n' }] },
   { name: 'D11 register 가 큐 행을 지우지 않는다', scenarios: 'S15', edits: [{ file: F.reg,
     find: '    const nextQueue = removeQueueDay(queueSrc, item.day)\n', replace: '    const nextQueue = queueSrc\n' }] },
   { name: 'D12 DIRECT 등록 영수증 생략', scenarios: 'S15', edits: [{ file: F.register,
