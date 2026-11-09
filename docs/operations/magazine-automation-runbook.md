@@ -160,10 +160,12 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 
 | 항목 | 상한 | 넘으면 |
 |---|---|---|
-| S5 canary + A commissioning 총액(모델 비교 포함) | **$5** | A 중단 |
+| S5 canary 총액(모델 비교 포함) | **$5** | canary 중단 |
 | 편당 provider hard cap | **$1** | 그 후보만 HOLD |
 | pilot 월 hard cap | **$30** | 새 provider 호출 0 · 검증된 후보의 release 는 계속 · 알림 1회 · 다음 달 재개 |
 | 월 $100 확대 | **미승인** | — |
+
+- A commissioning(S6)은 canary 뒤에 편당 $1 · 월 $30 상한 안에서 집행한다. S5 의 $5 와 합산하는 별도 상한이 아니다.
 
 비용은 Job 에 호출마다 기록하고 합계는 계산한다. 코드 상한이 1차 방어다.
 

@@ -1083,8 +1083,9 @@ runbook §0.0B, 현재 상태와 critical path 는 milestone 이 정본이며 �
 
 - 이유: 2026-11-09 readiness 실측에서 3+1 을 채운 미등록 intent 는 0 이었다. 출판 조건을 품질 목표와 같게 두면 공급이 멈춘다.
   최소선은 독자가 다음으로 갈 길 하나와 크롤 도달성을 지키는 데 필요한 만큼만 둔다.
-- 수량의 코드 정의는 `scripts/lib/magazine-relation-policy.mjs` 한 곳이다. 출판 최소와 표시 목표를 **서로 다른 이름**으로 그 파일에만 두고,
-  다른 모듈은 그 이름을 읽는다. 현재 코드의 `RELATION_POLICY.directMin`(2)·builder 의 `productionMinimum` 은 이 계약보다 뒤져 있으며 S2 에서 바꾼다.
+- 수량의 코드 정의는 `scripts/lib/magazine-relation-policy.mjs` 한 곳이다. **legacy 호환 기준 · vNext 출판 최소 · 표시 목표**를 서로 다른 이름으로
+  그 파일에만 두고, 다른 모듈은 그 이름을 읽는다. 현재 코드의 `RELATION_POLICY.directMin`(2)·builder 의 `productionMinimum` 은 legacy 호환 기준이다.
+  S1 은 이름과 책임만 셋으로 나누고 legacy 산출 바이트는 바꾸지 않는다. S2 compiler 가 그중 vNext 출판 최소를 실제 ContentPlan 컴파일에 적용한다.
 
 ### 18-B.3 research previous 와 product previous — 계층별 이력
 
