@@ -25,7 +25,7 @@ const L = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-load.mjs')
 const C = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-rehearsal-content.mjs')).href)
 const D = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-rehearsal-direct.mjs')).href)
 /** 🔴 의료 플래그는 실제 QA 정본에서 */
-const { MEDICAL_REQUIRED } = await import(pathToFileURL(join(REPO, 'scripts/magazine-qa.mjs')).href)
+const { MEDICAL_REQUIRED } = await import(pathToFileURL(join(REPO, 'scripts/lib/magazine-qa-constants.mjs')).href)
 
 const log = (e) => appendFileSync(join(FIX, 'calls.jsonl'), `${JSON.stringify({ tool: 'chatgpt', at: new Date().toISOString(), ...e })}\n`)
 

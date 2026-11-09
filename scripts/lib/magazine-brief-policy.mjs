@@ -16,31 +16,54 @@
 
 import { HOMOGRAPH_PATTERNS, judgeForbidden } from './magazine-forbidden.mjs'
 import { judgeBriefFormatContract, describeBriefViolations } from './magazine-manuscript-format.mjs'
+// 🔴 import 시점 부작용 보존 — 앞판은 여기서 ROOT 를 import 했고, 그래서 이 모듈을 적재하면 load 의
+//    시험 주입 차단(SORAN_MAGAZINE_DRAFTS_DIR 단독 설정 시 exit 2)이 같은 순서로 돌았다. ROOT 는 이제 쓰지 않지만
+//    그 동작을 바꾸지 않는다(S1 은 legacy 동작 불변).
+import './magazine-load.mjs'
+// legacy 경로 인자(assertQaWordsInSync(qaPath)) 전용 — 인자 없는 운영 호출은 파일을 읽지 않는다
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { ROOT } from './magazine-load.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
+import * as QA_CONSTANTS from './magazine-qa-constants.mjs'
+import { BANNED_WORDS, MEDICAL_ASSERTIONS } from './magazine-qa-constants.mjs'
 
 // ─────────────────────────────────────────────────────────
-// 공통 금지어 — magazine-qa.mjs 의 거울
+// 공통 금지어 — QA 와 같은 공용 정본 객체
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 magazine-qa.mjs 의 BANNED_WORDS · MEDICAL_ASSERTIONS 와 같은 값이다.
- *    저쪽이 export 하지 않아 여기 옮겨 적었다. 옮겨 적은 값은 갈라진다 —
- *    그래서 assertQaWordsInSync() 가 저 파일을 읽어 대조한다.
- *    (magazine-gate.mjs 의 assertGateInSync 와 같은 방식이다)
+ * 🔴 값은 `lib/magazine-qa-constants.mjs` 하나에 있다(S1 C2). QA(`magazine-qa.mjs`)도 같은 객체를 쓴다.
+ *    앞판은 같은 값을 여기 옮겨 적고, QA 소스를 정규식으로 다시 읽어 대조했다 — 그 재파싱은 없앴다.
+ *    이름은 그대로 내보낸다(brief 생성 · ArticleSpec · CTA 수리 · G8 이 이 이름을 읽는다).
  */
-export const BANNED_WORDS = ['시니어', '어르신', '노인', '실버']
-export const MEDICAL_ASSERTIONS = ['반드시', '치료됩니다', '원인입니다', '완치', '효과적입니다']
+export { BANNED_WORDS, MEDICAL_ASSERTIONS }
 
-/** magazine-qa.mjs 와 갈라졌는지 본다. 갈라졌으면 던진다 */
-export function assertQaWordsInSync(qaPath = join(ROOT, 'scripts/magazine-qa.mjs')) {
-  const src = readFileSync(qaPath, 'utf8')
-  const pick = (name) => {
-    const m = src.match(new RegExp(`const ${name} = \\[([^\\]]*)\\]`))
-    if (!m) throw new Error(`${name} 을 magazine-qa.mjs 에서 찾지 못했다`)
-    return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
+/**
+ * QA 가 쓰는 값과 갈라졌는지 본다. 갈라졌으면 던진다 — brief 생성(`magazine-brief-auto.mjs`) · brief 검증이 시작할 때 부른다.
+ *
+ * 인자 없이(운영 호출) — 파일을 읽지 않는다. 공용 정본 객체와 대조하고 `true` 를 돌려준다.
+ *   🔴 같은 값이어도 **다른 객체**(여기 사본을 다시 두는 경우)면 던진다 —
+ *      값 비교만 하면 사본이 생겨도 그날은 통과하고 다음 수정 때 갈라진다.
+ * 경로를 명시하면(legacy 호환 · 한시) — 앞판 그대로 그 파일을 읽어 정규식으로 파싱한다.
+ *   없는 파일은 같은 ENOENT, 이름이 없거나 값이 다르면 앞판과 **같은 문장**으로 던진다.
+ *   🔴 이 분기만 경계 검사 R2 의 사유 있는 예외다. 운영 호출처(brief-auto · brief-verify)는 경로를 넘기지 않는다.
+ *      정본 객체를 주입하는 계약은 두지 않는다 — 비교 대상은 언제나 정본 하나다.
+ * @param {string} [qaPath] legacy 호환 전용 — 운영은 넘기지 않는다
+ */
+export function assertQaWordsInSync(qaPath = undefined) {
+  let pick
+  if (qaPath === undefined) {
+    pick = (name) => {
+      const v = QA_CONSTANTS[name]
+      if (!Array.isArray(v)) throw new Error(`${name} 을 magazine-qa.mjs 에서 찾지 못했다`)
+      return v
+    }
+  } else {
+    const src = readFileSync(qaPath, 'utf8')
+    pick = (name) => {
+      const m = src.match(new RegExp(`const ${name} = \\[([^\\]]*)\\]`))
+      if (!m) throw new Error(`${name} 을 magazine-qa.mjs 에서 찾지 못했다`)
+      return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
+    }
   }
   const pairs = [
     ['BANNED_WORDS', BANNED_WORDS, pick('BANNED_WORDS')],
@@ -52,6 +75,9 @@ export function assertQaWordsInSync(qaPath = join(ROOT, 'scripts/magazine-qa.mjs
         `${name} 이 magazine-qa.mjs 와 다르다.\n  policy: ${mine.join(', ')}\n  qa    : ${theirs.join(', ')}\n` +
           '  두 곳을 같이 고친다.',
       )
+    }
+    if (qaPath === undefined && mine !== theirs) {
+      throw new Error(`${name} 이 공용 정본(scripts/lib/magazine-qa-constants.mjs)과 같은 객체가 아니다 — 값이 같아도 사본이다. 정본을 import 한다.`)
     }
   }
   return true

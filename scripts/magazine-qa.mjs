@@ -34,6 +34,21 @@ import {
   checkTreatmentDirective,
   checkCostClaim,
 } from './lib/magazine-editorial.mjs'
+import {
+  BANNED_WORDS,
+  MEDICAL_ASSERTIONS,
+  MEDICAL_REQUIRED,
+  MEDICAL_SUGGESTED,
+  HERO_WIDTH,
+  HERO_HEIGHT,
+} from './lib/magazine-qa-constants.mjs'
+
+/**
+ * 🔴 공용 상수는 `lib/magazine-qa-constants.mjs` 가 정본이다(S1 C2). 여기서는 같은 객체를 쓴다.
+ *    이 CLI 가 내보내던 이름은 호환을 위해 그대로 다시 내보낸다 — lib 는 정본을 직접 import 한다.
+ *    운영 CLI 의 이 파일 import 는 경계 검사 R10 pending 으로 따로 센다.
+ */
+export { BANNED_WORDS, MEDICAL_REQUIRED, MEDICAL_SUGGESTED, HERO_WIDTH, HERO_HEIGHT }
 
 const ROOT = process.cwd()
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
@@ -42,18 +57,7 @@ const DRAFTS_DIR = join(ROOT, 'drafts/magazine')
 const PUBLIC_DIR = join(ROOT, 'public')
 
 // ── 검사 상수 ──────────────────────────────────────────────
-
-/**
- * 제품·브랜드 금지어. 대체 표현은 "우리 나이" 계열.
- *
- * 🔴 **정본은 여기 하나다.** hero alt 검사(`lib/magazine-hero-brief.mjs`)도 이것을 읽는다 —
- *    본문에서 막는 호칭이 대체 텍스트로 새어 나가면 막은 의미가 없다.
- *    목록을 두 벌로 두면 언젠가 한쪽만 고쳐진다.
- */
-export const BANNED_WORDS = ['시니어', '어르신', '노인', '실버']
-
-/** 의료 단정 — 진단·효과를 확정하는 표현 (전략 원칙 8). 문맥과 무관하게 FAIL */
-const MEDICAL_ASSERTIONS = ['반드시', '치료됩니다', '원인입니다', '완치', '효과적입니다']
+// 금지어 · 의료 단정 · medical 클러스터 · hero 크기는 lib/magazine-qa-constants.mjs (위 import)
 
 /**
  * "낫습니다" 는 두 뜻이 겹친다 — 병이 낫다(의료 단정) vs ~보다 낫다(비교).
@@ -82,11 +86,6 @@ const MEANINGLESS_ALT = ['이미지', '사진', 'image', 'photo', '썸네일']
 
 const ALLOWED_BLOCK_TYPES = new Set(['p', 'h2', 'h3', 'list', 'callout', 'image', 'cta'])
 
-/** medical: true 가 없으면 FAIL — 핵심 건강 클러스터 */
-export const MEDICAL_REQUIRED = new Set(['menopause-symptom', 'sleep', 'clinic'])
-/** 경계 클러스터 — 없으면 WARN */
-export const MEDICAL_SUGGESTED = new Set(['daily', 'emotion'])
-
 /**
  * description 길이 기준이 둘인 이유
  *   HARD  검색 스니펫이 확실히 깨지는 구간 → FAIL
@@ -101,9 +100,6 @@ const DESC_SOFT_MAX = 120
 const H2_MIN = 4
 const H2_MAX = 6
 // 본문 길이 기준은 lib/magazine-body-length.mjs 하나가 정본이다 (hard 800~3000 FAIL · soft 1200~2500 WARN)
-
-export const HERO_WIDTH = 1200
-export const HERO_HEIGHT = 675
 
 /**
  * 공개 판정은 scripts/lib/magazine-gate.mjs 하나만 쓴다.

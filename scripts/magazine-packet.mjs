@@ -25,6 +25,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, resolve, relative, basename, isAbsolute } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { runQa } from './magazine-qa.mjs'
+import { HERO_WIDTH, HERO_HEIGHT } from './lib/magazine-qa-constants.mjs'
 
 const ROOT = process.cwd()
 const DRAFTS_DIR = join(ROOT, 'drafts')
@@ -33,9 +34,6 @@ const QUEUE_TS = join(ROOT, 'drafts/magazine/topic-queue.ts')
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
 const PUBLIC_DIR = join(ROOT, 'public')
 const FIXTURE_DIR = join(ROOT, 'scripts/__fixtures__/magazine-packet')
-
-const HERO_WIDTH = 1200
-const HERO_HEIGHT = 675
 
 /**
  * review.ts 를 만들 수 있는 주체.

@@ -21,7 +21,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(process.env.MAGAZINE_VNEXT_BOUNDARY_ROOT ?? join(HERE, '..'))
@@ -133,11 +133,8 @@ function ratchet(id, name, found, { canonical = [], pending = [], exempt = {}, o
   const found = scanImports(LIB, /\.\.\/(magazine-[\w-]+\.m[jt]s)/, /scripts\/(magazine-[\w-]+\.m[jt]s)|\.\.\/(magazine-[\w-]+\.m[jt]s)/)
   ratchet('R1', 'lib 가 CLI 를 import 하지 않는다', found, {
     pending: [
-      'scripts/lib/magazine-hero-brief.mjs → magazine-qa.mjs',
+      // readWebpSize — C3 에서 lib 정본으로 옮긴다
       'scripts/lib/magazine-hero.mjs → magazine-qa.mjs',
-      'scripts/lib/magazine-judge.mjs → magazine-qa.mjs',
-      'scripts/lib/magazine-rehearsal-chatgpt.mjs → magazine-qa.mjs',
-      'scripts/lib/magazine-rehearsal-scenarios.mjs → magazine-qa.mjs',
     ],
     exempt: {
       // producer 선정 함수(selectItems)를 실제 그대로 써야 rehearsal 이 운영 선정을 흉내 내지 않는다. 그 함수 이동은 S1 밖이다
@@ -151,8 +148,18 @@ function ratchet(id, name, found, { canonical = [], pending = [], exempt = {}, o
 {
   const re = /(readFileSync\([^)]*magazine-qa\.mjs)|(qaPath\s*=\s*[^)]*magazine-qa\.mjs)|(`const \$\{name\} = )/
   const kind = (m) => (m[1] ? 'QA 원문 읽기' : m[2] ? 'QA 경로 기본값' : '원문 재파싱 정규식')
-  ratchet('R2', 'QA 원문을 다시 파싱해 동기화하지 않는다', scan([...LIB, ...PROD], re, kind), {
-    pending: ['scripts/lib/magazine-brief-policy.mjs → QA 경로 기본값', 'scripts/lib/magazine-brief-policy.mjs → 원문 재파싱 정규식'],
+  const found = scan([...LIB, ...PROD], re, kind)
+  // 🔴 한시 예외는 정확히 이 키 1곳 × 1회다. 기본값(QA 경로 기본값) · 운영 경로 읽기(QA 원문 읽기)는 예외가 아니다 —
+  //    인자 없는 운영 호출은 재파싱 0 이고, 그것은 R11(실제 호출) · VB29/VB30(기본 경로 부활 변이)이 본다.
+  const LEGACY = 'scripts/lib/magazine-brief-policy.mjs → 원문 재파싱 정규식'
+  if ((found.get(LEGACY) ?? 0) > 1) bad('R2', 'QA 원문을 다시 파싱해 동기화하지 않는다', `한시 예외 자리가 ${found.get(LEGACY)}벌이다 — 1벌만 허용`)
+  else ratchet('R2', 'QA 원문을 다시 파싱해 동기화하지 않는다', found, {
+    pending: [],
+    exempt: {
+      // assertQaWordsInSync(qaPath) 를 경로로 부르는 legacy 호출의 예외 종류 · 문장을 앞판 그대로 지키는 좁은 호환 분기(S1 동작 불변).
+      // 운영 호출처는 경로를 넘기지 않는다. 경로 호출 계약을 정리할 때 이 분기와 함께 지운다
+      [LEGACY]: 'S1 legacy 호환 — 명시적 string qaPath 분기만',
+    },
   })
 }
 
@@ -161,18 +168,17 @@ function ratchet(id, name, found, { canonical = [], pending = [], exempt = {}, o
   const C = ['scripts/lib/magazine-qa-constants.mjs']
   const files = [...LIB, ...PROD]
   ratchet('R3a', 'BANNED_WORDS 값 정의는 한 곳', scan(files, /\[\s*'시니어'\s*,\s*'어르신'\s*,\s*'노인'\s*,\s*'실버'\s*\]/), {
-    once: true, canonical: C, pending: ['scripts/lib/magazine-brief-policy.mjs', 'scripts/magazine-qa.mjs'],
+    once: true, canonical: C, pending: [],
   })
   ratchet('R3b', 'MEDICAL_ASSERTIONS 값 정의는 한 곳', scan(files, /'치료됩니다'\s*,\s*'원인입니다'/), {
-    once: true, canonical: C, pending: ['scripts/lib/magazine-brief-policy.mjs', 'scripts/magazine-qa.mjs'],
+    once: true, canonical: C, pending: [],
   })
   ratchet('R3c', 'MEDICAL_REQUIRED · MEDICAL_SUGGESTED 정의는 한 곳', scan(files, /new Set\(\s*\[\s*'(menopause-symptom'\s*,\s*'sleep'\s*,\s*'clinic|daily'\s*,\s*'emotion)'\s*\]/,
     (m) => (m[1].startsWith('menopause') ? 'MEDICAL_REQUIRED' : 'MEDICAL_SUGGESTED')), {
-    once: true, canonical: C, pending: ['scripts/magazine-qa.mjs → MEDICAL_REQUIRED', 'scripts/magazine-qa.mjs → MEDICAL_SUGGESTED'],
+    once: true, canonical: C, pending: [],
   })
   ratchet('R3d', 'HERO_WIDTH · HERO_HEIGHT 정의는 한 곳', scan(files, /\bHERO_(WIDTH\s*=\s*1200|HEIGHT\s*=\s*675)\b/, (m) => m[1].slice(0, m[1].search(/\s|=/))), {
-    once: true, canonical: C,
-    pending: ['scripts/magazine-packet.mjs → WIDTH', 'scripts/magazine-packet.mjs → HEIGHT', 'scripts/magazine-qa.mjs → WIDTH', 'scripts/magazine-qa.mjs → HEIGHT'],
+    once: true, canonical: C, pending: [],
   })
 }
 
@@ -220,6 +226,8 @@ ratchet('R6', 'control.ts CONTROL 리터럴 판독은 한 곳', scan([...LIB, ..
 const MOVED_TARGETS = Object.freeze([
   ['scripts/magazine-auto-recovery-mutation.mjs', 'B QA 의 hard FAIL 제거', 'scripts/magazine-qa.mjs', '  if (!body.hard.ok) report.fail('],
   ['scripts/magazine-rehearsal-mutation.mjs', '㉑ QA 의 발행 길이 FAIL 제거', 'scripts/magazine-qa.mjs', '  if (!body.hard.ok) report.fail('],
+  // D10 은 #825 directScenario prepare 리팩터링 뒤 지점 0곳(변이 무효)으로 남아 있었다 — 그 재발을 여기서 매번 본다
+  ['scripts/magazine-rehearsal-mutation.mjs', 'D10 hero 를 미리 배치해 provider 호출 우회', 'scripts/magazine-rehearsal.mjs', '      const p = await prepareDirect(repo, { variant })\n'],
   ['scripts/magazine-direct-spec-source-check.mjs', "'MS15'", 'scripts/lib/magazine-direct-spec-source.mjs', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }"],
   ['scripts/magazine-direct-spec-source-check.mjs', "'MS16'", 'scripts/lib/magazine-direct-spec-source.mjs', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n"],
   ['scripts/magazine-g8-promote-mutation.mjs', 'control 판 대조 제거', 'scripts/lib/magazine-g8-promoter.mjs', '  if (parseControlText(texts.graphControl)?.graphVersion !== payload.graphVersion) problems.push('],
@@ -275,6 +283,25 @@ ratchet('R10', '운영 CLI 가 magazine-qa.mjs 를 import 하지 않는다',
   scanImports(PROD.filter((f) => f !== 'scripts/magazine-qa.mjs'), /\.\/(magazine-qa\.mjs)/, /\.\/(magazine-qa\.mjs)|scripts\/(magazine-qa\.mjs)/), {
   pending: ['scripts/magazine-batch-qa.mjs', 'scripts/magazine-judge-report.mjs', 'scripts/magazine-packet.mjs', 'scripts/magazine-producer-plan.mjs'].map((f) => `${f} → magazine-qa.mjs`),
 })
+
+// ── R11 공용 상수는 같은 객체다 (런타임) ─────────────────
+// 🔴 R3 은 값 리터럴만 본다 — `[...BANNED_WORDS]` · `new Set([...])` 처럼 펼친 사본은 리터럴이 없어 못 본다.
+//    그래서 실제로 적재해 brief 정책 · QA CLI 가 내보내는 값이 정본과 **같은 객체**인지 본다.
+//    🔴 QA 안에서만 쓰는 사본(내보내지 않는 이름)은 이 규칙 밖이다 — 그 자리는 R3(리터럴)만 본다.
+{
+  const problems = []
+  try {
+    const at = (rel) => import(pathToFileURL(join(ROOT, rel)).href)
+    const C = await at('scripts/lib/magazine-qa-constants.mjs')
+    const P = await at('scripts/lib/magazine-brief-policy.mjs')
+    const Q = await at('scripts/magazine-qa.mjs')
+    try { if (P.assertQaWordsInSync() !== true) problems.push('assertQaWordsInSync() 가 true 가 아니다') } catch (e) { problems.push(`assertQaWordsInSync() 가 던졌다: ${String(e.message).split('\n')[0]}`) }
+    for (const n of ['BANNED_WORDS', 'MEDICAL_ASSERTIONS']) if (P[n] !== C[n]) problems.push(`brief 정책 ${n} 이 정본 객체가 아니다`)
+    for (const n of ['BANNED_WORDS', 'MEDICAL_REQUIRED', 'MEDICAL_SUGGESTED', 'HERO_WIDTH', 'HERO_HEIGHT']) if (Q[n] !== C[n]) problems.push(`QA CLI 가 내보내는 ${n} 이 정본과 다르다`)
+  } catch (e) { problems.push(`적재 실패: ${String(e?.message ?? e).split('\n')[0]}`) }
+  if (problems.length) bad('R11', '공용 상수는 brief 정책 · QA CLI 에서 정본과 같은 객체다', problems.join(' | '))
+  else ok('R11', '공용 상수는 brief 정책 · QA CLI 에서 정본과 같은 객체다')
+}
 
 console.log(`\nvNext 경계 검사: ${pass} pass, ${fail} fail`)
 process.exit(fail ? 1 : 0)
