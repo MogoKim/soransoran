@@ -15,8 +15,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT, DRAFTS_DIR } from './magazine-load.mjs'
 import { HERO_WIDTH, HERO_HEIGHT } from './magazine-qa-constants.mjs'
-// 🔴 readWebpSize 는 S1 C3 에서 lib 정본으로 옮긴다 — 그때까지 이 CLI import 하나가 경계 검사 R1 pending 이다
-import { readWebpSize } from '../magazine-qa.mjs'
+import { readWebpSize } from './magazine-webp.mjs'
 
 export { HERO_WIDTH, HERO_HEIGHT }
 

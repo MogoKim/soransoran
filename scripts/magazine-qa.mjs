@@ -22,7 +22,6 @@
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
-import { runInNewContext } from 'node:vm'
 import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs'
 import { HARD_BODY, measureBody } from './lib/magazine-body-length.mjs'
 import {
@@ -42,6 +41,9 @@ import {
   HERO_WIDTH,
   HERO_HEIGHT,
 } from './lib/magazine-qa-constants.mjs'
+// 🔴 리터럴 · WebP 판독의 정의는 lib 한 곳(S1 C3). magazine-load 는 거치지 않는다(이 CLI 는 앞판에도 load 의 적재 차단을 받지 않았다)
+import { sliceLiteral, evalLiteral } from './lib/magazine-literal.mjs'
+import { readWebpSize } from './lib/magazine-webp.mjs'
 
 /**
  * 🔴 공용 상수는 `lib/magazine-qa-constants.mjs` 가 정본이다(S1 C2). 여기서는 같은 객체를 쓴다.
@@ -49,6 +51,8 @@ import {
  *    운영 CLI 의 이 파일 import 는 경계 검사 R10 pending 으로 따로 센다.
  */
 export { BANNED_WORDS, MEDICAL_REQUIRED, MEDICAL_SUGGESTED, HERO_WIDTH, HERO_HEIGHT }
+/** readWebpSize 도 같은 이유로 그대로 다시 내보낸다 — 정의는 lib/magazine-webp.mjs */
+export { readWebpSize }
 
 const ROOT = process.cwd()
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
@@ -108,59 +112,7 @@ const H2_MAX = 6
 
 // ── TS 데이터 파일에서 리터럴 꺼내기 ────────────────────────
 
-/**
- * 균형 잡힌 리터럴 한 덩어리를 잘라낸다.
- * 문자열·주석 안의 괄호는 세지 않는다.
- */
-function sliceLiteral(source, fromIndex, open, close) {
-  const start = source.indexOf(open, fromIndex)
-  if (start === -1) return null
-
-  let depth = 0
-  let quote = null
-  let i = start
-
-  while (i < source.length) {
-    const ch = source[i]
-    const next = source[i + 1]
-
-    if (quote) {
-      if (ch === '\\') i += 1
-      else if (ch === quote) quote = null
-    } else if (ch === "'" || ch === '"' || ch === '`') {
-      quote = ch
-    } else if (ch === '/' && next === '/') {
-      i = source.indexOf('\n', i)
-      if (i === -1) break
-    } else if (ch === '/' && next === '*') {
-      i = source.indexOf('*/', i + 2) + 1
-      if (i === 0) break
-    } else if (ch === open) {
-      depth += 1
-    } else if (ch === close) {
-      depth -= 1
-      if (depth === 0) return source.slice(start, i + 1)
-    }
-    i += 1
-  }
-  return null
-}
-
-/**
- * 잘라낸 리터럴을 값으로 만든다.
- *
- * vm.runInNewContext 를 쓰는 이유와 안전한 이유:
- *   대상은 우리 repo 의 순수 데이터 리터럴이고, 새 컨텍스트에는 전역이 하나도 없다.
- *   require · process · fetch · fs 가 없으므로 파일 접근도 네트워크 호출도 불가능하다.
- *   TS 를 JS 로 바꾸려고 빌드 도구를 새로 들이는 것보다 이쪽이 의존성이 적다.
- */
-function evalLiteral(literal, label) {
-  try {
-    return runInNewContext(`(${literal})`, Object.create(null), { timeout: 1000 })
-  } catch (err) {
-    throw new Error(`${label} 파싱 실패: ${err.message}`)
-  }
-}
+// sliceLiteral · evalLiteral 은 lib/magazine-literal.mjs (위 import)
 
 function loadPublished() {
   const src = readFileSync(ARTICLES_TS, 'utf8')
@@ -203,25 +155,7 @@ function loadQueue() {
 
 // ── webp 크기 ──────────────────────────────────────────────
 
-/** RIFF/WEBP 헤더에서 크기를 읽는다. 알 수 없으면 null */
-export function readWebpSize(path) {
-  const buf = readFileSync(path)
-  if (buf.length < 30) return null
-  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WEBP') return null
-
-  const fourcc = buf.toString('ascii', 12, 16)
-  if (fourcc === 'VP8X') {
-    return { width: buf.readUIntLE(24, 3) + 1, height: buf.readUIntLE(27, 3) + 1 }
-  }
-  if (fourcc === 'VP8 ') {
-    return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff }
-  }
-  if (fourcc === 'VP8L') {
-    const bits = buf.readUInt32LE(21)
-    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 }
-  }
-  return null
-}
+// readWebpSize 는 lib/magazine-webp.mjs (위 import · 다시 내보냄)
 
 // ── 결과 수집 ──────────────────────────────────────────────
 

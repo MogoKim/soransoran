@@ -132,10 +132,7 @@ function ratchet(id, name, found, { canonical = [], pending = [], exempt = {}, o
 {
   const found = scanImports(LIB, /\.\.\/(magazine-[\w-]+\.m[jt]s)/, /scripts\/(magazine-[\w-]+\.m[jt]s)|\.\.\/(magazine-[\w-]+\.m[jt]s)/)
   ratchet('R1', 'lib 가 CLI 를 import 하지 않는다', found, {
-    pending: [
-      // readWebpSize — C3 에서 lib 정본으로 옮긴다
-      'scripts/lib/magazine-hero.mjs → magazine-qa.mjs',
-    ],
+    pending: [],
     exempt: {
       // producer 선정 함수(selectItems)를 실제 그대로 써야 rehearsal 이 운영 선정을 흉내 내지 않는다. 그 함수 이동은 S1 밖이다
       'scripts/lib/magazine-rehearsal-scenarios.mjs → magazine-producer-plan.mjs': 'S1 밖 — producer selectItems 이동 미승인',
@@ -186,7 +183,7 @@ function ratchet(id, name, found, { canonical = [], pending = [], exempt = {}, o
 ratchet('R4', 'sliceLiteral · evalLiteral 정의는 한 곳', scan([...LIB, ...PROD], /function\s+(sliceLiteral|evalLiteral)\s*\(/, (m) => m[1]), {
   once: true,
   canonical: ['scripts/lib/magazine-literal.mjs'],
-  pending: ['sliceLiteral', 'evalLiteral'].flatMap((n) => ['scripts/lib/magazine-load.mjs', 'scripts/magazine-packet.mjs', 'scripts/magazine-qa.mjs'].map((f) => `${f} → ${n}`)),
+  pending: [],
   exempt: { 'scripts/magazine-inventory.mjs → sliceLiteral': 'S1 밖 — 재고 계산 CLI 의 독자 사본, 이동 미승인' },
 })
 
@@ -195,7 +192,7 @@ ratchet('R5', 'WebP 헤더 판독은 한 곳', scan([...LIB, ...PROD], /(functio
   (m) => (m[1] ? 'readWebpSize' : 'WEBP 헤더 파싱')), {
   once: true,
   canonical: ['scripts/lib/magazine-webp.mjs'],
-  pending: ['readWebpSize', 'WEBP 헤더 파싱'].flatMap((n) => ['scripts/magazine-packet.mjs', 'scripts/magazine-qa.mjs'].map((f) => `${f} → ${n}`)),
+  pending: [],
 })
 
 // ── R6 graph control 리터럴 판독 사본 0 ───────────────────
@@ -284,7 +281,7 @@ ratchet('R10', '운영 CLI 가 magazine-qa.mjs 를 import 하지 않는다',
   pending: ['scripts/magazine-batch-qa.mjs', 'scripts/magazine-judge-report.mjs', 'scripts/magazine-packet.mjs', 'scripts/magazine-producer-plan.mjs'].map((f) => `${f} → magazine-qa.mjs`),
 })
 
-// ── R11 공용 상수는 같은 객체다 (런타임) ─────────────────
+// ── R11 공용 상수 · 판독 함수는 같은 객체다 (런타임) ──────
 // 🔴 R3 은 값 리터럴만 본다 — `[...BANNED_WORDS]` · `new Set([...])` 처럼 펼친 사본은 리터럴이 없어 못 본다.
 //    그래서 실제로 적재해 brief 정책 · QA CLI 가 내보내는 값이 정본과 **같은 객체**인지 본다.
 //    🔴 QA 안에서만 쓰는 사본(내보내지 않는 이름)은 이 규칙 밖이다 — 그 자리는 R3(리터럴)만 본다.
@@ -298,9 +295,15 @@ ratchet('R10', '운영 CLI 가 magazine-qa.mjs 를 import 하지 않는다',
     try { if (P.assertQaWordsInSync() !== true) problems.push('assertQaWordsInSync() 가 true 가 아니다') } catch (e) { problems.push(`assertQaWordsInSync() 가 던졌다: ${String(e.message).split('\n')[0]}`) }
     for (const n of ['BANNED_WORDS', 'MEDICAL_ASSERTIONS']) if (P[n] !== C[n]) problems.push(`brief 정책 ${n} 이 정본 객체가 아니다`)
     for (const n of ['BANNED_WORDS', 'MEDICAL_REQUIRED', 'MEDICAL_SUGGESTED', 'HERO_WIDTH', 'HERO_HEIGHT']) if (Q[n] !== C[n]) problems.push(`QA CLI 가 내보내는 ${n} 이 정본과 다르다`)
+    // S1 C3 — 판독 함수도 다시 내보내는 자리가 정본과 같은 함수여야 한다(감싼 함수 · 화살표 사본은 R4·R5 정규식을 피한다)
+    const LT = await at('scripts/lib/magazine-literal.mjs')
+    const W = await at('scripts/lib/magazine-webp.mjs')
+    const L = await at('scripts/lib/magazine-load.mjs')
+    for (const n of ['sliceLiteral', 'evalLiteral']) if (typeof LT[n] !== 'function' || L[n] !== LT[n]) problems.push(`load 가 내보내는 ${n} 이 정본 함수가 아니다`)
+    if (typeof W.readWebpSize !== 'function' || Q.readWebpSize !== W.readWebpSize) problems.push('QA CLI 가 내보내는 readWebpSize 가 정본 함수가 아니다')
   } catch (e) { problems.push(`적재 실패: ${String(e?.message ?? e).split('\n')[0]}`) }
-  if (problems.length) bad('R11', '공용 상수는 brief 정책 · QA CLI 에서 정본과 같은 객체다', problems.join(' | '))
-  else ok('R11', '공용 상수는 brief 정책 · QA CLI 에서 정본과 같은 객체다')
+  if (problems.length) bad('R11', '공용 상수 · 판독 함수는 다시 내보내는 자리에서 정본과 같은 객체다', problems.join(' | '))
+  else ok('R11', '공용 상수 · 판독 함수는 다시 내보내는 자리에서 정본과 같은 객체다')
 }
 
 console.log(`\nvNext 경계 검사: ${pass} pass, ${fail} fail`)

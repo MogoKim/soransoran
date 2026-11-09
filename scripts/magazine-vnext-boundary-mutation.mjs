@@ -25,14 +25,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const CHECK = join(HERE, 'magazine-vnext-boundary-check.mjs')
 
-const DUP_SLICE = 'export function sliceLiteral(source, fromIndex, open, close) {\n  return null\n}\n'
 /**
  * [id, 설명, 기대(규칙 ID | 'PASS'), 편집[]] — 편집은 { file, from, to } 치환(from 정확히 1곳) · { file, append } · { file, create }
  */
 const MUTATIONS = [
   ['VB1', 'lib 가 QA CLI 를 새로 정적 import', 'R1', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import { runQa } from '../magazine-qa.mjs'\n" }]],
   ['VB2', 'lib 가 CLI 를 동적 import(경로 문자열)', 'R1', [{ file: 'scripts/lib/magazine-rehearsal-content.mjs', append: "const X = await import(pathToFileURL(join(REPO, 'scripts/magazine-batch-qa.mjs')).href)\n" }]],
-  ['VB3', 'lib→CLI 를 고쳤는데 pending 목록을 줄이지 않음(ratchet)', 'R1', [{ file: 'scripts/lib/magazine-hero.mjs', from: "import { readWebpSize } from '../magazine-qa.mjs'\n", to: '' }]],
+  ['VB3', 'hero 가 readWebpSize 를 다시 QA CLI 에서 import(C3 이전으로 되돌림)', 'R1', [{ file: 'scripts/lib/magazine-hero.mjs', from: "import { readWebpSize } from './magazine-webp.mjs'\n", to: "import { readWebpSize } from '../magazine-qa.mjs'\n" }]],
   ['VB18', 'lib 가 여러 줄 정적 import 로 CLI 를 부른다', 'R1', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import {\n  runQa,\n  BANNED_WORDS,\n} from\n  '../magazine-qa.mjs'\n" }]],
   ['VB19', 'lib 가 여러 줄 동적 import 로 CLI 를 부른다', 'R1', [{ file: 'scripts/lib/magazine-rehearsal-content.mjs', append: "const Y = await import(\n  pathToFileURL(\n    join(REPO, 'scripts/magazine-qa.mjs'),\n  ).href,\n)\n" }]],
   ['VB20', 'lib 가 부수효과 import 로 CLI 를 부른다', 'R1', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import '../magazine-batch-qa.mjs'\n" }]],
@@ -43,15 +42,13 @@ const MUTATIONS = [
   ['VB7', 'MEDICAL_REQUIRED 사본을 새로 둔다', 'R3c', [{ file: 'scripts/lib/magazine-judge.mjs', append: "const LOCAL_REQ = new Set(['menopause-symptom', 'sleep', 'clinic'])\n" }]],
   ['VB8', 'HERO 크기 상수 사본을 CLI 에 둔다', 'R3d', [{ file: 'scripts/magazine-hero-runner.mjs', append: 'const HERO_WIDTH = 1200\n' }]],
   ['VB9', 'sliceLiteral 사본을 새로 둔다', 'R4', [{ file: 'scripts/lib/magazine-gate.mjs', append: 'function sliceLiteral(source, fromIndex, open, close) { return null }\n' }]],
-  ['VB22', 'sliceLiteral 을 이미 있는 파일 안에 두 번째로 둔다', 'R4', [{ file: 'scripts/lib/magazine-load.mjs', append: 'function sliceLiteral2() {}\nfunction sliceLiteral(a) { return a }\n' }]],
-  ['VB23', '정본 literal 모듈 안에 sliceLiteral 을 두 벌 둔다(m3a 등록은 정상)', 'R4', [
-    { file: 'scripts/lib/magazine-literal.mjs', create: `${DUP_SLICE}function sliceLiteral(a) { return a }\n` },
-    { file: 'scripts/magazine-m3a-check.mjs', from: 'const FILES = [\n', to: "const FILES = [\n    'scripts/lib/magazine-literal.mjs',\n" }]],
+  ['VB22', '정본 literal 모듈 안에 sliceLiteral 을 두 번째로 둔다', 'R4', [{ file: 'scripts/lib/magazine-literal.mjs', append: 'function sliceLiteral2() {}\nfunction sliceLiteral(a) { return a }\n' }]],
+  ['VB23', '정본 literal 모듈 안에 evalLiteral 을 두 번째로 둔다', 'R4', [{ file: 'scripts/lib/magazine-literal.mjs', append: 'function evalLiteral(a) { return a }\n' }]],
   ['VB10', 'WebP 헤더 판독 사본을 새로 둔다', 'R5', [{ file: 'scripts/lib/magazine-hero-webp.mjs', append: 'function readWebpSize(path) { return null }\n' }]],
-  ['VB24', 'QA 안에 WebP 헤더 파싱을 두 번째로 둔다', 'R5', [{ file: 'scripts/magazine-qa.mjs', append: "const isWebp = (buf) => buf.toString('ascii', 8, 12) === 'WEBP'\n" }]],
+  ['VB24', 'QA 에 WebP 헤더 파싱을 되살린다(정본은 lib)', 'R5', [{ file: 'scripts/magazine-qa.mjs', append: "const isWebp = (buf) => buf.toString('ascii', 8, 12) === 'WEBP'\n" }]],
   ['VB11', 'control 리터럴 판독 사본을 새로 둔다', 'R6', [{ file: 'scripts/lib/magazine-research-current.mjs', append: "const CONTROL_AT = String(x).indexOf('export const CONTROL')\n" }]],
   ['VB25', 'graph-build 안에 control 판독을 두 번째로 둔다', 'R6', [{ file: 'scripts/lib/magazine-graph-build.mjs', append: "const CONTROL_AT2 = String(x).indexOf('export const CONTROL')\n" }]],
-  ['VB12', 'S1 새 lib 를 만들고 m3a FILES 스캔에 넣지 않음', 'R7', [{ file: 'scripts/lib/magazine-literal.mjs', create: 'export const X = 1\n' }]],
+  ['VB12', 'S1 새 lib 를 만들고 m3a FILES 스캔에 넣지 않음', 'R7', [{ file: 'scripts/lib/magazine-qa-core.mjs', create: 'export const X = 1\n' }]],
   ['VB13', 'QA 구현을 옮겼는데 변이 겨냥 문장이 0곳(겨냥 파일)', 'R8', [{ file: 'scripts/magazine-qa.mjs', from: '  if (!body.hard.ok) report.fail(', to: '  if (!body.hard.ok)  report.fail(' }]],
   ['VB14', '하네스 쪽 겨냥 문장만 바꾸고 표를 옮기지 않음', 'R8', [{ file: 'scripts/magazine-direct-spec-source-check.mjs',
     from: "\"  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }\", \"  raw = evalLiteral(literal, 'control.ts')\"]",
@@ -73,6 +70,11 @@ const MUTATIONS = [
     append: 'const pickAgain = (src, name) => src.match(new RegExp(`const ${name} = \\\\[`))\n' }]],
   ['VB31', '인자 없는 운영 호출이 legacy 파일 읽기 분기로 간다', 'R11', [{ file: 'scripts/lib/magazine-brief-policy.mjs',
     from: '  if (qaPath === undefined) {\n', to: "  if (qaPath === '__never__') {\n" }]],
+  // 🔴 감싼 함수로 다시 내보내면 R4·R5(정의 정규식)는 못 본다 — R11(실제 적재 · 함수 동일성)이 잡아야 한다
+  ['VB32', 'QA CLI 가 readWebpSize 를 감싼 함수로 다시 내보낸다', 'R11', [{ file: 'scripts/magazine-qa.mjs',
+    from: 'export { readWebpSize }\n', to: 'const readWebpSizeWrapped = (p) => readWebpSize(p)\nexport { readWebpSizeWrapped as readWebpSize }\n' }]],
+  ['VB33', 'load 가 sliceLiteral 을 감싼 함수로 다시 내보낸다', 'R11', [{ file: 'scripts/lib/magazine-load.mjs',
+    from: 'export { sliceLiteral, evalLiteral }\n', to: 'const sliceWrapped = (...a) => sliceLiteral(...a)\nexport { sliceWrapped as sliceLiteral, evalLiteral }\n' }]],
   ['VB26', '운영 CLI 가 여러 줄 import 로 QA CLI 를 부른다', 'R10', [{ file: 'scripts/magazine-dashboard.mjs', append: "import {\n  runQa,\n} from './magazine-qa.mjs'\n" }]],
   ['NC1', '대조군 — 주석 속 import 는 위반이 아니다', 'PASS', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "// import { runQa } from '../magazine-qa.mjs'\n//    import { X } from '../magazine-batch-qa.mjs'\n" }]],
   ['NC2', '대조군 — spawn 대상 경로 문자열은 import 가 아니다', 'PASS', [{ file: 'scripts/magazine-dashboard.mjs', append: "const QA_PATH = join(ROOT, 'scripts/magazine-qa.mjs')\n" }]],

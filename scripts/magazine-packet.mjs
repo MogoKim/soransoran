@@ -23,9 +23,11 @@
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, resolve, relative, basename, isAbsolute } from 'node:path'
-import { runInNewContext } from 'node:vm'
 import { runQa } from './magazine-qa.mjs'
 import { HERO_WIDTH, HERO_HEIGHT } from './lib/magazine-qa-constants.mjs'
+// 🔴 리터럴 · WebP 판독은 lib 정본을 직접 쓴다(S1 C3). magazine-load 는 거치지 않는다(앞판도 load 를 import 하지 않았다)
+import { sliceLiteral, evalLiteral } from './lib/magazine-literal.mjs'
+import { readWebpSize } from './lib/magazine-webp.mjs'
 
 const ROOT = process.cwd()
 const DRAFTS_DIR = join(ROOT, 'drafts')
@@ -46,53 +48,7 @@ const SHOW_RISK_SENTENCES = new Set(['MEDIUM', 'HIGH'])
 const SHOW_FULL_BODY = new Set(['HIGH'])
 
 // ── TS 리터럴 읽기 ─────────────────────────────────────────
-// magazine-qa.mjs 는 runQa() 만 내보낸다. 로더는 여기서 따로 갖는다.
-
-function sliceLiteral(source, fromIndex, open, close) {
-  const start = source.indexOf(open, fromIndex)
-  if (start === -1) return null
-
-  let depth = 0
-  let quote = null
-  let i = start
-
-  while (i < source.length) {
-    const ch = source[i]
-    const next = source[i + 1]
-
-    if (quote) {
-      if (ch === '\\') i += 1
-      else if (ch === quote) quote = null
-    } else if (ch === "'" || ch === '"' || ch === '`') {
-      quote = ch
-    } else if (ch === '/' && next === '/') {
-      i = source.indexOf('\n', i)
-      if (i === -1) break
-    } else if (ch === '/' && next === '*') {
-      i = source.indexOf('*/', i + 2) + 1
-      if (i === 0) break
-    } else if (ch === open) {
-      depth += 1
-    } else if (ch === close) {
-      depth -= 1
-      if (depth === 0) return source.slice(start, i + 1)
-    }
-    i += 1
-  }
-  return null
-}
-
-/**
- * vm.runInNewContext 로 데이터 리터럴만 평가한다.
- * 새 컨텍스트에 전역이 없어 require · process · fetch · fs 접근이 불가능하다.
- */
-function evalLiteral(literal, label) {
-  try {
-    return runInNewContext(`(${literal})`, Object.create(null), { timeout: 1000 })
-  } catch (err) {
-    throw new Error(`${label} 파싱 실패: ${err.message}`)
-  }
-}
+// 판독 함수는 lib/magazine-literal.mjs (위 import). 이름 붙은 리터럴을 읽는 얇은 로더만 여기 둔다.
 
 function loadNamedLiteral(path, exportName, open, close) {
   const src = readFileSync(path, 'utf8')
@@ -126,20 +82,6 @@ function collectText(body) {
     if (Array.isArray(block.items)) parts.push(...block.items)
   }
   return parts
-}
-
-function readWebpSize(path) {
-  const buf = readFileSync(path)
-  if (buf.length < 30) return null
-  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WEBP') return null
-  const fourcc = buf.toString('ascii', 12, 16)
-  if (fourcc === 'VP8X') return { width: buf.readUIntLE(24, 3) + 1, height: buf.readUIntLE(27, 3) + 1 }
-  if (fourcc === 'VP8 ') return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff }
-  if (fourcc === 'VP8L') {
-    const bits = buf.readUInt32LE(21)
-    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 }
-  }
-  return null
 }
 
 // ── 검증 ───────────────────────────────────────────────────
