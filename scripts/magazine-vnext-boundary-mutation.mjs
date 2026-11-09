@@ -11,7 +11,9 @@
  * 🔴 무변이 사본이 먼저 fail 0 이어야 한다. 변이 지점이 정확히 1곳이 아니면 하네스 FAIL(검출로 세지 않는다).
  * 🔴 검출 = exit 1 + 기대한 규칙 줄 `FAIL <규칙> ` · 대조군(NC*)은 exit 0 이어야 한다(오탐 방지).
  * 🔴 어떤 예외든 요약 줄을 남기고 하네스 FAIL 로 끝난다 — 요약 없이 죽으면 호출자가 검출 수를 읽을 수 없다.
- * 마지막 줄: `vNext 경계 변이: <n> pass, <n> fail (변이 <n>)`
+ * 🔴 집계는 둘로 나눈다 — 변이(VB*)는 기대한 규칙이 실패했을 때만 detected, 대조군(NC*)은 오탐 없이 통과했을 때만 control pass.
+ *    둘을 한 숫자로 합치면 "변이 N개 검출" 이 대조군까지 센 값이 된다. 하네스 실패(fail)는 둘 다·하네스 결함을 합산한다.
+ * 마지막 줄: `vNext 경계 변이: <검출>/<변이 수> detected · 대조군 <통과>/<대조군 수> · <n> fail`
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -64,7 +66,9 @@ const MUTATIONS = [
 ]
 
 const lines = []
-let detected = 0, harnessFail = 0
+let detected = 0, controlsPassed = 0, harnessFail = 0
+const MUTATION_COUNT = MUTATIONS.filter(([, , expect]) => expect !== 'PASS').length
+const CONTROL_COUNT = MUTATIONS.length - MUTATION_COUNT
 let base = null
 try {
   /** 스냅샷 — 숨김 파일 제외 · 이후 디스크를 다시 읽지 않는다 */
@@ -111,7 +115,7 @@ try {
       const r = run(w.dir)
       if (r.fail === null) { harnessFail++; lines.push(`FAIL ${id} ${label} — 요약 줄 없음(검출 아님): ${(r.out + r.err).slice(-200)}`); continue }
       if (expect === 'PASS') {
-        if (r.status === 0 && r.fail === 0) { detected++; lines.push(`PASS ${id} ${label} → 오탐 없음`) }
+        if (r.status === 0 && r.fail === 0) { controlsPassed++; lines.push(`PASS ${id} ${label} → 오탐 없음`) }
         else { harnessFail++; lines.push(`FAIL ${id} ${label} — 대조군이 실패했다(오탐): ${r.out.split('\n').filter((l) => l.startsWith('FAIL')).join(' / ').slice(0, 300)}`) }
         continue
       }
@@ -128,5 +132,5 @@ try {
   if (base) rmSync(base, { recursive: true, force: true })
 }
 console.log(lines.join('\n'))
-console.log(`\nvNext 경계 변이: ${detected} pass, ${harnessFail} fail (변이 ${MUTATIONS.length})`)
+console.log(`\nvNext 경계 변이: ${detected}/${MUTATION_COUNT} detected · 대조군 ${controlsPassed}/${CONTROL_COUNT} · ${harnessFail} fail`)
 process.exit(harnessFail ? 1 : 0)
