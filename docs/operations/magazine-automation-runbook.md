@@ -70,7 +70,9 @@ ContentPlan ─허용 필드 투영 + PII scan→ ProviderPlan(additionalPropert
 ```
 
 - 🔴 **runtime 은 mutable 비-git 연구 폴더를 직접 읽지 않는다.** 이유: 그 폴더는 바뀌고 이력이 없어, 같은 planHash 를 나중에 다시 만들 수 없다.
-- Bundle 은 graph 판과 같은 승격 변경으로만 들어온다(charter §18-B.5). 판독 불가·자기 해시 불일치·graph/control 해시 불일치이면
+- Bundle 은 graph 판과 같은 승격 변경으로만 들어온다. 현재 배포판 `g-20261102-427d4d` 의 최초 Bundle 만 S2 bootstrap 변경으로 1회 추가할 수 있고,
+  그 조건(Bundle 미존재 · 제품 graph/control/tree hash 와 연구 current 후보 신원 정확 일치 · graph 바이트 변경 0 · 어긋나면 쓰기 0)의 정본은 charter §18-B.5 다.
+  판독 불가·자기 해시 불일치·graph/control 해시 불일치이면
   compiler 는 그 graphVersion 의 plan 을 하나도 만들지 않는다.
 
 **ProviderPlan — provider 에 보내는 유일한 입력**

@@ -911,7 +911,7 @@ M-GRAPH 가 매거진 발행량을 늘린다는 이유로 제출 게이트를 �
 ### 🔴 주제 그래프 파일과 자동 병합 허용 목록
 
 아래는 **legacy 자동 등록 PR** 의 계약이다. vNext release PR 의 파일 모양은 runbook §0.0B.4 가 따로 정하고, graph 판과
-ContentPlanInputBundle 은 release PR 이 아니라 graph 승격 변경으로만 들어온다(§18-B.5).
+ContentPlanInputBundle 은 release PR 이 아니라 graph 승격 변경으로만 들어온다(현재 배포판의 최초 1회 bootstrap 예외 포함 — §18-B.5).
 
 legacy 자동 등록 PR 이 건드릴 수 있는 파일은 `ALLOWED_FILE_RULES` 네 모양으로 고정돼 있다.
 
@@ -1059,7 +1059,7 @@ runbook §0.0B, 현재 상태와 critical path 는 milestone 이 정본이며 �
 |---|---|---|
 | **Evidence** | 연구 폴더 (`contract/build/current` + 증거) | intent·관계 단위 검색 근거와 출처 신원. 🔴 mutable 하고 Git 이 아니므로 **runtime 은 직접 읽지 않는다** |
 | **Canonical Graph** | 제품 `src/content/magazine/graph/*` | intent·edge·mapping·control. 근거 있는 유효 관계를 수량 제한 없이 보존 |
-| **ContentPlanInputBundle** | 제품 저장소(추적 대상) · graph 판과 같은 승격 변경 | 연구 current 의 intent 필드(질문·독자 상황·답변 범위·포함/제외·검증 프로필·커뮤니티 목적지)와 관계(`readerReason`·`anchorLabel`·slot·대상)를 graphVersion 단위로 **content-addressed** 고정. 자기 해시와 graph·control 해시를 함께 싣는다 |
+| **ContentPlanInputBundle** | 제품 저장소(추적 대상) · graph 판과 같은 승격 변경(현재 배포판의 최초 1회 bootstrap 만 예외 — §18-B.5) | 연구 current 의 intent 필드(질문·독자 상황·답변 범위·포함/제외·검증 프로필·커뮤니티 목적지)와 관계(`readerReason`·`anchorLabel`·slot·대상)를 graphVersion 단위로 **content-addressed** 고정. 자기 해시와 graph·control 해시를 함께 싣는다 |
 | **ContentPlan** | compiler 산출 · Git 에는 그 글의 release PR 안 | Bundle·control·정책 판에서 **결정적으로** 만든다 — 같은 입력이면 같은 `planHash`. 검색 질문 · 독자 상황 · 답변 범위 · 포함/제외 · 관계와 독자 이동 이유 · 검증 프로필 · CTA · graphVersion·Bundle 신원 · 정책 판 |
 | **Job** | runtime (Git 밖) | 글 하나의 실행 기록 — runbook §0.0B.1 |
 | **Article** | Git (`src/content/magazine/articles.ts` · hero) | 최종 공개본과 `publishAt` 의 유일한 소유자 |
@@ -1121,6 +1121,18 @@ runbook §0.0B, 현재 상태와 critical path 는 milestone 이 정본이며 �
 **graph 승격 lane** — graph 정책과 영토 확대는 사람의 권위다(§18-B.6 표 개정). 이미 승인된 연구 current 를 제품 graph 판과
 ContentPlanInputBundle 로 결정적으로 승격하는 일은 gate(연구 current 검사 · graph watch · `GRAPH_BUNDLE_MISMATCH`)를 갖춘 **자동 lane 후보**다.
 그 lane 이 열리기 전에는 graph 승격은 사람 PR 이다(§15).
+
+**Bundle 의 위치 — 원칙과 1회 bootstrap (이 경계의 정본)**
+
+- 원칙: ContentPlanInputBundle 은 **그 graphVersion 의 graph 승격과 같은 변경**에서만 들어온다. 판과 Bundle 이 따로 들어오면
+  서로 다른 시점의 연구 current 를 묶을 수 있기 때문이다.
+- 🔴 **bootstrap 예외 — 정확히 1회.** 제품 graph `g-20261102-427d4d` 는 Bundle 계약보다 먼저 배포됐다. 그래서 **이 판의 최초 Bundle 에 한해**
+  S2 의 별도 bootstrap 변경으로 추가할 수 있다. 조건은 전부 충족해야 한다.
+  1. 그 graphVersion 의 Bundle 이 아직 없다.
+  2. 제품 graph 판 · `control.ts` · `current.ts` 의 해시(tree hash 포함)와 연구 current 의 후보 신원(graphVersion · 해시)이 **정확히 일치**한다.
+  3. 그 변경은 Bundle 만 더한다 — graph 정책과 graph 판 파일의 바이트 변경 0.
+- 하나라도 어긋나면(mismatch) **쓰기 0** 으로 멈춘다. 예외를 다시 쓰거나 다른 판에 넓히지 않는다.
+- 그다음 graphVersion 부터는 원칙만 적용한다.
 
 **공급 loop** — 관계가 부족한 intent 를 생산 경로가 메우지 않는다. 다음 loop 가 근거를 보강한다.
 
