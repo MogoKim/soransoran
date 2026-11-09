@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+/**
+ * Magazine vNext S1 경계 검사 변이 — 위반을 하나씩 되살리면 `magazine-vnext-boundary-check` 가 그 규칙으로 실패해야 한다.
+ *
+ *   node scripts/magazine-vnext-boundary-mutation.mjs
+ *
+ * 🔴 저장소 파일을 고치지 않는다. package.json · scripts/*.m[jt]s · scripts/lib/*.mjs 를 **시작할 때 한 번 읽어 둔 스냅샷**에서
+ *    임시 폴더로 쓰고, 사본 하나에 변이 하나를 심어 MAGAZINE_VNEXT_BOUNDARY_ROOT 로 넘긴다(검사는 읽기만 한다).
+ * 🔴 숨김 파일(`.` 로 시작)은 복사하지 않는다 — 다른 검사가 같은 폴더에 잠깐 만들었다 지우는 변이 사본(`.dssc-*` 등)이
+ *    목록과 복사 사이에 사라지면 ENOENT 로 하네스가 통째로 죽는다(2026-11-09 Codex 재현). 검사도 그 파일을 보지 않는다.
+ * 🔴 무변이 사본이 먼저 fail 0 이어야 한다. 변이 지점이 정확히 1곳이 아니면 하네스 FAIL(검출로 세지 않는다).
+ * 🔴 검출 = exit 1 + 기대한 규칙 줄 `FAIL <규칙> ` · 대조군(NC*)은 exit 0 이어야 한다(오탐 방지).
+ * 🔴 어떤 예외든 요약 줄을 남기고 하네스 FAIL 로 끝난다 — 요약 없이 죽으면 호출자가 검출 수를 읽을 수 없다.
+ * 마지막 줄: `vNext 경계 변이: <n> pass, <n> fail (변이 <n>)`
+ */
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const ROOT = resolve(HERE, '..')
+const CHECK = join(HERE, 'magazine-vnext-boundary-check.mjs')
+
+const DUP_SLICE = 'export function sliceLiteral(source, fromIndex, open, close) {\n  return null\n}\n'
+/**
+ * [id, 설명, 기대(규칙 ID | 'PASS'), 편집[]] — 편집은 { file, from, to } 치환(from 정확히 1곳) · { file, append } · { file, create }
+ */
+const MUTATIONS = [
+  ['VB1', 'lib 가 QA CLI 를 새로 정적 import', 'R1', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import { runQa } from '../magazine-qa.mjs'\n" }]],
+  ['VB2', 'lib 가 CLI 를 동적 import(경로 문자열)', 'R1', [{ file: 'scripts/lib/magazine-rehearsal-content.mjs', append: "const X = await import(pathToFileURL(join(REPO, 'scripts/magazine-batch-qa.mjs')).href)\n" }]],
+  ['VB3', 'lib→CLI 를 고쳤는데 pending 목록을 줄이지 않음(ratchet)', 'R1', [{ file: 'scripts/lib/magazine-judge.mjs', from: "import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from '../magazine-qa.mjs'\n", to: '' }]],
+  ['VB18', 'lib 가 여러 줄 정적 import 로 CLI 를 부른다', 'R1', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import {\n  runQa,\n  BANNED_WORDS,\n} from\n  '../magazine-qa.mjs'\n" }]],
+  ['VB19', 'lib 가 여러 줄 동적 import 로 CLI 를 부른다', 'R1', [{ file: 'scripts/lib/magazine-rehearsal-content.mjs', append: "const Y = await import(\n  pathToFileURL(\n    join(REPO, 'scripts/magazine-qa.mjs'),\n  ).href,\n)\n" }]],
+  ['VB20', 'lib 가 부수효과 import 로 CLI 를 부른다', 'R1', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import '../magazine-batch-qa.mjs'\n" }]],
+  ['VB4', '다른 lib 가 QA 원문을 읽어 다시 파싱', 'R2', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "const QA_SRC = readFileSync(join(ROOT, 'scripts/magazine-qa.mjs'), 'utf8')\n" }]],
+  ['VB5', 'BANNED_WORDS 값 사본을 새로 둔다', 'R3a', [{ file: 'scripts/lib/magazine-g8-promoter.mjs', append: "const LOCAL_BANNED = ['시니어', '어르신', '노인', '실버']\n" }]],
+  ['VB21', 'BANNED_WORDS 를 이미 있는 파일 안에 두 번째로 둔다', 'R3a', [{ file: 'scripts/lib/magazine-brief-policy.mjs', append: "const BANNED_AGAIN = ['시니어', '어르신', '노인', '실버']\n" }]],
+  ['VB6', 'MEDICAL_ASSERTIONS 값 사본을 새로 둔다', 'R3b', [{ file: 'scripts/lib/magazine-article-spec.mjs', append: "const LOCAL_MED = ['반드시', '치료됩니다', '원인입니다', '완치', '효과적입니다']\n" }]],
+  ['VB7', 'MEDICAL_REQUIRED 사본을 새로 둔다', 'R3c', [{ file: 'scripts/lib/magazine-judge.mjs', append: "const LOCAL_REQ = new Set(['menopause-symptom', 'sleep', 'clinic'])\n" }]],
+  ['VB8', 'HERO 크기 상수 사본을 CLI 에 둔다', 'R3d', [{ file: 'scripts/magazine-hero-runner.mjs', append: 'const HERO_WIDTH = 1200\n' }]],
+  ['VB9', 'sliceLiteral 사본을 새로 둔다', 'R4', [{ file: 'scripts/lib/magazine-gate.mjs', append: 'function sliceLiteral(source, fromIndex, open, close) { return null }\n' }]],
+  ['VB22', 'sliceLiteral 을 이미 있는 파일 안에 두 번째로 둔다', 'R4', [{ file: 'scripts/lib/magazine-load.mjs', append: 'function sliceLiteral2() {}\nfunction sliceLiteral(a) { return a }\n' }]],
+  ['VB23', '정본 literal 모듈 안에 sliceLiteral 을 두 벌 둔다(m3a 등록은 정상)', 'R4', [
+    { file: 'scripts/lib/magazine-literal.mjs', create: `${DUP_SLICE}function sliceLiteral(a) { return a }\n` },
+    { file: 'scripts/magazine-m3a-check.mjs', from: 'const FILES = [\n', to: "const FILES = [\n    'scripts/lib/magazine-literal.mjs',\n" }]],
+  ['VB10', 'WebP 헤더 판독 사본을 새로 둔다', 'R5', [{ file: 'scripts/lib/magazine-hero-webp.mjs', append: 'function readWebpSize(path) { return null }\n' }]],
+  ['VB24', 'QA 안에 WebP 헤더 파싱을 두 번째로 둔다', 'R5', [{ file: 'scripts/magazine-qa.mjs', append: "const isWebp = (buf) => buf.toString('ascii', 8, 12) === 'WEBP'\n" }]],
+  ['VB11', 'control 리터럴 판독 사본을 새로 둔다', 'R6', [{ file: 'scripts/lib/magazine-research-current.mjs', append: "const CONTROL_AT = String(x).indexOf('export const CONTROL')\n" }]],
+  ['VB25', 'graph-build 안에 control 판독을 두 번째로 둔다', 'R6', [{ file: 'scripts/lib/magazine-graph-build.mjs', append: "const CONTROL_AT2 = String(x).indexOf('export const CONTROL')\n" }]],
+  ['VB12', 'S1 새 lib 를 만들고 m3a FILES 스캔에 넣지 않음', 'R7', [{ file: 'scripts/lib/magazine-literal.mjs', create: 'export const X = 1\n' }]],
+  ['VB13', 'QA 구현을 옮겼는데 변이 겨냥 문장이 0곳(겨냥 파일)', 'R8', [{ file: 'scripts/magazine-qa.mjs', from: '  if (!body.hard.ok) report.fail(', to: '  if (!body.hard.ok)  report.fail(' }]],
+  ['VB14', '하네스 쪽 겨냥 문장만 바꾸고 표를 옮기지 않음', 'R8', [{ file: 'scripts/magazine-direct-spec-source-check.mjs',
+    from: "\"  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }\", \"  raw = evalLiteral(literal, 'control.ts')\"]",
+    to: "\"  try { raw = evalLiteral(literal, 'control.ts') } catch { return  null }\", \"  raw = evalLiteral(literal, 'control.ts')\"]" }]],
+  ['VB15', 'CI 체인에서 경계 검사를 뺀다', 'R9', [{ file: 'package.json', from: ' && node scripts/magazine-vnext-boundary-check.mjs', to: '' }]],
+  ['VB16', 'CI 체인에서 경계 변이를 뺀다', 'R9', [{ file: 'package.json', from: ' && node scripts/magazine-vnext-boundary-mutation.mjs', to: '' }]],
+  ['VB17', '운영 CLI 가 QA CLI 를 새로 import', 'R10', [{ file: 'scripts/magazine-dashboard.mjs', append: "import { runQa } from './magazine-qa.mjs'\n" }]],
+  ['VB26', '운영 CLI 가 여러 줄 import 로 QA CLI 를 부른다', 'R10', [{ file: 'scripts/magazine-dashboard.mjs', append: "import {\n  runQa,\n} from './magazine-qa.mjs'\n" }]],
+  ['NC1', '대조군 — 주석 속 import 는 위반이 아니다', 'PASS', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "// import { runQa } from '../magazine-qa.mjs'\n *    import { X } from '../magazine-batch-qa.mjs'\n" }]],
+  ['NC2', '대조군 — spawn 대상 경로 문자열은 import 가 아니다', 'PASS', [{ file: 'scripts/magazine-dashboard.mjs', append: "const QA_PATH = join(ROOT, 'scripts/magazine-qa.mjs')\n" }]],
+  ['NC3', '대조군 — lib 안 여러 줄 import 가 lib 를 부르면 위반이 아니다', 'PASS', [{ file: 'scripts/lib/magazine-editorial.mjs', append: "import {\n  sliceLiteral,\n} from './magazine-load.mjs'\nconst Z = await import(\n  './magazine-gate.mjs'\n)\n" }]],
+]
+
+const lines = []
+let detected = 0, harnessFail = 0
+let base = null
+try {
+  /** 스냅샷 — 숨김 파일 제외 · 이후 디스크를 다시 읽지 않는다 */
+  const visible = (d, re) => readdirSync(join(ROOT, d)).filter((f) => !f.startsWith('.') && re.test(f)).map((f) => `${d}/${f}`)
+  const snapshot = new Map()
+  for (const f of ['package.json', ...visible('scripts', /\.m[jt]s$/), ...visible('scripts/lib', /\.mjs$/)]) {
+    try { snapshot.set(f, readFileSync(join(ROOT, f), 'utf8')) } catch (e) {
+      if (e?.code !== 'ENOENT') throw e // 목록 뒤 사라진 일반 파일은 이 회차 사본에 없을 뿐이다 — 다른 오류는 숨기지 않는다
+    }
+  }
+  base = mkdtempSync(join(tmpdir(), 'vnext-boundary-mutation-'))
+
+  const world = (tag, edits) => {
+    const dir = join(base, tag)
+    const files = new Map(snapshot)
+    for (const e of edits) {
+      if (e.create !== undefined) { files.set(e.file, e.create); continue }
+      const src = files.get(e.file)
+      if (src === undefined) return { error: `${e.file} 가 스냅샷에 없다` }
+      if (e.append !== undefined) { files.set(e.file, `${src}${src.endsWith('\n') ? '' : '\n'}${e.append}`); continue }
+      const n = src.split(e.from).length - 1
+      if (n !== 1) return { error: `${e.file} 변이 지점 ${n}곳` }
+      files.set(e.file, src.replace(e.from, e.to))
+    }
+    for (const [f, t] of files) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), t) }
+    return { dir }
+  }
+  const run = (dir) => {
+    const r = spawnSync(process.execPath, [CHECK], { encoding: 'utf8', env: { ...process.env, MAGAZINE_VNEXT_BOUNDARY_ROOT: dir } })
+    const m = /vNext 경계 검사: (\d+) pass, (\d+) fail/.exec(r.stdout ?? '')
+    return { status: r.status, out: r.stdout ?? '', err: r.stderr ?? '', pass: m ? +m[1] : null, fail: m ? +m[2] : null }
+  }
+
+  const b = world('base', [])
+  const rb = b.error ? null : run(b.dir)
+  if (!rb || rb.fail === null || rb.status !== 0 || rb.fail !== 0) {
+    harnessFail++; lines.push(`FAIL 무변이 사본이 통과하지 않는다 — ${b.error ?? `${rb.out}${rb.err}`.slice(-400)}`)
+  } else lines.push(`PASS 무변이 사본 ${rb.pass} pass · 0 fail`)
+
+  for (const [id, label, expect, edits] of MUTATIONS) {
+    try {
+      const w = world(id, edits)
+      if (w.error) { harnessFail++; lines.push(`FAIL ${id} ${label} — ${w.error} (하네스 결함)`); continue }
+      const r = run(w.dir)
+      if (r.fail === null) { harnessFail++; lines.push(`FAIL ${id} ${label} — 요약 줄 없음(검출 아님): ${(r.out + r.err).slice(-200)}`); continue }
+      if (expect === 'PASS') {
+        if (r.status === 0 && r.fail === 0) { detected++; lines.push(`PASS ${id} ${label} → 오탐 없음`) }
+        else { harnessFail++; lines.push(`FAIL ${id} ${label} — 대조군이 실패했다(오탐): ${r.out.split('\n').filter((l) => l.startsWith('FAIL')).join(' / ').slice(0, 300)}`) }
+        continue
+      }
+      const hit = r.out.split('\n').some((l) => l.startsWith(`FAIL ${expect} `))
+      if (r.status === 1 && hit) { detected++; lines.push(`PASS ${id} ${label} → ${expect} 실패로 검출`) }
+      else { harnessFail++; lines.push(`FAIL ${id} ${label} — 기대한 ${expect} 가 실패하지 않았다 (status ${r.status} fail=${r.fail})`) }
+    } catch (e) {
+      harnessFail++; lines.push(`FAIL ${id} ${label} — 하네스 예외(검출 아님): ${e?.code ?? ''} ${String(e?.message ?? e).split('\n')[0].slice(0, 200)}`)
+    }
+  }
+} catch (e) {
+  harnessFail++; lines.push(`FAIL 하네스 예외로 중단(검출 아님): ${e?.code ?? ''} ${String(e?.message ?? e).split('\n')[0].slice(0, 200)}`)
+} finally {
+  if (base) rmSync(base, { recursive: true, force: true })
+}
+console.log(lines.join('\n'))
+console.log(`\nvNext 경계 변이: ${detected} pass, ${harnessFail} fail (변이 ${MUTATIONS.length})`)
+process.exit(harnessFail ? 1 : 0)
