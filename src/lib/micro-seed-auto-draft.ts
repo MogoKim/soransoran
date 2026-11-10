@@ -17,6 +17,10 @@
  */
 
 import { judgeSelfAgeBasis } from './persona-self-age'
+import type { IncompleteCause } from './content-core/review'
+import type {
+  GenerationFailureKind, GenerationFailureStage, RetryClass,
+} from './content-core/generation-failure'
 import {
   judgeCopy, COPY_REASON_LABEL,
   type OriginalityMeasure, type CopyReason,
@@ -86,7 +90,7 @@ export type DraftReason =
 export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   lifeHistoryConflict: '글쓴이의 삶과 어긋나는 1인칭 경험',
   ok: '통과',
-  noDraft: '템플릿이 초안을 만들지 못했다 (소재를 못 찾음)',
+  noDraft: '초안이 나오지 않았다 — 원인은 heldBy(화자 계획 · 형식 · 위기 · 재계획 · 생성 원인)',
   emptyTitle: '제목이 비었다',
   emptyBody: '본문이 비었다',
   safetyNotPass: 'safety 가 pass 가 아니다',
@@ -467,6 +471,31 @@ export type PickInput = {
    *    `drafts` 가 비었다는 사실만으로는 "초안 실패" 와 "여력 대기" 를 가를 수 없다 — 그래서 따로 받는다.
    */
   personaDeferred?: boolean
+  /**
+   * 🔴 **초안이 없을 때 왜 없는가 — 값으로** (2026-11-10 retry-authority-v7). 생성 러너가 넘긴다.
+   *    앞판은 화자 계획 실패 · 형식 오류 · 위기 차단 · 재계획 소진을 전부 `noDraft`(소재를 못 찾음)로 뭉쳐 원인이 사라졌다.
+   */
+  heldBy?: HeldBy
+}
+
+/** 🔴 초안이 나오지 않은 자리 — 유료 요청 전(`beforeCall`)과 생성 결과(`generation`)를 가른다 */
+export const HELD_CODES = [
+  'sourceMetaMissing', 'voiceBlocked', 'sourceCrisis', 'replanStopped', 'speakerSetRepeat', 'generationIncomplete', 'generationHeld',
+] as const
+export type HeldCode = (typeof HELD_CODES)[number]
+
+/**
+ * 🔴 **원인 코드 사슬** — 생성 결과의 원인 · 손실 유형 · 재선정 처리 · 지문을 그대로 나른다(개인정보 없음 · 해시뿐).
+ *    funnel · generation-loss 가 이 칸을 읽는다. 유료 요청 전 차단이면 원인 칸은 `null` 이다.
+ */
+export type HeldBy = {
+  code: HeldCode
+  cause: IncompleteCause | null
+  failureKind: GenerationFailureKind | null
+  failureStage: GenerationFailureStage | null
+  retryClass: RetryClass | null
+  evidenceFingerprint: string | null
+  failureFingerprint: string | null
 }
 
 export type Pick = {
@@ -487,6 +516,8 @@ export type Pick = {
    *    `gateResults.holds` 에 싣는다. `undefined` 는 "판정하지 않았다" 이다 — 적재기가 경고로 읽는다.
    */
   lifeReview?: DraftLifeReviewCode[]
+  /** 🔴 초안이 나오지 않은 원인 사슬 — `noDraft` 일 때만 있다(옛 picks 에는 없다 · 역사 판독은 그대로) */
+  heldBy?: HeldBy
 }
 
 /**
@@ -513,7 +544,10 @@ export function pickDraft(input: PickInput, now: string): Pick {
   if (input.sourceUsed) return no('AUTO_HOLD', 'sourceAlreadyUsed')
   // 🔴 여력 대기는 초안 실패가 아니다 — `noDraft` 보다 먼저 가른다
   if (input.personaDeferred === true) return no('AUTO_HOLD', 'personaCapacityDeferred')
-  if (input.drafts.length === 0) return no('AUTO_HOLD', 'noDraft')
+  if (input.drafts.length === 0) {
+    const p = no('AUTO_HOLD', 'noDraft')
+    return input.heldBy === undefined ? p : { ...p, heldBy: input.heldBy }
+  }
 
   const rejected: { draftNo: number; reason: DraftReason }[] = []
   // 🔴 draftNo 순으로 본다 — 입력 순서가 달라도 같은 것을 고른다

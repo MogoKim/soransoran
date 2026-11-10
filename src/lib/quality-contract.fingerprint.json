@@ -5,17 +5,17 @@
     "src/lib/quality-contract.ts": "99277524450229a69d44b2429a32cca22a80fa3d71cd371945be7139a554b8eb",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
     "src/lib/content-core/draft-life-gates.ts": "5e192419adf1e05b9e5718c2eefe361d7406545da3627430eb287dce6bbfdac4",
-    "src/lib/content-core/review.ts": "18c2867d12de4cbb7fdd7940a28e182e7ee1044d368c346fa4fa56a8739ea396",
+    "src/lib/content-core/review.ts": "fb8f476346b2ed561f221c282846ef36412a2f52e625082780242b856af5a33c",
     "src/lib/content-core/pipeline.ts": "19271911d1168118f396f31e2d2f946ae9068a29c5409de280d2a6a27b711ce8",
     "src/lib/content-core/evidence.ts": "5d057ae291e865cbc3131bb51a858e2568b351239f993c38c4d9453c95980e2e",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
-    "src/lib/micro-seed-auto-draft.ts": "73ee0c560dafe57285559ee7ea8f836d434992e6dbb2acb964c5d97e32dd1408",
+    "src/lib/micro-seed-auto-draft.ts": "6371b5189fb519f022efbe71df03f3688b34dc2b870e6caa931f0c71466e0aa8",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
     "src/lib/supply-schedule-contract.ts": "6523604d2e982d9a7f9dacfcba070189f4588da4a328cc1091b30227758c6b84",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
-    "scripts/lib/content-core-run.mts": "7bb5c25a71d3abfa34bc38f4e49039c1692380e436189bfb34b1ede7d8be4865",
+    "scripts/lib/content-core-run.mts": "13f9355b375282e8a05f123d9d4ab202baf563ccaf5f6faabcb53f2ea856598b",
     "scripts/lib/content-core-prompts.mts": "37460ae9e74940d63ac92411caf0aed9f1270a46873a76bcc829cf511a259d20",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
@@ -36,9 +36,11 @@
   },
   "acknowledgement": {
     "kind": "behaviorUnchanged",
-    "reason": "D100 자연 공급 회차 시작 시각을 기존 45분 proof 슬롯 창에 귀속하는 supplyRunSlotMinuteOf만 추가했다. 호출은 stage preflight·proof-day runner 증거 판정에만 있으며 AUTO_READY_CONTRACT·Content Core·eligibilityOf·qualityContractComponents/digest는 불변이다.",
+    "reason": "P0-1 retry-authority-v7: review.ts 재시도 목록(RETRYABLE_CAUSES·artifactRetryable) 삭제·speakerBound 원인 라벨/주석(해법·근거 지문당 1회 계약), micro-seed-auto-draft.ts picks 원인 사슬(heldBy) 칸·noDraft 라벨, content-core-run.mts 주석 — 초안 채택/HOLD 판정·게이트·검수 행동 불변",
     "changedFiles": [
-      "src/lib/supply-schedule-contract.ts"
+      "src/lib/content-core/review.ts",
+      "src/lib/micro-seed-auto-draft.ts",
+      "scripts/lib/content-core-run.mts"
     ]
   }
 }

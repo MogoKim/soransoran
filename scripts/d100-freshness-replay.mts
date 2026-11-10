@@ -132,7 +132,7 @@ for (const name of names.filter((n) => /^supply-selection-trace-\d{8}-\d{6}\.jso
       rows, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS,
       carriedOver: EMPTY_SOURCE_KEYS, concluded: new Set(), attempted: new Map(), releaseOf,
       limit: t.cap, runId: t.runId, takenAt: at,
-      jit: { slots, now: at, cap: t.cap, qualityContract: currentQualityContract() },
+      jit: { slots, now: at, cap: t.cap, qualityContract: currentQualityContract(), retryMode: 'normal' },
     })
     const picked = plan.workset.sources
     const pickedHashes = picked.map((s) => articleIdHashOf(s.sourceSite, s.sourceArticleId))

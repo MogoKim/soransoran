@@ -11,6 +11,7 @@
  *   🔴 발행 시점 재검사는 그대로다 — `scheduled` 는 공개가 아니다. 발행 트랜잭션이 그 시각에 다시 판정한다.
  */
 import { isSupplyContentCostStage, ledgerDateOf, type LedgerEntry } from './llm-ledger'
+import type { RetryClass } from './content-core/generation-failure'
 import { judgeSlotRelease, type ReleaseReason } from './source-slot-release'
 import { SUPPLY_JIT_CONTRACT } from './supply-intent'
 import {
@@ -196,6 +197,90 @@ export type CostAttribution = {
  *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
  *    🔴 raw 단가(정산 ÷ 행 수)로 대신하지 않는다.
  */
+// ─────────────────────────────────────────────────────────
+// 🔴 **재선정 비용 귀속 — 원 opportunity · attempt · 원인** (2026-11-10 retry-authority-v7)
+//
+//   같은 통합 장부의 현행 칸만 쓴다 — `sourceKey`(원천 해시 · opportunity) · `runId`(→ 파이프라인 회차 · attempt) ·
+//   `settledUsd`. 원인은 그 회차 artifact 의 원인(`cause`)·재선정 처리(`retryClass`)를 붙인다. 새 schema · migration 0.
+//   🔴 proof · business 비용 계약(`costAttributionOf` · 공용 envelope)은 바꾸지 않는다 — 이것은 관측 view 하나다.
+//   🔴 품질·안전 HOLD 는 낭비로 세지 않는다. **확정 회피 비용**은 "선택 시점에 이미 같은 지문으로 결론(`terminal`)이
+//   난 원천을 재선정 자리에서 다시 산" 시도의 정산액뿐이다 — 지금 정본(`concludedSourceKeys`)이 그 선택을 막는다.
+// ─────────────────────────────────────────────────────────
+
+export type RetryAttempt = {
+  /** 파이프라인 회차 id(`YYYYMMDD-HHMMSS`) — 장부 `runId`(`<회차>-j` · `<회차>-d`)와 묶인다 */
+  runId: string
+  /** 원천 해시 — 장부 `sourceKey` 와 같은 값 */
+  sourceKey: string
+  /** 선택 자리 — 신규(처음 사는 원천) · 재선정 */
+  lane: 'fresh' | 'retry'
+  /** 선택 시점 지난 결과의 처리 — 없으면 `none`, 창 밖이거나 못 읽었으면 `unknown` */
+  priorRetryClass: RetryClass | 'none' | 'unknown'
+  /** 이번 시도의 원인(완주면 `null`) · 처리 */
+  cause: string | null
+  retryClass: RetryClass | null
+  /** 이번 시도가 채택(AUTO_ADOPT)으로 끝났는가 — 채택된 재구매는 낭비가 아니라 v7 이 포기하는 수율이다 */
+  adopted: boolean
+}
+
+export type RetryCostAttribution = {
+  totalUsd: number
+  /** 시도와 짝이 없는 정산 — 0 이 아니면 귀속이 불완전하다 */
+  unlinkedUsd: number
+  /** 정산이 없는 요청 수(예약 · 사용량 미상) — 금액에 넣지 않는다 */
+  openRequests: number
+  byLane: Record<'fresh' | 'retry', number>
+  byCause: Record<string, number>
+  byRetryClass: Record<string, number>
+  /** 🔴 같은 지문 결론(`terminal`)을 재선정 자리에서 다시 사서 **채택 없이** 끝난 시도의 정산 합 — v7 이 막는 낭비 */
+  confirmedAvoidableUsd: number
+  confirmedAvoidableAttempts: number
+  /** 🔴 같은 지문 결론을 다시 사서 **채택된** 시도 — 낭비가 아니다. v7 이 이 채택을 포기한다(수율 위험 · 따로 보고) */
+  reselectedAdoptedUsd: number
+  reselectedAdoptedAttempts: number
+}
+
+export function retryCostAttributionOf(i: {
+  entries: readonly LedgerEntry[] | null
+  attempts: readonly RetryAttempt[]
+}): RetryCostAttribution | null {
+  if (i.entries === null) return null
+  const key = (run: string, src: string): string => `${run}\u0000${src}`
+  const byKey = new Map(i.attempts.map((a) => [key(a.runId, a.sourceKey), a]))
+  const out: RetryCostAttribution = {
+    totalUsd: 0, unlinkedUsd: 0, openRequests: 0, byLane: { fresh: 0, retry: 0 },
+    byCause: {}, byRetryClass: {}, confirmedAvoidableUsd: 0, confirmedAvoidableAttempts: 0,
+    reselectedAdoptedUsd: 0, reselectedAdoptedAttempts: 0,
+  }
+  const avoidable = new Set<string>()
+  const adoptedSet = new Set<string>()
+  for (const e of i.entries) {
+    if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
+    if (e.status !== 'settled' || e.settledUsd === null) { out.openRequests += 1; continue }
+    out.totalUsd += e.settledUsd
+    const run = pipelineRunOfLedger(e.runId)
+    const a = run === null || typeof e.sourceKey !== 'string' ? undefined : byKey.get(key(run, e.sourceKey))
+    if (a === undefined) { out.unlinkedUsd += e.settledUsd; continue }
+    out.byLane[a.lane] += e.settledUsd
+    const c = a.cause ?? 'complete'
+    out.byCause[c] = (out.byCause[c] ?? 0) + e.settledUsd
+    const rc = a.retryClass ?? 'unknown'
+    out.byRetryClass[rc] = (out.byRetryClass[rc] ?? 0) + e.settledUsd
+    if (a.lane === 'retry' && a.priorRetryClass === 'terminal') {
+      if (a.adopted) {
+        out.reselectedAdoptedUsd += e.settledUsd
+        adoptedSet.add(key(a.runId, a.sourceKey))
+      } else {
+        out.confirmedAvoidableUsd += e.settledUsd
+        avoidable.add(key(a.runId, a.sourceKey))
+      }
+    }
+  }
+  out.confirmedAvoidableAttempts = avoidable.size
+  out.reselectedAdoptedAttempts = adoptedSet.size
+  return out
+}
+
 export function costAttributionOf(i: {
   entries: readonly LedgerEntry[] | null
   fateByKey: ReadonlyMap<string, CostFate>

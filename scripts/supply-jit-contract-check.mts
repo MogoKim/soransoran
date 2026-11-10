@@ -196,7 +196,7 @@ console.log('\n⑥ 같은 원천 중복 유료 생성 0 · retryable 과 termina
     { sourceKey: k2, sourceArticleId: 'retry', atMs: 1, stage: 'draft', state: 'retryable' },
   ]
   const concluded = concludedSourceKeys(rows)
-  check('🔴 terminal 은 결론(다시 고르지 않는다) · retryable 은 결론이 아니다(다음 단일 순위의 후보)',
+  check('🔴 terminal 은 결론(다시 고르지 않는다) · retryable 은 결론이 아니다(근거 지문당 한 번 · 신규 먼저 · 재선정 몫 10% 안의 후보)',
     concluded.has(k1) && !concluded.has(k2) && attemptedOutcomes(rows).has(k2)
     && (CONCLUDED_STATES as readonly string[]).includes('terminal') && !(CONCLUDED_STATES as readonly string[]).includes('retryable'))
   const judge = strip('scripts/micro-seed-auto-judge.mts')
@@ -825,10 +825,10 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /const paid = paidSourcesFor\(\{ deficit: policy\.upTo, yieldHigh: before\?\.sourceYield\?\.high \?\? null, cap: WORKSET_LIMIT \}\)/.test(runner)
     && /judgeStageBudget\(PAID_LIMIT\)/.test(runner)
     // 🔴 (2026-10-10 P0-B1) 배정 · 선택은 `selectWorkset({ jit })` 하나 — 상한은 같은 PAID_LIMIT
-    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract\(\) \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
+    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract\(\), retryMode \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
     && !/judgeStageBudget\(WORKSET_LIMIT\)/.test(runner) && !/limit: WORKSET_LIMIT, runId/.test(runner))
   check('🔴 묶음은 수요가 있을 때만 만든다(policy.llm) — 수요 0 이면 판정 · 생성 0',
-    /if \(policy\.llm\) \{\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
+    /if \(policy\.llm\) \{\s*(?:\/\/[^\n]*\n\s*)?const retryMode = retryModeFor\(\{ paidBasis: paid\.basis \}\)\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
     && !/assignSourceSlots|intendedSlotOf/.test(runner))
   check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
     /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)

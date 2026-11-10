@@ -81,6 +81,7 @@ main은 #833 병합(§1 원격 main)이고 web Production은 그 SHA로 성공�
 | `sourceAge` 오름차순 단일 정본 비교 (§2.3) | 생산 비교 함수가 여럿이었다 | #833: `compareReleaseRank` 하나 · 판정·생성 순서는 묶음 순위 |
 | StageDecision v6 계약 | writer v5 · reader v5 + v4 legacy | 코드: reader v5+v6 (#833) · writer v6 (PR1b). runtime 설치 순서는 #833 reader 먼저·rollback 판독 확인 → 그 뒤 PR1b writer |
 | preflight 결정일 결속 | recovery 신원 판정 날짜를 판정 시각 `now`에서 가져와, 다음 날 리허설이 오늘 아침 복구 회차를 claim 없는 복구로 읽는다 | PR1b: 증명 슬롯의 단일 KST 날짜(비면·섞이면·깨지면 fail-closed) |
+| 신규 먼저 · 재선정 권위 하나 (§2.3 · §11) | 신규와 재선정을 한 줄로 세우고, `review.ts`의 9종 재시도 목록이 답을 받은 Persona 부적격·형식 오류를 회차마다 다시 산다(11-09·11-10 12회차 재생: 한 원천 최대 11회 · 11-10 17:15 재선정 13건 정산 $0.022643 산출 0) | P0-1 `fix/d100-retry-authority-v7`: `generation-failure.ts` 단일 권위(transient·speakerBound·terminal·unattempted) · 근거 지문당 한 번 · 신규 먼저 · 재선정 몫 10% · 채택 재생성 0 · 비용 귀속 view(`retryCostAttributionOf`). 판정은 세 축을 따로 본다 — code PASS = PR exact-head CI · deployed PASS = runtime HEAD = pin = manifest · operating PASS = 다음 자연 회차 증거 |
 | 자동 일정 owner launchd 하나 (§6) | 수동 `workflow_dispatch` 전용 `auto-publish.yml`·`supply-collect.yml`이 남아 있다 (예약 실행 없음 · 수동 실행은 commissioning) | rollback·의존성 감사 뒤 별도 삭제 |
 
 ## 2. 현재 runtime에 배포된 11월 2일·4일 근본 보정

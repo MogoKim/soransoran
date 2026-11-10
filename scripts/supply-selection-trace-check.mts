@@ -85,7 +85,7 @@ const pipeline = (o: {
   const plan = selectWorkset({
     rows: o.rows, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set<string>(), queuedSources: EMPTY_SOURCE_KEYS,
     carriedOver: EMPTY_SOURCE_KEYS, concluded: o.concluded ?? new Set<string>(), attempted, releaseOf,
-    jit: { slots: o.slots, now: NOW, cap: o.cap, qualityContract: QUALITY }, limit: Math.max(1, o.cap), runId: RUN, takenAt: NOW,
+    jit: { slots: o.slots, now: NOW, cap: o.cap, qualityContract: QUALITY, retryMode: 'normal' }, limit: Math.max(1, o.cap), runId: RUN, takenAt: NOW,
     ...(rec === null ? {} : { trace: rec.sink }),
   })
   const trace = rec === null ? null : buildSupplySelectionTrace({

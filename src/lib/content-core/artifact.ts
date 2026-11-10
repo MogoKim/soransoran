@@ -11,7 +11,7 @@ import { EVIDENCE_CHAR_BUDGET, type SourceEvidencePacket } from './evidence'
 import type { ClosingIntent, ContentRole, DropReason, ProtectedFact } from './source-facts'
 import type { PersonaDecision, SelfBasis, SpeakerWarrant, Stance, WarrantRejection } from './speaker'
 import type { GenerationContract } from './pipeline'
-import type { CallOutcome, GenerationFailure } from './generation-failure'
+import { isSpeakerSetKey, type CallOutcome, type GenerationFailure } from './generation-failure'
 import type { VoiceProvenance } from './voice-evidence'
 import type {
   DeterministicResult, DroppedFromSource, LifeContradiction, MachineOutcome, ReviewCompletion,
@@ -62,6 +62,12 @@ export type CallMeta = {
 
 export type HumanReviewArtifact = {
   artifactVersion: string
+  /**
+   * 🔴 **이 시도가 받은 화자 묶음 열쇠** (2026-11-10 retry-authority-v7) — `speakerSetKeyOf` 의 값(해시)이다.
+   *    생성 캐시 key 의 꼬리와 같은 값이고, 같은 묶음으로 Persona 부적격을 다시 사지 않게 하는 열쇠다.
+   *    옛 artifact 에는 없다 — 읽는 쪽이 `null` 로 본다(역사 판독 포맷 그대로).
+   */
+  speakerSetDigest?: string
   /**
    * 🔴 **불투명 id** (2026-09-20). 이 한 장을 정확히 가리키는 이름이다.
    *
@@ -209,6 +215,10 @@ export function violatesArtifact(a: HumanReviewArtifact): string[] {
   // 🔴 제목까지 합친 총량이 예산 안인가 — 앞판은 제목이 공짜였다
   if (a.evidence.totalEvidenceChars > EVIDENCE_CHAR_BUDGET) {
     bad.push(`🔴 저장 원문 총량 ${a.evidence.totalEvidenceChars}자 — 예산 ${EVIDENCE_CHAR_BUDGET}자를 넘었다`)
+  }
+  // 🔴 화자 묶음 칸은 단일 형식만(`isSpeakerSetKey`) — 임의 문자열을 artifact 로 내보내지 않는다
+  if (a.speakerSetDigest !== undefined && !isSpeakerSetKey(a.speakerSetDigest)) {
+    bad.push('🔴 speakerSetDigest 가 화자 묶음 열쇠 모양이 아니다')
   }
   if (a.review.machineOutcome === 'adopt' && !a.review.semanticCompletion.complete) {
     bad.push('🔴 완주하지 못한 검수로 adopt 가 됐다')

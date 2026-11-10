@@ -8,12 +8,13 @@
  * 🔴 **provider 를 부르지 않는다 · DB 를 읽지 않는다 · 파일을 쓰지 않는다.**
  *    순수 함수와 실제 소스 문자열만 본다.
  */
+import { retryClassOf, type RetryClass } from '../src/lib/content-core/generation-failure'
 import { readFileSync } from 'node:fs'
 
 import {
   artifactOutcome, baseIdOf, judgementOutcome, judgeStageBudget, readWorkset, selectWorkset,
   concludedSourceKeys, attemptedOutcomes, latestOutcomes, parseInstantMs, humanDecisionIndexOf, sourceKeyOf,
-  humanDecisionFor, artifactRecordOutcome, WORKSET_VERSION_LEGACY,
+  humanDecisionFor, artifactRecordOutcome, artifactRetryClassOf, WORKSET_VERSION_LEGACY,
   worksetAxisCaps, worksetAxisOf, worksetAxisQuota, WORKSET_RAW_SLOT_EVERY,
   OUTCOME_STATES, CONCLUDED_STATES, STAGE_RANK,
   attributeRuns, runWindowOf, isLaterOutcome, runClockOf, retryTierOf, resolveWorksetLimit,
@@ -55,8 +56,7 @@ import { buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { selectCarryOver } from '../src/lib/supply-fill-retry'
 import type { PoolCard } from '../src/lib/persona-pool-card'
 import {
-  artifactRetryable, reviewShapeOk, DIRECT_REASONS, INCOMPLETE_CAUSES, NOT_RUN_CAUSES,
-  RETRYABLE_CAUSES, REVIEW_VERSION,
+  reviewShapeOk, DIRECT_REASONS, INCOMPLETE_CAUSES, NOT_RUN_CAUSES, REVIEW_VERSION,
 } from '../src/lib/content-core/review'
 
 let pass = 0
@@ -423,7 +423,7 @@ console.log('\n⑧ 🔴 한 원천이 막혀도 다음 원천은 간다 · 실�
    */
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 🔴 **한 원천 HOLD 가 다음 원천을 막지 않는다**',
-    /if \(art\.draft === null\) \{[\s\S]{0,120}continue/.test(draft))
+    /if \(art\.draft === null\) \{[\s\S]{0,1200}?holdPick\(\{[\s\S]{0,600}?\}\)\s*continue/.test(draft))
   // 🔴 (2026-10-12) 러너의 요청 변환은 공용 어댑터 한 벌이다 — 러너가 그것을 쓰고, 어댑터가 정산 기록을 본다
   check('🔴 🔴 **정산 못 적은 건은 완주가 아니다** (fail-closed 유지)',
     /const v2Ask: Ask = ledgerAskOf\(/.test(draft)
@@ -482,7 +482,7 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   })
   const A = (o: Partial<PriorArtifactRow> = {}): PriorArtifactRow => ({
     sourceSite: W, sourceArticleId: 's1', artifactVersion: ARTIFACT_VERSION, contract: BASE,
-    outcome: 'hold', retryable: false, generatedAt: '2026-09-20T20:41:28.000Z', ...o,
+    outcome: 'hold', retryClass: 'terminal', generatedAt: '2026-09-20T20:41:28.000Z', ...o,
   })
   const jo = (o: Partial<PriorJudgementRow> = {}) => judgementOutcome(J(o), 'h1', CANON)
   const ao = (o: Partial<PriorArtifactRow> = {}) => artifactOutcome(A(o), BASE, ARTIFACT_VERSION)
@@ -493,10 +493,10 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   check('🔴 🔴 **파일명 문자열로는 2026-09-20 draft 가 2026-09-07 judge 보다 앞선다**',
     'auto-draft-20260920-204128.artifacts.json' < 'auto-judge-20260907-032058.shadow.jsonl')
   check('🔴 🔴 **그래도 명시 시각으로는 최신 retryable 이 이긴다**',
-    !done([jo(), ao({ retryable: true })]).has(KY('s1')))
+    !done([jo(), ao({ retryClass: 'transient' })]).has(KY('s1')))
   check('🔴 🔴 **배열에 늦게 온 것이 아니라 시각이 최신인 것이 이긴다**',
-    !done([ao({ retryable: true }), jo()]).has(KY('s1'))
-    && done([ao({ retryable: true, generatedAt: '2026-09-01T00:00:00.000Z' }), jo()]).has(KY('s1')))
+    !done([ao({ retryClass: 'transient' }), jo()]).has(KY('s1'))
+    && done([ao({ retryClass: 'transient', generatedAt: '2026-09-01T00:00:00.000Z' }), jo()]).has(KY('s1')))
   check('🔴 🔴 **같은 순간을 다른 글자로 적어도 같은 순간이다**', (() => {
     const z = jo({ decidedAt: '2026-09-20T00:00:00.000Z' })!
     const kst = ao({ generatedAt: '2026-09-20T09:00:00+09:00' })!
@@ -539,9 +539,11 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   check('🔴 🔴 **생성 러너는 AUTO_SEED 만 읽는다**',
     /\.filter\(\(j\) => j\.decision === 'AUTO_SEED'\)/
       .test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')))
-  check('🔴 adopt 는 candidate — terminal 이 아니다',
-    ao({ outcome: 'adopt' })?.state === 'candidate' && !done([ao({ outcome: 'adopt' })]).has(KY('s1')))
-  check('🔴 재시도 대상 artifact 는 retryable', ao({ retryable: true })?.state === 'retryable')
+  // 🔴 2026-11-10 retry-authority-v7 — 상태 이름은 candidate 그대로(terminal 아님)이되, 유료 재선정 풀에서는 빠진다(재생성 금지).
+  //    적재가 실패한 후보는 이월(`planCarryOver`)이 같은 후보를 다시 적재한다 — e2e ⑦ 반례
+  check('🔴 adopt 는 candidate 상태 — 그리고 유료 재선정 풀에서 빠진다(excluded)',
+    ao({ outcome: 'adopt' })?.state === 'candidate' && done([ao({ outcome: 'adopt' })]).has(KY('s1')))
+  check('🔴 재시도 대상 artifact 는 retryable', ao({ retryClass: 'transient' })?.state === 'retryable')
   check('🔴 🔴 **모르는 outcome 은 unknown**', ao({ outcome: '뭔가' })?.state === 'unknown')
 
   // ── ④ 지금 입력·지금 계약이 아니면 기록을 쓰지 않는다 ──
@@ -597,9 +599,8 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     semanticCompletion: { complete: false, reason: 'notRun', cause: 'speakerUnqualified' }, ...o,
   })
   /**
-   * 🔴 여섯 번째가 늘었다 (2026-09-22) — `speakerSlotNarrowed`.
-   *    화자 여력 계획이 원천마다 후보를 나누면서 "이번 묶음에 맞는 사람이 없었다" 가
-   *    생겼다. 그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
+   * 📜 역사 (2026-09-22) — `speakerSlotNarrowed` 가 생겼다. "이번 묶음에 맞는 사람이 없었다" 는 묶음 탓이다.
+   *    2026-11-10 부터 처리는 `speakerBound` — 다른 화자 묶음으로만 근거 지문당 한 번(같은 묶음 재구매는 러너가 막는다).
    *
    * 🔴 일곱·여덟 번째 (2026-09-23) — `personaTransformFailed` · `loadBearingMismatch`.
    *    원문 화자의 사실을 우리 Persona 값으로 **바꾸지 못한** 실패다.
@@ -612,41 +613,40 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
    *    `loadBearingSelfImpossible` — 만족하는 후보가 없다 (자리를 바꾼다)
    *    🔴 `meaningUnpreservable` 은 여기 없다 — 결론이다.
    */
-  check('🔴 🔴 **재시도 원인 아홉 가지**',
-    RETRYABLE_CAUSES.join(',')
-      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed'
-        + ',personaTransformFailed,loadBearingMismatch,loadBearingSelfImpossible',
-    RETRYABLE_CAUSES.join(','))
-  check('🔴 🔴 **의미가 보존되지 않는다는 결론은 다시 시도하지 않는다**',
-    !(RETRYABLE_CAUSES as readonly string[]).includes('meaningUnpreservable')
-    && (INCOMPLETE_CAUSES as readonly string[]).includes('meaningUnpreservable'))
-  check('🔴 🔴 **좁힌 묶음 탓은 다시 보고, 전체 자격 미달은 결론이다**',
-    (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed')
-    && !(RETRYABLE_CAUSES as readonly string[]).includes('speakerUnqualified'))
-  check('🔴 🔴 **모델이 형식을 어긴 것은 결론이 아니다**',
-    (RETRYABLE_CAUSES as readonly string[]).includes('parseFailed'))
+  /**
+   * 🔴 2026-11-10 retry-authority-v7 — 재선정 처리는 단일 권위(`retryClassOf`) 하나다. 원인 전수 표로 고정한다.
+   *    답을 받지 못한 것(무응답 · 출력 절단)만 transient · 나가지 않은 요청(예산 차단)은 unattempted · 나머지는 결론.
+   *    앞판의 아홉 가지 재시도 목록(`RETRYABLE_CAUSES`)은 지웠다 — Persona 부적격 · 형식 오류를 회차마다 다시 샀다.
+   */
+  const WANT: Readonly<Record<(typeof INCOMPLETE_CAUSES)[number], RetryClass>> = {
+    budgetBlocked: 'unattempted', noResponse: 'transient', truncated: 'transient',
+    usageUnknown: 'terminal', parseFailed: 'terminal',
+    speakerSlotNarrowed: 'speakerBound', personaTransformFailed: 'speakerBound',
+    loadBearingMismatch: 'speakerBound', loadBearingSelfImpossible: 'speakerBound',
+    contextInsufficient: 'terminal', evidenceBudgetViolated: 'terminal', speakerUnqualified: 'terminal',
+    voiceUnready: 'terminal', wiringBroken: 'terminal', deterministicFailed: 'terminal', meaningUnpreservable: 'terminal',
+  }
+  check('🔴 🔴 **원인 전수 표 — 모든 미완주 원인이 단일 권위의 처리 하나로 간다**',
+    INCOMPLETE_CAUSES.every((c) => retryClassOf(c, null) === WANT[c]) && Object.keys(WANT).length === INCOMPLETE_CAUSES.length,
+    INCOMPLETE_CAUSES.filter((c) => retryClassOf(c, null) !== WANT[c]).join(','))
+  check('🔴 🔴 **제공사가 요청 모양을 거절한 무응답(400·401·모름)은 결론 · timeout·5xx·429·네트워크는 transient**',
+    retryClassOf('noResponse', 'providerPermanent') === 'terminal'
+    && retryClassOf('noResponse', 'timeout') === 'transient' && retryClassOf('noResponse', 'providerTransient') === 'transient')
   check('🔴 🔴 **장부 탓·초안 읽기 실패라는 원인은 사라졌다**',
     !(INCOMPLETE_CAUSES as readonly string[]).includes('ledgerUnavailable')
     && !(INCOMPLETE_CAUSES as readonly string[]).includes('draftUnreadable'))
-  check('🔴 🔴 **근거 예산 위반은 제 이름으로 남는다 — 재시도가 아니다**',
-    (INCOMPLETE_CAUSES as readonly string[]).includes('evidenceBudgetViolated')
-    && !(RETRYABLE_CAUSES as readonly string[]).includes('evidenceBudgetViolated'))
-  for (const c of RETRYABLE_CAUSES) {
-    check(`🔴 ${c} 는 재시도다`,
-      artifactRetryable(RV({ semanticCompletion: { complete: false, reason: 'notRun', cause: c } })) === true)
+  for (const c of INCOMPLETE_CAUSES) {
+    check(`🔴 ${c} → ${WANT[c]} (artifact 판독도 같은 값)`,
+      artifactRetryClassOf(RV({ semanticCompletion: { complete: false, reason: 'notRun', cause: c } }), undefined) === WANT[c])
   }
-  for (const c of INCOMPLETE_CAUSES.filter((x) => !(RETRYABLE_CAUSES as readonly string[]).includes(x))) {
-    check(`🔴 ${c} 는 결론이다`,
-      artifactRetryable(RV({ semanticCompletion: { complete: false, reason: 'notRun', cause: c } })) === false)
-  }
-  check('🔴 완주한 검수는 재시도가 아니다',
-    artifactRetryable(RV({ semanticCompletion: { complete: true, reason: null, cause: null } })) === false)
+  check('🔴 완주한 검수는 결론이다',
+    artifactRetryClassOf(RV({ semanticCompletion: { complete: true, reason: null, cause: null } }), undefined) === 'terminal')
   check('🔴 🔴 **문구로 가르지 않는다** — machineReason 을 바꿔도 판정이 같다',
-    artifactRetryable(RV({ machineReason: '예산·상한에 막혀 묻지 못했다' })) === false
-    && artifactRetryable(RV({
+    artifactRetryClassOf(RV({ machineReason: '예산·상한에 막혀 묻지 못했다' }), undefined) === 'terminal'
+    && artifactRetryClassOf(RV({
       semanticCompletion: { complete: false, reason: 'notRun', cause: 'budgetBlocked' },
       machineReason: '아무 말이나',
-    })) === true)
+    }), undefined) === 'unattempted')
   for (const [name, bad] of [
     ['completion 없음', { machineOutcome: 'hold' }],
     ['직접 실패인데 원인이 다르다',
@@ -665,9 +665,9 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     ['모르는 machineOutcome', { machineOutcome: '뭔가', semanticCompletion: { complete: true, reason: null, cause: null } }],
   ] as const) {
     check(`🔴 🔴 **부분 artifact(${name})는 terminal 이 아니다**`,
-      !reviewShapeOk(bad) && artifactRetryable(bad) === null
+      !reviewShapeOk(bad) && artifactRetryClassOf(bad, undefined) === null
       && artifactOutcome({
-        ...A(), retryable: artifactRetryable(bad),
+        ...A(), retryClass: artifactRetryClassOf(bad, undefined),
         outcome: String((bad as { machineOutcome?: string }).machineOutcome ?? ''),
       }, BASE, ARTIFACT_VERSION)?.state === 'unknown')
   }
@@ -716,27 +716,27 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
       machineOutcome: 'drop',
       semanticCompletion: { complete: false, reason: 'notRun', cause: 'deterministicFailed' },
     })
-    return reviewShapeOk(det) && artifactRetryable(det) === false
+    return reviewShapeOk(det) && artifactRetryClassOf(det, undefined) === 'terminal'
       && artifactOutcome({
-        ...A(), retryable: false, outcome: 'drop',
+        ...A(), retryClass: 'terminal', outcome: 'drop',
       }, BASE, ARTIFACT_VERSION)?.state === 'terminal'
   })())
   check('🔴 정상 hard HOLD 는 terminal 이다', (() => {
     const good = RV({ semanticCompletion: { complete: true, reason: null, cause: null } })
     return reviewShapeOk(good) && artifactOutcome({
-      ...A(), retryable: artifactRetryable(good), outcome: 'hold',
+      ...A(), retryClass: artifactRetryClassOf(good, undefined), outcome: 'hold',
     }, BASE, ARTIFACT_VERSION)?.state === 'terminal'
   })())
   check('🔴 정상 budgetBlocked 는 재시도다', (() => {
     const b = RV({ semanticCompletion: { complete: false, reason: 'budgetBlocked', cause: 'budgetBlocked' } })
     return artifactOutcome({
-      ...A(), retryable: artifactRetryable(b), outcome: 'hold',
+      ...A(), retryClass: artifactRetryClassOf(b, undefined), outcome: 'hold',
     }, BASE, ARTIFACT_VERSION)?.state === 'retryable'
   })())
   check('🔴 정상 자격 실패 notRun 은 결론이다', (() => {
     const b = RV()
     return artifactOutcome({
-      ...A(), retryable: artifactRetryable(b), outcome: 'hold',
+      ...A(), retryClass: artifactRetryClassOf(b, undefined), outcome: 'hold',
     }, BASE, ARTIFACT_VERSION)?.state === 'terminal'
   })())
 
@@ -1041,11 +1041,13 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
     return c.seed === 1 && c.raw === 1
   })())
 
-  // ── 재시도 신분은 축 자리와 신선도 순서를 뒤집지 않는다 ──
+  // ── 🔴 비운영 legacy 경로(`jit` 없는 `selectWorkset`) 호환 — 이미 본 원천 표식이 이 경로의 축 자리·순위를 바꾸지 않는다 ──
+  //    운영 공급은 JIT 경로(`selectJitWorkset`)다: 신규 lane 먼저 · 재선정 몫 10% 는 `check:retry-authority` ·
+  //    supply-jit-selection-check 가 본다. 이 블록은 그 계약을 말하지 않는다.
   {
     const rows = [...seeds(10, 90), SEED('rs1', 1), SEED('rs2', 1), SEED('rs3', 1), ...raws(5, 200)]
     const p = sel({ rows, attempted: { rs1: at(5), rs2: at(2), rs3: at(9) }, limit: 5 })
-    check('🔴 재시도 예약석 없이 같은 source rank로 고른다',
+    check('🔴 legacy 경로(jit 없음) — attempted 표식이 있어도 이 경로는 같은 source rank 로 고른다(운영 JIT 계약 아님)',
       ids(p) === 'w0,s0,s1,s2,s3', ids(p))
   }
   {
@@ -1136,7 +1138,7 @@ const pj = (o: Partial<PriorJudgementRow> = {}): PriorOutcome => judgementOutcom
 }, 'h1', P0_CANON)!
 const pa = (o: Partial<PriorArtifactRow> = {}): PriorOutcome => artifactOutcome({
   sourceSite: W, sourceArticleId: 's1', artifactVersion: ARTIFACT_VERSION, contract: P0_BASE,
-  outcome: 'hold', retryable: false, generatedAt: '2026-09-24T05:15:00.850Z', ...o,
+  outcome: 'hold', retryClass: 'terminal', generatedAt: '2026-09-24T05:15:00.850Z', ...o,
 }, P0_BASE, ARTIFACT_VERSION)!
 /** 🔴 공급 러너가 적는 회차 기록 모양 그대로 — 칸만 읽는다 */
 const runRecord = (runId: string, startedAt: string, judge: [string, string] | null): unknown => ({
@@ -1163,7 +1165,7 @@ console.log('\n⑪ 🔴 🔴 같은 회차 안의 순서는 단계 순서다 —
 
   // ── (1) 같은 회차 · 판정이 초안보다 10초 늦게 적혔다 → 초안이 이긴다 ──
   const judgeLate = pj({ decidedAt: '2026-09-24T05:15:10.850Z', runAt: RUN_AT, runId: '20260924-051500' })
-  const draftHold = pa({ generatedAt: RUN_AT, outcome: 'hold', retryable: false })
+  const draftHold = pa({ generatedAt: RUN_AT, outcome: 'hold', retryClass: 'terminal' })
   check('🔴 🔴 **(1) 같은 회차 · 판정 decidedAt 이 10초 늦어도 초안(terminal)이 최신이다** — 판정 기록 칸(runAt)',
     latestOf([judgeLate, draftHold])?.stage === 'draft' && latestOf([draftHold, judgeLate])?.stage === 'draft'
     && latestOf([judgeLate, draftHold])?.state === 'terminal',
@@ -1186,7 +1188,7 @@ console.log('\n⑪ 🔴 🔴 같은 회차 안의 순서는 단계 순서다 —
   })())
 
   // ── (2) 다음 회차의 판정은 앞 회차의 초안을 이긴다 ──
-  const draftPrev = pa({ generatedAt: RUN_AT, outcome: 'adopt', retryable: false })
+  const draftPrev = pa({ generatedAt: RUN_AT, outcome: 'adopt', retryClass: 'terminal' })
   const judgeNext = pj({ decidedAt: '2026-09-24T08:15:08.000Z', decision: 'AUTO_HOLD', runAt: NEXT_AT, runId: '20260924-081504' })
   check('🔴 🔴 **(2) 다음 회차 판정(HOLD)이 앞 회차 초안(candidate)을 이긴다**',
     latestOf([draftPrev, judgeNext])?.stage === 'judge' && latestOf([judgeNext, draftPrev])?.state === 'terminal')
@@ -1196,7 +1198,7 @@ console.log('\n⑪ 🔴 🔴 같은 회차 안의 순서는 단계 순서다 —
     return latestOf(at)?.stage === 'judge' && at[1]?.run?.id === '20260924-081504'
   })())
   check('🔴 🔴 **(2) 다음 회차 초안은 그 회차 판정 뒤다 — 회차가 바뀌어도 규칙은 하나**', (() => {
-    const d2 = pa({ generatedAt: NEXT_AT, outcome: 'hold', retryable: false })
+    const d2 = pa({ generatedAt: NEXT_AT, outcome: 'hold', retryClass: 'terminal' })
     return latestOf([judgeNext, d2, draftPrev, judgeLate])?.stage === 'draft'
       && latestOf([judgeNext, d2, draftPrev, judgeLate])?.atMs === Date.parse(NEXT_AT)
   })())
@@ -1221,8 +1223,8 @@ console.log('\n⑪ 🔴 🔴 같은 회차 안의 순서는 단계 순서다 —
   })())
   check('🔴 🔴 **(4) 벽시계 규칙이면 같은 원천이 seeded 로 남아 재시도 풀에 머문다** — 고치기 전 모양',
     !concludedSourceKeys([legacyJudge, draftHold]).has(KY('s1')))
-  check('🔴 retryable 초안은 끝이 아니다 — 재시도 풀에 남는다',
-    !concludedSourceKeys(attributeRuns([legacyJudge, pa({ generatedAt: RUN_AT, retryable: true })], WINS)).has(KY('s1')))
+  check('🔴 transient 초안 하나는 끝이 아니다 — 근거 지문당 한 번 더 볼 수 있다',
+    !concludedSourceKeys(attributeRuns([legacyJudge, pa({ generatedAt: RUN_AT, retryClass: 'transient' })], WINS)).has(KY('s1')))
 
   // ── 경계 — 모르는 것을 안다고 하지 않는다 ──
   check('🔴 판정 구간 밖(손으로 부른 판정)은 회차를 붙이지 않는다 — 자기 시각이다', (() => {
@@ -1298,8 +1300,8 @@ console.log('\n⑫ 🔴 🔴 같은 원문으로 두 번째 글을 만들지 않
     // 🔴 같은 번호 p1 이 두 카페에 있다 — 큐에 있는 쪽(wgang)만 빠지고 다른 카페 p1 은 재시도로 남는다
     const RT = 'navercafe:remonterrace'
     const att = new Map<string, PriorOutcome>([
-      [KY('p1'), pa({ sourceArticleId: 'p1', outcome: 'adopt', retryable: false })],
-      [KY('p1', RT), pa({ sourceSite: RT, sourceArticleId: 'p1', outcome: 'adopt', retryable: false })],
+      [KY('p1'), pa({ sourceArticleId: 'p1', outcome: 'adopt', retryClass: 'terminal' })],
+      [KY('p1', RT), pa({ sourceSite: RT, sourceArticleId: 'p1', outcome: 'adopt', retryClass: 'terminal' })],
     ])
     const r = sel({ rows: rows2, queuedSources: queued, attemptedOutcomes: att, limit: 10 })
     return !srcs(r).includes(`${W}/p1`) && srcs(r).includes(`${RT}/p1`)
@@ -1315,7 +1317,7 @@ console.log('\n⑫ 🔴 🔴 같은 원문으로 두 번째 글을 만들지 않
   })())
 
   // ── (5) 적재 실패 후보만 이월로 되살린다 — 다시 만들지 않는다 ──
-  const cand = (id: string): PriorOutcome => pa({ sourceArticleId: id, outcome: 'adopt', retryable: false, generatedAt: at(3) })
+  const cand = (id: string): PriorOutcome => pa({ sourceArticleId: id, outcome: 'adopt', retryClass: 'terminal', generatedAt: at(3) })
   const att5 = new Map<string, PriorOutcome>([['c1', cand('c1')], ['c2', cand('c2')], ['c3', cand('c3')]])
   const carried = queuedSourceKeysOf([{ sourceSite: 'navercafe:wgang', sourceArticleId: 'c1' }])
   const queued5 = queuedSourceKeysOf([{ sourceSite: 'publish-candidate:auto:navercafe:wgang', sourceArticleId: 'c2-0badf00d' }])
@@ -1371,7 +1373,9 @@ console.log('\n⑬ 🔴 🔴 운영 33원천 재분류 — 읽기 전용 fixture
     .filter((w): w is RunWindow => w !== null)
   const outcomesOf = (src: Fx['sources'][number]): PriorOutcome[] => src.records.map((r) => (r.stage === 'judge'
     ? pj({ sourceArticleId: src.sourceArticleId, decidedAt: r.decidedAt ?? '', decision: r.decision ?? '', semanticStatus: r.semanticStatus ?? '' })
-    : pa({ sourceArticleId: src.sourceArticleId, generatedAt: r.generatedAt ?? '', outcome: r.machineOutcome ?? '', retryable: r.retryable ?? null })))
+    : pa({ sourceArticleId: src.sourceArticleId, generatedAt: r.generatedAt ?? '', outcome: r.machineOutcome ?? '',
+        // 🔴 시계 순서 회귀 시험 — 기록 당시 표식 그대로 읽는다(정책 효과는 아래 v7 단언이 따로 본다)
+        retryClass: r.retryable === undefined || r.retryable === null ? null : r.retryable ? 'transient' : 'terminal' })))
   check('🔴 fixture 는 33원천이다', fx.kind === 'supply-clock-inversion-fixture' && fx.sources.length === 33, `${fx.sources.length}`)
   check('🔴 🔴 **원문·제목·본문·화자가 없다** — id · 시각 · 결과 · 회차 구간만', (() => {
     const allowed = new Set(['stage', 'decidedAt', 'decision', 'semanticStatus', 'generatedAt', 'machineOutcome', 'retryable', 'cause'])
@@ -1402,15 +1406,21 @@ console.log('\n⑬ 🔴 🔴 운영 33원천 재분류 — 읽기 전용 fixture
     runMatch === 33, `${runMatch}/33`)
   check('🔴 🔴 **재분류 — candidate 18 · terminal 9 · retryable 6 (seeded 0)**',
     got.candidate === 18 && got.terminal === 9 && got.retryable === 6 && (got.seeded ?? 0) === 0, JSON.stringify(got))
-  check('🔴 🔴 **terminal 9원천이 재시도 풀을 떠난다**', (() => {
+  check('🔴 🔴 **terminal 9 + 채택 candidate 18 원천이 유료 재선정 풀을 떠난다** (2026-11-10: 채택 초안 재생성 금지)', (() => {
     const all = fx.sources.flatMap((s) => attributeRuns(outcomesOf(s), wins))
-    return concludedSourceKeys(all).size === 9
+    return concludedSourceKeys(all).size === 27
       && concludedSourceKeys(fx.sources.flatMap((s) => outcomesOf(s))).size === 0
+  })())
+  check('🔴 🔴 **v7 — 기록된 retryable 6건을 단일 권위로 읽으면 parseFailed 2 결론 · speakerSlotNarrowed 3 speakerBound · 출력 절단 1 transient**', (() => {
+    const rows = fx.sources.flatMap((s) => s.records).filter((r) => r.stage === 'draft' && r.retryable === true)
+    const cls = rows.map((r) => `${r.cause}:${retryClassOf(r.cause as (typeof INCOMPLETE_CAUSES)[number], null)}`).sort()
+    return rows.length === 6 && cls.join(',') === 'parseFailed:terminal,parseFailed:terminal,speakerSlotNarrowed:speakerBound,'
+      + 'speakerSlotNarrowed:speakerBound,speakerSlotNarrowed:speakerBound,truncated:transient'
   })())
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑭ 🔴 🔴 재시도 단계는 관측값이고 선택은 실제 원문 신선도가 정한다')
+console.log('\n⑭ 🔴 비운영 legacy 경로(jit 없는 selectWorkset) — 이미 본 원천의 단계는 관측값이고 이 경로의 순서는 원문 신선도다(운영 JIT 계약 아님)')
 // ─────────────────────────────────────────────────────────
 {
   const at = (h: number): string => `2026-09-20T${String(h).padStart(2, '0')}:00:00.000Z`
@@ -1418,7 +1428,7 @@ console.log('\n⑭ 🔴 🔴 재시도 단계는 관측값이고 선택은 실�
   const att = new Map<string, PriorOutcome>([
     // 단계가 서로 달라도 선택 순서는 원문 시각으로만 검증한다.
     ['jr', pj({ sourceArticleId: 'jr', semanticStatus: 'providerError', decidedAt: at(1) })],
-    ['dr', pa({ sourceArticleId: 'dr', retryable: true, generatedAt: at(3) })],
+    ['dr', pa({ sourceArticleId: 'dr', retryClass: 'transient', generatedAt: at(3) })],
     ['sd', pj({ sourceArticleId: 'sd', decision: 'AUTO_SEED', decidedAt: at(9) })],
   ])
   check('🔴 관측 단계 값 — seeded 0 · 생성 결과 1 · 판정 retryable 2',
@@ -1435,10 +1445,10 @@ console.log('\n⑭ 🔴 🔴 재시도 단계는 관측값이고 선택은 실�
     R('sd', '2026-09-20T06:45:00Z'),
   ]
   const p5 = sel({ rows, attemptedOutcomes: att, limit: 5 })
-  check('🔴 상한 5 · 재시도 예약석 없이 최신 원문 다섯 건',
+  check('🔴 legacy 경로 · 상한 5 — 최신 원문 다섯 건(운영 JIT 의 신규 먼저 · 재선정 몫은 check:retry-authority 가 본다)',
     p5.workset.sources.map(sid).join(',') === 'n0,n1,jr,n2,n3', p5.workset.sources.map(sid).join(','))
   const p10 = sel({ rows, attemptedOutcomes: att, limit: 10 })
-  check('🔴 상한 10 · 신규/재시도 구분 없이 최신 원문 열 건',
+  check('🔴 legacy 경로 · 상한 10 — 최신 원문 열 건(이 경로는 lane 을 가르지 않는다 · 운영 JIT 계약 아님)',
     p10.workset.sources.map(sid).join(',') === 'n0,n1,jr,n2,n3,dr,n4,n5,sd,n6', p10.workset.sources.map(sid).join(','))
   const pAll = sel({
     rows: [R('jr', '2026-09-20T08:45:00Z'), R('dr', '2026-09-20T07:45:00Z'), R('sd', '2026-09-20T06:45:00Z')],
@@ -1663,7 +1673,7 @@ console.log('\n⑳ 🔴 🔴 부족 슬롯마다 원천을 따로 짝짓는다 �
       const at = slots.find((d) => preGenerationRelease(r, d, NOW).verdict === 'eligible')
       return preGenerationRelease(r, at ?? slots[0] ?? s1, NOW)
     },
-    jit: { slots, now: NOW, cap, qualityContract: QUALITY }, limit: Math.max(cap, 1), runId: RUN, takenAt: NOW,
+    jit: { slots, now: NOW, cap, qualityContract: QUALITY, retryMode: 'normal' }, limit: Math.max(cap, 1), runId: RUN, takenAt: NOW,
   })
   const slotMap = (p: ReturnType<typeof jsel>): Map<string, string> =>
     new Map(p.workset.sources.map((x) => [sourceIdentityOf(x.sourceSite, x.sourceArticleId)!, x.slotAt!]))
