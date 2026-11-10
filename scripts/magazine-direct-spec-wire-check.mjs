@@ -818,7 +818,8 @@ check('W39 제목 대조는 공용 함수 하나 — auto-register 의 호출 �
   const src = readFileSync(join(ROOT, 'scripts/magazine-auto-register.mjs'), 'utf8')
   assert.equal(src.split('directSpecTitleCheck({').length - 1, 2, 'auto-register 의 directSpecTitleCheck 호출이 두 자리가 아니다')
   // 다른 계층에 제목 대조를 다시 두지 않는다 — 변이가 가려진다
-  for (const rel of ['scripts/lib/magazine-delivery-gate.mjs', 'scripts/magazine-register.mjs', 'scripts/magazine-md-to-draft.mjs', 'scripts/magazine-qa.mjs']) {
+  // S1 C4 — QA 판정은 lib/magazine-qa-core.mjs 에 있다. CLI 만 보면 판정 계층의 중복을 못 본다
+  for (const rel of ['scripts/lib/magazine-delivery-gate.mjs', 'scripts/magazine-register.mjs', 'scripts/magazine-md-to-draft.mjs', 'scripts/magazine-qa.mjs', 'scripts/lib/magazine-qa-core.mjs']) {
     assert.ok(!readFileSync(join(ROOT, rel), 'utf8').includes('directSpecTitleCheck'), `${rel} 에 제목 대조가 중복됐다`)
   }
 })

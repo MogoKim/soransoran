@@ -28,8 +28,9 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 import { isPublic } from './magazine-gate.mjs'
-import { RELATION_POLICY } from './magazine-relation-policy.mjs'
-import { evalLiteral, parseArticlesSource, sliceLiteral } from './magazine-load.mjs'
+import { RELATION_DISPLAY_TARGET, RELATION_POLICY } from './magazine-relation-policy.mjs'
+import { parseArticlesSource } from './magazine-load.mjs'
+import { parseControlText } from './magazine-graph-control.mjs'
 
 export const BUILD_SCHEMA = 'mgraph-build/1'
 /** 🔴 /2 — readiness 가 기대는 입력 전부를 `inputs` 에 싣는다(graph semanticHash 만으로는 control · articles · admission · 시각이 빠진다) */
@@ -72,10 +73,16 @@ export const DISCOVERY_SLOT = 'BRIDGE_DISCOVERY'
 export const DISCOVERY_TYPE = 'BRIDGE'
 export const BOARDS = Object.freeze(['/community/menopause', '/community/free'])
 
-/** 🔴 생산 최소선과 화면 표시 목표는 다른 숫자다 — 섞지 않는다 */
+/**
+ * 🔴 생산 최소선과 화면 표시 목표는 다른 숫자다 — 섞지 않는다.
+ *    productionMinimum  legacy 호환 기준(RELATION_POLICY = LEGACY_RELATION_POLICY · direct 2 + discovery 1) — 현재 GRAPH_READY 판정
+ *    displayTarget      표시 목표(RELATION_DISPLAY_TARGET · direct 최대 3 · discovery 1)
+ *    vNext 출판 최소(VNEXT_PUBLICATION_RELATION_MINIMUM)는 여기서 쓰지 않는다 — GRAPH_READY 를 쉽게 만들지 않는다(S2 compiler 가 쓴다)
+ *    🔴 이 객체는 readiness 보고서(policy)와 readinessHash 에 그대로 실린다 — 키 · 순서 · 값을 바꾸지 않는다
+ */
 export const READINESS_POLICY = Object.freeze({
   productionMinimum: Object.freeze({ direct: RELATION_POLICY.directMin, discovery: RELATION_POLICY.discovery }),
-  displayTarget: Object.freeze({ directMax: RELATION_POLICY.directMax, discovery: RELATION_POLICY.discovery }),
+  displayTarget: Object.freeze({ directMax: RELATION_DISPLAY_TARGET.directMax, discovery: RELATION_DISPLAY_TARGET.discovery }),
 })
 
 export class GraphBuildError extends Error {
@@ -412,26 +419,9 @@ export function readStringArray(text, name) {
   return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
 }
 
-/** control.ts 의 CONTROL — 구조 파서. 판독 실패는 null (호출자가 blocker 로 막는다) */
-export function parseControlText(text) {
-  const src = String(text ?? '')
-  const anchor = src.indexOf('export const CONTROL')
-  if (anchor === -1) return null
-  const literal = sliceLiteral(src, src.indexOf('=', anchor), '{', '}')
-  if (!literal) return null
-  let raw
-  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }
-  const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
-  if (!plain(raw) || typeof raw.enabled !== 'boolean' || !Array.isArray(raw.enabledClusters)) return null
-  if (!plain(raw.surfaces) || !plain(raw.killSwitch) || typeof raw.killSwitch.tripped !== 'boolean') return null
-  return {
-    graphVersion: String(raw.graphVersion ?? ''),
-    enabled: raw.enabled,
-    enabledClusters: [...raw.enabledClusters].map(String),
-    surfaces: Object.fromEntries(Object.entries(raw.surfaces).map(([k, v]) => [k, v === true])),
-    killSwitchTripped: raw.killSwitch.tripped,
-  }
-}
+// control.ts 판독(parseControlText)은 lib/magazine-graph-control.mjs 가 정본이다(S1 C5) — 위 import 를 그대로 다시 내보낸다(호환 export · 같은 함수)
+export { parseControlText }
+
 
 /** 제품 사실 텍스트 → 구조. 표면 계약을 못 읽으면 build 를 멈춘다(모를 때 넓게 잡지 않는다) */
 export function parseProductTexts(texts) {

@@ -310,7 +310,8 @@ if (REAL) {
   const rb = run([join(R, 'contract', 'build-graph.mjs'), '--in', join('reconciled', SNAP_NAME), '--out-dir', rbOut], { cwd: R })
   const rbDir = existsSync(rbOut) ? join(rbOut, readdirSync(rbOut).find((n) => n.startsWith('g-')) ?? 'none') : null
   const rbr = rbDir && existsSync(rbDir) ? V(rbDir) : { code: 'NO_RESEARCH_BUILD', why: rb.stderr.slice(0, 200) }
-  ok('반례2 옛 연구 builder 후보(3d32a6) → CANDIDATE_NOT_PRODUCT_BUILD', rbDir?.endsWith('g-20261102-3d32a6') && rbr.code === 'CANDIDATE_NOT_PRODUCT_BUILD', { rbDir, rbr })
+  // 판 이름은 연구 입력에 따라 바뀐다 — 고정 이름을 기대하지 않고, 옛 builder 가 실제로 후보 폴더를 만들었는지와 판정만 본다
+  ok('반례2 옛 연구 builder 가 실제로 만든 후보 → CANDIDATE_NOT_PRODUCT_BUILD', Boolean(rbDir && existsSync(rbDir)) && rbr.code === 'CANDIDATE_NOT_PRODUCT_BUILD', { rbDir, rbr })
   const forged = !(rbDir && existsSync(rbDir)) ? { code: 'NO_RESEARCH_BUILD' } : tamper('forged', (d) => {
     cpSync(join(rbDir, 'intents.jsonl'), join(d, 'intents.jsonl'))
     mani(d, (m) => { m.contentHash.intents = sha(readFileSync(join(d, 'intents.jsonl'))).slice(0, 16) })

@@ -1139,7 +1139,8 @@ expect('제목 핵심어가 본문에 있으면 통과', checkTitleBodyMatch('�
 expect('🔴 핵심어가 하나도 없으면 FAIL', checkTitleBodyMatch('국민연금 조기수령 유리한가요', '오늘은 잠에 대해 이야기합니다. 수면 위생과 낮잠.').level, 'FAIL')
 expect('절반 이상 없으면 WARN', checkTitleBodyMatch('잠자리 습관 2주 바꾸기 기록', '기록은 남겼습니다.').level, 'WARN')
 expect('조사·어미가 달라도 같은 말로 본다', checkTitleBodyMatch('50대 걷기 하루 몇 분이 적당할까요', '50대에 걷는 시간은 하루 몇 분이 적당한지 사람마다 다릅니다').level, null)
-expect('QA 가 이 검사를 부른다', readFileSync(join('scripts', 'magazine-qa.mjs'), 'utf8').includes('checkTitleBodyMatch('), true)
+// S1 C4 — QA 판정은 lib/magazine-qa-core.mjs 에 있다(CLI 는 argv·출력만). 그 정본이 이 검사를 부르는지 본다
+expect('QA 가 이 검사를 부른다', readFileSync(join('scripts', 'lib', 'magazine-qa-core.mjs'), 'utf8').includes('checkTitleBodyMatch('), true)
 
 console.log('\n══════ 무인 ④ 자동 병합 관문')
 /**
@@ -3070,7 +3071,7 @@ const relationPolicyMutation = spawnSync(process.execPath, [join('scripts', 'mag
   maxBuffer: 1e8,
 })
 expect('관계 수량 정책 변이가 전부 검출된다', relationPolicyMutation.status, 0)
-expect('관계 수량 정책 변이 8개를 실제 실행했다', /관계 수량 정책 변이: 8 pass, 0 fail \(변이 8\)/.test(relationPolicyMutation.stdout), true)
+expect('관계 수량 정책 변이 10개를 실제 실행했다', /관계 수량 정책 변이: 10 pass, 0 fail \(변이 10\)/.test(relationPolicyMutation.stdout), true)
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')

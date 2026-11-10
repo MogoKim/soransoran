@@ -54,7 +54,7 @@ import { acquireManuscriptLease, readQuarantine, QUARANTINE_PATH } from './lib/m
 import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath } from './lib/magazine-hero.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
-import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
+import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './lib/magazine-qa-constants.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
 import { ctaRepairPendingState } from './lib/magazine-draft-cta-repair.mjs'
@@ -475,7 +475,7 @@ ${item.seriesId ? `seriesId: ${item.seriesId}\nseriesOrder: ${item.seriesOrder}\
  *    과잉은 실제로 터졌다 — `health-insurance-after-retire` 가 medical:true 로 나갔고
  *    PR #193 에서 걷어냈다. 세제 글에 진료 권고를 요구하는 것은 맞지 않는다.
  *
- * 집합은 `magazine-qa.mjs` 에서 가져온다. **정의를 두 벌로 두지 않는다** —
+ * 집합은 `lib/magazine-qa-constants.mjs`(QA 와 같은 정본 객체)에서 가져온다. **정의를 두 벌로 두지 않는다** —
  * 갈라지면 producer 가 만든 frontmatter 를 QA 가 거부하는 상태가 다시 생긴다.
  *
  * SUGGESTED(daily·emotion)를 true 로 두는 근거는 등록분 실측이다.

@@ -20,7 +20,8 @@ const F = {
   quarantine: path.join(HERE, 'lib', 'magazine-quarantine.mjs'),
   regen: path.join(HERE, 'lib', 'magazine-regen.mjs'),
   body: path.join(HERE, 'lib', 'magazine-body-length.mjs'),
-  qa: path.join(HERE, 'magazine-qa.mjs'),
+  // S1 C4 — QA 판정(발행 길이 hard FAIL 포함)은 core 에 있다. CLI 를 겨냥하면 변이 지점이 0곳이다
+  qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs'),
   batch: path.join(HERE, 'magazine-batch-qa.mjs'),
   register: path.join(HERE, 'magazine-auto-register.mjs'),
   session: path.join(HERE, 'lib', 'chatgpt-session.mjs'),
@@ -52,7 +53,7 @@ const MUTATIONS = [
   { name: 'C 등록 성공 때 계보 정리 누락', edits: [{ file: F.regen, find: 'regenAttemptIds, regenLineage, regenLineageKeys, firstResponseInvalid, ...rest', replace: 'regenAttemptIds, regenLineageKeys, firstResponseInvalid, ...rest' }] },
   // ── B 길이 정본 ──
   { name: 'B hard 기준 완화 (3000 → 3500)', edits: [{ file: F.body, find: 'export const HARD_BODY = Object.freeze({ min: 800, max: 3000 })', replace: 'export const HARD_BODY = Object.freeze({ min: 800, max: 3500 })' }] },
-  { name: 'B QA 의 hard FAIL 제거 (앞판 — WARN 만)', edits: [{ file: F.qa, find: '  if (!body.hard.ok) report.fail(', replace: '  if (false) report.fail(' }] },
+  { name: 'B QA 의 hard FAIL 제거 (앞판 — WARN 만)', edits: [{ file: F.qaCore, find: '  if (!body.hard.ok) report.fail(', replace: '  if (false) report.fail(' }] },
   { name: 'B batch 가 다른 계산을 씀', edits: [{ file: F.batch, find: 'const bodyText = publishText', replace: "const bodyText = (a) => publishText(a).replace(/\\s/g, '')" }] },
   { name: 'B batch 길이 실패를 재생성 코드에서 뺌 (앞판)', edits: [{ file: F.register, find: '|BODY_TOO_SHORT$|BODY_TOO_LONG$)/', replace: ')/' }] },
   // ── A 최초 응답 ──

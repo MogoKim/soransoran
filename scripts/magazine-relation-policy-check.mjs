@@ -4,11 +4,11 @@
  *
  *   node scripts/magazine-relation-policy-check.mjs [--new-input <2026-10-21-money-work-retirement-next-e0335> --real-product <제품 루트>]
  *
- *   P1 정책 자체 — isValidDirectCount 0~5 · isSingleDiscovery
- *   P2 M-GRAPH builder — readiness 최소·표시 숫자가 정책에서 온다
+ *   P1 정책 자체 — isValidDirectCount 0~5 · isSingleDiscovery · 세 층 이름(legacy 호환 · 표시 목표 · vNext 관계 최소) · 호환 이름 동일성
+ *   P2 M-GRAPH builder — readiness 생산 최소는 legacy 기준 · 표시는 표시 목표에서 온다 · 직렬화 바이트 그대로
  *   P3 source required-field — direct 2·3 present · 1·4 missing · discovery 0·2 missing
  *   P4 ArticleSpec compile · verify — direct 2·3 통과 · 1·4 거부 · discovery 0·2 거부 · direct 2 에서도 중복·self 거부
- *   P5 제품 resolver 표시 상한(MAX_DIRECT · MAX_DISCOVERY) = 정책
+ *   P5 제품 resolver 표시 상한(MAX_DIRECT · MAX_DISCOVERY) = 표시 목표 = legacy 상한
  *   P6 소비 모듈이 공용 정책을 import 한다
  *   (선택) 실제 I-T6-05 — 최종 snapshot `2026-10-21-money-work-retirement-next-e0335` · effectiveAt 2026-10-21T11:00:00+09:00 에서
  *         direct 2 + discovery 1 이 source 수량 관문과 ArticleSpec 을 통과 · G8 미편입은 별도 blocker 로 남는다
@@ -46,13 +46,28 @@ check('P1 정책 — direct 2·3 만 유효(0·1·4·5 무효) · discovery 는 
   assert.deepEqual([0, 1, 2, 3, 4, 5].map(isValidDirectCount), [false, false, true, true, false, false])
   assert.deepEqual([{ slug: 'x' }, null, undefined, [], [{ slug: 'x' }], [{ slug: 'x' }, { slug: 'y' }]].map(isSingleDiscovery), [true, false, false, false, false, false])
   assert.deepEqual(RELATION_POLICY, { directMin: 2, directMax: 3, discovery: 1 })
+  // S1 C6 — 세 층은 이름이 다르고 값은 앞판 그대로다. 호환 이름은 같은 객체 · 같은 함수 · 같은 문자열
+  const { LEGACY_RELATION_POLICY, RELATION_DISPLAY_TARGET, VNEXT_PUBLICATION_RELATION_MINIMUM } = policy
+  assert.equal(RELATION_POLICY, LEGACY_RELATION_POLICY, 'RELATION_POLICY 는 legacy 호환 기준과 같은 객체여야 한다')
+  assert.equal(JSON.stringify(RELATION_POLICY), '{"directMin":2,"directMax":3,"discovery":1}', 'legacy 키 순서 · 값')
+  assert.deepEqual(RELATION_DISPLAY_TARGET, { directMax: 3, discovery: 1 }, '표시 목표')
+  assert.deepEqual(VNEXT_PUBLICATION_RELATION_MINIMUM, { direct: 1 }, 'vNext 관계 최소 — direct 1 · 다른 출판 조건 없음')
+  for (const [n, o] of Object.entries({ LEGACY_RELATION_POLICY, RELATION_DISPLAY_TARGET, VNEXT_PUBLICATION_RELATION_MINIMUM })) assert.ok(Object.isFrozen(o), `${n} 가 동결되지 않았다`)
+  assert.equal(policy.isLegacyDirectCount, isValidDirectCount, 'isLegacyDirectCount 는 같은 함수')
+  assert.equal(policy.isLegacySingleDiscovery, isSingleDiscovery, 'isLegacySingleDiscovery 는 같은 함수')
+  assert.deepEqual([isValidDirectCount.name, isSingleDiscovery.name], ['isValidDirectCount', 'isSingleDiscovery'], '기존 함수 이름')
+  assert.equal(policy.RELATION_CONTRACT_LABEL, 'direct 2~3 + discovery 1', '기존 계약 표기')
+  assert.equal(policy.LEGACY_RELATION_CONTRACT_LABEL, policy.RELATION_CONTRACT_LABEL, 'legacy 표기는 같은 문자열')
 })
 
 check('P2 M-GRAPH builder — 생산 최소 · 표시 상한이 정책 값이다', () => {
   assert.deepEqual(build.READINESS_POLICY, {
     productionMinimum: { direct: RELATION_POLICY.directMin, discovery: RELATION_POLICY.discovery },
-    displayTarget: { directMax: RELATION_POLICY.directMax, discovery: RELATION_POLICY.discovery },
+    displayTarget: { directMax: policy.RELATION_DISPLAY_TARGET.directMax, discovery: policy.RELATION_DISPLAY_TARGET.discovery },
   })
+  // S1 C6 — readiness 보고서 · readinessHash 에 실리는 바이트 그대로 (생산 최소는 legacy 기준 — vNext 관계 최소가 아니다)
+  assert.equal(JSON.stringify(build.READINESS_POLICY), '{"productionMinimum":{"direct":2,"discovery":1},"displayTarget":{"directMax":3,"discovery":1}}')
+  assert.notEqual(build.READINESS_POLICY.productionMinimum.direct, policy.VNEXT_PUBLICATION_RELATION_MINIMUM.direct, 'GRAPH_READY 생산 최소가 vNext 관계 최소로 내려갔다')
 })
 
 /** 필수 필드가 모두 채워진 source entry — 관계만 바꿔 가며 본다 */
@@ -112,6 +127,9 @@ check('P5 제품 resolver 의 표시 상한(MAX_DIRECT · MAX_DISCOVERY)이 정�
   const ts = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
   assert.equal(Number(/export const MAX_DIRECT = (\d+)/.exec(ts)?.[1]), RELATION_POLICY.directMax)
   assert.equal(Number(/export const MAX_DISCOVERY = (\d+)/.exec(ts)?.[1]), RELATION_POLICY.discovery)
+  // S1 C6 — 화면 상한의 정본 이름은 표시 목표다
+  assert.equal(Number(/export const MAX_DIRECT = (\d+)/.exec(ts)?.[1]), policy.RELATION_DISPLAY_TARGET.directMax)
+  assert.equal(Number(/export const MAX_DISCOVERY = (\d+)/.exec(ts)?.[1]), policy.RELATION_DISPLAY_TARGET.discovery)
 })
 
 check('P6 소비 모듈이 공용 정책 모듈을 import 한다', () => {

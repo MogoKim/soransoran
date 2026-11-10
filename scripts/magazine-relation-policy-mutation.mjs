@@ -23,7 +23,8 @@ const CHECK = join(HERE, 'magazine-relation-policy-check.mjs')
 
 const MUTATIONS = [
   ['RP1', '정책 자체를 exact-3 으로 되돌린다(directMin 3)', 'magazine-relation-policy.mjs', '  directMin: 2,', '  directMin: 3,', 'P1'],
-  ['RP2', '정책 표시 상한을 4 로 — 제품 resolver 와 어긋난다', 'magazine-relation-policy.mjs', '  directMax: 3,', '  directMax: 4,', 'P5'],
+  // S1 C6 — legacy 와 표시 목표가 같은 숫자를 따로 가지므로 표시 상한 변이는 표시 목표 블록을 겨냥한다
+  ['RP2', '정책 표시 상한을 4 로 — 제품 resolver 와 어긋난다', 'magazine-relation-policy.mjs', 'export const RELATION_DISPLAY_TARGET = Object.freeze({\n  directMax: 3,\n', 'export const RELATION_DISPLAY_TARGET = Object.freeze({\n  directMax: 4,\n', 'P5'],
   ['RP3', 'source required-field 가 exact-3 을 되살린다', 'magazine-direct-spec-source.mjs',
     "  if (path === 'relations.direct') return Array.isArray(value) && isValidDirectCount(value.length)",
     "  if (path === 'relations.direct') return Array.isArray(value) && value.length === 3", 'P3'],
@@ -36,6 +37,9 @@ const MUTATIONS = [
   ['RP8', 'ArticleSpec 이 공용 정책 import 를 버리고 자체 숫자를 쓴다', 'magazine-article-spec.mjs',
     "import { RELATION_CONTRACT_LABEL, RELATION_POLICY, isValidDirectCount } from './magazine-relation-policy.mjs'\n",
     "const RELATION_POLICY = { directMin: 3, directMax: 3, discovery: 1 }\nconst RELATION_CONTRACT_LABEL = '3+1'\nconst isValidDirectCount = (n) => n === 3\n", 'P4'],
+  // S1 C6 — 세 층 이름 분리. vNext 관계 최소 · 표시 목표가 legacy 값과 엇갈리면 P1 이 잡는다
+  ['RP9', 'vNext 출판 관계 최소를 direct 0 으로 — 근거 있는 direct 1개 요구가 사라진다', 'magazine-relation-policy.mjs', '  direct: 1,\n', '  direct: 0,\n', 'P1'],
+  ['RP10', '표시 목표 discovery 를 2 로 — 표시만 바뀌고 legacy 기준은 그대로여야 한다', 'magazine-relation-policy.mjs', 'export const RELATION_DISPLAY_TARGET = Object.freeze({\n  directMax: 3,\n  discovery: 1,\n', 'export const RELATION_DISPLAY_TARGET = Object.freeze({\n  directMax: 3,\n  discovery: 2,\n', 'P1'],
 ]
 
 const base = mkdtempSync(join(tmpdir(), 'relation-policy-mutation-'))

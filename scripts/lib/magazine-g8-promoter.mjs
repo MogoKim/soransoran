@@ -27,8 +27,9 @@ import { parseArticlesSource, parseQueueSource, sliceLiteral } from './magazine-
 import { checkTitleForm } from './magazine-editorial.mjs'
 import { BANNED_WORDS } from './magazine-brief-policy.mjs'
 import {
-  INPUT_FILES as SNAPSHOT_FILE_NAMES, computeGraphAndReadiness, isRealKstAt, parseControlText, semanticHashOf,
+  INPUT_FILES as SNAPSHOT_FILE_NAMES, computeGraphAndReadiness, isRealKstAt, semanticHashOf,
 } from './magazine-graph-build.mjs'
+import { parseControlText } from './magazine-graph-control.mjs'
 
 export const G8_SCHEMA = 'g8-promotion/2'
 export const RECEIPT_SCHEMA = 'g8-admission-receipt/1'

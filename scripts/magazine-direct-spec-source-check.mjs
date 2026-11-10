@@ -52,6 +52,8 @@ const PATHS = {
   brief: join(ROOT, 'scripts/magazine-brief-auto.mjs'),
   flow: join(ROOT, 'scripts/lib/magazine-producer-flow.mjs'),
   source: join(ROOT, 'scripts/lib/magazine-direct-spec-source.mjs'),
+  // S1 C5 — control.ts 판독(parseGraphControl)의 정본. MS15 · MS16 은 이 파일을 바꾼다
+  control: join(ROOT, 'scripts/lib/magazine-graph-control.mjs'),
   lane: join(ROOT, 'scripts/lib/magazine-auto-lane.mjs'),
   notify: join(ROOT, 'scripts/magazine-producer-notify.mjs'),
   webui: join(ROOT, 'scripts/magazine-webui-runner.mjs'),
@@ -2366,6 +2368,14 @@ function supersedeCases(planMod = real.plan, sourceMod = real.source, sourcePath
 }
 
 // ── 실행기 ─────────────────────────────────────────────────
+/** 실패를 오류 객체째 모은다 — 단언 실패(AssertionError)만 검출로 세는 변이(control)용 */
+async function runCasesDetailed(cases) {
+  const failures = []
+  for (const [name, fn] of cases) {
+    try { await fn() } catch (e) { failures.push({ error: e, text: `${name} — ${String(e?.message ?? e).split('\n')[0]}` }) }
+  }
+  return failures
+}
 async function runCases(cases) {
   const failures = []
   for (const [name, fn] of cases) {
@@ -2457,9 +2467,9 @@ const MUTATIONS = [
   ['source', 'MS9', 'hero alt·scene 검사 제거', '  if (heroRequired(queueItem?.imageMode)) {', '  if (false) {'],
   ['source', 'MS12', '소비 관문이 OPTIONAL hero 를 요구하지 않는다 (P1)', "  return imageMode === 'REQUIRED' || imageMode === 'OPTIONAL'", "  return imageMode === 'REQUIRED'"],
   ['source', 'MS13', '승인 basis exact-match 제거 (P1)', "      else if (canonicalJson(entry.productBasis) !== canonicalJson(b)) blockers.push('PRODUCT_BASIS_DRIFT')\n", ''],
-  ['source', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", "  raw = evalLiteral(literal, 'control.ts')"],
+  ['control', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", "  raw = evalLiteral(literal, 'control.ts')"],
   ['source', 'MS17', 'bundle 구조 검증 제거 (P1 — intents null 이 TypeError 로 번진다)', "  if (!graphBundleShapeOk(graph)) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'", "  if (false) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'"],
-  ['source', 'MS16', 'control 필드 형식 검증 제거 (P1)', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", ''],
+  ['control', 'MS16', 'control 필드 형식 검증 제거 (P1)', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", ''],
   ['source', 'MS14', 'productRoot 없을 때 통과 (P1 fail-closed 제거)', "  if (!productRoot) blockers.push('PRODUCT_BASIS_UNVERIFIED')", '  if (!productRoot) {}'],
   ['source', 'MS10', 'NO_IMAGE hero 금지 검사 제거', "  if (heroForbidden(entry, queueItem)) blockers.push('HERO_FORBIDDEN')\n", ''],
   ['source', 'MS11', '기존 spec 바이트 대조 제거 (재사용 신원)', "  if (existing.state === 'CONFLICT') {", '  if (false) {'],
@@ -2566,6 +2576,7 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
   }
   const path = join(dirname(PATHS[kind]), `.dssc-${id}-${process.pid}-${PATHS[kind].split('/').pop()}`)
   MUTANTS.push(path); writeFileSync(path, src)
+  let controlSourcePath = null
   let caught = false
   let why = ''
   try {
@@ -2610,6 +2621,21 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
         regenForGate = await imp(regenCompanion)
         unlinkSync(regenCompanion)
       }
+      let controlSource = null
+      if (kind === 'control') {
+        // 🔴 S1 C5 — 실제 판정이 변이 control 판독을 쓰게 한다: control 변이본 ← source 동반 사본(control import 를 변이본으로) ← plan 동반 사본(source import 를 동반 사본으로)
+        //    import 치환은 정확히 1곳이어야 한다 — 아니면 하네스 결함으로 FAIL(검출로 세지 않는다)
+        controlSourcePath = join(dirname(PATHS.source), `.dssc-${id}-${process.pid}-source.mjs`)
+        companion = join(dirname(PATHS.plan), `.dssc-${id}-${process.pid}-plan.mjs`)
+        MUTANTS.push(controlSourcePath, companion)
+        const cspec = "'./magazine-graph-control.mjs'"
+        if (ORIGINAL.source.split(cspec).length !== 2) throw new Error('source 의 graph-control import 가 정확히 1곳이 아니다')
+        writeFileSync(controlSourcePath, ORIGINAL.source.replace(cspec, `'./${path.split('/').pop()}'`))
+        const sspec = "'./lib/magazine-direct-spec-source.mjs'"
+        if (ORIGINAL.plan.split(sspec).length !== 2) throw new Error('plan 의 direct-spec-source import 가 정확히 1곳이 아니다')
+        writeFileSync(companion, ORIGINAL.plan.replace(sspec, `'./lib/${controlSourcePath.split('/').pop()}'`))
+        controlSource = await imp(controlSourcePath)
+      }
       const webuiForGate = companion ? await imp(companion) : null
       if (companion) unlinkSync(companion)
       const cases = kind === 'gate' ? [...sendCases(webuiForGate, mod), ...downgradeCases(webuiForGate, regenForGate), ...packetOnlyCases(webuiForGate), ...basisDriftCases(real.plan, real.lane, webuiForGate, regenForGate)]
@@ -2623,11 +2649,23 @@ for (const [kind, id, label, from, to] of MUTATIONS) {
             : kind === 'lane' ? [...laneCases(mod), ...reuseCases(real.plan, mod), ...basisDriftCases(real.plan, mod, real.webui, realRegen)]
               : kind === 'notify' ? notifyCases(mod, real.webui)
                 : kind === 'webui' ? [...notifyCases(real.notify, mod), ...sendCases(mod), ...downgradeCases(mod, realRegen), ...packetOnlyCases(mod), ...repairCases(realRepair, mod), ...briefFreeCases(mod), ...recoverCases(mod), ...withdrawCases(mod)]
-                  : [...sourceCases(mod), ...supersedeCases(webuiForGate, mod, path)]
-      const failures = await runCases(cases)
-      caught = failures.length > 0; why = failures[0] ?? '모든 반례가 통과했다'
+                  : kind === 'control' ? [...sourceCases(controlSource), ...supersedeCases(webuiForGate, controlSource, controlSourcePath)]
+                    : [...sourceCases(mod), ...supersedeCases(webuiForGate, mod, path)]
+      if (kind === 'control') {
+        // 🔴 검출은 단언 실패(AssertionError)만 — 적재 · import · 문법 · 그 밖의 예외는 검출이 아니라 하네스 결함이다
+        const detailed = await runCasesDetailed(cases)
+        const other = detailed.filter((f) => !(f.error instanceof assert.AssertionError))
+        if (other.length) throw new Error(`단언이 아닌 예외 ${other.length}건 — ${other[0].text}`)
+        caught = detailed.length > 0; why = detailed[0]?.text ?? '모든 반례가 통과했다'
+      } else {
+        const failures = await runCases(cases)
+        caught = failures.length > 0; why = failures[0] ?? '모든 반례가 통과했다'
+      }
     }
-  } catch (e) { caught = false; why = `변이 적재 실패 — 하네스 결함이지 검출이 아니다: ${e.message.split('\n')[0]}` } finally { try { unlinkSync(path) } catch { /* 이미 지웠다 */ } }
+  } catch (e) { caught = false; why = `변이 적재 실패 — 하네스 결함이지 검출이 아니다: ${e.message.split('\n')[0]}` } finally {
+    try { unlinkSync(path) } catch { /* 이미 지웠다 */ }
+    if (controlSourcePath) try { unlinkSync(controlSourcePath) } catch { /* 이미 지웠다 */ }
+  }
   report(caught, `${id} ${label} → 잡혔다`, why.slice(0, 150))
 }
 

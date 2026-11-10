@@ -57,7 +57,7 @@ export async function pickTargets({ repo, date, selectable = 1, others = 0 }) {
   const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
   const V = await imp(repo, 'scripts/lib/magazine-validation-profile.mjs')
   const P = await imp(repo, 'scripts/magazine-producer-plan.mjs')
-  const { MEDICAL_REQUIRED } = await imp(repo, 'scripts/magazine-qa.mjs')
+  const { MEDICAL_REQUIRED } = await imp(repo, 'scripts/lib/magazine-qa-constants.mjs')
   const queue = L.parseQueueSource(readFileSync(join(repo, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8'))
   const articles = L.parseArticlesSource(readFileSync(join(repo, 'src', 'content', 'magazine', 'articles.ts'), 'utf8'))
   const ok = queue.filter((i) => V.isAutoLaneEligible(i).ok && !MEDICAL_REQUIRED.has(i.cluster)).sort((a, b) => a.day - b.day)

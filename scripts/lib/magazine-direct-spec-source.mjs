@@ -49,7 +49,8 @@ import { ARTICLE_SPEC_SCHEMA_V2, canonicalJson, compileArticleSpec, verifyArticl
 import { ARTICLE_SPEC_FILENAME, ARTICLE_SPEC_REGISTER_LEDGER, DIRECT_SPEC_MODE, DIRECT_SPEC_OPT_IN_FIELD, G8_ROW_NOT_DIRECT, g8RowProblem, readDirectSpec } from './magazine-direct-spec.mjs'
 import { judgeForbidden } from './magazine-forbidden.mjs'
 import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
-import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
+import { sliceLiteral } from './magazine-load.mjs'
+import { parseGraphControl } from './magazine-graph-control.mjs'
 import { isSingleDiscovery, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const DIRECT_SPEC_SOURCE_NOT_READY = 'DIRECT_SPEC_SOURCE_NOT_READY'
@@ -270,35 +271,8 @@ function readStringArray(text, name) {
   return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
 }
 
-/**
- * control.ts 의 `export const CONTROL = {…}` 를 **구조 파서**(sliceLiteral + evalLiteral)로 읽는다.
- * 🔴 정상 TypeScript 리터럴(여러 줄 · 끝 쉼표 · 주석)은 한 줄 판과 같은 값으로 읽고,
- *    파싱 불가 · 필드 누락 · 형식 오류는 **던지지 않고** null 이다 — 호출자가 PRODUCT_BASIS_UNREADABLE 로 막는다.
- */
-export function parseGraphControl(controlText) {
-  const anchor = String(controlText ?? '').indexOf('export const CONTROL')
-  if (anchor === -1) return null
-  const literal = sliceLiteral(controlText, controlText.indexOf('=', anchor), '{', '}')
-  if (!literal) return null
-  let raw
-  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }
-  const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
-  if (!isPlain(raw)) return null
-  const { graphVersion, enabled, enabledClusters, surfaces, killSwitch } = raw
-  if (typeof graphVersion !== 'string' || !graphVersion.trim()) return null
-  if (typeof enabled !== 'boolean') return null
-  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null
-  if (!isPlain(surfaces) || !Object.values(surfaces).every((v) => typeof v === 'boolean')) return null
-  if (!isPlain(killSwitch) || typeof killSwitch.tripped !== 'boolean') return null
-  // 🔴 격리 컨텍스트의 객체를 이 컨텍스트의 평범한 값으로 옮긴다
-  return {
-    graphVersion,
-    enabled,
-    enabledClusters: [...enabledClusters],
-    surfaces: Object.fromEntries(Object.entries(surfaces)),
-    killSwitch: { tripped: killSwitch.tripped },
-  }
-}
+// control.ts 판독(parseGraphControl · 엄격 프로필)은 lib/magazine-graph-control.mjs 가 정본이다(S1 C5) — 위 import 를 그대로 다시 내보낸다(호환 export · 같은 함수)
+export { parseGraphControl }
 
 /**
  * graph bundle 의 구조 — basis 계산과 관계 판정이 실제로 쓰는 필드만, **던지지 않고** 검증한다.
