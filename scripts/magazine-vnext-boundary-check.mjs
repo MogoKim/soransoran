@@ -232,7 +232,7 @@ const MOVED_TARGETS = Object.freeze([
   ['scripts/magazine-direct-spec-source-check.mjs', "['control', 'MS16'", 'scripts/lib/magazine-graph-control.mjs', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", CONTROL_HARNESS_PATH],
   ['scripts/magazine-g8-promote-mutation.mjs', 'control 판 대조 제거', 'scripts/lib/magazine-g8-promoter.mjs', '  if (parseControlText(texts.graphControl)?.graphVersion !== payload.graphVersion) problems.push('],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP1'", 'scripts/lib/magazine-relation-policy.mjs', '  directMin: 2,'],
-  ['scripts/magazine-relation-policy-mutation.mjs', "'RP2'", 'scripts/lib/magazine-relation-policy.mjs', '  directMax: 3,'],
+  ['scripts/magazine-relation-policy-mutation.mjs', "'RP2'", 'scripts/lib/magazine-relation-policy.mjs', 'export const RELATION_DISPLAY_TARGET = Object.freeze({\n  directMax: 3,\n'],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP3'", 'scripts/lib/magazine-direct-spec-source.mjs', "  if (path === 'relations.direct') return Array.isArray(value) && isValidDirectCount(value.length)"],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP4'", 'scripts/lib/magazine-direct-spec-source.mjs', "  if (path === 'relations.discovery') return isSingleDiscovery(value)\n"],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP5'", 'scripts/lib/magazine-article-spec.mjs', '  if (!isValidDirectCount(direct.length)) {'],
@@ -387,6 +387,55 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
     else if (!targets.includes('./magazine-literal.mjs')) bad('R15', name, 'magazine-literal 을 import 하지 않는다')
     else ok('R15', name)
   }
+}
+
+// ── R16 관계 수량 이름 소유 (S1 C6) ──────────────────────────
+// 🔴 세 층(legacy 호환 · 표시 목표 · vNext 관계 최소)은 relation-policy 한 곳이 정의한다. 이름만 나눴고 legacy 값 · 판정은 앞판 그대로다.
+//    ① 수량 숫자 리터럴(directMin · directMax · direct · discovery: <숫자>)은 정책 파일 밖에 없다(사본 0)
+//    ② vNext 관계 최소(VNEXT_PUBLICATION_RELATION_MINIMUM)는 정책 파일 밖 어디도 아직 읽지 않는다 —
+//       legacy 소비처가 읽으면 GRAPH_READY · source · ArticleSpec 판정이 쉬워진다. 첫 소비처는 S2 compiler 이고 그때 이 규칙을 고쳐 연다
+//    ③ 정책 이름 · 호환 이름의 정의는 정책 파일 한 곳 (같은 이름의 사본 · 감싼 함수 금지)
+//    ④ 호환 이름은 같은 객체 · 같은 함수 · 같은 문자열이고, builder 의 생산 최소는 legacy · 표시는 표시 목표 값이다(실제 적재)
+//    ⑤ legacy 기준 · 표시 목표 블록은 숫자 리터럴만 — 서로(또는 다른 이름)에 기대지 않는다
+{
+  const POLICY = 'scripts/lib/magazine-relation-policy.mjs'
+  const found = new Map()
+  const add = (k) => found.set(k, (found.get(k) ?? 0) + 1)
+  const NAMES = ['RELATION_POLICY', 'LEGACY_RELATION_POLICY', 'RELATION_DISPLAY_TARGET', 'VNEXT_PUBLICATION_RELATION_MINIMUM', 'isValidDirectCount', 'isSingleDiscovery', 'isLegacyDirectCount', 'isLegacySingleDiscovery', 'RELATION_CONTRACT_LABEL', 'LEGACY_RELATION_CONTRACT_LABEL']
+  const defRe = new RegExp(`(?:function\\s+|(?:const|let|var)\\s+)(${NAMES.join('|')})\\b\\s*[(=]`, 'g')
+  for (const f of [...LIB, ...PROD].filter((x) => x !== POLICY)) {
+    const src = codeText(f)
+    for (const m of src.matchAll(/\b(directMin|directMax|direct|discovery)\s*:\s*\d/g)) add(`${f} → 수량 숫자 리터럴 ${m[0]}`)
+    if (/\bVNEXT_PUBLICATION_RELATION_MINIMUM\b/.test(src)) add(`${f} → VNEXT_PUBLICATION_RELATION_MINIMUM 를 읽는다(아직 소비처 0 — S2 compiler 가 연다)`)
+    for (const m of src.matchAll(defRe)) add(`${f} → ${m[1]} 정의 사본`)
+  }
+  // ⑤ 소유 구조 — legacy 기준과 표시 목표는 각자 자기 숫자를 가진다. 블록 안 값이 다른 이름을 빌리면(예: legacy ← 표시 목표)
+  //    표시(UI) 변경이 legacy 판정을 조용히 바꾼다. 값은 여기 다시 적지 않고, "숫자 리터럴만" 이라는 모양만 본다
+  {
+    const policySrc = read(POLICY) ?? ''
+    const OWN = { LEGACY_RELATION_POLICY: ['directMin', 'directMax', 'discovery'], RELATION_DISPLAY_TARGET: ['directMax', 'discovery'] }
+    for (const [name, keys] of Object.entries(OWN)) {
+      const m = new RegExp(`export const ${name} = Object\\.freeze\\(\\{([^}]*)\\}\\)`).exec(policySrc)
+      if (!m) { add(`정책 → ${name} 블록(Object.freeze({…}))을 찾지 못했다`); continue }
+      const props = m[1].split('\n').map((l) => l.trim()).filter(Boolean)
+      const seen = props.map((p) => /^(\w+)\s*:\s*\d+,?$/.exec(p)?.[1] ?? null)
+      if (seen.includes(null)) add(`정책 → ${name} 값이 숫자 리터럴이 아니다(다른 이름에 기대는 소유 결합): ${props.filter((_, i) => seen[i] === null).join(' | ')}`)
+      else if (JSON.stringify(seen) !== JSON.stringify(keys)) add(`정책 → ${name} 키가 ${keys.join(',')} 가 아니다: ${seen.join(',')}`)
+    }
+  }
+  try {
+    const at = (rel) => import(pathToFileURL(join(ROOT, rel)).href)
+    const RP = await at(POLICY)
+    const GBR = await at('scripts/lib/magazine-graph-build.mjs')
+    if (RP.RELATION_POLICY !== RP.LEGACY_RELATION_POLICY) add('정책 → RELATION_POLICY 가 LEGACY_RELATION_POLICY 와 같은 객체가 아니다')
+    if (typeof RP.isValidDirectCount !== 'function' || RP.isLegacyDirectCount !== RP.isValidDirectCount) add('정책 → isLegacyDirectCount 가 isValidDirectCount 와 같은 함수가 아니다')
+    if (typeof RP.isSingleDiscovery !== 'function' || RP.isLegacySingleDiscovery !== RP.isSingleDiscovery) add('정책 → isLegacySingleDiscovery 가 isSingleDiscovery 와 같은 함수가 아니다')
+    if (typeof RP.RELATION_CONTRACT_LABEL !== 'string' || RP.LEGACY_RELATION_CONTRACT_LABEL !== RP.RELATION_CONTRACT_LABEL) add('정책 → LEGACY_RELATION_CONTRACT_LABEL 이 RELATION_CONTRACT_LABEL 과 다르다')
+    const pm = GBR.READINESS_POLICY?.productionMinimum, dt = GBR.READINESS_POLICY?.displayTarget, L = RP.LEGACY_RELATION_POLICY, D = RP.RELATION_DISPLAY_TARGET
+    if (!L || pm?.direct !== L.directMin || pm?.discovery !== L.discovery) add('graph-build → 생산 최소가 legacy 호환 기준 값이 아니다')
+    if (!D || dt?.directMax !== D.directMax || dt?.discovery !== D.discovery) add('graph-build → 표시 목표가 RELATION_DISPLAY_TARGET 값이 아니다')
+  } catch (e) { add(`적재 실패: ${String(e?.message ?? e).split('\n')[0]}`) }
+  ratchet('R16', '관계 수량은 relation-policy 가 세 이름으로 소유 · legacy 판정 그대로 · vNext 최소 소비 0', found, { pending: [] })
 }
 
 console.log(`\nvNext 경계 검사: ${pass} pass, ${fail} fail`)
