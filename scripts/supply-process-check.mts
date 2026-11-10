@@ -13,6 +13,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 /** 🔴 fixture 전용 합성 말투 자산 — 운영 자산을 읽지도 복사하지도 않는다 */
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { clearPriorDraftArtifacts } from './lib/fake-prior-artifacts.mjs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -1030,17 +1031,11 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     // 🔴 캐시는 매번 비운다 — 캐시 hit 이 호출 수를 가려서는 안 된다
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
     /**
-     * 🔴 **지난 사례의 생성 결과도 매번 비운다** (2026-11-11 retry-authority-v7 · PR #838 CI).
-     *    러너는 데이터 폴더의 `auto-draft-*.artifacts.json` 을 전부 지난 결과로 읽는다(`readPriorOutcomes`).
-     *    v7 부터 같은 계약의 채택 초안은 결론이라(채택 재생성 0) 앞 사례가 채택한 원천을 뒤 사례가 다시 만들지 않는다 —
-     *    사례끼리 격리하지 않으면 "형제 차단이 호출을 줄였나" 라는 이 블록의 질문이 앞 사례의 채택에 가려지고,
-     *    결과가 사례 순서(어느 회차가 파일을 0장으로 덮었나)에 따라 갈린다. 채택 재생성 0 자체는 아래 ⓪-b 가 따로 본다.
+     * 🔴 **지난 사례의 생성 결과도 매번 비운다** (2026-11-11 retry-authority-v7 · PR #838 CI) — `clearPriorDraftArtifacts`.
+     *    격리하지 않으면 "형제 차단이 호출을 줄였나" 라는 이 블록의 질문이 앞 사례의 채택(v7 채택 재생성 0)에 가려지고
+     *    결과가 사례 순서에 따라 갈린다. 채택 재생성 0 자체는 아래 ⓪-b 가 지우지 않은 채 따로 본다.
      */
-    if (opts.keepPriorArtifacts !== true) {
-      for (const f of readdirSync(dd)) {
-        if (/^auto-draft-.*\.artifacts\.json$/.test(f)) rmSync(join(dd, f))
-      }
-    }
+    if (opts.keepPriorArtifacts !== true) clearPriorDraftArtifacts(dd)
     /**
      * 🔴 `npx` 가 아니라 **로컬 tsx 를 직접** 부른다 — HOME 을 바꾸면 npx 가
      *    캐시를 못 찾아 네트워크로 나갈 수 있다. 이 검사는 네트워크 0 이어야 한다.

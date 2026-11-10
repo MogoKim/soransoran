@@ -22,8 +22,12 @@ const WORKSET_FILE_PREFIX = worksetFileName('').replace(/\.json$/, '')
 import type { ContractBase } from '../../src/lib/content-core/pipeline'
 import { RUN_FILE_RE } from '../../src/lib/supply-process'
 
-/** 🔴 생성 결과 파일 이름 — 판정 파일과 달리 접두사까지 정해져 있다 */
-const ARTIFACT_FILE = /^auto-draft-.*\.artifacts\.json$/
+/**
+ * 🔴 **non-shadow 생성 artifact** 파일 이름 — 판정 shadow(`*.shadow.jsonl` · canon 이 있을 때만 읽는다)와 달리
+ *    접두사까지 정해져 있다. 시험이 사례 사이에 지난 생성 artifact 를 비울 때도 이 규칙 하나를 쓴다
+ *    (`fake-prior-artifacts`) — 사본 정규식 0. shadow 는 이 규칙의 범위가 아니다.
+ */
+export const PRIOR_ARTIFACT_FILE_RE = /^auto-draft-.*\.artifacts\.json$/
 
 export type PriorOutcomeRead = {
   dataDir: string
@@ -77,7 +81,7 @@ export function readPriorOutcomes(o: PriorOutcomeRead): PriorOutcome[] {
   try { names = readdirSync(o.dataDir) } catch { return out }
   for (const f of names) {
     const isShadow = f.endsWith('.shadow.jsonl')
-    if (!isShadow && !ARTIFACT_FILE.test(f)) continue
+    if (!isShadow && !PRIOR_ARTIFACT_FILE_RE.test(f)) continue
     let raw: string
     try { raw = readFileSync(join(o.dataDir, f), 'utf-8') } catch { continue }
     if (isShadow) {
