@@ -38,7 +38,8 @@ import {
   classifyCall, failureKindOf, isTransientCall, transientProviderError,
   type CallOutcome,
 } from '../src/lib/content-core/generation-failure'
-import { artifactRetryable, INCOMPLETE_CAUSES } from '../src/lib/content-core/review'
+import { INCOMPLETE_CAUSES } from '../src/lib/content-core/review'
+import { artifactRetryClassOf } from '../src/lib/supply-workset'
 import {
   SPEAKER_PLAN_VERSION, decidePersona, orderPersonasForSource, parseSourceNeed,
 } from '../src/lib/content-core/speaker'
@@ -453,7 +454,8 @@ try {
   check('🔴 [슬롯 종료] LEDGER_BLOCKED:SCHEDULED_WINDOW_CLOSED는 budgetBlocked HOLD이며 adopt가 아니다',
     closed.failure?.kind === 'budgetBlocked'
     && closed.review.machineOutcome === 'hold'
-    && artifactRetryable(closed.review) === true,
+    // 🔴 나가지 않은 요청은 시도가 아니다 — 단일 권위의 `unattempted`(신규와 같은 자리 · 재선정 몫을 쓰지 않는다)
+    && artifactRetryClassOf(closed.review, closed.cost) === 'unattempted',
     `${closed.failure?.kind ?? '-'} · ${closed.review.semanticCompletion.reason} · ${closed.review.machineOutcome}`)
 } finally {
   globalThis.fetch = realFetch

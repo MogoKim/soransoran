@@ -13,6 +13,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 /** 🔴 fixture 전용 합성 말투 자산 — 운영 자산을 읽지도 복사하지도 않는다 */
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { clearPriorDraftArtifacts } from './lib/fake-prior-artifacts.mjs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -1023,12 +1024,18 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({ runId: 'R1', takenAt: new Date(), rows })), 'utf-8')
   }
   /** 🔴 가짜 provider 를 끼우고 실제 스크립트를 돌린다 — 호출 수를 정확히 센다 */
-  const runWithFake = (args: readonly string[]): {
+  const runWithFake = (args: readonly string[], opts: { keepPriorArtifacts?: boolean } = {}): {
     code: number | null; out: string; calls: number; countCalls: number
   } => {
     writeFileSync(logPath, '', 'utf-8')
     // 🔴 캐시는 매번 비운다 — 캐시 hit 이 호출 수를 가려서는 안 된다
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    /**
+     * 🔴 **지난 사례의 생성 결과도 매번 비운다** (2026-11-11 retry-authority-v7 · PR #838 CI) — `clearPriorDraftArtifacts`.
+     *    격리하지 않으면 "형제 차단이 호출을 줄였나" 라는 이 블록의 질문이 앞 사례의 채택(v7 채택 재생성 0)에 가려지고
+     *    결과가 사례 순서에 따라 갈린다. 채택 재생성 0 자체는 아래 ⓪-b 가 지우지 않은 채 따로 본다.
+     */
+    if (opts.keepPriorArtifacts !== true) clearPriorDraftArtifacts(dd)
     /**
      * 🔴 `npx` 가 아니라 **로컬 tsx 를 직접** 부른다 — HOME 을 바꾸면 npx 가
      *    캐시를 못 찾아 네트워크로 나갈 수 있다. 이 검사는 네트워크 0 이어야 한다.
@@ -1117,6 +1124,12 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     /AUTO_ADOPT [1-9]/.test(control.out))
   check('🔴 [FP] 🔴 자산 부재로 멈추지 않았다 — 이 검사가 개인 Mac 자산에 기대지 않는다',
     !/쓸 Persona 가 없어/.test(control.out))
+
+  // ⓪-b 🔴 지난 결과를 그대로 두면 — 채택 · 결론 원천은 유료로 다시 만들지 않는다(실제 process · v7 채택 재생성 0)
+  const again = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'],
+    { keepPriorArtifacts: true })
+  check('🔴 [FP] 🔴 통제 사례의 채택 · 결론 원천을 다시 돌리면 둘 다 CONCLUDED · provider 호출 **정확히 0회**',
+    again.code === 0 && again.calls === 0 && (again.out.match(/ — CONCLUDED: /g) ?? []).length === 2)
 
   // ⓐ 대상 안 미발행 형제 둘 → 호출 0
   writeSnap([

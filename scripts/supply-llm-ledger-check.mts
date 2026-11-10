@@ -57,6 +57,7 @@ import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, conservativeShareUsd,
 } from '../src/lib/supply-scheduled-reserve'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
+import { clearPriorDraftArtifacts } from './lib/fake-prior-artifacts.mjs'
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
 const stripComments = (src: string): string =>
@@ -816,9 +817,17 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     }
     return out
   }
+  /**
+   * 🔴 **사례마다 지난 생성 결과를 비운다** (2026-11-11 retry-authority-v7 · PR #838 CI).
+   *    이 절의 사례는 모두 같은 원천(B1 · B9) · 같은 회차(R1)를 돈다. 앞 사례가 채택한 원천은 v7 에서 결론이라
+   *    뒤 사례가 `CONCLUDED` 로 provider 에 닿지 못하고, 장부 · 예산 판정(NO_BUDGET · NO_COUNT · DAILY_EXHAUSTED ·
+   *    SCHEDULED_RESERVE)이 기록되지 않는다 — 각 사례는 자기 비용 계약을 실제 fake provider 로 따로 재야 한다.
+   *    🔴 이어 보는 것은 **장부**뿐이다(`wipe: false` · ⓙ 재시작). 생성 결과를 이어 보는 사례는 이 절에 없다.
+   */
   const run = (budget: Record<string, string>, opts: { wipe?: boolean } = {}): Run => {
     writeFileSync(logPath, '', 'utf-8')
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    clearPriorDraftArtifacts(dd)
     if (opts.wipe !== false) wipeLedger()
     const r = spawnSync(
       join(process.cwd(), 'node_modules/.bin/tsx'),
@@ -1065,6 +1074,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
     }
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    clearPriorDraftArtifacts(dd)
     const both = [0, 1].map(() => spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), args, {
       cwd: root, encoding: 'utf-8', env,
     }))
@@ -1138,6 +1148,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
      */
     wipeLedger()
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    // 🔴 앞 12:20 정기 회차의 채택이 두 동시 회차를 `CONCLUDED` 로 막지 않게 — 동시성 판정은 실제 provider 도달이 전제다
+    clearPriorDraftArtifacts(dd)
     const spawnOne = (extra: Record<string, string>, runId: string, logFile: string): Promise<{ code: number | null; out: string }> =>
       new Promise((resolve) => {
         let out = ''

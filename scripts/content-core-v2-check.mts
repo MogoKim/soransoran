@@ -46,7 +46,7 @@ import {
   exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
   materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
-import { EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, selectWorkset, preGenerationRelease, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX, sourceKeyOf } from '../src/lib/supply-workset'
+import { artifactRetryClassOf, EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, selectWorkset, preGenerationRelease, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX, sourceKeyOf } from '../src/lib/supply-workset'
 /** 🔴 이 검사의 원천 사이트 — 원천 열쇠(P0-B)는 (사이트, id) 다 */
 const FX_SITE = 'navercafe:fixture'
 const RT_SITE = 'navercafe:remonterrace'
@@ -54,7 +54,7 @@ import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import {
   resolveLoadBearing, ACTIVATED_AXES, loadBearingRequirements, checkLoadBearingPreserved,
 } from '../src/lib/content-core/load-bearing'
-import { RETRYABLE_CAUSES } from '../src/lib/content-core/review'
+import { CROSS_RUN_TRANSIENT_RETRY_MAX, retryClassOf, speakerRemedyOf } from '../src/lib/content-core/generation-failure'
 import { priorFailureLines, selfForbiddenBy } from '../src/lib/content-core/replan-input'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
 import { personasForAttempt } from './lib/replan-personas.mjs'
@@ -64,7 +64,7 @@ import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-co
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL, REVIEW_VERSION,
-  artifactRetryable, reviewShapeOk,
+  reviewShapeOk,
   REVIEW_WARNING_AXES, judgeMachine, reviewWarnings,
   type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
 } from '../src/lib/content-core/review'
@@ -1156,14 +1156,15 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
       fault, canned: { plan: planIn, draft: D },
     })
     const c = got.review.semanticCompletion
-    check(`🔴 🔴 **${name} → 다시 시도한다**`,
+    // 🔴 2026-11-10 retry-authority-v7: 답을 받은 형식 오류는 같은 지문으로 다시 사지 않는다(결론). 이름(parseFailed)은 그대로 남긴다
+    check(`🔴 🔴 **${name} → parseFailed 로 남고 같은 지문으로 다시 사지 않는다**`,
       c.complete === false && c.reason === 'notRun' && c.cause === 'parseFailed'
-      && artifactRetryable(got.review) === true && reviewShapeOk(got.review),
+      && artifactRetryClassOf(got.review, got.cost) === 'terminal' && reviewShapeOk(got.review),
       `${String(c.reason)}/${String(c.cause)} · ${got.review.machineReason}`)
   }
   check('🔴 🔴 **정상 자격 실패는 그대로 결론이다**',
     held.review.semanticCompletion.cause === 'speakerUnqualified'
-    && artifactRetryable(held.review) === false,
+    && artifactRetryClassOf(held.review, held.cost) === 'terminal',
     String(held.review.semanticCompletion.cause))
   {
     const chose = await run({
@@ -1176,10 +1177,10 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
     check('🔴 🔴 **모델이 완주해서 고른 HOLD 는 결론이다**',
       chose.review.machineOutcome === 'hold'
       && chose.review.semanticCompletion.complete === true
-      && artifactRetryable(chose.review) === false,
+      && artifactRetryClassOf(chose.review, chose.cost) === 'terminal',
       `${chose.review.machineOutcome} · ${chose.review.machineReason}`)
   }
-  check('🔴 예산에 막힌 회차는 계속 재시도다', artifactRetryable(blocked.review) === true)
+  check('🔴 예산에 막힌 회차는 시도가 아니다 — unattempted(신규와 같은 자리)', artifactRetryClassOf(blocked.review, blocked.cost) === 'unattempted')
 
   /** 🔴 근거 예산 위반은 **장부 탓이 아니다** — 근거를 만드는 쪽이 어긋난 것이다 */
   {
@@ -1192,7 +1193,7 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
       c.cause === 'evidenceBudgetViolated' && c.reason === 'notRun',
       `${String(c.reason)}/${String(c.cause)}`)
     check('🔴 🔴 **그리고 다시 시도하지 않는다 — 배선이 그대로면 또 같다**',
-      artifactRetryable(over.review) === false && over.cost.totalCalls === 0)
+      artifactRetryClassOf(over.review, over.cost) === 'terminal' && over.cost.totalCalls === 0)
   }
 
   check('🔴 🔴 **중단 원인을 문구가 아니라 값으로 적는다**', (() => {
@@ -1597,10 +1598,9 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
    *    `AUTO_ADOPT` 만 들어가므로 HOLD 는 **DB 후보가 되지 않는다.**
    *    남는 곳은 회차 산출물 `auto-draft-<회차>.picks.jsonl` 이다.
    *
-   * 🔴 **재시도 계약** (2026-09-23 재정정). `AUTO_HOLD` 원천은 `concluded` 가 아니어서
-   *    **재시도 자격을 유지한다.** 다만 **다음 회차 즉시 선택은 보장되지 않는다** —
-   *    신규·재시도를 나누지 않고 실제 원문 시각 1순위의 단일 순위에서 다시 선택된다.
-   *    그 동작은 아래 `selectWorkset` 실행 검사가 값으로 확인한다.
+   * 🔴 **재선정 계약** (2026-11-10 retry-authority-v7 · 앞판 2026-09-23 대체). `AUTO_HOLD` 원천이 다시 뽑히는지는
+   *    그 artifact 의 처리(`retryClassOf`)가 정한다 — 결론이면 `concluded`, transient · speakerBound 이면 근거 지문당 한 번,
+   *    신규 먼저 · 재선정 몫 10% 안에서만. 다음 회차 즉시 선택은 보장되지 않는다(`check:retry-authority` · 아래 실행 검사).
    */
   const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 HOLD 도 `picks` 산출물에는 남는다',
@@ -1726,9 +1726,9 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
   /**
    * 🔴 앞판은 "다음 회차에 그 원천이 다시 뽑힌다" 고 단언했다. **철회한다.**
    *    정확한 계약은 이렇다.
-   *      · HOLD 된 원천은 `concluded` 에 들어가지 않아 **재시도 자격을 유지**한다
-   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 더 신선한 원천이 자리를 채울 수 있다
-   *      · 신규/재시도 구분·대기 시간·단계는 순위를 바꾸지 않는다
+   *      · 선택기는 결론 집합(`concluded`)만 본다 — 무엇이 결론인지는 단일 권위(`retryClassOf` · `concludedSourceKeys`)가 정한다
+   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 먼저이고 재선정은 몫 10% 안이다 (2026-11-10)
+   *      · 대기 시간 · 단계는 각 자리 안의 순위를 바꾸지 않는다
    */
   const NOW = new Date('2026-09-23T05:00:00Z')
   // 🔴 (2026-09-30) 순서는 정본 rank(원천 상대 백분위)다 — 옛 댓글 수 순서를 백분위로 옮겨 싣는다
@@ -2141,8 +2141,8 @@ console.log('\n🔴 🔴 **P02 전체 E2E — 실제 `runContentCore` 를 끝까
   check('🔴 🔴 **③ 구조화된 `personaTransformFailed` 로 돌아온다 — 문자열 파싱 아님**',
     a3.review.semanticCompletion.cause === 'personaTransformFailed',
     String(a3.review.semanticCompletion.cause))
-  check('🔴 🔴 **③ 그 사유는 재시도 자격을 유지한다 — 영구 제외가 아니다**',
-    artifactRetryable(a3.review) === true)
+  check('🔴 🔴 **③ 그 사유는 speakerBound — 원천 재시도가 아니라 화자 탓 · 다른 묶음으로 한 번만**',
+    artifactRetryClassOf(a3.review, a3.cost) === 'speakerBound')
 
   /** 🔴 반례 ④: 제3자 44 와 우리 나이가 같은 글에 있다 */
   const a4 = await go({
@@ -2270,8 +2270,8 @@ console.log('\n🔴 🔴 **materiality — 계획이 말한 값을 쓰되 증거
     silent.review.machineOutcome !== 'adopt'
     && silent.review.semanticCompletion.cause === 'parseFailed',
     `${silent.review.machineOutcome} · ${String(silent.review.semanticCompletion.cause)}`)
-  check('🔴 🔴 **⑤ 그것은 재시도다 — 정상 원천을 영구 제외하지 않는다**',
-    artifactRetryable(silent.review) === true)
+  check('🔴 🔴 **⑤ 답을 받은 형식 오류 — 같은 지문으로 다시 사지 않는다(계약이 바뀌면 새 지문)**',
+    artifactRetryClassOf(silent.review, silent.cost) === 'terminal')
   check('🔴 🔴 **⑤ 기본값 함수가 사라졌다 — `materialityFor` 는 없으면 `null` 이다**',
     materialityFor('44', 'head', new Map()) === null)
 
@@ -2726,8 +2726,8 @@ console.log('\n🔴 🔴 **원문 자기 나이 탐지는 planner 출력에 의�
     blind.review.machineOutcome !== 'adopt'
     && blind.review.semanticCompletion.cause === 'parseFailed',
     `${blind.review.machineOutcome} · ${String(blind.review.semanticCompletion.cause)}`)
-  check('🔴 🔴 **① 그 사유는 재시도다 — 정상 원천을 영구 제외하지 않는다**',
-    artifactRetryable(blind.review) === true)
+  check('🔴 🔴 **① 답을 받은 형식 오류 — 같은 지문으로 다시 사지 않는다(계약이 바뀌면 새 지문)**',
+    artifactRetryClassOf(blind.review, blind.cost) === 'terminal')
 
   /**
    * 🔴 ② **speakerRelative 로만 적어도 받는다** — 그때는 변환 대상으로 싣는다.
@@ -2931,9 +2931,8 @@ console.log('\n🔴 🔴 **load-bearing 해소 — 사람을 차례로 태우지
   })
   check('🔴 🔴 **⑤ 금지 뒤에도 1인칭이면 MEANING_UNPRESERVABLE — 재시도가 아니다**',
     !term.ok && !term.retry && term.code === 'MEANING_UNPRESERVABLE', JSON.stringify(term))
-  check('🔴 🔴 **⑤ 그 사유는 재시도 목록에 없다 — 같은 원천을 다시 사지 않는다**',
-    ![...RETRYABLE_CAUSES].includes('meaningUnpreservable' as never),
-    [...RETRYABLE_CAUSES].join(','))
+  check('🔴 🔴 **⑤ 그 사유는 단일 권위에서 결론이다 — 같은 원천을 다시 사지 않는다**',
+    retryClassOf('meaningUnpreservable', null) === 'terminal')
 
   /** 🔴 ⑥ 활성화하지 않은 축이 load-bearing 이면 결론이다 — 범위를 넘겨 바꾸지 않는다 */
   const other = resolveLoadBearing({
@@ -3065,6 +3064,10 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
   const d1 = world()
   writeArtifacts(d1, '20260923-100000', [a02])
   const r1 = planNext(d1)
+  /**
+   * 🔴 2026-11-10 retry-authority-v7 — `personaTransformFailed` 는 speakerBound: 근거 지문당 한 번 더, 실패 화자를 뺀 다른 묶음으로.
+   *    두 번째도 끝나지 않으면 결론 집합(`concludedSourceKeys`)이 막는다(②·③).
+   */
   check('🔴 🔴 **① 디스크에 쓴 실패 기록을 읽어 P02 를 제외한다**',
     r1.ok && r1.excluded.join(',') === 'P02', JSON.stringify(r1))
   check('🔴 🔴 **① 다음 시도에 나가는 화자가 실제로 바뀐다 — P02 가 빠진다**',
@@ -3083,10 +3086,8 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
   writeArtifacts(d2, '20260923-100000', [a02])
   writeArtifacts(d2, '20260923-110000', [a04])
   const r2 = planNext(d2)
-  check('🔴 🔴 **② 두 번 실패하면 둘 다 빠지고 남은 한 사람만 나간다**',
-    r2.ok && r2.personas.map((c) => c.code).join(',') === 'P08'
-    && [...r2.excluded].sort().join(',') === 'P02,P04',
-    JSON.stringify(r2.ok ? r2.personas.map((c) => c.code) : r2))
+  check('🔴 🔴 **② 두 번째도 끝나지 않으면 결론 — 세 번째 화자로 유료 재구매하지 않는다(근거 지문당 한 번 상한)**',
+    !r2.ok && r2.code === 'CONCLUDED', JSON.stringify(r2))
 
   /** 🔴 ③ 셋 다 실패 — 더 시도하지 않는다. 같은 원천을 무한히 다시 사지 않는다 */
   const a08 = await failWith('P08')
@@ -3095,11 +3096,11 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
   writeArtifacts(d3, '20260923-110000', [a04])
   writeArtifacts(d3, '20260923-120000', [a08])
   const r3 = planNext(d3)
-  check('🔴 🔴 **③ 적격 화자를 모두 소진하면 구조화된 중단이다 (문자열 아님)**',
-    !r3.ok && (r3.code === 'EXHAUSTED' || r3.code === 'ATTEMPT_CAP'),
-    JSON.stringify(r3))
+  check('🔴 🔴 **③ 구조화된 중단이다 (문자열 아님) — 결론 원천은 CONCLUDED**',
+    !r3.ok && r3.code === 'CONCLUDED', JSON.stringify(r3))
   check('🔴 🔴 **③ 무한 유료 반복 반례 — 시도 상한을 넘기지 않는다**',
-    REPLAN_ATTEMPT_MAX === 3 && !r3.ok, `${REPLAN_ATTEMPT_MAX} · ${JSON.stringify(r3)}`)
+    REPLAN_ATTEMPT_MAX === CROSS_RUN_TRANSIENT_RETRY_MAX + 1 && REPLAN_ATTEMPT_MAX === 2 && !r3.ok,
+    `${REPLAN_ATTEMPT_MAX} · ${JSON.stringify(r3)}`)
 
   /**
    * 🔴 ④ **화자 탓이 아닌 실패로 사람을 태우지 않는다.**
@@ -3118,6 +3119,10 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
   check('🔴 🔴 **④ 화자 탓 사유는 두 가지뿐이다 — 목록이 늘면 이 검사가 깨진다**',
     [...PERSONA_REPLAN_CAUSES].join(',') === 'personaTransformFailed,loadBearingMismatch',
     [...PERSONA_REPLAN_CAUSES].join(','))
+  check('🔴 🔴 **④ 화자 탓 목록 ⊂ speakerBound · 해법 speakerSet — 빠진 둘은 탓할 한 사람이 없거나(좁힌 묶음) 해법이 자리다**',
+    PERSONA_REPLAN_CAUSES.every((c) => retryClassOf(c, 'ok') === 'speakerBound' && speakerRemedyOf(c) === 'speakerSet')
+    && speakerRemedyOf('speakerSlotNarrowed') === 'speakerSet' && !(PERSONA_REPLAN_CAUSES as readonly string[]).includes('speakerSlotNarrowed')
+    && speakerRemedyOf('loadBearingSelfImpossible') === 'stance')
 
   /** 🔴 ⑤ 계약이 다르면 지난 실패는 이 계약의 결론이 아니다 */
   check('🔴 🔴 **⑤ 원천 입력이 달라지면 지난 실패를 물려받지 않는다**', (() => {
@@ -3144,9 +3149,10 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
     && !/personas: voice\.candidates/.test(runnerSrc),
     runnerSrc.split('\n').filter((l) => /^\s*personas:/.test(l)).join(' | '))
   check('🔴 🔴 **⑥ `ok:false` 면 만들지 않고 넘어간다 — 유료 호출 앞이다**',
-    /if \(!replan\.ok\) \{[\s\S]{0,400}?holdPick\(\)\n\s*continue/.test(runnerSrc))
+    /if \(!replan\.ok\) \{[\s\S]{0,400}?holdPick\(\{ heldBy: beforeCall\('replanStopped'\) \}\)\n\s*continue/.test(runnerSrc))
   check('🔴 🔴 **⑥ 제외 목록이 캐시 key 에 들어간다 — 바뀌기 전 결과를 되받지 않는다**',
-    /excl=\$\{digest16/.test(runnerSrc))
+    /speakerSetKeyOf\(\{ speakerCodes: slotCodes, excludedCodes: replan\.excluded \}\)/.test(runnerSrc)
+    && /export function speakerSetKeyOf[\s\S]{0,400}\|excl=/.test(readFileSync('src/lib/content-core/generation-failure.ts', 'utf-8')))
 }
 
 console.log('\n🔴 🔴 **birthDate 가 생성 계약에 들어간다 — 고치면 캐시가 무효화된다**')
@@ -3180,16 +3186,17 @@ console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 �
     droppedFromSource: [], unsupportedAdditions: [], lifeContradictions: [],
     voice: null, machineOutcome: 'hold', machineReason: '',
   })
-  check('🔴 🔴 **`personaTransformFailed` 는 재시도 자격을 유지한다**',
-    artifactRetryable(rev('personaTransformFailed')) === true)
-  check('🔴 🔴 **`loadBearingMismatch` 도 재계획 대상이다**',
-    artifactRetryable(rev('loadBearingMismatch')) === true)
-  check('🔴 예산·파싱 실패는 그대로 재시도다',
-    artifactRetryable(rev('budgetBlocked', 'budgetBlocked')) === true
-    && artifactRetryable(rev('parseFailed', 'parseFailed')) === true)
+  // 🔴 2026-11-10 retry-authority-v7: Persona 부적격 · 답을 받은 실패는 결론, 나가지 않은 요청만 unattempted
+  check('🔴 🔴 **`personaTransformFailed` 는 speakerBound — 원천 재시도가 아니라 화자 탓(다른 묶음으로 한 번)**',
+    artifactRetryClassOf(rev('personaTransformFailed'), undefined) === 'speakerBound')
+  check('🔴 🔴 **`loadBearingMismatch` 도 speakerBound — 조건을 만족하는 다른 사람으로 한 번**',
+    artifactRetryClassOf(rev('loadBearingMismatch'), undefined) === 'speakerBound')
+  check('🔴 예산 차단은 unattempted · 파싱 실패는 결론',
+    artifactRetryClassOf(rev('budgetBlocked', 'budgetBlocked'), undefined) === 'unattempted'
+    && artifactRetryClassOf(rev('parseFailed', 'parseFailed'), undefined) === 'terminal')
   check('🔴 🔴 **자격 없음·안전 실패는 그대로 결론이다**',
-    artifactRetryable(rev('speakerUnqualified')) === false
-    && artifactRetryable(rev('deterministicFailed')) === false)
+    artifactRetryClassOf(rev('speakerUnqualified'), undefined) === 'terminal'
+    && artifactRetryClassOf(rev('deterministicFailed'), undefined) === 'terminal')
 
   // 🔴 실제 사슬 — `selectWorkset` 이 그 원천을 다시 볼 수 있는가
   const AT = new Date('2026-09-23T05:00:00Z')
@@ -3208,7 +3215,7 @@ console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 �
     releaseOf: (r) => preGenerationRelease(r, AT, AT),
     limit: 5, runId: 'r1', takenAt: AT,
   }).workset.sources.map((s) => s.sourceArticleId)
-  check('🔴 🔴 **변환 실패 원천은 `concluded` 에 들어가지 않아 다시 뽑힐 수 있다**',
+  check('🔴 🔴 **선택기는 결론 집합(`concluded`)만 본다 — 비어 있으면 뽑힌다**',
     pick([]).includes('transform-fail'))
   check('🔴 🔴 **결론인 원천만 `concluded` 로 빠진다**',
     !pick(['transform-fail']).includes('transform-fail'))

@@ -83,7 +83,7 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
  */
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
 import { currentContractBase } from './lib/generation-contract.mjs'
-import { digest16, loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
+import { loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
 import { createAttemptPool, planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
 import {
   readSpeakerLoad, SPEAKER_LOAD_FILE,
@@ -118,7 +118,12 @@ import {
 import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type PersonaInput,
 } from './lib/content-core-run.mjs'
-import { GENERATION_RETRY_MAX } from '../src/lib/content-core/generation-failure'
+import {
+  GENERATION_RETRY_MAX, completionRetryClass, evidenceFingerprintOf, failureFingerprintOf, generationAttemptKeyOf,
+  lastCallOutcomeOf, speakerSetKeyOf,
+} from '../src/lib/content-core/generation-failure'
+import { speakerSetAlreadyFailed } from '../src/lib/supply-workset'
+import type { HeldBy, HeldCode } from '../src/lib/micro-seed-auto-draft'
 import { ledgerAskOf } from './lib/content-core-ledger-ask.mjs'
 import { buildSpeakerPlanSystemPrompt } from './lib/content-core-prompts.mjs'
 import {
@@ -1061,22 +1066,31 @@ async function main(): Promise<void> {
     const ik = intentKeyOf(j.sourceSite, j.sourceArticleId)
     COST_CONTRACT = ik === null ? null : RUN_INTENTS?.get(ik)?.contract ?? null
     const meta = metas.get(keyOfJ(j))
-    const holdPick = (o: { personaDeferred?: boolean } = {}): void => {
+    /**
+     * 🔴 **초안이 없을 때 원인 사슬을 함께 남긴다** (2026-11-10 retry-authority-v7) — `noDraft` 한 이름으로 뭉치지 않는다.
+     *    유료 요청 전 차단은 원인 칸이 `null` 이고, 생성 결과는 artifact 의 원인 · 손실 유형 · 재선정 처리 · 지문을 그대로 나른다.
+     */
+    const beforeCall = (code: HeldCode): HeldBy => ({
+      code, cause: null, failureKind: null, failureStage: null, retryClass: null,
+      evidenceFingerprint: null, failureFingerprint: null,
+    })
+    const holdPick = (o: { personaDeferred?: boolean; heldBy?: HeldBy } = {}): void => {
       picks.push(pickDraft({
         judgement: j, drafts: [], seenTitles, seenBodies, sourceUsed: false,
         personaDeferred: o.personaDeferred === true,
+        ...(o.heldBy === undefined ? {} : { heldBy: o.heldBy }),
       }, nowIso))
     }
-    if (meta === undefined) { holdPick(); continue }
+    if (meta === undefined) { holdPick({ heldBy: beforeCall('sourceMetaMissing') }); continue }
     /** 🔴 정본을 못 읽었으면 전 원천을 멈춘다 — provider 호출 0 */
-    if (voice.blockAllCode !== null) { voiceHeld += 1; holdPick(); continue }
+    if (voice.blockAllCode !== null) { voiceHeld += 1; holdPick({ heldBy: beforeCall('voiceBlocked') }); continue }
     /**
      * 🔴 **위기 소재는 만들지 않는다** — 정본 §4 선행 차단 (2026-09-16).
      *    유료 호출보다 앞이다. v2 로 바뀌어도 이 순서는 그대로다.
      */
     if (!judgeSourceGate({ title: meta.title, bodyHead: meta.bodyHead }).generate) {
       sourceCrisisHeld += 1
-      holdPick()
+      holdPick({ heldBy: beforeCall('sourceCrisis') })
       continue
     }
 
@@ -1123,7 +1137,7 @@ async function main(): Promise<void> {
        */
       console.log(`   🟡 ${j.sourceArticleId} — ${replan.code}: ${replan.reason}`
         + `${replan.excluded.length > 0 ? ` (제외 ${replan.excluded.join(' ')})` : ''}`)
-      holdPick()
+      holdPick({ heldBy: beforeCall('replanStopped') })
       continue
     }
     /**
@@ -1131,17 +1145,30 @@ async function main(): Promise<void> {
      *    **바뀌기 전 결과**를 캐시에서 받아 그대로 또 실패한다.
      *    🔴 제외가 없을 때는 칸을 붙이지 않는다 — 평상시 key 를 바꾸지 않기 위해서다.
      */
-    const slotDigest = digest16(slotCodes.join(','))
-    const exclPart = replan.excluded.length === 0
-      ? '' : `|excl=${digest16([...replan.excluded].sort().join(','))}`
+    /**
+     * 🔴 **화자 묶음 열쇠 · 시도 열쇠 — 단일 helper** (2026-11-10 retry-authority-v7). 캐시 key 와 결론 판독(artifact 의
+     *    `speakerSetDigest` · 같은 묶음 재구매 차단)이 같은 함수를 쓴다. 바이트는 앞판 key 와 같다 — 캐시를 무효화하지 않는다.
+     */
+    const speakerSetKey = speakerSetKeyOf({ speakerCodes: slotCodes, excludedCodes: replan.excluded })
+    /**
+     * 🔴 **같은 화자 묶음으로 이미 Persona 부적격을 받았으면 다시 사지 않는다** — 유료 호출 앞이다.
+     *    `speakerBound` 는 원천 재시도가 아니라 화자 탓이다 — 다른 묶음일 때만, 같은 근거 지문당 한 번(상한은 공급 선택이 본다).
+     */
+    if (speakerSetAlreadyFailed(priorOutcomes, keyOfJ(j), speakerSetKey)) {
+      holdPick({ heldBy: beforeCall('speakerSetRepeat') })
+      continue
+    }
     // 🔴 원천 (사이트, id) 를 담는다(P0-B) — 옛 열쇠(사이트 없음)는 자연히 빗나간다(다시 만든다 · 남의 artifact 를 받지 않는다)
-    const v2Key = `v2|${S(j.sourceSite)}|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}${exclPart}`
+    const v2Key = `v2|${S(j.sourceSite)}|${j.sourceArticleId}|${generationAttemptKeyOf({
+      artifactVersion: ARTIFACT_VERSION, contractIdentity: generationIdentity(contract), speakerSetKey,
+    })}`
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
     if (cached?.artifact !== undefined) {
       hit += 1
-      art = cached.artifact
+      // 🔴 같은 key 의 캐시는 같은 화자 묶음이다 — 옛 캐시 객체에 칸이 없으면 지금 열쇠를 싣는다
+      art = { ...cached.artifact, speakerSetDigest: speakerSetKey }
     } else {
       miss += 1
       art = await runContentCore({
@@ -1186,6 +1213,8 @@ async function main(): Promise<void> {
          */
         retryCap: GENERATION_RETRY_MAX,
       })
+      // 🔴 이 시도의 화자 묶음 열쇠 — 결론 판독이 캐시와 같은 값을 본다
+      art = { ...art, speakerSetDigest: speakerSetKey }
       // 🔴 완주한 회차만 캐시에 남긴다 — 막힌 결과를 재사용하면 다음 회차도 막힌다
       if (art.review.semanticCompletion.complete) {
         cache.set(v2Key, { artifact: art, status: 'ok', attemptCount: art.cost.totalCalls })
@@ -1214,7 +1243,18 @@ async function main(): Promise<void> {
 
     if (art.draft === null) {
       v2Held += 1
-      holdPick()
+      const sc = art.review.semanticCompletion
+      const lastCall = lastCallOutcomeOf(art.cost)
+      const evidenceFingerprint = evidenceFingerprintOf({ artifactVersion: ARTIFACT_VERSION, contractIdentity: generationIdentity(contract) })
+      holdPick({
+        heldBy: {
+          code: sc.complete ? 'generationHeld' : 'generationIncomplete',
+          cause: sc.cause, failureKind: art.failure?.kind ?? null, failureStage: art.failure?.stage ?? null,
+          retryClass: completionRetryClass(sc, lastCall),
+          evidenceFingerprint,
+          failureFingerprint: failureFingerprintOf({ evidenceFingerprint, speakerSetKey, cause: sc.cause, lastCall }),
+        },
+      })
       continue
     }
     /**
@@ -1370,6 +1410,17 @@ async function main(): Promise<void> {
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)
+  }
+  /** 🔴 초안이 나오지 않은 원인 — `noDraft` 한 줄 뒤의 실제 원인 코드와 재선정 처리(단일 권위의 값) */
+  const heldTally = new Map<string, number>()
+  for (const pp of picks) {
+    if (pp.heldBy === undefined) continue
+    const k = `${pp.heldBy.code}:${pp.heldBy.cause ?? '-'}:${pp.heldBy.retryClass ?? '-'}`
+    heldTally.set(k, (heldTally.get(k) ?? 0) + 1)
+  }
+  if (heldTally.size > 0) {
+    console.log('   ④-b 초안 없음의 원인 (자리:원인:재선정)')
+    for (const [k, n] of [...heldTally].sort((a, b) => b[1] - a[1])) console.log(`   ${String(n).padStart(3)}건  ${k}`)
   }
   console.log(`\n⑤ 원천당 1개 — 채택 ${adopted.length}건 · 고유 원천 ${usedSources.size}건`
     + `${adopted.length === usedSources.size ? ' ✅' : ' 🔴'}`)

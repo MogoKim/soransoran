@@ -25,7 +25,7 @@ import {
 import { JUDGE_MODEL } from './micro-seed-auto-judge.mjs'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 import {
-  EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, attemptedOutcomes, concludedSourceKeys, judgeStageBudget, latestOutcomes, selectWorkset as selectWorksetCore,
+  EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, attemptedOutcomes, concludedSourceKeys, selectionLaneOf, judgeStageBudget, latestOutcomes, selectWorkset as selectWorksetCore,
   sourceKeyOf, sourceOfKey,
   preGenerationRelease, worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
 } from '../src/lib/supply-workset'
@@ -33,9 +33,9 @@ import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
 import { missingCandidateKeys } from './lib/candidate-envelope.mjs'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
-import {
-  RETRYABLE_CAUSES, INCOMPLETE_CAUSE_LABEL,
-} from '../src/lib/content-core/review'
+import { INCOMPLETE_CAUSE_LABEL } from '../src/lib/content-core/review'
+import { retryClassOf } from '../src/lib/content-core/generation-failure'
+import { planCarryOver } from './lib/fill-carry-over.mjs'
 import type { PriorOutcome } from '../src/lib/supply-workset'
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 import { ledgerRunIdOf, runFileName } from '../src/lib/supply-process'
@@ -465,8 +465,9 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     [...latestOutcomes(got).values()].map((o) => `${o.sourceArticleId}:${o.stage}:${o.state}`).join(' '))
 
   const terminal = concludedIds(got)
-  check('🔴 🔴 **채택된 원천은 terminal 이 아니다** — 결론이 아니라 큐로 가는 것이다',
-    terminal.size === 0 && [...latestOutcomes(got).values()].every((o) => o.state === 'candidate'),
+  // 🔴 2026-11-10 retry-authority-v7 — 상태는 candidate(terminal 아님)이되 유료 재생성 풀에서 빠진다. 적재 못 한 후보는 이월이 살린다(⑥ ⑦)
+  check('🔴 🔴 **채택된 원천은 candidate 상태 — 그리고 유료 재생성 풀(결론 집합)로 빠진다**',
+    terminal.size === 5 && [...latestOutcomes(got).values()].every((o) => o.state === 'candidate'),
     [...latestOutcomes(got).values()].map((o) => o.state).join(','))
 
   /**
@@ -514,14 +515,14 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     }
   }
 
-  // ── 2회차 — 신규/재시도 상태가 원천 순위를 뒤집지 않는다 ──
+  // ── 2회차 — 채택 원천은 유료 재생성 0 · 처음 보는 원천이 신규 자리로 먼저 선다(2026-11-10 신규 먼저 · 재선정 몫 10%) ──
   const attempted1 = attemptedOutcomes(outcomesOf(w))
   check('🔴 1회차가 본 원천은 5건이다', attempted1.size === 5, `${attempted1.size}건`)
   const second = selectAt(`${RUN}-2`)
   check('🔴 🔴 **적재된 원천을 다시 고르지 않는다**',
     second.workset.sources.map(sid).every((id) => !queued.has(id)), second.workset.sources.map(sid).join(','))
-  check('🔴 🔴 **동일 신선도에서 반응 순위가 그대로다** — 신규/재시도가 순위를 뒤집지 않는다',
-    second.workset.sources.map(sid).join(',') === 'e1,e2,e3,e4,e5',
+  check('🔴 🔴 **채택 원천을 다시 사지 않는다 — 그 자리는 처음 보는 원천(e5·e6·e7)이 쓴다** (앞판: e1~e4 재생성 + e5)',
+    second.workset.sources.map(sid).join(',') === 'e5,e6,e7',
     second.workset.sources.map(sid).join(','))
   check('🔴 적재분이 제외 사유로 세어진다',
     second.dropped.queueSibling === queued.size, `${second.dropped.queueSibling}/${queued.size}`)
@@ -538,30 +539,23 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
   const t2 = concludedIds(outcomesOf(w))
   const newlyJudged = second.workset.sources.map(sid).filter((id) => !attempted1.has(KY(id)))
   check('🔴 🔴 **2회차에 처음 본 원천은 그 판정으로 끝났다**',
-    newlyJudged.length === 1 && newlyJudged[0] === 'e5' && t2.has('e5'),
+    newlyJudged.join(',') === 'e5,e6,e7' && newlyJudged.every((id) => t2.has(id)),
     `${newlyJudged.join(',')} / terminal ${[...t2].join(',')}`)
-  check('🔴 🔴 **순위 밖 원천은 다음 회차로 유예된다** — 미시도 예약석이 없다',
-    second.deferred === 2
+  check('🔴 🔴 **처음 보는 원천이 남지 않았다 — 유예 0 (채택 원천을 사지 않아 신규가 한 회차에 다 들어왔다)**',
+    second.deferred === 0
       && rows.filter((r) => !attempted1.has(KY(r.sourceArticleId))
-        && !second.workset.sources.map(sid).includes(r.sourceArticleId))
-        .map((r) => r.sourceArticleId).sort().join(',') === 'e6,e7',
+        && !second.workset.sources.map(sid).includes(r.sourceArticleId)).length === 0,
     `${second.deferred}건 유예`)
 
   const third = selectAt(`${RUN}-3`)
   check('🔴 🔴 **끝난 원천을 되풀이해 고르지 않는다**',
     third.workset.sources.map(sid).every((id) => !t2.has(id)), third.workset.sources.map(sid).join(','))
   /**
-   * 🔴 결론이 안 난 상위 원천은 다시 올라온다. 입력·계약이 같은 재시도 4건은
-   *    판정 캐시가 받고, 이번에 처음 보는 e6 한 건만 유료 호출한다.
+   * 🔴 2026-11-10 retry-authority-v7 — 채택 · 결론 원천만 남으면 3회차 묶음은 비고 유료 호출이 나가지 않는다
+   *    (앞판: 채택 원천 e1~e4 를 캐시로 다시 돌리고 e6 를 유료로 샀다).
    */
-  const r3 = judgeRound(`${RUN}-3`, third, Math.max(1, third.picked.length))
-  check('🔴 🔴 **캐시된 재시도는 공짜·새 원천 한 건만 유료**',
-    r3.code === 0 && r3.paid === 1
-      && third.workset.sources.map(sid).join(',') === 'e1,e2,e3,e4,e6',
-    `${r3.paid}회 · code=${r3.code} · ${third.workset.sources.map(sid).join(',')}`)
-  check('🔴 그래도 그 묶음만 본다',
-    r3.ids.slice().sort().join(',') === third.workset.sources.map(sid).slice().sort().join(','),
-    r3.ids.join(','))
+  check('🔴 🔴 **남은 원천이 채택·결론뿐이면 묶음 0 · 유료 0**',
+    third.workset.sources.length === 0 && third.picked.length === 0, third.workset.sources.map(sid).join(','))
 
   // ── 되풀이가 멈추는가 ──
   const fourth = selectAt(`${RUN}-4`)
@@ -802,7 +796,7 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑨ 🔴 🔴 최신 원천이 재시도 예약석에 밀리지 않는다 (실제 파일)')
+console.log('\n⑨ 🔴 🔴 최신 원천이 재선정에 밀리지 않는다 — 신규 먼저 (실제 파일)')
 // ─────────────────────────────────────────────────────────
 {
   const w5 = makeWorld()
@@ -966,24 +960,26 @@ console.log('\n⑳ 🔴 🔴 화자 여력 파일 — 공급 러너 → 파일 �
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n㉑ 🔴 🔴 좁힌 묶음 탓 HOLD 는 다음 회차에 다시 본다')
+console.log('\n㉑ 🔴 🔴 좁힌 묶음 탓 HOLD 는 Persona 부적격 결론이다 (2026-11-10 retry-authority-v7)')
 // ─────────────────────────────────────────────────────────
 {
   /**
-   * 🔴 **결론과 재시도를 가른다.** 좁힌 묶음에 맞는 사람이 없어 멈춘 것은
-   *    `speakerSlotNarrowed` 이고 **다시 본다**. 전체 후보에서도 자격이 없는 것은
-   *    `speakerUnqualified` 이고 **결론**이다. 섞으면 정상 원천이 영구 제외된다.
+   * 🔴 **두 값은 손실 원인을 가르는 다른 이름이고, 재선정 처리도 다르다** (2026-11-10 retry-authority-v7).
+   *    `speakerSlotNarrowed`(좁힌 묶음에 맞는 사람 없음)는 `speakerBound` — 해법 `speakerSet`: **다른 화자 묶음**으로
+   *    근거 지문당 딱 한 번(같은 묶음 재구매는 러너가 유료 호출 앞에서 막는다). `speakerUnqualified`(전체 후보에서도 없음)는 결론이다.
+   *    앞판은 `speakerSlotNarrowed` 를 같은 묶음 그대로 회차마다 다시 사서 11-09·11-10 에 같은 원천을 최대 11회 샀다
+   *    (lastCall 전부 `ok` — 답을 받은 Persona 부적격).
    */
-  check('🔴 🔴 **`speakerSlotNarrowed` 는 다시 시도한다**',
-    (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed'))
+  check('🔴 🔴 **`speakerSlotNarrowed` 는 speakerBound — 원천 재시도가 아니라 화자 묶음 탓 · 다른 묶음으로 한 번**',
+    retryClassOf('speakerSlotNarrowed', 'ok') === 'speakerBound')
   check('🔴 🔴 **`speakerUnqualified` 는 그대로 결론이다**',
-    !(RETRYABLE_CAUSES as readonly string[]).includes('speakerUnqualified'))
+    retryClassOf('speakerUnqualified', 'ok') === 'terminal')
   check('🔴 두 값은 서로 다른 이름이다',
     INCOMPLETE_CAUSE_LABEL.speakerSlotNarrowed !== INCOMPLETE_CAUSE_LABEL.speakerUnqualified)
 
   /** 🔴 생성 러너가 좁혀졌을 때만 그 값을 쓴다 */
   const runSrc = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
-  check('🔴 🔴 **좁혀졌을 때만 재시도 값으로 적는다**',
+  check('🔴 🔴 **좁혀졌을 때만 그 이름으로 적는다(손실 원인 구분 · 좁힘은 speakerBound · 전체 부적격은 결론)**',
     /input\.personas\.length < input\.personaPoolSize/.test(runSrc)
     && /narrowed \? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const/.test(runSrc))
 }
@@ -1056,6 +1052,11 @@ console.log('\n㉒ 🔴 🔴 재계획 — 실제 러너로 세 갈래를 값으
     }
   }
 
+  /**
+   * 🔴 2026-11-10 retry-authority-v7 — Persona 부적격은 `speakerBound`: 근거 지문당 **한 번 더**(첫 시도 + 1),
+   *    그 한 번은 해법(`speakerRemedyOf`)이 바뀐 시도여야 한다 — 다른 화자 묶음(`speakerSet`) 또는 다른 자리(`stance`).
+   *    같은 묶음 재구매는 유료 호출 앞에서 막고(ⓓ), 두 번째도 끝나지 않으면 결론이다(ⓐ·ⓑ 3회차).
+   */
   // ── ⓐ 사람을 바꾸면 될 수 있는 실패 — 초안이 나이를 통째로 뺀다 ──
   {
     const world = mk('20260922-ra')
@@ -1064,15 +1065,19 @@ console.log('\n㉒ 🔴 🔴 재계획 — 실제 러너로 세 갈래를 값으
       r1.causes.join(',') === 'personaTransformFailed' && r1.picked[0] !== '',
       `${r1.picked.join(',')} · ${r1.causes.join(',')}`)
     const r2 = draftOnce(world, '20260922-ra2', { dropAge: true })
-    check('🔴 🔴 **ⓐ 다음 회차에 실제로 다른 사람이 나간다**',
+    check('🔴 🔴 **ⓐ 2회차 — 실패 화자를 뺀 다른 묶음으로 실제로 다른 사람이 나간다(한 번 허용)**',
       r2.picked.length === 1 && r2.picked[0] !== '' && r2.picked[0] !== r1.picked[0],
       `1회차 ${r1.picked.join(',')} → 2회차 ${r2.picked.join(',')}`)
+    const r3 = draftOnce(world, '20260922-ra3', { dropAge: true })
+    check('🔴 🔴 **ⓐ 3회차 — 두 번째도 끝나지 않았으면 결론: 세 번째 유료 시도 없음(CONCLUDED)**',
+      r3.picked.length === 0 && /CONCLUDED/.test(r3.out),
+      `${r2.causes.join(',')} → ${r3.picked.join(',')} · ${r3.out.slice(-160)}`)
   }
 
   /**
    * ── ⓑ 🔴 **사람을 바꿔도 소용없는 실패** ──
-   *    원문 44 가 결론을 바꾼다. 후보 중 44 인 사람이 없다 —
-   *    앞판은 여기서 **세 명을 차례로 태웠다.** 지금은 태우지 않는다.
+   *    원문 44 가 결론을 바꾼다. 후보 중 44 인 사람이 없다 — 해법은 사람이 아니라 자리(1인칭 금지)다.
+   *    앞판은 여기서 **세 명을 차례로 태웠다.** 지금은 같은 사람으로 자리만 바꿔 한 번 본다.
    */
   {
     const world = mk('20260922-rb')
@@ -1081,8 +1086,8 @@ console.log('\n㉒ 🔴 🔴 재계획 — 실제 러너로 세 갈래를 값으
       r1.causes.join(',') === 'loadBearingSelfImpossible',
       `${r1.picked.join(',')} · ${r1.causes.join(',')}`)
     const r2 = draftOnce(world, '20260922-rb2', { selfAgeRole: 'loadBearing' })
-    check('🔴 🔴 **ⓑ 그 사람을 태우지 않는다 — 다음 회차도 같은 사람이다**',
-      r2.picked.length === 1 && r2.picked[0] === r1.picked[0],
+    check('🔴 🔴 **ⓑ 2회차 — 그 사람을 태우지 않는다(같은 사람 · 자리 해법) · 같은 묶음이어도 막지 않는다(해법이 stance)**',
+      r2.picked.length === 1 && r2.picked[0] === r1.picked[0] && !/speakerSetRepeat/.test(r2.out),
       `1회차 ${r1.picked.join(',')} → 2회차 ${r2.picked.join(',')}`)
     check('🔴 🔴 **ⓑ 지시를 무시하고 또 1인칭이면 `meaningUnpreservable` — 한 번에 결론이다**',
       r2.causes.join(',') === 'meaningUnpreservable', r2.causes.join(','))
@@ -1091,7 +1096,7 @@ console.log('\n㉒ 🔴 🔴 재계획 — 실제 러너로 세 갈래를 값으
       r3.picked.length === 0 && /CONCLUDED/.test(r3.out),
       `${r3.picked.join(',')} · ${r3.out.slice(-200)}`)
     /**
-     * 🔴 **운영 경로에서도 결론이다.** 공급 러너는 `concludedSourceIds` 로 먼저 거른다 —
+     * 🔴 **운영 경로에서도 결론이다.** 공급 러너는 `concludedSourceKeys` 로 먼저 거른다 —
      *    러너 안의 방어와 **따로** 확인한다. 한쪽만 보면 다른 쪽이 조용히 열려 있어도 모른다.
      */
     check('🔴 🔴 **ⓑ 공급 러너의 묶음 선택에서도 빠진다 — 같은 원천을 다시 사지 않는다**', (() => {
@@ -1121,13 +1126,40 @@ console.log('\n㉒ 🔴 🔴 재계획 — 실제 러너로 세 갈래를 값으
       r1.causes.join(',') === 'loadBearingSelfImpossible' && r1.stances.join(',') === 'SELF_EXPERIENCE',
       `${r1.stances.join(',')} · ${r1.causes.join(',')}`)
     const r2 = draftOnce(world, '20260922-rc2', { selfAgeRole: 'loadBearing', obeyForbid: true })
-    check('🔴 🔴 **ⓒ 2회차는 자리가 바뀐다 — 금지가 요청에 실제로 실렸다**',
+    check('🔴 🔴 **ⓒ 2회차는 자리가 바뀐다 — 금지가 요청에 실제로 실렸다(한 번 허용)**',
       r2.stances.join(',') !== 'SELF_EXPERIENCE' && r2.stances[0] !== undefined,
       `${r1.stances.join(',')} → ${r2.stances.join(',')}`)
     check('🔴 🔴 **ⓒ 그 회차는 load-bearing 으로 멈추지 않는다 — 의미가 보존됐다**',
       !['loadBearingSelfImpossible', 'meaningUnpreservable', 'loadBearingMismatch']
         .includes(r2.causes[0] ?? ''),
       `${r2.causes.join(',')} · ${r2.out.slice(-160)}`)
+  }
+
+  /**
+   * ── ⓓ 🔴 **같은 화자 묶음으로는 다시 사지 않는다** (2026-11-10) ──
+   *    좁힌 묶음에 맞는 사람이 없었다(`speakerSlotNarrowed` · 해법 `speakerSet`)면 탓할 한 사람이 없어 제외가 생기지 않는다 —
+   *    다음 회차가 **같은 묶음**을 받으면 같은 결과다. 실제 러너가 1회차에 남긴 artifact(러너가 적은 `speakerSetDigest` 그대로)의
+   *    원인 칸만 `speakerSlotNarrowed` 로 두고, 같은 여력 파일(같은 묶음)로 2회차를 돌린다 — 유료 호출 0 · 원인 사슬이 남는다.
+   */
+  {
+    const world = mk('20260922-rd')
+    const r1 = draftOnce(world, '20260922-rd1', { dropAge: true })
+    const artPath = join(world.w.dd, 'auto-draft-20260922-rd1.artifacts.json')
+    const arts = JSON.parse(readFileSync(artPath, 'utf-8')) as Record<string, unknown>[]
+    const digest = String(arts[0]?.speakerSetDigest ?? '')
+    check('🔴 🔴 **ⓓ 러너가 artifact 에 화자 묶음 열쇠를 적었다 — 캐시 key 꼬리와 같은 모양(해시)**',
+      r1.picked.length === 1 && /^speakers=[0-9a-f]{16}$/.test(digest), digest)
+    const narrowed = arts.map((a) => ({
+      ...a, review: { ...(a.review as Record<string, unknown>),
+        semanticCompletion: { complete: false, reason: 'notRun', cause: 'speakerSlotNarrowed' } },
+    }))
+    writeFileSync(artPath, `${JSON.stringify(narrowed, null, 2)}\n`, 'utf-8')
+    const r2 = draftOnce(world, '20260922-rd2', { dropAge: true })
+    const picks2 = readFileSync(join(world.w.dd, 'auto-draft-20260922-rd2.picks.jsonl'), 'utf-8').split('\n')
+      .filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as { reason?: string; heldBy?: { code?: string } })
+    check('🔴 🔴 **ⓓ 같은 묶음 2회차 — 유료 호출 앞에서 멈춘다(artifact 0) · 원인 사슬 `speakerSetRepeat` 가 picks 에 남는다**',
+      r2.picked.length === 0 && picks2.length === 1 && picks2[0]?.reason === 'noDraft' && picks2[0]?.heldBy?.code === 'speakerSetRepeat',
+      `${r2.picked.join(',')} · ${JSON.stringify(picks2)}`)
   }
 }
 
@@ -1617,6 +1649,23 @@ console.log('\n⑯ 🔴 🔴 (P0-B) 82cook · 네이버 카페 같은 숫자 id 
     latest6.size === 2 && latest6.get(k82)?.stage === 'draft' && latest6.get(kNc)?.stage === 'draft'
     && latest6.get(k82)?.sourceKey !== latest6.get(kNc)?.sourceKey,
     [...latest6.values()].map((o) => `${o.sourceKey.replace('\u0000', '/')}:${o.stage}:${o.state}`).join(' '))
+  /**
+   * 🔴 **⑦ 반례 (2026-11-10 retry-authority-v7)** — 채택 candidate 는 유료 재생성 lane 에 들어가지 않는다(`excluded` →
+   *    `concluded`). 그 대신 적재가 끝나지 않은 후보는 **이월이 같은 후보를 다시 적재한다** — 재생성 없이 살아난다.
+   *    실제 생성 러너가 쓴 artifact · candidates 파일과 회차 기록(초안 ok · 적재 실패)로 본다.
+   */
+  const concluded6 = concludedSourceKeys(out6)
+  check('🔴 🔴 **⑦ 채택 candidate 2건은 excluded lane — 결론 집합으로 가 유료 재생성 0**',
+    [...latest6.values()].every((o) => o.state === 'candidate' && selectionLaneOf(o) === 'excluded')
+    && concluded6.has(k82) && concluded6.has(kNc), [...concluded6].length.toString())
+  writeFileSync(join(w6.dd, `supply-process-${RUN6}.run.json`), `${JSON.stringify({
+    runId: RUN6, stages: [{ stage: 'draft', status: 'ok' }, { stage: 'fill', status: 'failed' }],
+  })}\n`, 'utf-8')
+  const carry6 = planCarryOver({ dataDir: w6.dd, currentRunId: '20261001-010000', nowMs: Date.parse('2026-10-01T01:00:00.000Z') })
+  const carried6 = new Set(carry6.picked.flatMap((p) => p.sources).map((x) => sourceKeyOf(x.sourceSite, x.sourceArticleId)))
+  check('🔴 🔴 **⑦ 적재가 끝나지 않은 그 후보 파일을 이월이 다시 얹는다 — 두 원천 모두 재생성 없이 살아난다**',
+    carry6.picked.some((p) => p.runId === RUN6) && carried6.has(k82) && carried6.has(kNc),
+    JSON.stringify({ picked: carry6.picked.map((p) => p.runId), rejected: carry6.rejected.map((r) => `${r.name}:${r.code}`) }))
   // 🔴 호환 경계 — 사이트 칸 없는 옛 판정 줄: 지문이 한 원천에만 맞으면 그 원천 · 모호하면 버린다
   const legacy = (hash: string): Record<string, unknown> => ({
     sourceArticleId: '4242', inputHash: hash, ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION, model: JUDGE_MODEL,
