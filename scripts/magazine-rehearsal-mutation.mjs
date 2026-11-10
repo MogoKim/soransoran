@@ -31,7 +31,8 @@ const F = {
   webp: path.join(HERE, 'lib', 'magazine-hero-webp.mjs'),
   register: path.join(HERE, 'magazine-auto-register.mjs'),
   regen: path.join(HERE, 'lib', 'magazine-regen.mjs'),
-  qa: path.join(HERE, 'magazine-qa.mjs'),
+  // S1 C4 — QA 판정(발행 길이 hard FAIL 포함)은 core 에 있다. CLI 를 겨냥하면 변이 지점이 0곳이다
+  qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs'),
   repair: path.join(HERE, 'lib', 'magazine-input-repair.mjs'),
   webui: path.join(HERE, 'magazine-webui-runner.mjs'),
   ready: path.join(HERE, 'magazine-auto-register-ready.mjs'),
@@ -95,7 +96,7 @@ const MUTATIONS = [
     find: "          correctFrom = { ...row, source: 'fetch' }", replace: "          correctFrom = null" }] },
   { name: '⑳ 장부의 최초 응답 기록 무시 (같은 일반 요청 재전송)', scenarios: 'S10', edits: [{ file: F.register,
     find: '    const priorInvalid = firstResponseInvalidFor(entryNow, g0.messageFingerprint)', replace: '    const priorInvalid = null' }] },
-  { name: '㉑ QA 의 발행 길이 FAIL 제거 (autumn — hero 뒤 batch 에서 막힘)', scenarios: 'S9', edits: [{ file: F.qa,
+  { name: '㉑ QA 의 발행 길이 FAIL 제거 (autumn — hero 뒤 batch 에서 막힘)', scenarios: 'S9', edits: [{ file: F.qaCore,
     find: '  if (!body.hard.ok) report.fail(', replace: '  if (false) report.fail(' }] },
   { name: '㉒ 입력 수리 교체가 새 계보를 열지 않음 (cold — 옛 예산을 이어받음)', scenarios: 'S2', edits: [{ file: F.repair,
     find: '    const lineage = completePendingLineage({ draftsDir, slug: t.slug, path: quarantinePath })', replace: "    const lineage = { ok: true, status: 'OPENED' }" }] },

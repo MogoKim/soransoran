@@ -23,7 +23,7 @@
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, resolve, relative, basename, isAbsolute } from 'node:path'
-import { runQa } from './magazine-qa.mjs'
+import { runQa } from './lib/magazine-qa-core.mjs'
 import { HERO_WIDTH, HERO_HEIGHT } from './lib/magazine-qa-constants.mjs'
 // 🔴 리터럴 · WebP 판독은 lib 정본을 직접 쓴다(S1 C3). magazine-load 는 거치지 않는다(앞판도 load 를 import 하지 않았다)
 import { sliceLiteral, evalLiteral } from './lib/magazine-literal.mjs'

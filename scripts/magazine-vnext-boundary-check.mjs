@@ -221,8 +221,9 @@ ratchet('R6', 'control.ts CONTROL 리터럴 판독은 한 곳', scan([...LIB, ..
 //    여기서 매번 본다: 하네스에 그 변이가 그대로 있고, 겨냥 파일에 그 문장이 정확히 1곳.
 //    S1 커밋이 구현을 옮기면 하네스와 이 표를 **같은 커밋에서** 새 위치로 옮긴다.
 const MOVED_TARGETS = Object.freeze([
-  ['scripts/magazine-auto-recovery-mutation.mjs', 'B QA 의 hard FAIL 제거', 'scripts/magazine-qa.mjs', '  if (!body.hard.ok) report.fail('],
-  ['scripts/magazine-rehearsal-mutation.mjs', '㉑ QA 의 발행 길이 FAIL 제거', 'scripts/magazine-qa.mjs', '  if (!body.hard.ok) report.fail('],
+  // S1 C4 — QA 판정은 core 로 옮겼다. 다섯째 칸: 하네스 안의 경로 정의(def)와 그 변이가 쓰는 파일 참조(ref) — 표만 옮기고 하네스 경로를 남기면 잡는다
+  ['scripts/magazine-auto-recovery-mutation.mjs', 'B QA 의 hard FAIL 제거', 'scripts/lib/magazine-qa-core.mjs', '  if (!body.hard.ok) report.fail(', { def: "qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs')", ref: 'file: F.qaCore' }],
+  ['scripts/magazine-rehearsal-mutation.mjs', '㉑ QA 의 발행 길이 FAIL 제거', 'scripts/lib/magazine-qa-core.mjs', '  if (!body.hard.ok) report.fail(', { def: "qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs')", ref: 'file: F.qaCore' }],
   // D10 은 #825 directScenario prepare 리팩터링 뒤 지점 0곳(변이 무효)으로 남아 있었다 — 그 재발을 여기서 매번 본다
   ['scripts/magazine-rehearsal-mutation.mjs', 'D10 hero 를 미리 배치해 provider 호출 우회', 'scripts/magazine-rehearsal.mjs', '      const p = await prepareDirect(repo, { variant })\n'],
   ['scripts/magazine-direct-spec-source-check.mjs', "'MS15'", 'scripts/lib/magazine-direct-spec-source.mjs', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }"],
@@ -248,11 +249,18 @@ const literalForms = (s) => {
 }
 {
   const problems = []
-  for (const [harness, label, target, find] of MOVED_TARGETS) {
+  for (const [harness, label, target, find, path] of MOVED_TARGETS) {
     const h = read(harness), t = read(target)
     if (h === null) { problems.push(`${harness} 없음`); continue }
     if (!h.includes(label)) { problems.push(`${harness} 에 변이 ${label} 이 없다`); continue }
     if (!literalForms(find).some((f) => h.includes(f))) { problems.push(`${harness} ${label} 의 겨냥 문장이 표와 다르다(하네스와 표를 같은 커밋에서 옮긴다)`); continue }
+    if (path) {
+      // 하네스가 실제로 그 파일을 바꾸는가 — 경로 정의 1곳 + 이 변이(라벨 → 겨냥 문장 사이)가 그 정의를 쓴다
+      const at = h.indexOf(label)
+      const seg = h.slice(at, Math.max(...literalForms(find).map((f) => h.indexOf(f, at))))
+      if (h.split(path.def).length - 1 !== 1) { problems.push(`${harness} 에 경로 정의 ${path.def} 가 정확히 1곳이 아니다`); continue }
+      if (!seg.includes(path.ref)) { problems.push(`${harness} ${label} 이 ${path.ref} 를 쓰지 않는다`); continue }
+    }
     const count = t === null ? 0 : t.split(find).length - 1
     if (count !== 1) problems.push(`${label} → ${target} 지점 ${count}곳`)
   }
@@ -278,7 +286,7 @@ const literalForms = (s) => {
 // spawn 대상 경로(auto-register 의 `scripts/magazine-qa.mjs`)는 import 가 아니라 위반이 아니다
 ratchet('R10', '운영 CLI 가 magazine-qa.mjs 를 import 하지 않는다',
   scanImports(PROD.filter((f) => f !== 'scripts/magazine-qa.mjs'), /\.\/(magazine-qa\.mjs)/, /\.\/(magazine-qa\.mjs)|scripts\/(magazine-qa\.mjs)/), {
-  pending: ['scripts/magazine-batch-qa.mjs', 'scripts/magazine-judge-report.mjs', 'scripts/magazine-packet.mjs', 'scripts/magazine-producer-plan.mjs'].map((f) => `${f} → magazine-qa.mjs`),
+  pending: [],
 })
 
 // ── R11 공용 상수 · 판독 함수는 같은 객체다 (런타임) ──────
@@ -301,10 +309,21 @@ ratchet('R10', '운영 CLI 가 magazine-qa.mjs 를 import 하지 않는다',
     const L = await at('scripts/lib/magazine-load.mjs')
     for (const n of ['sliceLiteral', 'evalLiteral']) if (typeof LT[n] !== 'function' || L[n] !== LT[n]) problems.push(`load 가 내보내는 ${n} 이 정본 함수가 아니다`)
     if (typeof W.readWebpSize !== 'function' || Q.readWebpSize !== W.readWebpSize) problems.push('QA CLI 가 내보내는 readWebpSize 가 정본 함수가 아니다')
+    // S1 C4 — QA CLI 의 runQa 는 core 의 그 함수여야 한다(감싼 함수 · 사본이면 다른 객체다)
+    const QC = await at('scripts/lib/magazine-qa-core.mjs')
+    if (typeof QC.runQa !== 'function' || Q.runQa !== QC.runQa) problems.push('QA CLI 가 내보내는 runQa 가 core 정본 함수가 아니다')
   } catch (e) { problems.push(`적재 실패: ${String(e?.message ?? e).split('\n')[0]}`) }
   if (problems.length) bad('R11', '공용 상수 · 판독 함수는 다시 내보내는 자리에서 정본과 같은 객체다', problems.join(' | '))
   else ok('R11', '공용 상수 · 판독 함수는 다시 내보내는 자리에서 정본과 같은 객체다')
 }
+
+// ── R12 QA 판정 구현은 core 한 곳 ──────────────────────────
+// 🔴 R11 은 내보내는 runQa 의 동일성만 본다 — CLI 가 core 를 다시 내보내면서 main 은 자기 사본을 쓰면 R11 은 통과한다.
+//    그래서 판정 함수(runQa · checkArticle · checkCollisions)의 정의(function · const 화살표)가 core 밖에 없는지 본다.
+ratchet('R12', 'QA 판정 구현(runQa · checkArticle · checkCollisions)은 core 한 곳',
+  scan([...LIB, ...PROD], /(?:function\s+|const\s+)(runQa|checkArticle|checkCollisions)\s*[(=]/, (m) => m[1]), {
+  once: true, canonical: ['scripts/lib/magazine-qa-core.mjs'], pending: [],
+})
 
 console.log(`\nvNext 경계 검사: ${pass} pass, ${fail} fail`)
 process.exit(fail ? 1 : 0)
