@@ -28,7 +28,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-import { ADMISSION_FILES, BUILD_SCHEMA, INPUT_FILES, PRODUCT_FILES, buildAll, existingAssetSummaries, parseControlText, productLifecycleDrift, parseInputTexts, parseProductTexts, validateBuiltArtifacts } from './magazine-graph-build.mjs'
+import { ADMISSION_FILES, BUILD_SCHEMA, INPUT_FILES, PRODUCT_FILES, buildAll, existingAssetSummaries, productLifecycleDrift, parseInputTexts, parseProductTexts, validateBuiltArtifacts } from './magazine-graph-build.mjs'
+import { parseControlText } from './magazine-graph-control.mjs'
 
 export const BUILD_REL = join('contract', 'build')
 export const LOCK_NAME = '.research-current.lock'
@@ -178,7 +179,7 @@ const PRODUCT_CONTROL_REL = 'src/content/magazine/graph/control.ts'
  *   graphVersion           후보 manifest (설치) · 내리는 대상 판 (rollback)
  *   previousGraphVersion   CAS 로 고정한 직전 current 링크
  *   enabled · enabledClusters · surfaces · killSwitch
- *                          제품 control.ts (`parseControlText` — builder 와 같은 parser). 후보 manifest 가 그 바이트로 build 됐거나
+ *                          제품 control.ts (`parseControlText` — lib/magazine-graph-control.mjs 정본 · builder 와 같은 함수). 후보 manifest 가 그 바이트로 build 됐거나
  *                          제품이 이미 같은 판을 가리켜야 한다. kill switch 가 켜져 있으면 세부를 옮길 수 없어 HOLD
  *   fallback               아래 상수 — 제품 resolver 의 폴백 계약 설명 (판마다 바뀌지 않는다)
  *   authority              어디서 만들었는지 — 제품 control sha256 · 후보 트리 sha256

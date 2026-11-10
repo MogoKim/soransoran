@@ -801,6 +801,7 @@ const FILES = [
     'scripts/magazine-hero-runner.mjs','scripts/lib/magazine-hero.mjs',
     'scripts/lib/magazine-hero-brief.mjs','scripts/lib/magazine-brief-policy.mjs',
     'scripts/lib/magazine-qa-constants.mjs','scripts/lib/magazine-literal.mjs','scripts/lib/magazine-webp.mjs','scripts/lib/magazine-qa-core.mjs',
+    'scripts/lib/magazine-graph-control.mjs',
     'scripts/lib/magazine-auto-lane.mjs','scripts/lib/magazine-merge-gate.mjs',
     'scripts/lib/magazine-editorial.mjs','scripts/magazine-webui-runner.mjs',
     'scripts/magazine-register.mjs','scripts/magazine-brief-auto.mjs','scripts/magazine-pr.mjs',

@@ -200,7 +200,7 @@ ratchet('R5', 'WebP 헤더 판독은 한 곳', scan([...LIB, ...PROD], /(functio
 ratchet('R6', 'control.ts CONTROL 리터럴 판독은 한 곳', scan([...LIB, ...PROD], /indexOf\(\s*'export const CONTROL'\s*\)/), {
   once: true,
   canonical: ['scripts/lib/magazine-graph-control.mjs'],
-  pending: ['scripts/lib/magazine-direct-spec-source.mjs', 'scripts/lib/magazine-graph-build.mjs'],
+  pending: [],
 })
 
 // ── R7 S1 새 lib 는 m3a 낡은 개념 스캔에 들어 있다 ─────────
@@ -220,14 +220,16 @@ ratchet('R6', 'control.ts CONTROL 리터럴 판독은 한 곳', scan([...LIB, ..
 // 🔴 CI 밖 변이(auto-recovery · rehearsal · g8 · graph-build)는 사람이 돌릴 때만 "지점 0곳"을 말한다.
 //    여기서 매번 본다: 하네스에 그 변이가 그대로 있고, 겨냥 파일에 그 문장이 정확히 1곳.
 //    S1 커밋이 구현을 옮기면 하네스와 이 표를 **같은 커밋에서** 새 위치로 옮긴다.
+/** S1 C5 — MS15 · MS16 은 direct-spec-source-check 의 PATHS.control 을 바꾼다(라벨에 종류 'control' 을 포함해 본다) */
+const CONTROL_HARNESS_PATH = Object.freeze({ def: "  control: join(ROOT, 'scripts/lib/magazine-graph-control.mjs'),\n" })
 const MOVED_TARGETS = Object.freeze([
   // S1 C4 — QA 판정은 core 로 옮겼다. 다섯째 칸: 하네스 안의 경로 정의(def)와 그 변이가 쓰는 파일 참조(ref) — 표만 옮기고 하네스 경로를 남기면 잡는다
   ['scripts/magazine-auto-recovery-mutation.mjs', 'B QA 의 hard FAIL 제거', 'scripts/lib/magazine-qa-core.mjs', '  if (!body.hard.ok) report.fail(', { def: "qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs')", ref: 'file: F.qaCore' }],
   ['scripts/magazine-rehearsal-mutation.mjs', '㉑ QA 의 발행 길이 FAIL 제거', 'scripts/lib/magazine-qa-core.mjs', '  if (!body.hard.ok) report.fail(', { def: "qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs')", ref: 'file: F.qaCore' }],
   // D10 은 #825 directScenario prepare 리팩터링 뒤 지점 0곳(변이 무효)으로 남아 있었다 — 그 재발을 여기서 매번 본다
   ['scripts/magazine-rehearsal-mutation.mjs', 'D10 hero 를 미리 배치해 provider 호출 우회', 'scripts/magazine-rehearsal.mjs', '      const p = await prepareDirect(repo, { variant })\n'],
-  ['scripts/magazine-direct-spec-source-check.mjs', "'MS15'", 'scripts/lib/magazine-direct-spec-source.mjs', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }"],
-  ['scripts/magazine-direct-spec-source-check.mjs', "'MS16'", 'scripts/lib/magazine-direct-spec-source.mjs', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n"],
+  ['scripts/magazine-direct-spec-source-check.mjs', "['control', 'MS15'", 'scripts/lib/magazine-graph-control.mjs', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", CONTROL_HARNESS_PATH],
+  ['scripts/magazine-direct-spec-source-check.mjs', "['control', 'MS16'", 'scripts/lib/magazine-graph-control.mjs', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", CONTROL_HARNESS_PATH],
   ['scripts/magazine-g8-promote-mutation.mjs', 'control 판 대조 제거', 'scripts/lib/magazine-g8-promoter.mjs', '  if (parseControlText(texts.graphControl)?.graphVersion !== payload.graphVersion) problems.push('],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP1'", 'scripts/lib/magazine-relation-policy.mjs', '  directMin: 2,'],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP2'", 'scripts/lib/magazine-relation-policy.mjs', '  directMax: 3,'],
@@ -259,7 +261,7 @@ const literalForms = (s) => {
       const at = h.indexOf(label)
       const seg = h.slice(at, Math.max(...literalForms(find).map((f) => h.indexOf(f, at))))
       if (h.split(path.def).length - 1 !== 1) { problems.push(`${harness} 에 경로 정의 ${path.def} 가 정확히 1곳이 아니다`); continue }
-      if (!seg.includes(path.ref)) { problems.push(`${harness} ${label} 이 ${path.ref} 를 쓰지 않는다`); continue }
+      if (path.ref && !seg.includes(path.ref)) { problems.push(`${harness} ${label} 이 ${path.ref} 를 쓰지 않는다`); continue }
     }
     const count = t === null ? 0 : t.split(find).length - 1
     if (count !== 1) problems.push(`${label} → ${target} 지점 ${count}곳`)
@@ -312,6 +314,15 @@ ratchet('R10', '운영 CLI 가 magazine-qa.mjs 를 import 하지 않는다',
     // S1 C4 — QA CLI 의 runQa 는 core 의 그 함수여야 한다(감싼 함수 · 사본이면 다른 객체다)
     const QC = await at('scripts/lib/magazine-qa-core.mjs')
     if (typeof QC.runQa !== 'function' || Q.runQa !== QC.runQa) problems.push('QA CLI 가 내보내는 runQa 가 core 정본 함수가 아니다')
+    // S1 C5 — control 판독 호환 export 는 남아 있어야 하고, 정본과 같은 함수여야 한다(감싼 함수 · 사본이면 다른 객체다)
+    const GC = await at('scripts/lib/magazine-graph-control.mjs')
+    const GBM = await at('scripts/lib/magazine-graph-build.mjs')
+    const DSM = await at('scripts/lib/magazine-direct-spec-source.mjs')
+    if (typeof GC.parseControlText !== 'function' || typeof GC.parseGraphControl !== 'function') problems.push('정본 graph-control 이 두 판독 함수를 내보내지 않는다')
+    if (!('parseControlText' in GBM)) problems.push('graph-build 호환 export parseControlText 가 없다')
+    else if (GBM.parseControlText !== GC.parseControlText) problems.push('graph-build 의 parseControlText 가 정본 함수가 아니다')
+    if (!('parseGraphControl' in DSM)) problems.push('direct-spec-source 호환 export parseGraphControl 이 없다')
+    else if (DSM.parseGraphControl !== GC.parseGraphControl) problems.push('direct-spec-source 의 parseGraphControl 이 정본 함수가 아니다')
   } catch (e) { problems.push(`적재 실패: ${String(e?.message ?? e).split('\n')[0]}`) }
   if (problems.length) bad('R11', '공용 상수 · 판독 함수는 다시 내보내는 자리에서 정본과 같은 객체다', problems.join(' | '))
   else ok('R11', '공용 상수 · 판독 함수는 다시 내보내는 자리에서 정본과 같은 객체다')
@@ -324,6 +335,59 @@ ratchet('R12', 'QA 판정 구현(runQa · checkArticle · checkCollisions)은 co
   scan([...LIB, ...PROD], /(?:function\s+|const\s+)(runQa|checkArticle|checkCollisions)\s*[(=]/, (m) => m[1]), {
   once: true, canonical: ['scripts/lib/magazine-qa-core.mjs'], pending: [],
 })
+
+// ── R13 control 판독 정의는 정본 한 곳 ─────────────────────
+// 🔴 판독 함수 · 공유 찾기·eval 의 정의(function · const/let/var)가 정본 밖에 다시 생기면 사본이다(감싼 호환 함수도 정의다)
+const CONTROL_CANON = 'scripts/lib/magazine-graph-control.mjs'
+ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · controlLiteral · evalControl)는 정본 한 곳',
+  scan([...LIB, ...PROD], /(?:function\s+|(?:const|let|var)\s+)(parseControlText|parseGraphControl|controlLiteral|evalControl)\s*[(=]/, (m) => m[1]), {
+  once: true, canonical: [CONTROL_CANON], pending: [],
+})
+
+// ── R14 control 판독 소비 경계 ─────────────────────────────
+// 🔴 ① 두 이름의 import 는 정본에서만 ② 다시 내보내기는 정확한 호환 선언 2개뿐(graph-build · direct-spec-source)
+//    ③ 프로필 소유 — 엄격(parseGraphControl)은 direct-spec-source, legacy(parseControlText)는 graph-build · research-current · g8.
+//       엄격 판독이 실패할 때 느슨한 판독으로 넘어가는 경로(fallback)를 막는다. 새 소비처는 이 표를 고쳐야 열린다
+{
+  const NAMES = ['parseControlText', 'parseGraphControl']
+  const OWNERS = {
+    parseControlText: ['scripts/lib/magazine-graph-build.mjs', 'scripts/lib/magazine-research-current.mjs', 'scripts/lib/magazine-g8-promoter.mjs'],
+    parseGraphControl: ['scripts/lib/magazine-direct-spec-source.mjs'],
+  }
+  const COMPAT = { 'scripts/lib/magazine-graph-build.mjs': 'export { parseControlText }', 'scripts/lib/magazine-direct-spec-source.mjs': 'export { parseGraphControl }' }
+  const found = new Map()
+  const add = (k) => found.set(k, (found.get(k) ?? 0) + 1)
+  for (const f of [...LIB, ...PROD].filter((x) => x !== CONTROL_CANON)) {
+    const src = codeText(f)
+    for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+      for (const spec of m[1].split(',').map((x) => x.trim().split(/\s+as\s+/)[0]).filter((x) => NAMES.includes(x))) {
+        if (!/(^|\/)magazine-graph-control\.mjs$/.test(m[2])) add(`${f} → ${spec} 를 ${m[2]} 에서 import`)
+      }
+    }
+    for (const m of src.matchAll(/export\s*\{([^}]*)\}(\s*from\s*['"][^'"]+['"])?/g)) {
+      if (!m[1].split(',').some((x) => NAMES.some((n) => new RegExp(`\\b${n}\\b`).test(x)))) continue
+      if (m[0] !== COMPAT[f]) add(`${f} → 호환 선언이 아닌 다시 내보내기: ${m[0].replace(/\s+/g, ' ')}`)
+    }
+    for (const n of NAMES) if (new RegExp(`\\b${n}\\b`).test(src) && !OWNERS[n].includes(f)) add(`${f} → ${n} 를 쓴다(이 프로필의 소비처가 아니다)`)
+  }
+  for (const [f, decl] of Object.entries(COMPAT)) if (codeText(f).split(decl).length - 1 !== 1) add(`${f} → 호환 선언 ${decl} 가 정확히 1곳이 아니다`)
+  ratchet('R14', 'control 판독은 정본에서 import · 호환 다시 내보내기 2곳뿐 · 프로필 소유 고정', found, { pending: [] })
+}
+
+// ── R15 정본 graph-control 은 부작용 없는 모듈만 import ────
+// 🔴 magazine-load 는 적재 순간 drafts 주입을 검사해 exit 2 로 끝난다 — 정본이 그것을 끌어오면 소비처의 import 시점 동작이 바뀐다
+{
+  const name = '정본 graph-control 은 magazine-literal(과 node 내장)만 import'
+  if (read(CONTROL_CANON) === null) bad('R15', name, '정본 파일이 없다')
+  else {
+    const src = codeText(CONTROL_CANON)
+    const targets = [...src.matchAll(/(?:\bfrom|^\s*import)\s+['"]([^'"]+)['"]/gm), ...src.matchAll(/\bimport\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
+    const extra = targets.filter((t) => t !== './magazine-literal.mjs' && !t.startsWith('node:'))
+    if (extra.length) bad('R15', name, `허용 밖 import: ${extra.join(', ')}`)
+    else if (!targets.includes('./magazine-literal.mjs')) bad('R15', name, 'magazine-literal 을 import 하지 않는다')
+    else ok('R15', name)
+  }
+}
 
 console.log(`\nvNext 경계 검사: ${pass} pass, ${fail} fail`)
 process.exit(fail ? 1 : 0)
