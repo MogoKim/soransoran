@@ -10,19 +10,48 @@
  *       `readSettleHold`·`readOpenReservations`·`pidAlive`(llm-ledger-store) · `readSpeakerLoad` · `createAttemptPool` ·
  *       `readStageDecision` · `readStageEvidenceFacts`. 덧붙이기 잠금은 장부와 같은 `withLedgerLock` 이다.
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { appendFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { runIdStartMs, type ShadowRecord, type SupplyRunView } from '../../src/lib/ops-shadow-plan'
-import { withLedgerLock } from './llm-ledger-store.mjs'
+import { naturalScheduledRunEvidenceAt } from '../../src/lib/supply-run-token'
+import { pidAlive, withLedgerLock } from './llm-ledger-store.mjs'
 
 /** 🔴 감사 장부 디렉터리 — 저장소 밖 · 운영 데이터 정본 옆(Application Support) */
 export const OPS_SHADOW_DIR_NAME = 'ops-shadow'
 export function defaultOpsShadowDir(home: string = homedir()): string {
   return join(home, 'Library', 'Application Support', 'soransoran', OPS_SHADOW_DIR_NAME)
+}
+
+/**
+ * 🔴 **주입 시각(`--now`)은 버려도 되는 격리 시험에서만** (2026-11-11 · Phase 2 반론 U2).
+ *    주입 시각은 "그 시각에 보았다" 를 적는데, 관측 재료(DB · StageDecision · LLM 장부 · 공급 기록)는 **지금** 것이다.
+ *    운영 DB · 실제 홈의 장부로 지난 시각의 관측 · dayClose 를 재구성하면 거짓 기록이 된다. 그래서 주입 시각은
+ *    ① `SORAN_ISOLATED_DB=yes-throwaway` ② DB 주소 둘 다 localhost 의 `soran_test` ③ HOME 이 실제 계정 홈이 아님 — 셋이 모두일 때만 받는다.
+ *    🔴 `fillDbConnection` 이 env 파일로 빈 주소를 채우기 **전에** 판정한다(빈 주소는 격리가 아니다).
+ */
+export function injectedClockProblems(env: NodeJS.ProcessEnv, home: string = homedir(), realHome: string = userInfo().homedir): string[] {
+  const out: string[] = []
+  const isolated = (v: string | undefined): boolean => /^postgresql:\/\/[^@/]*@(127\.0\.0\.1|localhost):\d+\/soran_test(\?|$)/.test(v ?? '')
+  if ((env.SORAN_ISOLATED_DB ?? '').trim() !== 'yes-throwaway') out.push('SORAN_ISOLATED_DB=yes-throwaway 가 없다')
+  if (!isolated(env.DATABASE_URL)) out.push('DATABASE_URL 이 localhost 의 soran_test 가 아니다')
+  if (!isolated(env.DIRECT_URL)) out.push('DIRECT_URL 이 localhost 의 soran_test 가 아니다')
+  if (home === realHome) out.push('HOME 이 실제 계정 홈이다 — 운영 장부 · 공급 기록을 지난 시각처럼 읽는다')
+  return out
+}
+
+/**
+ * 🔴 **배포 중이면 observer 는 아무것도 하지 않는다** — runtime:deploy 의 잠금(`runtime-deploy.lock`)이 있으면
+ *    tick 을 바로 끝낸다(감사 장부 디렉터리 · 잠금 · DB · 공급 기록 0). 배포가 observer 를 bootout 하기 전의 틈에도
+ *    새 tick 이 일을 시작하지 않게 — 배포기 자체의 판정(실행 중이면 멈춤 · bootout · 되올림)은 바꾸지 않는다.
+ */
+export const RUNTIME_DEPLOY_LOCK_NAME = 'runtime-deploy.lock'
+export function deployLockPresent(home: string = homedir()): boolean {
+  return existsSync(join(home, 'Library', 'Application Support', 'soransoran', RUNTIME_DEPLOY_LOCK_NAME))
 }
 
 /** 이 저장소의 뿌리 — 감사 장부가 저장소 안에 생기지 않게 막는 데만 쓴다 */
@@ -56,6 +85,99 @@ export function assertShadowDir(dir: string): string {
  *    한 구간에서 한다. 잠금을 못 잡으면 던진다(그 사이클은 기록되지 않는다 — 두 줄보다 안전하다).
  *    덮어쓰지 않는다 · 지우지 않는다. 파일은 KST 날짜별 하나다.
  */
+/**
+ * 🔴 **observer 단일 실행 잠금** (2026-11-11 · causal/backfill 경계 경합) — tick 전체(선택 → 기록)를 감싼다.
+ *    완료 +4:59 에 causal 을 고른 observer 가 아직 DB 를 읽는 동안 +5:01 tick 이 같은 회차를 backfill 로 골라
+ *    marker 가 먼저 잠금을 잡으면, 같은 cycle id 라 더 풍부한 causal 기록이 영영 못 들어간다.
+ *    launchd 는 같은 label 을 겹쳐 띄우지 않지만 손 실행과 launchd tick 은 겹칠 수 있다 — 그래서 여기서 막는다.
+ *
+ * 🔴 **죽은 잠금 정리 계약** — 정리와 획득을 나눈다(지우고 다시 거는 사이에 남의 새 잠금을 지우는 경합 0).
+ *    · 잠금 · claim 은 내용을 다 쓴 임시 파일을 `link` 로 건다(EEXIST 면 남의 것) · 내용에 nonce 가 있어 원문이 유일하다
+ *    · 정리 claim(`.observer-cleanup.lock`)이 있으면 잡으려는 쪽은 **물러난다**(이번 tick 0)
+ *    · 죽은 pid · 깨진 잠금을 본 쪽은 claim 을 **하나만** 잡고, claim 안에서 잠금 원문이 처음 본 원문과 **바이트로 같고**
+ *      여전히 죽었을 때만 지운다 · claim 을 풀고 **이번 tick 은 잡지 않는다**(다음 tick 이 잡는다)
+ *    · 잠금이 있는 동안 아무도 새 잠금을 걸 수 없고 살아 있는 주인은 자기 원문만 지우므로, 재검증과 삭제 사이에 바뀔 수 없다
+ *    · 풀 때는 원문이 내 것일 때만 지운다
+ *    · 🔴 정리 claim 의 주인이 죽어 남으면(정리 중 크래시) **자동으로 지우지 않는다** — `cleanupStranded` 로 tick 을 실패시킨다
+ *      (같은 경합이 claim 에서 되풀이되므로 사람이 확인하고 지운다)
+ */
+export const OBSERVER_LOCK_FILE = '.observer.lock'
+export const OBSERVER_CLEANUP_FILE = '.observer-cleanup.lock'
+export type ObserverLockReason = 'busy' | 'cleanupInProgress' | 'cleaned' | 'cleanupStranded' | 'raced'
+export type ObserverLock =
+  | { acquired: true; release: () => void }
+  | { acquired: false; reason: ObserverLockReason; holderPid: number | null }
+
+const readRaw = (path: string): string | null => {
+  try { return readFileSync(path, 'utf-8') } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw e
+  }
+}
+const pidOfRaw = (raw: string | null): number | null => {
+  if (raw === null) return null
+  try {
+    const pid = (JSON.parse(raw) as { pid?: unknown }).pid
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch { return null }
+}
+const ownerRaw = (): string => JSON.stringify({ pid: process.pid, at: new Date().toISOString(), nonce: randomUUID() })
+/** 내용을 다 쓴 임시 파일을 원자적으로 건다 — 이미 있으면 false. 임시 이름은 `.tmp-` 를 품어 호스트 이전이 싣지 않는다 */
+function linkExclusive(d: string, path: string, raw: string): boolean {
+  const tmp = join(d, `.observer.tmp-${process.pid}-${randomUUID()}`)
+  writeFileSync(tmp, raw, { mode: 0o600 })
+  try { linkSync(tmp, path); return true } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw e
+  } finally { unlinkSync(tmp) }
+}
+const unlinkIfRaw = (path: string, raw: string): boolean => {
+  if (readRaw(path) !== raw) return false
+  unlinkSync(path)
+  return true
+}
+
+/**
+ * 죽은 잠금 정리 — **claim 하나** 안에서 재검증한 뒤 처음 본 원문(`seenRaw`)만 지운다. 이번 tick 은 잡지 않는다.
+ *    (검사가 경합 순서를 직접 만들려고 export 한다)
+ */
+export function cleanupStaleObserverLock(dir: string, seenRaw: string): ObserverLock {
+  const d = assertShadowDir(dir)
+  const lockPath = join(d, OBSERVER_LOCK_FILE)
+  const claimPath = join(d, OBSERVER_CLEANUP_FILE)
+  const claim = ownerRaw()
+  if (!linkExclusive(d, claimPath, claim)) return { acquired: false, reason: 'cleanupInProgress', holderPid: pidOfRaw(readRaw(claimPath)) }
+  try {
+    const now = readRaw(lockPath)
+    const pid = pidOfRaw(now)
+    if (now !== seenRaw || (pid !== null && pidAlive(pid))) return { acquired: false, reason: 'raced', holderPid: pid }
+    unlinkSync(lockPath)
+    return { acquired: false, reason: 'cleaned', holderPid: pid }
+  } finally { unlinkIfRaw(claimPath, claim) }
+}
+
+export function acquireObserverLock(dir: string): ObserverLock {
+  const d = assertShadowDir(dir)
+  mkdirSync(d, { recursive: true, mode: 0o700 })
+  const lockPath = join(d, OBSERVER_LOCK_FILE)
+  const claimPath = join(d, OBSERVER_CLEANUP_FILE)
+  // ① 정리 중이면 물러난다 — 주인이 죽은 claim 은 지우지 않고 실패로 알린다
+  const claimRaw = readRaw(claimPath)
+  if (claimRaw !== null) {
+    const pid = pidOfRaw(claimRaw)
+    return { acquired: false, reason: pid !== null && pidAlive(pid) ? 'cleanupInProgress' : 'cleanupStranded', holderPid: pid }
+  }
+  // ② 건다
+  const mine = ownerRaw()
+  if (linkExclusive(d, lockPath, mine)) return { acquired: true, release: () => { unlinkIfRaw(lockPath, mine) } }
+  // ③ 남의 잠금 — 살아 있으면 물러나고, 죽었거나 깨졌으면 정리만 한다(이번 tick 은 잡지 않는다)
+  const seen = readRaw(lockPath)
+  if (seen === null) return { acquired: false, reason: 'raced', holderPid: null }
+  const pid = pidOfRaw(seen)
+  if (pid !== null && pidAlive(pid)) return { acquired: false, reason: 'busy', holderPid: pid }
+  return cleanupStaleObserverLock(d, seen)
+}
+
 export function appendShadowRecord(dir: string, record: ShadowRecord): { written: boolean; path: string } {
   const d = assertShadowDir(dir)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(record.kstDate)) throw new Error('OPS_SHADOW_BAD_DATE')
@@ -88,7 +210,21 @@ const CHILD_FNS = ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFi
  *    `fetch` 를 던지는 함수로 바꾸고, `child_process` 의 실행 함수를 던지는 함수로 바꾼 뒤 ESM 바인딩까지 맞춘다.
  *    되돌리는 함수를 돌려준다(검사 전용).
  */
+let guardInstalled = false
+/** 설치마다 늘어나는 세대 — 되돌리는 함수는 **자기 세대가 지금 걸려 있을 때만** 되돌린다 */
+let guardGeneration = 0
+/** 🔴 공용 사이클(`runShadowCycle`)은 가드가 걸렸을 때만 돈다 — 가드 없이 부르면 던진다 */
+export function isShadowGuardInstalled(): boolean { return guardInstalled }
+
+/**
+ * 🔴 **중첩 금지** — 이미 걸려 있으면 던진다(두 번째 설치가 "진짜" fetch 대신 첫 가드를 저장했다가
+ *    먼저 풀리면 가드가 사라지는 순서 사고를 막는다). 되돌리기는 자기 세대에서 한 번만 — 두 번 · 남의 세대면 던진다.
+ */
 export function installShadowCallGuard(): () => void {
+  if (guardInstalled) throw new Error('OPS_SHADOW_GUARD_NESTED — 가드가 이미 걸려 있다')
+  guardInstalled = true
+  guardGeneration += 1
+  const generation = guardGeneration
   const realFetch = globalThis.fetch
   globalThis.fetch = (() => { throw new Error('OPS_SHADOW_NO_NETWORK') }) as typeof fetch
   const cp = createRequire(import.meta.url)('node:child_process') as Record<string, unknown>
@@ -99,6 +235,8 @@ export function installShadowCallGuard(): () => void {
   }
   syncBuiltinESMExports()
   return () => {
+    if (!guardInstalled || guardGeneration !== generation) throw new Error('OPS_SHADOW_GUARD_RESTORE_MISUSE — 이미 풀렸거나 다른 설치의 되돌리기다')
+    guardInstalled = false
     globalThis.fetch = realFetch
     for (const [k, v] of saved) cp[k] = v
     syncBuiltinESMExports()
@@ -174,12 +312,12 @@ export function readSupplyRuns(dataDir: string): {
       continue
     }
     const jit = (r.jit ?? null) as Record<string, unknown> | null
-    const tok = (r.runTokenShadow ?? null) as Record<string, unknown> | null
     out.push({
       runId: r.runId as string, startedAt: r.startedAt,
       status: typeof r.status === 'string' ? r.status : 'unknown',
       completedAt: typeof r.completedAt === 'string' ? r.completedAt : null,
-      trigger: tok !== null && typeof tok.trigger === 'string' ? tok.trigger : null,
+      // 🔴 자연 회차 판단은 정본 하나 — 완전한 tag(trigger · launchTrigger 모두 scheduled · 흡수 규칙)만 시각을 낸다
+      naturalAt: naturalScheduledRunEvidenceAt(r.runTokenShadow, r.startedAt),
       paidSources: jit !== null && Number.isInteger(jit.paidSources) ? jit.paidSources as number : null,
     })
   }
@@ -188,6 +326,27 @@ export function readSupplyRuns(dataDir: string): {
     malformed: malformed.sort(),
     readable: true,
   }
+}
+
+/**
+ * 🔴 이미 기록된 cycle id — 주어진 KST 날짜 파일들만 읽는다. 깨진 줄이 있으면 던진다(모르는 채로 다시 쓰지 않는다 —
+ *    sink 도 같은 이유로 거부한다). 파일이 없으면 빈 집합이다.
+ */
+export function readShadowCycleIds(dir: string, kstDates: Iterable<string>): Set<string> {
+  const d = assertShadowDir(dir)
+  const out = new Set<string>()
+  for (const date of new Set(kstDates)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('OPS_SHADOW_BAD_DATE')
+    const path = join(d, `${date}.jsonl`)
+    if (!existsSync(path)) continue
+    for (const line of readFileSync(path, 'utf-8').split('\n')) {
+      if (line.trim() === '') continue
+      let id: unknown = null
+      try { id = (JSON.parse(line) as { cycleId?: unknown }).cycleId } catch { throw new Error(`OPS_SHADOW_CORRUPT: ${path}`) }
+      if (typeof id === 'string') out.add(id)
+    }
+  }
+  return out
 }
 
 /** 가장 최근 선택 트레이스(파일 이름의 회차 순) — 없으면 null */

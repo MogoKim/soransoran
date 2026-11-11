@@ -369,8 +369,12 @@ export type SupplyRunView = {
   startedAt: string
   status: string
   completedAt: string | null
-  /** 런처가 적은 실행 종류(`runTokenShadow.trigger`) — 자연 예약은 `scheduled` */
-  trigger: string | null
+  /**
+   * 🔴 **자연 예약 회차 증거 시각** — 정본 `naturalScheduledRunEvidenceAt`(supply-run-token)이 완전한 tag
+   *    (trigger · launchTrigger 모두 `scheduled` · 흡수 규칙)에서만 낸 값. manual · recovery · event · 손상 tag 는 null.
+   *    follow-up pass 는 원래 marker 시각이다 — 슬롯 귀속은 이 시각으로 한다. 판독은 IO 가 하고 여기서 다시 하지 않는다.
+   */
+  naturalAt: string | null
 }
 
 const KST_MS = 9 * 3_600_000
@@ -417,8 +421,10 @@ const strictIsoMs = (v: string | null): number | null => {
  */
 export function writerDueOf(kstDate: string, now: Date, runs: readonly SupplyRunView[], malformedRunIds: readonly string[] = []): {
   due: boolean; lastNaturalSlotMinute: number; runId: string | null; reason: string; expectedWindowKst: string
+  /** due 일 때 고른 회차의 완료 시각 — dayClose 열쇠(`naturalRunKeyOf`)의 재료 */
+  completedAt: string | null
   /** 마지막 슬롯 창에 든 회차(자연 예약 · 그 밖) — 결정적 순서 */
-  slotRuns: { runId: string; trigger: string | null; status: string }[]
+  slotRuns: { runId: string; natural: boolean; status: string }[]
 } {
   const last = Math.max(...SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute))
   const nowMs = now.getTime()
@@ -428,15 +434,17 @@ export function writerDueOf(kstDate: string, now: Date, runs: readonly SupplyRun
     const m = kstMinuteOfIso(iso)
     return m !== null && supplyRunSlotMinuteOf(m) === last
   }
-  // 🔴 결정적 순서 — 시작 시각 → runId. 입력 순서가 결과를 바꾸지 않는다
+  // 🔴 슬롯 귀속 시각 — 자연 회차는 정본 증거 시각(follow-up 이면 원래 marker), 그 밖은 시작 시각
+  const slotAt = (r: SupplyRunView): number => Date.parse(r.naturalAt ?? r.startedAt)
+  // 🔴 결정적 순서 — 귀속 시각 → runId. 입력 순서가 결과를 바꾸지 않는다
   const inSlot = runs.filter((r) => {
-    const t = Date.parse(r.startedAt)
+    const t = slotAt(r)
     return !Number.isNaN(t) && inLastSlot(t)
-  }).sort((x, y) => (Date.parse(x.startedAt) - Date.parse(y.startedAt)) || (x.runId < y.runId ? -1 : x.runId > y.runId ? 1 : 0))
-  const natural = inSlot.filter((r) => r.trigger === 'scheduled')
+  }).sort((x, y) => (slotAt(x) - slotAt(y)) || (x.runId < y.runId ? -1 : x.runId > y.runId ? 1 : 0))
+  const natural = inSlot.filter((r) => r.naturalAt !== null)
   const base = {
-    lastNaturalSlotMinute: last, expectedWindowKst: SHADOW_WRITER_EXPECTED_WINDOW_KST,
-    slotRuns: inSlot.map((r) => ({ runId: r.runId, trigger: r.trigger, status: r.status })),
+    lastNaturalSlotMinute: last, expectedWindowKst: SHADOW_WRITER_EXPECTED_WINDOW_KST, completedAt: null,
+    slotRuns: inSlot.map((r) => ({ runId: r.runId, natural: r.naturalAt !== null, status: r.status })),
   }
   const blockedBy = malformedRunIds.find((id) => {
     const t = runIdStartMs(id)
@@ -457,7 +465,7 @@ export function writerDueOf(kstDate: string, now: Date, runs: readonly SupplyRun
   const done = [...natural].sort((x, y) => (Date.parse(x.completedAt!) - Date.parse(y.completedAt!)) || (x.runId < y.runId ? -1 : 1))
   const pick = done[done.length - 1]!
   return {
-    ...base, due: true, runId: pick.runId,
+    ...base, due: true, runId: pick.runId, completedAt: pick.completedAt,
     reason: natural.length > 1 ? `마지막 슬롯 자연 회차 ${natural.length}개 모두 완료 — 가장 늦게 끝난 회차` : '마지막 자연 공급 회차 완료',
   }
 }
@@ -528,21 +536,48 @@ export function inputHashOf(input: unknown): string {
 
 export type ShadowRecordKind = 'cycle' | 'dayClose'
 
+/**
+ * 🔴 **자연 회차 열쇠** — `runId` 와 `completedAt` 만으로 정해지는 결정적 해시(개인정보 0). heartbeat 시각은 들어가지 않는다 —
+ *    같은 회차를 1,440번 · 동시에 · 재부팅 뒤에 다시 봐도 같은 열쇠다.
+ */
+export function naturalRunKeyOf(runId: string, completedAt: string): string {
+  return inputHashOf({ kind: 'naturalRun', runId, completedAt })
+}
+
+/**
+ * 🔴 **이 기록이 무엇에 대한 관측인가.**
+ *    · `manual` — 손으로 돌린 한 사이클(관측 시각 = 실행 시각 · 시험은 과거 주입)
+ *    · `naturalRun` — 자연 예약 공급 회차 하나의 완료 뒤 관측(observer). `completedAt` 은 **출처(provenance)일 뿐**이고
+ *      기록의 관측 시각(`at`)은 언제나 observer 가 실제로 본 시각이다.
+ *      `causal` — 완료 뒤 짧은 지연 안에 본 회차. 지금 상태를 snapshot 하고, 그날 마지막 자연 회차면 하루를 닫는다.
+ *      `backfill` — 늦게 본 회차. 🔴 **최소 marker 한 줄만** 적는다 — 결정 · 장부 · DB 를 읽지 않고
+ *      봉투 · 계획 · 관측 · 부족분 · 결과 · writer · dayClose 가 전부 없다(지금 상태를 그 시각처럼 적지 않는다).
+ *      🔴 `status: done` 은 완료 관측일 뿐 공급 최종 exit 0 이 아니다 — `integrity: 'unknown'` 으로 적는다.
+ */
+export type NaturalRunSource<M extends 'causal' | 'backfill'> =
+  { kind: 'naturalRun'; runId: string; completedAt: string; key: string; mode: M; integrity: 'unknown' }
+export type ShadowSource = { kind: 'manual' } | NaturalRunSource<'causal'> | NaturalRunSource<'backfill'>
+
 export function cycleIdOf(kind: ShadowRecordKind, kstDate: string, inputHash: string): string {
   return `${kstDate}:${kind}:${inputHash.slice(0, 16)}`
 }
 
-export type ShadowRecord = {
+type ShadowRecordBase = {
   v: typeof OPS_SHADOW_VERSION
   cycleId: string
   kind: ShadowRecordKind
   kstDate: string
+  /** 🔴 실제 관측 시각 — 손 실행은 실행 시각(시험은 과거 주입) · observer 는 그 tick 의 시각. 회차 완료 시각이 아니다 */
   at: string
   inputHash: string
   runtimeSha: string | null
-  /** 관측 시각의 출처 — 시험 · 재생은 `injected`(과거 시각만 허용) */
+  /** 관측 시각의 출처 — 실제 시계(`real`) · 시험 · 재생(`injected` · 과거만 허용) */
   clock: 'real' | 'injected'
   authority: 'none'
+}
+/** 지금 상태를 관측한 기록 — 손 실행 · causal observer */
+export type ShadowObservedRecord = ShadowRecordBase & {
+  source: { kind: 'manual' } | NaturalRunSource<'causal'>
   envelope: OperatingEnvelope
   plan: DailyOperatingPlan
   observation: SanitizedObservation | null
@@ -550,3 +585,15 @@ export type ShadowRecord = {
   outcome: DailyOutcome | null
   writer: ReturnType<typeof writerDueOf> | null
 }
+/** 🔴 backfill marker — "이 회차를 늦게 보았다" 한 줄. 지금 상태에서 온 칸이 하나도 없다 */
+export type ShadowBackfillMarker = ShadowRecordBase & {
+  kind: 'cycle'
+  source: NaturalRunSource<'backfill'>
+  envelope: null
+  plan: null
+  observation: null
+  deficit: null
+  outcome: null
+  writer: null
+}
+export type ShadowRecord = ShadowObservedRecord | ShadowBackfillMarker

@@ -269,6 +269,7 @@
     "supply:jit-selection-check": "tsx scripts/supply-jit-selection-check.mts",
     "check:retry-authority": "tsx scripts/retry-authority-check.mts && tsx scripts/retry-authority-mutation.mts",
     "ops:shadow-plan": "tsx scripts/ops-shadow-plan.mts",
+    "ops:shadow-observer": "tsx scripts/ops-shadow-observer.mts",
     "ops:shadow-plan-check": "tsx scripts/ops-shadow-plan-check.mts && tsx scripts/ops-shadow-plan-mutation.mts",
     "ops:shadow-plan-db-check": "tsx scripts/ops-shadow-plan-db-check.mts",
     "check:political-axis": "tsx scripts/political-axis-contract-check.mts",

@@ -603,7 +603,7 @@ export type OptionalJobVerdict = {
 }
 
 /**
- * 🔴 **설치본 원문(템플릿 바이트) 불일치를 유예할 수 있는 label — ops-loop-install 이 소유한 둘뿐이다** (2026-10-29).
+ * 🔴 **설치본 원문(템플릿 바이트) 불일치를 유예할 수 있는 label — ops-loop-install 이 소유한 것뿐이다** (2026-10-29 · 2026-11-11 observer 추가).
  *
  *    runtime:deploy 는 잠시 멈춘 이 둘을 **옛 설치본 그대로** 되올린다(render·write 하지 않는다 — 소유자가 아니다).
  *    그 직후의 strict 격리 검사는 옛 원문 ≠ 새 템플릿으로 막혀, 정작 새 원문을 설치할 ops-loop-install 까지
@@ -615,6 +615,8 @@ export type OptionalJobVerdict = {
 export const OPS_LOOP_TEMPLATE_DEFER_LABELS: readonly string[] = [
   'com.soransoran.runner-recover',
   'com.soransoran.stage-controller',
+  // 2026-11-11 Phase 2 — ops shadow observer(권위 0)도 ops-loop 설치기가 소유한다
+  'com.soransoran.ops-shadow-observer',
 ]
 
 /**

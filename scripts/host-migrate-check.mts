@@ -25,6 +25,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { PUBLISH_RUN_DIR, PUBLISH_RUN_DIR_NAME } from './lib/publish-run-record.mjs'
+import { renderOpsShadowObserverPlist } from './lib/ops-loop-templates'
 import { QUEUE_LOCK_DIR, queueLockFile } from './lib/magazine-queue-lock.mjs'
 
 import {
@@ -75,12 +76,30 @@ check('🔴 발행 회차 기록(publish-runs)은 분류돼 있고 싣지 않는
   classifyCanonEntry(PUBLISH_RUN_DIR_NAME).kind === 'exclude' && PUBLISH_RUN_DIR_NAME === basename(PUBLISH_RUN_DIR))
 check('heartbeat 지난 틱 표식은 싣는다', !isTransientFile('tick-2026-09-28T08-00.lock', 'publish-heartbeat'))
 check('🔴 heartbeat 디렉터리라도 틱 이름이 아니면 뺀다', isTransientFile('other.lock', 'publish-heartbeat'))
-check('🔴 D100 allowlist 는 정확히 9개 — plist 템플릿 대상은 이것뿐', D100_LANE_LABELS.length === 9
+check('🔴 D100 allowlist 는 정확히 10개(ops shadow observer 는 선택 설치 · 설치본이 있을 때만 실린다) — plist 템플릿 대상은 이것뿐', D100_LANE_LABELS.length === 10
   && JSON.stringify([...D100_LANE_LABELS].sort()) === JSON.stringify([
     'com.soransoran.auto-ready-audit', 'com.soransoran.keep-awake', 'com.soransoran.navercafe-collect-remonterrace-multi',
-    'com.soransoran.navercafe-collect-wgang-multi', 'com.soransoran.original-post-runner', 'com.soransoran.persona-comment-runner',
-    'com.soransoran.runner-recover', 'com.soransoran.stage-controller', 'com.soransoran.supply-process',
+    'com.soransoran.navercafe-collect-wgang-multi', 'com.soransoran.ops-shadow-observer', 'com.soransoran.original-post-runner',
+    'com.soransoran.persona-comment-runner', 'com.soransoran.runner-recover', 'com.soransoran.stage-controller', 'com.soransoran.supply-process',
   ]) && !D100_LANE_LABELS.some((l) => l.includes('magazine') || l.includes('82cook')))
+
+// 🔴 ops shadow 감사 장부(2026-11-11 Phase 2) — state · 날짜 jsonl 과 잠금만 · 잠금 · 임시는 걷기에서 빠진다
+{
+  const t = (rootType: ChildEntry['type'], ...rels: string[]): EntryTree => ({ rootType, children: rels.map((rel) => ({ rel, type: 'file' as const })) })
+  check('🔴 ops-shadow 는 state · 날짜 jsonl · 잠금 · 임시만 있으면 state', classifyCanonEntry('ops-shadow').kind === 'state'
+    && classifyCanonEntryIn('ops-shadow', t('dir', '2026-11-10.jsonl', '2026-11-11.jsonl', '.lock', '.observer.lock', '.observer-cleanup.lock',
+      '.observer.tmp-123-0b5f2c1e-1d2e-4f00-9abc-0123456789ab')).kind === 'state')
+  check('🔴 ops-shadow 안에 모르는 파일 · 하위 디렉터리가 있으면 unclassified(export 가 멈춘다)',
+    classifyCanonEntryIn('ops-shadow', t('dir', '2026-11-11.jsonl', 'notes.txt')).kind === 'unclassified'
+    && classifyCanonEntryIn('ops-shadow', { rootType: 'dir', children: [{ rel: 'x', type: 'dir' }] }).kind === 'unclassified')
+  check('🔴 observer 잠금 · 정리 claim · 임시는 호스트마다 새로 — 걷기에서 빠진다 · 장부 jsonl 은 싣는다',
+    isTransientFile('.observer.lock', 'ops-shadow') && isTransientFile('.observer-cleanup.lock', 'ops-shadow') && isTransientFile('.lock', 'ops-shadow')
+    && isTransientFile('.observer.tmp-123-abc', 'ops-shadow') && !isTransientFile('2026-11-11.jsonl', 'ops-shadow'))
+  check('ops shadow observer 로그는 레인 로그로 싣는다', isLaneLog('ops-shadow-observer.log') && isLaneLog('ops-shadow-observer-error.log'))
+  check('🔴 observer 는 설치본이 있을 때만 묶음에 실린다 — 없으면 묶음 0(대상에도 없다)',
+    !lanePlistFiles(['com.soransoran.supply-process.plist', 'com.soransoran.keep-awake.plist']).includes('com.soransoran.ops-shadow-observer.plist')
+    && lanePlistFiles(['com.soransoran.supply-process.plist', 'com.soransoran.ops-shadow-observer.plist']).includes('com.soransoran.ops-shadow-observer.plist'))
+}
 
 // 🔴 2026-10-07 plan 의 미분류 2건 — 이름은 정확히 하나씩만 등록한다
 const tree = (rootType: ChildEntry['type'], ...children: ChildEntry[]): EntryTree => ({ rootType, children })
@@ -222,6 +241,15 @@ check('🔴 /Users 밖 홈으로도 /Users/<누구> 0', foreignHomePaths(nonUser
 const raw = renderAndJudge('com.soransoran.supply-process', srcPlist, TGT)
 check('🔴 반례 — 템플릿화 안 한 plist 는 원 홈 경로로 실패', raw.problems.some((p) => p.includes('/Users/alice')))
 check('🔴 반례 — Label 다르면 실패', renderAndJudge('com.soransoran.stage-controller', tpl, TGT).problems.length > 0)
+// 🔴 ops shadow observer 설치본(ops-loop 동적 render)도 같은 경로로 대상 홈에 다시 찍힌다
+{
+  const obsSrc = renderOpsShadowObserverPlist({ runtimeRoot: `${SRC_HOME}/Documents/soransoran-runtime`, npxPath: `${NB}/npx`, nodeBinDir: NB, logDir: `${SRC_HOME}/Library/Logs/soransoran` })
+  const obsTpl = templatizePlist(obsSrc, { home: SRC_HOME, nodeBin: NB })
+  const obsR = renderAndJudge('com.soransoran.ops-shadow-observer', obsTpl, TGT)
+  check('🔴 observer 설치본 → 템플릿 → 대상 홈 — 문제 0 · 원 홈 0 · 대상 runtime 의 observer 스크립트 · 60초 그대로', obsR.problems.length === 0
+    && !obsR.xml.includes('/Users/alice') && obsR.xml.includes('/Users/bob/Documents/soransoran-runtime/scripts/ops-shadow-observer.mts')
+    && /<key>StartInterval<\/key><integer>60<\/integer>/.test(obsR.xml), obsR.problems.join(' · '))
+}
 check('🔴 반례 — 모르는 placeholder 가 남으면 실패', renderAndJudge('com.soransoran.supply-process', tpl.replace('tsx', '__NEW__'), TGT).problems.length > 0)
 // 🔴 레인 반례 — 매거진 job 은 Label·경로가 멀쩡해도 D100 묶음에 들어가지 못한다
 const magPlist = srcPlist.replace('com.soransoran.supply-process', 'com.soransoran.magazine-watch')
