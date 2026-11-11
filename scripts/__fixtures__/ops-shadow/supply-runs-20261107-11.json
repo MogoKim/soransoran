@@ -1,12 +1,11 @@
 {
- "note": "11-07~11-11 KST 자연 공급 회차의 수요·유료 결정 숫자만(원천·원문·닉네임·post id 없음). 출처: runtime supply-process run.json · llm-ledger 정산 합.",
+ "note": "11-07~11-11 KST 자연 공급 회차의 수요·유료 결정 숫자만(원천·원문·닉네임·post id 없음). 출처: runtime supply-process run.json · llm-ledger 정산 합. runTokenShadow 는 운영 기록의 완전한 tag 그대로(tokenId 만 합성 값).",
  "runs": [
   {
    "runId": "20261106-211506",
    "startedAt": "2026-11-06T21:15:06.781Z",
    "status": "done",
    "completedAt": "2026-11-06T21:16:31.990Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 2,
     "readyFilled": 0,
@@ -18,6 +17,17 @@
    "settledUsd": {
     "j": 0.026341,
     "d": 0.01146
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-00",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 06:15"
    }
   },
   {
@@ -25,7 +35,6 @@
    "startedAt": "2026-11-06T23:15:05.278Z",
    "status": "done",
    "completedAt": "2026-11-06T23:21:04.548Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 20,
     "readyFilled": 3,
@@ -37,6 +46,17 @@
    "settledUsd": {
     "j": 0.033627,
     "d": 0.237351
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-01",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 08:15"
    }
   },
   {
@@ -44,7 +64,6 @@
    "startedAt": "2026-11-07T03:15:06.226Z",
    "status": "done",
    "completedAt": "2026-11-07T03:20:31.781Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 14,
     "readyFilled": 9,
@@ -56,6 +75,17 @@
    "settledUsd": {
     "j": 0.035093,
     "d": 0.209246
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-02",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 12:15"
    }
   },
   {
@@ -63,7 +93,6 @@
    "startedAt": "2026-11-07T05:15:07.052Z",
    "status": "done",
    "completedAt": "2026-11-07T05:15:45.163Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 11,
     "readyFilled": 11,
@@ -75,6 +104,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-03",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 14:15"
    }
   },
   {
@@ -82,7 +122,6 @@
    "startedAt": "2026-11-07T08:15:02.367Z",
    "status": "done",
    "completedAt": "2026-11-07T08:16:05.325Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 7,
     "readyFilled": 6,
@@ -94,6 +133,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0.007247
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-04",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 17:15"
    }
   },
   {
@@ -101,7 +151,6 @@
    "startedAt": "2026-11-07T12:15:04.446Z",
    "status": "done",
    "completedAt": "2026-11-07T12:15:44.635Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 1,
     "readyFilled": 1,
@@ -113,6 +162,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-05",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 21:15"
    }
   },
   {
@@ -120,7 +180,6 @@
    "startedAt": "2026-11-07T13:15:06.272Z",
    "status": "done",
    "completedAt": "2026-11-07T13:15:44.057Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 1,
     "readyFilled": 1,
@@ -132,6 +191,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-06",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-07 22:15"
    }
   },
   {
@@ -139,7 +209,6 @@
    "startedAt": "2026-11-07T21:15:07.196Z",
    "status": "done",
    "completedAt": "2026-11-07T21:16:11.017Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 2,
     "readyFilled": 0,
@@ -151,6 +220,17 @@
    "settledUsd": {
     "j": 0.005218,
     "d": 0.003928
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-07",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 06:15"
    }
   },
   {
@@ -158,7 +238,6 @@
    "startedAt": "2026-11-07T23:15:05.676Z",
    "status": "done",
    "completedAt": "2026-11-07T23:20:01.593Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 20,
     "readyFilled": 4,
@@ -170,6 +249,17 @@
    "settledUsd": {
     "j": 0.033427,
     "d": 0.176894
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-08",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 08:15"
    }
   },
   {
@@ -177,7 +267,6 @@
    "startedAt": "2026-11-08T03:15:06.596Z",
    "status": "done",
    "completedAt": "2026-11-08T03:18:23.706Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 18,
     "readyFilled": 3,
@@ -189,6 +278,17 @@
    "settledUsd": {
     "j": 0.022841,
     "d": 0.087077
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-09",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 12:15"
    }
   },
   {
@@ -196,7 +296,6 @@
    "startedAt": "2026-11-08T05:15:04.717Z",
    "status": "done",
    "completedAt": "2026-11-08T05:16:18.733Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 15,
     "readyFilled": 2,
@@ -208,6 +307,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0.013984
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-10",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 14:15"
    }
   },
   {
@@ -215,7 +325,6 @@
    "startedAt": "2026-11-08T08:15:07.767Z",
    "status": "done",
    "completedAt": "2026-11-08T08:16:55.284Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 13,
     "readyFilled": 0,
@@ -227,6 +336,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0.0389
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-11",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 17:15"
    }
   },
   {
@@ -234,7 +354,6 @@
    "startedAt": "2026-11-08T12:15:05.778Z",
    "status": "done",
    "completedAt": "2026-11-08T12:19:10.693Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 6,
     "readyFilled": 0,
@@ -246,6 +365,17 @@
    "settledUsd": {
     "j": 0.020598,
     "d": 0.143851
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-12",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 21:15"
    }
   },
   {
@@ -253,7 +383,6 @@
    "startedAt": "2026-11-08T13:15:03.657Z",
    "status": "done",
    "completedAt": "2026-11-08T13:17:37.935Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 1,
     "readyFilled": 0,
@@ -265,6 +394,17 @@
    "settledUsd": {
     "j": 0.012962,
     "d": 0.060916
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-13",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-08 22:15"
    }
   },
   {
@@ -272,7 +412,6 @@
    "startedAt": "2026-11-08T21:15:06.235Z",
    "status": "done",
    "completedAt": "2026-11-08T21:17:25.454Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 2,
     "readyFilled": 0,
@@ -284,6 +423,17 @@
    "settledUsd": {
     "j": 0.027061,
     "d": 0.045597
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-14",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 06:15"
    }
   },
   {
@@ -291,7 +441,6 @@
    "startedAt": "2026-11-08T23:15:05.074Z",
    "status": "done",
    "completedAt": "2026-11-08T23:20:58.609Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 20,
     "readyFilled": 3,
@@ -303,6 +452,17 @@
    "settledUsd": {
     "j": 0.042457,
     "d": 0.199534
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-15",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 08:15"
    }
   },
   {
@@ -310,7 +470,6 @@
    "startedAt": "2026-11-09T03:15:05.006Z",
    "status": "done",
    "completedAt": "2026-11-09T03:20:55.531Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 16,
     "readyFilled": 4,
@@ -322,6 +481,17 @@
    "settledUsd": {
     "j": 0.038934,
     "d": 0.206066
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-16",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 12:15"
    }
   },
   {
@@ -329,7 +499,6 @@
    "startedAt": "2026-11-09T05:15:05.025Z",
    "status": "done",
    "completedAt": "2026-11-09T05:19:53.197Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 14,
     "readyFilled": 3,
@@ -341,6 +510,17 @@
    "settledUsd": {
     "j": 0.031238,
     "d": 0.135658
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-17",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 14:15"
    }
   },
   {
@@ -348,7 +528,6 @@
    "startedAt": "2026-11-09T08:15:06.389Z",
    "status": "done",
    "completedAt": "2026-11-09T08:19:33.661Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 7,
     "readyFilled": 2,
@@ -360,6 +539,17 @@
    "settledUsd": {
     "j": 0.02584,
     "d": 0.146683
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-18",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 17:15"
    }
   },
   {
@@ -367,7 +557,6 @@
    "startedAt": "2026-11-09T12:15:05.180Z",
    "status": "done",
    "completedAt": "2026-11-09T12:18:52.405Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 6,
     "readyFilled": 3,
@@ -379,6 +568,17 @@
    "settledUsd": {
     "j": 0.022598,
     "d": 0.107392
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-19",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 21:15"
    }
   },
   {
@@ -386,7 +586,6 @@
    "startedAt": "2026-11-09T13:15:06.220Z",
    "status": "done",
    "completedAt": "2026-11-09T13:15:51.371Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 1,
     "readyFilled": 1,
@@ -398,6 +597,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-20",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-09 22:15"
    }
   },
   {
@@ -405,7 +615,6 @@
    "startedAt": "2026-11-09T21:15:06.357Z",
    "status": "done",
    "completedAt": "2026-11-09T21:17:45.292Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 2,
     "readyFilled": 0,
@@ -417,6 +626,17 @@
    "settledUsd": {
     "j": 0.035727,
     "d": 0.057054
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-21",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 06:15"
    }
   },
   {
@@ -424,7 +644,6 @@
    "startedAt": "2026-11-09T23:15:05.525Z",
    "status": "done",
    "completedAt": "2026-11-09T23:21:30.923Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 21,
     "readyFilled": 2,
@@ -436,6 +655,17 @@
    "settledUsd": {
     "j": 0.026535,
     "d": 0.224094
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-22",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 08:15"
    }
   },
   {
@@ -443,7 +673,6 @@
    "startedAt": "2026-11-10T03:15:02.310Z",
    "status": "done",
    "completedAt": "2026-11-10T03:20:12.593Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 20,
     "readyFilled": 3,
@@ -455,6 +684,17 @@
    "settledUsd": {
     "j": 0.035604,
     "d": 0.168912
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-23",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 12:15"
    }
   },
   {
@@ -462,7 +702,6 @@
    "startedAt": "2026-11-10T05:15:05.352Z",
    "status": "done",
    "completedAt": "2026-11-10T05:19:28.497Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 16,
     "readyFilled": 4,
@@ -474,6 +713,17 @@
    "settledUsd": {
     "j": 0.036455,
     "d": 0.132428
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-24",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 14:15"
    }
   },
   {
@@ -481,7 +731,6 @@
    "startedAt": "2026-11-10T08:15:06.964Z",
    "status": "done",
    "completedAt": "2026-11-10T08:16:40.884Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 11,
     "readyFilled": 2,
@@ -493,6 +742,17 @@
    "settledUsd": {
     "j": 0,
     "d": 0.022643
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-25",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 17:15"
    }
   },
   {
@@ -500,7 +760,6 @@
    "startedAt": "2026-11-10T12:15:06.416Z",
    "status": "done",
    "completedAt": "2026-11-10T12:18:55.529Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 6,
     "readyFilled": 2,
@@ -512,6 +771,17 @@
    "settledUsd": {
     "j": 0.017877,
     "d": 0.107898
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-26",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 21:15"
    }
   },
   {
@@ -519,7 +789,6 @@
    "startedAt": "2026-11-10T13:15:04.504Z",
    "status": "done",
    "completedAt": "2026-11-10T13:17:02.010Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 1,
     "readyFilled": 0,
@@ -531,6 +800,17 @@
    "settledUsd": {
     "j": 0.007634,
     "d": 0.038765
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-27",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-10 22:15"
    }
   },
   {
@@ -538,7 +818,6 @@
    "startedAt": "2026-11-10T21:15:07.484Z",
    "status": "done",
    "completedAt": "2026-11-10T21:17:14.521Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 2,
     "readyFilled": 0,
@@ -550,6 +829,17 @@
    "settledUsd": {
     "j": 0.036315,
     "d": 0.036746
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-28",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-11 06:15"
    }
   },
   {
@@ -557,7 +847,6 @@
    "startedAt": "2026-11-10T23:15:03.767Z",
    "status": "done",
    "completedAt": "2026-11-10T23:22:45.855Z",
-   "trigger": "scheduled",
    "jit": {
     "slots": 10,
     "readyFilled": 2,
@@ -569,6 +858,17 @@
    "settledUsd": {
     "j": 0.034039,
     "d": 0.244665
+   },
+   "runTokenShadow": {
+    "ok": true,
+    "code": null,
+    "tokenId": "fixture-token-29",
+    "trigger": "scheduled",
+    "launchTrigger": "scheduled",
+    "absorbedTrigger": null,
+    "absorbedAt": null,
+    "pass": 0,
+    "budgetWindow": "2026-11-11 08:15"
    }
   }
  ]

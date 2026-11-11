@@ -11,8 +11,8 @@
 import { ALWAYS_RUNNING_LABELS } from './host-migrate.mjs'
 import { programArguments } from './launchd-install.mjs'
 import {
-  KEEP_AWAKE_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL,
-  renderKeepAwakePlist, renderRunnerRecoverPlist, renderStageControllerPlist,
+  KEEP_AWAKE_LABEL, OPS_SHADOW_OBSERVER_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL,
+  renderKeepAwakePlist, renderOpsShadowObserverPlist, renderRunnerRecoverPlist, renderStageControllerPlist,
 } from './ops-loop-templates'
 import {
   PUBLISH_RUNNER_LABEL, judgeLaunchdRunMarker, launchctlEnvironmentOf, renderRunnerPlistFor,
@@ -20,14 +20,35 @@ import {
 } from './original-post-runner-template'
 import { parseLaunchctlPrint } from '../../src/lib/runtime-isolation'
 
-/** 교체 대상 4 job 과 기대 plist — 🔴 keep-awake 도 여기 있으므로 bootout·교체·bootstrap·검증을 똑같이 거친다 */
-export function desiredPlists(publishMode: RunnerTriggerMode, input: RunnerPlistInput): Map<string, string> {
-  return new Map<string, string>([
+/**
+ * 🔴 **ops shadow observer 설치 의도** (2026-11-11 · Phase 2 · 권위 0) — 코드 merge · 배포만으로는 설치되지 않는다.
+ *    `ops:loop-install --apply` 는 배포 뒤 필수 단계라, observer 를 무조건 넣으면 merge 하나가 조용히 설치한다.
+ *    · 플래그 없음 — **지금 상태 유지**: 설치돼 있으면 새 원문으로 교체(keep) · 없으면 없는 채로(absent)
+ *    · `--observer=on` — 설치(install) · `--observer=off` — 설치돼 있으면 내리고 지운다(remove · snapshot 으로 되돌릴 수 있다)
+ *    · 그 밖의 값 — null(인자 오류)
+ */
+export type ObserverIntent = 'install' | 'keep' | 'absent' | 'remove'
+export function observerIntentOf(flag: string | null, installed: boolean): ObserverIntent | null {
+  if (flag === null) return installed ? 'keep' : 'absent'
+  if (flag === 'on') return installed ? 'keep' : 'install'
+  if (flag === 'off') return installed ? 'remove' : 'absent'
+  return null
+}
+export const observerWanted = (intent: ObserverIntent): boolean => intent === 'install' || intent === 'keep'
+
+/**
+ * 교체 대상 job 과 기대 plist — 🔴 keep-awake 도 여기 있으므로 bootout·교체·bootstrap·검증을 똑같이 거친다.
+ * 🔴 ops shadow observer(권위 0)는 **설치 의도가 있을 때만** 넣는다(`observerIntentOf`) — 넣으면 같은 snapshot · rollback · strict 격리를 거친다.
+ */
+export function desiredPlists(publishMode: RunnerTriggerMode, input: RunnerPlistInput, o: { observer: boolean }): Map<string, string> {
+  const out = new Map<string, string>([
     [PUBLISH_RUNNER_LABEL, renderRunnerPlistFor(publishMode, input)],
     [STAGE_CONTROLLER_LABEL, renderStageControllerPlist(input)],
     [RUNNER_RECOVER_LABEL, renderRunnerRecoverPlist(input)],
     [KEEP_AWAKE_LABEL, renderKeepAwakePlist({ logDir: input.logDir })],
   ])
+  if (o.observer) out.set(OPS_SHADOW_OBSERVER_LABEL, renderOpsShadowObserverPlist(input))
+  return out
 }
 
 /** 🔴 실행 중이어도 교체를 막지 않는 label — 늘 떠 있는 것(keep-awake)만 */

@@ -59,9 +59,15 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
 | `com.soransoran.stage-controller` | 단계 controller |
 | `com.soransoran.runner-recover` | 러너 복구 |
 | `com.soransoran.keep-awake` | 잠자기 방지 |
+| `com.soransoran.ops-shadow-observer` | ops shadow 감사(권위 0) — **선택 설치 · 설치본이 있을 때만 실린다** |
 
 묶음 · quiesce · 설치 · 되돌리기 · 소유/handoff 표식이 **전부 이 목록 하나에서 나온다**(`scripts/lib/host-migrate.mts`).
-판정 함수가 스스로 목록으로 거른다 — 부르는 쪽이 걸러 주기를 믿지 않는다.
+
+> 🟡 **ops shadow observer(`com.soransoran.ops-shadow-observer`) — 2026-11-11 Phase 2 · 권위 0 · 선택 설치.**
+> ops-loop 설치기가 `--observer=on` 으로만 설치한다(플래그 없으면 지금 상태 유지 — merge · 배포만으로는 설치되지 않는다).
+> 레인 목록에는 있지만 **설치본이 있을 때만** 묶음에 실리고(없으면 `laneMissing` 🟡 안내뿐 · 막지 않는다), 원 호스트 quiesce 가
+> 함께 내린다. 감사 장부(`Application Support/soransoran/ops-shadow`)는 state 다 — 날짜 jsonl 만 싣고, 잠금 · 정리 claim ·
+> 임시(`.lock` · `.observer.lock` · `.observer-cleanup.lock` · `.observer.tmp-*`)는 걷기에서 빠지며, 그 밖의 것이 있으면 export 가 멈춘다.
 
 ### 1.2 범위 밖 — 원 호스트에 그대로 남는다 (기본 거부)
 

@@ -9,12 +9,16 @@
  *   ⑤ 결정이 없으면 기록 0 · 실패 코드(봉투 상한을 모르면 쓰지 않는다)
  *   ⑥ 시각 — 실제로 지난 날(어제 KST)을 주입 시각(`--now`)으로 재생한다. 회차 시작 전 시각 · 마지막 슬롯의 깨진
  *      회차 기록이면 dayClose 0 (writer fail-closed)
+ *   ⑦ observer(Phase 2) — 같은 격리 DB · 임시 장부 디렉터리에서 실제 observer CLI 를 돌린다.
+ *      자연 회차 하나 = cycle 한 줄(회차 열쇠) · 관측 시각 = tick(완료 시각은 출처로만) · 재실행 · 동시 3개 ·
+ *      늦은 tick(backfill)은 결정 · 장부 · DB 없이 marker 한 줄 · dayClose 0(결정 없는 날도 marker) · trigger-only 가짜 tag 0 ·
+ *      손 실행 dayClose 와 causal dayClose 가 같은 id · DB 행 수 · 데이터 digest 그대로
  *
  *   SORAN_ISOLATED_DB=yes-throwaway · localhost · soran_test 가 아니면 즉시 멈춘다.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 
@@ -84,10 +88,16 @@ try {
   await createStageDecision(prisma, v.decision)
   const startUtc = new Date(`${D}T22:15:05+09:00`)
   const runId = startUtc.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+  // 🔴 완전한 tag — 자연 회차 판정은 정본 `naturalScheduledRunEvidenceAt` 하나다(trigger 만 있는 가짜 tag 는 자연이 아니다)
+  const fullTag = (budgetWindow: string): Record<string, unknown> => ({
+    ok: true, code: null, tokenId: 'fixture-token-db', trigger: 'scheduled', launchTrigger: 'scheduled',
+    absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow,
+  })
+  const completedIso = new Date(startUtc.getTime() + 600_000).toISOString()
   writeFileSync(join(dataDir, `supply-process-${runId}.run.json`), JSON.stringify({
-    runId, startedAt: startUtc.toISOString(), status: 'done', completedAt: new Date(startUtc.getTime() + 600_000).toISOString(),
+    runId, startedAt: startUtc.toISOString(), status: 'done', completedAt: completedIso,
     jit: { slots: 1, readyFilled: 1, upTo: 0, paidSources: 0, paidBasis: 'noDemand', sourceYieldHigh: null },
-    runTokenShadow: { trigger: 'scheduled' },
+    runTokenShadow: fullTag(`${D} 22:15`),
   }))
   const dataBefore = digest()
 
@@ -124,6 +134,117 @@ try {
   check('🔴 다른 관측 시각 — cycle 한 줄 추가 · dayClose 는 여전히 한 줄', r3.status === 0
     && lines3.filter((l) => l.kind === 'dayClose').length === 1 && lines3.filter((l) => l.kind === 'cycle').length === 2)
   check('재실행도 DB 쓰기 0', JSON.stringify(await countAll()) === JSON.stringify(after))
+
+  console.log('\n⑦ observer — 자연 회차 하나 = 한 줄 · 관측 시각 = tick · backfill 은 marker 만 · 재실행 · 동시 · 가짜 tag 0')
+  // trigger-only 가짜 tag(옛 fixture 모양) — 21:15 슬롯 자리. 자연이 아니므로 observer 는 보지 않는다
+  const fakeStart = new Date(`${D}T21:15:04+09:00`)
+  const fakeId = fakeStart.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+  writeFileSync(join(dataDir, `supply-process-${fakeId}.run.json`), JSON.stringify({
+    runId: fakeId, startedAt: fakeStart.toISOString(), status: 'done', completedAt: new Date(fakeStart.getTime() + 300_000).toISOString(),
+    jit: { slots: 1, readyFilled: 1, upTo: 0, paidSources: 0, paidBasis: 'noDemand', sourceYieldHigh: null },
+    runTokenShadow: { trigger: 'scheduled' },
+  }))
+  // 결정 행이 **없는** 전날(D-1)의 자연 회차 — backfill 이 결정을 읽지 않는다는 반례(읽으면 DECISION_MISSING 으로 0줄)
+  const D2 = previousKstDate(D)
+  if (D2 === null) throw new Error('D-1 을 계산하지 못했다')
+  await prisma.stageDecision.deleteMany({ where: { kstDate: D2 } })
+  const oldStart = new Date(`${D2}T22:15:07+09:00`)
+  const oldId = oldStart.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+  writeFileSync(join(dataDir, `supply-process-${oldId}.run.json`), JSON.stringify({
+    runId: oldId, startedAt: oldStart.toISOString(), status: 'done', completedAt: new Date(oldStart.getTime() + 600_000).toISOString(),
+    jit: { slots: 1, readyFilled: 1, upTo: 0, paidSources: 0, paidBasis: 'noDemand', sourceYieldHigh: null },
+    runTokenShadow: fullTag(`${D2} 22:15`),
+  }))
+  const obsData = digest()
+  const obsArgs = (outDir: string, nowIso: string | null): string[] => [join(REPO_ROOT, 'scripts/ops-shadow-observer.mts'),
+    `--data-dir=${dataDir}`, `--out-dir=${outDir}`, ...(nowIso === null ? [] : [`--now=${nowIso}`])]
+  const obsEnv = { ...process.env, HOME: home, NODE_OPTIONS: '' }
+  const tsxBin = join(REPO_ROOT, 'node_modules/.bin/tsx')
+  const runObserver = (outDir: string, nowIso: string | null): ReturnType<typeof spawnSync> =>
+    spawnSync(tsxBin, obsArgs(outDir, nowIso), { cwd: REPO_ROOT, encoding: 'utf-8', env: obsEnv })
+  const runObserverAsync = (outDir: string, nowIso: string | null): Promise<number | null> => new Promise((res) => {
+    const c = spawn(tsxBin, obsArgs(outDir, nowIso), { cwd: REPO_ROOT, env: obsEnv, stdio: 'ignore' })
+    c.on('exit', (code) => res(code))
+  })
+  type ObsLine = { kind: string; cycleId: string; kstDate: string; clock: string; at: string
+    envelope: unknown; plan: unknown; observation: unknown; deficit: unknown; outcome: unknown; writer: unknown
+    source: { kind: string; runId?: string; completedAt?: string; mode?: string; integrity?: string } }
+  const linesOf = (dir: string): ObsLine[] => {
+    try { return walk(dir).filter((f) => f.endsWith('.jsonl')).flatMap((f) => readFileSync(f, 'utf-8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as ObsLine)) } catch { return [] }
+  }
+  const ofRun = (ls: ObsLine[], id: string): ObsLine[] => ls.filter((l) => l.source.runId === id && l.kind === 'cycle')
+  const isMarker = (l: ObsLine | undefined): boolean => l !== undefined && l.kind === 'cycle' && l.source.mode === 'backfill'
+    && [l.envelope, l.plan, l.observation, l.deficit, l.outcome, l.writer].every((v) => v === null)
+  const obsBefore = await countAll()
+  const TICK = AT('22:27')
+
+  // ── causal — 완료 2분 뒤 tick ──
+  const causalDir = join(tmp, 'obs-causal', 'ops-shadow')
+  const o1 = runObserver(causalDir, TICK)
+  const c1 = linesOf(causalDir)
+  const c1Run = ofRun(c1, runId)
+  const c1Close = c1.filter((l) => l.kind === 'dayClose')
+  check('🔴 causal — 자연 회차 cycle 한 줄 + dayClose 한 줄 · 관측 시각 = tick(완료 시각 아님) · 시계 injected · 완료 시각은 출처로만',
+    o1.status === 0 && c1Run.length === 1 && c1Close.length === 1 && c1Run[0]!.source.mode === 'causal' && c1Run[0]!.source.integrity === 'unknown'
+    && c1Run[0]!.at === TICK && c1Run[0]!.clock === 'injected' && c1Run[0]!.source.completedAt === completedIso
+    && c1Run[0]!.observation !== null && c1Run[0]!.envelope !== null && c1Close[0]!.at === TICK && c1Close[0]!.kstDate === D,
+    `${String(o1.status)} ${String(o1.stderr).slice(0, 300)} ${c1.map((l) => `${l.kind}:${l.source.mode ?? '-'}`).join(',')}`)
+  check('🔴 어떤 줄도 회차 완료 시각을 관측 시각으로 적지 않는다', c1.length > 0 && c1.every((l) => l.at !== completedIso && l.at === TICK))
+  check('🔴 같은 tick 의 결정 없는 전날 회차 → backfill marker 한 줄(결정 · 장부 · DB 0) · 그날 dayClose 0',
+    isMarker(ofRun(c1, oldId)[0]) && ofRun(c1, oldId).length === 1 && !c1.some((l) => l.kstDate === D2 && l.kind === 'dayClose'))
+  check('🔴 trigger-only 가짜 tag 회차는 기록 0', c1.length === 3 && !c1.some((l) => l.source.runId === fakeId))
+  const o2 = runObserver(causalDir, AT('22:28'))
+  check('🔴 다음 tick 재실행 → 줄 추가 0(seen)', o2.status === 0 && linesOf(causalDir).length === 3, String(o2.stdout).slice(-300))
+
+  // ── 동시 3개 ──
+  const concDir = join(tmp, 'obs-concurrent', 'ops-shadow')
+  const codes = await Promise.all([0, 1, 2].map(() => runObserverAsync(concDir, TICK)))
+  const cc = linesOf(concDir)
+  check('🔴 observer 동시 3개 → 회차마다 cycle 한 줄 · dayClose 한 줄(장부 잠금 + 회차 열쇠)', codes.every((c) => c === 0)
+    && ofRun(cc, runId).length === 1 && ofRun(cc, oldId).length === 1 && cc.filter((l) => l.kind === 'dayClose').length === 1 && cc.length === 3,
+    `${codes.join(',')} ${cc.length}`)
+  check('🔴 동시 실행과 단독 실행의 cycle id 집합이 같다(빈 집합 아님 · 회차가 열쇠)',
+    cc.length === 3 && c1.length === 3 && JSON.stringify(cc.map((l) => l.cycleId).sort()) === JSON.stringify(c1.map((l) => l.cycleId).sort()))
+
+  // ── backfill — 실제 시각 tick(완료 뒤 한참) ──
+  const backDir = join(tmp, 'obs-backfill', 'ops-shadow')
+  const tickStart = Date.now()
+  const o3 = runObserver(backDir, null)
+  const b1 = linesOf(backDir)
+  const bRun = ofRun(b1, runId)[0]
+  check('🔴 늦은 tick → backfill marker 한 줄 · 봉투 · 계획 · 관측 · 부족분 · 결과 · writer 전부 null', o3.status === 0
+    && isMarker(bRun) && ofRun(b1, runId).length === 1, `${String(o3.status)} ${String(o3.stderr).slice(0, 300)}`)
+  check('🔴 늦은 tick → dayClose 0(지금 DB 결과로 하루를 닫지 않는다)', b1.length > 0 && !b1.some((l) => l.kind === 'dayClose'))
+  check('🔴 backfill 관측 시각 = 실제 tick 시각 · 시계 real · 완료 시각은 출처로만', bRun !== undefined && bRun.clock === 'real'
+    && Date.parse(bRun.at) >= tickStart && bRun.at !== completedIso && bRun.source.completedAt === completedIso)
+  check('🔴 backfill marker 와 causal 기록은 같은 cycle id(회차 열쇠 · 먼저 쓴 한 줄만 남는다)',
+    bRun !== undefined && c1Run[0] !== undefined && bRun.cycleId === c1Run[0].cycleId)
+  check('🔴 causal 이 이미 쓴 장부에서 늦은 tick 은 줄 추가 0', runObserver(causalDir, null).status === 0 && linesOf(causalDir).length === 3)
+
+  // ── 경계 경합 — 완료 +4:59 causal 이 잠금을 쥔 동안 +5:01 tick 이 온다 ──
+  const edgeDir = join(tmp, 'obs-edge', 'ops-shadow')
+  mkdirSync(edgeDir, { recursive: true })
+  const plus = (ms: number): string => new Date(Date.parse(completedIso) + ms).toISOString()
+  // 진행 중인 causal observer 를 이 검사 프로세스(살아 있는 다른 pid)로 대신한다
+  writeFileSync(join(edgeDir, '.observer.lock'), JSON.stringify({ pid: process.pid, at: plus(299_000) }))
+  const eBusy = runObserver(edgeDir, plus(301_000))
+  check('🔴 경계 — causal 이 쥔 동안 +5:01 tick 은 backfill marker 를 쓰지 않는다(0줄 · exit 0)',
+    eBusy.status === 0 && linesOf(edgeDir).length === 0, `${String(eBusy.status)} ${String(eBusy.stderr).slice(0, 200)}`)
+  rmSync(join(edgeDir, '.observer.lock'))
+  const eCausal = runObserver(edgeDir, plus(299_000))
+  const eLate = runObserver(edgeDir, plus(301_000))
+  const eRun = ofRun(linesOf(edgeDir), runId)
+  check('🔴 경계 — causal 이 끝난 뒤의 +5:01 tick 은 seen · 남는 것은 causal 한 줄(관측 있음 · marker 아님)',
+    eCausal.status === 0 && eLate.status === 0 && eRun.length === 1 && eRun[0]!.source.mode === 'causal' && eRun[0]!.observation !== null
+    && eRun[0]!.at === plus(299_000) && !existsSync(join(edgeDir, '.observer.lock')))
+
+  const manualClose = lines3.find((l) => l.kind === 'dayClose') as unknown as { cycleId: string } | undefined
+  check('🔴 손 실행 dayClose 와 causal observer dayClose 는 같은 id(같은 마지막 자연 회차 열쇠)',
+    manualClose !== undefined && c1Close[0] !== undefined && manualClose.cycleId === c1Close[0].cycleId)
+  check('🔴 observer 전 구간 DB 행 수 그대로', JSON.stringify(await countAll()) === JSON.stringify(obsBefore))
+  check('🔴 observer 전 구간 데이터 디렉터리 digest 그대로', JSON.stringify(digest()) === JSON.stringify(obsData))
+  rmSync(join(dataDir, `supply-process-${fakeId}.run.json`))
+  rmSync(join(dataDir, `supply-process-${oldId}.run.json`))
 
   console.log('\n⑥-b 마지막 슬롯의 깨진 회차 기록이면 dayClose 0')
   rmSync(join(home, 'Library'), { recursive: true, force: true })

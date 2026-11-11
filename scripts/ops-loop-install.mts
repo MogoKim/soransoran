@@ -2,6 +2,8 @@
 /**
  * 무인 운영 루프 공식 설치기. 기본은 계획만이며 `--apply`만 변경한다.
  * 발행 러너의 현재 trigger(fixed/heartbeat)를 보존하고 controller·recover·keep-awake를 설치한다.
+ * 🔴 ops shadow observer(권위 0)는 **명시할 때만** 바뀐다 — 플래그 없으면 지금 상태 유지(설치돼 있으면 새 원문 · 없으면 없는 채로),
+ *    `--observer=on` 설치 · `--observer=off` 제거(snapshot 에 실어 rollback 이 되살린다). merge · 배포만으로는 설치되지 않는다.
  * 판정·적용 순서는 `lib/ops-loop-install-core.mts` 에 있다(검사가 가짜 launchctl 로 실행해 본다).
  * 공급 job은 runtime deploy가 설치한 stage consumer 배선을 읽기 전용으로 검증한다.
  * 🔴 loaded 검증 뒤 `runtime:isolation-check --require-runtime` 을 **유예 플래그 없이** 돌린다 — runtime:deploy 가
@@ -16,7 +18,8 @@ import { dirname, join, resolve } from 'node:path'
 import {
   leftoverPlaceholders, programArguments, readInstalled, removeInstalled, render, templatePathOf, writeInstalled,
 } from './lib/launchd-install.mjs'
-import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
+import { applyInstall, desiredPlists, observerIntentOf, observerWanted, runningBlockers } from './lib/ops-loop-install-core.mjs'
+import { OPS_SHADOW_OBSERVER_LABEL } from './lib/ops-loop-templates'
 import {
   PUBLISH_HEARTBEAT_ARGS, PUBLISH_RUNNER_ARGS, PUBLISH_RUNNER_LABEL, type RunnerTriggerMode,
   judgeLaunchdRunMarker, plistEnvironmentOf,
@@ -30,6 +33,11 @@ const apply = argv.includes('--apply')
 const rollbackArg = argv.find((a) => a.startsWith('--rollback='))?.slice('--rollback='.length) ?? null
 if (apply && rollbackArg !== null) {
   console.error('🔴 --apply와 --rollback은 함께 쓸 수 없다')
+  process.exit(2)
+}
+const observerFlag = argv.find((a) => a.startsWith('--observer='))?.slice('--observer='.length) ?? null
+if (observerFlag !== null && observerFlag !== 'on' && observerFlag !== 'off') {
+  console.error('🔴 --observer 는 on 또는 off 만 받는다')
   process.exit(2)
 }
 
@@ -109,7 +117,10 @@ const publishMode: RunnerTriggerMode = heartbeat ? 'heartbeat' : 'fixed'
 if (installedPublish === null) problems.push('발행 러너 설치본이 없다')
 else if (!fixedShape) problems.push('발행 러너 인자를 알아볼 수 없다 — trigger를 추측하지 않는다')
 
-const desired = desiredPlists(publishMode, input)
+const observerIntent = observerIntentOf(observerFlag, readInstalled(agentDir, OPS_SHADOW_OBSERVER_LABEL) !== null)!
+const desired = desiredPlists(publishMode, input, { observer: observerWanted(observerIntent) })
+/** 🔴 바뀌는 label 전부 — 교체 대상 + 제거할 observer. 실행 중 판정 · snapshot 이 이 목록을 쓴다 */
+const touched: string[] = [...desired.keys(), ...(observerIntent === 'remove' ? [OPS_SHADOW_OBSERVER_LABEL] : [])]
 for (const [label, xml] of desired) {
   const left = leftoverPlaceholders(xml)
   if (left.length > 0) problems.push(`${label} placeholder가 남았다 — ${left.join(', ')}`)
@@ -128,7 +139,7 @@ const installedSupply = readInstalled(agentDir, supplyLabel)
 if (!samePlist(installedSupply, expectedSupply)) problems.push('공급 job이 stage consumer 배선이 아니다 — 이 runtime으로 deploy 먼저')
 
 // 🔴 회차가 돌고 있는 job 위로 내리지 않는다 — 늘 떠 있는 keep-awake 만 예외(판정은 ops-loop-install-core)
-problems.push(...runningBlockers(desired.keys(), running))
+problems.push(...runningBlockers(touched, running))
 
 console.log(`   runtime ${head.ok ? head.out.slice(0, 7) : '읽기 실패'} · publish ${publishMode}`)
 console.log(`   supply consumer ${samePlist(installedSupply, expectedSupply) ? '✅' : '🔴'}`)
@@ -136,6 +147,8 @@ for (const [label, xml] of desired) {
   const current = readInstalled(agentDir, label)
   console.log(`   ${label.padEnd(42)} ${current === null ? '신규' : current === xml ? '최신' : '교체'}`)
 }
+if (observerIntent === 'remove') console.log(`   ${OPS_SHADOW_OBSERVER_LABEL.padEnd(42)} 제거(--observer=off)`)
+if (observerIntent === 'absent') console.log(`   ${OPS_SHADOW_OBSERVER_LABEL.padEnd(42)} 미설치 유지 — 설치는 --observer=on (권위 0)`)
 for (const problem of problems) console.log(`   🔴 ${problem}`)
 if (!apply) {
   console.log(`\n${problems.length === 0 ? '🟢 적용 가능' : `🔴 막힘 ${problems.length}건`} · 실제 적용은 --apply\n`)
@@ -152,13 +165,23 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 const backupDir = join(backupRoot, stamp)
 mkdirSync(backupDir, { mode: 0o700 })
 const rows: SnapshotRow[] = []
-for (const label of desired.keys()) {
+for (const label of touched) {
   const current = readInstalled(agentDir, label)
   const file = current === null ? null : `${label}.plist`
   if (file !== null && current !== null) writeFileSync(join(backupDir, file), current, { mode: 0o600 })
   rows.push({ label, installed: current !== null, loaded: loaded(label), file })
 }
 writeFileSync(join(backupDir, 'manifest.json'), `${JSON.stringify({ createdAt: new Date().toISOString(), rows } satisfies Snapshot, null, 2)}\n`, { mode: 0o600 })
+
+// 🔴 observer 제거 — snapshot 뒤 · 교체 전. 실패하면 snapshot 으로 되돌린다
+if (observerIntent === 'remove') {
+  bootout(OPS_SHADOW_OBSERVER_LABEL)
+  if (!removeInstalled(agentDir, OPS_SHADOW_OBSERVER_LABEL)) {
+    console.log(`🔴 ${OPS_SHADOW_OBSERVER_LABEL} 설치본을 지우지 못했다 — 되돌린다`)
+    process.exit(restore(backupDir) ? 1 : 2)
+  }
+  console.log(`   ${OPS_SHADOW_OBSERVER_LABEL} 내림 · 설치본 제거`)
+}
 
 const outcome = applyInstall(desired, runtimeRoot, {
   bootout,
