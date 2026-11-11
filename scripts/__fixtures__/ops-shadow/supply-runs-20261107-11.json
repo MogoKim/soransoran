@@ -1,0 +1,575 @@
+{
+ "note": "11-07~11-11 KST 자연 공급 회차의 수요·유료 결정 숫자만(원천·원문·닉네임·post id 없음). 출처: runtime supply-process run.json · llm-ledger 정산 합.",
+ "runs": [
+  {
+   "runId": "20261106-211506",
+   "startedAt": "2026-11-06T21:15:06.781Z",
+   "status": "done",
+   "completedAt": "2026-11-06T21:16:31.990Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 2,
+    "readyFilled": 0,
+    "upTo": 2,
+    "paidSources": 10,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.20408163265306123
+   },
+   "settledUsd": {
+    "j": 0.026341,
+    "d": 0.01146
+   }
+  },
+  {
+   "runId": "20261106-231505",
+   "startedAt": "2026-11-06T23:15:05.278Z",
+   "status": "done",
+   "completedAt": "2026-11-06T23:21:04.548Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 20,
+    "readyFilled": 3,
+    "upTo": 17,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2037037037037037
+   },
+   "settledUsd": {
+    "j": 0.033627,
+    "d": 0.237351
+   }
+  },
+  {
+   "runId": "20261107-031506",
+   "startedAt": "2026-11-07T03:15:06.226Z",
+   "status": "done",
+   "completedAt": "2026-11-07T03:20:31.781Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 14,
+    "readyFilled": 9,
+    "upTo": 5,
+    "paidSources": 18,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.28125
+   },
+   "settledUsd": {
+    "j": 0.035093,
+    "d": 0.209246
+   }
+  },
+  {
+   "runId": "20261107-051507",
+   "startedAt": "2026-11-07T05:15:07.052Z",
+   "status": "done",
+   "completedAt": "2026-11-07T05:15:45.163Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 11,
+    "readyFilled": 11,
+    "upTo": 0,
+    "paidSources": 0,
+    "paidBasis": "noDemand",
+    "sourceYieldHigh": 0.2808219178082192
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0
+   }
+  },
+  {
+   "runId": "20261107-081502",
+   "startedAt": "2026-11-07T08:15:02.367Z",
+   "status": "done",
+   "completedAt": "2026-11-07T08:16:05.325Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 7,
+    "readyFilled": 6,
+    "upTo": 1,
+    "paidSources": 4,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2808219178082192
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0.007247
+   }
+  },
+  {
+   "runId": "20261107-121504",
+   "startedAt": "2026-11-07T12:15:04.446Z",
+   "status": "done",
+   "completedAt": "2026-11-07T12:15:44.635Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 1,
+    "readyFilled": 1,
+    "upTo": 0,
+    "paidSources": 0,
+    "paidBasis": "noDemand",
+    "sourceYieldHigh": 0.28
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0
+   }
+  },
+  {
+   "runId": "20261107-131506",
+   "startedAt": "2026-11-07T13:15:06.272Z",
+   "status": "done",
+   "completedAt": "2026-11-07T13:15:44.057Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 1,
+    "readyFilled": 1,
+    "upTo": 0,
+    "paidSources": 0,
+    "paidBasis": "noDemand",
+    "sourceYieldHigh": 0.28
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0
+   }
+  },
+  {
+   "runId": "20261107-211507",
+   "startedAt": "2026-11-07T21:15:07.196Z",
+   "status": "done",
+   "completedAt": "2026-11-07T21:16:11.017Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 2,
+    "readyFilled": 0,
+    "upTo": 2,
+    "paidSources": 7,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.30097087378640774
+   },
+   "settledUsd": {
+    "j": 0.005218,
+    "d": 0.003928
+   }
+  },
+  {
+   "runId": "20261107-231505",
+   "startedAt": "2026-11-07T23:15:05.676Z",
+   "status": "done",
+   "completedAt": "2026-11-07T23:20:01.593Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 20,
+    "readyFilled": 4,
+    "upTo": 16,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2909090909090909
+   },
+   "settledUsd": {
+    "j": 0.033427,
+    "d": 0.176894
+   }
+  },
+  {
+   "runId": "20261108-031506",
+   "startedAt": "2026-11-08T03:15:06.596Z",
+   "status": "done",
+   "completedAt": "2026-11-08T03:18:23.706Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 18,
+    "readyFilled": 3,
+    "upTo": 15,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2692307692307692
+   },
+   "settledUsd": {
+    "j": 0.022841,
+    "d": 0.087077
+   }
+  },
+  {
+   "runId": "20261108-051504",
+   "startedAt": "2026-11-08T05:15:04.717Z",
+   "status": "done",
+   "completedAt": "2026-11-08T05:16:18.733Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 15,
+    "readyFilled": 2,
+    "upTo": 13,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2534246575342466
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0.013984
+   }
+  },
+  {
+   "runId": "20261108-081507",
+   "startedAt": "2026-11-08T08:15:07.767Z",
+   "status": "done",
+   "completedAt": "2026-11-08T08:16:55.284Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 13,
+    "readyFilled": 0,
+    "upTo": 13,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.24025974025974026
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0.0389
+   }
+  },
+  {
+   "runId": "20261108-121505",
+   "startedAt": "2026-11-08T12:15:05.778Z",
+   "status": "done",
+   "completedAt": "2026-11-08T12:19:10.693Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 6,
+    "readyFilled": 0,
+    "upTo": 6,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2222222222222222
+   },
+   "settledUsd": {
+    "j": 0.020598,
+    "d": 0.143851
+   }
+  },
+  {
+   "runId": "20261108-131503",
+   "startedAt": "2026-11-08T13:15:03.657Z",
+   "status": "done",
+   "completedAt": "2026-11-08T13:17:37.935Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 1,
+    "readyFilled": 0,
+    "upTo": 1,
+    "paidSources": 5,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2215909090909091
+   },
+   "settledUsd": {
+    "j": 0.012962,
+    "d": 0.060916
+   }
+  },
+  {
+   "runId": "20261108-211506",
+   "startedAt": "2026-11-08T21:15:06.235Z",
+   "status": "done",
+   "completedAt": "2026-11-08T21:17:25.454Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 2,
+    "readyFilled": 0,
+    "upTo": 2,
+    "paidSources": 10,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2
+   },
+   "settledUsd": {
+    "j": 0.027061,
+    "d": 0.045597
+   }
+  },
+  {
+   "runId": "20261108-231505",
+   "startedAt": "2026-11-08T23:15:05.074Z",
+   "status": "done",
+   "completedAt": "2026-11-08T23:20:58.609Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 20,
+    "readyFilled": 3,
+    "upTo": 17,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2
+   },
+   "settledUsd": {
+    "j": 0.042457,
+    "d": 0.199534
+   }
+  },
+  {
+   "runId": "20261109-031505",
+   "startedAt": "2026-11-09T03:15:05.006Z",
+   "status": "done",
+   "completedAt": "2026-11-09T03:20:55.531Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 16,
+    "readyFilled": 4,
+    "upTo": 12,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2125
+   },
+   "settledUsd": {
+    "j": 0.038934,
+    "d": 0.206066
+   }
+  },
+  {
+   "runId": "20261109-051505",
+   "startedAt": "2026-11-09T05:15:05.025Z",
+   "status": "done",
+   "completedAt": "2026-11-09T05:19:53.197Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 14,
+    "readyFilled": 3,
+    "upTo": 11,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.20555555555555555
+   },
+   "settledUsd": {
+    "j": 0.031238,
+    "d": 0.135658
+   }
+  },
+  {
+   "runId": "20261109-081506",
+   "startedAt": "2026-11-09T08:15:06.389Z",
+   "status": "done",
+   "completedAt": "2026-11-09T08:19:33.661Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 7,
+    "readyFilled": 2,
+    "upTo": 5,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.215
+   },
+   "settledUsd": {
+    "j": 0.02584,
+    "d": 0.146683
+   }
+  },
+  {
+   "runId": "20261109-121505",
+   "startedAt": "2026-11-09T12:15:05.180Z",
+   "status": "done",
+   "completedAt": "2026-11-09T12:18:52.405Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 6,
+    "readyFilled": 3,
+    "upTo": 3,
+    "paidSources": 15,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.2009132420091324
+   },
+   "settledUsd": {
+    "j": 0.022598,
+    "d": 0.107392
+   }
+  },
+  {
+   "runId": "20261109-131506",
+   "startedAt": "2026-11-09T13:15:06.220Z",
+   "status": "done",
+   "completedAt": "2026-11-09T13:15:51.371Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 1,
+    "readyFilled": 1,
+    "upTo": 0,
+    "paidSources": 0,
+    "paidBasis": "noDemand",
+    "sourceYieldHigh": 0.19658119658119658
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0
+   }
+  },
+  {
+   "runId": "20261109-211506",
+   "startedAt": "2026-11-09T21:15:06.357Z",
+   "status": "done",
+   "completedAt": "2026-11-09T21:17:45.292Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 2,
+    "readyFilled": 0,
+    "upTo": 2,
+    "paidSources": 13,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.15384615384615385
+   },
+   "settledUsd": {
+    "j": 0.035727,
+    "d": 0.057054
+   }
+  },
+  {
+   "runId": "20261109-231505",
+   "startedAt": "2026-11-09T23:15:05.525Z",
+   "status": "done",
+   "completedAt": "2026-11-09T23:21:30.923Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 21,
+    "readyFilled": 2,
+    "upTo": 19,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.14358974358974358
+   },
+   "settledUsd": {
+    "j": 0.026535,
+    "d": 0.224094
+   }
+  },
+  {
+   "runId": "20261110-031502",
+   "startedAt": "2026-11-10T03:15:02.310Z",
+   "status": "done",
+   "completedAt": "2026-11-10T03:20:12.593Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 20,
+    "readyFilled": 3,
+    "upTo": 17,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.13953488372093023
+   },
+   "settledUsd": {
+    "j": 0.035604,
+    "d": 0.168912
+   }
+  },
+  {
+   "runId": "20261110-051505",
+   "startedAt": "2026-11-10T05:15:05.352Z",
+   "status": "done",
+   "completedAt": "2026-11-10T05:19:28.497Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 16,
+    "readyFilled": 4,
+    "upTo": 12,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.14893617021276595
+   },
+   "settledUsd": {
+    "j": 0.036455,
+    "d": 0.132428
+   }
+  },
+  {
+   "runId": "20261110-081506",
+   "startedAt": "2026-11-10T08:15:06.964Z",
+   "status": "done",
+   "completedAt": "2026-11-10T08:16:40.884Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 11,
+    "readyFilled": 2,
+    "upTo": 9,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.14901960784313725
+   },
+   "settledUsd": {
+    "j": 0,
+    "d": 0.022643
+   }
+  },
+  {
+   "runId": "20261110-121506",
+   "startedAt": "2026-11-10T12:15:06.416Z",
+   "status": "done",
+   "completedAt": "2026-11-10T12:18:55.529Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 6,
+    "readyFilled": 2,
+    "upTo": 4,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.1417910447761194
+   },
+   "settledUsd": {
+    "j": 0.017877,
+    "d": 0.107898
+   }
+  },
+  {
+   "runId": "20261110-131504",
+   "startedAt": "2026-11-10T13:15:04.504Z",
+   "status": "done",
+   "completedAt": "2026-11-10T13:17:02.010Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 1,
+    "readyFilled": 0,
+    "upTo": 1,
+    "paidSources": 8,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.1423611111111111
+   },
+   "settledUsd": {
+    "j": 0.007634,
+    "d": 0.038765
+   }
+  },
+  {
+   "runId": "20261110-211507",
+   "startedAt": "2026-11-10T21:15:07.484Z",
+   "status": "done",
+   "completedAt": "2026-11-10T21:17:14.521Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 2,
+    "readyFilled": 0,
+    "upTo": 2,
+    "paidSources": 14,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.15137614678899083
+   },
+   "settledUsd": {
+    "j": 0.036315,
+    "d": 0.036746
+   }
+  },
+  {
+   "runId": "20261110-231503",
+   "startedAt": "2026-11-10T23:15:03.767Z",
+   "status": "done",
+   "completedAt": "2026-11-10T23:22:45.855Z",
+   "trigger": "scheduled",
+   "jit": {
+    "slots": 10,
+    "readyFilled": 2,
+    "upTo": 8,
+    "paidSources": 20,
+    "paidBasis": "measuredYield",
+    "sourceYieldHigh": 0.15086206896551724
+   },
+   "settledUsd": {
+    "j": 0.034039,
+    "d": 0.244665
+   }
+  }
+ ]
+}
