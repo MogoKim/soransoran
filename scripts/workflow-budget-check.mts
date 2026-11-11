@@ -309,6 +309,8 @@ const EXPECTED_D100_DB_COMMANDS = [
   'supply:stock-parity-db-check',
   'publish:lane-fairness-db-check',
   'supply:wip-contract-db-check',
+  // 2026-11-11 ops shadow S1/S2 격리 DB A-to-Z — 기존 D100 DB job 에 한 줄로 잇는다(새 job · 컨테이너 · step 없음)
+  'ops:shadow-plan-db-check',
   'supply:draft-deferral-e2e-db-check',
   // 2026-10-27 공급 적재 뒤 자동 READY 도장 마감 — controller 전 unknown 잔여를 같은 격리 DB에서 검증한다
   'supply:auto-ready-finalize-db-check',
