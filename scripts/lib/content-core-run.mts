@@ -245,8 +245,9 @@ export type RunInput = {
   callCap: number
   /**
    * 🔴 **원천 하나가 쓸 수 있는 재시도 수** (2026-10-12 Batch B) — `callCap` 과 **따로** 센다.
-   *    일시적 기술 실패(timeout · 잘림 · 네트워크 · 429 · 5xx)에만 쓴다. 안전·품질·Persona 자격은
-   *    재시도 대상이 아니다. 없으면 0 — 재시도하지 않는다. 운영 러너는 `GENERATION_RETRY_MAX` 를 준다.
+   *    **같은 회차 · 같은 요청**의 일시적 기술 실패(timeout · 잘림 · 네트워크 · 429 · 5xx)에만 쓴다. 안전·품질·Persona 자격을
+   *    같은 요청으로 다시 묻지 않는다(회차를 넘는 재선정 — transient · speakerBound 의 근거 지문당 한 번 — 은
+   *    `generation-failure` 의 `retryClassOf` 가 정한다). 없으면 0 — 재시도하지 않는다. 운영 러너는 `GENERATION_RETRY_MAX` 를 준다.
    *    🔴 재시도도 같은 `ask` 를 지난다 — 회차 예산·장부 예약·잠금을 우회하지 않는다.
    */
   retryCap?: number
@@ -553,10 +554,10 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   /**
    * 🔴 **좁힌 묶음 탓인지 전체에서도 없는지 가른다** (2026-09-22).
    *
-   *    `speakerUnqualified` 는 **결론**이라 그 원천이 영구 제외된다.
-   *    후보를 나눈 뒤에는 "이번 묶음에 맞는 사람이 없었다" 가 그 값으로 적히는데,
-   *    그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
-   *    🔴 좁혀져 있었으면 `speakerSlotNarrowed`(다시 본다)로 적는다.
+   *    `speakerUnqualified` 는 **결론**이라 그 원천이 영구 제외된다(전체 후보에서도 자격이 없다).
+   *    후보를 나눈 뒤에는 "이번 묶음에 맞는 사람이 없었다" 가 그 값으로 적히는데, 그것은 그 묶음 탓이다.
+   *    🔴 좁혀져 있었으면 `speakerSlotNarrowed` 로 적는다 — 처리는 단일 권위의 `speakerBound`(2026-11-10):
+   *       **다른 화자 묶음**으로만 근거 지문당 한 번 더(같은 묶음 재구매는 러너가 유료 호출 앞에서 막는다).
    */
   const narrowed = input.personas.length < input.personaPoolSize
   const noSpeakerCause = narrowed ? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const

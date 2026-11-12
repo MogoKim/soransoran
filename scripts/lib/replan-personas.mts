@@ -10,7 +10,7 @@
  * 🔴 **유료 호출보다 앞이다.** `ok: false` 면 러너는 만들지 않고 넘어간다 —
  *    같은 원천을 무한히 다시 사는 경로를 여기서 끊는다.
  */
-import { planReplan, type PriorOutcome, type ReplanPlan } from '../../src/lib/supply-workset'
+import { concludedSourceKeys, planReplan, type PriorOutcome, type ReplanPlan } from '../../src/lib/supply-workset'
 import type { PriorPlanFailure } from '../../src/lib/content-core/replan-input'
 
 /** 🔴 화자 하나 — 코드만 본다. 카드 전체를 알 필요가 없다 */
@@ -77,9 +77,8 @@ export function personasForAttempt<T extends PersonaCoded>(input: {
    *    한 번 더 본다 — 묶음 파일을 손으로 주는 경로가 있고, 그때 결론난 원천에
    *    **유료 호출이 또 나가면** "한 번에 결론" 이라는 계약이 거짓이 된다.
    */
-  const concluded = input.outcomes.some(
-    (o) => o.sourceKey === input.sourceKey && o.stage === 'draft' && o.state === 'terminal',
-  )
+  // 🔴 결론은 공급 선택과 같은 정본 하나(`concludedSourceKeys` · 결론 · 채택 · 기회당 상한 소진)다 (2026-11-10 retry-authority-v7)
+  const concluded = concludedSourceKeys(input.outcomes).has(input.sourceKey)
   if (concluded) {
     return {
       ok: false, code: 'CONCLUDED', excluded: [],

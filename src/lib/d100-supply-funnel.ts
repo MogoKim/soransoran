@@ -10,6 +10,9 @@
  *      ③ 한 번의 canary — 그것을 일수로 나누면 일간 처리량처럼 보이지만 아니다
  */
 
+import { artifactRetryClassOf } from './supply-workset'
+import { isSpeakerSetKey } from './content-core/generation-failure'
+
 export const PIPELINE_STAGES = [
   'sourceList', 'sourceDetail', 'adapt', 'workset', 'judge', 'draft',
   'semanticReview', 'candidate', 'humanReady', 'personaMatch', 'publish', 'comment',
@@ -459,6 +462,34 @@ export function tallySemanticCompletion(artifacts: unknown): SemanticTally | nul
     if (complete === true) t.complete += 1
     else if (complete === false) t.incomplete += 1
     else t.unknown += 1
+  }
+  return t
+}
+
+/**
+ * 🔴 **재선정 처리 집계 — 단일 권위의 값 그대로** (2026-11-10 retry-authority-v7).
+ *    artifact 마다 `artifactRetryClassOf`(→ `generation-failure` 의 `completionRetryClass`)를 부른다 — 관제가 원인 목록을
+ *    따로 갖지 않는다. 원인별 수는 "무엇 때문에 멈췄나" 를 그대로 센다(채택 · 완주 HOLD 는 `complete`).
+ */
+export type RetryClassTally = {
+  transient: number; speakerBound: number; terminal: number; unattempted: number; unknown: number
+  byCause: Record<string, number>
+}
+
+export function tallyRetryClasses(artifacts: unknown): RetryClassTally | null {
+  if (!Array.isArray(artifacts)) return null
+  const t: RetryClassTally = { transient: 0, speakerBound: 0, terminal: 0, unattempted: 0, unknown: 0, byCause: {} }
+  for (const a of artifacts) {
+    const o = a !== null && typeof a === 'object' ? a as Record<string, unknown> : null
+    // 🔴 판독 권위(`artifactRecordOutcome`)와 같은 fail-closed — 화자 묶음 칸이 있는데 모양이 틀리면 분류하지 않는다(unknown).
+    //    칸이 없는 옛 artifact 는 그대로 분류한다. 형식 판정은 단일 validator `isSpeakerSetKey` 하나다
+    const malformedSpeakerSet = o !== null && o.speakerSetDigest !== undefined && !isSpeakerSetKey(o.speakerSetDigest)
+    const cls = o === null || malformedSpeakerSet ? null : artifactRetryClassOf(o.review, o.cost)
+    if (cls === null) { t.unknown += 1; continue }
+    t[cls] += 1
+    const sc = ((o!.review as Record<string, unknown>).semanticCompletion ?? {}) as Record<string, unknown>
+    const k = sc.complete === true ? 'complete' : String(sc.cause ?? 'complete')
+    t.byCause[k] = (t.byCause[k] ?? 0) + 1
   }
   return t
 }

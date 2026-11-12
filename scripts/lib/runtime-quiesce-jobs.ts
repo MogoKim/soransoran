@@ -14,16 +14,29 @@
  *    · 자동 READY 감사 러너 `com.soransoran.auto-ready-audit` (2026-09-28) — 설치는 선택이다
  *    · 무인 댓글 루프 `com.soransoran.persona-comment-runner` (2026-09-28 · Track B) — 설치는 선택이다.
  *      회차가 checkout 중에 뜨면 반쯤 바뀐 트리로 발행 트랜잭션을 연다 — 감사 러너와 같은 이유다.
+ *    · ops shadow observer `com.soransoran.ops-shadow-observer` (2026-11-11 · Phase 2 · 권위 0) — 60초마다 같은 runtime
+ *      트리의 코드를 import 한다. checkout 중에 뜨면 반쯤 바뀐 트리를 읽는다. 설치는 ops-loop 설치기가 한다.
  */
 import { AUDIT_RUNNER_LABEL } from './auto-ready-audit-template'
 import { PUBLISH_RUNNER_LABEL } from './original-post-runner-template'
 import { COMMENT_RUNNER_LABEL } from './persona-comment-runner-template'
-import { RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './ops-loop-templates'
+import { OPS_SHADOW_OBSERVER_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './ops-loop-templates'
 
-export const DEPLOY_QUIESCE_JOBS: readonly string[] = [
+/** 🔴 같은 트리에서 **쓰는** job — production activation 의 writer 판정(`D100_WRITER_JOBS`)이 이 목록만 쓴다 */
+export const DEPLOY_QUIESCE_WRITER_JOBS: readonly string[] = [
   PUBLISH_RUNNER_LABEL,
   AUDIT_RUNNER_LABEL,
   COMMENT_RUNNER_LABEL,
   RUNNER_RECOVER_LABEL,
   STAGE_CONTROLLER_LABEL,
 ]
+/**
+ * 🔴 같은 트리의 코드를 실행하지만 **제품 데이터를 쓰지 않는** job(reader) — 2026-11-11 · ops shadow observer(권위 0).
+ *    배포 quiesce 의 주인은 runtime:deploy 다(실행 중이면 배포가 멈추고 · idle 이면 내렸다 되올린다 — checkout 중 새 코드 실행 0).
+ *    writer 가 아니므로 production activation 의 writer 판정에는 넣지 않는다(돌고 있다는 이유로 운영 열림을 막거나 재시도시키지 않는다).
+ *    observer 는 배포 잠금(`runtime-deploy.lock`)을 보면 tick 을 바로 끝내 배포 창에서 일을 시작하지 않는다.
+ */
+export const DEPLOY_QUIESCE_READER_JOBS: readonly string[] = [
+  OPS_SHADOW_OBSERVER_LABEL,
+]
+export const DEPLOY_QUIESCE_JOBS: readonly string[] = [...DEPLOY_QUIESCE_WRITER_JOBS, ...DEPLOY_QUIESCE_READER_JOBS]

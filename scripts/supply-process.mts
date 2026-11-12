@@ -117,6 +117,7 @@ import {
 import { loadVoice } from './lib/voice-runtime.mjs'
 import { kstDateString } from '../src/lib/release-canary'
 import { paidSourcesFor } from '../src/lib/ready-fate'
+import { retryModeFor } from '../src/lib/content-core/generation-failure'
 import { readReadyCohort, recentDates } from './lib/stage-preflight-facts.mjs'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
 import { nextSlotAnchor } from '../src/lib/scale-profile'
@@ -1156,9 +1157,11 @@ async function main(proof: LeaseProof | null): Promise<number> {
      * 🔴 **JIT 선택 하나** (2026-10-19) — raw 제외 → 부족 슬롯 연결 → 신선도 우선 단일 순위 →
      *    고른 집합에만 EDF 배정. 고른 원천은 **배정 슬롯**에서 다시 판정해 묶음에 나이를 적는다.
      */
+    // 🔴 재선정 몫 · 축소 운영은 단일 권위가 정한다 — 수율을 모르는 회복 canary 는 신규만(`freshOnly`) (2026-11-10)
+    const retryMode = retryModeFor({ paidBasis: paid.basis })
     const plan = selectWorkset({
       ...eligibilityInput, attempted: prior.attempted,
-      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract() },
+      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract(), retryMode },
       limit: PAID_LIMIT, runId, takenAt: runAt,
       trace: recorder.sink,
     })

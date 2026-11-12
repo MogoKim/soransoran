@@ -168,28 +168,27 @@ export type IncompleteReason = (typeof INCOMPLETE_REASONS)[number]
  *    찾아서** 갈랐다. 문구는 사람이 읽으라고 있는 것이다 — 한 글자만 고쳐도
  *    예산에 막힌 회차가 "결론" 이 되어 영구 제외된다.
  *
- * 🔴 앞 절반은 **다시 물으면 달라질 수 있는 것**, 뒤 절반은 **다시 물어도 같은 것**이다.
+ * 🔴 **이 목록은 "무엇 때문에 멈췄나" 만 말한다.** 다음 회차에 다시 볼지(재선정)는 여기서 정하지 않는다 —
+ *    단일 권위 `generation-failure.ts`(`retryClassOf`)가 정한다 (2026-11-10 retry-authority-v7).
+ *    값은 artifact 역사 판독 포맷이라 지우지 않는다.
  */
 export const INCOMPLETE_CAUSES = [
   /**
-   * 🔴 **다시 물으면 달라질 수 있는 것.** `parseFailed` 가 여기 있는 이유는
-   *    모델이 이번에 형식을 어겼다는 뜻이기 때문이다 — 같은 입력이라도 다음에는
-   *    제대로 온다. 이것을 결론으로 적으면 정상 원천이 영구 제외된다(2026-09-21 실측).
+   * 🔴 **유료 단계가 직접 끝나지 않은 것.** `budgetBlocked` 는 나가지 않은 요청이고,
+   *    `noResponse` · `truncated` 만 답을 받지 못한 것이다. `parseFailed` · `usageUnknown` 은 답을 받았다.
    */
   'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
   /**
-   * 🔴 **좁힌 후보 묶음 탓에 못 쓴 것** (2026-09-22).
-   *
-   *    화자 여력 계획이 원천마다 후보를 나누면서, "이 원문에 맞는 사람이
-   *    **이번 묶음에** 없었다" 는 실패가 생겼다. 그것은 **결론이 아니다** —
-   *    다음 회차에 다른 묶음을 받으면 쓸 수 있다.
-   *    🔴 `speakerUnqualified`(전체 후보에서도 자격이 없다)와 **다른 값**이다.
-   *       섞으면 정상 원천이 영구 제외된다 — `parseFailed` 가 그랬던 것과 같다.
+   * 🔴 **좁힌 후보 묶음에서 이 원문을 1인칭으로 쓸 사람이 없었다** (2026-09-22).
+   *    `speakerUnqualified`(전체 후보에서도 자격이 없다)와 **다른 값**으로 남겨 손실 원인을 가른다.
+   *    🔴 처리는 `speakerBound` · 해법 `speakerSet` (2026-11-10): **다른 화자 묶음**으로만 근거 지문당 딱 한 번.
+   *       탓할 한 사람이 없어 제외가 생기지 않으므로, 같은 묶음 재구매는 러너가 유료 호출 앞에서 막는다.
    */
   'speakerSlotNarrowed',
   /**
    * 🔴 **화자 상대 사실을 우리 값으로 바꾸지 못했다** (2026-09-23).
-   *    같은 원천이라도 **다른 Persona** 면 바꿀 수 있으므로 결론이 아니다.
+   *    🔴 처리는 `speakerBound` · 해법 `speakerSet` (2026-11-10): 다음 회차가 **실패한 그 화자를 뺀 묶음**(`planReplan`)으로
+   *       근거 지문당 딱 한 번 다시 본다. 제외가 묶음 열쇠(`|excl=`)를 바꾸므로 같은 묶음 재구매가 아니다.
    */
   'personaTransformFailed',
   /**
@@ -200,9 +199,9 @@ export const INCOMPLETE_CAUSES = [
    *    가능성이 0 인데 세 명을 차례로 태웠다. 재계획이 아니라 유료 반복이었다.
    *    🔴 **다음 시도에 무엇이 달라지는가**로 나눈다.
    */
-  // 🔴 그 조건을 만족하는 **다른 후보가 있다** → 그 사람으로 다시 계획한다
+  // 🔴 그 조건을 만족하는 **다른 후보가 있다** → `speakerBound` · 해법 `speakerSet`: 실패 화자를 뺀 다른 묶음으로 근거 지문당 딱 한 번
   'loadBearingMismatch',
-  // 🔴 만족하는 후보가 없다 → **SELF 가 아닌 stance** 로 다시 계획한다 (사람은 그대로)
+  // 🔴 만족하는 후보가 없다 → `speakerBound` · 해법 `stance`: 같은 사람 · **SELF 가 아닌 자리**로 근거 지문당 딱 한 번
   'loadBearingSelfImpossible',
   // 결론이다 — 같은 입력·같은 계약이면 또 같다
   'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
@@ -214,24 +213,6 @@ export const INCOMPLETE_CAUSES = [
   'meaningUnpreservable',
 ] as const
 export type IncompleteCause = (typeof INCOMPLETE_CAUSES)[number]
-
-export const RETRYABLE_CAUSES = [
-  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
-  // 🔴 다음 회차에 다른 묶음을 받으면 달라진다
-  'speakerSlotNarrowed',
-  /**
-   * 🔴 **다른 Persona 면 될 수 있다** (2026-09-23). 앞판은 `complete` 인 HOLD 를
-   *    **전부** 결론으로 봤다 — 자동으로 고칠 수 있는 불일치 하나가 원천을 영구히 태웠다.
-   */
-  /**
-   * 🔴 셋 다 **다음 시도에 실제로 달라지는 것이 있다.**
-   *    · personaTransformFailed — 다른 Persona 면 바꿀 값이 있다
-   *    · loadBearingMismatch     — 그 조건을 만족하는 후보가 실제로 있다
-   *    · loadBearingSelfImpossible — SELF 를 버리고 다른 stance 로 갈 수 있다
-   *    🔴 `meaningUnpreservable` 은 여기 없다 — 다시 물어도 같다.
-   */
-  'personaTransformFailed', 'loadBearingMismatch', 'loadBearingSelfImpossible',
-] as const satisfies readonly IncompleteCause[]
 
 /**
  * 🔴 **유료 단계가 직접 실패했을 때 쓰는 사유.** 이때 `reason` 과 `cause` 는 **같은 값**이다 —
@@ -268,13 +249,13 @@ export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> =
   contextInsufficient: '무슨 이야기인지 확인하지 못했다',
   evidenceBudgetViolated: '원문 근거 예산을 넘겼다 — 근거를 만드는 쪽이 어긋났다',
   speakerUnqualified: '이 원문을 1인칭으로 쓸 사람이 없다',
-  speakerSlotNarrowed: '이번 묶음에 맞는 사람이 없었다 — 다음 회차에 다시 본다',
+  speakerSlotNarrowed: '이번 묶음에 이 원문을 1인칭으로 쓸 사람이 없었다 — speakerBound — 다른 화자 묶음 또는 다른 자리로만 근거 지문당 한 번(다른 화자 묶음)',
   voiceUnready: '말투 근거가 서지 않았다',
   wiringBroken: '요청 배선이 어긋났다',
-  personaTransformFailed: '🔴 원문 화자의 사실을 우리 Persona 값으로 바꾸지 못했다 — 다른 사람이면 될 수 있다',
-  loadBearingMismatch: '🔴 그 사실이 글의 결론을 바꾼다 — **그 조건을 만족하는 다른 사람**으로 다시 계획한다',
+  personaTransformFailed: '🔴 원문 화자의 사실을 우리 Persona 값으로 바꾸지 못했다 — speakerBound — 다른 화자 묶음 또는 다른 자리로만 근거 지문당 한 번(실패 화자를 뺀 다른 묶음)',
+  loadBearingMismatch: '🔴 그 사실이 글의 결론을 바꾸는데 조건을 만족하는 화자가 아니었다 — speakerBound — 다른 화자 묶음 또는 다른 자리로만 근거 지문당 한 번(조건을 만족하는 다른 묶음)',
   loadBearingSelfImpossible:
-    '🔴 그 조건을 만족하는 사람이 없다 — 1인칭을 버리고 **다른 자리(관찰·질문)** 로 다시 계획한다',
+    '🔴 그 조건을 만족하는 사람이 없다 — speakerBound — 다른 화자 묶음 또는 다른 자리로만 근거 지문당 한 번(같은 사람 · 1인칭을 금지한 다른 자리)',
   meaningUnpreservable:
     '🔴 어떤 사람·자리로도 원문의 뜻이 보존되지 않는다 — 결론이다. 다시 묻지 않는다',
   deterministicFailed: '확정 가능한 결함이 있다',
@@ -417,25 +398,9 @@ export type MachineOutcome = (typeof MACHINE_OUTCOMES)[number]
  * 별도 사람 검토를 정상 운영 경로로 만들지 않는다. 완주하지 못한 검수도 HOLD다.
  */
 /**
- * 🔴 **다시 물어보면 답이 달라질 수 있는 사유들.** 결론이 아니라 "못 물어봤다" 이다.
- *    🔴 `notRun` 은 **여기 없다** — 앞 단계가 왜 멈췄는지에 따라 갈린다.
- *       사유 문구(`machineReason`)에 아래 낱말이 있으면 일시 실패다.
+ * 🔴 **재선정 판정은 여기 없다** (2026-11-10 retry-authority-v7). 앞판의 `artifactRetryable`·`RETRYABLE_CAUSES` 는
+ *    `generation-failure.ts` 의 `artifactRetryClass`·`retryClassOf` 하나로 옮겼다 — 같은 판정을 두 벌 두지 않는다.
  */
-/**
- * 🔴 **이 회차 결과를 다시 시도해야 하는가 — 값 하나로 가른다.**
- *
- *    앞판은 `machineReason` 문구에서 정본 라벨을 찾았다. 문구가 바뀌면 판정이
- *    바뀌는 구조였다. 이제 `semanticCompletion.cause` **값**만 본다.
- *
- * 🔴 읽지 못한 모양은 `null` 이다 — 재시도도 결론도 아니다. 부르는 쪽이 `unknown` 으로 둔다.
- */
-export function artifactRetryable(review: unknown): boolean | null {
-  if (!reviewShapeOk(review)) return null
-  const c = (review as { semanticCompletion: { complete: boolean; cause: IncompleteCause | null } })
-    .semanticCompletion
-  if (c.complete) return false
-  return (RETRYABLE_CAUSES as readonly string[]).includes(c.cause ?? '')
-}
 
 export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource'] as const
 export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]

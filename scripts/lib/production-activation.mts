@@ -17,10 +17,13 @@ import {
 } from '../../src/lib/production-activation-guard'
 import { RUNTIME_JOBS } from '../../src/lib/runtime-isolation'
 import { readEnvKeys } from './ops-signals.mjs'
-import { DEPLOY_QUIESCE_JOBS } from './runtime-quiesce-jobs'
+import { DEPLOY_QUIESCE_WRITER_JOBS } from './runtime-quiesce-jobs'
 
-/** 🔴 D100 writer job — 공급 job(`RUNTIME_JOBS`) + 같은 runtime 트리에서 쓰는 job(`DEPLOY_QUIESCE_JOBS`). label 을 다시 적지 않는다 */
-export const D100_WRITER_JOBS: readonly string[] = [...new Set([...RUNTIME_JOBS, ...DEPLOY_QUIESCE_JOBS])]
+/**
+ * 🔴 D100 writer job — 공급 job(`RUNTIME_JOBS`) + 같은 runtime 트리에서 **쓰는** job(`DEPLOY_QUIESCE_WRITER_JOBS`). label 을 다시 적지 않는다.
+ *    배포 quiesce 의 reader(ops shadow observer · 권위 0)는 넣지 않는다 — 제품 데이터를 쓰지 않는다.
+ */
+export const D100_WRITER_JOBS: readonly string[] = [...new Set([...RUNTIME_JOBS, ...DEPLOY_QUIESCE_WRITER_JOBS])]
 
 export type FactPaths = { repoRoot: string; runtimeRoot: string; canonDir: string; envFile?: string }
 /** 🔴 runtime 배포기(`runtime-deploy.mts`)와 같은 자리 */

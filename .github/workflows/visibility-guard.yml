@@ -930,7 +930,9 @@ jobs:
       #    🔴 heavy 조건 뒤 — 무조건 step 은 상한(70)에 닿아 있다. 이 검사가 보는 src/lib · scripts 는 ALLOW 밖이라
       #       그 코드를 건드리는 PR 은 언제나 heavy 다. 매일 main 예약 실행도 heavy 다.
       #    공급 선택 관측 trace(P0-B0) — trace 유무로 선택이 바뀌지 않는다 · 단계 사유 · 개인정보 0. 새 step 이 아니다
-      #    JIT 공급 선택(P0-B1) — 최대 슬롯 보존(전수 탐색 대조) · 정본 순위 · raw 0 · 재시도 예약 · 운영 모양 재생
+      #    JIT 공급 선택(P0-B1) — 최대 슬롯 보존(전수 탐색 대조) · 정본 순위 · raw 0 · 신규 먼저 · 재선정 몫 10% · 운영 모양 재생
+      #    재선정 권위 단일화(retry-authority-v7) — 원인 전수 표 · AST ratchet · 지문 · 11-09/10 비식별 재생 · 비용 귀속 · 변이검사
+      #    ops shadow S1/S2(권위 0) — 11-07~11 재생 · 부작용 0 가드 · 속도·요청·지출 상한 · writer fail-closed · 변이검사. 새 step 이 아니다
       - name: D100 생동감 계약 (READY 손실 · JIT 공급 · 정치 축)
         if: needs.scope.outputs.heavy == 'true'
         run: |
@@ -938,6 +940,8 @@ jobs:
           npm run supply:jit-contract-check
           npm run supply:selection-trace-check
           npm run supply:jit-selection-check
+          npm run check:retry-authority
+          npm run ops:shadow-plan-check
           npm run check:political-axis
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.

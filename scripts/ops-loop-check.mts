@@ -52,12 +52,13 @@ import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
   stageControllerLeaseDisposition,
   OPS_LOOP_INSTALL_STEPS, RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS,
-  KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
+  KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OPS_SHADOW_OBSERVER_LABEL,
 } from './lib/ops-loop-templates'
-import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
+import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
+import { applyInstall, desiredPlists, observerIntentOf, observerWanted, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
 import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
-import { RUNTIME_JOBS } from '../src/lib/runtime-isolation'
+import { OPS_LOOP_TEMPLATE_DEFER_LABELS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 import { programArguments, render, valueOf } from './lib/launchd-install.mjs'
 import {
   renderPublishHeartbeatPlist, renderPublishRunnerPlist, STAGE_CONSUMER_SCRIPT, PUBLISH_RUNNER_LABEL,
@@ -798,7 +799,18 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const installer = readFileSync('scripts/ops-loop-install.mts', 'utf-8')
   check('🔴 공식 설치기는 runtime/pin·공급 consumer·실행 중 job을 모두 확인한다',
     /runtime HEAD와 pin/.test(installer) && /samePlist\(installedSupply, expectedSupply\)/.test(installer)
-    && /runningBlockers\(desired\.keys\(\), running\)/.test(installer))
+    && /runningBlockers\(touched, running\)/.test(installer)
+    && /const touched: string\[\] = \[\.\.\.desired\.keys\(\), \.\.\.\(observerIntent === 'remove' \? \[OPS_SHADOW_OBSERVER_LABEL\] : \[\]\)\]/.test(installer)
+    && /for \(const label of touched\) \{/.test(installer))
+  // 🔴 observer 는 apply 경로에서도 같은 의도 판정 하나로만 바뀐다 — desired 는 한 번만 만들고 applyInstall 이 그것을 쓴다 ·
+  //    제거는 의도가 remove 일 때만 · snapshot 뒤 · 교체 전
+  check('🔴 공식 설치기 apply — observer 설치 · 제거는 명시 의도(observerIntentOf)에서만 · desired 한 번 · 제거는 snapshot 뒤',
+    (installer.match(/desiredPlists\(/g) ?? []).length === 1
+    && /const desired = desiredPlists\(publishMode, input, \{ observer: observerWanted\(observerIntent\) \}\)/.test(installer)
+    && /const outcome = applyInstall\(desired, runtimeRoot,/.test(installer)
+    && (installer.match(/removeInstalled\(agentDir, OPS_SHADOW_OBSERVER_LABEL\)/g) ?? []).length === 1
+    && /if \(observerIntent === 'remove'\) \{\n  bootout\(OPS_SHADOW_OBSERVER_LABEL\)/.test(installer)
+    && installer.indexOf("writeFileSync(join(backupDir, 'manifest.json')") < installer.indexOf('removeInstalled(agentDir, OPS_SHADOW_OBSERVER_LABEL)'))
   check('🔴 runtime deploy가 제거한 plist 끝 개행만으로 consumer를 거절하지 않는다',
     /installed\.trimEnd\(\) === expected\.trimEnd\(\)/.test(installer))
   const installCore = readFileSync('scripts/lib/ops-loop-install-core.mts', 'utf-8')
@@ -1039,11 +1051,31 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
 // ─────────────────────────────────────────────────────────
 {
   const KA = KEEP_AWAKE_LABEL
-  const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL] as const
+  const OBS = OPS_SHADOW_OBSERVER_LABEL
+  const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OBS] as const
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
-  const desired = desiredPlists('fixed', input)
-  check('교체 대상은 발행·controller·복구·keep-awake 넷이다 — keep-awake 도 같은 적용 경로를 탄다',
-    JSON.stringify([...desired.keys()]) === JSON.stringify([...BLOCKING, KA]))
+  const desired = desiredPlists('fixed', input, { observer: true })
+  check('교체 대상은 발행·controller·복구·keep-awake(+ 설치 의도가 있으면 ops shadow observer) — 모두 같은 적용 · snapshot · rollback 경로를 탄다',
+    JSON.stringify([...desired.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, OBS])
+    && JSON.stringify([...desiredPlists('fixed', input, { observer: false }).keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA]))
+  // 🔴 observer 설치 의도 — merge · 배포만으로는 설치되지 않는다(플래그 없으면 지금 상태 유지)
+  check('🔴 observer 의도 — 플래그 없음: 설치본 있으면 keep · 없으면 absent · on: install/keep · off: remove/absent · 그 밖은 null',
+    observerIntentOf(null, false) === 'absent' && observerIntentOf(null, true) === 'keep'
+    && observerIntentOf('on', false) === 'install' && observerIntentOf('on', true) === 'keep'
+    && observerIntentOf('off', true) === 'remove' && observerIntentOf('off', false) === 'absent' && observerIntentOf('yes', false) === null
+    && !observerWanted('absent') && !observerWanted('remove') && observerWanted('install') && observerWanted('keep'))
+  // 🔴 observer 템플릿 계약(2026-11-11 Phase 2) — 60초 StartInterval · 감시(WatchPaths) 0 · 실행 인자 0 · runtime 트리 · 공급 job 아님
+  {
+    const xml = desired.get(OBS)!
+    check('🔴 observer plist — StartInterval 60 · WatchPaths/KeepAlive/RunAtLoad true 0 · 인자는 observer 스크립트뿐 · WD=runtime',
+      /<key>StartInterval<\/key><integer>60<\/integer>/.test(xml) && !/WatchPaths|QueueDirectories|KeepAlive|StartCalendarInterval/.test(xml)
+      && /<key>RunAtLoad<\/key><false\/>/.test(xml)
+      && JSON.stringify(programArguments(xml)) === JSON.stringify(['/n/npx', 'tsx', '/r/scripts/ops-shadow-observer.mts'])
+      && /<key>WorkingDirectory<\/key><string>\/r<\/string>/.test(xml))
+    check('🔴 observer 는 공급 job(RUNTIME_JOBS) · 복구 대상이 아니고 배포 quiesce · ops-loop 원문 유예 소유에만 든다',
+      !RUNTIME_JOBS.includes(OBS) && !RECOVERABLE_LABELS.includes(OBS) && DEPLOY_QUIESCE_JOBS.includes(OBS)
+      && OPS_LOOP_TEMPLATE_DEFER_LABELS.includes(OBS) && !ALWAYS_RUNNING_LABELS.includes(OBS))
+  }
   check('🔴 예외 정본(호스트 이전 ALWAYS_RUNNING_LABELS)은 keep-awake 하나뿐이다 — 넓히면 여기서 막힌다',
     JSON.stringify(ALWAYS_RUNNING_LABELS) === JSON.stringify([KA]))
 
@@ -1091,7 +1123,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       const agentDir = join(home, 'Library', 'LaunchAgents')
       mkdirSync(agentDir, { recursive: true })
       writeFileSync(join(agentDir, `${PUBLISH_RUNNER_LABEL}.plist`),
-        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }).get(PUBLISH_RUNNER_LABEL)!)
+        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: false }).get(PUBLISH_RUNNER_LABEL)!)
       writeFileSync(join(agentDir, 'com.soransoran.supply-process.plist'), render(readFileSync(tplRel, 'utf-8'), {
         npx: npxBesideNode, node: process.execPath, repo: rt, nodebin: nodeBinDir, logdir: logDir,
       }))
@@ -1114,8 +1146,9 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       const callLog = join(home, 'launchctl.log')
       const tsxCli = createRequire(import.meta.url).resolve('tsx/cli')
       const installerPath = join(process.cwd(), 'scripts', 'ops-loop-install.mts')
-      const plan = (runningSet: readonly string[]): { status: number | null; out: string } => {
-        const r = spawnSync(process.execPath, [tsxCli, installerPath], {
+      // 기존 시험은 observer 설치 의도(--observer=on)를 명시한 판으로 돈다 — 기본 경로는 아래에서 따로 잰다
+      const plan = (runningSet: readonly string[], args: readonly string[] = ['--observer=on']): { status: number | null; out: string } => {
+        const r = spawnSync(process.execPath, [tsxCli, installerPath, ...args], {
           cwd: rt, encoding: 'utf8',
           env: { HOME: home, PATH: bin, FAKE_RUNNING: runningSet.join(' '), FAKE_LAUNCHCTL_LOG: callLog },
         })
@@ -1133,8 +1166,27 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
           r.status === 1 && r.out.includes(`${label}이 실행 중이다`) && r.out.includes('🔴 막힘 1건'), r.out.slice(-600))
       }
       const all = plan([KA, ...BLOCKING])
-      check('(b) 설치기 plan: 넷 다 running → 막힘 3건(keep-awake 제외)',
-        all.status === 1 && all.out.includes('🔴 막힘 3건') && !all.out.includes(`${KA}이 실행 중이다`), all.out.slice(-600))
+      check(`(b) 설치기 plan: 다섯 다 running → 막힘 ${BLOCKING.length}건(keep-awake 제외 · observer 포함)`,
+        all.status === 1 && all.out.includes(`🔴 막힘 ${BLOCKING.length}건`) && all.out.includes(`${OBS}이 실행 중이다`) && !all.out.includes(`${KA}이 실행 중이다`), all.out.slice(-600))
+      // 🔴 기본 경로(플래그 없음) — code-only merge 뒤 배포의 필수 ops-loop-install 이 observer 를 설치하지 않는다
+      const obsLine = (out: string): string => out.split('\n').find((l) => l.includes(OBS)) ?? ''
+      const dflt = plan([], [])
+      check('🔴 설치기 plan · 플래그 없음 · observer 미설치 → 미설치 유지(교체 대상 아님) · 적용 가능',
+        dflt.status === 0 && obsLine(dflt.out).includes('미설치 유지') && !/신규|교체|최신/.test(obsLine(dflt.out)), dflt.out.slice(-600))
+      check('🔴 설치기 plan · 플래그 없음 · observer 미설치면 observer 가 돌고 있어도 막지 않는다(교체 대상 아님)',
+        plan([OBS], []).status === 0)
+      const on = plan([], ['--observer=on'])
+      check('설치기 plan · --observer=on · 미설치 → 신규', on.status === 0 && obsLine(on.out).includes('신규'), on.out.slice(-400))
+      check('설치기 plan · --observer 에 on/off 밖의 값 → exit 2', plan([], ['--observer=yes']).status === 2)
+      const obsInstalled = join(agentDir, `${OBS}.plist`)
+      writeFileSync(obsInstalled, desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: true }).get(OBS)!)
+      const keep = plan([], [])
+      check('🔴 설치기 plan · 플래그 없음 · observer 설치돼 있으면 keep(새 원문 대조 · 최신)', keep.status === 0 && obsLine(keep.out).includes('최신'), keep.out.slice(-400))
+      const off = plan([], ['--observer=off'])
+      check('🔴 설치기 plan · --observer=off · 설치돼 있으면 제거 계획(교체 대상 아님) · 계획은 아무것도 바꾸지 않는다',
+        off.status === 0 && obsLine(off.out).includes('제거') && existsSync(obsInstalled), off.out.slice(-400))
+      check('🔴 설치기 plan · --observer=off 여도 observer 가 돌고 있으면 막는다', plan([OBS], ['--observer=off']).status === 1)
+      rmSync(obsInstalled)
       const calls = existsSync(callLog) ? readFileSync(callLog, 'utf-8').trim().split('\n') : []
       check('🔴 plan 은 가짜 launchctl 을 실제로 불렀고(print) 그 밖의 하위 명령은 0이다',
         calls.length > 0 && calls.every((c) => c.startsWith('print ')), calls.slice(0, 5).join(' | '))
@@ -1157,7 +1209,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
     failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
     isolationOk?: boolean
   } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
-    const old = desiredPlists('heartbeat', input)
+    const old = desiredPlists('heartbeat', input, { observer: true })
     const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
     const written = new Map(old)
     const outcome = applyInstall(desired, '/r', {

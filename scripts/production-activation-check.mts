@@ -16,7 +16,10 @@ import { join } from 'node:path'
 import {
   activationModeOf, approvalOf, productionGuardProblems, stagedGuardProblems, writerStateOf, type ProductionFacts,
 } from '../src/lib/production-activation-guard'
+import { RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 import { D100_WRITER_JOBS, openActivation, type FactPaths } from './lib/production-activation.mjs'
+import { OPS_SHADOW_OBSERVER_LABEL } from './lib/ops-loop-templates'
+import { DEPLOY_QUIESCE_JOBS, DEPLOY_QUIESCE_READER_JOBS, DEPLOY_QUIESCE_WRITER_JOBS } from './lib/runtime-quiesce-jobs'
 
 let pass = 0
 let fail = 0
@@ -74,6 +77,10 @@ console.log('\n③ 사실')
     && productionGuardProblems(T, { ...good(), canonicalEnv: { read: true, hasDatabaseUrl: true, looksIsolated: true } }).length === 1)
   check('🔴 거부 문구에 SHA 전체 · 주소가 없다', productionGuardProblems(T, { ...good(), repoHead: OTHER }).every((p) => !p.includes(OTHER) && !p.includes('postgresql')))
   check('writer 목록 = 공급 job + 같은 트리 writer(중복 0 · 비지 않음)', D100_WRITER_JOBS.length > 0 && new Set(D100_WRITER_JOBS).size === D100_WRITER_JOBS.length)
+  check('🔴 writer 목록에 ops shadow observer(reader · 권위 0)는 없다 — 돌고 있어도 운영 열림을 막지 않는다 · 배포 quiesce 에는 있다',
+    !D100_WRITER_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL) && DEPLOY_QUIESCE_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL)
+    && DEPLOY_QUIESCE_READER_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL) && !DEPLOY_QUIESCE_WRITER_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL)
+    && JSON.stringify([...D100_WRITER_JOBS].sort()) === JSON.stringify([...new Set([...RUNTIME_JOBS, ...DEPLOY_QUIESCE_WRITER_JOBS])].sort()))
   check('launchctl: state = running → running', writerStateOf({ label: 'x', exitCode: 0, stdout: '\tstate = running\n', stderr: '' }) === 'running')
   check('launchctl: state = not running → idle', writerStateOf({ label: 'x', exitCode: 0, stdout: '\tstate = not running\n', stderr: '' }) === 'idle')
   check('launchctl: 서비스 없음 → idle', writerStateOf({ label: 'x', exitCode: 113, stdout: '', stderr: 'Could not find service "x" in domain' }) === 'idle')

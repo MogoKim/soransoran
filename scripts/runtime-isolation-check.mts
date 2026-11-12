@@ -43,9 +43,9 @@ import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 /** 🔴 감사 러너 label · 렌더 입력 형식의 정본 */
 import { AUDIT_RUNNER_LABEL } from './lib/auto-ready-audit-template'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
-import { RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
+import { OPS_SHADOW_OBSERVER_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
 /** 🔴 배포기가 잠시 멈출 job 목록의 정본 — 배포기와 **같은 상수** */
-import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
+import { DEPLOY_QUIESCE_JOBS, DEPLOY_QUIESCE_READER_JOBS, DEPLOY_QUIESCE_WRITER_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
 /** 🔴 단일 실행 authority — 활성 호출 그래프 판정(⑦) */
 import {
@@ -1706,8 +1706,9 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         && !/'com\.soransoran\.original-post-runner'/.test(src)
         && !/'com\.soransoran\.auto-ready-audit'/.test(src)
     })())
-    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행·감사·댓글·복구·단계 controller**',
-      DEPLOY_QUIESCE_JOBS.length === 5 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행·감사·댓글·복구·단계 controller·ops shadow observer**',
+      DEPLOY_QUIESCE_JOBS.length === 6 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL) && !RUNTIME_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL)
       && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL) && DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL)
       && DEPLOY_QUIESCE_JOBS.includes(RUNNER_RECOVER_LABEL)
       && DEPLOY_QUIESCE_JOBS.includes(STAGE_CONTROLLER_LABEL))
@@ -1807,6 +1808,36 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       check('🔴 [QA] 🔴 **preflight 뒤에 시작한 감사 회차도 첫 unload 앞에서 잡는다**',
         !r.ok && r.phase === 'pre-unload-recheck'
         && idx(w, 'unload:') === -1 && idx(w, 'checkout:target') === -1)
+    }
+    // ── 🔴 [QO] 배포 겹침 — ops shadow observer(reader · 권위 0)의 quiesce 주인은 runtime:deploy 다 ──
+    {
+      const OBS = OPS_SHADOW_OBSERVER_LABEL
+      check('🔴 [QO] observer 는 배포 quiesce 의 reader 다 — writer 목록 밖', RQ.includes(OBS)
+        && DEPLOY_QUIESCE_READER_JOBS.includes(OBS) && !DEPLOY_QUIESCE_WRITER_JOBS.includes(OBS))
+      const busy = makeWorld({ running: [OBS] })
+      const rb = await deploy(busy, [], RQ)
+      check('🔴 [QO] observer tick 이 돌고 있으면 배포하지 않는다 — unload · checkout · write 0(반쯤 바뀐 트리를 읽게 하지 않는다)',
+        !rb.ok && rb.phase === 'preflight' && idx(busy, 'unload:') === -1 && idx(busy, 'checkout:target') === -1
+        && idx(busy, 'write-plist:') === -1 && busy.state.get(OBS) === 'loaded')
+      const late = makeWorld({ runningLater: [OBS] })
+      const rl = await deploy(late, [], RQ)
+      check('🔴 [QO] preflight 뒤 첫 unload 앞에 시작한 observer tick 도 잡는다', !rl.ok && rl.phase === 'pre-unload-recheck'
+        && idx(late, 'unload:') === -1 && idx(late, 'checkout:target') === -1)
+      const idle = makeWorld()
+      const ri = await deploy(idle, [], RQ)
+      check('🟢 [QO] idle observer — checkout 전에 내리고 성공 뒤 그대로 되올린다 · 설치본 write 0(배포가 설치 · 교체하지 않는다)',
+        ri.ok && ri.steps.includes(`quiesce-unload:${OBS}`) && idx(idle, `unload:${OBS}`) < idx(idle, 'checkout:target')
+        && idle.state.get(OBS) === 'loaded' && countOf(idle, `write-plist:${OBS}`) === 0)
+      if (!ri.ok) console.log(`      [QO] idle 배포 실패: ${ri.problems.join(' · ')}`)
+      // 🔴 원래 상태 복원 — 설치본은 있는데 unloaded 면 끝까지 unloaded · 미설치면 끝까지 미설치(배포가 설치 · load 하지 않는다)
+      const parked = makeWorld({ initial: { [OBS]: 'unloaded' } })
+      const rp = await deploy(parked, [], RQ)
+      check('🔴 [QO] 원래 unloaded observer → 배포 뒤에도 unloaded · load 0 · write 0', rp.ok && parked.state.get(OBS) === 'unloaded'
+        && idx(parked, `load:${OBS}`) === -1 && countOf(parked, `write-plist:${OBS}`) === 0)
+      const absent = makeWorld({ noInstalledPlist: [OBS], initial: { [OBS]: 'unloaded' } })
+      const ra = await deploy(absent, [], RQ)
+      check('🔴 [QO] 미설치 observer → 배포 뒤에도 미설치 · unloaded · 손댐 0(code-only merge 의 배포가 설치하지 않는다)', ra.ok
+        && absent.state.get(OBS) === 'unloaded' && !absent.plists.has(OBS) && idx(absent, `load:${OBS}`) === -1 && countOf(absent, `write-plist:${OBS}`) === 0)
     }
     {
       const w = makeWorld({ audit: 'loaded', probeUnknown: [AJOB] })
@@ -1972,15 +2003,15 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       !j({ expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }).ok)
     check('🔴 [QI] runtime 템플릿을 render 하지 못하면 실패(fail-closed)', !j({ expectedXml: null }).ok)
 
-    // ── 🔴 [D20] ops-loop 원문 유예 — runtime:deploy 전환 전용 · 원문 불일치 **하나만** · 소유 label 둘만 ──
-    const OPS_OWNED = [RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL] as const
+    // ── 🔴 [D20] ops-loop 원문 유예 — runtime:deploy 전환 전용 · 원문 불일치 **하나만** · 소유 label 셋만 ──
+    const OPS_OWNED = [RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL, OPS_SHADOW_OBSERVER_LABEL] as const
     const opsJ = (label: string, o: Partial<In> = {}) => {
       const plist = `/Users/x/Library/LaunchAgents/${label}.plist`
       return judgeOptionalRuntimeJob(base({ label, expectedPlistPath: plist, loadedPlistPath: plist, ...o }))
     }
     // 옛 설치본 그대로 되올린 상태 — 새 템플릿 render 와 원문만 다르다
     const STALE: Partial<In> = { expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }
-    check('🔴 [D20] 유예 가능 label 은 ops-loop-templates 정본의 runner-recover·stage-controller 둘뿐이다(문자열 drift 0)',
+    check('🔴 [D20] 유예 가능 label 은 ops-loop-templates 정본의 runner-recover·stage-controller·ops-shadow-observer 셋뿐이다(문자열 drift 0)',
       JSON.stringify([...OPS_LOOP_TEMPLATE_DEFER_LABELS].sort()) === JSON.stringify([...OPS_OWNED].sort()))
     for (const L of OPS_OWNED) {
       const strict = opsJ(L, STALE)
@@ -2015,6 +2046,14 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       check(`🔴 [D20] ${L}: 유예 플래그여도 경로·설치/loaded·인자/WD·HEAD=pin·추적·unknown/unloaded·render 실패는 FAIL (${strictCases.length - leaked.length}/${strictCases.length})`,
         leaked.length === 0)
       for (const n of leaked) console.log(`      유예가 새어 나간 사례: ${n}`)
+    }
+    // 🔴 [D20-O] observer 전용 — 선택 설치(`--observer=on`)라 미설치 · unloaded 호스트도 통과한다(보고는 한다).
+    //    이 반례는 observer 하나에만 건다 — runner-recover · stage-controller 의 필수 여부는 이 판정의 몫이 아니고 여기서 낮추지 않는다.
+    {
+      const offObs = opsJ(OPS_SHADOW_OBSERVER_LABEL, { installedXml: null, installedArgs: [], installedWorkingDirectory: null, state: 'unloaded', loadedPlistPath: null, loaded: parseLaunchctlPrint(null), expectedXml: null })
+      check('🟢 [D20-O] observer 미설치 · unloaded → 통과(선택 설치) · 보고한다', offObs.ok && !offObs.installed && offObs.notes.some((n) => n.includes('필수 아님')))
+      const ghost = opsJ(OPS_SHADOW_OBSERVER_LABEL, { installedXml: null, installedArgs: [], installedWorkingDirectory: null, deferOpsLoopTemplate: true })
+      check('🔴 [D20-O] observer 설치본 없이 loaded → 유예 플래그여도 FAIL(선택 설치가 느슨한 통과가 아니다)', !ghost.ok)
     }
     for (const L of [AJOB, COMMENT_RUNNER_LABEL, PUBLISH_RUNNER_LABEL]) {
       const v = opsJ(L, { ...STALE, deferOpsLoopTemplate: true })
@@ -2825,6 +2864,8 @@ if (!existsSync(RUNTIME_ROOT)) {
     { label: COMMENT_RUNNER_LABEL, module: 'persona-comment-runner-template.ts', render: 'renderCommentRunnerPlist' },
     { label: RUNNER_RECOVER_LABEL, module: 'ops-loop-templates.ts', render: 'renderRunnerRecoverPlist' },
     { label: STAGE_CONTROLLER_LABEL, module: 'ops-loop-templates.ts', render: 'renderStageControllerPlist' },
+    // 2026-11-11 Phase 2 — ops shadow observer(권위 0 · ops-loop 소유)도 설치됐으면 같은 규칙으로 대조한다
+    { label: OPS_SHADOW_OBSERVER_LABEL, module: 'ops-loop-templates.ts', render: 'renderOpsShadowObserverPlist' },
   ]
   for (const opt of OPTIONAL_RUNNERS) {
     const label = opt.label
