@@ -64,16 +64,48 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
 **입력 흐름**
 
 ```text
-연구 current ─export(content-addressed)→ ContentPlanInputBundle   제품 저장소 추적 대상 · graph·control 해시와 함께 고정
-Bundle + control + 정책 판 ─compiler(결정적)→ ContentPlan(planHash)
-ContentPlan ─허용 필드 투영 + PII scan→ ProviderPlan(additionalProperties:false) → ManuscriptProvider
+연구 current + exact snapshot ─export(엄격 투영 · content-addressed)→ ContentPlanInputBundle
+      제품 저장소 추적 대상 · bundleHash(내용 신원) + recordHash(출처 봉인: graph 판·current 해시 · export 시점 control 전체 해시 포함)
+Bundle + 정책 판 ─compiler(정적 · 결정적)→ ContentPlan(planHash · 날짜·slug 없음 · `<graphVersion>:<intentId>`)
+ContentPlan + 현재 control·articles·legacy queue 신원·시각·진행 중 신원 ─admission(동적)→ 후보 | HOLD(사유 코드) · planHash 불변
+admitted ContentPlan ─허용 필드 투영 + PII scan→ ProviderPlan(additionalProperties:false) → ManuscriptProvider
 ```
 
 - 🔴 **runtime 은 mutable 비-git 연구 폴더를 직접 읽지 않는다.** 이유: 그 폴더는 바뀌고 이력이 없어, 같은 planHash 를 나중에 다시 만들 수 없다.
 - Bundle 은 graph 판과 같은 승격 변경으로만 들어온다. 현재 배포판 `g-20261102-427d4d` 의 최초 Bundle 만 S2 bootstrap 변경으로 1회 추가할 수 있고,
   그 조건(Bundle 미존재 · 제품 graph/control/tree hash 와 연구 current 후보 신원 정확 일치 · graph 바이트 변경 0 · 어긋나면 쓰기 0)의 정본은 charter §18-B.5 다.
-  판독 불가·자기 해시 불일치·graph/control 해시 불일치이면
-  compiler 는 그 graphVersion 의 plan 을 하나도 만들지 않는다.
+  Bundle 판독 불가·두 해시(`BUNDLE_HASH_MISMATCH` · `RECORD_HASH_MISMATCH`) 불일치이면 compiler 는 그 graphVersion 의 plan 을 하나도 만들지 않는다.
+  bootstrap 실행 API 에는 판을 바꾸는 손잡이가 없고(허용 판은 상수 하나), 출력 경로 구성 요소가 symlink 면 쓰지 않는다(제품 루트 밖 쓰기 0).
+  쓰기는 crash-safe no-clobber 다 — 최종 파일은 없거나 바이트가 같고 fsync 된 완전한 파일이다(짧은 쓰기 반복 · 되읽기 대조 · link 의 EEXIST 만
+  `BUNDLE_ALREADY_EXISTS` · 그 밖의 link 오류는 `BUNDLE_WRITE_FAILED` · 새 폴더 부모와 대상 폴더 fsync · link 뒤 경로 바꿔치기는 `OUTPUT_PATH_RACE`).
+  앞 실행이 남긴 임시 파일이 있으면 지우지 않고 `STALE_TEMP_PRESENT` 로 멈춘다.
+  🔴 경로는 **검증된 폴더 inode 에 고정**한 뒤 쓴다(2026-11-11 S2 P1-7) — Node 에 openat · linkat 이 없어 제품 루트부터 구성 요소마다
+  lstat → chdir → dev·ino 대조로 cwd 를 고정하고, tmp open · link · 정리를 상대 이름으로만 한다. 경로가 중간에 symlink 로 바뀌어도
+  제품 루트 밖 바이트 · 이름은 생기지 않는다(`OUTPUT_PATH_RACE`). 한계: 고정한 폴더 자체를 옮기면(rename) 그 폴더를 따라간다 — openat 과 같고, 사후 확인이 지운다.
+  🔴 **입력 CAS** — 컴파일에 쓴 권위 입력(제품 current · control · graph 판 · 연구 current 링크 대상 · 트리 · manifest · control.json · snapshot · 증거)을
+  link 바로 앞에서 같은 함수로 다시 읽어 키 단위로 대조한다. 바뀌었으면 `INPUT_DRIFT` · 출력 0. Bundle 바이트에 들어가지 않는 articles · queue 는 보지 않는다.
+  🔴 증거 파일은 ENOENT 만 "없음"이다. 그 밖의 읽기 오류(EACCES · EIO …)는 `EVIDENCE_READ_FAILED` 로 전체를 멈춘다. 모든 파일 시스템 오류는
+  `{ ok:false, code, why, errno }` JSON · exit 1 이다(`FILESYSTEM_ERROR` 포함 · stack trace 0).
+- 🔴 **두 해시 (2026-11-10 S2 P1).** ContentPlan · planHash 는 `bundleHash`(schemaVersion · graphVersion · intents · relations · mappings)만 싣는다.
+  export 시점 control 토글 · current 주석 · manifest `generatedAt` 같은 출처 변화는 `recordHash` 만 바꾸고 planHash 를 바꾸지 않는다.
+- 🔴 **control 은 컴파일 입력이 아니다 (2026-11-10).** Bundle 의 control 전체 해시는 export 시점 출처 기록이다. 현재 control 은 admission 이 엄격
+  판독(`parseGraphControl` · 토큰 단위 실제 선언 · **데이터 전용** — JS 실행 0 · getter · 호출 · spread · 중복 key 는 판독 불가)해 graphVersion 불일치(`GRAPH_VERSION_MISMATCH`) · kill switch · graph 꺼짐 · 꺼진 cluster · 근거 있는 direct 관계의
+  켜진 표면 없음이면 fail-closed 로 HOLD 한다. 정당한 control 토글은 Bundle 을 무효로 만들지 않고 planHash 를 바꾸지 않는다.
+- 🔴 **정적 / 동적 분리.** ContentPlan · planHash 의 입력은 엄격 판독한 Bundle 과 버전이 붙은 정책 판뿐이다(정책 판 · 원문 경계 규칙의 내용은
+  id 별 기대 해시로 고정한다 — 내용을 바꾸면 legacy 공유 상수 변경이어도 id 를 올린다). 현재 control · articles · legacy queue ·
+  판정 시각 · 진행 중 신원 · same-release(이미 공개된 대상에서 출발하는 층 · 순환/고립 HOLD · 후보 탈락 뒤 고정점 재판정)는 admission 이다.
+  same-release 후보끼리도 정확 신원(intentId · canonical mapping slug · 정규화 제목)을 공유하면 그 묶음에서 planId 가 가장 작은 후보 하나만 남고
+  나머지는 `DUPLICATE_SAME_RELEASE` 다(입력 순서와 무관). articles 의 공개 시각은 오프셋이 있는 엄격 시각만 받는다 — 달력에 없는 날(2/30 · 평년 2/29) ·
+  24:00 · 범위 밖 오프셋은 `ARTICLES_UNREADABLE`(앞판 `Date.parse` 는 2/30 을 3/2 로 넘겼다). Bundle · 입력의 희소 배열(빈 칸)은 해시 전에 거부한다.
+  S3 release 는 release·merge 직전에 같은 admission 을 다시 돈다.
+- 🔴 **legacy queue 임시 신원 adapter.** vNext 는 queue 를 plan·콘텐츠 입력으로 쓰지 않고 **절대 쓰지 않는다.** legacy 가 남아 있는 동안 admission 이
+  `drafts/magazine/topic-queue.ts` 에서 신원 투영(intentId · slug · 정규화 제목 · cluster)만 읽어 중복을 본다. 파일·앵커를 못 읽으면 fail-closed
+  (`QUEUE_IDENTITY_UNREADABLE`) — 같은 slug 두 행 · 한 행의 같은 필드 두 번 · articles 의 같은 slug 두 번 · 공개/예약 행의 해석 불가·오프셋 없는
+  공개 시각도 같다(원시 중복을 마지막 값으로 덮지 않는다). 같은 cluster 라는 이유만으로 막지 않는다. 초안·HOLD·격리 바이트는 읽지도 승계하지도 않는다(§0.0B.7).
+- 🔴 **slug 는 S3 에서 묶는다.** S2 는 slug 를 만들지 않고 legacy queue · source materialization 을 쓰지 않는다. admission 은
+  `SLUG_BINDING_REQUIRED` 를 드러내고, S3 의 vNext release 신원 경계가 stable slug 를 묶는다. S2 는 현재 queue 기반 G8 workflow 를 부르지 않는다.
+- 초기 commissioning 은 **STANDARD 만** 컴파일한다. CONTROLLED(MEDICAL · FINANCIAL · SENSITIVE)는 validator 전까지 `CONTROLLED_VALIDATOR_ABSENT` 로 HOLD.
+  3+1 은 plan 의 품질·표시 metadata 일 뿐 하드 게이트가 아니다. 하드 관계 최소는 근거 있는 direct 관계 1개다.
 
 **ProviderPlan — provider 에 보내는 유일한 입력**
 
@@ -81,8 +113,18 @@ ContentPlan ─허용 필드 투영 + PII scan→ ProviderPlan(additionalPropert
 |---|---|
 | `primaryQuery` · `audienceSituation` · `answerScope` · inclusions · exclusions · `validationProfile` · forbidden claims · CTA·community destination · **이미 공개된** 관련 글의 title·slug · 승인된 공식 출처 URL | 회원 데이터 · 커뮤니티 원문·제목 · raw evidence·SERP snippet · 로컬 경로 · token·tracking 파라미터가 붙은 URL · 목록에 없는 모든 필드 |
 
-- schema 는 `additionalProperties: false` 다. 허용 목록이 1차 방어다.
-- 전송 직전 PII scan(전화·이메일·주민등록번호·계좌 등 식별 패턴)을 **반드시** 돈다. 걸리면 그 Job 만 HOLD 한다(2차 방어).
+- schema 는 `additionalProperties: false` 다. 허용 목록으로 새 객체를 만들고(1차 방어) exact-key 를 확인한다.
+- 🔴 **호출자 값을 믿지 않는다 (2026-11-11 S2 P1).** ProviderPlan 은 호출자가 준 plan · admission 결과(관련 글 title · slug)를 받지 않는다.
+  같은 admission 입력으로 봉인된 Bundle 에서 다시 컴파일 · admission 해 도출하고, job 이 묶인 planHash 와 다르면(내용 · 정책 판이 바뀐 낡은 plan)
+  `PLAN_STALE` 로 돌려주고 ProviderPlan 은 만들지 않는다(산출 0). 정책 판 · 원문 경계 규칙은 id 별 기대 해시 신원표가 runtime 에서 강제한다(`POLICY_IDENTITY_DRIFT`).
+- 🔴 내부 주석 표식(`🔴` 등)·원문 근거 경로·로컬 경로·token·query/fragment 가 붙은 URL 이 하나라도 있으면 **조용히 지우지 않고** ProviderPlan 을 만들지 않는다.
+  Bundle · ContentPlan 의 원문 문자열은 그대로 보존한다 — 고칠 곳은 연구 정본이다.
+- 🔴 **커뮤니티 원문·제목은 구조로 막는다 (2026-11-10 S2 P1).** Bundle 조립 때 intent 의 provider 행 문장을 연구가 관측한 제3자 글
+  (canonical 증거의 검색 결과 제목 · snippet · `communityTitle` — 우리 사이트 결과 제외)과 결정적으로 대조해 intent 마다 `textProvenance`
+  (`CLEAR` · `THIRD_PARTY_TEXT` · `UNVERIFIED`)만 싣는다. `CLEAR` 가 아니면 ProviderPlan 0 이다. 문구 목록이 아니고, 원문은 Bundle 에 싣지 않는다.
+  한계: 연구 증거 corpus 밖에서 손으로 옮긴 원문은 이 판정이 보지 못한다 — 2차 스캔과 연구 정본 수정이 맡는다.
+- 전송 직전 PII scan(전화 — 괄호 지역번호 · 국가번호 포함 · 이메일 · 주민등록번호 · 계좌 — 공백 · NBSP · 대시 구분과 이어 쓴 10~14자리 포함 · 저장소 상대 경로 · 일반 credential 꼴 등)을 **반드시** 돈다.
+  걸리면 그 Job 만 HOLD 한다(2차 방어).
 - 이유: provider 쪽 보존(§0.0B.2 `store:true`)을 허용하는 근거가 "회원 데이터가 없다" 하나뿐이므로, 그 전제를 구조로 강제한다.
 
 **Job — 글 하나의 실행 기록**
@@ -211,8 +253,10 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 
 - SHA 고정 · CI · 중복 slug(PR 안 · main) · 예약일 형태와 중복 · 과거 날짜 금지 — legacy 와 같은 위험을 같은 방식으로 막는다.
 - 변경 파일 모양은 그 release 의 slug 집합에 대한 `articles.ts` 항목 · hero · 그 글의 ContentPlan 파일만이다(정확한 파일 이름은 S3 에서 고정).
-- 🔴 **main 의 ContentPlanInputBundle · control · 정책 판으로 ContentPlan 을 재컴파일한 planHash 가 PR 의 planHash 와 같아야 한다.**
-  이유: PR 이 자기 위험 등급이나 관계를 바꿔 통과하는 것을 queue 없이 막는 방법이다(legacy `QUEUE_GRADE_CHANGED` 가 하던 일).
+- 🔴 **main 의 ContentPlanInputBundle · 정책 판으로 ContentPlan 을 재컴파일한 planHash 가 PR 의 planHash 와 같아야 하고, 같은 admission 을
+  merge 직전에 다시 통과해야 한다.** 이유: PR 이 자기 위험 등급이나 관계를 바꿔 통과하는 것을 queue 없이 막는 방법이다(legacy `QUEUE_GRADE_CHANGED` 가 하던 일).
+  control 은 planHash 입력이 아니라 admission 입력이다(§0.0B.1).
+- stable slug 는 이 단계(S3)의 vNext release 신원 경계가 묶는다 — admission 의 `SLUG_BINDING_REQUIRED` 를 여기서 해소한다.
 - release CI 가 실패하면 그 release 만 닫고 Candidate 를 검증됨으로 되돌린다.
 - 🔴 **열린 release PR 은 다음 release 만 기다리게 한다. 생성은 막지 않는다.** (§0.1 의 전역 HOLD 는 legacy 경로의 현행 동작이다.)
 - `--admin` 을 쓰지 않는다.
@@ -296,7 +340,9 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 - legacy(`LEGACY_BRIEF_V1` · `DIRECT_SPEC_V1` · queue · register · 웹 UI 회수 · 격리 장부)는 **안전 긴급 수정 외에 기능·정책을 보정하지 않는다.**
   이유: 삭제할 코드를 다듬는 시간이 vNext 를 늦춘다.
 - 🔴 기존 HOLD · 격리 · 초안 **바이트를 vNext 로 직접 승계하지 않는다.** 같은 intent 가 필요하면 현행 Bundle·정책으로 새 ContentPlan 을 컴파일해 새로 생성한다.
-- vNext 의 중복 검사는 기존 공개·예약 slug(`articles.ts`)와 **legacy queue 행까지** 포함한다. 이유: 동결 기간에도 legacy 는 돌며 같은 주제를 낼 수 있다.
+- vNext admission 의 중복 검사는 `articles.ts`(공개·예약 · canonical mapping · 정규화 제목)와 **legacy queue 신원 투영**(intentId · slug ·
+  정규화 제목 · cluster)까지 본다. 이유: 동결 기간에도 legacy 는 돌며 같은 주제를 낼 수 있다. queue 는 읽기 전용 중복 오라클일 뿐이다 —
+  콘텐츠 바이트 승계 0 · 쓰기 0 · 파일/앵커를 못 읽으면 fail-closed. 삭제 단계에서 adapter 도 함께 끈다(§0.0B.1).
 - vNext 가 실제 쓰기를 시작할 때 legacy writer 는 rollout switch 로 배타 정지된다(§0.0B.5). 그 전까지 legacy 는 지금처럼 돈다.
 
 **삭제** — 다음 **네 조건이 모두** 충족되면 **단일 삭제 단계**에서 legacy 활성 경로 · switch 분기 · `release: draft` 분기 · 전용 검사를 함께 지운다.
@@ -318,6 +364,10 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 - **완성 exact head 의 공통 PASS**: rollout switch 가 없거나 손상됐거나 `legacy` 일 때 legacy 회차 산출(run.json · handoff · PR 모양) 바이트 불변 ·
   `legacy` 에서 vNext 진입점 쓰기 0 · ContentPlan 해시에 날짜·provider·경로 0 · `typecheck` · `typecheck:ops` · `lint` · `build` · `check:tokens` ·
   `magazine:auto-check` · `check:m3a` · `check:magazine-graph` · `check:research-current` · `magazine:rehearsal`.
+- 🔴 **S2 변이 하네스의 소유 (2026-11-12 S2 P1-10).** `check:magazine-plan-input-mutation` · `check:magazine-content-plan-mutation` 은
+  `magazine:auto-check`(CI `visibility-guard.yml`) 체인 **끝**에서 돈다(실측 ≈ 76초 · ≈ 22초). 빠른 검사(`check:magazine-plan-input` ·
+  `check:magazine-content-plan`)는 변이를 부르지 않는다. 체인에서 빠지면 경계 검사 R9 가 FAIL 한다(변이 VB79 · VB80 이 그 검출을 증명).
+  이유: 체인 밖이면 겨냥 문자열이 바뀌어 변이 지점이 0곳이 되어도 아무도 모른다(2026-11-11 실측).
 - **production-shaped rehearsal** (fake provider · 격리 저장소 · 녹화 evidence): 서로 다른 cluster 를 포함한 STANDARD 계획 여러 개에 다음을 주입한다 —
   이미지 실패 · 금지 패턴(면책 문장) · 메타 칸 · 의료 안내 누락 · 사실 오류 · 비용 상한 · 급사 후 재개(`nextPollAt`) · `SUBMISSION_UNKNOWN` ·
   회수 불능(404) · DELETE 실패 · ProviderPlan 의 금지 필드·PII · Bundle 해시 불일치 · 같은 slug 동시 실행 · same-release 순환·고립 묶음 ·
@@ -337,6 +387,7 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 | ProviderPlan 금지 필드 · PII 탐지 | 그 Job | HOLD · 전송 0 | 1회 |
 | DELETE 실패 | 그 Job | 진행 계속 · sweeper 재시도 · 404 는 완료 | 반복 실패일 때만 1회 |
 | Bundle 판독 불가 · 해시 불일치 | 그 graphVersion | 그 판의 컴파일 0 | 1회 |
+| 현재 control 판 불일치 · kill switch · graph 꺼짐 · queue 신원 판독 불가 | 그 graphVersion | admission 전체 HOLD · 컴파일·planHash 불변 | 상태가 바뀔 때 1회 |
 | 출판 최소 미충족 | 그 intent | 컴파일하지 않음 · 공급 loop 보강 대상 | 없음(정상 상태) |
 | EvidenceProvider 상한 · 429 | 그날 공급 loop | 중단 · 다음 회차 | 1회 |
 | AUTH · 월 비용 상한 | 생성 전체 | 새 호출 0 · 검증된 후보 release 계속 | 1회 |

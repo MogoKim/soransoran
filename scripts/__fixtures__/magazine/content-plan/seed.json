@@ -1,0 +1,77 @@
+{
+  "note": "합성 fixture — 실제 연구·회원·운영 데이터가 아니다. scripts/magazine-plan-input-check.mjs · magazine-content-plan-check.mjs 가 world.mjs 로 임시 연구·제품 루트를 만든다",
+  "effectiveDate": "20261110",
+  "intents": [
+    { "intentId": "I-F1-01", "territoryId": "T6", "magazineCluster": "money-work", "primaryQuery": "합성 이력서 칸을 어떻게 채우나요", "audienceSituation": "합성 독자 상황 — 양식 칸에서 막힐 때", "answerScope": "합성 답변 범위 — 칸별 기준", "exclusions": ["양식 파일 배포", "합격 자소서"], "verificationProfile": "STANDARD", "forbiddenClaims": ["의학·재정 단정"], "communityDestination": "/community/free" },
+    { "intentId": "I-F1-02", "territoryId": "T6", "magazineCluster": "money-work", "primaryQuery": "합성 자격증이 의미가 있을까요", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F1-03", "territoryId": "T6", "magazineCluster": "money-work", "primaryQuery": "합성 다시 일하려고 할 때", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F1-04", "territoryId": "T6", "magazineCluster": "money-work", "primaryQuery": "합성 무엇을 배우면 좋을까요", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F2-01", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 가족 첫 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F2-02", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 가족 다음 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F3-01", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 순환 앞 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F3-02", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 순환 뒤 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F4-01", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 고립 첫째 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F4-02", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 고립 둘째 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F4-03", "territoryId": "T3", "magazineCluster": "family", "primaryQuery": "합성 고립 셋째 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F5-01", "territoryId": "T5", "magazineCluster": "money-work", "primaryQuery": "합성 연금 수령 시기", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "FINANCIAL", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F6-01", "territoryId": "T6", "magazineCluster": "money-work", "primaryQuery": "합성 근거 없는 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F8-01", "territoryId": "T6", "magazineCluster": "money-work", "primaryQuery": "합성 이미 공개된 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" },
+    { "intentId": "I-F9-01", "territoryId": "T9", "magazineCluster": "money-work", "primaryQuery": "합성 제외 영토 질문", "audienceSituation": "합성 상황", "answerScope": "합성 범위", "exclusions": [], "verificationProfile": "STANDARD", "forbiddenClaims": [], "communityDestination": "/community/free" }
+  ],
+  "privateIntentFields": {
+    "policyScopeWhy": "PRIVATE-POLICY-WHY 합성 내부 메모",
+    "verdictWhy": "PRIVATE-VERDICT-WHY 합성 판정 메모",
+    "founderApproval": "PRIVATE-FOUNDER-APPROVAL",
+    "retryPolicyNote": "PRIVATE-RETRY-NOTE",
+    "implementationNote": "PRIVATE-PROFILE-NOTE 🔴 합성 내부 표식"
+  },
+  "edges": [
+    { "edgeId": "E-0001", "from": "I-F1-01", "to": "I-F1-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 이력서 자격 칸이 비어 보이면 자격증을 묻게 된다", "anchor": "합성 자격증이 의미가 있을까", "evidence": ["fx-a.json"] },
+    { "edgeId": "E-0002", "from": "I-F1-01", "to": "I-F1-03", "type": "SIBLING", "slot": "SAME_EXPERIENCE", "placement": "FOOTER_SIBLING", "priority": 2, "reason": "합성 오래 비어 있는 경력 칸은 다시 일하려는 사람의 자리다", "anchor": "합성 다시 일하려고 할 때", "evidence": ["fx-b.json", "fx-a.json"] },
+    { "edgeId": "E-0003", "from": "I-F1-01", "to": "I-F1-04", "type": "BRIDGE", "slot": "BRIDGE_DISCOVERY", "placement": "FOOTER_BRIDGE", "priority": 3, "reason": "합성 온라인 이력서가 낯설면 배움을 고르는 기준으로 간다", "anchor": "합성 무엇을 배우면 좋을까", "evidence": ["fx-c.json"] },
+    { "edgeId": "E-0010", "from": "I-F2-01", "to": "I-F2-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 가족 첫 질문 다음에는 다음 질문이 온다", "anchor": "합성 가족 다음 질문", "evidence": ["fx-a.json"] },
+    { "edgeId": "E-0011", "from": "I-F2-02", "to": "I-F1-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 가족 다음 질문 뒤에 자격증 고민이 이어진다", "anchor": "합성 자격증이 의미가 있을까", "evidence": ["fx-b.json"] },
+    { "edgeId": "E-0020", "from": "I-F3-01", "to": "I-F3-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 순환 앞 질문에서 뒤 질문으로 간다", "anchor": "합성 순환 뒤 질문", "evidence": ["fx-a.json"] },
+    { "edgeId": "E-0021", "from": "I-F3-02", "to": "I-F3-01", "type": "SIBLING", "slot": "SAME_EXPERIENCE", "placement": "FOOTER_SIBLING", "priority": 2, "reason": "합성 순환 뒤 질문에서 앞 질문으로 돌아간다", "anchor": "합성 순환 앞 질문", "evidence": ["fx-b.json"] },
+    { "edgeId": "E-0040", "from": "I-F4-01", "to": "I-F4-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 고립 첫째에서 둘째로 이어진다", "anchor": "합성 고립 둘째 질문", "evidence": ["fx-a.json"] },
+    { "edgeId": "E-0041", "from": "I-F4-02", "to": "I-F4-03", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 고립 둘째에서 셋째로 이어진다", "anchor": "합성 고립 셋째 질문", "evidence": ["fx-c.json"] },
+    { "edgeId": "E-0050", "from": "I-F5-01", "to": "I-F1-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 연금 다음에는 자격증 고민이 이어진다", "anchor": "합성 자격증이 의미가 있을까", "evidence": ["fx-a.json"] },
+    { "edgeId": "E-0030", "from": "I-F6-01", "to": "I-F1-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 근거 없는 관계 — 구조화 근거가 없다", "anchor": "합성 자격증이 의미가 있을까", "evidence": null },
+    { "edgeId": "E-0080", "from": "I-F8-01", "to": "I-F1-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 이미 공개된 글에서 자격증으로 이어진다", "anchor": "합성 자격증이 의미가 있을까", "evidence": ["fx-c.json"] },
+    { "edgeId": "E-0090", "from": "I-F9-01", "to": "I-F1-02", "type": "NEXT_QUESTION", "slot": "DIRECT_NEXT", "placement": "FOOTER_NEXT", "priority": 1, "reason": "합성 제외 영토에서 자격증으로 이어진다", "anchor": "합성 자격증이 의미가 있을까", "evidence": ["fx-c.json"] },
+    { "edgeId": "E-0095", "from": "I-F1-02", "to": "I-F1-01", "type": "PREREQUISITE", "slot": "ACTION_OR_CONTEXT", "placement": "BODY_INLINE_OR_TOP", "priority": 1, "reason": "합성 builder 자동 역방향", "anchor": "합성 이력서 칸을 어떻게 채우나요", "evidence": null, "generatedBy": "build-graph.mjs backlink activation" },
+    { "edgeId": "E-0096", "from": "I-F1-01", "to": "/community/free", "type": "COMMUNITY", "slot": null, "placement": "CTA_END", "priority": 1, "reason": "합성 커뮤니티로", "anchor": "합성 게시판", "evidence": null }
+  ],
+  "privateEdgeFields": {
+    "basis": "PRIVATE-BASIS 합성 승인 묶음 · 공개 본문 대조",
+    "notes": "PRIVATE-EDGE-NOTE",
+    "evidenceQuote": "PRIVATE-SNIPPET 「합성 검색 결과 인용 문장」"
+  },
+  "mappings": [
+    { "intentId": "I-F1-02", "slug": "fx-next" },
+    { "intentId": "I-F1-03", "slug": "fx-sibling" },
+    { "intentId": "I-F1-04", "slug": "fx-bridge" },
+    { "intentId": "I-F8-01", "slug": "fx-registered" },
+    { "intentId": "I-F2-02", "slug": "fx-queued" }
+  ],
+  "evidenceDocs": {
+    "fx-a.json": { "query": "PRIVATE-QUERY 합성 질의 하나", "organicTitle": "PRIVATE-ORGANIC 합성 결과 제목" },
+    "fx-b.json": { "query": "PRIVATE-QUERY 합성 질의 둘", "organicTitle": "PRIVATE-ORGANIC 합성 결과 둘" },
+    "fx-c.json": { "query": "PRIVATE-QUERY 합성 질의 셋", "organicTitle": "PRIVATE-ORGANIC 합성 결과 셋" }
+  },
+  "articles": [
+    { "slug": "fx-next", "title": "합성 공개 글 — 자격증", "cluster": "money-work", "publishAt": "2026-11-01T10:30:00+09:00" },
+    { "slug": "fx-sibling", "title": "합성 공개 글 — 다시 일하기", "cluster": "money-work", "publishAt": "2026-11-01T10:30:00+09:00" },
+    { "slug": "fx-bridge", "title": "합성 공개 글 — 배움", "cluster": "money-work", "publishAt": "2026-11-01T10:30:00+09:00" },
+    { "slug": "fx-registered", "title": "합성 공개 글 — 이미 쓴 주제", "cluster": "money-work", "publishAt": "2026-11-01T10:30:00+09:00" }
+  ],
+  "queue": [
+    { "slug": "fx-queue-other", "title": "합성 같은 cluster 의 전혀 다른 주제", "cluster": "money-work", "notes": "PRIVATE-QUEUE-NOTE 합성 초안 메모", "whyNow": "PRIVATE-QUEUE-WHY" }
+  ],
+  "control": {
+    "enabled": true,
+    "enabledClusters": ["sleep", "family", "money-work"],
+    "surfaces": { "CTA_END": true, "FOOTER_NEXT": true, "FOOTER_SIBLING": true, "FOOTER_BRIDGE": true, "SERIES_NAV": false, "BODY_INLINE_OR_TOP": false, "BODY_CALLOUT": false },
+    "killSwitch": { "tripped": false, "trippedAt": null, "trippedBy": null, "reason": null }
+  }
+}

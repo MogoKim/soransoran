@@ -53,7 +53,7 @@
 |---|---|---|---|---|
 | **S0 ← 현재** | 권위 문서 재동결(charter · runbook · 이 문서) | `master:doc-check` · Codex 재검토 | 창업자 결정 필요한 정책 충돌 | revert |
 | S1 | 공용 코어 — QA core 추출 · 공용 상수 · WebP 판독 · 엄격 control 판독 · relation-policy 출판 최소/표시 목표 분리 · 미등록 검사 방지 | legacy 회차 산출 바이트 불변 · `magazine:auto-check` · `check:m3a` | 바이트 차이 | PR revert |
-| S2 | ContentPlanInputBundle export + compiler — 출판 최소 · same-release 규칙 · 중복(legacy queue 포함) · ProviderPlan 투영 · PII scan. 현재 배포판 `g-20261102-427d4d` 의 최초 Bundle 은 **1회 bootstrap 변경**으로 추가한다(조건 정본 charter §18-B.5) | 결정적 planHash · 날짜·provider 0 · STANDARD 후보 ≥1 · bootstrap 은 해시·신원 정확 일치 · graph 바이트 변경 0 | 후보 0 → S9 를 앞당긴다 · bootstrap mismatch → 쓰기 0 | revert |
+| S2 | ContentPlanInputBundle 엄격 투영 export + 정적 compiler + 동적 admission(control · 중복 — legacy queue 는 신원 투영만 · same-release) · ProviderPlan 투영 · PII scan (계약 charter §18-B.1 · runbook §0.0B.1). 현재 배포판 `g-20261102-427d4d` 의 최초 Bundle 은 **1회 bootstrap 변경**으로 추가한다(조건 정본 charter §18-B.5) — Bundle 파일만 담은 별도 자식 커밋 | 결정적 planHash · 날짜·provider·control·slug 0 · admission 통과 STANDARD 후보 ≥1 · bootstrap 은 해시·신원 정확 일치 · graph 바이트 변경 0 | 후보 0 → S9 를 앞당긴다 · bootstrap mismatch → 쓰기 0 | revert |
 | S3 | release 경로 — `articles.ts` 전용 writer · vNext merge gate(planHash 재컴파일) · `feat/magazine-release-*` | 격리 저장소에서 Draft·auto PR 각 1 · 변조 반례 차단 · legacy PR 판정 회귀 0 | 회귀 | revert |
 | S4 | Job · fake provider · 검증·부분 수리 · hero · vnext 위임 · dev 전용 시계 · production-shaped rehearsal | runbook §0.0B.8 전 항목 | 하나라도 FAIL | switch `legacy` |
 | S4′ (S1 뒤 병렬) | 띠배너(`next/image`) · hero 비율 · 진단 이벤트 · 제품 전체 North Star 하한 계측(Prisma 변경 0) | 글자 크기 3단계 · 767px · 52px · 토큰 · 기존 글 렌더 회귀 0 | 회귀 | revert |

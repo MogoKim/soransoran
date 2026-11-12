@@ -12,9 +12,12 @@
  *   · removeCluster — 정확히 있을 때만 뺀다. 없으면 CLUSTER_NOT_PRESENT
  *   · 바꾼 뒤 CONTROL 전체를 다시 파싱해 enabledClusters 가 기대값인지, 다른 필드가 의미상 같은지 본다
  *   · 실패는 조용히 통과하지 않는다 — 전부 ControlEditError(code)
+ *   · 🔴 CONTROL 값은 정본 graph-control 의 데이터 전용 판독(parseDataLiteral)으로 읽는다 — JS 실행 0(S2 P1-1).
+ *     앞판은 magazine-load 의 vm 평가라 호출 · getter 가 실행되고 중복 key 는 마지막 값이 조용히 이겼다
  * 🔴 제품 control.ts 를 쓰지 않는다. 텍스트를 받아 텍스트를 돌려줄 뿐이다.
  */
-import { evalLiteral, sliceLiteral } from './magazine-load.mjs'
+import { sliceLiteral } from './magazine-literal.mjs'
+import { ControlLocateError, locateControlObject, parseDataLiteral } from './magazine-graph-control.mjs'
 
 export class ControlEditError extends Error {
   constructor(code, why) { super(`${code}: ${why}`); this.code = code; this.why = why }
@@ -22,124 +25,10 @@ export class ControlEditError extends Error {
 const fail = (code, why) => { throw new ControlEditError(code, why) }
 const CLUSTER_RE = /^[a-z][a-z0-9-]*$/
 
-// ── lexical scanner — 주석 · 문자열 · template literal(${} 중첩) · 정규식 리터럴을 건너뛰고 코드 토큰만 낸다 ──
-const KEYWORDS_BEFORE_REGEX = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await'])
-const isIdStart = (c) => /[A-Za-z_$]/.test(c)
-const isIdPart = (c) => /[A-Za-z0-9_$]/.test(c)
-
-/**
- * src[i..] 를 코드로 읽는다. nested 면 짝이 맞는 `}` (template `${ }` 의 끝)에서 멈춘다.
- * @returns {{ toks: { type: 'word'|'punct'|'string'|'template'|'regex'|'number', value?: string, start: number, end: number }[], end: number }}
- */
-function lex(src, i, nested) {
-  const toks = []
-  const n = src.length
-  let depth = 0
-  const regexAllowed = () => {
-    const p = toks[toks.length - 1]
-    if (!p) return true
-    if (p.type === 'word') return KEYWORDS_BEFORE_REGEX.has(p.value)
-    if (p.type === 'punct') return !(p.value === ')' || p.value === ']' || p.value === '}')
-    return false
-  }
-  while (i < n) {
-    const ch = src[i], next = src[i + 1]
-    if (/\s/.test(ch)) { i++; continue }
-    if (ch === '/' && next === '/') { const e = src.indexOf('\n', i); i = e === -1 ? n : e; continue }
-    if (ch === '/' && next === '*') {
-      const e = src.indexOf('*/', i + 2)
-      if (e === -1) fail('CONTROL_PARSE_FAILED', '닫히지 않은 block 주석')
-      i = e + 2; continue
-    }
-    if (ch === "'" || ch === '"') {
-      const s = i++
-      while (i < n && src[i] !== ch) { if (src[i] === '\\') i++; else if (src[i] === '\n') fail('CONTROL_PARSE_FAILED', '닫히지 않은 문자열'); i++ }
-      if (i >= n) fail('CONTROL_PARSE_FAILED', '닫히지 않은 문자열')
-      toks.push({ type: 'string', start: s, end: ++i }); continue
-    }
-    if (ch === '`') {
-      const s = i++
-      for (;;) {
-        if (i >= n) fail('CONTROL_PARSE_FAILED', '닫히지 않은 template literal')
-        if (src[i] === '\\') { i += 2; continue }
-        if (src[i] === '`') { i++; break }
-        if (src[i] === '$' && src[i + 1] === '{') { i = lex(src, i + 2, true).end; continue }
-        i++
-      }
-      toks.push({ type: 'template', start: s, end: i }); continue
-    }
-    if (ch === '/' && regexAllowed()) {
-      const s = i++
-      let inClass = false
-      for (;;) {
-        if (i >= n || src[i] === '\n') fail('CONTROL_PARSE_FAILED', '닫히지 않은 정규식')
-        if (src[i] === '\\') { i += 2; continue }
-        if (src[i] === '[') inClass = true
-        else if (src[i] === ']') inClass = false
-        else if (src[i] === '/' && !inClass) { i++; break }
-        i++
-      }
-      while (i < n && isIdPart(src[i])) i++
-      toks.push({ type: 'regex', start: s, end: i }); continue
-    }
-    if (isIdStart(ch)) {
-      const s = i
-      while (i < n && isIdPart(src[i])) i++
-      toks.push({ type: 'word', value: src.slice(s, i), start: s, end: i }); continue
-    }
-    if (/[0-9]/.test(ch)) {
-      const s = i
-      while (i < n && /[0-9A-Za-z_.]/.test(src[i])) i++
-      toks.push({ type: 'number', start: s, end: i }); continue
-    }
-    if (ch === '{' || ch === '(' || ch === '[') depth++
-    else if (ch === '}' || ch === ')' || ch === ']') {
-      if (nested && ch === '}' && depth === 0) return { toks, end: i + 1 }
-      depth--
-    }
-    toks.push({ type: 'punct', value: ch, start: i, end: i + 1 })
-    i++
-  }
-  if (nested) fail('CONTROL_PARSE_FAILED', '닫히지 않은 template 식')
-  return { toks, end: i }
-}
-
-const isControlName = (w) => w === 'CONTROL'
-const OPEN = new Set(['{', '(', '[']), CLOSE = new Set(['}', ')', ']'])
-
-/** 🔴 실제 선언만 — 최상위 코드 토큰 `export const CONTROL … = { … }` 의 객체 리터럴 [start, end) */
+// ── 실제 CONTROL 선언 찾기 — 토큰 판독(주석 · 문자열 · template · 정규식 건너뛰기)은 정본 graph-control 한 곳이다 ──
+/** 정본 locateControlObject 의 실패를 이 helper 의 throw 계약(ControlEditError · 같은 code)으로 옮긴다 */
 function findControlObject(src) {
-  const { toks } = lex(src, 0, false)
-  const decls = []
-  let depth = 0
-  for (let k = 0; k < toks.length; k++) {
-    const t = toks[k]
-    if (t.type === 'punct') { if (OPEN.has(t.value)) depth++; else if (CLOSE.has(t.value)) depth--; continue }
-    if (depth === 0 && t.type === 'word' && t.value === 'export'
-      && toks[k + 1]?.type === 'word' && toks[k + 1].value === 'const'
-      && toks[k + 2]?.type === 'word' && isControlName(toks[k + 2].value)) decls.push(k + 2)
-  }
-  if (decls.length === 0) fail('CONTROL_NOT_FOUND', '실제 export const CONTROL 선언이 없다')
-  if (decls.length > 1) fail('CONTROL_AMBIGUOUS', `실제 export const CONTROL 선언이 ${decls.length}개다`)
-  // 타입 표기를 건너뛰어 같은 깊이의 `=` 를 찾는다 (`=>` 는 타입의 함수 화살표)
-  let k = decls[0] + 1, d = 0
-  for (; k < toks.length; k++) {
-    const t = toks[k]
-    if (t.type !== 'punct') continue
-    if (OPEN.has(t.value)) d++
-    else if (CLOSE.has(t.value)) d--
-    else if (d === 0 && t.value === '=' && !(toks[k + 1]?.type === 'punct' && toks[k + 1].value === '>' && toks[k + 1].start === t.end)) break
-  }
-  const open = toks[k + 1]
-  if (k >= toks.length || !open || open.type !== 'punct' || open.value !== '{') fail('CONTROL_PARSE_FAILED', 'CONTROL 의 초기값이 객체 리터럴이 아니다')
-  let depth2 = 0
-  for (let m = k + 1; m < toks.length; m++) {
-    const t = toks[m]
-    if (t.type !== 'punct') continue
-    if (OPEN.has(t.value)) depth2++
-    else if (CLOSE.has(t.value) && --depth2 === 0) return { start: open.start, end: t.end }
-  }
-  return fail('CONTROL_PARSE_FAILED', 'CONTROL 객체 리터럴의 끝을 찾지 못했다')
+  try { return locateControlObject(src) } catch (err) { if (err instanceof ControlLocateError) fail(err.code, err.why); throw err }
 }
 
 /** CONTROL 객체 리터럴의 시작 위치 · 텍스트 · 파싱 값 */
@@ -147,8 +36,14 @@ function locateControl(text) {
   const src = String(text ?? '')
   const { start, end } = findControlObject(src)
   const literal = src.slice(start, end)
+  // 🔴 데이터 전용 판독(정본 graph-control) — JS 실행 0 · 호출 · getter · spread · 계산 key · 중복 key 거부(S2 P1-1).
+  //    최상위 enabledClusters 중복만 이 helper 의 앞판 계약 그대로 CLUSTERS_AMBIGUOUS 다(어느 값을 고칠지 모호). 나머지는 CONTROL_PARSE_FAILED
   let value
-  try { value = evalLiteral(literal, 'control.ts') } catch (e) { fail('CONTROL_PARSE_FAILED', e.message) }
+  try { value = parseDataLiteral(literal) } catch (e) {
+    if (!(e instanceof ControlLocateError)) throw e
+    if (e.code === 'LITERAL_DUPLICATE_KEY' && e.detail?.depth === 0 && e.detail?.key === 'enabledClusters') fail('CLUSTERS_AMBIGUOUS', `CONTROL 최상위에 enabledClusters 가 두 번 있다`)
+    fail('CONTROL_PARSE_FAILED', e.message)
+  }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('CONTROL_PARSE_FAILED', 'CONTROL 이 객체가 아니다')
   return { src, start, literal, value }
 }

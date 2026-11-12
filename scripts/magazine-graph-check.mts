@@ -236,11 +236,12 @@ console.log('\n①-C 공개 글 coverage — 활성 canary 준비도와 번들 �
       cwd: ROOT,
       encoding: 'utf8',
     }).trim().split('\n').at(-1) ?? ''
-    controlEditPassed = /21 pass, 0 fail/.test(controlEditDetail)
+    // S2 P1-1 (2026-11-11) — 데이터 전용 CONTROL 판독 반례 1개가 더해져 22개다. 줄 전체를 정확히 맞춘다(121 pass 같은 부분 일치 금지)
+    controlEditPassed = /^control 편집 검사: 22 pass, 0 fail$/.test(controlEditDetail)
   } catch (err) {
     controlEditDetail = String((err as { stdout?: string | Buffer }).stdout ?? err)
   }
-  check('control 편집 helper 반례 21개가 독립 실행에서 통과한다', controlEditPassed, controlEditDetail)
+  check('control 편집 helper 반례 22개가 독립 실행에서 통과한다', controlEditPassed, controlEditDetail)
 
   const coverage = COVERAGE
   const countTotal = Object.values(coverage.counts).reduce((sum, count) => sum + count, 0)
