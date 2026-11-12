@@ -6,6 +6,8 @@
  *   node scripts/magazine-graph-control-edit-mutation.mjs
  *
  * helper: 사본을 임시 폴더에 만들고(상대 import 는 절대 경로로) MGRAPH_CONTROL_EDIT_LIB 로 주입한다 — 저장소 파일을 고치지 않는다.
+ *         실제 선언 찾기(토큰 판독)는 정본 graph-control 로 옮겼다(S2 P1-B) — `locator: true` 변이는 graph-control 사본에 심고,
+ *         helper 사본의 graph-control import 를 그 사본으로 바꾼다(지점 정확히 1곳).
  * 소비처: 제자리에서 옛 고정 문자열 치환으로 되돌리고, 매 변이 뒤 원본 바이트로 되돌린 것을 해시로 확인한다.
  * 🔴 검출 = 기대한 반례 이름이 FAIL 로 찍히고 exit ≠ 0. 변이 지점 없음 · 지점 중복 · 적재 실패(LOAD_ERROR) · 요약 없음 · 원복 실패는 하네스 FAIL.
  * 🔴 무변이 상태에서 검사가 먼저 통과해야 한다.
@@ -21,6 +23,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.dirname(HERE)
 const LIB = path.join(HERE, 'lib', 'magazine-graph-control-edit.mjs')
 const CHECK = path.join(HERE, 'magazine-graph-control-edit-check.mjs')
+const LOCATOR = path.join(HERE, 'lib', 'magazine-graph-control.mjs')
 
 const HELPER_MUTATIONS = [
   { id: 'CE2 중복 추가 허용', from: "  if (cs.includes(cluster)) fail('CLUSTER_ALREADY_PRESENT'", to: "  if (false) fail('CLUSTER_ALREADY_PRESENT'",
@@ -37,18 +40,22 @@ const HELPER_MUTATIONS = [
   { id: 'CE7 단순 indexOf 탐색으로 되돌리기', from: '  const { start, end } = findControlObject(src)\n  const literal = src.slice(start, end)',
     to: "  const start = src.indexOf('{', src.indexOf('=', src.indexOf('export const CONTROL')))\n  const literal = sliceLiteral(src, start, '{', '}')",
     expect: 'decoy: line 주석 안의 완전한 가짜 CONTROL 선언' },
-  { id: 'CE8 line 주석 무시 제거', from: "    if (ch === '/' && next === '/') { const e = src.indexOf('\\n', i);",
+  { locator: true, id: 'CE8 line 주석 무시 제거', from: "    if (ch === '/' && next === '/') { const e = src.indexOf('\\n', i);",
     to: "    if (false) { const e = src.indexOf('\\n', i);", expect: 'decoy: line 주석 안의 완전한 가짜 CONTROL 선언' },
-  { id: 'CE9 block 주석 무시 제거', from: "    if (ch === '/' && next === '*') {\n      const e = src.indexOf('*/', i + 2)",
+  { locator: true, id: 'CE9 block 주석 무시 제거', from: "    if (ch === '/' && next === '*') {\n      const e = src.indexOf('*/', i + 2)",
     to: "    if (false) {\n      const e = src.indexOf('*/', i + 2)", expect: 'decoy: block 주석 안의 가짜 CONTROL 선언' },
-  { id: 'CE10 문자열 무시 제거', from: "    if (ch === \"'\" || ch === '\"') {\n      const s = i++",
+  { locator: true, id: 'CE10 문자열 무시 제거', from: "    if (ch === \"'\" || ch === '\"') {\n      const s = i++",
     to: "    if (false) {\n      const s = i++", expect: 'decoy: 작은따옴표 문자열 안의 가짜 선언' },
-  { id: 'CE11 template literal 무시 제거', from: "    if (ch === '`') {\n      const s = i++",
+  { locator: true, id: 'CE11 template literal 무시 제거', from: "    if (ch === '`') {\n      const s = i++",
     to: "    if (false) {\n      const s = i++", expect: 'decoy: template literal' },
-  { id: 'CE12 정확한 CONTROL identifier 경계 제거', from: "const isControlName = (w) => w === 'CONTROL'",
-    to: "const isControlName = (w) => w.startsWith('CONTROL')", expect: 'decoy: CONTROLLER 선언(부분 일치 이름)' },
-  { id: 'CE13 중복 실제 선언 허용', from: "  if (decls.length > 1) fail('CONTROL_AMBIGUOUS'",
-    to: "  if (false) fail('CONTROL_AMBIGUOUS'", expect: '실제 CONTROL 선언 2개는 CONTROL_AMBIGUOUS' },
+  { locator: true, id: 'CE12 정확한 CONTROL identifier 경계 제거', from: "const isDeclName = (w, name) => w === name",
+    to: "const isDeclName = (w, name) => w.startsWith(name)", expect: 'decoy: CONTROLLER 선언(부분 일치 이름)' },
+  { id: 'CE14 CONTROL 값을 vm 평가로 되돌리기(호출 · getter 실행 · 중복 key 덮어쓰기 · S2 P1-1)',
+    from: '  try { value = parseDataLiteral(literal) } catch (e) {',
+    to: '  try { value = Function(`return (${literal})`)() } catch (e) {',
+    expect: 'CONTROL 은 데이터로만 읽는다' },
+  { locator: true, id: 'CE13 중복 실제 선언 허용', from: "  if (decls.length > 1) fail(`${prefix}_AMBIGUOUS`",
+    to: "  if (false) fail(`${prefix}_AMBIGUOUS`", expect: '실제 CONTROL 선언 2개는 CONTROL_AMBIGUOUS' },
 ]
 const CONSUMER_MUTATIONS = [
   { id: 'CE1a direct-spec source 가 helper 대신 고정 문자열로 cluster-off', file: 'scripts/magazine-direct-spec-source-check.mjs',
@@ -87,12 +94,20 @@ else lines.push(`✅ 무변이 ${base.pass} pass · 0 fail`)
 
 // ── helper (사본 주입) ──
 const TMP = fs.mkdtempSync(path.join(tmpdir(), 'control-edit-mutation-'))
-const libText = fs.readFileSync(LIB, 'utf8').replace(/from '\.\/([^']+)'/g, (_, rel) => `from '${path.join(path.dirname(LIB), rel)}'`)
+const absImports = (file) => fs.readFileSync(file, 'utf8').replace(/from '\.\/([^']+)'/g, (_, rel) => `from '${path.join(path.dirname(file), rel)}'`)
+const libText = absImports(LIB)
+const locatorText = absImports(LOCATOR)
+const locatorImport = `from '${LOCATOR}'`
 for (const [i, mu] of HELPER_MUTATIONS.entries()) {
-  const n = occurrences(libText, mu.from)
+  const n = occurrences(mu.locator ? locatorText : libText, mu.from)
   if (n !== 1) { lines.push(`❌ ${mu.id} — 변이 지점 ${n}곳 (하네스 결함)`); harnessFail++; continue }
   const p = path.join(TMP, `m${i + 1}.mjs`)
-  fs.writeFileSync(p, libText.replace(mu.from, mu.to))
+  if (mu.locator) {
+    if (occurrences(libText, locatorImport) !== 1) { lines.push(`❌ ${mu.id} — helper 의 graph-control import 지점이 1곳이 아니다 (하네스 결함)`); harnessFail++; continue }
+    const g = path.join(TMP, `g${i + 1}.mjs`)
+    fs.writeFileSync(g, locatorText.split(mu.from).join(mu.to))
+    fs.writeFileSync(p, libText.split(locatorImport).join(`from '${g}'`))
+  } else fs.writeFileSync(p, libText.replace(mu.from, mu.to))
   judge(mu, run({ MGRAPH_CONTROL_EDIT_LIB: p }))
 }
 fs.rmSync(TMP, { recursive: true, force: true })

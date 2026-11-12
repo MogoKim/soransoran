@@ -877,8 +877,9 @@ M-GRAPH 가 매거진 발행량을 늘린다는 이유로 제출 게이트를 �
 - 🔴 자동 레인 PR 의 **변경 파일 허용 목록** `ALLOWED_FILE_RULES`
   (`scripts/lib/magazine-merge-gate.mjs`) — 목록 밖 파일은 `UNEXPECTED_FILES` 로 병합이 막힌다
 - 🔴 자동 병합의 **위험 등급 정본** — legacy 는 `drafts/magazine/topic-queue.ts`, vNext 는 ContentPlan 의 `validationProfile` 이다.
-  vNext merge gate 는 PR 이 실은 값을 믿지 않고, main 의 ContentPlanInputBundle·control·정책 판으로 ContentPlan 을 **재컴파일한
-  planHash** 와 대조한다(runbook §0.0B.4). 이유: PR 이 자기 등급·관계를 바꿔 통과하는 것을 막는 일을 queue 없이 하려면 이것뿐이다.
+  vNext merge gate 는 PR 이 실은 값을 믿지 않고, main 의 ContentPlanInputBundle·정책 판으로 ContentPlan 을 **재컴파일한
+  planHash** 와 대조한 뒤, 같은 동적 admission(현재 control·articles·legacy queue 신원·시각)을 다시 돈다(runbook §0.0B.4).
+  이유: PR 이 자기 등급·관계를 바꿔 통과하는 것을 막는 일을 queue 없이 하려면 이것뿐이다. control 은 planHash 입력이 아니다(§18-B.1).
   — 🔴 `validationProfile` 을 정할 수 있고 결정론적 QA 를 통과한 글이 자동으로 나간다
 - 예약 전 비공개
 - Production SHA와 도메인 서빙 확인
@@ -933,7 +934,8 @@ public/magazine/<slug>/hero.webp
 🔴 **정하지 않은 채 파일부터 만들지 않는다.** 이 결정 없이 그래프를 도입하면
 M-GRAPH 의 첫 산출물이 M-AUTO 의 일일 공급을 멈추게 한다 — 전환 규칙 7의 정확한 위반 사례다.
 
-legacy 의 위험 등급 정본이 `topic-queue.ts` 이므로 legacy 동결 기간에는 queue 구조를 바꾸지 않는다. vNext 는 queue 를 읽지 않는다.
+legacy 의 위험 등급 정본이 `topic-queue.ts` 이므로 legacy 동결 기간에는 queue 구조를 바꾸지 않는다. vNext 는 queue 를 plan·콘텐츠
+입력으로 쓰지 않고 절대 쓰지 않는다 — legacy 가 남아 있는 동안 admission 이 중복 판정용 신원 투영만 읽는다(§18-B.1).
 
 ---
 
@@ -1014,7 +1016,7 @@ watch 거짓 PASS 0
 | Codex | 목적·정본·조사 품질·중복·마일스톤·구현 범위·배포 판단 총괄 |
 | Claude Code | 승인된 범위의 read-only 조사, 구현, 검증, 증거 보고 |
 | M-GRAPH | 확정된 검색 의도·관계를 ContentPlanInputBundle 로 고정하고, 출판 최소를 충족한 intent 를 공급 · 3+1·inbound 품질 보강(§18-B) |
-| G8 | graph-ready intent의 stable slug·admission 신원 부여 |
+| G8 | legacy: graph-ready intent의 stable slug·admission 신원 부여. vNext 의 stable slug 는 S3 release 신원 경계가 묶는다 — S2 는 queue 기반 G8 workflow 를 부르지 않는다(§18-B.1) |
 | M-AUTO | ContentPlan 을 생성·검증·release·병합·공개 (runbook §0.0B) |
 
 ### 초기 운영
@@ -1059,15 +1061,26 @@ runbook §0.0B, 현재 상태와 critical path 는 milestone 이 정본이며 �
 |---|---|---|
 | **Evidence** | 연구 폴더 (`contract/build/current` + 증거) | intent·관계 단위 검색 근거와 출처 신원. 🔴 mutable 하고 Git 이 아니므로 **runtime 은 직접 읽지 않는다** |
 | **Canonical Graph** | 제품 `src/content/magazine/graph/*` | intent·edge·mapping·control. 근거 있는 유효 관계를 수량 제한 없이 보존 |
-| **ContentPlanInputBundle** | 제품 저장소(추적 대상) · graph 판과 같은 승격 변경(현재 배포판의 최초 1회 bootstrap 만 예외 — §18-B.5) | 연구 current 의 intent 필드(질문·독자 상황·답변 범위·포함/제외·검증 프로필·커뮤니티 목적지)와 관계(`readerReason`·`anchorLabel`·slot·대상)를 graphVersion 단위로 **content-addressed** 고정. 자기 해시와 graph·control 해시를 함께 싣는다 |
-| **ContentPlan** | compiler 산출 · Git 에는 그 글의 release PR 안 | Bundle·control·정책 판에서 **결정적으로** 만든다 — 같은 입력이면 같은 `planHash`. 검색 질문 · 독자 상황 · 답변 범위 · 포함/제외 · 관계와 독자 이동 이유 · 검증 프로필 · CTA · graphVersion·Bundle 신원 · 정책 판 |
+| **ContentPlanInputBundle** | 제품 저장소(추적 대상) · graph 판과 같은 승격 변경(현재 배포판의 최초 1회 bootstrap 만 예외 — §18-B.5) | 연구 current 의 **엄격 투영**. intent 필드(질문·독자 상황·답변 범위·포함/제외·금지 주장·검증 프로필·커뮤니티 목적지)와 **근거가 확인된** 관계(`readerReason`·`anchorLabel`·slot·대상·근거 신원 해시)·mapping 신원을 graphVersion 단위로 **content-addressed** 고정. 해시는 둘이다 — **내용 해시 `bundleHash`**(schemaVersion·graphVersion·intents·relations·mappings 만 · ContentPlan/planHash 가 싣는 유일한 Bundle 신원)와 **출처 봉인 `recordHash`**(provenance 포함 기록 전체). provenance 에는 연구 current/snapshot 신원 · graph 판·current 해시 · **export 시점 control 전체 해시(출처 기록)** · 제3자 원문 대조 규칙/corpus 신원을 싣는다. intent 마다 제3자 원문 판정(`textProvenance`)만 싣고, 연구 원문·증거 원문·메모·승인 흔적·readiness 는 싣지 않는다 |
+| **ContentPlan** | compiler 산출 · Git 에는 그 글의 release PR 안 | **Bundle·정책 판에서만** 결정적으로 만든다(정적) — 같은 입력이면 같은 `planHash`. 날짜·slug 없이 `<graphVersion>:<intentId>` 로 식별한다. 검색 질문 · 독자 상황 · 답변 범위 · 포함/제외 · 관계와 독자 이동 이유 · 검증 프로필 · CTA · graphVersion·Bundle 신원 · 정책 판 |
 | **Job** | runtime (Git 밖) | 글 하나의 실행 기록 — runbook §0.0B.1 |
 | **Article** | Git (`src/content/magazine/articles.ts` · hero) | 최종 공개본과 `publishAt` 의 유일한 소유자 |
 
 - provider 에 보내는 것은 ContentPlan 전체가 아니라 허용 필드만 투영한 **ProviderPlan** 이다(runbook §0.0B.1). 회원 데이터는 어떤 provider 입력에도 넣지 않는다.
 - 🔴 **ContentPlan 에 넣지 않는 것**: `publishAt` · provider 이름 · provider 작업 ID · runtime 경로 · PR·branch·배포 정보 · 승인자.
 - 🔴 **`publishAt` 은 release 직전에 배정한다.** 날짜를 놓쳐도 ContentPlan·원고·해시는 바뀌지 않고 재승인도 없다.
-- queue 는 legacy 가 남아 있는 동안만 존재하며, vNext 는 queue 를 읽지도 쓰지도 않는다.
+- 🔴 **정적 plan · 동적 admission (2026-11-10 Codex 결정).** 현재 control · 현재 articles · legacy queue · 판정 시각 · 진행 중 신원 ·
+  same-release 판정은 **admission** 입력이다. ContentPlan 과 `planHash` 에 들어가지 않는다. admission 결과는 바뀔 수 있어도 planHash 는 그대로다.
+  - control 전체 해시는 Bundle 의 export 시점 **출처 기록**일 뿐이다. 현재 control 은 admission 이 엄격 판독해 graphVersion 불일치 · kill switch ·
+    graph 꺼짐 · 꺼진 cluster · 근거 있는 direct 관계의 켜진 표면 없음이면 fail-closed 로 HOLD 한다.
+    이유: 정당한 control 토글(cluster·표면)이 Bundle 을 영구 무효로 만들거나 planHash 를 바꾸면, 같은 글이 토글마다 새 plan 이 된다.
+  - S3 release 는 release·merge 직전에 같은 admission 을 다시 돌린다. queue 가 바뀌면 admission 은 바뀔 수 있지만 planHash 는 바뀌지 않는다.
+- 🔴 **legacy queue — 임시 중복 신원 adapter.** vNext 는 queue 를 plan·콘텐츠 입력으로 쓰지 않고 **절대 쓰지 않는다.** legacy 가 남아 있는 동안
+  admission 이 중복 판정용 **신원 투영**(intentId · slug · 정규화 제목 · cluster)만 읽는다. 초안·HOLD·격리·콘텐츠 바이트는 승계하지 않는다.
+  그동안 queue 파일이나 앵커를 못 읽으면 fail-closed 다. legacy 삭제 단계(runbook §0.0B.7)에서 adapter 도 함께 끈다.
+- 🔴 **slug 는 S3 release 신원 경계에서 묶는다.** S2 ContentPlan 은 slug 를 만들지 않고, legacy queue · source materialization 을 쓰지 않는다.
+  admission 은 그 요구를 `SLUG_BINDING_REQUIRED` 로 드러낼 뿐 ContentPlan 필드로 두지 않는다. 기존 G8·admission 기록은 충돌·출처 확인에
+  읽을 수 있지만, 현재 queue 기반 G8 workflow 를 S2 가 부르지 않는다.
 
 ### 18-B.2 관계 계약 — 보존 · 표시 · 출판 최소 (2026-11-09 창업자 결정)
 
@@ -1077,9 +1090,9 @@ runbook §0.0B, 현재 상태와 critical path 는 milestone 이 정본이며 �
 |---|---|
 | **Canonical Graph (보존)** | 근거 있는 유효 관계를 **수량 제한 없이** 보존한다. 근거 있는 관계를 숫자에 맞추려고 지우지 않는다 |
 | **화면 표시 (목표)** | direct **최대 3** + discovery **최대 1** 을 relation policy 의 품질·표면·결정적 tie 규칙(priority → edgeId)으로 **결정적으로 선택**한다. 근거가 없는 칸은 비운다 |
-| **출판 최소 (하드)** | ① 허용 영토·정책 통과(§18-B.6) ② 기존 공개·예약 글과 legacy queue 까지 포함해 중복 0 ③ **근거 있는 direct 관계 1개 이상** — 대상이 이미 공개됐거나 같은 release(§18-B.4) ④ 그 관계의 `readerReason`·`anchorLabel` 이 결정적 검사를 통과 ⑤ canonical `/magazine?cluster=<cluster>` 목록에서 도달 가능(§11) ⑥ same-release 관계는 최종적으로 이미 공개된 글까지 이어짐 |
+| **출판 최소 (하드)** | ① 허용 영토·정책 통과(§18-B.6) ② 기존 공개·예약 글과 legacy queue 신원 투영까지 포함해 **정확한 신원**(intentId · canonical mapping · 정규화 제목 · S3 의 stable slug) 중복 0 — 같은 cluster 라는 이유만으로는 막지 않는다 ③ **근거 있는 direct 관계 1개 이상** — 대상이 이미 공개됐거나 같은 release(§18-B.4) ④ 그 관계의 `readerReason`·`anchorLabel` 이 결정적 검사를 통과 ⑤ canonical `/magazine?cluster=<cluster>` 목록에서 도달 가능(§11) ⑥ same-release 관계는 최종적으로 이미 공개된 글까지 이어짐 |
 | **품질 지표 (게이트 아님)** | 3+1 충족 여부 · 다른 공개 글에서 오는 글→글 inbound 유무. 출판을 막지 않고 공급 loop 의 보강 우선순위가 된다(§18-B.5) |
-| 기준 | 관계 근거 기준을 낮추지 않는다. 숫자를 채우려고 약한 관계나 가짜 edge 를 만들지 않는다 |
+| 기준 | 관계 근거 기준을 낮추지 않는다. 숫자를 채우려고 약한 관계나 가짜 edge 를 만들지 않는다. `AUTOMATION_READY` 만으로 근거로 세지 않는다 — Bundle 은 canonical g5 edge 와 정확히 맞고 `basis` 가 비어 있지 않으며 구조화 `evidence` 가 참조하는 증거 파일이 존재·허용 schema·해시된 관계만 싣는다 |
 
 - 이유: 2026-11-09 readiness 실측에서 3+1 을 채운 미등록 intent 는 0 이었다. 출판 조건을 품질 목표와 같게 두면 공급이 멈춘다.
   최소선은 독자가 다음으로 갈 길 하나와 크롤 도달성을 지키는 데 필요한 만큼만 둔다.
@@ -1306,6 +1319,19 @@ Codex나 Claude가 구현 편의를 이유로 이 문서의 목적을 축소하�
 충돌을 보고하고, 창업자 결정 없이 문서를 구현에 맞춰 조용히 바꾸지 않는다.
 
 ### 변경 기록
+
+**2026-11-10 — S2 권위 정정: 정적 ContentPlan · 동적 admission · control provenance · queue 신원 adapter · slug 경계 (§15 · §18 · §18-B.1 · §18-B.2)**
+
+1. **무엇을 바꾸는가** — control 전체 해시를 Bundle 의 export 출처 기록으로 내리고 현재 control 판정을 admission 으로 옮겼다. ContentPlan · planHash 는
+   Bundle·정책 판만의 정적 산출이고, 현재 control · articles · queue · 시각 · 진행 중 신원 · same-release 는 admission 이다. vNext 는 queue 를
+   입력으로 쓰지 않고 쓰지도 않으며, legacy 가 남는 동안 중복 판정용 신원 투영만 읽는다. S2 plan 은 slug 가 없고 stable slug 는 S3 release 신원
+   경계가 묶는다. Bundle 은 근거가 확인된 관계만 싣는 엄격 투영이다.
+2. **왜** — 11-09 판은 "Bundle 이 control 해시를 싣고 불일치면 컴파일 0" 이라 cluster 하나를 켜는 정당한 토글이 Bundle 을 영구 무효로 만들었고,
+   "control 로 컴파일" 이 planHash 를 토글마다 바꿨다. "vNext 는 queue 를 읽지 않는다" 와 "중복 검사는 legacy queue 까지" 가 서로 모순이었다.
+3. **근거** — 2026-11-10 Codex 결정 D1~D5(독립 감사 2회) · 연구 current `g-20261102-427d4d` exact snapshot 읽기 전용 실측: canonical g5 339 edge 중 구조화
+   evidence 11 · 증거 파일 참조 4 · 출판 최소를 충족한 미등록 STANDARD intent 는 I-T6-03 하나.
+4. **M-AUTO 와 기존 예약 재고 영향** — 문서와 S2 검사 코드뿐이다. 운영 경로 · runtime · launchd · queue · graph · control · 예약 글 변화 0. 실제 Bundle 은 아직 없다.
+5. **판정 변화** — 없음. M-GRAPH PARTIAL · M-AUTO PARTIAL · OUTCOME NOT PROVEN.
 
 **2026-11-09 — S0 재동결: 창업자 결정 5건 반영 (§3-B · §11 · §12 · §15 · §18 · §18-H · §18-B.1~§18-B.8 정정)**
 

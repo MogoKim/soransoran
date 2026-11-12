@@ -16,11 +16,14 @@
  *              고쳤는데 목록에서 안 빼면 FAIL 이다 — 목록이 현실보다 넓으면 그 자리로 위반이 되돌아와도 못 본다.
  *   exempt     S1 범위 밖이라 남겨 두는 자리 — 사유를 함께 적는다. 늘리려면 이 파일을 고쳐야 한다(조용히 늘지 않는다)
  *
+ * S2 (2026-11-10) — R9 에 S2 검사 등록 · R14 엄격 control 판독 소비처에 S2 compiler · R16 vNext 관계 최소의 소비처를 compiler 하나로 연다 ·
+ *   R17 S2 순수 lib 경계 — **전이 폐포**(두 lib 가 부르는 모듈이 부르는 모듈까지) · import 허용 표 · fs/path/env/cwd/벽시계/네트워크/초안 0.
+ *
  * 🔴 읽기만 한다. 변이 하네스가 사본 루트를 MAGAZINE_VNEXT_BOUNDARY_ROOT 로 넘긴다(없으면 이 저장소).
  * 마지막 줄: `vNext 경계 검사: <n> pass, <n> fail`
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, posix, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -228,7 +231,7 @@ const MOVED_TARGETS = Object.freeze([
   ['scripts/magazine-rehearsal-mutation.mjs', '㉑ QA 의 발행 길이 FAIL 제거', 'scripts/lib/magazine-qa-core.mjs', '  if (!body.hard.ok) report.fail(', { def: "qaCore: path.join(HERE, 'lib', 'magazine-qa-core.mjs')", ref: 'file: F.qaCore' }],
   // D10 은 #825 directScenario prepare 리팩터링 뒤 지점 0곳(변이 무효)으로 남아 있었다 — 그 재발을 여기서 매번 본다
   ['scripts/magazine-rehearsal-mutation.mjs', 'D10 hero 를 미리 배치해 provider 호출 우회', 'scripts/magazine-rehearsal.mjs', '      const p = await prepareDirect(repo, { variant })\n'],
-  ['scripts/magazine-direct-spec-source-check.mjs', "['control', 'MS15'", 'scripts/lib/magazine-graph-control.mjs', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", CONTROL_HARNESS_PATH],
+  ['scripts/magazine-direct-spec-source-check.mjs', "['control', 'MS15'", 'scripts/lib/magazine-graph-control.mjs', "  try { raw = parseDataLiteral(literal) } catch (err) { if (err instanceof ControlLocateError) return null; throw err }", CONTROL_HARNESS_PATH],
   ['scripts/magazine-direct-spec-source-check.mjs', "['control', 'MS16'", 'scripts/lib/magazine-graph-control.mjs', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", CONTROL_HARNESS_PATH],
   ['scripts/magazine-g8-promote-mutation.mjs', 'control 판 대조 제거', 'scripts/lib/magazine-g8-promoter.mjs', '  if (parseControlText(texts.graphControl)?.graphVersion !== payload.graphVersion) problems.push('],
   ['scripts/magazine-relation-policy-mutation.mjs', "'RP1'", 'scripts/lib/magazine-relation-policy.mjs', '  directMin: 2,'],
@@ -276,12 +279,18 @@ const literalForms = (s) => {
   try { scripts = JSON.parse(read('package.json') ?? '{}').scripts ?? {} } catch { /* 아래에서 FAIL */ }
   const chain = String(scripts['magazine:auto-check'] ?? '').split('&&').map((s) => s.trim())
   const need = ['node scripts/magazine-vnext-boundary-check.mjs', 'node scripts/magazine-vnext-boundary-mutation.mjs']
+  // S2 — 순수 Bundle · compiler 검사와 그 변이 하네스(S2 P1-10 · 2026-11-12)는 CI 체인(magazine:auto-check · visibility-guard.yml)에 있다.
+  //   변이는 체인 끝에만 둔다 — 빠른 검사가 변이를 부르지 않고(재귀 0), 변이 하네스는 OS 임시 사본만 쓴다. 실측 plan-input ≈ 76s · content-plan ≈ 22s.
+  //   체인 밖이면 겨냥 문자열이 바뀌어 "지점 0곳" 이 되어도 아무도 모른다(2026-11-11 CM39 · CM41 · VB63 실측).
+  const s2 = { 'check:magazine-plan-input': 'node scripts/magazine-plan-input-check.mjs', 'check:magazine-content-plan': 'node scripts/magazine-content-plan-check.mjs',
+    'check:magazine-plan-input-mutation': 'node scripts/magazine-plan-input-mutation.mjs', 'check:magazine-content-plan-mutation': 'node scripts/magazine-content-plan-mutation.mjs' }
   const problems = []
   if (scripts['check:magazine-vnext-boundary'] !== need[0]) problems.push('check:magazine-vnext-boundary 스크립트가 없다·다르다')
   if (scripts['check:magazine-vnext-boundary-mutation'] !== need[1]) problems.push('check:magazine-vnext-boundary-mutation 스크립트가 없다·다르다')
-  for (const n of need) if (!chain.includes(n)) problems.push(`magazine:auto-check 체인에 "${n}" 가 없다`)
-  if (problems.length) bad('R9', '경계 검사·변이가 package 와 magazine:auto-check(CI) 에 등록돼 있다', problems.join(' | '))
-  else ok('R9', '경계 검사·변이가 package 와 magazine:auto-check(CI) 에 등록돼 있다')
+  for (const [k, v] of Object.entries(s2)) if (scripts[k] !== v) problems.push(`${k} 스크립트가 없다·다르다`)
+  for (const n of [...need, ...Object.values(s2)]) if (!chain.includes(n)) problems.push(`magazine:auto-check 체인에 "${n}" 가 없다`)
+  if (problems.length) bad('R9', '경계 · S2 검사 · S2 변이가 package 와 magazine:auto-check(CI) 에 등록돼 있다', problems.join(' | '))
+  else ok('R9', '경계 · S2 검사 · S2 변이가 package 와 magazine:auto-check(CI) 에 등록돼 있다')
 }
 
 // ── R10 운영 CLI 가 QA CLI 를 import 하지 않는다 ───────────
@@ -346,13 +355,13 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
 
 // ── R14 control 판독 소비 경계 ─────────────────────────────
 // 🔴 ① 두 이름의 import 는 정본에서만 ② 다시 내보내기는 정확한 호환 선언 2개뿐(graph-build · direct-spec-source)
-//    ③ 프로필 소유 — 엄격(parseGraphControl)은 direct-spec-source, legacy(parseControlText)는 graph-build · research-current · g8.
+//    ③ 프로필 소유 — 엄격(parseGraphControl)은 direct-spec-source · S2 compiler(admission 의 현재 control), legacy(parseControlText)는 graph-build · research-current · g8.
 //       엄격 판독이 실패할 때 느슨한 판독으로 넘어가는 경로(fallback)를 막는다. 새 소비처는 이 표를 고쳐야 열린다
 {
   const NAMES = ['parseControlText', 'parseGraphControl']
   const OWNERS = {
     parseControlText: ['scripts/lib/magazine-graph-build.mjs', 'scripts/lib/magazine-research-current.mjs', 'scripts/lib/magazine-g8-promoter.mjs'],
-    parseGraphControl: ['scripts/lib/magazine-direct-spec-source.mjs'],
+    parseGraphControl: ['scripts/lib/magazine-direct-spec-source.mjs', 'scripts/lib/magazine-content-plan.mjs'],
   }
   const COMPAT = { 'scripts/lib/magazine-graph-build.mjs': 'export { parseControlText }', 'scripts/lib/magazine-direct-spec-source.mjs': 'export { parseGraphControl }' }
   const found = new Map()
@@ -392,13 +401,15 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
 // ── R16 관계 수량 이름 소유 (S1 C6) ──────────────────────────
 // 🔴 세 층(legacy 호환 · 표시 목표 · vNext 관계 최소)은 relation-policy 한 곳이 정의한다. 이름만 나눴고 legacy 값 · 판정은 앞판 그대로다.
 //    ① 수량 숫자 리터럴(directMin · directMax · direct · discovery: <숫자>)은 정책 파일 밖에 없다(사본 0)
-//    ② vNext 관계 최소(VNEXT_PUBLICATION_RELATION_MINIMUM)는 정책 파일 밖 어디도 아직 읽지 않는다 —
-//       legacy 소비처가 읽으면 GRAPH_READY · source · ArticleSpec 판정이 쉬워진다. 첫 소비처는 S2 compiler 이고 그때 이 규칙을 고쳐 연다
+//    ② vNext 관계 최소(VNEXT_PUBLICATION_RELATION_MINIMUM)는 정책 파일 밖에서 **S2 compiler 한 곳만** 읽고, 그 compiler 는 반드시
+//       relation-policy 에서 import 한다 — legacy 소비처가 읽으면 GRAPH_READY · source · ArticleSpec 판정이 쉬워지고,
+//       compiler 가 안 읽으면(숫자 사본 · 미소비) 출판 최소가 정책 파일과 갈라진다
 //    ③ 정책 이름 · 호환 이름의 정의는 정책 파일 한 곳 (같은 이름의 사본 · 감싼 함수 금지)
 //    ④ 호환 이름은 같은 객체 · 같은 함수 · 같은 문자열이고, builder 의 생산 최소는 legacy · 표시는 표시 목표 값이다(실제 적재)
 //    ⑤ legacy 기준 · 표시 목표 블록은 숫자 리터럴만 — 서로(또는 다른 이름)에 기대지 않는다
 {
   const POLICY = 'scripts/lib/magazine-relation-policy.mjs'
+  const COMPILER = 'scripts/lib/magazine-content-plan.mjs'
   const found = new Map()
   const add = (k) => found.set(k, (found.get(k) ?? 0) + 1)
   const NAMES = ['RELATION_POLICY', 'LEGACY_RELATION_POLICY', 'RELATION_DISPLAY_TARGET', 'VNEXT_PUBLICATION_RELATION_MINIMUM', 'isValidDirectCount', 'isSingleDiscovery', 'isLegacyDirectCount', 'isLegacySingleDiscovery', 'RELATION_CONTRACT_LABEL', 'LEGACY_RELATION_CONTRACT_LABEL']
@@ -406,8 +417,11 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
   for (const f of [...LIB, ...PROD].filter((x) => x !== POLICY)) {
     const src = codeText(f)
     for (const m of src.matchAll(/\b(directMin|directMax|direct|discovery)\s*:\s*\d/g)) add(`${f} → 수량 숫자 리터럴 ${m[0]}`)
-    if (/\bVNEXT_PUBLICATION_RELATION_MINIMUM\b/.test(src)) add(`${f} → VNEXT_PUBLICATION_RELATION_MINIMUM 를 읽는다(아직 소비처 0 — S2 compiler 가 연다)`)
+    if (f !== COMPILER && /\bVNEXT_PUBLICATION_RELATION_MINIMUM\b/.test(src)) add(`${f} → VNEXT_PUBLICATION_RELATION_MINIMUM 를 읽는다(소비처는 S2 compiler 하나)`)
     for (const m of src.matchAll(defRe)) add(`${f} → ${m[1]} 정의 사본`)
+  }
+  if (!/import\s*\{[^}]*\bVNEXT_PUBLICATION_RELATION_MINIMUM\b[^}]*\}\s*from\s*'\.\/magazine-relation-policy\.mjs'/.test(codeText(COMPILER))) {
+    add(`${COMPILER} → VNEXT_PUBLICATION_RELATION_MINIMUM 를 relation-policy 에서 import 하지 않는다(출판 최소 미소비 · 사본)`)
   }
   // ⑤ 소유 구조 — legacy 기준과 표시 목표는 각자 자기 숫자를 가진다. 블록 안 값이 다른 이름을 빌리면(예: legacy ← 표시 목표)
   //    표시(UI) 변경이 legacy 판정을 조용히 바꾼다. 값은 여기 다시 적지 않고, "숫자 리터럴만" 이라는 모양만 본다
@@ -435,7 +449,78 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
     if (!L || pm?.direct !== L.directMin || pm?.discovery !== L.discovery) add('graph-build → 생산 최소가 legacy 호환 기준 값이 아니다')
     if (!D || dt?.directMax !== D.directMax || dt?.discovery !== D.discovery) add('graph-build → 표시 목표가 RELATION_DISPLAY_TARGET 값이 아니다')
   } catch (e) { add(`적재 실패: ${String(e?.message ?? e).split('\n')[0]}`) }
-  ratchet('R16', '관계 수량은 relation-policy 가 세 이름으로 소유 · legacy 판정 그대로 · vNext 최소 소비 0', found, { pending: [] })
+  ratchet('R16', '관계 수량은 relation-policy 가 세 이름으로 소유 · legacy 판정 그대로 · vNext 최소 소비는 S2 compiler 하나', found, { pending: [] })
+}
+
+// ── R17 S2 순수 lib 경계 (전이 폐포) ──────────────────────────
+// 🔴 Bundle · ContentPlan · admission · ProviderPlan 은 같은 입력이면 같은 해시여야 하고(merge gate 재컴파일), legacy 삭제 때 함께 지우지 않는다.
+//    그래서 두 lib 에서 상대 import 를 **재귀로** 따라가 닿는 모든 모듈이 ① PURE 표 안이고 ② 외부 import 는 node:crypto · node:vm 뿐이고
+//    ③ 파일 시스템 · path · env · cwd · 벽시계 · 네트워크 · 동적 import · 초안 경로를 코드에 두지 않는다.
+//    직접 import 만 보면 허용 모듈이 끌고 오는 fs · cwd · Date.now 기본값을 못 본다(앞판: gate 를 허용해 fs · path · cwd 가 폐포에 들어왔다 — P1-C).
+//    공개 판정은 import 0 의 public-rule 이 소유하고, gate 는 그것을 다시 내보낼 뿐이다. 파일 읽기는 bootstrap CLI(경계) 몫이다.
+{
+  const ROOTS = ['scripts/lib/magazine-content-plan-input.mjs', 'scripts/lib/magazine-content-plan.mjs']
+  const PURE = new Set([...ROOTS, 'scripts/lib/magazine-public-rule.mjs', 'scripts/lib/magazine-graph-control.mjs', 'scripts/lib/magazine-literal.mjs',
+    'scripts/lib/magazine-qa-constants.mjs', 'scripts/lib/magazine-relation-policy.mjs'])
+  const EXTERNAL = new Set(['node:crypto', 'node:vm'])
+  // 🔴 토큰 판정(S2 P1-3) — 정규식 · 주석 지우기(codeText)는 `import /* 틈 */ ('node:fs')` · 주석 뒤 static import · re-export ·
+  //    process['env'] · Date['now']() 를 놓쳤다. 정본 graph-control 의 lexer 가 주석 · 문자열 · template(안쪽 식은 펼침) · 정규식을 가른다.
+  const BANNED_WORDS = new Map([['process', 'process(env · cwd · exit)'], ['require', 'require'], ['fetch', 'fetch'], ['globalThis', 'globalThis'],
+    ['eval', 'eval'], ['Function', 'Function 생성자'], ['XMLHttpRequest', '네트워크'], ['WebSocket', '네트워크']])
+  const FS_WORDS = new Set(['readFileSync', 'writeFileSync', 'readdirSync', 'existsSync', 'openSync', 'mkdirSync', 'renameSync', 'rmSync', 'unlinkSync', 'statSync',
+    'lstatSync', 'realpathSync', 'readFile', 'writeFile', 'createReadStream', 'createWriteStream'])
+  const DATE_PURE = new Set(['UTC'])
+  let codeTokens = null
+  try { ({ codeTokens } = await import(pathToFileURL(join(HERE, 'lib', 'magazine-graph-control.mjs')).href)) } catch { /* 아래에서 FAIL */ }
+  const found = new Map()
+  const add = (k) => found.set(k, (found.get(k) ?? 0) + 1)
+  if (typeof codeTokens !== 'function') add('정본 lexer(codeTokens)를 적재하지 못했다')
+  const seen = new Set()
+  const queue = [...ROOTS]
+  while (queue.length && typeof codeTokens === 'function') {
+    const f = queue.shift()
+    if (seen.has(f)) continue
+    seen.add(f)
+    if (!PURE.has(f)) add(`${f} → 순수 폐포 밖 모듈이 닿는다`)
+    const src = read(f)
+    if (src === null) { add(`${f} → 파일이 없다`); continue }
+    let toks
+    try { toks = codeTokens(src) } catch (e) { add(`${f} → 토큰 판독 실패(${e.code ?? e.message}) — 판정할 수 없으면 FAIL`); continue }
+    const isP = (t, v) => t?.type === 'punct' && t.value === v
+    const isW = (t, v) => t?.type === 'word' && t.value === v
+    const strOf = (t) => (t?.type === 'string' ? src.slice(t.start + 1, t.end - 1) : null)
+    const spec = (s) => {
+      if (s.startsWith('.')) queue.push(posix.normalize(posix.join(posix.dirname(f), s)))
+      else if (!EXTERNAL.has(s)) add(`${f} → 허용 밖 외부 import ${s}`)
+    }
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i], prev = toks[i - 1], next = toks[i + 1]
+      const member = isP(prev, '.') // obj.<word> — 속성 이름
+      if (t.type === 'string' || t.type === 'template') { if (src.slice(t.start, t.end).includes('drafts/')) add(`${f} → 초안 경로`); continue }
+      if (t.type !== 'word') continue
+      if (t.value === 'import' && !member) {
+        if (isP(next, '(')) add(`${f} → 동적 import`)
+        else if (isP(next, '.')) add(`${f} → import.meta`)
+        else if (next?.type === 'string') spec(strOf(next))
+        continue
+      }
+      if (t.value === 'from' && !member && next?.type === 'string' && !isP(prev, ',') && !isP(prev, '(')) { spec(strOf(next)); continue }
+      if (BANNED_WORDS.has(t.value) && !member) add(`${f} → ${BANNED_WORDS.get(t.value)}`)
+      if (FS_WORDS.has(t.value)) add(`${f} → 파일 시스템 호출 ${t.value}`)
+      if (t.value === 'constructor' && (member || isP(prev, '['))) add(`${f} → .constructor 접근(생성자 탈출)`)
+      if (t.value === 'Date' && !member) {
+        // 허용: Date.UTC(…) · new Date(<인자>). 금지: Date.now · Date['…'] · 인자 없는 new Date() · Date 를 값으로 넘기기(별칭)
+        const ok = (isP(next, '.') && isW(toks[i + 2], 'UTC') && DATE_PURE.has('UTC')) || (isW(prev, 'new') && isP(next, '(') && !isP(toks[i + 2], ')'))
+        if (!ok) add(`${f} → 벽시계 · Date 접근 ${src.slice(t.start, (toks[i + 2] ?? t).end)}`)
+      }
+    }
+    // computed 문자열 접근 — x['process'] · x["env"] · x['now'] 같은 이름을 문자열로 우회
+    for (let i = 1; i < toks.length; i++) {
+      const v = strOf(toks[i])
+      if (v !== null && isP(toks[i - 1], '[') && (BANNED_WORDS.has(v) || FS_WORDS.has(v) || ['env', 'cwd', 'now', 'constructor', 'argv'].includes(v))) add(`${f} → 문자열 계산 접근 [${JSON.stringify(v)}]`)
+    }
+  }
+  ratchet('R17', `S2 순수 lib 의 전이 폐포(${seen.size} 모듈)는 PURE 표 안 · 외부는 node:crypto · node:vm 만 · fs/path/env/cwd/벽시계/네트워크/초안 0`, found, { pending: [] })
 }
 
 console.log(`\nvNext 경계 검사: ${pass} pass, ${fail} fail`)

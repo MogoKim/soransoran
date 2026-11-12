@@ -2467,7 +2467,7 @@ const MUTATIONS = [
   ['source', 'MS9', 'hero alt·scene 검사 제거', '  if (heroRequired(queueItem?.imageMode)) {', '  if (false) {'],
   ['source', 'MS12', '소비 관문이 OPTIONAL hero 를 요구하지 않는다 (P1)', "  return imageMode === 'REQUIRED' || imageMode === 'OPTIONAL'", "  return imageMode === 'REQUIRED'"],
   ['source', 'MS13', '승인 basis exact-match 제거 (P1)', "      else if (canonicalJson(entry.productBasis) !== canonicalJson(b)) blockers.push('PRODUCT_BASIS_DRIFT')\n", ''],
-  ['control', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = evalLiteral(literal, 'control.ts') } catch { return null }", "  raw = evalLiteral(literal, 'control.ts')"],
+  ['control', 'MS15', 'control 파싱 예외를 다시 던진다 (P1)', "  try { raw = parseDataLiteral(literal) } catch (err) { if (err instanceof ControlLocateError) return null; throw err }", "  raw = parseDataLiteral(literal)"],
   ['source', 'MS17', 'bundle 구조 검증 제거 (P1 — intents null 이 TypeError 로 번진다)', "  if (!graphBundleShapeOk(graph)) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'", "  if (false) return { ok: false, code: 'GRAPH_BUNDLE_UNREADABLE'"],
   ['control', 'MS16', 'control 필드 형식 검증 제거 (P1)', "  if (typeof enabled !== 'boolean') return null\n  if (!Array.isArray(enabledClusters) || !enabledClusters.every((c) => typeof c === 'string' && c.trim())) return null\n", ''],
   ['source', 'MS14', 'productRoot 없을 때 통과 (P1 fail-closed 제거)', "  if (!productRoot) blockers.push('PRODUCT_BASIS_UNVERIFIED')", '  if (!productRoot) {}'],

@@ -14,18 +14,16 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** KST 기본 공개 시각 — magazine.ts 의 KST_PUBLISH_TIME 과 같아야 한다 */
-export const KST_PUBLISH_TIME = 'T10:30:00+09:00'
+import { KST_PUBLISH_TIME, publicAtRule, resolvePublishAt } from './magazine-public-rule.mjs'
 
-/** publishAt 이 없으면 publishedAt 을 KST 10:30 으로 본다 */
-export function resolvePublishAt(article) {
-  return new Date(article.publishAt ?? `${article.publishedAt}${KST_PUBLISH_TIME}`).getTime()
-}
+// 🔴 규칙 본문(KST 시각 · publishAt 해석 · DRAFT/BLOCKED · 시각 비교)은 `magazine-public-rule.mjs` 한 곳이다(S2 P1-C).
+//    여기는 같은 이름을 다시 내보내고 위임만 한다 — legacy 호출자(graph-build · qa-core · inventory · direct-spec-authoring ·
+//    rehearsal-bin)의 import 경로와 결과는 그대로다. 순수 compiler 는 gate 가 아니라 public-rule 을 직접 쓴다(fs · cwd 를 끌고 오지 않게).
+export { KST_PUBLISH_TIME, resolvePublishAt }
 
-/** 지금 공개해도 되는 글인가. qaStatus·riskLevel 은 런타임 판정에 쓰지 않는다 */
+/** 지금 공개해도 되는 글인가. qaStatus·riskLevel 은 런타임 판정에 쓰지 않는다 — 기본 시각은 벽시계(legacy 의미 그대로) */
 export function isPublic(article, now = Date.now()) {
-  if (article.status === 'DRAFT' || article.status === 'BLOCKED') return false
-  return resolvePublishAt(article) <= now
+  return publicAtRule(article, now)
 }
 
 /** 리포트에 붙일 상태 표기 */
