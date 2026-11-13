@@ -38,10 +38,14 @@ export function planSupplementSnapshot(input: {
   const frozenBundles = [...(input.frozenBundles ?? [])]
   const frozenCodes = new Set(frozenBundles.map((bundle) => bundle.personaCode))
   const overlap = newCodes.filter((code) => frozenCodes.has(code))
+  // 다음 세대는 base 바로 뒤가 아니라 이미 동결된 append-only 세대 뒤에서
+  // 배정한다. frozen 코드를 빼고 다시 계획하면 P44부터가 P34부터의 화자를
+  // 재사용해도 오직 사후 중복 검사에서만 드러난다.
+  const occupiedCodes = sortPersonaCodes([...baseCodes, ...frozenCodes])
   const plan = planAppendOnlyBundles({
     canonRows: input.canonRows,
     extraRows: input.extraRows,
-    productionCodes: baseCodes,
+    productionCodes: occupiedCodes,
     newCodes,
   })
   const problems: string[] = []

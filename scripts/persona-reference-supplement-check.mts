@@ -178,6 +178,31 @@ try {
     v2.ok && v2.asset.bundles.map((bundle) => bundle.personaCode).join(',') === 'P34,P35,P36,P37')
   check('v2 plan preserves frozen v1 bundle bytes',
     JSON.stringify(v2.asset.bundles.slice(0, 2)) === JSON.stringify(plan.asset.bundles))
+  const sequentialCanon = rows('seq', 4)
+  const sequentialV1 = planSupplementSnapshot({
+    canonRows: sequentialCanon,
+    extraRows: [],
+    baseCodes,
+    newCodes,
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-14T00:00:00.000Z',
+    reason: 'sequential generation one',
+  })
+  const sequentialV2 = planSupplementSnapshot({
+    canonRows: sequentialCanon,
+    extraRows: rows('seq-extra', 2),
+    baseCodes,
+    newCodes: ['P36', 'P37'],
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-14T01:00:00.000Z',
+    reason: 'sequential generation two',
+    frozenBundles: sequentialV1.asset.bundles,
+  })
+  check('next generation allocates after frozen codes instead of reusing their canonical speakers',
+    sequentialV1.ok && sequentialV2.ok
+    && sequentialV2.problems.every((problem) => !problem.startsWith('FROZEN_BUNDLE_REUSE')))
   const v2Write = writeSupplementSnapshot({
     assetText: v2.assetText,
     manifestText: v2.manifestText,
