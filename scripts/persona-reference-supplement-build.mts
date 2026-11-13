@@ -109,8 +109,7 @@ else if (PRODUCTION || TARGET !== null || APPROVED_DIGEST !== null) {
 await loadEnvLocal()
 // 읽기 전용 plan도 운영 확장 판정과 같은 canonical DB를 본다. 셸에 DB 주소가
 // 없다는 이유로 plan만 실패하거나, 반대로 임의 셸 주소를 권위로 삼지 않는다.
-const canonicalDb = fillDbConnection()
-if (!canonicalDb.ok) fail(`canonical DB 주소를 읽지 못했다 — ${canonicalDb.reason ?? '이유 모름'}`)
+if (!fillDbConnection()) fail('canonical env 에 DATABASE_URL 이 없다 — 보충 말투 plan 을 시작하지 않는다')
 const salt = readEvidenceSalt({ ...process.env, ...readEnvKeys([VOICE_EVIDENCE_SALT_ENV]).values })
 const validSalt = salt.ok ? salt : fail(`voice evidence salt: ${salt.code}`)
 const canon = loadCanonAsset()
