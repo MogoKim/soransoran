@@ -22,13 +22,14 @@
  *      · 일부만 처리하는 것 — 하나라도 어긋나면 **전원 롤백**한다
  */
 import { PrismaClient, type Prisma, type PersonaStatus } from '@prisma/client'
+import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 
 import {
   COHORTS, cohortOf, verifyAllCohorts, stageOf,
   judgeCreate, judgeSeed, judgeActivate, judgePause, judgePrerequisites, judgeArgs,
   judgeCohortArg, judgeStepArg, requiresActor, checkCohortKeys,
-  displayNamePathOf, seedPathOf,
+  COHORT_EXPANSION_FIXTURES, displayNamePathOf, seedPathOf,
   type CohortId, type CohortManifest, type CohortMemberState, type CohortStep,
 } from '../src/lib/persona-cohort'
 import { judgeRealMember } from '../src/lib/real-member-gate'
@@ -40,6 +41,7 @@ import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
+import { parseExpansionFixture, type ExpansionFixture } from './lib/persona-expansion-gate.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 const DRAFT: PersonaStatus = 'draft'
@@ -67,6 +69,23 @@ const cg = judgeCohortArg(arg('cohort'))
 if (!cg.ok) fail(cg.reason)
 const COHORT: CohortId = cg.id!
 const M: CohortManifest = cohortOf(COHORT)!
+
+/** 🔴 승인 fixture 는 경로뿐 아니라 digest 까지 manifest 에 고정한다. */
+const approvedExpansionFixture = (): ExpansionFixture | null => {
+  const approved = COHORT_EXPANSION_FIXTURES[COHORT]
+  if (approved === undefined) return null
+  let raw: string
+  try { raw = readFileSync(approved.path, 'utf-8') }
+  catch (e) { fail(`${approved.path} 을 읽을 수 없습니다: ${(e as Error).message}`) }
+  const digest = createHash('sha256').update(raw).digest('hex')
+  if (digest !== approved.sha256) fail(`승인 fixture digest 불일치: ${digest} ≠ ${approved.sha256}`)
+  const parsed = parseExpansionFixture(raw)
+  if (!parsed.ok) fail(`승인 fixture 형식 오류: ${parsed.problems.join(' / ')}`)
+  if (parsed.fixture.cohort !== COHORT) fail(`승인 fixture cohort ${parsed.fixture.cohort} ≠ ${COHORT}`)
+  const keyProblems = checkCohortKeys(M, parsed.fixture.candidates.map((c) => c.code))
+  if (keyProblems.length > 0) fail(`승인 fixture 범위 오류: ${keyProblems.join(' / ')}`)
+  return parsed.fixture
+}
 
 const sg = judgeStepArg(arg('step'))
 if (!sg.ok) fail(sg.reason)
@@ -236,7 +255,15 @@ if (STEP === 'create') {
    *       창업자가 직접 고르고 싶을 때의 문은 닫지 않는다.
    */
   const path = displayNamePathOf(COHORT)
-  if (existsSync(path)) {
+  const approved = approvedExpansionFixture()
+  if (approved !== null) {
+    creates = M.codes.map((code) => ({
+      code,
+      name: approved.candidates.find((candidate) => candidate.code === code)!.displayName.trim(),
+    }))
+    if (creates.some((c) => c.name === '')) { await prisma.$disconnect(); fail('승인 fixture 에 비어 있는 이름이 있습니다') }
+    ok(`승인 fixture 표시명 사용 (${COHORT_EXPANSION_FIXTURES[COHORT]!.path}) — digest 고정 · ${creates.length}개`)
+  } else if (existsSync(path)) {
     let selection: Record<string, string>
     try { selection = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string> }
     catch (e) { await prisma.$disconnect(); fail(`${path} 을 읽을 수 없습니다: ${(e as Error).message}`) }

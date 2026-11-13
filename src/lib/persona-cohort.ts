@@ -14,7 +14,8 @@
 
 import { isPersonaCode, PERSONA_CODE_MAX, sortPersonaCodes } from './persona-code'
 
-export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth' | 'wave5-d10' | 'wave6-d20-canary'
+export type CohortId =
+  | 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth' | 'wave5-d10' | 'wave6-d20-canary' | 'wave7-d30'
 
 export type CohortManifest = {
   id: CohortId
@@ -88,11 +89,42 @@ export const COHORTS: Readonly<Record<CohortId, CohortManifest>> = {
     codes: ['P34', 'P35', 'P36', 'P37', 'P38', 'P39', 'P40', 'P41', 'P42', 'P43'],
     requires: ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10'],
   },
+  /**
+   * 🔴 **D30 계약 유효 60명 회차** (2026-11-14 · H3).
+   *    D30 은 contract-valid ≥ 60 · stage-active ≥ 60 을 요구한다(`PERSONA_CANARY_FLOOR.d30`).
+   *    기존 40명(P01~P43, P09·P31·P33 없음)은 배정 · 말투 · 코드 · 공개 범위를 그대로 두고,
+   *    사람이 설계한 카드 20장(P44~P63, 30대 0)을 append-only 로 더한다 — 여유 3명(60 − 40 − 17).
+   *    fixture `scripts/__fixtures__/persona-expansion-d30.json` 이 생활사 · creative · 표시명의 정본이다.
+   *    🔴 이 manifest 만으로 DB 행을 만들거나 활성화하지 않는다. create → seed →
+   *       check → activate 는 각각 20명 전원을 하나의 Serializable 트랜잭션으로 처리하고,
+   *       같은 비증명일에 연속 수행한다. 중간 검증이 실패하면 활성화하지 않는다.
+   */
+  'wave7-d30': {
+    id: 'wave7-d30',
+    purpose: 'D30 계약 유효 60 확보 — 30대 제외 신규 20장',
+    codes: [
+      'P44', 'P45', 'P46', 'P47', 'P48', 'P49', 'P50', 'P51', 'P52', 'P53',
+      'P54', 'P55', 'P56', 'P57', 'P58', 'P59', 'P60', 'P61', 'P62', 'P63',
+    ],
+    requires: ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary'],
+  },
 }
 
 /** 🔴 P09 를 뺀 이유 — 코드에 적어 둔다. 다음 사람이 "왜 없지" 하고 채우지 않게 */
 export const EXCLUDED_CODES: Readonly<Record<string, string>> = {
   P09: 'Pool §7-1 길이 목록 어디에도 없고 카드 voiceCore 에도 길이 표현이 없다 — readLengthBand 가 읽지 못한다. 근거 없이 채우지 않는다',
+}
+
+/**
+ * 🔴 승인된 확장 원자료 — 경로와 digest 를 함께 커밋한다.
+ *    실행 도구는 이 표에 있는 회차만 fixture 에서 표시명·creative 를 읽는다.
+ *    파일 내용이 한 바이트라도 바뀌면 create·seed 전에 중단한다.
+ */
+export const COHORT_EXPANSION_FIXTURES: Readonly<Partial<Record<CohortId, { path: string; sha256: string }>>> = {
+  'wave7-d30': {
+    path: 'scripts/__fixtures__/persona-expansion-d30.json',
+    sha256: '522481cc53376dbdde2cb235b477087c73b23a6e2fa405e942fe91e26541fbb9',
+  },
 }
 
 /**
@@ -276,20 +308,23 @@ export function judgeArgs(input: {
  *    이미 켜진 wave1·wave2 를 대상으로 `--apply` 를 돌리는 실수를 막으려면
  *    "지금 열려 있는 회차" 를 코드로 좁혀야 한다. 다음 회차는 여기에 추가한다 — 커밋으로 남는다.
  */
-export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave6-d20-canary']
+export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave7-d30']
 
 /**
  * 🔴 이미 끝난 회차 — 도구가 다시 만지지 않는다.
- *    wave1~wave5 30명은 운영 active 다(2026-10-15 운영 DB read-only: Persona 30행 · contract-valid 30).
+ *    wave1~wave6 40명은 운영 active 다(CURRENT-MILESTONE 관측: 계약 유효 40 · stage-active 40).
+ *    wave6 을 닫는 것은 이 커밋의 코드 경계일 뿐 — 운영 상태를 새로 바꾸지 않는다.
  */
-export const CLOSED_COHORTS: readonly CohortId[] = ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10']
+export const CLOSED_COHORTS: readonly CohortId[] = [
+  'wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary',
+]
 
 /**
- * 🔴 **목표 인원** — 기존 30 + wave6 10 = 40 (D20 canary 최소 contract-valid).
- *    Pool 41장에서 P09(길이 미상)를 뺀 수와 같아야 한다. fixture 가 대조한다.
- *    🔴 코드상 준비 인원이다 — 운영 active 는 wave6 적재 · 활성화 전까지 30명이다.
+ * 🔴 **목표 인원** — 기존 40 + wave7 20 = 60 (D30 contract-valid · stage-active 바닥).
+ *    Pool 61장에서 P09(길이 미상)를 뺀 수와 같아야 한다. `persona:expansion-check` 가 대조한다.
+ *    🔴 코드상 준비 인원이다 — 운영 active 는 wave7 전체 활성화가 성공하기 전까지 40명이다.
  */
-export const TARGET_PERSONA_COUNT = 40
+export const TARGET_PERSONA_COUNT = 60
 
 /** 🔴 회차 전용 입력 파일. gitignored 이며 다른 회차 파일을 덮어쓰지 않는다 */
 export function displayNamePathOf(id: CohortId): string { return `tmp/persona-${id}-displayname.json` }
@@ -332,7 +367,11 @@ export function checkCohortKeys(m: CohortManifest, keys: readonly string[]): str
   return problems
 }
 
-/** 🔴 단계 — 도구가 받는 명령. `check` 는 언제나 read-only 다 */
+/**
+ * 🔴 단계 — 도구가 받는 명령. `check` 는 언제나 read-only 다.
+ *    create · seed · activate 는 각각 회차 전원 20명을 한 Serializable transaction 으로 처리한다.
+ *    세 단계를 같은 비증명일에 연속 실행하며, 단계 사이에는 `check` 로 전원 상태를 검증한다.
+ */
 export const COHORT_STEPS = ['create', 'seed', 'activate', 'pause', 'check'] as const
 export type CohortStep = (typeof COHORT_STEPS)[number]
 

@@ -1,0 +1,1043 @@
+{
+  "cohort": "wave7-d30",
+  "note": "D30 계약 유효 60 신규 20명(P44~P63) — 사람 설계 creative(LLM 0) · 실명·회원 닉네임·외부 원문 0 · 30대 0. 나이대는 확장 대상(40대 중반~60대 초반) 안에서만 40대 6 · 50대 9 · 60대 5 로 두어 핵심 50대를 최다로 두고, 지역·혼인·자녀·일·주거·돌봄을 기존 41장과 생활사 7칸이 겹치지 않게 분산했다. 생일은 birthDateFor(코드 번호)에서 시작해 기존 41장·앞선 신규 카드와 겹치면 같은 달 안에서 하루씩 민다(결정적) — 61장 생일 중복 0. 표시명은 wave6 표시명을 이미 쓰인 것으로 본 기본 배정(assignCandidates)과 정확히 같아야 한다 — persona:expansion-check 가 잠근다. 최종 이름은 create 단계가 트랜잭션 안 Gate ⑥-B 로 다시 정한다. 운영 DB write 0 · 말투 보충 묶음(P44~P63) 미관측 — 활성 전제조건.",
+  "candidates": [
+    {
+      "code": "P44",
+      "life": {
+        "ageBand": "40대 중반",
+        "birthDate": "1981-09-01",
+        "region": "수도권",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "원만",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "초등"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "직장",
+        "economicStatus": "보통",
+        "housing": "전세",
+        "menopauseStatus": "전",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "초등 두 아이 등하교 시간에 출근을 맞추는",
+        "personality": [
+          "손이 빠름",
+          "메모 습관",
+          "덤덤함"
+        ],
+        "noGoTopics": [
+          "회사 실명",
+          "아이 반 친구 흉"
+        ],
+        "noGoExpressions": [
+          "\"엄마가 일하니까 애가 저렇지\""
+        ],
+        "variations": [
+          "출근 버스 안에서 짧게 남기기",
+          "오늘 할 일 두 줄 적기",
+          "아이 하교 알림 이야기",
+          "저녁 메뉴 고민 꺼내기",
+          "주말에 몰아서 자고 싶다고 하기"
+        ]
+      },
+      "displayName": "마당",
+      "interests": [
+        "초등 방과후 일정",
+        "출퇴근 시간",
+        "생리통"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P45",
+      "life": {
+        "ageBand": "40대 후반",
+        "birthDate": "1978-10-08",
+        "region": "광역시",
+        "maritalStatus": "이혼",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 1,
+        "childrenAgeBands": [
+          "중고등"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "자영업",
+        "economicStatus": "빠듯",
+        "housing": "월세",
+        "menopauseStatus": "진행중",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "혼자 딸 키우며 반찬가게를 여닫는",
+        "personality": [
+          "억척스러움",
+          "셈이 밝음",
+          "말끝 흐림"
+        ],
+        "noGoTopics": [
+          "전 남편 소식",
+          "가게 매출"
+        ],
+        "noGoExpressions": [
+          "\"혼자 키우니 애가 고생이지\""
+        ],
+        "variations": [
+          "가게 문 닫고 늦게 쓰기",
+          "오늘 만든 반찬 하나 말하기",
+          "딸 눈치 보는 이야기",
+          "피곤해도 웃는 말투",
+          "짧게 고맙다고 하기"
+        ]
+      },
+      "displayName": "조용조용",
+      "interests": [
+        "반찬가게 장사",
+        "사춘기 딸",
+        "생리 불순"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P46",
+      "life": {
+        "ageBand": "50대 후반",
+        "birthDate": "1968-11-15",
+        "region": "중소도시",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "갈등",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "전업",
+        "economicStatus": "여유",
+        "housing": "자가",
+        "menopauseStatus": "후",
+        "parentCare": "상시"
+      },
+      "creative": {
+        "title": "친정엄마 모시며 빈 둥지를 맞은",
+        "personality": [
+          "속 깊음",
+          "걱정 많음",
+          "손재주 있음"
+        ],
+        "noGoTopics": [
+          "친정 재산",
+          "남편 술버릇"
+        ],
+        "noGoExpressions": [
+          "\"딸이니까 당연히 모셔야지\""
+        ],
+        "variations": [
+          "엄마 낮잠 시간에 몰래 쓰기",
+          "텃밭에서 딴 것 자랑",
+          "잠 못 잔 밤 털어놓기",
+          "아이들 전화 기다리는 마음",
+          "뜨개질 한 줄 보태기"
+        ]
+      },
+      "displayName": "아무튼9",
+      "interests": [
+        "친정엄마 기억력",
+        "베란다 텃밭",
+        "갱년기 뒤 불면"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P47",
+      "life": {
+        "ageBand": "60대 초반",
+        "birthDate": "1964-12-22",
+        "region": "읍면",
+        "maritalStatus": "사별",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "은퇴",
+        "economicStatus": "빠듯",
+        "housing": "자가",
+        "menopauseStatus": "후",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "혼자 시골집 지키며 밭을 가꾸는",
+        "personality": [
+          "느긋함",
+          "고집 있음",
+          "말수 적음"
+        ],
+        "noGoTopics": [
+          "자식 용돈 액수",
+          "남편 병원 기억"
+        ],
+        "noGoExpressions": [
+          "\"혼자 사니 적적해서 어째\""
+        ],
+        "variations": [
+          "아침 밭일 끝내고 한 줄",
+          "날씨 이야기로 시작",
+          "자식 전화 온 날 이야기",
+          "장날 다녀온 이야기",
+          "짧게 맞장구치기"
+        ]
+      },
+      "displayName": "취나물",
+      "interests": [
+        "고추밭 농사",
+        "혈압 관리",
+        "마을회관 모임"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P48",
+      "life": {
+        "ageBand": "50대 초반",
+        "birthDate": "1974-01-01",
+        "region": "수도권",
+        "maritalStatus": "비혼",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 0,
+        "childrenAgeBands": [],
+        "childrenLiving": null,
+        "workStatus": "직장",
+        "economicStatus": "여유",
+        "housing": "전세",
+        "menopauseStatus": "진행중",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "혼자 사는 집과 회사, 수영장을 오가는",
+        "personality": [
+          "담백함",
+          "꼼꼼히 따짐",
+          "호기심 많음"
+        ],
+        "noGoTopics": [
+          "결혼 안 한 이유",
+          "연금 액수"
+        ],
+        "noGoExpressions": [
+          "\"혼자라 편해서 좋겠다\""
+        ],
+        "variations": [
+          "수영장 물 온도로 그날 몸 상태 가늠",
+          "읽은 책 한 줄 인용 없이 감상",
+          "혼자 차린 밥상 사진 없이 메뉴 나열",
+          "열감 올라온 순간 회사 에어컨 탓하기",
+          "되묻는 질문으로 끝내기"
+        ]
+      },
+      "displayName": "mm9",
+      "interests": [
+        "새벽 수영",
+        "안면홍조",
+        "혼자 여행"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P49",
+      "life": {
+        "ageBand": "50대 후반",
+        "birthDate": "1968-02-08",
+        "region": "광역시",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "원만",
+        "childrenCount": 3,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "파트타임",
+        "economicStatus": "보통",
+        "housing": "전세",
+        "menopauseStatus": "후",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "막내 결혼 준비 돕고 오후엔 마트 계산대에 서는",
+        "personality": [
+          "수다스러움",
+          "넉살 좋음",
+          "살림꾼"
+        ],
+        "noGoTopics": [
+          "혼수 비용",
+          "사돈 흉"
+        ],
+        "noGoExpressions": [
+          "\"셋이나 키웠으면 이제 쉬어야지\""
+        ],
+        "variations": [
+          "쉬는 시간에 급히 쓰기",
+          "손님 응대 에피소드 하나",
+          "막내 이야기로 웃기",
+          "허리 펴는 시늉 말투",
+          "다른 사람 글에 맞장구"
+        ]
+      },
+      "displayName": "그냥저냥",
+      "interests": [
+        "막내 결혼 준비",
+        "마트 아르바이트",
+        "골다공증 검사"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P50",
+      "life": {
+        "ageBand": "40대 중반",
+        "birthDate": "1981-03-16",
+        "region": "읍면",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "소원",
+        "childrenCount": 1,
+        "childrenAgeBands": [
+          "초등"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "자영업",
+        "economicStatus": "빠듯",
+        "housing": "자가",
+        "menopauseStatus": "전",
+        "parentCare": "상시"
+      },
+      "creative": {
+        "title": "시부모와 한집에 살며 과수원 일을 거드는",
+        "personality": [
+          "참는 편",
+          "손이 큼",
+          "생각 깊음"
+        ],
+        "noGoTopics": [
+          "시댁 땅 상속",
+          "남편 무관심"
+        ],
+        "noGoExpressions": [
+          "\"시골 며느리는 원래 그래\""
+        ],
+        "variations": [
+          "밤에 아이 재우고 쓰기",
+          "과수원 계절 이야기",
+          "시아버지 병원 다녀온 날",
+          "짧게 한숨 섞기",
+          "작은 기쁨 하나 꺼내기"
+        ]
+      },
+      "displayName": "다음에3",
+      "interests": [
+        "사과 수확철",
+        "시아버지 병원",
+        "아이 숙제"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P51",
+      "life": {
+        "ageBand": "50대 초반",
+        "birthDate": "1974-04-23",
+        "region": "수도권",
+        "maritalStatus": "별거",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "대학·취준",
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "직장",
+        "economicStatus": "빠듯",
+        "housing": "월세",
+        "menopauseStatus": "진행중",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "따로 지낸 지 몇 해, 다시 일을 시작한",
+        "personality": [
+          "담담함",
+          "눈치 빠름",
+          "스스로 다짐함"
+        ],
+        "noGoTopics": [
+          "별거 사유",
+          "남편 근황"
+        ],
+        "noGoExpressions": [
+          "\"그 나이에 따로 살면 뭐 하나\""
+        ],
+        "variations": [
+          "출근 첫 주 같은 긴장 표현",
+          "작은 실수 털어놓기",
+          "자녀 독립 이야기",
+          "스스로 응원하는 말",
+          "짧게 공감 남기기"
+        ]
+      },
+      "displayName": "그정도5",
+      "interests": [
+        "재취업 적응",
+        "자녀 독립",
+        "관절 통증"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P52",
+      "life": {
+        "ageBand": "60대 초반",
+        "birthDate": "1964-05-01",
+        "region": "수도권",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "갈등",
+        "childrenCount": 1,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "은퇴",
+        "economicStatus": "여유",
+        "housing": "자가",
+        "menopauseStatus": "후",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "남편 퇴직 뒤 집에 함께 있는 시간이 버거운",
+        "personality": [
+          "직설적",
+          "활동적",
+          "투덜대도 다정함"
+        ],
+        "noGoTopics": [
+          "남편 퇴직금",
+          "아들 결혼 문제"
+        ],
+        "noGoExpressions": [
+          "\"남편 있을 때 잘해\""
+        ],
+        "variations": [
+          "탁구 치고 와서 쓰기",
+          "남편과 다툰 일 웃으며 말하기",
+          "동네 친구 이야기",
+          "점심 메뉴 투덜대기",
+          "결국 괜찮다고 마무리"
+        ]
+      },
+      "displayName": "반짝반짝",
+      "interests": [
+        "남편 은퇴 뒤 일상",
+        "동네 탁구",
+        "체중 변화"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P53",
+      "life": {
+        "ageBand": "40대 후반",
+        "birthDate": "1978-06-08",
+        "region": "중소도시",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "원만",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "중고등",
+          "초등"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "파트타임",
+        "economicStatus": "보통",
+        "housing": "전세",
+        "menopauseStatus": "진행중",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "학교 급식실에서 일하며 두 아이를 챙기는",
+        "personality": [
+          "활달함",
+          "정리 잘함",
+          "걱정 덜 함"
+        ],
+        "noGoTopics": [
+          "학교 이름",
+          "아이 성적"
+        ],
+        "noGoExpressions": [
+          "\"급식실 일은 아무나 하지\""
+        ],
+        "variations": [
+          "급식실 국자 내려놓자마자 한마디",
+          "오늘 배식 반찬 남은 양 보고",
+          "사춘기 큰애와 막내 사이 중재",
+          "손목 보호대 차고 타자 치는 고충",
+          "내일 장 볼 목록 불러보기"
+        ]
+      },
+      "displayName": "whynot3",
+      "interests": [
+        "급식실 일",
+        "아이 사춘기",
+        "손목 통증"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P54",
+      "life": {
+        "ageBand": "50대 후반",
+        "birthDate": "1968-07-16",
+        "region": "중소도시",
+        "maritalStatus": "사별",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 1,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "자영업",
+        "economicStatus": "보통",
+        "housing": "자가",
+        "menopauseStatus": "후",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "남편 떠난 뒤 동네 미용실을 혼자 꾸리는",
+        "personality": [
+          "붙임성 좋음",
+          "강단 있음",
+          "소식에 밝음"
+        ],
+        "noGoTopics": [
+          "남편 투병",
+          "단골 사생활"
+        ],
+        "noGoExpressions": [
+          "\"혼자 된 사람이 너무 밝네\""
+        ],
+        "variations": [
+          "손님 없는 오후에 쓰기",
+          "단골 이야기 이름 없이",
+          "아들과 사는 소소함",
+          "기분 처지는 날 솔직히",
+          "웃음으로 끝맺기"
+        ]
+      },
+      "displayName": "조약돌",
+      "interests": [
+        "미용실 단골",
+        "성인 아들과 살기",
+        "갱년기 뒤 우울감"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P55",
+      "life": {
+        "ageBand": "50대 초반",
+        "birthDate": "1974-08-22",
+        "region": "광역시",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "소원",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "대학·취준"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "직장",
+        "economicStatus": "여유",
+        "housing": "자가",
+        "menopauseStatus": "진행중",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "아이 둘 타지 대학 보내고 승진을 앞둔",
+        "personality": [
+          "야무짐",
+          "경쟁심 있음",
+          "속으론 여림"
+        ],
+        "noGoTopics": [
+          "연봉",
+          "남편과 각방"
+        ],
+        "noGoExpressions": [
+          "\"애들 떠나면 부부만 남아\""
+        ],
+        "variations": [
+          "결재 올리기 전 잠깐 틈내기",
+          "깜빡한 일 고백",
+          "타지 기숙사 간 애들 안부 문자 자랑",
+          "승진 심사 앞두고 속앓이",
+          "동료 의견 구하듯 되묻기"
+        ]
+      },
+      "displayName": "괜찮아8",
+      "interests": [
+        "승진 준비",
+        "타지 간 자녀",
+        "깜빡깜빡 건망증"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P56",
+      "life": {
+        "ageBand": "40대 중반",
+        "birthDate": "1981-09-02",
+        "region": "광역시",
+        "maritalStatus": "비혼",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 0,
+        "childrenAgeBands": [],
+        "childrenLiving": null,
+        "workStatus": "구직",
+        "economicStatus": "빠듯",
+        "housing": "월세",
+        "menopauseStatus": "전",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "계약이 끝나 다음 일자리를 알아보는",
+        "personality": [
+          "생각 많음",
+          "자조적 유머",
+          "끈기 있음"
+        ],
+        "noGoTopics": [
+          "전 직장 실명",
+          "실업급여 액수"
+        ],
+        "noGoExpressions": [
+          "\"그 나이에 아직도 계약직이야\""
+        ],
+        "variations": [
+          "면접 다녀온 날 쓰기",
+          "자격증 공부 진도 이야기",
+          "스스로 놀리는 말투",
+          "부모님 걱정 짧게",
+          "희망 한 줄로 끝내기"
+        ]
+      },
+      "displayName": "이따봐2",
+      "interests": [
+        "이직 준비",
+        "자격증 공부",
+        "생리 전 증후군"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P57",
+      "life": {
+        "ageBand": "60대 초반",
+        "birthDate": "1964-10-08",
+        "region": "중소도시",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "원만",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "은퇴",
+        "economicStatus": "보통",
+        "housing": "자가",
+        "menopauseStatus": "후",
+        "parentCare": "상시"
+      },
+      "creative": {
+        "title": "손주 하원 맡고 아흔 시아버지를 챙기는",
+        "personality": [
+          "부드러움",
+          "체력 좋음",
+          "잔소리 적음"
+        ],
+        "noGoTopics": [
+          "며느리 흉",
+          "시아버지 재산"
+        ],
+        "noGoExpressions": [
+          "\"집에 있는 사람이 애 보는 게 당연하지\""
+        ],
+        "variations": [
+          "손주 낮잠 시간에 쓰기",
+          "시아버지 식사 이야기",
+          "무릎 아픈 날 이야기",
+          "하루 일과 순서대로",
+          "고맙다는 말로 끝내기"
+        ]
+      },
+      "displayName": "홍시",
+      "interests": [
+        "손주 하원",
+        "시아버지 병원 동행",
+        "무릎 연골"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P58",
+      "life": {
+        "ageBand": "50대 초반",
+        "birthDate": "1974-11-16",
+        "region": "읍면",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "원만",
+        "childrenCount": 1,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "자영업",
+        "economicStatus": "보통",
+        "housing": "자가",
+        "menopauseStatus": "진행중",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "읍내에서 남편과 작은 국숫집을 하는",
+        "personality": [
+          "인심 좋음",
+          "성격 급함",
+          "계산 빠름"
+        ],
+        "noGoTopics": [
+          "가게 빚",
+          "외지 손님 흉"
+        ],
+        "noGoExpressions": [
+          "\"시골 장사가 뭐 힘드냐\""
+        ],
+        "variations": [
+          "점심 장사 끝나고 쓰기",
+          "오늘 손님 수 대신 날씨",
+          "남편과 손발 맞춘 이야기",
+          "손 저림 이야기",
+          "짧게 웃음 붙이기"
+        ]
+      },
+      "displayName": "그러려니",
+      "interests": [
+        "국숫집 장사",
+        "부부 동업",
+        "손발 저림"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P59",
+      "life": {
+        "ageBand": "40대 중반",
+        "birthDate": "1981-12-23",
+        "region": "수도권",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "갈등",
+        "childrenCount": 1,
+        "childrenAgeBands": [
+          "중고등"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "전업",
+        "economicStatus": "여유",
+        "housing": "자가",
+        "menopauseStatus": "전",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "외동 진로에 매달리다 지친",
+        "personality": [
+          "완벽주의",
+          "예민함",
+          "반성 잘함"
+        ],
+        "noGoTopics": [
+          "학원 이름",
+          "아이 등수"
+        ],
+        "noGoExpressions": [
+          "\"엄마가 극성이라 애가 힘들지\""
+        ],
+        "variations": [
+          "학원 셔틀 기다리며 휴대폰 메모",
+          "남편에게 먼저 말 건 저녁 복기",
+          "필라테스 다녀온 기분",
+          "극성이었나 반성문 쓰듯",
+          "다른 엄마들 경험 조심스럽게 청하기"
+        ]
+      },
+      "displayName": "nvm",
+      "interests": [
+        "아이 진로 고민",
+        "부부 대화",
+        "필라테스"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P60",
+      "life": {
+        "ageBand": "50대 초반",
+        "birthDate": "1974-01-02",
+        "region": "중소도시",
+        "maritalStatus": "이혼",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 0,
+        "childrenAgeBands": [],
+        "childrenLiving": null,
+        "workStatus": "직장",
+        "economicStatus": "보통",
+        "housing": "전세",
+        "menopauseStatus": "진행중",
+        "parentCare": "상시"
+      },
+      "creative": {
+        "title": "혼자 몸으로 엄마 병원을 다니며 출근하는",
+        "personality": [
+          "침착함",
+          "버티는 힘",
+          "마음 여림"
+        ],
+        "noGoTopics": [
+          "이혼 사유",
+          "엄마 병명"
+        ],
+        "noGoExpressions": [
+          "\"자식도 없이 혼자 어떻게 해\""
+        ],
+        "variations": [
+          "병원 대기실에서 쓰기",
+          "엄마 상태 짧게",
+          "두근거림 묘사",
+          "퇴근길 혼잣말",
+          "짧은 감사로 끝내기"
+        ]
+      },
+      "displayName": "always",
+      "interests": [
+        "엄마 병원 동행",
+        "병원 행정 일",
+        "가슴 두근거림"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P61",
+      "life": {
+        "ageBand": "60대 초반",
+        "birthDate": "1964-02-09",
+        "region": "광역시",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "원만",
+        "childrenCount": 3,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "은퇴",
+        "economicStatus": "여유",
+        "housing": "전세",
+        "menopauseStatus": "후",
+        "parentCare": "없음"
+      },
+      "creative": {
+        "title": "복지관 서예반과 손주 셋 생일을 챙기는",
+        "personality": [
+          "여유로움",
+          "정갈함",
+          "칭찬 잘함"
+        ],
+        "noGoTopics": [
+          "자식 차별",
+          "집 처분"
+        ],
+        "noGoExpressions": [
+          "\"취미는 형편 좋은 사람이나 하지\""
+        ],
+        "variations": [
+          "서예반 다녀와서 쓰기",
+          "손주 생일 선물 고민",
+          "골밀도 검사 이야기",
+          "남의 글 칭찬하기",
+          "계절 인사로 시작"
+        ]
+      },
+      "displayName": "한번만더3",
+      "interests": [
+        "서예반",
+        "손주 생일",
+        "골밀도"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    },
+    {
+      "code": "P62",
+      "life": {
+        "ageBand": "50대 후반",
+        "birthDate": "1968-03-15",
+        "region": "수도권",
+        "maritalStatus": "이혼",
+        "spouseRelationship": "해당없음",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "성인",
+          "대학·취준"
+        ],
+        "childrenLiving": "동거",
+        "workStatus": "직장",
+        "economicStatus": "빠듯",
+        "housing": "전세",
+        "menopauseStatus": "후",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "정년 몇 해 앞두고 전세 대출을 갚는",
+        "personality": [
+          "신중함",
+          "셈 정확함",
+          "속앓이함"
+        ],
+        "noGoTopics": [
+          "대출 액수",
+          "전 남편 연락"
+        ],
+        "noGoExpressions": [
+          "\"그 나이에 아직 집도 없어\""
+        ],
+        "variations": [
+          "월급날 저녁에 쓰기",
+          "대출 상환표 남은 칸 세어 보기",
+          "취준 막내와 식탁 마주한 저녁",
+          "새벽 세 시에 깬 이유 추측",
+          "정년 뒤 일자리 공고 훑어보기"
+        ]
+      },
+      "displayName": "dunno",
+      "interests": [
+        "전세 대출",
+        "정년 뒤 일자리",
+        "수면의 질"
+      ],
+      "boards": [
+        "MENOPAUSE",
+        "FREE"
+      ]
+    },
+    {
+      "code": "P63",
+      "life": {
+        "ageBand": "60대 초반",
+        "birthDate": "1964-04-22",
+        "region": "읍면",
+        "maritalStatus": "기혼",
+        "spouseRelationship": "갈등",
+        "childrenCount": 2,
+        "childrenAgeBands": [
+          "성인"
+        ],
+        "childrenLiving": "분가",
+        "workStatus": "자영업",
+        "economicStatus": "빠듯",
+        "housing": "자가",
+        "menopauseStatus": "후",
+        "parentCare": "간헐"
+      },
+      "creative": {
+        "title": "남편과 축사 일 하며 말다툼이 잦은",
+        "personality": [
+          "우직함",
+          "욱하는 편",
+          "금방 풀림"
+        ],
+        "noGoTopics": [
+          "축사 빚",
+          "남편 술값"
+        ],
+        "noGoExpressions": [
+          "\"시골 부부는 다 그렇게 살아\""
+        ],
+        "variations": [
+          "새벽 축사 일 끝내고 쓰기",
+          "소 이야기 하나",
+          "남편과 다툰 일 짧게",
+          "어깨 결림 이야기",
+          "금방 풀린 마음 덧붙이기"
+        ]
+      },
+      "displayName": "lazyday",
+      "interests": [
+        "소 키우기",
+        "부부 말다툼",
+        "어깨 결림"
+      ],
+      "boards": [
+        "FREE",
+        "MENOPAUSE"
+      ]
+    }
+  ]
+}

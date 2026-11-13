@@ -33,6 +33,7 @@ import { voicePoolFor } from './lib/persona-autogen.mjs'
 import type { ExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { judgeExpansionBatch, loadExpansionFixture, nameSpaceCapacity } from './lib/persona-expansion-gate.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { fillDbConnection } from './lib/ops-signals.mjs'
 import { readEvidenceSalt, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import type { LocalComment } from './lib/persona-reference-store.mjs'
@@ -82,6 +83,7 @@ const baselineCodeSet = new Set(baselineCodes)
 let facts: ExpansionFacts | null = null
 if (USE_DB) {
   await loadEnvLocal()
+  if (!fillDbConnection()) fail('canonical env 에 DATABASE_URL 이 없다 — 운영 DB 판정을 시작하지 않는다')
   const { PrismaClient } = await import('@prisma/client')
   const { readExpansionFacts } = await import('./lib/persona-expansion-facts.mjs')
   const prisma = new PrismaClient()

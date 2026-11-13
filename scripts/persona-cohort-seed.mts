@@ -19,7 +19,9 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import { cohortOf, judgeCohortArg, PRODUCTION_PERSONA_CODES, seedPathOf, verifyAllCohorts } from '../src/lib/persona-cohort'
+import {
+  COHORT_EXPANSION_FIXTURES, cohortOf, judgeCohortArg, PRODUCTION_PERSONA_CODES, seedPathOf, verifyAllCohorts,
+} from '../src/lib/persona-cohort'
 import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
 import { lifeStageOf, modeCadence, voiceCoreFromBundle, type Cadence } from '../src/lib/persona-autogen'
 import {
@@ -29,6 +31,7 @@ import {
 import { planBundles, stableAssignment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { parseExpansionFixture } from './lib/persona-expansion-gate.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | null => {
@@ -48,8 +51,11 @@ const COHORT = cg.id!
 const CODES = cohortOf(COHORT)!.codes
 const CREATIVE = arg('creative')
 const EXPECT_SHA = arg('expect-sha')
-if (CREATIVE === null) fail('[ARGS] --creative=<승인 creative 파일> 이 필요하다')
-if (EXPECT_SHA === null || !/^[0-9a-f]{64}$/.test(EXPECT_SHA)) fail('[ARGS] --expect-sha=<sha256 64자> 이 필요하다')
+const EXPANSION_FIXTURE = COHORT_EXPANSION_FIXTURES[COHORT]
+if (EXPANSION_FIXTURE === undefined && CREATIVE === null) fail('[ARGS] --creative=<승인 creative 파일> 이 필요하다')
+if (EXPANSION_FIXTURE === undefined && (EXPECT_SHA === null || !/^[0-9a-f]{64}$/.test(EXPECT_SHA))) {
+  fail('[ARGS] --expect-sha=<sha256 64자> 이 필요하다')
+}
 const outsideUniverse = CODES.filter((c) => !PRODUCTION_PERSONA_CODES.includes(c))
 if (outsideUniverse.length > 0) fail(`[COHORT] production universe 밖 코드: ${outsideUniverse.join(',')}`)
 
@@ -57,11 +63,32 @@ console.log(`\n══ Persona cohort seed — ${COHORT} · ${WRITE ? '🔴 --wri
 console.log(`  대상 ${CODES.length}명  ${CODES.join(' · ')}   🔴 manifest 가 정한다`)
 
 // ── ① 승인 creative ──
-if (!existsSync(CREATIVE!)) fail(`[CREATIVE] 파일이 없다: ${CREATIVE}`)
-const creativeRead = readApprovedCreative({ raw: readFileSync(CREATIVE!, 'utf-8'), expectSha: EXPECT_SHA!, codes: CODES })
-if (!creativeRead.ok) failAll(creativeRead.problems)
-const creatives = (creativeRead as { ok: true; value: Parameters<typeof judgeCreativeAgainstCards>[0]['creatives'] }).value
-console.log(`  ✅ 승인 creative — SHA 일치 · 코드 ${Object.keys(creatives).length}개 · 중복 0 · 엄격 파서 통과`)
+let creatives: Parameters<typeof judgeCreativeAgainstCards>[0]['creatives']
+if (EXPANSION_FIXTURE !== undefined) {
+  if (!existsSync(EXPANSION_FIXTURE.path)) fail(`[CREATIVE] 승인 fixture 가 없다: ${EXPANSION_FIXTURE.path}`)
+  const raw = readFileSync(EXPANSION_FIXTURE.path, 'utf-8')
+  const digest = sha256Hex(raw)
+  if (digest !== EXPANSION_FIXTURE.sha256) {
+    fail(`[CREATIVE_SHA_MISMATCH] fixture ${digest} ≠ 승인 ${EXPANSION_FIXTURE.sha256}`)
+  }
+  const parsed = parseExpansionFixture(raw)
+  if (!parsed.ok) failAll(parsed.problems.map((p) => `[CREATIVE_INVALID] ${p}`))
+  if (parsed.fixture.cohort !== COHORT) fail(`[CREATIVE_COHORT_MISMATCH] ${parsed.fixture.cohort} ≠ ${COHORT}`)
+  const keys = parsed.fixture.candidates.map((candidate) => candidate.code)
+  const missing = CODES.filter((code) => !keys.includes(code))
+  const extra = keys.filter((code) => !CODES.includes(code))
+  if (missing.length + extra.length > 0) {
+    fail(`[CREATIVE_SCOPE] 누락 ${missing.join(',') || '0'} · 초과 ${extra.join(',') || '0'}`)
+  }
+  creatives = Object.fromEntries(parsed.fixture.candidates.map((candidate) => [candidate.code, candidate.creative]))
+  console.log(`  ✅ 승인 확장 fixture — SHA 일치 · 코드 ${Object.keys(creatives).length}개 · 엄격 파서 통과`)
+} else {
+  if (!existsSync(CREATIVE!)) fail(`[CREATIVE] 파일이 없다: ${CREATIVE}`)
+  const creativeRead = readApprovedCreative({ raw: readFileSync(CREATIVE!, 'utf-8'), expectSha: EXPECT_SHA!, codes: CODES })
+  if (!creativeRead.ok) failAll(creativeRead.problems)
+  creatives = (creativeRead as { ok: true; value: Parameters<typeof judgeCreativeAgainstCards>[0]['creatives'] }).value
+  console.log(`  ✅ 승인 creative — SHA 일치 · 코드 ${Object.keys(creatives).length}개 · 중복 0 · 엄격 파서 통과`)
+}
 
 // ── ② 정본 카드 ──
 const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
