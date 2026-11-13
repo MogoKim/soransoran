@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:ops": "tsc -p tsconfig.ops.json --noEmit",
     "check:tokens": "node scripts/check-color-literals.mjs",
+    "check:delivery-evidence": "tsx scripts/delivery-evidence-check.mts",
     "check:brand": "node scripts/check-brand-literals.mjs",
     "check:brand-colors": "node scripts/check-brand-colors.mjs",
     "check:contrast": "node scripts/check-contrast.mjs",
