@@ -214,6 +214,7 @@ console.log('⑦ CLI 연결')
     && runner.includes('SEED_PROVENANCE_MISMATCH'))
   const usesFrozenV1Baseline = (source: string): boolean =>
     /const before = stableAssignment\(\{ repoRoot: process\.cwd\(\), supplementGeneration: 1 \}\)/.test(source)
+    && /const bundle = before\.byCode\.get\(code\)/.test(source)
     && /judgeCohortVoice\(\{ cohortCodes: [A-Za-z.]+, existingCodes: existing, base, full: sa\.byCode \}\)/.test(source)
     && !/planBundles\(\{ rows: sa\.rows, personaCodes: existing \}\)/.test(source)
   check('🔴 seed dry-run과 DB 적용 직전 검사가 모두 동결 supplement v1을 기존 40명 기준선으로 쓴다',
@@ -222,8 +223,13 @@ console.log('⑦ CLI 연결')
     'stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })',
     'stableAssignment({ repoRoot: process.cwd() })',
   )
+  const lookupMutation = cli.replace(
+    'const bundle = before.byCode.get(code)',
+    'const bundle = sa.byCode.get(code)',
+  )
   check('🔴 배선 변이 — 현재 v2를 자기 자신과 비교하면 하네스가 잡는다',
-    selfComparisonMutation !== cli && !usesFrozenV1Baseline(selfComparisonMutation))
+    selfComparisonMutation !== cli && !usesFrozenV1Baseline(selfComparisonMutation)
+    && lookupMutation !== cli && !usesFrozenV1Baseline(lookupMutation))
 }
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
