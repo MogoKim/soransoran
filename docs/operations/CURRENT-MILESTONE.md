@@ -41,7 +41,7 @@
 ### 1.1 이번 변경의 실제 검증
 
 - Persona 계약 fixture: 133/133(실제 fixture digest·1바이트 변이 포함).
-- Persona 자동 생성: 134/134, cohort seed 47/47.
+- Persona 자동 생성: 134/134, creative 비용·품질·공식 token 계수 fail-closed 176/176, cohort seed 49/49.
 - Persona 보충 근거: 37/37.
 - 댓글 engine 전체: 1160/1160, H1 독립 fixture 61/61, mutation 14/14.
 - 비용 지배 판정: generation-loss 77, mutation 27, supply e2e 154.
@@ -84,7 +84,9 @@
 ### 2.2 공급 비용 4.909¢ → 4.0¢ 이하
 
 기준선 49개 결과를 유지하면 총비용은 $1.96 이하여야 하므로 최소 $0.4456 절감이 필요하다. 코드 변경은
-`AUTO_ADOPT`가 최선의 의미검수 결과를 받아도 불가능한 후보만 유료 의미검수 전에 멈춘다.
+`AUTO_ADOPT`가 최선의 의미검수 결과를 받아도 불가능한 후보만 유료 의미검수 전에 멈춘다. Persona creative는
+실제 유료 요청과 같은 입력을 공식 무료 `count_tokens`로 먼저 센 뒤 출력 hard cap과 함께 예약하며, 계수 실패는
+유료 호출 0으로 끝낸다. UTF-8 byte를 token으로 간주해 한글 batch를 과대 차단하던 레거시는 제거했다.
 
 - publish·safety·quality gate를 완화하지 않는다.
 - 장부 92건에 같은 분포가 재현되면 모델상 약 $0.0377/result다.

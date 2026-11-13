@@ -33,12 +33,18 @@ import { reserveOf } from '../src/lib/llm-pricing'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import { judgeAutogenBatch } from './lib/persona-autogen.mjs'
-import { CREATIVE_BLOCK_OF, generateCreativeBatch, generateCreatives, outcomesOfBatch, type CreativeCall } from './lib/persona-creative-run.mjs'
+import { CREATIVE_BLOCK_OF, generateCreativeBatch, generateCreatives, outcomesOfBatch, type CreativeCall, type CreativeCount } from './lib/persona-creative-run.mjs'
 import type { LlmResponse } from './lib/voice-m3-provider.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 
 let pass = 0
 let failN = 0
+const byteCount: CreativeCount = async (req) => ({
+  ok: true,
+  inputTokens: Buffer.byteLength(req.systemPrompt, 'utf-8') + Buffer.byteLength(req.userPayload, 'utf-8'),
+  errorCode: null,
+  errorMessage: null,
+})
 const check = (name: string, ok: boolean, detail = ''): void => {
   if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { failN += 1; console.log(`  🔴 FAIL  ${name}${detail === '' ? '' : ` — ${detail}`}`) }
 }
@@ -188,7 +194,7 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
   const noTexts = (): string[] => []
   {
     const f = fakeCall((code) => okResponse(variant(Number(code.slice(1)))))
-    const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     check('6명 → 호출 6 · generated 6', r.ok && f.calls() === 6 && r.outcomes.every((o) => o.status === 'generated'))
     check('실제 비용 = 사용량 × 정본 단가(haiku 1/5) 합', r.ok && r.ledger.usd !== null
       && Math.abs(r.ledger.usd - 6 * (600 * 1 + 180 * 5) / 1e6) < 1e-12, String(r.ledger.usd))
@@ -204,7 +210,7 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
     const f = fakeCall(() => okResponse(GOOD))
     const r = await generateCreatives({
       briefs: Array.from({ length: CREATIVE_MAX_CANDIDATES + 1 }, (_, i) => briefFor(autogenCodeOf(26 + i))),
-      avoid: [], forbiddenTextsOf: noTexts, call: f.call,
+      avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount,
     })
     check(`🔴 후보 ${CREATIVE_MAX_CANDIDATES + 1}명 → 한 번도 부르지 않는다`, !r.ok && f.calls() === 0)
   }
@@ -217,7 +223,7 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
     })
     check('최악 예약 1회가 상한 안이다(정본 상한으로 최소 1회는 부를 수 있다)', one.known && one.usd < CREATIVE_COST_CAP_USD)
     const f = fakeCall(() => okResponse(GOOD))
-    const r0 = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call, capUsd: one.known ? one.usd / 2 : 0 })
+    const r0 = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount, capUsd: one.known ? one.usd / 2 : 0 })
     check('🔴 상한 < 최악 예약 1회 → 호출 0 · 전원 budget-blocked', r0.ok && f.calls() === 0
       && r0.outcomes.every((o) => o.status === 'budget-blocked'))
     // 실제 비용이 예약과 같게 나오는 호출 — 두 번째부터 상한을 넘으므로 1회만 부른다
@@ -225,14 +231,14 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
       { inputTokens: Buffer.byteLength(CREATIVE_SYSTEM_PROMPT) + Buffer.byteLength(creativeUserPayload(briefFor(code), [])),
         outputTokens: CREATIVE_MAX_OUTPUT_TOKENS })
     const f2 = fakeCall(worst)
-    const r1 = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f2.call, capUsd: one.known ? one.usd * 1.5 : 0 })
+    const r1 = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f2.call, count: byteCount, capUsd: one.known ? one.usd * 1.5 : 0 })
     check('🔴 지출 + 다음 최악 예약 > 상한 → 그 뒤는 부르지 않는다(호출 1)', r1.ok && f2.calls() === 1
       && r1.outcomes.filter((o) => o.status === 'budget-blocked').length === 5)
     check('🔴 실제 지출은 상한을 넘지 않는다', r1.ledger.usd !== null && r1.ledger.usd <= r1.ledger.capUsd)
   }
   {
     const f = fakeCall(() => ({ ...okResponse(GOOD), ok: false, errorCode: 'HTTP_500', usageKnown: false }))
-    const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     check('🔴 호출 실패 → 재시도 0 · 사용량 모름 → 뒤 후보 0회 (호출 1)', r.ok && f.calls() === 1
       && r.outcomes[0]!.status === 'call-failed' && r.outcomes.slice(1).every((o) => o.status === 'budget-blocked'
         && /사용량 · 비용을 읽지 못했다/.test(o.problems.join('')))
@@ -240,23 +246,23 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
   }
   {
     const f = fakeCall((code) => (code === 'P27' ? okResponse('{"title":"반쪽"') : okResponse(variant(Number(code.slice(1))))))
-    const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: six, avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     const o = r.ok ? r.outcomes.find((x) => x.code === 'P27') : undefined
     check('🔴 잘린 JSON → 그 후보만 invalid · 재시도 0 (호출 6)', r.ok && f.calls() === 6 && o?.status === 'invalid' && o.creative === null)
   }
   {
     const f = fakeCall(() => okResponse({ ...GOOD, variations: GOOD.variations.slice(0, 2) }))
-    const r = await generateCreatives({ briefs: six.slice(0, 1), avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: six.slice(0, 1), avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     check('🔴 일부 칸 개수 위반 → invalid · creative 없음(기본값 0)', r.ok && r.outcomes[0]!.status === 'invalid' && r.outcomes[0]!.creative === null)
   }
   {
     const f = fakeCall(() => okResponse(GOOD, { maxTokensReached: true }))
-    const r = await generateCreatives({ briefs: six.slice(0, 1), avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: six.slice(0, 1), avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     check('🔴 출력 상한 닿음(잘림) → call-failed', r.ok && r.outcomes[0]!.status === 'call-failed')
   }
   {
     const f = fakeCall(() => okResponse(GOOD))
-    const r = await generateCreatives({ briefs: six.slice(0, 2), avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: six.slice(0, 2), avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     check('🔴 두 후보가 글자까지 같은 creative → 뒤 후보 invalid', r.ok && r.outcomes[0]!.status === 'generated'
       && r.outcomes[1]!.status === 'invalid' && /글자까지 같은/.test(r.outcomes[1]!.problems.join('')))
   }
@@ -264,14 +270,21 @@ console.log('④ 실행기 — 상한 · 재시도 0 · 사용량 모름')
     const f = fakeCall(() => okResponse(GOOD))
     const r = await generateCreatives({
       briefs: six.slice(0, 1), avoid: [{ code: 'P01', title: TEXTS[0]!, personality: [] }],
-      forbiddenTextsOf: () => TEXTS, call: f.call,
+      forbiddenTextsOf: () => TEXTS, call: f.call, count: byteCount,
     })
     check('🔴 나가는 글에 댓글 원문이 실리면 부르지 않는다(호출 0 · leak-blocked)', r.ok && f.calls() === 0 && r.outcomes[0]!.status === 'leak-blocked')
   }
   {
     const f = fakeCall(() => okResponse(GOOD))
-    const r = await generateCreatives({ briefs: [briefFor('P26'), briefFor('P26')], avoid: [], forbiddenTextsOf: noTexts, call: f.call })
+    const r = await generateCreatives({ briefs: [briefFor('P26'), briefFor('P26')], avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: byteCount })
     check('같은 코드 두 번 → 호출 0', !r.ok && f.calls() === 0)
+  }
+  {
+    const f = fakeCall(() => okResponse(GOOD))
+    const countFail: CreativeCount = async () => ({ ok: false, inputTokens: null, errorCode: 'HTTP_500', errorMessage: 'fixture' })
+    const r = await generateCreatives({ briefs: six.slice(0, 2), avoid: [], forbiddenTextsOf: noTexts, call: f.call, count: countFail })
+    check('🔴 공식 입력 계산 실패 → 유료 호출 0 · 전원 budget-blocked', r.ok && f.calls() === 0
+      && r.outcomes.every((o) => o.status === 'budget-blocked') && /공식 입력 토큰 계산 실패/.test(r.outcomes[0]!.problems.join('')))
   }
   check('생성 실패 코드가 정본 격리 코드 목록에 있다',
     Object.values(CREATIVE_BLOCK_OF).every((c) => (AUTOGEN_BLOCK_CODES as readonly string[]).includes(c)))
@@ -291,7 +304,7 @@ console.log('⑤ 판정 연결 — 운영 판정 그대로')
     takenCodes: new Set(pool.cards.map((c) => c.code)), existingCards: pool.cards, productionBundles: [],
   }).verdicts[0]!
   const f = fakeCall(() => okResponse(GOOD))
-  const r = await generateCreatives({ briefs: [brief], avoid: [], forbiddenTextsOf: () => TEXTS, call: f.call })
+  const r = await generateCreatives({ briefs: [brief], avoid: [], forbiddenTextsOf: () => TEXTS, call: f.call, count: byteCount })
   const gen = r.ok ? r.outcomes[0]!.creative : null
   const v = judge(gen)
   // 🔴 운영 묶음이 없으면 문체 분리 기준을 못 잰다 — 그 이유 하나만 남아야 한다(다른 칸은 전부 통과)
@@ -375,7 +388,7 @@ const LIVES = new Map(proposeLifeSkeletons({ existing: POOL.cards, codes: Array.
   }
   const pick = (m: Record<string, PersonaCreative>) => (codes: string[]) => JSON.stringify(Object.fromEntries(codes.map((c) => [c, providerOf(m[c]!)])))
   const run = (f: ReturnType<typeof batchCall>, capUsd?: number) => generateCreativeBatch({
-    briefs, avoid, forbiddenTextsOf: () => TEXTS, call: f.call, ...(capUsd === undefined ? {} : { capUsd }),
+    briefs, avoid, forbiddenTextsOf: () => TEXTS, call: f.call, count: byteCount, ...(capUsd === undefined ? {} : { capUsd }),
   })
 
   const f1 = batchCall(pick(GOOD6))
@@ -432,8 +445,15 @@ const LIVES = new Map(proposeLifeSkeletons({ existing: POOL.cards, codes: Array.
   }
   {
     const f = batchCall(pick(GOOD6))
-    const r = await generateCreativeBatch({ briefs, avoid: [{ title: TEXTS[1]!, personality: [] }], forbiddenTextsOf: () => TEXTS, call: f.call })
+    const r = await generateCreativeBatch({ briefs, avoid: [{ title: TEXTS[1]!, personality: [] }], forbiddenTextsOf: () => TEXTS, call: f.call, count: byteCount })
     check('🔴 나가는 글에 원문 → 호출 0 · 전원 leak-blocked', f.calls() === 0 && !r.ok && outcomesOfBatch(r, SIX).every((o) => o.status === 'leak-blocked'))
+  }
+  {
+    const f = batchCall(pick(GOOD6))
+    const countFail: CreativeCount = async () => ({ ok: false, inputTokens: null, errorCode: 'HTTP_500', errorMessage: 'fixture' })
+    const r = await generateCreativeBatch({ briefs, avoid, forbiddenTextsOf: () => TEXTS, call: f.call, count: countFail })
+    check('🔴 batch 공식 입력 계산 실패 → 유료 호출 0 · fail-closed', f.calls() === 0 && !r.ok
+      && /공식 입력 토큰 계산 실패/.test(r.reason))
   }
 }
 

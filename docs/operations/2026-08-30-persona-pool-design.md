@@ -779,6 +779,12 @@ noGo 자녀 자랑 · 비교 · 훈계 · 금액 언급
 > `persona-autogen.RETIRED_AUTOGEN_CODES` 가 단일 authority 다. P09(`persona-cohort.EXCLUDED_CODES` · 카드는 있으나 cohort 제외)와 다른 뜻이다.
 > 빈 번호를 다시 채우면 그 코드가 운영 코드 사이에 끼어 코드순 말투 배정이 기존 production Persona 의 묶음을 바꾼다. 다음 자동 후보는 P64 부터다 (wave7-d30 이 P44~P63 을 발급했다).
 
+> 🔴 **creative 생성 비용 예약 계약 (2026-11-14).** 유료 creative 생성 전에 실제 provider 요청과 같은
+> `model`·system prompt·user payload를 Anthropic의 무료 `count_tokens` 경로로 센다. 입력 예약액은 이 공식
+> token 수와 출력 hard cap으로 계산하고, 계수 실패·미지원 model·사용량 미상은 추정값으로 우회하지 않고 유료
+> 호출 0으로 fail-closed 한다. UTF-8 byte 수를 token 수로 간주하던 방식은 한글 payload를 과대 계산해 정상
+> batch까지 영구 차단하므로 폐기한다. `CREATIVE_BATCH_COST_CAP_USD=0.03`과 품질·안전·출처 gate는 완화하지 않는다.
+
 ### P26 — 읍면에서 가게 하며 두 아이 키우는 중
 
 ```
