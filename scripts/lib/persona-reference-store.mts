@@ -461,6 +461,8 @@ export function planAppendOnlyBundles(input: {
   extraRows: readonly LocalComment[]
   productionCodes: readonly string[]
   newCodes: readonly string[]
+  /** 이미 동결·배정된 묶음. 같은 근거 화자를 다음 세대에 다시 주지 않는다. */
+  occupiedBundles?: readonly VoiceReferenceBundle[]
   target?: number
 }): {
   byCode: Map<string, VoiceReferenceBundle>
@@ -486,8 +488,11 @@ export function planAppendOnlyBundles(input: {
 
   // ── ③ 보충 — 정본과 같은 글자를 가진 화자는 통째로 뺀다 ──
   const canonTexts = new Set(input.canonRows.map((r) => r.text))
+  const occupiedTexts = new Set((input.occupiedBundles ?? []).flatMap((bundle) => bundle.comments.map((comment) => comment.text)))
   const canonSpeakers = new Set(input.canonRows.map((r) => r.speakerId))
-  const tainted = new Set(input.extraRows.filter((r) => canonTexts.has(r.text) || canonSpeakers.has(r.speakerId)).map((r) => r.speakerId))
+  const tainted = new Set(input.extraRows
+    .filter((r) => canonTexts.has(r.text) || occupiedTexts.has(r.text) || canonSpeakers.has(r.speakerId))
+    .map((r) => r.speakerId))
   const extra = input.extraRows.filter((r) => !tainted.has(r.speakerId))
   const extraSupply = speakerSupply(extra)
   const extraAssignable = planBundles({

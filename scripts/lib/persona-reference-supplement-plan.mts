@@ -47,6 +47,7 @@ export function planSupplementSnapshot(input: {
     extraRows: input.extraRows,
     productionCodes: occupiedCodes,
     newCodes,
+    occupiedBundles: frozenBundles,
   })
   const problems: string[] = []
   if (overlap.length > 0) problems.push(`FROZEN_NEW_OVERLAP:${overlap.join(',')}`)

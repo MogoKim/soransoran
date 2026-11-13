@@ -333,11 +333,18 @@ export function voicePoolFor(input: {
   }
   if (!canon.ok || canon.rows.length === 0) return empty
   const base = stableAssignment({ repoRoot: input.repoRoot })
+  const newCodeSet = new Set(input.newCodes)
+  const occupiedCodes = [...base.byCode.keys()].sort(comparePersonaCodes)
+  const occupiedBundles = occupiedCodes.flatMap((code) => {
+    const bundle = base.byCode.get(code)
+    return bundle === undefined ? [] : [bundle]
+  })
   const appended = planAppendOnlyBundles({
     canonRows: canon.rows,
     extraRows: input.supplementalRows ?? [],
-    productionCodes: PRODUCTION_PERSONA_CODES,
+    productionCodes: occupiedCodes,
     newCodes: input.newCodes,
+    occupiedBundles,
   })
   // 🔴 코드 수가 화자보다 많으면 모든 화자가 배정된다 — 그 수가 "3건 이상 안전 화자" 전부다
   const all = planBundles({
@@ -368,7 +375,7 @@ export function voicePoolFor(input: {
     code: drift.length === 0 ? 'OK' : 'VOICE_ASSIGNMENT_DRIFT',
     eligibleSpeakers: Math.max(all.bundles.length + appended.extraEligibleSpeakers, allAssigned.size),
     assignedSpeakers: base.byCode.size,
-    productionWithoutVoice: PRODUCTION_PERSONA_CODES.filter((c) => !base.byCode.has(c)),
+    productionWithoutVoice: PRODUCTION_PERSONA_CODES.filter((c) => !newCodeSet.has(c) && !base.byCode.has(c)),
     byCode,
     drift,
     productionBundles: PRODUCTION_PERSONA_CODES.map((c) => base.byCode.get(c))
