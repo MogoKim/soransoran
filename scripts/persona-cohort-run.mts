@@ -44,7 +44,7 @@ import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { parseExpansionFixture, type ExpansionFixture } from './lib/persona-expansion-gate.mjs'
 import { modeCadence, type Cadence } from '../src/lib/persona-autogen'
 import { buildCohortSeeds, judgeCohortVoice, serializeSeeds } from './lib/persona-cohort-seed.mjs'
-import { planBundles, stableAssignment } from './lib/persona-reference-store.mjs'
+import { stableAssignment } from './lib/persona-reference-store.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 const DRAFT: PersonaStatus = 'draft'
@@ -367,7 +367,22 @@ if (STEP === 'seed') {
       fail(`정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
     }
     const existing = PRODUCTION_PERSONA_CODES.filter((code) => !M.codes.includes(code))
-    const base = new Map(planBundles({ rows: sa.rows, personaCodes: existing }).bundles.map((bundle) => [bundle.personaCode, bundle]))
+    // 🔴 현재 v2를 자기 자신과 비교하지 않는다. wave7 이전 40명의 동결 v1
+    // 배정을 재현해, 새 스냅샷이 기존 말투를 한 바이트라도 바꿨는지 판정한다.
+    const before = stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })
+    if (!before.canonicalAsset || before.rows.length === 0) {
+      await prisma.$disconnect()
+      fail(`투입 전 동결 v1 배정을 읽지 못했다 — ${before.origin}`)
+    }
+    const base = new Map(existing.flatMap((code) => {
+      const bundle = before.byCode.get(code)
+      return bundle === undefined ? [] : [[code, bundle] as const]
+    }))
+    const baselineMissing = existing.filter((code) => !base.has(code))
+    if (baselineMissing.length > 0) {
+      await prisma.$disconnect()
+      fail(`[VOICE_BASELINE_MISSING] 동결 v1에 기존 production 묶음이 없다: ${baselineMissing.join(',')}`)
+    }
     const voiceProblems = judgeCohortVoice({ cohortCodes: M.codes, existingCodes: existing, base, full: sa.byCode })
     if (voiceProblems.length > 0) { await prisma.$disconnect(); fail(voiceProblems.join(' / ')) }
 

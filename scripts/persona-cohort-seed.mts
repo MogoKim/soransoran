@@ -28,7 +28,7 @@ import {
   buildCohortSeeds, judgeCohortVoice, judgeCreativeAgainstCards, judgeExistingOutput, readApprovedCreative,
   SEED_FILE_MODE, seedPrivacyProblems, serializeSeeds, sha256Hex,
 } from './lib/persona-cohort-seed.mjs'
-import { planBundles, stableAssignment } from './lib/persona-reference-store.mjs'
+import { stableAssignment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { parseExpansionFixture } from './lib/persona-expansion-gate.mjs'
@@ -104,7 +104,19 @@ console.log('  ✅ 정본 카드 ↔ creative — title · personality · noGo �
 const sa = stableAssignment({ repoRoot: process.cwd() })
 if (!sa.canonicalAsset || sa.rows.length === 0) fail(`[VOICE_ASSET] 정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
 const existing = PRODUCTION_PERSONA_CODES.filter((c) => !CODES.includes(c))
-const base = new Map(planBundles({ rows: sa.rows, personaCodes: existing }).bundles.map((b) => [b.personaCode, b]))
+// 🔴 wave7 투입 전 40명의 권위는 canonical-only 재계산이 아니라 동결 v1이다.
+// P34~P43은 v1 supplement 묶음을 쓰므로 canonical-only와 비교하면 정상 묶음도
+// VOICE_ASSIGNMENT_DRIFT가 된다. 반대로 현재 v2를 양쪽에 쓰면 실제 drift를 못 잡는다.
+const before = stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })
+if (!before.canonicalAsset || before.rows.length === 0) {
+  fail(`[VOICE_BASELINE] 투입 전 동결 v1 배정을 읽지 못했다 — ${before.origin}`)
+}
+const base = new Map(existing.flatMap((code) => {
+  const bundle = before.byCode.get(code)
+  return bundle === undefined ? [] : [[code, bundle] as const]
+}))
+const baselineMissing = existing.filter((code) => !base.has(code))
+if (baselineMissing.length > 0) fail(`[VOICE_BASELINE_MISSING] 동결 v1에 기존 production 묶음이 없다: ${baselineMissing.join(',')}`)
 const voiceProblems = judgeCohortVoice({ cohortCodes: CODES, existingCodes: existing, base, full: sa.byCode })
 if (voiceProblems.length > 0) failAll(voiceProblems)
 console.log(`  ✅ 말투 묶음 ${CODES.length}/${CODES.length} · 기존 production ${existing.length}명 배정 drift 0`)

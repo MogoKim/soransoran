@@ -134,6 +134,25 @@ console.log('④ 🔴 말투 묶음 누락 · 기존 배정 drift · cadence 없
   check('🔴 반례 10a — 대상 묶음 누락 → VOICE_BUNDLE_MISSING', has(judgeCohortVoice({ cohortCodes: CODES, existingCodes: ['P01'], base: new Map([['P01', a]]), full: noVoice }), 'VOICE_BUNDLE_MISSING'))
   check('🔴 반례 10b — 기존 production 묶음이 바뀜 → VOICE_ASSIGNMENT_DRIFT',
     has(judgeCohortVoice({ cohortCodes: CODES, existingCodes: ['P01'], base: new Map([['P01', b]]), full }), 'VOICE_ASSIGNMENT_DRIFT'))
+
+  // 🔴 2026-11-14 회귀: D30 전 40명은 canonical 32묶음 + 동결 supplement 8묶음이다.
+  // canonical-only로 다시 나누면 supplement 8명이 ∅가 되어 정상 스냅샷을 막았고,
+  // 현재 스냅샷을 양쪽에 쓰면 진짜 변조를 놓친다.
+  const priorCodes = Array.from({ length: 40 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`)
+  const canonical32 = new Map(priorCodes.slice(0, 32).map((code, index) => [code, bundleOf(code, index)]))
+  const supplement8 = new Map(priorCodes.slice(32).map((code, index) => [code, bundleOf(code, index + 32)]))
+  const frozen40 = new Map([...canonical32, ...supplement8])
+  const nextCodes = Array.from({ length: 6 }, (_, index) => `P${String(index + 41).padStart(2, '0')}`)
+  const nextVoice = new Map(nextCodes.map((code, index) => [code, bundleOf(code, index + 40)]))
+  const expanded = new Map([...frozen40, ...nextVoice])
+  check('🔴 회귀 10c — canonical 32 + 동결 supplement 8이면 기존 40명 drift 0',
+    judgeCohortVoice({ cohortCodes: nextCodes, existingCodes: priorCodes, base: frozen40, full: expanded }).length === 0)
+  const mutated = new Map(expanded)
+  const frozen = mutated.get('P40')!
+  mutated.set('P40', { ...frozen, comments: frozen.comments.map((comment, index) =>
+    index === 0 ? { text: `${comment.text}!` } : comment) })
+  check('🔴 회귀 10d — 동결 supplement 한 바이트 변조를 drift로 잡는다',
+    has(judgeCohortVoice({ cohortCodes: nextCodes, existingCodes: priorCodes, base: frozen40, full: mutated }), 'VOICE_ASSIGNMENT_DRIFT'))
   const nc = buildCohortSeeds({ codes: CODES, cards, creatives: GOOD, voice: VOICE, cadence: null })
   check('🔴 반례 11 — cadence 없음 → CADENCE_UNMEASURED', !nc.ok && has(nc.problems, 'CADENCE_UNMEASURED'))
   const badCap = buildCohortSeeds({ codes: CODES, cards, creatives: GOOD, voice: VOICE, cadence: { ...CADENCE, dailyCap: 11 } })

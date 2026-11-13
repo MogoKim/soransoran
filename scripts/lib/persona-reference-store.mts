@@ -42,6 +42,7 @@ import {
   assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot,
 } from './persona-reference-supplement-store.mjs'
 import { supplementFallbackPartition } from '../../src/lib/persona-reference-supplement'
+import type { SupplementGeneration } from '../../src/lib/persona-reference-supplement'
 
 /**
  * 🔴 **이 참고 댓글은 남의 경험을 담고 있는가** (2026-09-10, 창업자 판정 B).
@@ -532,6 +533,13 @@ export function planAppendOnlyBundles(input: {
 export function stableAssignment(input: {
   repoRoot: string
   target?: number
+  /**
+   * Expansion provenance only. Runtime callers omit this and read the active
+   * generation. A cohort verifier passes the previous generation so it can
+   * prove that the new append-only snapshot did not rewrite an old Persona's
+   * frozen voice bundle.
+   */
+  supplementGeneration?: SupplementGeneration
 }): {
   byCode: Map<string, VoiceReferenceBundle>
   assets: ReferenceAssetReport[]
@@ -568,6 +576,7 @@ export function stableAssignment(input: {
   const supplement = canon.ok && canon.sourceDigest !== null
     ? readSupplementSnapshot({
       baseSourceDigest: canon.sourceDigest,
+      generation: input.supplementGeneration,
       baseAssignmentDigestFor: (codes) => {
         // Manifest identity is independent of a caller's display/sample cap.
         const base = planBundles({ rows, personaCodes: codes })

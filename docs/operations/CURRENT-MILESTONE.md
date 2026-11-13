@@ -135,7 +135,7 @@
 | 축 | PASS | FAIL | UNKNOWN | rollback |
 |---|---|---|---|---|
 | runtime | HEAD=pin=manifest=merge SHA, jobs green | SHA 불일치·job 오류 | 읽기 실패 | 직전 pin 복구 |
-| Persona | contract-valid 60 · active 60 · 기존 40 배정 불변 | 일부 적재·충돌·cadence 위반 | DB/근거 판독 실패 | 새 cohort 전체 pause |
+| Persona | contract-valid 60 · active 60 · 기존 40 배정 불변 | 일부 적재·충돌·cadence 위반 | DB/근거 판독 실패 | 새 runtime에서 cohort 전체 pause → active 0·기존 40 불변 확인 → 직전 runtime pin 복구 |
 | 비용 | rolling 72h ≤ $0.040/result | 초과 | 장부 미정산·분모 0 | 지배 판정 경로 off/직전 SHA |
 | 댓글 | block code 정상 · starvation 0 · 불변식 위반 0 | 첫 댓글/실회원/중복 회귀 | 표본 또는 provenance 부족 | followup switch off |
 | D30 | controller `TRIAL d30` 뒤 자연 30/30 증명 | controller/preflight 또는 증명 FAIL | 증거 부족 | D20 공개 유지 |
