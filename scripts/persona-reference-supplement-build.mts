@@ -14,7 +14,7 @@ import { PrismaClient } from '@prisma/client'
 import { loadExpansionFixture } from './lib/persona-expansion-gate.mjs'
 import { readExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readEnvKeys } from './lib/ops-signals.mjs'
+import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import {
   readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir,
 } from './lib/voice-evidence-capture.mjs'
@@ -107,6 +107,10 @@ else if (PRODUCTION || TARGET !== null || APPROVED_DIGEST !== null) {
 }
 
 await loadEnvLocal()
+// 읽기 전용 plan도 운영 확장 판정과 같은 canonical DB를 본다. 셸에 DB 주소가
+// 없다는 이유로 plan만 실패하거나, 반대로 임의 셸 주소를 권위로 삼지 않는다.
+const canonicalDb = fillDbConnection()
+if (!canonicalDb.ok) fail(`canonical DB 주소를 읽지 못했다 — ${canonicalDb.reason ?? '이유 모름'}`)
 const salt = readEvidenceSalt({ ...process.env, ...readEnvKeys([VOICE_EVIDENCE_SALT_ENV]).values })
 const validSalt = salt.ok ? salt : fail(`voice evidence salt: ${salt.code}`)
 const canon = loadCanonAsset()
