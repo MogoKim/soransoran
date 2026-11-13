@@ -10,7 +10,7 @@
  *
  *   🔴 발행 시점 재검사는 그대로다 — `scheduled` 는 공개가 아니다. 발행 트랜잭션이 그 시각에 다시 판정한다.
  */
-import { isSupplyContentCostStage, ledgerDateOf, type LedgerEntry } from './llm-ledger'
+import { isSupplyContentCostStage, ledgerDateOf, type LedgerEntry, type LedgerStage } from './llm-ledger'
 import type { RetryClass } from './content-core/generation-failure'
 import { judgeSlotRelease, type ReleaseReason } from './source-slot-release'
 import { SUPPLY_JIT_CONTRACT } from './supply-intent'
@@ -185,6 +185,12 @@ export type CostAttribution = {
   wasteUsd: number | null
   /** 🔴 READY 가 되지 못한 원천(판정 HOLD · 생성 실패 · 재시도)에 쓴 돈 — 연결이 완전할 때만 */
   noReadyUsd: number | null
+  /**
+   * 🔴 **noReady 를 장부 단계(`LedgerEntry.stage`)로 나눈 값 — 보고 전용** (2026-11-13 · 진단).
+   *    장부가 이미 적은 칸만 쓴다(추정 귀속 0). 원천 종류·막은 gate 는 장부에 없다 — 여기서 만들지 않는다.
+   *    합은 `noReadyUsd` 와 같다. 연결이 완전하지 않으면 `null`. 판정(단가·envelope)은 이 칸을 읽지 않는다.
+   */
+  noReadyByStage: Readonly<Partial<Record<LedgerStage, number>>> | null
 }
 
 /**
@@ -306,6 +312,7 @@ export function costAttributionOf(i: {
   let recoveryUsageUnknownRequests = 0
   let trialOverrunRequests = 0
   let trialIneligibleRequests = 0
+  const noReadyStage: Partial<Record<LedgerStage, number>> = {}
   for (const e of i.entries) {
     if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
     const started = new Date(e.startedAt)
@@ -397,7 +404,9 @@ export function costAttributionOf(i: {
       unlinked += e.settledUsd
       continue
     }
-    byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
+    const fate = i.fateByKey.get(key) ?? 'noReady'
+    byFate[fate] += e.settledUsd
+    if (fate === 'noReady') noReadyStage[e.stage] = (noReadyStage[e.stage] ?? 0) + e.settledUsd
   }
   const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
@@ -417,5 +426,6 @@ export function costAttributionOf(i: {
       ? total / i.counts.published : null,
     wasteUsd: complete ? byFate.lost : null,
     noReadyUsd: complete ? byFate.noReady : null,
+    noReadyByStage: complete ? noReadyStage : null,
   }
 }

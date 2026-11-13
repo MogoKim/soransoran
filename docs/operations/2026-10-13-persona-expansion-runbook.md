@@ -141,6 +141,11 @@ D20 canary가 운영 증거로 닫히면 D20 지속 → D30 canary/지속 → D5
 
 - 다음 자연 단계를 기다리는 동안 필요한 인원만 새 cohort로 설계·자격 검증해 contract-valid reserve로 둔다.
 - 아직 필요하지 않은 reserve를 stage-active로 미리 올리지 않는다.
+- 🔴 **D30 이상은 reserve 만으로 열리지 않는다** (2026-11-13 · canon §4). preflight 가 계약 유효 수와 stage-active 수를
+  둘 다 그 단계 canary 하한과 비교한다(`PERSONA_SHORT` · `PERSONA_ACTIVE_SHORT`). 그래서 다음 단계용 cohort 의
+  create·seed(§3.1 ⑤)와 activate(§3.1 ⑥)는 **같은 비증명일에** 이어서 하고, controller 가 `TRIAL` 을 기록할 수 있는 날의
+  전날 밤·당일에는 하지 않는다. 운영 DB write 는 창업자 승인 뒤에만 한다.
+- 30대 Persona 는 이 순서의 단계 cohort 에 섞지 않는다 — 별도 cohort canary 이며 단계 하한 수에 넣지 않는다(canon §4).
 - 각 cohort는 §2.1 이름 gate와 §3.1의 말투·카드·seed·전체 활성화 절차를 그대로 반복한다.
 - 한 단계의 활동 집중도·매칭 실패·말투 충돌이 나빠지면 다음 cohort 구성에서 부족한 축을 먼저 보강한다.
 - D30과 D50을 건너뛰어 D100 cohort를 한 번에 활성화하지 않는다.

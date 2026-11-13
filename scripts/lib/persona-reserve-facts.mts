@@ -21,7 +21,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
 import { verifySeedCard } from '../../src/lib/persona-card-verify'
 import {
-  historyFromEvents, type ActivityHistory, type CommentEvent, type PostEvent, type QualificationEvidence,
+  historyFromEvents, personaCapacityOf, type ActivityHistory, type CommentEvent, type PostEvent, type QualificationEvidence,
 } from '../../src/lib/persona-reserve'
 import type { PersonaReserveFacts, PersonaReserveRepo, PersonaReserveRow } from './d100-persona-tiers.mjs'
 import { readPersonaReserve } from './d100-persona-tiers.mjs'
@@ -212,10 +212,19 @@ export async function readCommentCapablePersonas(
 export async function readContractValidPersonas(
   prisma: Reader, opts: { now: Date; repoRoot: string },
 ): Promise<number | null> {
+  return (await readPersonaCapacity(prisma, opts)).contractValid
+}
+
+/**
+ * 🔴 **계약 유효 수와 stage-active 수를 한 번의 판독으로** (2026-11-13) — 단계 preflight 가 받는다.
+ *    두 값을 따로 읽으면 사이에 상태가 바뀐 두 스냅숏이 섞인다. 읽기 실패는 둘 다 `null`(모름) — 0 이 아니다.
+ */
+export async function readPersonaCapacity(
+  prisma: Reader, opts: { now: Date; repoRoot: string },
+): Promise<{ contractValid: number | null; stageActive: number | null }> {
   try {
-    const r = await readPersonaReserve(prismaReserveRepo(prisma, { now: opts.now, repoRoot: opts.repoRoot }))
-    return r.contractValid
+    return personaCapacityOf(await readPersonaReserve(prismaReserveRepo(prisma, { now: opts.now, repoRoot: opts.repoRoot })))
   } catch {
-    return null
+    return { contractValid: null, stageActive: null }
   }
 }

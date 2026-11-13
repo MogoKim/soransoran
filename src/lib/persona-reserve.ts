@@ -430,6 +430,21 @@ export function judgePersonaReserve(read: PersonaReserveRead): PersonaReserveRes
 }
 
 /**
+ * 🔴 **용량 두 칸 — 같은 판정 한 번에서 꺼낸다** (2026-11-13 · canon §4).
+ *    `contractValid` = reserve + stage-active(preflight `PERSONA_SHORT`) ·
+ *    `stageActive` = 계약 유효이면서 DB `active`(preflight D30 이상 `PERSONA_ACTIVE_SHORT`).
+ *    🔴 `activeRows` 로 대신하지 않는다 — active 인데 계약을 통과하지 못한 사람은 stage-active 가 아니다.
+ *    판정을 못 했으면 둘 다 모른다(`null`).
+ */
+export function personaCapacityOf(r: Pick<PersonaReserveResult, 'contractValid' | 'byState'>): {
+  contractValid: number | null
+  stageActive: number | null
+} {
+  if (r.contractValid === null) return { contractValid: null, stageActive: null }
+  return { contractValid: r.contractValid, stageActive: r.byState['stage-active'].length }
+}
+
+/**
  * 🔴 **단계 하한 대비 부족분** — 하한은 `d100-capacity` 정본 그대로다. 여기서 낮추지 않는다.
  *    `contractValid === null` 이면 부족분도 모른다(`null`) — 충족으로 읽히지 않게.
  */

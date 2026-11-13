@@ -87,6 +87,12 @@ export const STAGE_EVIDENCE_CODES = [
   'PUBLISH_NOT_AUTO_READY', 'PUBLISH_OVER', 'PERSONA_REPEAT',
   // ③ 첫 댓글
   'COMMENT_MISSING', 'COMMENT_LATE', 'COMMENT_OVER_CAP', 'COMMENT_SELF', 'COMMENT_CAP_UNKNOWN', 'COMMENT_PROVENANCE_BROKEN',
+  /**
+   * 🔴 자동 target 글에 사람이 단 Persona 댓글(출처 `none`)이 있다 — 증명이 사람 손을 탔다 (2026-11-13 · canon §6).
+   *    수동 댓글 자체를 지우지 않는다 — 원래대로 자동 증거(첫 댓글)에서 빠지고, 시행일부터 그날 증명을 FAIL 로 닫는다.
+   *    시행일 전 증거는 다시 읽어도 이 코드를 내지 않는다(`usesManualPersonaProofGate`).
+   */
+  'COMMENT_MANUAL_PERSONA',
   // ④ 감사
   'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_ZERO', 'AUDIT_COVERAGE_SHORT', 'AUDIT_OUTSIDE_TARGET',
   'AUDIT_UNJUDGED', 'AUDIT_DEFECT', 'AUDIT_OVERDUE', 'AUDIT_RETRYABLE', 'AUDIT_MISSING_POST',
@@ -106,6 +112,15 @@ export const STAGE_EVIDENCE_CODES = [
   'READ_ERROR',
 ] as const
 export type StageEvidenceCode = (typeof STAGE_EVIDENCE_CODES)[number]
+
+/**
+ * 🔴 **수동 Persona 댓글 증명 관문 시행일** (2026-11-13 창업자 결정) — 이 KST 날짜부터의 증거만 `COMMENT_MANUAL_PERSONA` 를 낸다.
+ *    그 전 날짜(D1~D20 역사 증거 포함)는 다시 판정해도 결과가 바뀌지 않는다.
+ */
+export const MANUAL_PERSONA_PROOF_GATE_FROM_KST = '2026-11-14' as const
+export function usesManualPersonaProofGate(kstDate: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(kstDate) && kstDate >= MANUAL_PERSONA_PROOF_GATE_FROM_KST
+}
 
 /** 🔴 PASS 가 아닌 것 중 "몰라서" 인 코드 — FAIL 코드가 하나도 없을 때만 UNKNOWN 이 된다 */
 const UNKNOWN_CODES: readonly StageEvidenceCode[] = [
@@ -533,6 +548,7 @@ export function judgeEvidenceForTarget<S extends string>(
     let firstOk = 0
     let brokenProv = 0
     let manualPersona = 0
+    let manualOnTargets = 0
     let followupCount = 0
     for (const p of facts.posts) {
       if (p.queueRows !== 1) codes.add('DUP_QUEUE')
@@ -555,12 +571,14 @@ export function judgeEvidenceForTarget<S extends string>(
       if (own.length > 0) codes.add('COMMENT_SELF')
       if (cap !== null && stageComments.length > cap) codes.add('COMMENT_OVER_CAP')
       // 🔴 출처가 깨진 댓글 — 어느 글이든 FAIL(자동 표식을 흉내 낸 행 · 반쯤 남은 행)
+      let manualHere = 0
       for (const c of stageComments) {
         if (c.provenance === 'broken') brokenProv += 1
-        else if (c.provenance === 'none') manualPersona += 1
+        else if (c.provenance === 'none') { manualPersona += 1; manualHere += 1 }
       }
       // (a) 첫 댓글 보장 — 🔴 자동 target 글만 · 60분 안 최상위 · 다른 Persona · **자동 출처 연결** **1건 이상**
       if (!(p.decider === 'auto' && p.unattended)) continue
+      manualOnTargets += manualHere
       const eligible = stageComments.filter((c) =>
         c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId && c.provenance === 'auto')
       const inWindow = eligible.filter((c) =>
@@ -574,6 +592,10 @@ export function judgeEvidenceForTarget<S extends string>(
     counts.manualPersonaComments = manualPersona
     counts.followupComments = followupCount
     if (brokenProv > 0) codes.add('COMMENT_PROVENANCE_BROKEN')
+    if (usesManualPersonaProofGate(kstDate)) {
+      counts.manualPersonaOnTargets = manualOnTargets
+      if (manualOnTargets > 0) codes.add('COMMENT_MANUAL_PERSONA')
+    }
     if (facts.orphanPublishLogs > 0) codes.add('PUBLISH_LOG_ORPHAN')
     if (facts.unloggedPublishes > 0) codes.add('UNLOGGED_PUBLISH')
     // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) · 표본은 그 집합 안 · 표본 전부 판정·결함 0
