@@ -16,7 +16,7 @@ import { readExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { readEnvKeys } from './lib/ops-signals.mjs'
 import {
-  readEvidenceSalt, voiceEvidenceDataDir,
+  readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir,
 } from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
@@ -107,7 +107,7 @@ else if (PRODUCTION || TARGET !== null || APPROVED_DIGEST !== null) {
 }
 
 await loadEnvLocal()
-const salt = readEvidenceSalt(process.env)
+const salt = readEvidenceSalt({ ...process.env, ...readEnvKeys([VOICE_EVIDENCE_SALT_ENV]).values })
 const validSalt = salt.ok ? salt : fail(`voice evidence salt: ${salt.code}`)
 const canon = loadCanonAsset()
 if (!canon.ok) fail(`canonical reference: ${canon.code}`)
