@@ -470,7 +470,8 @@ export function pickV2(input: PickV2Input, now: string): Pick {
  *    🔴 `crisisStop` 은 부르는 쪽이 **초안만으로**(검수 `harm` 없이) 계산해 넘긴다 — 검수 없이 알 수 있는 것만 쓴다.
  *    🔴 `null` 은 "채택 가능성이 남았다" — 의미 검수를 그대로 산다. 의미 검수 의미·확인 B 는 바뀌지 않는다.
  *    🔴 알려진 차이 하나: 실제 검수가 `harm` 이었다면 앞판은 `AUTO_DROP(generatedHarm)` 이었고 지금은 이 함수의
- *       `AUTO_HOLD` 사유다. 둘 다 채택이 아니고, 원천 재선정은 같은 결론(`deterministicFailed` → `terminal`)이다.
+ *       `AUTO_HOLD` 사유다. 완주 뒤 막힌 초안은 `candidate`, 검수 앞 지배는 `deterministicFailed` → `terminal` 로
+ *       상태 표지는 다르지만, 둘 다 결론 집합이라 같은 원천을 유료로 다시 사지 않는다.
  */
 export type PreReviewPickInput = Omit<PickV2Input, 'machineOutcome' | 'machineReason'>
 
