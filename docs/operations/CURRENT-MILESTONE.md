@@ -41,7 +41,7 @@
 ### 1.1 이번 변경의 실제 검증
 
 - Persona 계약 fixture: 133/133(실제 fixture digest·1바이트 변이 포함).
-- Persona 자동 생성: 134/134, creative 비용·품질·공식 token 계수 fail-closed 176/176, cohort seed 49/49.
+- Persona 자동 생성: 134/134, creative 비용·품질·공식 token 계수 fail-closed 176/176, cohort seed 53/53.
 - Persona 보충 근거: 37/37.
 - 댓글 engine 전체: 1160/1160, H1 독립 fixture 61/61, mutation 14/14.
 - 비용 지배 판정: generation-loss 77, mutation 27, supply e2e 154.
