@@ -1141,8 +1141,10 @@ const REAL_RESEARCH = process.env.MGRAPH_REAL_RESEARCH ? path.resolve(process.en
 export const REAL_GRAPH_CONTRACTS = Object.freeze({
   'g-20261021-081d9a': { snapshot: '2026-10-21-money-work-retirement-next-e0335', at: '2026-10-22T00:30:00+09:00', intentId: 'I-T6-05', slug: 'age-learning',
     admission: [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]] },
+  // manifestHash 재고정(2026-11-12 S3 P1) — 앞값 b5dc90be…. S3 가 src/lib/magazine-graph.ts(출처 overlay)를 바꿔 resolver 신원 해시만 달라졌다.
+  //   후보 · 관계 · 거절 · readiness 판정은 같다(파생 readinessHash 만 바뀜). resolver 신원 결박은 그대로다.
   'g-20261102-427d4d': { snapshot: '2026-11-02-money-work-age-learning-live', at: '2026-11-02T11:00:00+09:00', intentId: 'I-T6-03', slug: 'resume-age',
-    manifestHash: 'b5dc90be4649d59760c03aefd1c6cc68055e13300c15322689cc8b0ef06839c0', admission: [['I-T6-03', ['E-0338', 'E-0339'], 'E-0340', ['E-0093']]] },
+    manifestHash: '550049136a05514b3b89cc48715b971dfa9a6c4471dbb9cd9aba1637cd155f9f', admission: [['I-T6-03', ['E-0338', 'E-0339'], 'E-0340', ['E-0093']]] },
 })
 /** 판 → 계약. 없으면 null (부른 쪽이 FAIL 로 센다 — SKIP 이 아니다) */
 export function realGraphContract(pointer, contracts = REAL_GRAPH_CONTRACTS) {

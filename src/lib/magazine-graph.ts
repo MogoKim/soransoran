@@ -346,21 +346,75 @@ function fallback(
   }
 }
 
+type GraphMapping = MagazineGraph['mappings'][number]
+
+/**
+ * 유효 mapping — canonical graph mapping 에 **공개된** vNext 글의 출처 신원(slug → release.intentId)을 더한다 (S3 P1).
+ *
+ * 🔴 출처는 신원만 준다. edge · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위 · 3+1 은 전부 graph.edges 가 정한다 — 이 함수는 edge 를 보지 않는다.
+ * 🔴 canonical 이 이긴다 — graph mapping 에 **같은 slug 또는 같은 intent** 가 하나라도 있으면 그 출처는 쓰지 않는다.
+ *    intent 의 공개 글은 canonical 이 정한다(출처가 같은 intent 에 두 번째 글을 붙이지 않는다). 다음 graph 승격이 흡수하면 출처 행은 자연히 무시된다.
+ * 🔴 intent 가 현재 graph 에 없으면(그 intent 가 없는 판으로 rollback) 쓰지 않는다 — 실패가 아니라 폴백이다.
+ *    graph 가 intent 목록을 주지 않으면 출처를 하나도 쓰지 않는다(모르면 더하지 않는다).
+ */
+export function effectiveGraphMappings(
+  graph: Pick<MagazineGraph, 'mappings'> & { intents?: MagazineGraph['intents'] },
+  published: readonly MagazineArticle[],
+): readonly GraphMapping[] {
+  if (!graph.intents) return graph.mappings
+  const intents = new Set(graph.intents.map((i) => i.id))
+  const canonicalSlugs = new Set(graph.mappings.map((m) => m.slug))
+  const canonicalIntents = new Set(graph.mappings.map((m) => m.intent))
+  const overlay: GraphMapping[] = []
+  for (const a of published) {
+    const intent = a.release?.intentId
+    if (typeof intent !== 'string' || !intents.has(intent) || canonicalSlugs.has(a.slug)) continue
+    if (canonicalIntents.has(intent)) continue
+    overlay.push({ intent, slug: a.slug, cluster: null })
+  }
+  if (overlay.length === 0) return graph.mappings
+  return [...graph.mappings, ...overlay.sort((x, y) => byString(x.slug, y.slug))]
+}
+
+/**
+ * 출처 진단 — 차단하지 않는다(S3 P1). graph rollback 으로 intent 가 사라진 출처 · canonical mapping 과 충돌하는 출처를 알린다.
+ *   충돌 = canonical 의 같은 slug 가 다른 intent 를 가리키거나, canonical 의 같은 intent 가 다른 slug 를 가리킨다.
+ * 🔴 resolver 는 둘 다 무시하고 그래프 · 폴백 규칙대로 그린다. 이 진단으로 rollback 을 막지 않는다.
+ */
+export function provenanceDiagnostics(
+  graph: Pick<MagazineGraph, 'mappings' | 'intents'>,
+  articles: readonly MagazineArticle[],
+): { code: 'PROVENANCE_INTENT_ABSENT' | 'PROVENANCE_GRAPH_CONFLICT'; slug: string; intentId: string }[] {
+  const intents = new Set(graph.intents.map((i) => i.id))
+  const out: { code: 'PROVENANCE_INTENT_ABSENT' | 'PROVENANCE_GRAPH_CONFLICT'; slug: string; intentId: string }[] = []
+  for (const a of articles) {
+    const intentId = a.release?.intentId
+    if (typeof intentId !== 'string') continue
+    if (!intents.has(intentId)) out.push({ code: 'PROVENANCE_INTENT_ABSENT', slug: a.slug, intentId })
+    const slugConflict = graph.mappings.some((m) => m.slug === a.slug && m.intent !== intentId)
+    const intentConflict = graph.mappings.some((m) => m.intent === intentId && m.slug !== a.slug)
+    if (slugConflict || intentConflict) out.push({ code: 'PROVENANCE_GRAPH_CONFLICT', slug: a.slug, intentId })
+  }
+  return out.sort((x, y) => byString(x.slug, y.slug) || byString(x.code, y.code))
+}
+
 /**
  * 그래프 하나로 이 글의 하단 목록을 만든다 — 켜짐 · 버전 · cluster 판정이 끝난 뒤의 몫.
  *
  * 🔴 그래프 · 공개 글 · 보충 재료를 인자로 받는다. resolver 는 운영 GRAPH 와 공개 목록을 넘기고,
  *    검사는 같은 함수에 합성 그래프를 넘겨 edge 단위 계약을 **실제 조립 결과로** 본다.
+ * 🔴 vNext 출처 overlay(effectiveGraphMappings)는 여기 안에서만 쓴다 — 켜짐 · 버전 · cluster 관문 뒤다.
  * @param published 공개 관문을 거친 글 전부 (같은 now 로 만든 것)
  * @param legacy    예전 방식 연관 글 — 그래프 후보가 있을 때만 부른다
  */
 export function resolveFromGraph(
   article: MagazineArticle,
-  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'>,
+  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'> & { intents?: MagazineGraph['intents'] },
   published: readonly MagazineArticle[],
   legacy: () => readonly MagazineArticle[],
 ): { resolved: ResolvedRelatedMagazine } | { reason: 'NO_MAPPING' | 'EDITORIAL_NON_SEARCH' | 'NO_RESULT' } {
-  const fromIntents = new Set(graph.mappings.filter((m) => m.slug === article.slug).map((m) => m.intent))
+  const mappings = effectiveGraphMappings(graph, published)
+  const fromIntents = new Set(mappings.filter((m) => m.slug === article.slug).map((m) => m.intent))
   if (fromIntents.size === 0) {
     // 🔴 검색 근거 없음이 증명된 글과 아직 분류되지 않은 글을 폴백 사유로 구분한다. 화면은 같은 폴백이다
     const editorial = (graph.participation ?? []).some((p) => p.slug === article.slug && p.state === 'EDITORIAL_NON_SEARCH'
@@ -369,7 +423,7 @@ export function resolveFromGraph(
   }
 
   const { direct, discovery } = selectGraphPicks(
-    graph,
+    { edges: graph.edges, mappings },
     fromIntents,
     new Map(published.map((a) => [a.slug, a])),
     article.slug,

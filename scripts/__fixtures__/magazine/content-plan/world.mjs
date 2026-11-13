@@ -39,11 +39,14 @@ export const evidenceDoc = (d) => ({
   counts: { related: 0, paa: 0, autocomplete: 0, organic: 1 }, rawPayloadKept: false, note: '합성',
 })
 
-/** articles.ts 텍스트 — 제품 파일과 같은 앵커(MAGAZINE_ARTICLE_RECORD) */
+/**
+ * articles.ts 텍스트 — 제품 파일과 같은 앵커(MAGAZINE_ARTICLE_RECORD).
+ * 행에 `release` 키가 있으면(S3 P1 vNext 출처) 그대로 싣는다 — 없는 행의 바이트는 앞판과 같다.
+ */
 export const articlesText = (rows) => `import type { MagazineArticleBody } from './types'
 
 const MAGAZINE_ARTICLE_RECORD = {
-${rows.map((a) => `  ${JSON.stringify(a.slug)}: ${JSON.stringify({ title: a.title, description: '합성 설명', cluster: a.cluster, status: a.status ?? 'SCHEDULED', publishAt: a.publishAt, publishedAt: a.publishAt.slice(0, 10), body: [] })},`).join('\n')}
+${rows.map((a) => `  ${JSON.stringify(a.slug)}: ${JSON.stringify({ title: a.title, description: '합성 설명', cluster: a.cluster, status: a.status ?? 'SCHEDULED', publishAt: a.publishAt, publishedAt: a.publishAt.slice(0, 10), body: [], ...('release' in a ? { release: a.release } : {}) })},`).join('\n')}
 }
 
 export const MAGAZINE_ARTICLES = MAGAZINE_ARTICLE_RECORD as Record<string, MagazineArticleBody>

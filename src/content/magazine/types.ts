@@ -91,6 +91,26 @@ export type MagazineArticleBody = {
    * 오프셋을 문자열에 박아야 서버 타임존(UTC)과 무관하게 같은 시각을 가리킨다.
    */
   publishAt?: string
+
+  /**
+   * vNext release 출처 — vNext release writer 가 만든 행에만 있다(legacy 행에는 없다).
+   * 🔴 신원만 싣는다. 관계(edge · readerReason · placement)는 canonical graph 가, 공개 시각은 위 필드가 유일한 소유자다.
+   * 판독 계약은 `scripts/lib/magazine-content-plan.mjs` 의 parseArticleIdentityText 한 곳이다.
+   */
+  release?: MagazineReleaseProvenance
+}
+
+/**
+ * vNext 출처 — planId 는 저장하지 않는다(`${graphVersion}:${intentId}` 로 파생).
+ * 🔴 publishAt · edge · readerReason · 산출물 해시 · provider · runtime 상태는 넣지 않는다.
+ */
+export type MagazineReleaseProvenance = {
+  schemaVersion: 'magazine-article-release/1'
+  intentId: string
+  graphVersion: string
+  bundleHash: string
+  planHash: string
+  policyBoard: { id: string; hash: string }
 }
 
 export type MagazineArticle = MagazineArticleBody & {

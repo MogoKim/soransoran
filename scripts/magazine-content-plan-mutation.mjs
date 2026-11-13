@@ -92,6 +92,29 @@ const MUTATIONS = [
   ['CM56', 'Bundle 판독이 빈 칸을 모양 판정 전에 거르지 않는다(P1-6)', 'CP27', [{ file: 'scripts/lib/magazine-content-plan-input.mjs', from: "  { const sp = sparsePathOf(b); if (sp) fail('BUNDLE_SCHEMA', `희소 배열(빈 칸) ${sp}`) }\n", to: '' }]],
   ['CM57', 'admission 진행 중 신원 배열의 빈 칸을 받는다(P1-6)', 'CP27', [{ file: LIB, from: 'Array.isArray(input[k]) && isDense(input[k]) && input[k].every(isStr)', to: 'Array.isArray(input[k]) && input[k].every(isStr)' }]],
   ['CM37', 'ProviderPlan 이 AWS access key id 를 통과시킨다(P1-E)', 'CP12', [{ file: LIB, from: '|\\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA|ACCA)[A-Z0-9]{16}\\b', to: '' }]],
+  // ── S3 P1 (2026-11-12) — Article 출처(release) · 출시 intent 중복 · intent 단위 진행 중 · 대상 신원 ──
+  ['CM59', '출시 intent 를 공개 · 예약 행에서만 본다(DRAFT · BLOCKED 출처 무시 · 상태 필터)', 'CP28', [{ file: LIB,
+    from: '  const releasedSlugOf = new Map(articles.ok ? articles.rows.filter((a) => a.release).map(', to: '  const releasedSlugOf = new Map(articles.ok ? articles.rows.filter((a) => a.release && !isHeldStatus(a)).map(' }]],
+  ['CM60', '진행 중을 planId 로 비교한다(graphVersion 이 바뀌면 놓친다)', 'CP28', [{ file: LIB, from: "      if (inFlight.has(plan.intentId)) reasons.push('IN_FLIGHT')", to: "      if (inFlight.has(plan.planId)) reasons.push('IN_FLIGHT')" }]],
+  ['CM61', '출시 intent 를 planId(graphVersion:intentId)로 비교한다', 'CP28', [
+    { file: LIB, from: '.map((a) => [a.release.intentId, a.slug]) : [])', to: '.map((a) => [`${a.release.graphVersion}:${a.release.intentId}`, a.slug]) : [])' },
+    { file: LIB, from: "      if (releasedSlugOf.has(plan.intentId)) reasons.push('DUPLICATE_RELEASED_INTENT')", to: "      if (releasedSlugOf.has(plan.planId)) reasons.push('DUPLICATE_RELEASED_INTENT')" }]],
+  ['CM62', '출처 key 를 느슨하게 받는다(초과 · 누락 key 통과)', 'CP28', [{ file: LIB,
+    from: "  if (!exactKeysOf(r, ARTICLE_RELEASE_KEYS) || !exactKeysOf(r.policyBoard, ['hash', 'id'])) return null", to: '  if (!isPlain(r) || !isPlain(r.policyBoard)) return null' }]],
+  ['CM63', '모르는 정책 판 id 를 받는다(신원표에 없는 id)', 'CP28', [
+    { file: LIB, from: ' || !Object.prototype.hasOwnProperty.call(POLICY_IDENTITY_TABLE, id)) return null', to: ') return null' },
+    { file: LIB, from: '  if (!isStr(hash) || hash !== POLICY_IDENTITY_TABLE[id]) return null', to: '  if (!isStr(hash) || (id in POLICY_IDENTITY_TABLE && hash !== POLICY_IDENTITY_TABLE[id])) return null' }]],
+  ['CM64', '정책 판 id 와 hash 의 일치를 보지 않는다', 'CP28', [{ file: LIB, from: '  if (!isStr(hash) || hash !== POLICY_IDENTITY_TABLE[id]) return null', to: '  if (!isStr(hash)) return null' }]],
+  ['CM65', '같은 release.intentId 두 행을 받는다(마지막 행이 이긴다)', 'CP28', [{ file: LIB, from: "      if (releasedBy.has(release.intentId)) return { ok: false, code: 'ARTICLES_RELEASE_DUPLICATE_INTENT' }\n", to: '' }]],
+  ['CM66', '깨진 출처(release: null)를 legacy 행으로 넘긴다', 'CP28', [{ file: LIB, from: "    if (Object.prototype.hasOwnProperty.call(a, 'release')) {", to: '    if (a.release !== undefined && a.release !== null) {' }]],
+  ['CM67', '대상 판정이 출처 행을 보지 않는다(Bundle mapping 만)', 'CP28', [{ file: LIB, from: '    if (releasedSlugOf.has(intentId)) pool.add(releasedSlugOf.get(intentId))\n', to: '' }]],
+  ['CM68', '대상 slug 가 둘 이상이면 하나를 임의로 고른다', 'CP28', [{ file: LIB, from: '    return s.length === 1 ? s[0] : null', to: '    return s.length >= 1 ? [...s].sort()[0] : null' }]],
+  ['CM69', '이미 출시된 intent 를 막지 않는다', 'CP28', [{ file: LIB, from: "      if (releasedSlugOf.has(plan.intentId)) reasons.push('DUPLICATE_RELEASED_INTENT')\n", to: '' }]],
+  ['CM70', 'compile 이 articles 를 입력으로 받는다', 'CP28', [{ file: LIB, from: "  exactInput(input, ['bundle'], 'compile')", to: "  exactInput(input, ['bundle', 'articlesText'], 'compile')" }]],
+  ['CM71', 'admission 이 articles(출처)를 planHash 에 섞는다', 'CP28', [{ file: LIB, from: '    admitted.push({ planId: plan.planId, planHash: plan.planHash,', to: '    admitted.push({ planId: plan.planId, planHash: sha256(plan.planHash + String(articlesText)),' }]],
+  ['CM72', '옛 키 inFlightPlanIds 를 조용히 받는다', 'CP28', [{ file: LIB,
+    from: "  exactInput(input, ['bundle', 'controlText', 'articlesText', 'legacyQueue', 'nowMs', 'inFlightIntentIds', 'withdrawnPlanIds'], 'admission')",
+    to: "  exactInput(input, ['bundle', 'controlText', 'articlesText', 'legacyQueue', 'nowMs', 'inFlightIntentIds', 'inFlightPlanIds', 'withdrawnPlanIds'], 'admission')" }]],
 ]
 
 const lines = []

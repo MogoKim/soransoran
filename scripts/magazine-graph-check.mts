@@ -24,7 +24,7 @@
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MAGAZINE_ARTICLES } from '../src/content/magazine/articles'
 import { CONTROL, enabledClusters, isGraphEnabled } from '../src/content/magazine/graph/control'
@@ -47,6 +47,8 @@ import {
   MAX_DIRECT,
   MAX_TOTAL,
   SLOT_LABEL,
+  effectiveGraphMappings,
+  provenanceDiagnostics,
   resolveFromGraph,
   resolveRelatedMagazine,
   graphRuntimeConfig,
@@ -830,6 +832,123 @@ console.log('\n④-F edge 단위 선택 정책 (실제 조립 함수 resolveFrom
   const withCov = GRAPH.mappings.filter((m) => m.coverage !== undefined).length
   check('번들: mapping coverage 는 전부 있거나 전부 없다',
     withCov === 0 || withCov === GRAPH.mappings.length, `${withCov}/${GRAPH.mappings.length}`)
+}
+
+// ── ④-P 🔴 vNext Article 출처 overlay — 신원만 · edge 는 graph · canonical 이 이긴다 · 관문 뒤 · rollback 은 폴백 (S3 P1) ──
+console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제 조립 함수 resolveFromGraph)')
+
+{
+  type PEdge = MagazineGraph['edges'][number]
+  type PMap = MagazineGraph['mappings'][number]
+  type PIntent = MagazineGraph['intents'][number]
+  const rel = (intentId: string): MagazineArticle['release'] => ({ schemaVersion: 'magazine-article-release/1', intentId,
+    graphVersion: 'g-20261102-abcdef', bundleHash: 'a'.repeat(64), planHash: 'b'.repeat(64), policyBoard: { id: 'magazine-content-plan-policy/1', hash: 'c'.repeat(64) } })
+  const art = (slug: string, publishedAt: string, intentId?: string) =>
+    ({ slug, publishedAt, cluster: 'fam', title: slug, ...(intentId ? { release: rel(intentId) } : {}) }) as unknown as MagazineArticle
+  const pe = (id: string, from: string, to: string, slot: PEdge['slot'] = 'DIRECT_NEXT'): PEdge => ({
+    id, from, to, type: slot === DISCOVERY_SLOT ? 'BRIDGE' : 'NEXT_QUESTION', slot, anchor: `${id} 앵커`, reason: `${id} 정본 이유`,
+    placement: slot === DISCOVERY_SLOT ? 'FOOTER_BRIDGE' : 'FOOTER_NEXT', priority: 1, fromCluster: 'fam', toCluster: 'fam', active: true,
+  })
+  const pm = (intent: string, slug: string): PMap => ({ intent, slug, cluster: 'fam', coverage: 'ANSWERS' })
+  const pi = (...ids: string[]): PIntent[] => ids.map((id) => ({ id, cluster: 'fam', board: 'free' }))
+  const g = (edges: PEdge[], mappings: PMap[], intents?: PIntent[]) => ({ graphVersion: 'g-p', edges, mappings, ...(intents ? { intents } : {}) })
+  const items = (self: MagazineArticle, graph: ReturnType<typeof g>, published: MagazineArticle[]) => {
+    const r = resolveFromGraph(self, graph, published, () => [])
+    return 'reason' in r ? r.reason : r.resolved.items.map((i) => `${i.article.slug}|${i.source}|${i.slot ?? '-'}|${i.reason ?? '-'}|${i.relationType}|${i.surface}`)
+  }
+
+  const NEW = art('new-v', '2026-11-20', 'I-NEW'), OLD = art('old', '2026-09-01'), OTH = art('other', '2026-10-01')
+  const edges = [pe('E-N1', 'I-NEW', 'I-OLD'), pe('E-O1', 'I-OTH', 'I-NEW')]
+  const maps = [pm('I-OLD', 'old'), pm('I-OTH', 'other')]
+  const full = g(edges, maps, pi('I-NEW', 'I-OLD', 'I-OTH'))
+  const out = items(NEW, full, [NEW, OLD, OTH])
+  check('출처로 나가는 관계 — mapping 없는 vNext 글이 graph edge 대로 대상을 고른다',
+    JSON.stringify(out) === JSON.stringify(['old|GRAPH|DIRECT_NEXT|E-N1 정본 이유|NEXT_QUESTION|FOOTER_NEXT']), JSON.stringify(out))
+  const inbound = items(OTH, full, [NEW, OLD, OTH])
+  check('출처로 들어오는 링크 — 기존 글의 정본 edge 가 vNext 글을 대상으로 고른다',
+    JSON.stringify(inbound) === JSON.stringify(['new-v|GRAPH|DIRECT_NEXT|E-O1 정본 이유|NEXT_QUESTION|FOOTER_NEXT']), JSON.stringify(inbound))
+  check('  관계 유형 · 이유 · 표면 · 슬롯은 graph edge 값 그대로다 (출처는 edge 를 싣지 않는다)',
+    Array.isArray(out) && Array.isArray(inbound) && !Object.keys(rel('x') ?? {}).some((k) => /edge|reason|placement|slot|priority|anchor|publish/i.test(k)))
+  check('  출처 없는 graph 결과는 overlay 함수를 거쳐도 같은 배열 객체다 (legacy 바이트 · 출력 불변)',
+    effectiveGraphMappings(full, [OLD, OTH]) === full.mappings && effectiveGraphMappings(GRAPH, published) === GRAPH.mappings)
+  check('  공개되지 않은 vNext 글은 대상이 아니다 (공개 목록에 없으면 overlay 0)',
+    JSON.stringify(items(OTH, full, [OLD, OTH])) === JSON.stringify('NO_RESULT'), JSON.stringify(items(OTH, full, [OLD, OTH])))
+  check('  intent 목록을 주지 않는 graph 에서는 출처를 쓰지 않는다 (모르면 더하지 않는다)',
+    items(NEW, g(edges, maps), [NEW, OLD, OTH]) === 'NO_MAPPING')
+
+  // canonical 이 이긴다 — 같은 slug 가 graph 에서 다른 intent 로 매핑되면 출처를 버린다
+  const conflict = g([...edges, pe('E-X1', 'I-X', 'I-OLD')], [...maps, pm('I-X', 'new-v')], pi('I-NEW', 'I-OLD', 'I-OTH', 'I-X'))
+  check('canonical mapping 이 출처를 이긴다 — 충돌하면 출처 intent 의 edge 는 쓰이지 않는다',
+    JSON.stringify(items(OTH, conflict, [NEW, OLD, OTH])) === JSON.stringify('NO_RESULT')
+      && JSON.stringify(items(NEW, conflict, [NEW, OLD, OTH])) === JSON.stringify(['old|GRAPH|DIRECT_NEXT|E-X1 정본 이유|NEXT_QUESTION|FOOTER_NEXT']),
+    `${JSON.stringify(items(OTH, conflict, [NEW, OLD, OTH]))} / ${JSON.stringify(items(NEW, conflict, [NEW, OLD, OTH]))}`)
+  // rollback — intent 가 없는 판에서는 출처를 버리고 폴백 (실패가 아니다)
+  const rolled = g([pe('E-O1', 'I-OTH', 'I-NEW')], maps, pi('I-OLD', 'I-OTH'))
+  check('graph rollback 으로 출처 intent 가 없으면 무시하고 폴백한다 (예외 0 · 차단 0)',
+    items(NEW, rolled, [NEW, OLD, OTH]) === 'NO_MAPPING' && items(OTH, rolled, [NEW, OLD, OTH]) === 'NO_RESULT')
+  const withIntents = (x: ReturnType<typeof g>) => ({ mappings: x.mappings, intents: x.intents ?? [] })
+  const diag = provenanceDiagnostics(withIntents(conflict), [NEW, OLD, OTH]).concat(provenanceDiagnostics(withIntents(rolled), [NEW, OLD, OTH]))
+  check('  진단만 낸다 — PROVENANCE_GRAPH_CONFLICT · PROVENANCE_INTENT_ABSENT (비차단)',
+    JSON.stringify(diag.map((d) => d.code)) === JSON.stringify(['PROVENANCE_GRAPH_CONFLICT', 'PROVENANCE_INTENT_ABSENT']), JSON.stringify(diag))
+  // 다음 graph 승격이 mapping 을 흡수 — 같은 intent 면 출처 행이 겹쳐 무시되고 결과가 같다
+  const absorbed = g(edges, [...maps, pm('I-NEW', 'new-v')], pi('I-NEW', 'I-OLD', 'I-OTH'))
+  check('graph 가 mapping 을 흡수하면 출처는 겹쳐 무시되고 결과가 같다',
+    JSON.stringify(items(OTH, absorbed, [NEW, OLD, OTH])) === JSON.stringify(inbound)
+      && effectiveGraphMappings(absorbed, [NEW, OLD, OTH]) === absorbed.mappings)
+  // canonical 은 intent 에도 우선한다 — canonical I-NEW → canonical-slug 가 있으면 출처 new-v → I-NEW 는 버린다(P1 수리)
+  const CAN = art('canonical-slug', '2026-10-10')
+  const sameIntent = g(edges, [...maps, pm('I-NEW', 'canonical-slug')], pi('I-NEW', 'I-OLD', 'I-OTH'))
+  const pubs = [NEW, OLD, OTH, CAN]
+  const eff = effectiveGraphMappings(sameIntent, pubs)
+  check('canonical 같은 intent 우선 — 유효 mapping 의 I-NEW 는 canonical-slug 하나뿐 · new-v overlay 0',
+    JSON.stringify(eff.filter((m) => m.intent === 'I-NEW').map((m) => m.slug)) === JSON.stringify(['canonical-slug'])
+      && !eff.some((m) => m.slug === 'new-v') && JSON.stringify(eff) === JSON.stringify(sameIntent.mappings),
+    JSON.stringify(eff.filter((m) => m.intent === 'I-NEW' || m.slug === 'new-v')))
+  check('  들어오는 링크는 canonical-slug 로 간다 · 출처 글(new-v)은 graph 신원이 없어 폴백',
+    JSON.stringify(items(OTH, sameIntent, pubs)) === JSON.stringify(['canonical-slug|GRAPH|DIRECT_NEXT|E-O1 정본 이유|NEXT_QUESTION|FOOTER_NEXT'])
+      && items(NEW, sameIntent, pubs) === 'NO_MAPPING',
+    `${JSON.stringify(items(OTH, sameIntent, pubs))} / ${JSON.stringify(items(NEW, sameIntent, pubs))}`)
+  const sameIntentDiag = provenanceDiagnostics(withIntents(sameIntent), pubs)
+  check('  같은 intent · 다른 slug 는 PROVENANCE_GRAPH_CONFLICT 진단 (비차단)',
+    JSON.stringify(sameIntentDiag) === JSON.stringify([{ code: 'PROVENANCE_GRAPH_CONFLICT', slug: 'new-v', intentId: 'I-NEW' }]), JSON.stringify(sameIntentDiag))
+
+  // 관문 — kill switch · 판 불일치 · cluster 는 resolveFromGraph(=overlay) 앞에 있다
+  const graphSrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
+  const entry = graphSrc.slice(graphSrc.indexOf('export function resolveRelatedMagazine('))
+  const at = (s: string) => entry.indexOf(s)
+  const callAt = at('const result = resolveFromGraph(')
+  check('관문(꺼짐 · 판 불일치 · cluster)이 overlay(resolveFromGraph) 앞에 있다',
+    callAt > 0 && [at("fallback(article, 'DISABLED'"), at("'VERSION_MISMATCH'"), at("'CLUSTER_NOT_ENABLED'")].every((i) => i > 0 && i < callAt))
+  check('  overlay 호출은 resolveFromGraph 안 한 곳뿐이다',
+    graphSrc.split('effectiveGraphMappings(graph, published)').length - 1 === 1
+      && graphSrc.indexOf('effectiveGraphMappings(graph, published)') > graphSrc.indexOf('export function resolveFromGraph('))
+  const realSelf = published.find((a) => GRAPH.mappings.some((m) => m.slug === a.slug))
+  if (realSelf) {
+    const withRel = { ...realSelf, release: rel(GRAPH.mappings.find((m) => m.slug === realSelf.slug)!.intent) } as MagazineArticle
+    const off = resolveRelatedMagazine(withRel, OFF, CHECK_NOW)
+    check('  kill switch 에서는 출처가 있어도 폴백이다', off.source === 'FALLBACK' && off.reason === 'DISABLED', `${off.source} ${off.reason}`)
+  } else check('  kill switch 반례 대상 공개 글이 있다', false)
+
+  // 실제 저장소 — legacy 57편은 출처 0 · 진단 0
+  const { MAGAZINE_ARTICLES } = await import('../src/content/magazine/articles')
+  check('실제 articles.ts — 출처 있는 행 0 · 진단 0 (legacy 바이트 그대로)',
+    MAGAZINE_ARTICLES.every((a) => a.release === undefined) && provenanceDiagnostics(GRAPH, MAGAZINE_ARTICLES).length === 0,
+    `${MAGAZINE_ARTICLES.filter((a) => a.release !== undefined).length}행`)
+
+  // 클라이언트 · JSON 경계 — 출처가 화면 밖으로 나갈 길이 없다
+  const scan = (dir: string): string[] => readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? scan(join(dir, e.name)) : /\.(tsx?|mts)$/.test(e.name) ? [join(dir, e.name)] : [])
+  const leaks = [...scan('src/app'), ...scan('src/components')].filter((f) => {
+    const t = readFileSync(join(ROOT, f), 'utf8')
+    return /\.release\b|['"]release['"]|\{\s*\.\.\.(article|a|item\.article)\s*[,}]/.test(t)
+  })
+  const linkSrc = readFileSync(join(ROOT, 'src/components/features/RelatedMagazineLink.tsx'), 'utf8')
+  const props = linkSrc.slice(linkSrc.indexOf('export type RelatedLinkProps'), linkSrc.indexOf('}', linkSrc.indexOf('export type RelatedLinkProps')))
+  check('출처가 클라이언트 props · 화면 · JSON 으로 나가지 않는다 (src/app · src/components 참조 0 · 기사 펼침 0)',
+    leaks.length === 0 && props.length > 0 && !/release/.test(props), leaks.join(', '))
+  const watchSrc = readFileSync(join(ROOT, 'scripts/magazine-graph-watch.mts'), 'utf8')
+  check('graph watch 는 출처를 판정하지 않는다 — rollback 을 막는 hard fail 0',
+    !/release|provenance/i.test(watchSrc))
 }
 
 // ── ④-G 🔴 graph 참여 — EDITORIAL_NON_SEARCH 는 선언으로만 · 활성 계약은 미분류를 막는다 (2026-10-18) ──

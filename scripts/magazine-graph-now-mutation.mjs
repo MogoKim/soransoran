@@ -46,6 +46,22 @@ const MUTATIONS = [
     find: '!isPublicMagazineArticle(a, now)).map((a) => a.slug)', replace: '!isPublicMagazineArticle(a)).map((a) => a.slug)' }] },
   { name: '검사의 공개 목록만 다른 시각을 쓴다', edits: [{ file: F.check,
     find: '  const list = getAllMagazineArticles(now)\n', replace: '  const list = getAllMagazineArticles()\n' }] },
+  // ── S3 P1 (2026-11-12) — vNext Article 출처 overlay: 신원만 · canonical 우선 · 관문 뒤 · rollback 폴백 (검사 ④-P) ──
+  { name: '출처 overlay 가 canonical mapping 을 이긴다', edits: [{ file: F.graph,
+    find: "    if (typeof intent !== 'string' || !intents.has(intent) || canonicalSlugs.has(a.slug)) continue",
+    replace: "    if (typeof intent !== 'string' || !intents.has(intent)) continue" }] },
+  { name: '출처 overlay 가 현재 graph 에 없는 intent 도 더한다(rollback 무시)', edits: [{ file: F.graph,
+    find: "    if (typeof intent !== 'string' || !intents.has(intent) || canonicalSlugs.has(a.slug)) continue",
+    replace: "    if (typeof intent !== 'string' || canonicalSlugs.has(a.slug)) continue" }] },
+  { name: '출처가 있는 글은 kill switch 관문보다 먼저 graph 로 간다', edits: [{ file: F.graph,
+    find: "    if (!runtime.enabled) return fallback(article, 'DISABLED', now)",
+    replace: "    if (!runtime.enabled && !article.release) return fallback(article, 'DISABLED', now)" }] },
+  { name: '출처 overlay 가 canonical 의 같은 intent 를 무시하고 두 번째 글을 붙인다', edits: [{ file: F.graph,
+    find: '    if (canonicalIntents.has(intent)) continue\n', replace: '' }] },
+  { name: '진단이 같은 intent · 다른 slug 충돌을 보지 않는다', edits: [{ file: F.graph,
+    find: '    if (slugConflict || intentConflict) out.push(', replace: '    if (slugConflict) out.push(' }] },
+  { name: 'resolver 가 출처 overlay 를 쓰지 않는다(canonical mapping 만)', edits: [{ file: F.graph,
+    find: '  const mappings = effectiveGraphMappings(graph, published)\n', replace: '  const mappings = graph.mappings\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
