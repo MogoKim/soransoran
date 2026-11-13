@@ -143,7 +143,7 @@ export async function runEnqueuePipeline(args: {
    */
   preflightOk: boolean
   preflightBlockers?: readonly string[]
-  /** 🔴 provider 호출 직전 관문 — 첫 댓글 lane 의 시도 기록이 쓴다. 다른 호출자는 넘기지 않는다 */
+  /** 🔴 provider 호출 직전 관문 — 첫 댓글 · 추가 댓글 lane 의 시도 기록이 쓴다(lane 별 파일). 다른 호출자는 넘기지 않는다 */
   beforeProvider?: PipelineBeforeProvider
 }): Promise<PipelineResult> {
   const outcomes: PipelineOutcome[] = []

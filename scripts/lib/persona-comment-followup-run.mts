@@ -6,6 +6,7 @@
  *      · 한 글 판정 · 대상 · 제외 Persona · 순서 — `judgeFollowupPost` · `orderFollowupGo` · `pickFollowupPersona`
  *      · 입력 · 9관문 · 적재 계약 — `buildCommentInput` · `runEnqueuePipeline` · `checkCommentCandidate` (첫 댓글과 같은 정본)
  *      · 본문 중복 — `judgeFollowupText`
+ *      · 실패 격리 — 첫 댓글과 같은 시도 기억 정책 · 저장소(`persona-comment-attempt-policy` · 추가 댓글 lane 파일)
  *      · 발행 재판정 — `publishCandidateTx({ followupLane: true })` (Serializable · 기존 재검사 전부 + `judgeFollowupPublish`)
  *      · 출처 — #707 정본 `personaCommentProvenanceOf`
  *      · 반응 라벨 — 정본 분류기 `classifyReaction`
@@ -16,8 +17,11 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
   FOLLOWUP_KEY_PREFIX, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
-  followupStageOf, orderFollowupGo, pickFollowupPersona, readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
-  type FollowupCommentRow, type FollowupPostFacts, type FollowupPostVerdict,
+  FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK, addFollowupIsolation, classifyFollowupFailure, followupFailureHaltsRound,
+  followupIsolationOf, followupPersonaCandidates, followupPlanCap, followupStageOf, orderFollowupGo, pickFollowupPersona,
+  readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
+  type FollowupCommentRow, type FollowupFailureCode, type FollowupIsolation, type FollowupPersonaFacts, type FollowupPostFacts,
+  type FollowupPostVerdict,
 } from '../../src/lib/persona-comment-followup'
 import {
   FOLLOWUP_LANE_DECIDED_BY, judgeConversationAudit, personaCommentCapFor, personaCommentProvenanceOf,
@@ -42,7 +46,14 @@ import { priceOf } from '../../src/lib/llm-pricing'
 import { COMMENT_CALL_SHAPE } from '../../src/lib/persona-comment-cost'
 import { classifyReaction } from './voice-comment-signals.mjs'
 import { gateInputOf, sourceTextsOf, type GateContext, type SourcePost, type TargetSource } from './persona-comment-targets'
-import { runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter } from './persona-comment-pipeline'
+import {
+  runEnqueuePipeline, type PipelineBeforeProvider, type PipelineGate, type PipelineProvider, type PipelineOutcome, type PipelineResult, type PipelineTarget,
+  type PipelineWriter,
+} from './persona-comment-pipeline'
+import {
+  attemptKeyOf, attemptOutcomeOf, postPersonaKeyOf, type AttemptEntry,
+} from '../../src/lib/persona-comment-attempt-policy'
+import type { AttemptStore } from './persona-comment-attempt-store.mjs'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
 import { judgeStaticVoiceCapability } from '../../src/lib/persona-voice-repeat'
@@ -140,6 +151,11 @@ export type FollowupPhaseDeps = {
   runtimeStage: string | null
   /** 🔴 최근 단계 증거의 대화 감사(`StageEvidenceVerdict.conversation`) — 그대로 넘긴다 */
   conversationAudit: unknown
+  /**
+   * 🔴 **추가 댓글 lane 시도 기억**(`followupAttemptStoreInLease`). 첫 댓글 저장소와 다른 파일이다.
+   *    다른 lane 저장소이거나 못 읽으면 그 회차 유료 생성 0(fail-closed) — sweep 은 돈다.
+   */
+  attemptStore: AttemptStore
 }
 
 export type FollowupPhaseReport = {
@@ -188,6 +204,150 @@ export function followupReserveUsd(model: string | null, headroom: number | null
 const reactionOf = (text: string): ReactionType | null => {
   const r: unknown = classifyReaction(text)
   return isReactionType(r) ? r : null
+}
+
+/** 회차가 이을 글 하나(정해진 순서) — 시도 기억의 만료 계산에 글 공개 시각이 필요하다 */
+export type FollowupSlot = { postId: string; postPublishedAtMs: number }
+
+/**
+ * 🔴 이 글에서 지금 고를 Persona 를 정할 때 빼야 하는 것 — 오늘 격리(이번 회차 실패를 더한 사본) · 이번 회차 사용.
+ *    같은 글에 머무는 실패(Persona · 글 × Persona · 기억이 막음)는 다시 고르기 **전에** 격리 사본에 들어간다.
+ */
+export type FollowupExclusion = {
+  isolation: FollowupIsolation
+  usedPersonaIds: ReadonlySet<string>
+}
+
+export type FollowupPlanned = { target: PipelineTarget; personaId: string }
+
+/**
+ * 🔴 한 대상의 시도 — 운영은 `runEnqueuePipeline` 에 대상 하나를 넘긴다(호출 1 · 적재 1 상한).
+ *    `errorCode`(provider) · `writeCode`(writer)는 분류기가 쓰는 코드다 — 본문 · 사유 문장이 아니다.
+ */
+export type FollowupAttempt = (target: PipelineTarget, beforeProvider: PipelineBeforeProvider) =>
+  Promise<{ result: PipelineResult; errorCode: string | null; writeCode: string | null }>
+
+export type FollowupGenerationReport = {
+  providerCalls: number
+  created: number
+  outcomes: PipelineOutcome[]
+  stoppedReason: string | null
+  /** 시도마다 붙인 분류 — 글 · Persona · 분류 코드 */
+  classified: { postId: string; personaCode: string; code: FollowupFailureCode }[]
+  warnings: string[]
+  lines: string[]
+}
+
+/**
+ * 🔴 **추가 댓글 생성 — 실패 분류 · 같은 회차 재선정** (2026-11-14 H1).
+ *
+ *    글은 정해진 순서(`orderFollowupGo`)로 하나씩 본다. 한 글에서:
+ *      1. `planFor` 가 오늘 격리 · 이번 회차 사용 · 이 글 시도를 뺀 Persona 를 고른다(결정적 picker 그대로)
+ *      2. provider 앞에서 시작 기록(`recordStart`) — 못 남기면 부르지 않는다(IO 면 회차를 멈춘다)
+ *      3. 결과를 `classifyFollowupFailure` 로 분류하고 **바로** 기억에 적는다(`FU_*` 를 `blockCodes` 에)
+ *      4. Persona 실패 → 그 Persona 를 오늘 빼고 **같은 글에서 다음 정상 Persona** 를 다시 고른다
+ *         글 × Persona 실패 → 그 글에서 그 Persona 만 빼고 다시 고른다
+ *         글 실패 → 그 글만 오늘 빼고 다음 글로 간다(그 Persona 는 다른 글에서 쓴다)
+ *         일시 · 모르는 실패 → 이번 회차를 멈춘다(일시 실패는 아무것도 격리하지 않는다)
+ *    🔴 상한 — 적재 `allowed` · 호출 `providerCallBudget`(비용 잔량 건수로 묶인 값) · 한 글 `FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK`.
+ *    🔴 첫 댓글 저장소를 받으면 아무것도 하지 않는다 — 첫 댓글 기억을 추가 댓글이 쓰지 않는다.
+ */
+export async function runFollowupGeneration<S extends FollowupSlot>(i: {
+  store: AttemptStore
+  nowMs: number
+  allowed: number
+  /** 🔴 `judgeFollowupTick().providerCallBudget` — 이보다 많이 부르지 않는다 */
+  providerCallBudget: number
+  slots: readonly S[]
+  /** 시도 기억에서 읽은 오늘 격리(`followupIsolationOf`) — 이 함수는 사본에 더한다 */
+  isolation: FollowupIsolation
+  planFor: (slot: S, ex: FollowupExclusion) => { ok: true; plan: FollowupPlanned } | { ok: false; reason: string }
+  attempt: FollowupAttempt
+}): Promise<FollowupGenerationReport> {
+  const report: FollowupGenerationReport = {
+    providerCalls: 0, created: 0, outcomes: [], stoppedReason: null, classified: [], warnings: [], lines: [],
+  }
+  if (i.store.lane !== 'followup') {
+    report.warnings.push('🔴 추가 댓글 단계가 다른 lane 시도 기억을 받았다 — 유료 호출 0')
+    report.stoppedReason = '시도 기억 lane 불일치 — provider 0'
+    return report
+  }
+  const iso: FollowupIsolation = {
+    personaCodes: new Set(i.isolation.personaCodes), postIds: new Set(i.isolation.postIds),
+    postPersonaKeys: new Set(i.isolation.postPersonaKeys),
+  }
+  const usedPersonaIds = new Set<string>()
+  const budget = Math.max(0, i.providerCallBudget)
+  const full = (): boolean => report.created >= i.allowed || report.providerCalls >= budget
+  const halt = (why: string): void => { report.stoppedReason = why }
+
+  outer: for (const slot of i.slots) {
+    if (full()) break
+    if (iso.postIds.has(slot.postId)) { report.lines.push(`글 ${slot.postId.slice(0, 8)} — 오늘(KST) 글 쪽 실패로 격리 · 건너뜀`); continue }
+    for (let n = 0; n < FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK; n++) {
+      if (full()) break outer
+      const picked = i.planFor(slot, { isolation: iso, usedPersonaIds })
+      if (!picked.ok) { report.lines.push(`글 ${slot.postId.slice(0, 8)} — ${picked.reason}`); break }
+      const { target, personaId } = picked.plan
+      const facts = target.facts
+      const key = attemptKeyOf(facts)
+      let started = false
+      const beforeProvider: PipelineBeforeProvider = () => {
+        const entry: AttemptEntry = {
+          postId: facts.postId, personaCode: facts.personaCode, reactionRole: facts.reactionRole,
+          postPublishedAtMs: slot.postPublishedAtMs, attemptedAtMs: i.nowMs, step: 'STARTED', failedGates: [], blockCodes: [],
+        }
+        const w = i.store.recordStart(entry, i.nowMs)
+        if (w.ok) { started = true; return { proceed: true } }
+        if (w.kind === 'IO') report.warnings.push(`🔴 추가 댓글 시도 기록을 남기지 못했다 ${w.reason} — 남은 provider 0`)
+        return { proceed: false, reason: `시도 기록 [${w.kind}] ${w.reason}`, stopRound: w.kind === 'IO' }
+      }
+      const r = await i.attempt(target, beforeProvider)
+      report.providerCalls += r.result.providerCalls
+      report.created += r.result.created
+      report.outcomes.push(...r.result.outcomes)
+      const o = r.result.outcomes.at(-1)
+      // 🔴 대상 결과가 없다 = 파이프라인 입구(정본 · 모델 · 관문 입력)가 닫혔다 — 다음 대상도 같다
+      if (o === undefined) { halt(r.result.stoppedReason ?? '파이프라인이 결과 없이 끝났다 — provider 0'); break outer }
+      if (o.step === 'AUTHOR_BLOCKED') break // 글 성격 — provider 0 · 기록 0 · 다음 글
+      if (o.step === 'ATTEMPT_BLOCKED') {
+        if (r.result.stoppedReason !== null) { halt(r.result.stoppedReason); break outer }
+        iso.postPersonaKeys.add(postPersonaKeyOf(facts)) // 기억이 이미 막고 있다 — 이번 회차에서도 뺀다(호출 0)
+        continue
+      }
+      const code = o.step === 'ENQUEUED' ? null : classifyFollowupFailure({
+        step: o.step, errorCode: r.errorCode, writeCode: r.writeCode,
+        failedGates: o.plan?.gates.filter((g) => g.outcome !== 'pass').map((g) => `${g.gate}:${g.outcome}`) ?? [],
+        blockCodes: o.plan?.blocks.map((b) => b.code) ?? [],
+      })
+      if (started) {
+        const summary = attemptOutcomeOf({ step: o.step, gates: o.plan?.gates ?? [], blockCodes: o.plan?.blocks.map((b) => b.code) ?? [] })
+        if (summary !== null) {
+          const blockCodes = code === null ? summary.blockCodes : [...summary.blockCodes.slice(0, 31), code]
+          const done = i.store.recordOutcomes([{ key, ...summary, blockCodes }], i.nowMs)
+          if (!done.ok) {
+            // 🔴 결과를 못 적으면 다음 회차는 미완(`STARTED`)으로 읽는다(글 × Persona). 이번 회차는 더 부르지 않는다
+            report.warnings.push(`🔴 추가 댓글 시도 결과를 갱신하지 못했다 ${done.reason} — 남은 provider 0`)
+            halt('시도 결과 기록 실패 — 남은 provider 0')
+            break outer
+          }
+        }
+      }
+      if (code === null) {
+        if (o.step === 'ENQUEUED') usedPersonaIds.add(personaId)
+        break // 적재 · dry-run — 한 글 한 건, 다음 글
+      }
+      report.classified.push({ postId: facts.postId, personaCode: facts.personaCode, code })
+      addFollowupIsolation(iso, facts, code)
+      report.lines.push(`   분류 ${facts.personaCode} → 글 ${facts.postId.slice(0, 8)} · ${o.step} · ${code}`)
+      if (r.result.stoppedReason !== null) { halt(r.result.stoppedReason); break outer }
+      if (followupFailureHaltsRound(code)) { halt(`${code} — 이번 회차 남은 provider 0(격리 ${code === 'FU_TRANSIENT' ? '없음' : '글 × Persona'})`); break outer }
+      if (code === 'FU_POST_DAY') break // 그 글만 오늘 뺀다 — 그 Persona 는 다른 글에서 쓴다
+      // FU_PERSONA_DAY · FU_COMBO_DAY — 같은 글에서 다음 정상 Persona 를 다시 고른다
+      //    (글 × Persona 실패는 그 쌍만 막는다 — 그 Persona 는 이번 회차에도 다른 글에서 쓸 수 있다)
+    }
+  }
+  return report
 }
 
 /**
@@ -324,6 +484,20 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     const sweepAfter = await sweepFollowupLane(prisma, now)
     return { ...emptyPhase('TICK_ZERO', tick.blockers[0] ?? tick.detail), sweepBefore, sweepAfter, lines }
   }
+  // 🔴 시도 기억 — 추가 댓글 lane 저장소만 · 못 읽으면 유료 생성 0(첫 댓글과 같은 fail-closed)
+  const memory = deps.attemptStore.lane === 'followup' ? deps.attemptStore.read(nowMs) : null
+  if (memory === null || !memory.ok) {
+    const why = memory === null ? '추가 댓글 단계가 다른 lane 시도 기억을 받았다' : `추가 댓글 시도 기억을 읽지 못했다 [${memory.code}] ${memory.reason}`
+    lines.push(`🔴 ${why} — 유료 호출 0`)
+    const sweepAfter = await sweepFollowupLane(prisma, now)
+    return { ...emptyPhase('TICK_ZERO', why), sweepBefore, sweepAfter, lines }
+  }
+  if (memory.warning !== undefined) lines.push(memory.warning)
+  // 🔴 오늘(KST) 격리 — Persona · 글 · 글 × Persona 셋뿐이다. 일시 실패는 어디에도 들지 않는다
+  const isolation = followupIsolationOf(memory.entries, nowMs)
+  if (isolation.personaCodes.size + isolation.postIds.size + isolation.postPersonaKeys.size > 0) {
+    lines.push(`오늘 실패 격리 — Persona ${isolation.personaCodes.size} · 글 ${isolation.postIds.size} · 글×Persona ${isolation.postPersonaKeys.size} (KST 자정에 풀린다)`)
+  }
   const prof = validateFollowupProfile(deps.profile, deps.runtimeStage)
   const perPersonaMax = prof.ok ? prof.profile.perPersonaDailyMax : 0
 
@@ -349,10 +523,8 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   for (const r of fuRows) fuToday.set(r.personaId, (fuToday.get(r.personaId) ?? 0) + 1)
   const personaIdByCode = new Map((await prisma.persona.findMany({ select: { id: true, code: true } })).map((p) => [p.code, p.id]))
 
-  type Planned = { target: Parameters<typeof runEnqueuePipeline>[0]['targets'][number]; gate: GateContext; recentTexts: readonly string[]
+  type Planned = { target: PipelineTarget; gate: GateContext; recentTexts: readonly string[]
     go: Extract<FollowupPostVerdict, { verdict: 'GO' }>; existing: { text: string; persona: boolean }[] }
-  const planned: Planned[] = []
-  const usedPersonas = new Set<string>()
   /**
    * 🔴 **후보와 무관하게 ⑧ 이 막는 Persona 는 고르지 않는다** (2026-11-07 · 첫 댓글과 같은 함수).
    *    seed 공유 수는 고정 배정 값이라 한 번 읽는다 — 고를 때와 판정할 때 같은 값이다. 반복 이력만으로는 빼지 않는다.
@@ -361,21 +533,49 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   for (const pe of personas) if (pe.status === 'active') seedShareByCode.set(pe.code, await deps.source.seedUseCount(pe.code))
   const staticLocked = [...seedShareByCode].filter(([, n]) => !judgeStaticVoiceCapability({ seedShare: n }).capable).map(([c]) => c)
   if (staticLocked.length > 0) lines.push(`planner skip 고정 잠금 ${staticLocked.join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
-  for (const { postId, go, facts } of orderFollowupGo(eligibleReady)) {
-    if (planned.length >= allowed) break
+  // 🔴 자격 사실은 한 번 만든다 — 실회원 판정 · 프로필 · 정적 말투 능력은 기존 정본 그대로다(재선정이 이 값을 바꾸지 않는다)
+  const personaFacts: FollowupPersonaFacts[] = personas.map((pe) => {
+    const id = personaIdByCode.get(pe.code) ?? null
+    return {
+      code: pe.code, personaId: id, active: pe.status === 'active',
+      realMember: judgeRealMember({ accountCount: pe.user?.accountCount ?? null, providerId: pe.user?.providerId ?? null }).real,
+      profileComplete: pe.identity !== null && pe.voiceCore !== null && pe.lifeStage !== null && pe.lifeStage.trim() !== '',
+      voiceCapable: judgeStaticVoiceCapability({ seedShare: seedShareByCode.get(pe.code) ?? null }).capable,
+      followupsToday: id === null ? 0 : fuToday.get(id) ?? 0,
+    }
+  })
+  const ordered = orderFollowupGo(eligibleReady)
+  // 🔴 출처 문맥은 글 성격이다 — 회차 앞에서 GO 글 전부를 판정한다. 하나라도 모르면 회차 전체 유료 호출 0
+  //    (옛 규칙은 계획된 글만 봤다 — 재선정으로 어느 글까지 닿을지 미리 모르므로 범위를 넓혀 fail-closed 로 둔다)
+  const ctxByPost = new Map(ordered.flatMap(({ postId }) => {
     const src = srcById.get(postId)
-    if (src === undefined) continue
-    const eligible = personas.filter((pe) => pe.status === 'active'
-      && !judgeRealMember({ accountCount: pe.user?.accountCount ?? null, providerId: pe.user?.providerId ?? null }).real
-      && pe.identity !== null && pe.voiceCore !== null && pe.lifeStage !== null && pe.lifeStage.trim() !== ''
-      && judgeStaticVoiceCapability({ seedShare: seedShareByCode.get(pe.code) ?? null }).capable)
-    const pick = pickFollowupPersona(go, postId, eligible.flatMap((pe) => {
-      const id = personaIdByCode.get(pe.code)
-      // 🔴 같은 회차에 한 Persona 는 한 글만
-      return id === undefined || usedPersonas.has(id) ? [] : [{ personaId: id, eligible: true, followupsToday: fuToday.get(id) ?? 0 }]
-    }), perPersonaMax)
-    if (pick.personaId === null) { lines.push(`글 ${postId.slice(0, 8)} — ${pick.reason}`); continue }
-    const pe = eligible.find((x) => personaIdByCode.get(x.code) === pick.personaId)!
+    return src === undefined ? [] : [[postId, judgeSourceContext({
+      visibility: src.visibility, sourceSite: src.sourceSite, boardType: src.boardType, title: src.title, body: src.content,
+    })] as const]
+  }))
+  const providerBlockers: string[] = []
+  if (knownNames === undefined) providerBlockers.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
+  if (frequencyRead.corpus === null) providerBlockers.push(`frequencyLookup — ${frequencyRead.reason}`)
+  for (const ctx of ctxByPost.values()) if (ctx.operational === null) providerBlockers.push(`sourceIsCafeOperational — ${ctx.reason}`)
+  // 🔴 seed 공유 수를 못 셌으면 회차 전체 유료 호출 0 — 첫 댓글 materializer 와 같은 정본(그 사람만 빼고 계속하지 않는다)
+  for (const [code, n] of seedShareByCode) if (n === null) providerBlockers.push(`seedUseCount (${code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
+
+  const byKey = new Map<string, Planned>()
+  const planOf = (input: CommentInput) => byKey.get(`${input.post.id}\u0000${input.personaCode}`)
+  type Slot = FollowupSlot & (typeof ordered)[number]
+  /** 🔴 이 글에서 지금 고를 Persona 하나 — 걸러내기는 `followupPersonaCandidates`, 순서는 `pickFollowupPersona`(결정적) */
+  const planFor = (slot: Slot, ex: FollowupExclusion): { ok: true; plan: FollowupPlanned } | { ok: false; reason: string } => {
+    const { postId, go, facts } = slot
+    const src = srcById.get(postId)
+    const ctx = ctxByPost.get(postId)
+    if (src === undefined || ctx === undefined) return { ok: false, reason: '원문을 찾지 못했다' }
+    const candidates = followupPersonaCandidates({
+      postId, personas: personaFacts, isolation: ex.isolation, usedPersonaIds: ex.usedPersonaIds,
+    })
+    const pick = pickFollowupPersona(go, postId, candidates, perPersonaMax)
+    if (pick.personaId === null) return { ok: false, reason: pick.reason }
+    const pe = personas.find((x) => personaIdByCode.get(x.code) === pick.personaId)
+    if (pe === undefined) return { ok: false, reason: '고른 Persona 를 찾지 못했다' }
     const replyToDigest = go.target.kind === 'reply'
       ? (contentOf.get(go.target.commentId) ?? '').slice(0, FOLLOWUP_REPLY_DIGEST_CHARS) : undefined
     const liveComments = facts.comments.filter((c) => !c.isDeleted)
@@ -399,11 +599,9 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       })
       if (b.ok) { built = b; break }
     }
-    if (built === null || !built.ok) { lines.push(`글 ${postId.slice(0, 8)} — ${pe.code} 입력을 만들지 못했다`); continue }
-    usedPersonas.add(pick.personaId)
-    const ctx = judgeSourceContext({ visibility: src.visibility, sourceSite: src.sourceSite, boardType: src.boardType, title: src.title, body: src.content })
+    if (built === null || !built.ok) return { ok: false, reason: `${pe.code} 입력을 만들지 못했다` }
     const recentTexts = pe.comments.map((c) => c.content)
-    planned.push({
+    const planned: Planned = {
       go, recentTexts,
       existing: [
         { text: `${src.title}\n${src.content}`, persona: false },
@@ -427,18 +625,18 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           personaAlreadyOnPost: false, postStatus: src.visibility.status, personaActive: true, personaRealMember: false,
         },
       },
-    })
+    }
+    byKey.set(`${postId}\u0000${pe.code}`, planned)
+    return { ok: true, plan: { target: planned.target, personaId: pick.personaId } }
   }
-  const providerBlockers: string[] = []
-  if (knownNames === undefined) providerBlockers.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
-  if (frequencyRead.corpus === null) providerBlockers.push(`frequencyLookup — ${frequencyRead.reason}`)
-  for (const p of planned) if (p.gate.sourceIsCafeOperational === null) providerBlockers.push(`sourceIsCafeOperational — ${p.gate.sourceContextReason}`)
-  // 🔴 seed 공유 수를 못 셌으면 회차 전체 유료 호출 0 — 첫 댓글 materializer 와 같은 정본(그 사람만 빼고 계속하지 않는다)
-  for (const [code, n] of seedShareByCode) if (n === null) providerBlockers.push(`seedUseCount (${code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
-
-  const byKey = new Map(planned.map((p) => [`${p.target.facts.postId}\u0000${p.target.facts.personaCode}`, p]))
-  const planOf = (input: CommentInput) => byKey.get(`${input.post.id}\u0000${input.personaCode}`)
-  const generate = planned.length === 0 ? null : deps.makeGenerate(planned.map((p) => p.target.input.personaCode))
+  // 🔴 생성기는 첫 시도에서 한 번 만든다 — 말투 근거는 고를 수 있는 Persona 전체 기준(자산이 하나라도 있으면 전원 강제)
+  let generate: FollowupGenerate | null = null
+  const generatorOf = (): FollowupGenerate => {
+    if (generate === null) {
+      generate = deps.makeGenerate(personaFacts.filter((p) => p.active && !p.realMember && p.profileComplete && p.voiceCapable).map((p) => p.code))
+    }
+    return generate
+  }
   // 🔴 9관문은 첫 댓글과 같은 정본 그대로다(`makeCanonGate` 와 같은 모양 · 완화 없음)
   const gate: PipelineGate = ({ input, text }) => {
     const p = planOf(input)
@@ -455,6 +653,9 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       return { gates: [], gateStatus: 'GATE_ERROR', isBootstrap: false }
     }
   }
+  // 🔴 분류기가 쓰는 코드 — 대상 하나씩 부르므로 시도마다 비운다(본문 · 사유 문장이 아니다)
+  let lastErrorCode: string | null = null
+  let lastWriteCode: string | null = null
   const writer: PipelineWriter = async ({ input, text, gates, gateStatus, provenance }) => {
     const p = planOf(input)
     if (p === undefined) return { created: false, reason: '추가 댓글 계획을 찾지 못했다' }
@@ -474,32 +675,48 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       },
     })
     if (res.created) return { created: true, reason: '추가 댓글 PENDING 적재' }
+    lastWriteCode = res.code
     const code = res.errorCode // 🔴 중복은 unique constraint(P2002)가 가른다
     return { created: false, reason: code === 'P2002' ? '🔴 같은 자리(글·순번) 열쇠가 이미 있다(fail-closed)' : res.reason }
   }
-  const result = await runEnqueuePipeline({
-    selection: deps.canon.selection, canon: deps.canon.canon, targets: planned.map((p) => p.target),
-    preflightOk: providerBlockers.length === 0, preflightBlockers: providerBlockers,
-    provider: async ({ model: m, input }) => {
-      const p = planOf(input)
-      if (p === undefined || generate === null) return { ok: false, text: null, errorCode: 'NO_PLAN' }
-      let r: { ok: boolean; text: string | null; errorCode: string | null }
-      try { r = await generate({ model: m, input, recentTexts: p.recentTexts }) } catch {
-        return { ok: false, text: null, errorCode: 'PROVIDER_EXCEPTION' }
-      }
-      // 🔴 본문 중복 · 같은 도입 — 9관문 앞에서 막는다(돈은 썼지만 적재 0)
-      if (r.ok && r.text !== null && !judgeFollowupText({ text: r.text, existing: p.existing }).ok) {
-        return { ok: false, text: null, errorCode: 'FOLLOWUP_TEXT_DUP' }
-      }
-      return r
-    },
-    gate, writer, providerCallLimit: planned.length, limit: allowed, oneCreatedPerPost: true,
+  const provider: PipelineProvider = async ({ model: m, input }) => {
+    const p = planOf(input)
+    if (p === undefined) { lastErrorCode = 'NO_PLAN'; return { ok: false, text: null, errorCode: 'NO_PLAN' } }
+    let r: { ok: boolean; text: string | null; errorCode: string | null }
+    try { r = await generatorOf()({ model: m, input, recentTexts: p.recentTexts }) } catch {
+      lastErrorCode = 'PROVIDER_EXCEPTION'
+      return { ok: false, text: null, errorCode: 'PROVIDER_EXCEPTION' }
+    }
+    // 🔴 본문 중복 · 같은 도입 — 9관문 앞에서 막는다(돈은 썼지만 적재 0)
+    if (r.ok && r.text !== null && !judgeFollowupText({ text: r.text, existing: p.existing }).ok) {
+      lastErrorCode = 'FOLLOWUP_TEXT_DUP'
+      return { ok: false, text: null, errorCode: 'FOLLOWUP_TEXT_DUP' }
+    }
+    lastErrorCode = r.ok ? null : r.errorCode
+    return r
+  }
+  const attempt: FollowupAttempt = async (target, beforeProvider) => {
+    lastErrorCode = null
+    lastWriteCode = null
+    // 🔴 대상 하나 · 호출 1 · 적재 1 — 다음 대상은 이 결과를 분류한 뒤에 고른다(같은 회차 재선정)
+    const result = await runEnqueuePipeline({
+      selection: deps.canon.selection, canon: deps.canon.canon, targets: [target],
+      preflightOk: providerBlockers.length === 0, preflightBlockers: providerBlockers,
+      provider, gate, writer, providerCallLimit: 1, limit: 1, oneCreatedPerPost: true, beforeProvider,
+    })
+    return { result, errorCode: lastErrorCode, writeCode: lastWriteCode }
+  }
+  const gen = await runFollowupGeneration({
+    store: deps.attemptStore, nowMs, allowed, providerCallBudget: Math.min(tick.providerCallBudget, followupPlanCap(allowed)),
+    slots: ordered.map((x) => ({ ...x, postPublishedAtMs: x.publishedAtMs })), isolation, planFor, attempt,
   })
-  if (result.stoppedReason !== null) lines.push(`생성 멈춤: ${result.stoppedReason}`)
-  for (const o of result.outcomes) lines.push(`   추가 ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}`)
+  for (const w of gen.warnings) lines.push(w)
+  for (const l of gen.lines) lines.push(l)
+  if (gen.stoppedReason !== null) lines.push(`생성 멈춤: ${gen.stoppedReason}`)
+  for (const o of gen.outcomes) lines.push(`   추가 ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}`)
   const sweepAfter = await sweepFollowupLane(prisma, now)
   return {
     outcome: 'RAN', reason: tick.detail, sweepBefore, sweepAfter, goPosts: ready.length,
-    providerCalls: result.providerCalls, enqueued: result.created, outcomes: result.outcomes, lines,
+    providerCalls: gen.providerCalls, enqueued: gen.created, outcomes: gen.outcomes, lines,
   }
 }

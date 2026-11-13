@@ -59,6 +59,8 @@ const { runCommentLoop, sweepAutoLane } = await import('./lib/persona-comment-lo
 const { createAttemptStore } = await import('./lib/persona-comment-attempt-store.mjs')
 /** 🔴 호출마다 빈 시도 기억 — 이 검사의 시나리오는 서로 이어지지 않는다(첫 댓글 시도 기억 자체는 loop-check 가 시험한다) */
 const freshAttemptStore = () => createAttemptStore({ dir: mkdtempSync(join(HOME, 'attempts-')) })
+/** 🔴 추가 댓글 lane 도 호출마다 빈 기억 — 실패 격리 · 자정 리셋 자체는 followup-check 가 결정적으로 시험한다 */
+const freshFollowupAttemptStore = () => createAttemptStore({ dir: mkdtempSync(join(HOME, 'fu-attempts-')), lane: F.FOLLOWUP_ATTEMPT_LANE })
 const { runFollowupPhase, readFollowupContext, sweepFollowupLane, FOLLOWUP_EXPIRE_REASON } = await import('./lib/persona-comment-followup-run.mjs')
 const { SupplyLlmSession } = await import('./lib/supply-llm-call.mjs')
 const { judgeCommentCall } = await import('./lib/persona-comment-call.mjs')
@@ -265,7 +267,7 @@ async function phase(gen: FollowupGenerate, over: Partial<Parameters<typeof runF
   return runFollowupPhase({
     prisma, now, env: process.env, source: source(), canon: canonRead,
     makeGenerate: () => gen, generation: { ok: true, reason: '' },
-    ledger: { entries: [], capUsd: 0.2, headroom: 1.5 },
+    ledger: { entries: [], capUsd: 0.2, headroom: 1.5 }, attemptStore: freshFollowupAttemptStore(),
     ...ctx, ...over,
   })
 }
@@ -1048,6 +1050,7 @@ async function main(): Promise<void> {
         prisma: trap, now: new Date(), env: process.env, source: source(), canon: canonRead,
         makeGenerate: () => fakeGen().gen, generation: { ok: true, reason: '' },
         ledger: { entries: [], capUsd: 0.2, headroom: 1.5 }, profile: PROFILE, runtimeStage: STAGE, conversationAudit: PASS_AUDIT,
+        attemptStore: freshFollowupAttemptStore(),
       })
       check('🔴 스위치 OFF → 추가 댓글 단계의 DB 접근 0 · provider 0', r.outcome === 'OFF' && touched === 0, `${r.outcome} touched=${touched}`)
     }

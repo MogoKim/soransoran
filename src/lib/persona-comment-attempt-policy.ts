@@ -21,7 +21,15 @@
  *    그래서 `failedGates` 에 `⑧:*` 가 남은 항목은 그 글에서 **그 Persona 의 모든 역할**을 뺀다. 다른 글은 막지 않는다.
  *    파일 모양(v1)은 바꾸지 않는다 — 이미 적고 있는 `failedGates` 에서 파생한다(옛 reader 와 rollback 이 같은 파일을 읽는다).
  *
- * 🔴 이 모듈은 Gate · threshold · 상수 · 비용 · Queue · 발행을 건드리지 않는다. 첫 댓글 lane 만 쓴다(추가 댓글은 쓰지 않는다).
+ * 🔴 **lane 두 개가 같은 모양 · 같은 함수를 쓴다** (2026-11-14 H1 · 추가 댓글 starvation).
+ *    · 첫 댓글 lane(`FIRST_COMMENT_ATTEMPT_LANE`, 기본값) — 위 60분 계약 그대로다. 기본 인자라 기존 호출부는 바뀌지 않는다.
+ *      두 lane 훅(`replaceableOnRestart` · `startBlockedBy`)은 첫 댓글에서 "바꾸지 않음 · 더 막지 않음" 이다.
+ *    · 추가 댓글 lane(`FOLLOWUP_ATTEMPT_LANE` · `persona-comment-followup.ts`) — 기억은 **시도한 KST 날의 자정까지**다.
+ *      실패를 typed 분류 코드(`FU_*`, `blockCodes` 에 싣는다)로 나눠 **그 분류의 최소 범위만** 막는다 —
+ *      Persona · 글 · 글 × Persona 중 하나. 글 전체를 실패 하나로 막지 않는다(정상 Persona 재선정을 막았다).
+ *    두 lane 은 **다른 파일**에 적는다(저장소가 lane 이름으로 파일을 고른다) — 한 lane 의 기억이 다른 lane 을 막지 않는다.
+ *
+ * 🔴 이 모듈은 Gate · threshold · 상수 · 비용 · Queue · 발행을 건드리지 않는다.
  */
 import { AUTO_FIRST_COMMENT_WINDOW_MS } from './persona-comment-auto-lane'
 import { dedupKeyOf } from './persona-comment-queue'
@@ -50,28 +58,72 @@ export type AttemptEntry = {
 
 export type AttemptJournal = { version: typeof ATTEMPT_JOURNAL_VERSION; entries: readonly AttemptEntry[] }
 
+/**
+ * 🔴 **시도 기억의 기간 · 범위** — lane 마다 하나. 파일 모양(v1)은 같다.
+ *    `expiresAtMs` 는 그 기억이 끝나는 시각(포함)이고, `allExpiredAtMs(t)` 는 t 에 마지막으로 쓴 장부의 모든 기억이
+ *    끝난 시각(포함)이다 — 손상본 자동 복구는 그 뒤에만 한다(그 전에는 무엇을 보냈는지 모르므로 fail-closed).
+ */
+export type AttemptLane = {
+  readonly name: 'first-comment' | 'followup'
+  /** 사유 문장에 싣는 기간 이름 — 본문 · 경로가 아니다 */
+  readonly windowLabel: string
+  readonly expiresAtMs: (e: Pick<AttemptEntry, 'postPublishedAtMs' | 'attemptedAtMs'>) => number
+  /** 🔴 시도는 글 공개 뒤 이 시간(포함) 안에서만 일어난다 — 스키마가 그 밖의 줄을 거절한다 */
+  readonly attemptWindowMs: number
+  readonly allExpiredAtMs: (lastWriteMs: number) => number
+  /**
+   * 🔴 같은 조합의 기억 `prev` 를 새 시작 기록으로 **바꿔도 되는가**(한 조합 한 줄 · 파일 모양 유지).
+   *    첫 댓글은 언제나 false — 같은 조합 재전송 금지가 그 lane 의 계약이다.
+   */
+  readonly replaceableOnRestart: (prev: AttemptEntry) => boolean
+  /**
+   * 🔴 lane 고유의 마지막 방어선 — 막아야 하면 사유, 아니면 null. `live` 는 이 lane 기간 안의 기억이다.
+   *    첫 댓글은 언제나 null(조합 · ⑧ 규칙만 쓴다).
+   */
+  readonly startBlockedBy: (live: readonly AttemptEntry[], e: AttemptEntry) => string | null
+}
+
+/** 🔴 첫 댓글 lane — 발행 + 60분. 모든 함수의 기본값이다 */
+export const FIRST_COMMENT_ATTEMPT_LANE: AttemptLane = Object.freeze({
+  name: 'first-comment',
+  windowLabel: '60분 window',
+  expiresAtMs: (e: Pick<AttemptEntry, 'postPublishedAtMs' | 'attemptedAtMs'>) => e.postPublishedAtMs + AUTO_FIRST_COMMENT_WINDOW_MS,
+  attemptWindowMs: AUTO_FIRST_COMMENT_WINDOW_MS,
+  allExpiredAtMs: (lastWriteMs: number) => lastWriteMs + AUTO_FIRST_COMMENT_WINDOW_MS,
+  replaceableOnRestart: () => false,
+  startBlockedBy: () => null,
+})
+
 /** 🔴 조합 열쇠는 Queue 의 `dedupKey` 와 같다 — 같은 자리를 같은 이름으로 부른다 */
 export function attemptKeyOf(c: { postId: string; personaCode: string; reactionRole: string }): string {
   return dedupKeyOf(c.postId, c.personaCode, c.reactionRole)
 }
 
-/** 이 기억이 끝나는 시각(포함) — 발행 + 60분 */
-export function attemptExpiresAtMs(e: Pick<AttemptEntry, 'postPublishedAtMs'>): number {
-  return e.postPublishedAtMs + AUTO_FIRST_COMMENT_WINDOW_MS
+/** 이 기억이 끝나는 시각(포함) — 첫 댓글은 발행 + 60분 · 추가 댓글은 시도한 KST 날의 끝 */
+export function attemptExpiresAtMs(
+  e: Pick<AttemptEntry, 'postPublishedAtMs' | 'attemptedAtMs'>, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): number {
+  return lane.expiresAtMs(e)
 }
 
 /** 🔴 window 는 경계 포함이다(`judgeAutoLane` 도 정확히 60분이면 통과). 그 뒤에는 글이 대상이 아니라 기억할 이유가 없다 */
-export function isAttemptActive(e: Pick<AttemptEntry, 'postPublishedAtMs'>, nowMs: number): boolean {
-  return nowMs <= attemptExpiresAtMs(e)
+export function isAttemptActive(
+  e: Pick<AttemptEntry, 'postPublishedAtMs' | 'attemptedAtMs'>, nowMs: number, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): boolean {
+  return nowMs <= attemptExpiresAtMs(e, lane)
 }
 
-export function activeAttempts(entries: readonly AttemptEntry[], nowMs: number): AttemptEntry[] {
-  return entries.filter((e) => isAttemptActive(e, nowMs))
+export function activeAttempts(
+  entries: readonly AttemptEntry[], nowMs: number, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): AttemptEntry[] {
+  return entries.filter((e) => isAttemptActive(e, nowMs, lane))
 }
 
 /** 🔴 planner 의 feasible 단계가 제외할 **정확한 조합** 집합 — ⑧ 밖의 실패는 조합 범위다(다른 역할은 다른 조합) */
-export function attemptedComboKeys(entries: readonly AttemptEntry[], nowMs: number): Set<string> {
-  return new Set(activeAttempts(entries, nowMs).map(attemptKeyOf))
+export function attemptedComboKeys(
+  entries: readonly AttemptEntry[], nowMs: number, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): Set<string> {
+  return new Set(activeAttempts(entries, nowMs, lane).map(attemptKeyOf))
 }
 
 /** 글 × Persona 열쇠 — 역할을 뺀다 */
@@ -89,8 +141,10 @@ export const isVoiceFailure = (e: Pick<AttemptEntry, 'failedGates'>): boolean =>
   e.failedGates.some((g) => VOICE_BLOCKING_GATES.has(g))
 
 /** 🔴 이 60분 window 안에서 ⑧ 로 막혀 **그 글에서는** 다시 부르지 않는 글 × Persona */
-export function voiceFailedPostPersonaKeys(entries: readonly AttemptEntry[], nowMs: number): Set<string> {
-  return new Set(activeAttempts(entries, nowMs).filter(isVoiceFailure).map(postPersonaKeyOf))
+export function voiceFailedPostPersonaKeys(
+  entries: readonly AttemptEntry[], nowMs: number, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): Set<string> {
+  return new Set(activeAttempts(entries, nowMs, lane).filter(isVoiceFailure).map(postPersonaKeyOf))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -114,7 +168,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const isStringList = (v: unknown, re: RegExp): v is string[] =>
   Array.isArray(v) && v.length <= LIST_MAX && v.every((x) => typeof x === 'string' && re.test(x))
 
-function entryProblem(raw: unknown): string | null {
+function entryProblem(raw: unknown, lane: AttemptLane): string | null {
   if (!isRecord(raw)) return '항목이 객체가 아니다'
   const keys = Object.keys(raw)
   if (keys.length !== ENTRY_KEYS.length || !ENTRY_KEYS.every((k) => keys.includes(k))) return '항목 키가 계약과 다르다'
@@ -126,11 +180,11 @@ function entryProblem(raw: unknown): string | null {
     const v = raw[k]
     if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) return `${k} 가 양의 정수가 아니다`
   }
-  // 🔴 시도는 글이 공개된 뒤 60분 window 안에서만 일어난다(경계 포함 — 런타임이 쓰는 범위와 같다)
+  // 🔴 시도는 글이 공개된 뒤 그 lane 범위 안에서만 일어난다(경계 포함 — 런타임이 쓰는 범위와 같다)
   const publishedAtMs = raw.postPublishedAtMs as number
   const attemptedAtMs = raw.attemptedAtMs as number
-  if (attemptedAtMs < publishedAtMs || attemptedAtMs > attemptExpiresAtMs({ postPublishedAtMs: publishedAtMs })) {
-    return 'attemptedAtMs 가 글 발행 후 60분 window 밖이다'
+  if (attemptedAtMs < publishedAtMs || attemptedAtMs > publishedAtMs + lane.attemptWindowMs) {
+    return `attemptedAtMs 가 글 발행 후 ${lane.name === 'first-comment' ? '60분 window' : '시도 범위'} 밖이다`
   }
   if (!(ATTEMPT_STEPS as readonly unknown[]).includes(raw.step)) return 'step 이 계약 밖이다'
   if (!isStringList(raw.failedGates, FAILED_GATE_RE)) return 'failedGates 모양이 맞지 않는다'
@@ -139,7 +193,7 @@ function entryProblem(raw: unknown): string | null {
 }
 
 /** 🔴 읽기만 한다 — 고치지 않는다. 깨졌으면 부르는 쪽이 유료 생성을 닫는다 */
-export function parseAttemptJournal(text: string): AttemptParse {
+export function parseAttemptJournal(text: string, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE): AttemptParse {
   let raw: unknown
   try { raw = JSON.parse(text) } catch {
     return { ok: false, code: 'JSON_INVALID', reason: 'JSON 을 읽지 못했다' }
@@ -148,7 +202,7 @@ export function parseAttemptJournal(text: string): AttemptParse {
     return { ok: false, code: 'SCHEMA_MISMATCH', reason: `최상위 모양이 v${ATTEMPT_JOURNAL_VERSION} 계약과 다르다` }
   }
   for (const [i, e] of raw.entries.entries()) {
-    const why = entryProblem(e)
+    const why = entryProblem(e, lane)
     if (why !== null) return { ok: false, code: 'SCHEMA_MISMATCH', reason: `entries[${i}] — ${why}` }
   }
   // 🔴 같은 조합은 한 줄이다 — 시작 기록이 중복을 거절하므로, 두 줄이면 손으로 고쳐졌거나 깨진 파일이다
@@ -175,18 +229,31 @@ export type StartResult =
   | { ok: false; reason: string }
 
 /** 🔴 시작 기록. 같은 조합이 window 안에 이미 있으면 거절한다 — 두 번째 전송의 마지막 방어선 */
-export function withAttemptStarted(entries: readonly AttemptEntry[], e: AttemptEntry, nowMs: number): StartResult {
-  const live = activeAttempts(entries, nowMs)
+export function withAttemptStarted(
+  entries: readonly AttemptEntry[], e: AttemptEntry, nowMs: number, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): StartResult {
+  // 🔴 파일에 들어갈 줄은 읽을 때와 같은 스키마를 지금 통과해야 한다 — 잘못된 줄 하나가 장부 전체를 닫지 않게
+  const bad = entryProblem(e, lane)
+  if (bad !== null) return { ok: false, reason: `시작 기록 모양이 어긋났다 — ${bad}` }
+  const live = activeAttempts(entries, nowMs, lane)
   const key = attemptKeyOf(e)
-  if (live.some((x) => attemptKeyOf(x) === key)) {
-    return { ok: false, reason: '같은 조합이 이 60분 window 안에서 이미 전송 기록에 있다' }
+  /**
+   * 🔴 lane 이 허락한 같은 조합 기억만 새 시작으로 바꾼다 — 추가 댓글 lane 은 적재로 끝난 조합(다음 자리의 새 시도)과
+   *    일시 실패(`FU_TRANSIENT`)만 허락한다. 첫 댓글 lane 은 아무것도 바꾸지 않는다(같은 조합은 거절).
+   */
+  const kept = live.filter((x) => !(attemptKeyOf(x) === key && lane.replaceableOnRestart(x)))
+  if (kept.some((x) => attemptKeyOf(x) === key)) {
+    return { ok: false, reason: `같은 조합이 이 ${lane.windowLabel} 안에서 이미 전송 기록에 있다` }
   }
+  // 🔴 lane 고유의 마지막 방어선(추가 댓글 — 오늘 격리된 Persona · 글 · 글 × Persona). 첫 댓글은 null
+  const laneBlock = lane.startBlockedBy(kept, e)
+  if (laneBlock !== null) return { ok: false, reason: laneBlock }
   // 🔴 마지막 방어선 — ⑧ 로 막힌 글 × Persona 는 역할만 바꿔 다시 보내지 않는다
   if (live.some((x) => isVoiceFailure(x) && postPersonaKeyOf(x) === postPersonaKeyOf(e))) {
-    return { ok: false, reason: '이 글에서 같은 Persona 가 이 60분 window 안에 이미 ⑧ 로 막혔다 — 역할만 바꿔 다시 보내지 않는다' }
+    return { ok: false, reason: `이 글에서 같은 Persona 가 이 ${lane.windowLabel} 안에 이미 ⑧ 로 막혔다 — 역할만 바꿔 다시 보내지 않는다` }
   }
   if (e.step !== 'STARTED') return { ok: false, reason: '시작 기록의 step 은 STARTED 여야 한다' }
-  return { ok: true, entries: [...live, e] }
+  return { ok: true, entries: [...kept, e] }
 }
 
 export type AttemptOutcomeUpdate = {
@@ -202,8 +269,9 @@ export type AttemptOutcomeUpdate = {
  */
 export function withAttemptOutcomes(
   entries: readonly AttemptEntry[], updates: readonly AttemptOutcomeUpdate[], nowMs: number,
+  lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
 ): { entries: AttemptEntry[]; missing: string[] } {
-  const live = activeAttempts(entries, nowMs)
+  const live = activeAttempts(entries, nowMs, lane)
   const byKey = new Map(updates.map((u) => [u.key, u]))
   const hit = new Set<string>()
   const next = live.map((e) => {

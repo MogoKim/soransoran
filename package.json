@@ -288,6 +288,8 @@
     "check:comment-thread-db": "tsx --tsconfig tsconfig.ops.json scripts/comment-thread-db-check.mts",
     "check:persona-followup": "tsx scripts/persona-comment-followup-check.mts",
     "check:persona-followup-mutation": "tsx scripts/persona-comment-followup-mutation.mts",
+    "check:persona-followup-reselect": "tsx --tsconfig tsconfig.ops.json scripts/persona-comment-followup-reselect-check.mts",
+    "check:persona-followup-reselect-mutation": "tsx --tsconfig tsconfig.ops.json scripts/persona-comment-followup-reselect-mutation.mts",
     "persona:followup-db-check": "tsx scripts/persona-comment-followup-db-check.mts",
     "persona:birth-anchors": "tsx scripts/persona-birth-anchor-table.mts",
     "stage:db-check": "tsx scripts/stage-decision-db-check.mts",

@@ -1,6 +1,6 @@
 # 글당 Persona 댓글 최대 10 — 첫 댓글 뒤 선택적 추가 댓글·답글(0~9)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 profile 보정 · 2026-11-04 구조 상한 보정 · 상태: **최대 10 구현 후보 · 운영 검증 전**
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 profile 보정 · 2026-11-04 구조 상한 보정 · 2026-11-14 H1 실패 분류·같은 회차 재선정(§4-1) · 상태: **최대 10 구현 후보 · 운영 검증 전**
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
@@ -72,9 +72,11 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
   그날 단계는 **consumer 가 넣은 결정 env** 로만 안다 — 정본 읽기 문 `decisionStageEnv` 결과를 `followupStageOf` 가 판정한다
   (회차·트랜잭션 같은 함수): 표식 날짜 = 오늘(KST) · 공개·천장이 정본 단계 · 공개 ≤ 천장. 아니면 단계 모름 → 0건.
   러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 이 모듈은 단계 칸 env 를 직접 읽지 않는다.
-  `FOLLOWUP_CANARY_PROFILE_CANDIDATE`(40건 · $0.08 · 3 · 3)는 승인자가 비어 있는 **후보값**이다.
+  `FOLLOWUP_CANARY_PROFILE_CANDIDATE`(80건 · $0.16 · 3 · 3 — H1 에서 40건 · $0.08 에서 올렸다)는 승인자가 비어 있는 **후보값**이다.
+  승인자가 없으므로 이 값만으로는 0건이다. 운영에 설치된 승인 profile(§9)은 이 코드 변경으로 바뀌지 않는다.
 - 구조 상한 10은 운영 예산을 확대하지 않는다. 첫 댓글 부트스트랩 계산은 기존 기준 5(첫 댓글 1 + profile 산출 기준 4),
-  하루 절대 500을 유지하고, 추가 댓글 profile도 40건 · $0.08 · 회차 3 · Persona당 3을 유지한다.
+  하루 절대 500을 유지한다. 공유 장부 하루 상한 $0.20(`COMMENT_LOOP_DAILY_USD_DEFAULT`)은 H1 에서도 그대로다.
+  운영 승인 profile 은 §9 의 40건 · $0.08 · 회차 3 · Persona당 3 이고, 바꾸려면 승인 파일을 새로 써야 한다.
 - kill switch: `PersonaGlobalSwitch` — 회차와 트랜잭션 둘 다.
 
 ## 4. 멱등 · 복구
@@ -84,6 +86,31 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - 첫 댓글 sweep 은 추가 댓글 행을 집지 않고, 추가 댓글 sweep 은 추가 댓글 행만 집는다 — 두 레인이 서로의 행을 닫지 않는다.
 - 적재 뒤 죽으면 다음 정기 회차가 먼저 발행한다(provider 0). 발행 뒤 다시 돌아도 Queue · ActivityLog 중복 0.
 - 놓친 회차를 메우지 않는다 — 늦으면 다음 회차에 한 건, 24시간이 지나면 끝.
+
+## 4-1. 실패 분류 · 최소 범위 격리 · 같은 회차 재선정 (H1 · 2026-11-14 · 미배포 코드)
+
+- 문제: picker 가 (글, 순번) 해시로 Persona 를 고르는 결정적 선택이라, 실패한 Persona 를 다음 회차에도 다시 골랐다(starvation).
+  직전 미완 diff 는 실패한 글 **전체**를 KST 하루 격리해 같은 글의 정상 Persona 까지 막았다. 그 post 전체 격리는 지웠다.
+- 추가 댓글 시도 기억은 첫 댓글과 다른 파일(`followup-attempts.v1.json`)이고, 기억 기간은 KST 하루다(자정에 풀린다).
+  첫 댓글 파일(`first-comment-attempts.v1.json` · 60분)과 첫 댓글 lane 판정은 바꾸지 않았다.
+- 실패는 `classifyFollowupFailure` 가 다섯 코드 중 하나로 나누고, 시도 기억 `blockCodes` 에 함께 적는다(적힌 코드가 재분류보다 우선한다).
+
+| 코드 | 원인 | 오늘(KST) 격리 범위 | 같은 회차 |
+|---|---|---|---|
+| `FU_PERSONA_DAY` | Persona 에 묶인 결정적 실패(설정 · 말투 · bootstrap · prompt 근거 · 비활성 · 실회원) | 그 Persona — 모든 글 | 같은 글에서 다음 정상 Persona 재선정 |
+| `FU_POST_DAY` | 글에 묶인 실패(글 사라짐 · 비공개 · 게시판 바뀜 · Persona 댓글 꽉 참 · 글 상태 모름) | 그 글 하나 | 다음 글로 넘어간다 |
+| `FU_COMBO_DAY` | 그 글 × 그 Persona 본문 실패(관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복) | 글 × Persona 쌍 | 같은 글에서 재선정 |
+| `FU_TRANSIENT` | 일시 provider · IO · 장부(429 · 5xx · NETWORK · TIMEOUT · LEDGER_BLOCKED · DB ERROR) | 없음 | 회차를 멈춘다. 다음 회차에 같은 조합을 새로 시작할 수 있다 |
+| `FU_HALT` | 모르는 · 내부 실패 · 요청 모양 거부(400) | 글 × Persona 쌍 | 회차를 멈춘다 |
+
+- 상한: 적재는 profile 잔량(`allowed`) 그대로다. provider 호출은 `min(followupPlanCap(allowed) = allowed × 2, 비용 잔량 건수)`이고,
+  한 글에서 한 회차에 부르는 횟수는 `FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK` = 2 다. 하루 USD · 공유 장부 $0.20 · 첫 댓글 몫 선차감은 그대로다.
+- 후보 필터(`followupPersonaCandidates`)는 실회원 · 비활성 · 프로필 미완 · 말투 불가 · 격리 Persona · 격리 쌍 · 이번 회차 사용 Persona 를 뺀다.
+  회차 안의 격리 사본은 실패 직후 갱신되므로, 같은 글에 머무는 재선정은 방금 실패한 Persona 를 다시 고르지 않는다.
+- 시작 기록이나 결과 기록을 쓰지 못하면 provider 를 더 부르지 않고 회차를 멈춘다(fail-closed).
+- 범위가 넓어진 판정 둘: 출처 문맥 판정은 회차 앞에서 **GO 글 전부**를 본다(하나라도 모르면 회차 전체 유료 호출 0).
+  생성기(`makeGenerate`)에는 계획된 Persona 만이 아니라 재선정될 수 있는 정상 Persona 전부를 넘긴다.
+- 실제 회원 댓글 · 원문은 읽기 판정에만 쓰고 쓰지 않는다. 9관문 · 대화 감사 · 발행 트랜잭션 재검사는 바뀌지 않았다.
 
 ## 5. 단계 증거 분리 (D10)
 
@@ -97,6 +124,8 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 |---|---|---|
 | `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 시나리오 · profile 반례 · 구조 상한 10 · 일반 Persona 1회 · 글쓴이 답글 3회 · 사슬 6 · 첫 댓글 프롬프트 바이트 동일 |
 | `npm run check:persona-followup-mutation` | 같은 step | 구조 상한·글쓴이 예외·일반 반복 금지·profile·비용·증거를 지우거나 넓히면 잡히는지 확인 |
+| `npm run check:persona-followup-reselect` | 같은 step | H1 러너 결정 시험 — 실패 Persona 반복 0 · 같은 회차 대체 성공 · 글 실패가 다른 Persona·글을 막지 않음 · KST 자정 해제 · 일시 실패 오격리 0 · 모든 후보 실패 · 호출·비용 상한 · 결과 기록 IO 실패 · 첫 댓글 lane 규칙 불변(첫 댓글 저장소를 받으면 호출 0) · 실회원 Persona 선택 0 |
+| `npm run check:persona-followup-reselect-mutation` | 같은 step | 러너 사본에 재선정·격리·상한·중단 분기 14개를 하나씩 깨서 위 시험이 잡는지 확인 |
 | `npm run persona:followup-db-check` | 격리 Postgres step | 실제 consumer e2e · OFF 무변화 · 첫 댓글 회귀 · 정상 답글 · 총 10 상한 · 글쓴이 두 번째 답글 · 일반 반복 차단 · 실회원 우선 · 중복·동시 · 복구 · 장부 · 단계 증거 분리 |
 
 새 step 은 없다(무조건 step 상한 불변 · `check:workflow-budget` 90/90).
