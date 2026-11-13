@@ -31,6 +31,7 @@ import { isHeldStatus, isPublicAt, strictPublishAtMs } from './magazine-public-r
 import { ControlLocateError, locateConstLiteral, parseDataLiteral, parseGraphControl } from './magazine-graph-control.mjs'
 import { BANNED_WORDS } from './magazine-qa-constants.mjs'
 import { RELATION_DISPLAY_TARGET, VNEXT_PUBLICATION_RELATION_MINIMUM } from './magazine-relation-policy.mjs'
+import { NO_RELEASE_BINDING, provenanceOverlay } from '../../src/lib/magazine-provenance-rule.mjs'
 
 export const CONTENT_PLAN_SCHEMA = 'magazine-content-plan/1'
 export const COMPILE_SCHEMA = 'magazine-content-plan-compile/1'
@@ -446,15 +447,30 @@ function admitWithPlans(input) {
   const articleTitleKeys = new Set(listedRows.map((a) => normalizeTitleKey(a.title)))
   const mappedSlugs = new Map()
   for (const m of bundle.mappings) (mappedSlugs.get(m.intentId) ?? mappedSlugs.set(m.intentId, []).get(m.intentId)).push(m.slug)
-  // vNext 출처 — 상태와 무관하게 이미 출시된 intent(중복 판정) · 출처가 가리키는 행의 slug(대상 신원)
+  // vNext 출처 — 상태와 무관하게 이미 출시된 intent(중복 판정 · 차단 쪽이라 결속과 무관하다)
   const releasedSlugOf = new Map(articles.ok ? articles.rows.filter((a) => a.release).map((a) => [a.release.intentId, a.slug]) : [])
   /**
-   * 대상 intent 의 지금 공개된 slug — Bundle mapping slug ∪ 그 intent 의 vNext 출처 행 slug 중 공개된 것이 **정확히 하나일 때만** 센다.
+   * 출처가 **대상**이 되는 신원 — runtime resolver 와 같은 규칙 `provenanceOverlay` 하나로 정한다(S3 P1 수리).
+   * 🔴 runtime 이 버릴 대상을 승인하지 않는다 — canonical 같은 intent(미공개여도) · 같은 slug 충돌 · 출처 intent 중복 · 판에 없는 intent ·
+   *    결속 없음은 runtime 과 똑같이 overlay 0 이다. 같은 공개 관문(이 시각에 공개인 행)만 넘긴다 — runtime 의 공개 목록과 같은 모집단.
+   * 🔴 S3 P1 은 결속이 없다(NO_RELEASE_BINDING) — 출처는 대상이 되지 않는다. S3-P2 가 두 층에 같은 결속을 준다.
+   */
+  const overlaySlugsOf = new Map()
+  if (articles.ok) {
+    const overlay = provenanceOverlay({
+      canonical: bundle.mappings.map((m) => ({ intent: m.intentId, slug: m.slug })),
+      graphIntentIds: bundle.intents.map((x) => x.intentId),
+      rows: articles.rows.filter((a) => a.release && isPublicAt(a, nowMs)).map((a) => ({ slug: a.slug, release: a.release })),
+      binding: NO_RELEASE_BINDING,
+    })
+    for (const o of overlay) overlaySlugsOf.set(o.intent, [...(overlaySlugsOf.get(o.intent) ?? []), o.slug])
+  }
+  /**
+   * 대상 intent 의 지금 공개된 slug — Bundle mapping slug ∪ 공유 규칙이 더한 출처 slug 중 공개된 것이 **정확히 하나일 때만** 센다.
    * 🔴 둘 이상이면 고르지 않는다(null · 대상 없음) — 어느 글이 그 질문의 답인지 임의로 정하지 않는다.
    */
   const publicSlugOf = (intentId) => {
-    const pool = new Set(mappedSlugs.get(intentId) ?? [])
-    if (releasedSlugOf.has(intentId)) pool.add(releasedSlugOf.get(intentId))
+    const pool = new Set([...(mappedSlugs.get(intentId) ?? []), ...(overlaySlugsOf.get(intentId) ?? [])])
     const s = [...pool].filter((slug) => articleBySlug.has(slug) && isPublicAt(articleBySlug.get(slug), nowMs))
     return s.length === 1 ? s[0] : null
   }

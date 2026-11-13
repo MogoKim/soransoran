@@ -50,6 +50,8 @@ export const PRODUCT_FILES = Object.freeze({
   resolver: 'src/lib/magazine-graph.ts',
   control: 'src/content/magazine/graph/control.ts',
   articles: 'src/content/magazine/articles.ts',
+  // S3 P1 수리 — resolver · admission 이 함께 쓰는 출처 overlay 규칙. resolver 행동을 바꾸는 권위라 같은 제품 신원에 묶는다
+  provenanceRule: 'src/lib/magazine-provenance-rule.mjs',
 })
 
 /** G8 편입 장부 — readiness 가 읽기만 한다 */
@@ -425,6 +427,9 @@ export { parseControlText }
 
 /** 제품 사실 텍스트 → 구조. 표면 계약을 못 읽으면 build 를 멈춘다(모를 때 넓게 잡지 않는다) */
 export function parseProductTexts(texts) {
+  // 🔴 제품 신원 파일은 전부 실제 텍스트여야 한다 — 빠진 파일을 빈 문자열 해시로 넘기면 그 파일의 표류를 영영 못 본다
+  const missing = Object.entries(PRODUCT_FILES).filter(([k]) => typeof texts?.[k] !== 'string').map(([, rel]) => rel)
+  if (missing.length) fail('PRODUCT_TEXT_MISSING', `제품 신원 파일이 없다: ${missing.join(', ')}`)
   const implemented = readStringArray(texts.resolver, 'IMPLEMENTED_SURFACES')
   const footer = readStringArray(texts.resolver, 'FOOTER_SURFACES')
   const relationTypes = readStringArray(texts.resolver, 'MAGAZINE_RELATION_TYPES')
@@ -436,7 +441,7 @@ export function parseProductTexts(texts) {
   return {
     implemented, footer, relationTypes, articles,
     control: parseControlText(texts.control),
-    hashes: Object.fromEntries(Object.entries(PRODUCT_FILES).map(([k, rel]) => [rel, sha256(String(texts[k] ?? ''))])),
+    hashes: Object.fromEntries(Object.entries(PRODUCT_FILES).map(([k, rel]) => [rel, sha256(texts[k])])),
   }
 }
 

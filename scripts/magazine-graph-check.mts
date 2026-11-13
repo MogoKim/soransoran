@@ -48,11 +48,11 @@ import {
   MAX_TOTAL,
   SLOT_LABEL,
   effectiveGraphMappings,
-  provenanceDiagnostics,
   resolveFromGraph,
   resolveRelatedMagazine,
   graphRuntimeConfig,
 } from '../src/lib/magazine-graph'
+import { NO_RELEASE_BINDING, type ReleaseBinding } from '../src/lib/magazine-provenance-rule.mjs'
 import {
   MAX_KEYS,
   clearImpressions,
@@ -841,10 +841,14 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   type PEdge = MagazineGraph['edges'][number]
   type PMap = MagazineGraph['mappings'][number]
   type PIntent = MagazineGraph['intents'][number]
-  const rel = (intentId: string): MagazineArticle['release'] => ({ schemaVersion: 'magazine-article-release/1', intentId,
-    graphVersion: 'g-20261102-abcdef', bundleHash: 'a'.repeat(64), planHash: 'b'.repeat(64), policyBoard: { id: 'magazine-content-plan-policy/1', hash: 'c'.repeat(64) } })
-  const art = (slug: string, publishedAt: string, intentId?: string) =>
-    ({ slug, publishedAt, cluster: 'fam', title: slug, ...(intentId ? { release: rel(intentId) } : {}) }) as unknown as MagazineArticle
+  type Rel = NonNullable<MagazineArticle['release']>
+  const rel = (intentId: string, over: Partial<Rel> = {}): Rel => ({ schemaVersion: 'magazine-article-release/1', intentId,
+    graphVersion: 'g-20261102-abcdef', bundleHash: 'a'.repeat(64), planHash: 'b'.repeat(64), policyBoard: { id: 'magazine-content-plan-policy/1', hash: 'c'.repeat(64) }, ...over })
+  const art = (slug: string, publishedAt: string, intentId?: string, over: Partial<Rel> = {}) =>
+    ({ slug, publishedAt, cluster: 'fam', title: slug, ...(intentId ? { release: rel(intentId, over) } : {}) }) as unknown as MagazineArticle
+  // 🔴 합성 결속 — 정확한 컴파일 plan 의 다섯 필드. 운영 호출은 결속을 넘기지 않는다(S3 P1 = 출처 비활성)
+  const BIND: ReleaseBinding = { graphVersion: 'g-20261102-abcdef', bundleHash: 'a'.repeat(64),
+    policyBoard: { id: 'magazine-content-plan-policy/1', hash: 'c'.repeat(64) }, planHashOf: { 'I-NEW': 'b'.repeat(64) } }
   const pe = (id: string, from: string, to: string, slot: PEdge['slot'] = 'DIRECT_NEXT'): PEdge => ({
     id, from, to, type: slot === DISCOVERY_SLOT ? 'BRIDGE' : 'NEXT_QUESTION', slot, anchor: `${id} 앵커`, reason: `${id} 정본 이유`,
     placement: slot === DISCOVERY_SLOT ? 'FOOTER_BRIDGE' : 'FOOTER_NEXT', priority: 1, fromCluster: 'fam', toCluster: 'fam', active: true,
@@ -852,10 +856,13 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   const pm = (intent: string, slug: string): PMap => ({ intent, slug, cluster: 'fam', coverage: 'ANSWERS' })
   const pi = (...ids: string[]): PIntent[] => ids.map((id) => ({ id, cluster: 'fam', board: 'free' }))
   const g = (edges: PEdge[], mappings: PMap[], intents?: PIntent[]) => ({ graphVersion: 'g-p', edges, mappings, ...(intents ? { intents } : {}) })
-  const items = (self: MagazineArticle, graph: ReturnType<typeof g>, published: MagazineArticle[]) => {
-    const r = resolveFromGraph(self, graph, published, () => [])
+  const items = (self: MagazineArticle, graph: ReturnType<typeof g>, published: MagazineArticle[], binding: ReleaseBinding | null = BIND) => {
+    const r = resolveFromGraph(self, graph, published, () => [], binding)
     return 'reason' in r ? r.reason : r.resolved.items.map((i) => `${i.article.slug}|${i.source}|${i.slot ?? '-'}|${i.reason ?? '-'}|${i.relationType}|${i.surface}`)
   }
+  /** canonical 밖에서 실제로 더해진 출처 신원 — 버린 이유를 따로 돌려받지 않는다(운영이 읽지 않는 진단은 계약이 아니다) */
+  const addedOf = (graph: ReturnType<typeof g>, published: MagazineArticle[], binding: ReleaseBinding | null = BIND) =>
+    effectiveGraphMappings(graph, published, binding).slice(graph.mappings.length).map((m) => `${m.intent}>${m.slug}`)
 
   const NEW = art('new-v', '2026-11-20', 'I-NEW'), OLD = art('old', '2026-09-01'), OTH = art('other', '2026-10-01')
   const edges = [pe('E-N1', 'I-NEW', 'I-OLD'), pe('E-O1', 'I-OTH', 'I-NEW')]
@@ -870,7 +877,7 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   check('  관계 유형 · 이유 · 표면 · 슬롯은 graph edge 값 그대로다 (출처는 edge 를 싣지 않는다)',
     Array.isArray(out) && Array.isArray(inbound) && !Object.keys(rel('x') ?? {}).some((k) => /edge|reason|placement|slot|priority|anchor|publish/i.test(k)))
   check('  출처 없는 graph 결과는 overlay 함수를 거쳐도 같은 배열 객체다 (legacy 바이트 · 출력 불변)',
-    effectiveGraphMappings(full, [OLD, OTH]) === full.mappings && effectiveGraphMappings(GRAPH, published) === GRAPH.mappings)
+    effectiveGraphMappings(full, [OLD, OTH], BIND) === full.mappings && effectiveGraphMappings(GRAPH, published, BIND) === GRAPH.mappings)
   check('  공개되지 않은 vNext 글은 대상이 아니다 (공개 목록에 없으면 overlay 0)',
     JSON.stringify(items(OTH, full, [OLD, OTH])) === JSON.stringify('NO_RESULT'), JSON.stringify(items(OTH, full, [OLD, OTH])))
   check('  intent 목록을 주지 않는 graph 에서는 출처를 쓰지 않는다 (모르면 더하지 않는다)',
@@ -886,20 +893,19 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   const rolled = g([pe('E-O1', 'I-OTH', 'I-NEW')], maps, pi('I-OLD', 'I-OTH'))
   check('graph rollback 으로 출처 intent 가 없으면 무시하고 폴백한다 (예외 0 · 차단 0)',
     items(NEW, rolled, [NEW, OLD, OTH]) === 'NO_MAPPING' && items(OTH, rolled, [NEW, OLD, OTH]) === 'NO_RESULT')
-  const withIntents = (x: ReturnType<typeof g>) => ({ mappings: x.mappings, intents: x.intents ?? [] })
-  const diag = provenanceDiagnostics(withIntents(conflict), [NEW, OLD, OTH]).concat(provenanceDiagnostics(withIntents(rolled), [NEW, OLD, OTH]))
-  check('  진단만 낸다 — PROVENANCE_GRAPH_CONFLICT · PROVENANCE_INTENT_ABSENT (비차단)',
-    JSON.stringify(diag.map((d) => d.code)) === JSON.stringify(['PROVENANCE_GRAPH_CONFLICT', 'PROVENANCE_INTENT_ABSENT']), JSON.stringify(diag))
+  check('  충돌 · rollback 출처는 더해지지 않는다 (예외 0 · 비차단) — 대조군 full 에서는 더해진다',
+    addedOf(conflict, [NEW, OLD, OTH]).length === 0 && addedOf(rolled, [NEW, OLD, OTH]).length === 0
+      && JSON.stringify(addedOf(full, [NEW, OLD, OTH])) === JSON.stringify(['I-NEW>new-v']))
   // 다음 graph 승격이 mapping 을 흡수 — 같은 intent 면 출처 행이 겹쳐 무시되고 결과가 같다
   const absorbed = g(edges, [...maps, pm('I-NEW', 'new-v')], pi('I-NEW', 'I-OLD', 'I-OTH'))
   check('graph 가 mapping 을 흡수하면 출처는 겹쳐 무시되고 결과가 같다',
     JSON.stringify(items(OTH, absorbed, [NEW, OLD, OTH])) === JSON.stringify(inbound)
-      && effectiveGraphMappings(absorbed, [NEW, OLD, OTH]) === absorbed.mappings)
+      && effectiveGraphMappings(absorbed, [NEW, OLD, OTH], BIND) === absorbed.mappings)
   // canonical 은 intent 에도 우선한다 — canonical I-NEW → canonical-slug 가 있으면 출처 new-v → I-NEW 는 버린다(P1 수리)
   const CAN = art('canonical-slug', '2026-10-10')
   const sameIntent = g(edges, [...maps, pm('I-NEW', 'canonical-slug')], pi('I-NEW', 'I-OLD', 'I-OTH'))
   const pubs = [NEW, OLD, OTH, CAN]
-  const eff = effectiveGraphMappings(sameIntent, pubs)
+  const eff = effectiveGraphMappings(sameIntent, pubs, BIND)
   check('canonical 같은 intent 우선 — 유효 mapping 의 I-NEW 는 canonical-slug 하나뿐 · new-v overlay 0',
     JSON.stringify(eff.filter((m) => m.intent === 'I-NEW').map((m) => m.slug)) === JSON.stringify(['canonical-slug'])
       && !eff.some((m) => m.slug === 'new-v') && JSON.stringify(eff) === JSON.stringify(sameIntent.mappings),
@@ -908,9 +914,68 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
     JSON.stringify(items(OTH, sameIntent, pubs)) === JSON.stringify(['canonical-slug|GRAPH|DIRECT_NEXT|E-O1 정본 이유|NEXT_QUESTION|FOOTER_NEXT'])
       && items(NEW, sameIntent, pubs) === 'NO_MAPPING',
     `${JSON.stringify(items(OTH, sameIntent, pubs))} / ${JSON.stringify(items(NEW, sameIntent, pubs))}`)
-  const sameIntentDiag = provenanceDiagnostics(withIntents(sameIntent), pubs)
-  check('  같은 intent · 다른 slug 는 PROVENANCE_GRAPH_CONFLICT 진단 (비차단)',
-    JSON.stringify(sameIntentDiag) === JSON.stringify([{ code: 'PROVENANCE_GRAPH_CONFLICT', slug: 'new-v', intentId: 'I-NEW' }]), JSON.stringify(sameIntentDiag))
+  check('  같은 intent · 다른 slug 출처는 더해지지 않는다 (비차단)', addedOf(sameIntent, pubs).length === 0, JSON.stringify(addedOf(sameIntent, pubs)))
+
+  // ── P1 수리 반례 — admission 과 같은 규칙(provenanceOverlay)이 runtime 에서도 같은 답을 낸다 ──
+  // ① canonical 같은 intent 가 **미공개**인데 출처 글은 공개 — 출처를 대상으로 되살리지 않는다(admission 도 승인하지 않는다 · content-plan CP28 ⑦)
+  const unpubCanon = [NEW, OLD, OTH] // canonical-slug 는 공개 목록에 없다
+  check('반례 ① canonical 같은 intent 미공개 + 출처 공개 — 들어오는 링크 0 (NO_RESULT) · 출처를 더하지 않는다',
+    items(OTH, sameIntent, unpubCanon) === 'NO_RESULT' && addedOf(sameIntent, unpubCanon).length === 0,
+    `${JSON.stringify(items(OTH, sameIntent, unpubCanon))} / ${JSON.stringify(addedOf(sameIntent, unpubCanon))}`)
+  // ①' canonical 같은 slug 충돌(다른 intent) — 출처 intent 로 들어오는 링크 0
+  check("반례 ①' canonical 같은 slug · 다른 intent — 출처 intent(I-NEW)로 들어오는 링크 0 · 출처를 더하지 않는다",
+    items(OTH, conflict, [NEW, OLD, OTH]) === 'NO_RESULT' && addedOf(conflict, [NEW, OLD, OTH]).length === 0)
+  // ② 공개 글 두 편이 같은 release.intentId — 고르지 않고 둘 다 버린다(폴백) · 입력 순서 무관
+  const DA = art('new-a', '2026-11-20', 'I-NEW'), DB = art('new-b', '2026-11-21', 'I-NEW')
+  check('반례 ② 출처 intent 중복 — mapping 0 · 들어오는 링크 0 · 두 글 다 폴백(NO_MAPPING) · 입력 순서 무관',
+    !effectiveGraphMappings(full, [DA, DB, OLD, OTH], BIND).some((m) => m.intent === 'I-NEW')
+      && items(OTH, full, [DA, DB, OLD, OTH]) === 'NO_RESULT' && items(OTH, full, [OTH, OLD, DB, DA]) === 'NO_RESULT'
+      && items(DA, full, [DA, DB, OLD, OTH]) === 'NO_MAPPING' && items(DB, full, [DA, DB, OLD, OTH]) === 'NO_MAPPING'
+      && addedOf(full, [DB, DA, OLD, OTH]).length === 0,
+    JSON.stringify(addedOf(full, [DB, DA, OLD, OTH])))
+  check('  대조군 — 중복이 풀리면(한 편) 그 글이 대상이 된다',
+    JSON.stringify(items(OTH, full, [DA, OLD, OTH])) === JSON.stringify(['new-a|GRAPH|DIRECT_NEXT|E-O1 정본 이유|NEXT_QUESTION|FOOTER_NEXT']))
+  // ③ 결속 — 다섯 필드가 정확한 컴파일 plan 과 같아야 한다. 64-hex 형식만으로 믿지 않는다
+  const FORGED: [string, Partial<Rel> | null][] = [
+    ['planHash 위조', { planHash: 'f'.repeat(64) }],
+    ['bundleHash 위조', { bundleHash: 'e'.repeat(64) }],
+    ['graphVersion 위조', { graphVersion: 'g-20990101-abcdef' }],
+    ['policyBoard 위조', { policyBoard: { id: 'magazine-content-plan-policy/1', hash: 'd'.repeat(64) } }],
+    ['intentId 위조(결속에 plan 없는 intent)', null],
+  ]
+  for (const [label, over] of FORGED) {
+    const forgedBind: ReleaseBinding = over ? BIND : { ...BIND, planHashOf: { 'I-OTHER': 'b'.repeat(64) } }
+    const F1 = art('new-v', '2026-11-20', 'I-NEW', over ?? {})
+    const outF = items(OTH, full, [F1, OLD, OTH], forgedBind)
+    check(`반례 ③ ${label} — 출처를 쓰지 않는다 (들어오는 링크 0 · 그 글 폴백 · overlay 0)`,
+      outF === 'NO_RESULT' && items(F1, full, [F1, OLD, OTH], forgedBind) === 'NO_MAPPING' && addedOf(full, [F1, OLD, OTH], forgedBind).length === 0,
+      `${JSON.stringify(outF)} / ${JSON.stringify(addedOf(full, [F1, OLD, OTH], forgedBind))}`)
+  }
+  check('  대조군 — 다섯 필드가 결속과 같으면 출처가 대상이 된다', JSON.stringify(items(OTH, full, [NEW, OLD, OTH])) === JSON.stringify(inbound))
+  // ④ 🔴 S3 P1 운영 경로 — 결속이 없다(NO_RELEASE_BINDING). 형식이 완벽한 출처도 켜지지 않는다
+  check('반례 ④ 결속 없음(운영 기본값) — 형식이 맞는 출처도 대상 0 · overlay 0',
+    NO_RELEASE_BINDING === null && items(OTH, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_RESULT'
+      && items(NEW, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_MAPPING'
+      && (() => { const r = resolveFromGraph(OTH, full, [NEW, OLD, OTH], () => []); return 'reason' in r && r.reason === 'NO_RESULT' })()
+      && effectiveGraphMappings(full, [NEW, OLD, OTH]) === full.mappings && addedOf(full, [NEW, OLD, OTH], NO_RELEASE_BINDING).length === 0)
+  {
+    const gsrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
+    const prodCall = 'const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>\n      getRelatedMagazineArticles(article, MAX_DIRECT, now),\n    )\n'
+    check('  운영 resolver 호출은 결속을 넘기지 않는다 (인자 4개 · 기본값 NO_RELEASE_BINDING)',
+      gsrc.split(prodCall).length - 1 === 1 && /binding: ReleaseBinding \| null = NO_RELEASE_BINDING,\n\): \{ resolved/.test(gsrc))
+    const cpsrc = readFileSync(join(ROOT, 'scripts/lib/magazine-content-plan.mjs'), 'utf8')
+    check('  admission · runtime 이 같은 규칙 하나를 쓴다 — 둘 다 provenanceOverlay 를 공유 모듈에서 부르고 자기 사본이 없다',
+      /import \{ NO_RELEASE_BINDING, provenanceOverlay \} from '\.\.\/\.\.\/src\/lib\/magazine-provenance-rule\.mjs'/.test(cpsrc)
+        && /from '@\/lib\/magazine-provenance-rule\.mjs'/.test(gsrc)
+        && cpsrc.split('provenanceOverlay(').length - 1 === 1 && gsrc.split('provenanceOverlay(').length - 1 === 1
+        && cpsrc.includes('binding: NO_RELEASE_BINDING,') && !/canonicalIntents|canonicalSlugs/.test(gsrc + cpsrc))
+    const rsrc = readFileSync(join(ROOT, 'src/lib/magazine-provenance-rule.mjs'), 'utf8')
+    const ruleMod = await import('../src/lib/magazine-provenance-rule.mjs')
+    check('  운영이 읽지 않는 출처 진단 계약이 없다 — 규칙은 overlay 배열만 · 진단 API · dropped 0',
+      JSON.stringify(Object.keys(ruleMod).sort()) === JSON.stringify(['NO_RELEASE_BINDING', 'provenanceOverlay'])
+        && Array.isArray(ruleMod.provenanceOverlay({ canonical: [], graphIntentIds: [], rows: [], binding: null }))
+        && !/provenanceDiagnostics|dropped/.test(gsrc + rsrc) && !/provenanceDiagnostics/.test(cpsrc), Object.keys(ruleMod).join(','))
+  }
 
   // 관문 — kill switch · 판 불일치 · cluster 는 resolveFromGraph(=overlay) 앞에 있다
   const graphSrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
@@ -920,8 +985,8 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   check('관문(꺼짐 · 판 불일치 · cluster)이 overlay(resolveFromGraph) 앞에 있다',
     callAt > 0 && [at("fallback(article, 'DISABLED'"), at("'VERSION_MISMATCH'"), at("'CLUSTER_NOT_ENABLED'")].every((i) => i > 0 && i < callAt))
   check('  overlay 호출은 resolveFromGraph 안 한 곳뿐이다',
-    graphSrc.split('effectiveGraphMappings(graph, published)').length - 1 === 1
-      && graphSrc.indexOf('effectiveGraphMappings(graph, published)') > graphSrc.indexOf('export function resolveFromGraph('))
+    graphSrc.split('effectiveGraphMappings(graph, published, binding)').length - 1 === 1
+      && graphSrc.indexOf('effectiveGraphMappings(graph, published, binding)') > graphSrc.indexOf('export function resolveFromGraph('))
   const realSelf = published.find((a) => GRAPH.mappings.some((m) => m.slug === a.slug))
   if (realSelf) {
     const withRel = { ...realSelf, release: rel(GRAPH.mappings.find((m) => m.slug === realSelf.slug)!.intent) } as MagazineArticle
@@ -931,8 +996,8 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
 
   // 실제 저장소 — legacy 57편은 출처 0 · 진단 0
   const { MAGAZINE_ARTICLES } = await import('../src/content/magazine/articles')
-  check('실제 articles.ts — 출처 있는 행 0 · 진단 0 (legacy 바이트 그대로)',
-    MAGAZINE_ARTICLES.every((a) => a.release === undefined) && provenanceDiagnostics(GRAPH, MAGAZINE_ARTICLES).length === 0,
+  check('실제 articles.ts — 출처 있는 행 0 · 유효 mapping 은 canonical 그대로 (legacy 바이트 그대로)',
+    MAGAZINE_ARTICLES.every((a) => a.release === undefined) && effectiveGraphMappings(GRAPH, MAGAZINE_ARTICLES) === GRAPH.mappings,
     `${MAGAZINE_ARTICLES.filter((a) => a.release !== undefined).length}행`)
 
   // 클라이언트 · JSON 경계 — 출처가 화면 밖으로 나갈 길이 없다

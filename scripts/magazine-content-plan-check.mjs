@@ -58,6 +58,7 @@ import { parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
 import * as gate from './lib/magazine-gate.mjs'
 import * as publicRule from './lib/magazine-public-rule.mjs'
 import { parseControlText, parseGraphControl } from './lib/magazine-graph-control.mjs'
+import { NO_RELEASE_BINDING, provenanceOverlay } from '../src/lib/magazine-provenance-rule.mjs'
 
 /**
  * 정책 신원 고정 (P1-G) — lib 의 POLICY_IDENTITY_TABLE 이 runtime 에서 강제하고, 이 표는 **기존 행이 바뀌지 않았는지**를 따로 고정한다.
@@ -358,8 +359,11 @@ try {
     for (const [id, h] of Object.entries(POLICY_HASHES)) assert(POLICY_IDENTITY_TABLE[id] === h, `lib 신원표의 ${id} 가 고정 해시와 다르다 — 기존 행을 고치지 말고 id 를 올린다`)
     assert(SOURCE_TEXT_RULE_HASH === ruleHash && Object.isFrozen(POLICY_IDENTITY_TABLE), 'lib 원문 규칙 해시 · 신원표 동결')
     // runtime 강제 — 정책 판 내용만 바꾼 lib 사본은 compile 이 POLICY_IDENTITY_DRIFT 로 멈춘다(사본은 임시 폴더 · 저장소 무변경)
-    const libCopy = mkdtempSync(join(TMP, 'policy-drift-'))
+    // 사본은 저장소와 같은 배치(scripts/lib · src/lib) — lib 가 공유 출처 규칙(src/lib/magazine-provenance-rule.mjs)을 상대 경로로 부른다
+    const copyRoot = mkdtempSync(join(TMP, 'policy-drift-'))
+    const libCopy = join(copyRoot, 'scripts', 'lib')
     cpSync(join(HERE, 'lib'), libCopy, { recursive: true, filter: (src) => !src.split('/').some((x) => x.startsWith('.')) })
+    cpSync(join(ROOT, 'src/lib/magazine-provenance-rule.mjs'), join(copyRoot, 'src/lib/magazine-provenance-rule.mjs'))
     const cpFile = join(libCopy, 'magazine-content-plan.mjs')
     const cpText = readFileSync(cpFile, 'utf8')
     const marker = "    internalMarkers: ['🔴', '🟠', '🟡', '🟢', '⚠', 'TODO', 'FIXME'],"
@@ -759,22 +763,79 @@ try {
     for (const rows of [[], [row('fx-v1', rel('I-F1-01'))], [row('fx-v43', rel('I-F4-03'))], [row('fx-v1', rel('I-F1-01'), { status: 'BLOCKED' })]]) {
       assert(hashesOf(admit(F, { articles: [...F.w.seed.articles, ...rows] })) === want, `articles 가 planHash 를 바꿨다 (${rows.map((r) => r.slug)})`)
     }
-    // ⑦ 대상 신원 — mapping 이 없는 intent 도 공개된 출처 행이면 대상이 된다 · 공개 전 · DRAFT 는 아니다 · 둘 이상이면 고르지 않는다
+    // ⑦ 대상 신원 — runtime resolver 와 **같은 규칙**(provenanceOverlay)으로만 센다. runtime 이 버릴 대상을 승인하지 않는다(S3 P1 수리)
     const base4 = admit(F)
     assert(!admittedOf(base4, F.pid('I-F4-02')), '전제 — I-F4-02 는 공개 대상이 없어 기본 admission 에서 빠진다')
-    const via = admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] })
-    const g42 = admittedOf(via, F.pid('I-F4-02'))
-    assert(g42 && g42.layer === 1 && canonicalJson(g42.groundedBy) === canonicalJson([{ edgeId: 'E-0041', toIntentId: 'I-F4-03', target: 'PUBLIC', slug: 'fx-v43' }]), `출처 대상 ${JSON.stringify(g42)}`)
-    assert(admittedOf(via, F.pid('I-F4-01'))?.layer === 2, '출처 대상 위의 연쇄')
-    for (const [label, over] of [['예약', { status: 'SCHEDULED', publishAt: FUTURE }], ['DRAFT', { status: 'DRAFT' }], ['BLOCKED', { status: 'BLOCKED' }]]) {
-      assert(!admittedOf(admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'), over)] }), F.pid('I-F4-02')), `${label} 출처 행을 공개 대상으로 셌다`)
+    const noMapRow = (r) => (r.release === undefined ? (({ release, ...x }) => x)(r) : r)
+    const heldTarget = (a) => heldOf(a, F.pid('I-F4-02'))?.join() === 'RELATION_TARGET_UNAVAILABLE'
+    // ⑦-0 🔴 S3 P1 은 결속이 없다(NO_RELEASE_BINDING) — 형식이 완벽한 공개 출처도 대상이 아니다(runtime 운영 경로도 overlay 0)
+    assert(NO_RELEASE_BINDING === null, 'P1 결속은 없음(null)이다')
+    assert(heldTarget(admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] })), '결속 없는 출처를 공개 대상으로 셌다')
+    //   정확한 컴파일 plan 과 다섯 필드가 모두 같은 출처도 P1 에서는 대상이 아니다 — admission 이 결속을 넘기면(활성화) 여기서 잡힌다
+    {
+      const plan42 = base.plans.find((p) => p.intentId === 'I-F4-02')
+      assert(plan42 && !parsePI(F.text).mappings.some((m) => m.intentId === 'I-F4-02'), '전제 — I-F4-02 는 컴파일 plan 이 있고 mapping 이 없다')
+      const exact = rel('I-F4-02', { graphVersion: base.graphVersion, bundleHash: base.bundleHash, planHash: plan42.planHash, policyBoard: base.policyBoard })
+      const a = admit(F, { articles: [...F.w.seed.articles, row('fx-v42', exact)] })
+      assert(!admittedOf(a, F.pid('I-F4-01')), `정확히 결속된 출처(fx-v42)를 P1 에서 대상으로 셌다 ${JSON.stringify(admittedOf(a, F.pid('I-F4-01')))}`)
     }
+    // ⑦-1 반례 ① canonical 같은 intent 가 **미공개**인데 출처 글은 공개 — runtime 은 canonical 이 이겨 링크 0 · admission 도 대상 0
     const sortMaps = (b) => b.mappings.sort((x, y) => (`${x.intentId}\u0000${x.slug}` < `${y.intentId}\u0000${y.slug}` ? -1 : 1))
     const two = edit(F.text, (b) => { b.mappings.push({ intentId: 'I-F4-03', slug: 'fx-m43' }); sortMaps(b) })
-    const amb = admit(F, { bundle: two, articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03')), row('fx-m43', undefined, { title: '합성 mapping 글 43' })].map((r) => (r.release === undefined ? (({ release, ...x }) => x)(r) : r)) })
-    assert(!admittedOf(amb, F.pid('I-F4-02')), 'mapping slug 와 출처 slug 가 둘 다 공개인데 하나를 골랐다')
+    assert(heldTarget(admit(F, { bundle: two, articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] })), '반례 ①: 미공개 canonical intent 대신 출처 글을 대상으로 승인했다')
+    // ⑦-2 반례 ①' canonical 같은 slug 가 다른 intent — 출처 intent 의 대상 0
+    const slugClash = edit(F.text, (b) => { b.mappings.push({ intentId: 'I-F1-01', slug: 'fx-v43' }); sortMaps(b) })
+    assert(heldTarget(admit(F, { bundle: slugClash, articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] })), "반례 ①': 같은 slug 가 다른 intent 인 출처를 대상으로 승인했다")
+    // ⑦-3 반례 ③ 위조 출처(64-hex 형식만 맞음) — 대상 0
+    for (const over of [{ planHash: 'f'.repeat(64) }, { bundleHash: 'e'.repeat(64) }, { graphVersion: 'g-20990101-abcdef' }]) {
+      assert(heldTarget(admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03', over))] })), `위조 출처 ${Object.keys(over)} 를 대상으로 셌다`)
+    }
+    // ⑦-4 canonical 이 이긴다 — canonical 글이 공개면 그 글이 대상(runtime 과 같다) · 같은 (intent, slug) 는 하나로 센다
+    const canonPub = admit(F, { bundle: two, articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03')), row('fx-m43', undefined, { title: '합성 mapping 글 43' })].map(noMapRow) })
+    assert(canonicalJson(admittedOf(canonPub, F.pid('I-F4-02'))?.groundedBy) === canonicalJson([{ edgeId: 'E-0041', toIntentId: 'I-F4-03', target: 'PUBLIC', slug: 'fx-m43' }]),
+      `canonical 공개 글이 대상이 아니다 ${JSON.stringify(admittedOf(canonPub, F.pid('I-F4-02')))}`)
+    // canonical 이 같은 intent 에 둘 이상이고 둘 다 공개면 고르지 않는다(대상 없음) — 어느 글이 답인지 임의로 정하지 않는다
+    const twoCanon = edit(F.text, (b) => { b.mappings.push({ intentId: 'I-F4-03', slug: 'fx-m43' }, { intentId: 'I-F4-03', slug: 'fx-n43' }); sortMaps(b) })
+    assert(heldTarget(admit(F, { bundle: twoCanon, articles: [...F.w.seed.articles, row('fx-m43', undefined, { title: '합성 mapping 글 43' }), row('fx-n43', undefined, { title: '합성 mapping 글 43b' })].map(noMapRow) })),
+      'canonical slug 가 둘 다 공개인데 하나를 골랐다')
     const same = edit(F.text, (b) => { b.mappings.push({ intentId: 'I-F4-03', slug: 'fx-v43' }); sortMaps(b) })
     assert(admittedOf(admit(F, { bundle: same, articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] }), F.pid('I-F4-02')), '같은 slug 를 둘로 셌다(중복 제거)')
+    for (const [label, over] of [['예약', { status: 'SCHEDULED', publishAt: FUTURE }], ['DRAFT', { status: 'DRAFT' }], ['BLOCKED', { status: 'BLOCKED' }]]) {
+      assert(heldTarget(admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'), over)] })), `${label} 출처 행을 공개 대상으로 셌다`)
+    }
+
+    // ⑦-5 공유 규칙 자체 — 실제 컴파일 plan 결속(다섯 필드)으로 위조 · 중복 · canonical 우선을 판정한다 (S3-P2 가 두 층에 줄 결속의 계약)
+    const B = parsePI(F.text)
+    const bind = { graphVersion: base.graphVersion, bundleHash: base.bundleHash, policyBoard: base.policyBoard,
+      planHashOf: Object.fromEntries(base.plans.map((p) => [p.intentId, p.planHash])) }
+    const mapped = new Set(B.mappings.map((m) => m.intentId))
+    const target = base.plans.find((p) => !mapped.has(p.intentId))
+    const planless = B.intents.map((x) => x.intentId).find((i) => !mapped.has(i) && !base.plans.some((p) => p.intentId === i))
+    assert(target && planless, `전제 — mapping 없는 컴파일 plan(${target?.intentId}) · plan 없는 intent(${planless})`)
+    const boundRel = (intentId, over = {}) => ({ intentId, graphVersion: bind.graphVersion, bundleHash: bind.bundleHash, planHash: bind.planHashOf[intentId] ?? 'a'.repeat(64), policyBoard: bind.policyBoard, ...over })
+    const ov = (rows, binding = bind) => provenanceOverlay({ canonical: B.mappings.map((m) => ({ intent: m.intentId, slug: m.slug })),
+      graphIntentIds: B.intents.map((x) => x.intentId), rows, binding })
+    const good5 = ov([{ slug: 'fx-new', release: boundRel(target.intentId) }])
+    assert(canonicalJson(good5) === canonicalJson([{ intent: target.intentId, slug: 'fx-new' }]), `대조군 — 정확한 결속은 overlay ${JSON.stringify(good5)}`)
+    const FORGED = [
+      ['planHash 위조', boundRel(target.intentId, { planHash: 'f'.repeat(64) })],
+      ['bundleHash 위조', boundRel(target.intentId, { bundleHash: 'e'.repeat(64) })],
+      ['graphVersion 위조', boundRel(target.intentId, { graphVersion: 'g-20990101-abcdef' })],
+      ['policyBoard 위조', boundRel(target.intentId, { policyBoard: { id: bind.policyBoard.id, hash: 'd'.repeat(64) } })],
+      ['intentId 위조(컴파일 plan 없는 intent)', boundRel(planless)],
+    ]
+    for (const [label, release] of FORGED) {
+      const r = ov([{ slug: 'fx-new', release }])
+      assert(Array.isArray(r) && r.length === 0, `${label}: ${JSON.stringify(r)}`)
+    }
+    assert(ov([{ slug: 'fx-new', release: boundRel(target.intentId) }], NO_RELEASE_BINDING).length === 0, '결속 없음인데 overlay 가 생겼다')
+    assert(ov([{ slug: 'fx-b', release: boundRel(target.intentId) }, { slug: 'fx-a', release: boundRel(target.intentId) }]).length === 0, '출처 intent 중복에서 하나를 골랐다')
+    // canonical 우선 — 결속은 정확해야(plan 있는 intent) 다른 이유에 가려지지 않고 이 규칙만 본다
+    const someMap = B.mappings[0]
+    const mappedPlan = base.plans.find((p) => mapped.has(p.intentId))
+    assert(mappedPlan, '전제 — mapping 이 있고 컴파일 plan 도 있는 intent')
+    assert(ov([{ slug: someMap.slug, release: boundRel(target.intentId) }]).length === 0, 'canonical 같은 slug(다른 intent) 출처를 더했다')
+    assert(ov([{ slug: 'fx-c', release: boundRel(mappedPlan.intentId) }]).length === 0, 'canonical 같은 intent(다른 slug) 출처를 더했다')
     // ⑧ 실제 제품 articles.ts — 출처 없는 legacy 57편 그대로 판독
     const real = parseArticleIdentityText(readFileSync(join(ROOT, 'src/content/magazine/articles.ts'), 'utf8'))
     assert(real.ok && real.rows.every((r) => r.release === null), `실제 articles 출처 ${real.ok ? real.rows.filter((r) => r.release).length : real.code}`)

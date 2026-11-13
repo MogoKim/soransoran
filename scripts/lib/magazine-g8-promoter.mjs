@@ -56,6 +56,8 @@ export const PRODUCT_FILES = {
   graphCurrent: 'src/content/magazine/graph/current.ts',
   graphControl: 'src/content/magazine/graph/control.ts',
   graphResolver: 'src/lib/magazine-graph.ts',
+  // S3 P1 수리 — resolver · admission 이 함께 쓰는 출처 overlay 규칙. resolver 행동의 권위라 같은 신원에 묶는다
+  graphProvenanceRule: 'src/lib/magazine-provenance-rule.mjs',
 }
 export const SNAPSHOT_FILES = Object.freeze(Object.values(SNAPSHOT_FILE_NAMES))
 
@@ -129,7 +131,7 @@ export function titleProblems(title) {
   return out
 }
 
-// ── 신원 입력 (15개) ──────────────────────────────────────────
+// ── 신원 입력 (16개) ──────────────────────────────────────────
 
 /**
  * 🔴 **apply 직전에 전부 다시 센다.** 하나라도 다르면 journal 전에 STALE_INPUT — 실제 write 0.
@@ -153,6 +155,7 @@ export function readIdentityInputs({ repoDir, researchDir, snapshotDir }) {
     graphBundle: readRequired(p(bundleRel), bundleRel),
     graphControl: readRequired(p(PRODUCT_FILES.graphControl), PRODUCT_FILES.graphControl),
     graphResolver: readRequired(p(PRODUCT_FILES.graphResolver), PRODUCT_FILES.graphResolver),
+    graphProvenanceRule: readRequired(p(PRODUCT_FILES.graphProvenanceRule), PRODUCT_FILES.graphProvenanceRule),
     draftSlugs,
     slugManifest: readOptional(path.join(researchDir, ADMISSION_FILES.slugManifest)),
     ledger: readOptional(path.join(researchDir, ADMISSION_FILES.ledger)),
@@ -168,6 +171,7 @@ export function readIdentityInputs({ repoDir, researchDir, snapshotDir }) {
     ['product.graphBundle', sha256(texts.graphBundle)],
     ['product.graphControl', sha256(texts.graphControl)],
     ['product.graphResolver', sha256(texts.graphResolver)],
+    ['product.graphProvenanceRule', sha256(texts.graphProvenanceRule)],
     ['research.slugManifest', absent(texts.slugManifest)],
     ['research.ledger', absent(texts.ledger)],
     ['research.slugModule', sha256(texts.slugModule)],
@@ -240,7 +244,7 @@ export async function buildManifest({ repoDir, researchDir, snapshotDir, at }) {
   try {
     core = computeGraphAndReadiness({
       inputTexts: texts.snapshot,
-      productTexts: { resolver: texts.graphResolver, control: texts.graphControl, articles: texts.articles },
+      productTexts: { resolver: texts.graphResolver, control: texts.graphControl, articles: texts.articles, provenanceRule: texts.graphProvenanceRule },
       admissionTexts: { slugManifest: texts.slugManifest, ledger: texts.ledger },
       effectiveAt: at,
       expectedGraphVersion: texts.graphPointer,
@@ -716,7 +720,7 @@ function alreadyApplied({ manifest, researchDir, repoDir, knownLegacy }) {
 
 /**
  * 🔴 **명시적 apply** — 연구 세 파일만 쓴다. 제품 파일 · topic queue 는 쓰지 않는다.
- *   lock → 남은 journal 완성 → ALREADY_APPLIED 판정 → 입력 15개 재해시 · graph · readiness 재검증
+ *   lock → 남은 journal 완성 → ALREADY_APPLIED 판정 → 입력 16개 재해시 · graph · readiness 재검증
  *   → 승인 형식 → staged preflight → journal → receipt wx → slug 원자 교체 → ledger append → 검증 → journal 삭제 → unlock
  *
  * 🔴 journal 을 쓴 뒤의 예외는 급사와 같다 — 잠금 · journal 을 남긴다(`recoverStaleLock` 이 이어서 완성한다).
@@ -744,7 +748,7 @@ export async function applyAdmissions({ manifest, repoDir, researchDir, snapshot
   if (already.state === 'COMPLETE') return done({ ok: true, code: 'ALREADY_APPLIED', written: [], recovered })
   if (already.state !== 'ABSENT') return done({ ok: false, code: 'ADMISSION_INCONSISTENT', why: already.why, recovered })
 
-  // ③ 입력 15개 · graph · readiness 재검증 — 다르면 journal 전에 멈춘다
+  // ③ 입력 16개 · graph · readiness 재검증 — 다르면 journal 전에 멈춘다
   let current
   try { current = readIdentityInputs({ repoDir, researchDir, snapshotDir }) } catch (e) { return done({ ok: false, code: 'STALE_INPUT', why: e.message, recovered }) }
   const stale = Object.keys({ ...manifest.identityInputHashes, ...current.hashes }).filter((k) => manifest.identityInputHashes?.[k] !== current.hashes[k]).sort()

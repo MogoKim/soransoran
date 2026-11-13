@@ -107,7 +107,8 @@ const MUTATIONS = [
   ['CM64', '정책 판 id 와 hash 의 일치를 보지 않는다', 'CP28', [{ file: LIB, from: '  if (!isStr(hash) || hash !== POLICY_IDENTITY_TABLE[id]) return null', to: '  if (!isStr(hash)) return null' }]],
   ['CM65', '같은 release.intentId 두 행을 받는다(마지막 행이 이긴다)', 'CP28', [{ file: LIB, from: "      if (releasedBy.has(release.intentId)) return { ok: false, code: 'ARTICLES_RELEASE_DUPLICATE_INTENT' }\n", to: '' }]],
   ['CM66', '깨진 출처(release: null)를 legacy 행으로 넘긴다', 'CP28', [{ file: LIB, from: "    if (Object.prototype.hasOwnProperty.call(a, 'release')) {", to: '    if (a.release !== undefined && a.release !== null) {' }]],
-  ['CM67', '대상 판정이 출처 행을 보지 않는다(Bundle mapping 만)', 'CP28', [{ file: LIB, from: '    if (releasedSlugOf.has(intentId)) pool.add(releasedSlugOf.get(intentId))\n', to: '' }]],
+  // CM67(대상 판정이 출처 행을 보지 않는다)은 S3 P1 수리(2026-11-13)로 뺐다 — admission 은 공유 규칙 overlay 만 보고, P1 은 결속이 없어
+  //   overlay 가 늘 비어 있다. 그 변이는 결과가 같아(동치) 죽일 수 없다. 출처 → 대상 경로는 CP28 ⑦-5(규칙 단위) · CM73~CM76 · graph-now 변이가 본다
   ['CM68', '대상 slug 가 둘 이상이면 하나를 임의로 고른다', 'CP28', [{ file: LIB, from: '    return s.length === 1 ? s[0] : null', to: '    return s.length >= 1 ? [...s].sort()[0] : null' }]],
   ['CM69', '이미 출시된 intent 를 막지 않는다', 'CP28', [{ file: LIB, from: "      if (releasedSlugOf.has(plan.intentId)) reasons.push('DUPLICATE_RELEASED_INTENT')\n", to: '' }]],
   ['CM70', 'compile 이 articles 를 입력으로 받는다', 'CP28', [{ file: LIB, from: "  exactInput(input, ['bundle'], 'compile')", to: "  exactInput(input, ['bundle', 'articlesText'], 'compile')" }]],
@@ -115,6 +116,17 @@ const MUTATIONS = [
   ['CM72', '옛 키 inFlightPlanIds 를 조용히 받는다', 'CP28', [{ file: LIB,
     from: "  exactInput(input, ['bundle', 'controlText', 'articlesText', 'legacyQueue', 'nowMs', 'inFlightIntentIds', 'withdrawnPlanIds'], 'admission')",
     to: "  exactInput(input, ['bundle', 'controlText', 'articlesText', 'legacyQueue', 'nowMs', 'inFlightIntentIds', 'inFlightPlanIds', 'withdrawnPlanIds'], 'admission')" }]],
+  // ── S3 P1 수리 (2026-11-13) — admission 은 runtime 과 같은 출처 규칙 하나로만 대상을 센다 ──
+  ['CM73', 'admission 이 공유 규칙을 우회해 출처 slug 를 그대로 대상 후보에 넣는다(앞판)', 'CP28', [{ file: LIB,
+    from: '    const pool = new Set([...(mappedSlugs.get(intentId) ?? []), ...(overlaySlugsOf.get(intentId) ?? [])])',
+    to: '    const pool = new Set([...(mappedSlugs.get(intentId) ?? []), ...(releasedSlugOf.has(intentId) ? [releasedSlugOf.get(intentId)] : [])])' }]],
+  ['CM74', 'admission 이 컴파일 plan 결속을 넘겨 P1 에서 출처를 켠다(runtime 은 꺼져 있다)', 'CP28', [{ file: LIB,
+    from: '      binding: NO_RELEASE_BINDING,',
+    to: '      binding: { graphVersion: compiled.graphVersion, bundleHash: compiled.bundleHash, policyBoard: compiled.policyBoard, planHashOf: Object.fromEntries(compiled.plans.map((p) => [p.intentId, p.planHash])) },' }]],
+  ['CM75', '공유 규칙이 canonical 같은 intent(미공개)를 무시한다 — admission 경로', 'CP28', [{ file: 'src/lib/magazine-provenance-rule.mjs',
+    from: '    if (slugsOfIntent.has(intentId)) continue', to: '    if (false) continue' }]],
+  ['CM76', '공유 규칙이 결속 없음을 결속으로 본다 — admission 경로', 'CP28', [{ file: 'src/lib/magazine-provenance-rule.mjs',
+    from: '  if (!binding) return false\n', to: '  if (!binding) return true\n' }]],
 ]
 
 const lines = []
@@ -124,7 +136,8 @@ try {
   const visible = (d, re) => (existsSync(join(ROOT, d)) ? readdirSync(join(ROOT, d)).filter((f) => !f.startsWith('.') && re.test(f)).map((f) => `${d}/${f}`) : [])
   const snapshot = new Map()
   for (const f of [...visible('scripts/lib', /\.mjs$/), ...visible('scripts/__fixtures__/magazine/content-plan', /./), CHECK,
-    'scripts/magazine-plan-input-bootstrap.mjs', 'src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts']) {
+    'scripts/magazine-plan-input-bootstrap.mjs', 'src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts',
+    'src/lib/magazine-provenance-rule.mjs']) { // S3 P1 수리 — lib 가 상대 경로로 부르는 공유 출처 규칙
     if (existsSync(join(ROOT, f))) snapshot.set(f, readFileSync(join(ROOT, f), 'utf8'))
   }
   base = mkdtempSync(join(tmpdir(), 'content-plan-mutation-'))
