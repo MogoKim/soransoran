@@ -34,6 +34,7 @@ import {
   READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, pipelineRunOfLedger, terminalYieldOf,
   type CostAttribution, type CostFate, type FateCounts, type PendingFate,
 } from '../../src/lib/ready-fate'
+import { costEpochDiagnosticOf, noReadyBreakdownOf } from '../../src/lib/supply-cost-diagnostics'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import { kstDateString } from '../../src/lib/release-canary'
 import {
@@ -270,6 +271,27 @@ export function pooledEntries(days: readonly (readonly LedgerEntry[] | null)[]):
 const readDay = (dir: string, date: string): LedgerEntry[] | null => {
   const r = readLedgerDay(ledgerPathOf(dir, date))
   return r.ok ? r.entries : null
+}
+
+/**
+ * 🔴 **비용 진단 묶음 — 보고 전용** (2026-11-13). 판정 입력(`facts`)에 넣지 않는다.
+ *    진단이 던져도 preflight·controller 를 멈추지 않는다 — 그 사실만 적는다.
+ */
+export function costDiagnosticsOf(
+  entries: readonly LedgerEntry[] | null,
+  fateByKey: ReadonlyMap<string, CostFate>,
+  cohortRuns: ReadonlySet<string>,
+  authoritative: CostAttribution | null,
+): Record<string, unknown> {
+  try {
+    return {
+      kind: 'diagnostic-only',
+      noReady: noReadyBreakdownOf(authoritative),
+      epoch: costEpochDiagnosticOf({ entries, fateByKey, cohortRuns }),
+    }
+  } catch (e) {
+    return { kind: 'diagnostic-only', error: (e as Error).name }
+  }
 }
 
 const kstRange = (date: string): { gte: Date; lt: Date } => {
@@ -992,6 +1014,11 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
    *    🔴 활성 행 수를 넣지 않는다.
    */
   contractValidPersonas?: () => Promise<number | null>
+  /**
+   * 🔴 **Persona 용량 두 칸을 한 판독으로** (2026-11-13) — 있으면 `contractValidPersonas` 보다 먼저 쓴다.
+   *    `stageActive` 는 4상태 정본의 stage-active 수다(active 행 수 아님). D30 이상 preflight 가 본다.
+   */
+  personaCapacity?: () => Promise<{ contractValid: number | null; stageActive: number | null }>
 }): Promise<{ facts: PreflightFacts; notes: string[]; detail: Record<string, unknown> }> {
   const notes: string[] = []
   /** 🔴 결정일 — 한 번만 계산해 recovery 신원 판정과 `facts.proofKstDate` 에 같이 쓴다(`now` 가 아니다) */
@@ -1058,7 +1085,16 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
 
   // Persona — 주입 자리(제공자 없으면 모름)
   let contractValidPersonas: number | null = null
-  if (i.contractValidPersonas === undefined) notes.push('계약 유효 Persona 수 제공자가 없다(Persona 레인) — 모름')
+  let stageActivePersonas: number | null = null
+  if (i.personaCapacity !== undefined) {
+    try {
+      const cap = await i.personaCapacity()
+      contractValidPersonas = cap.contractValid
+      stageActivePersonas = cap.stageActive
+    } catch (e) {
+      notes.push(`Persona 용량을 읽지 못했다 — ${(e as Error).name}`)
+    }
+  } else if (i.contractValidPersonas === undefined) notes.push('계약 유효 Persona 수 제공자가 없다(Persona 레인) — 모름')
   else {
     try { contractValidPersonas = await i.contractValidPersonas() } catch (e) {
       notes.push(`계약 유효 Persona 수를 읽지 못했다 — ${(e as Error).name}`)
@@ -1127,6 +1163,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     readyCohort,
     latencyP50H, latencyP90H,
     contractValidPersonas,
+    stageActivePersonas,
     commentUsdPerRequest,
     commentDailyUsdCap: commentLoopLimitsFromEnv(i.env).limits.dailyUsd,
     auditUsdPerCall,
@@ -1146,6 +1183,11 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
+      /**
+       * 🔴 진단 전용(2026-11-13) — 판정은 위 `costAttribution`(rolling 72h 권위 cohort)만 쓴다.
+       *    noReady 장부 단계 분해 · PR 838 병합 시각 뒤 회차만의 단가. 원천 종류·막은 gate 는 장부에 없어 `unknown`.
+       */
+      costDiagnostics: costDiagnosticsOf(supplyEntries, fateByKey, cohort.cohortRuns, costAttribution),
       recoveryIdentity: {
         claimRunId: recovery.claimRunId, costRunId: recoveryCostRunId,
         ledgerRecoveryRuns: recovery.ledgerRuns, issue: recovery.issue,
