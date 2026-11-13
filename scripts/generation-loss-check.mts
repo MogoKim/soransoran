@@ -15,6 +15,7 @@
  *   ⑦ 실제 비용 없는 요청을 예약액으로 정산하지 않는다
  *   ⑧ 같은 원천에서 재시도가 두 번째 초안·두 번째 artifact 를 만들지 않는다
  *   ⑨ 실패 유형 표 — 원인 값과 요청 결과로만 가른다
+ *   ⑩ (H2) 의미 검수를 adopt 로 가정해도 채택이 막히는 초안은 검수를 사지 않는다 · 판정 불변
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,8 +23,8 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import {
-  runContentCore, personaInputOf, STAGE_MODEL, parseDraft, DRAFT_PERSONA_DRIFT,
-  type Ask, type AskResult, type PersonaInput,
+  runContentCore, personaInputOf, STAGE_MODEL, parseDraft, DRAFT_PERSONA_DRIFT, PRE_REVIEW_DOMINATED_LABEL,
+  type Ask, type AskResult, type PersonaInput, type RunInput,
 } from './lib/content-core-run.mjs'
 import { ledgerAskOf, V2_LEDGER_STAGE, V2_LEDGER_RETRY_STAGE } from './lib/content-core-ledger-ask.mjs'
 import { SupplyLlmSession } from './lib/supply-llm-call.mjs'
@@ -49,7 +50,10 @@ import {
 import { REVIEW_VERSION } from '../src/lib/content-core/review'
 import { buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { LEDGER_STAGES, ledgerDateOf, type LedgerEntry } from '../src/lib/llm-ledger'
-import { BANNED_WORDS } from '../src/lib/micro-seed-auto-draft'
+import {
+  BANNED_WORDS, dominatedBeforeReview, normalize, pickV2,
+  type DraftCandidate, type Judgement, type PickV2Input,
+} from '../src/lib/micro-seed-auto-draft'
 import { filterByVoice, judgeVoiceMatch, readVoiceProvenance } from '../src/lib/original-post-voice-match'
 import type { HumanReviewArtifact } from '../src/lib/content-core/artifact'
 import type { PoolCard } from '../src/lib/persona-pool-card'
@@ -148,7 +152,11 @@ const contract = {
   stageModels: STAGE_MODEL, stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
   voiceAssetDigest: 'asset000000000', personaPoolDigest: 'pool0000000000',
 }
-const run = (o: { script?: Script; ask?: Ask; personas?: readonly PersonaInput[]; retryCap?: number; cap?: number }) => {
+const run = (o: {
+  script?: Script; ask?: Ask; personas?: readonly PersonaInput[]; retryCap?: number; cap?: number
+  /** 🔴 (H2) 검수 앞 지배 판정 훅 — 비우면 앞판 경로 그대로다 */
+  pre?: RunInput['preReviewTerminal']
+}) => {
   SENT = []
   return runContentCore({
     artifactId: randomUUID().replace(/-/g, ''), sourceSite: 'navercafe:fixture', sourceArticleId: SRC.id,
@@ -157,6 +165,7 @@ const run = (o: { script?: Script; ask?: Ask; personas?: readonly PersonaInput[]
     personas: o.personas ?? ALL, personaPoolSize: (o.personas ?? ALL).length, voiceSourceDigest: 'asset000000000',
     contract, ask: o.ask ?? scriptedAsk(o.script ?? {}), now: NOW, callCap: o.cap ?? V2_CALL_CAP,
     ...(o.retryCap === undefined ? { retryCap: GENERATION_RETRY_MAX } : { retryCap: o.retryCap }),
+    ...(o.pre === undefined ? {} : { preReviewTerminal: o.pre }),
   })
 }
 const attemptsOf = (a: HumanReviewArtifact): string => a.cost.calls.map((c) => `${c.stage}#${c.attempt ?? 1}:${c.outcome ?? '?'}`).join(' ')
@@ -317,6 +326,93 @@ console.log('\n④ 🔴 재시도 0 — 안전·품질 · Persona 자격 · 사�
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('\n④-b 🔴 (H2) 검수 앞 지배 — adopt 로 가정해도 채택이 막히면 의미 검수를 사지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const stagesOf = (): string => SENT.map((s) => s.stage).join(',')
+  // (a) 지배 — 검수 0 · 결정적 HOLD · terminal (같은 원천을 다시 사지 않는다)
+  const dom = await run({ pre: () => 'draftGate:x' })
+  const domStages = stagesOf()
+  check('🔴 🔴 지배 초안은 의미 검수를 부르지 않는다 — 요청은 판독·초안 둘뿐',
+    domStages === 'speakerPlan,draftGen' && dom.cost.totalCalls === 2, domStages)
+  check('🔴 🔴 지배 결과는 HOLD · 검수 미실행 사유 deterministicFailed · 검수 판정 없음 · 사유 이름이 남는다',
+    dom.review.machineOutcome === 'hold' && dom.review.semanticCompletion.cause === 'deterministicFailed'
+    && dom.review.semantic === null && dom.review.machineReason.includes(PRE_REVIEW_DOMINATED_LABEL)
+    && dom.review.machineReason.includes('draftGate:x'), `${dom.review.machineOutcome} · ${dom.review.machineReason}`)
+  check('🔴 🔴 지배 결과는 terminal — 같은 근거·같은 계약으로 다시 사지 않는다 · 재시도 0',
+    artifactRetryClassOf(dom.review, dom.cost) === 'terminal'
+    && dom.failure?.stage === 'deterministic' && dom.failure.kind === 'safetyQuality' && dom.failure.retried === false
+    && dom.cost.calls.every((c) => (c.attempt ?? 1) === 1), `${artifactRetryClassOf(dom.review, dom.cost)} · ${JSON.stringify(dom.failure)}`)
+  // (b) 지배 아님 — 앞판 경로 그대로 (검수를 산다 · 채택)
+  const free = await run({ pre: () => null })
+  const freeStages = stagesOf()
+  check('🔴 🔴 지배가 아니면 앞판 경로 그대로 — 검수를 부르고 채택',
+    freeStages === 'speakerPlan,draftGen,semanticReview' && free.review.machineOutcome === 'adopt' && free.failure === null, freeStages)
+  const none = await run({})
+  check('🔴 훅을 넘기지 않은 호출부도 앞판 경로 그대로', stagesOf() === 'speakerPlan,draftGen,semanticReview'
+    && none.review.machineOutcome === 'adopt')
+  // (c) 훅 입력 — 결정적 검사를 통과한 바로 그 초안 · 확정된 화자
+  const seen: { title: string; body: string; code: string }[] = []
+  await run({ pre: (d, plan) => { seen.push({ title: d.title, body: d.body, code: plan.personaCode }); return null } })
+  check('🔴 훅은 한 번 · 초안 그대로 · 코드가 정한 화자(P01)를 받는다',
+    seen.length === 1 && seen[0]!.title === DRAFT.title && seen[0]!.body === DRAFT.body && seen[0]!.code === 'P01',
+    JSON.stringify(seen))
+  // (d) 결정적 실패가 먼저다 — 훅은 결정적 통과 뒤에만 불린다
+  let calls = 0
+  const bannedDraft = { ...DRAFT, body: `${DRAFT.body} ${BANNED_WORDS[0]!}` }
+  const det = await run({ script: { draft: bannedDraft }, pre: () => { calls += 1; return 'x' } })
+  check('🔴 결정적 실패면 훅을 부르지 않는다 — 판정 주체가 바뀌지 않는다',
+    calls === 0 && det.failure?.stage === 'deterministic' && det.review.semanticCompletion.cause === 'deterministicFailed'
+    && !det.review.machineReason.includes(PRE_REVIEW_DOMINATED_LABEL), det.review.machineReason)
+
+  // ── 판정 불변 — 지배 판정은 실제 pickV2 의 adopt 가정 결과 그 자체다 ──
+  const judgement: Judgement = { sourceArticleId: 'x', decision: 'AUTO_SEED' }
+  const cand = (o: Partial<DraftCandidate> = {}): DraftCandidate => ({
+    sourceArticleId: 'x', draftNo: 1, title: DRAFT.title, body: DRAFT.body, safetyVerdict: 'pass',
+    originality: { runWords: 0, runChars: 0, coverRatio: 0 }, generatedAt: NOW.toISOString(), ...o,
+  })
+  const base = (o: Partial<PickV2Input> = {}): Omit<PickV2Input, 'machineOutcome' | 'machineReason'> => ({
+    judgement, draft: cand(), seenTitles: new Set<string>(), seenBodies: new Set<string>(),
+    sourceUsed: false, sourceTitleCopied: false, crisisStop: null, ...o,
+  })
+  const cases: [string, Omit<PickV2Input, 'machineOutcome' | 'machineReason'>, boolean][] = [
+    ['깨끗한 초안', base(), false],
+    ['중복 제목', base({ seenTitles: new Set([normalize(DRAFT.title)]) }), true],
+    ['중복 본문', base({ seenBodies: new Set([normalize(DRAFT.body)]) }), true],
+    ['원문 제목 복사', base({ sourceTitleCopied: true }), true],
+    ['위기 신호', base({ crisisStop: 'crisisSignal' }), true],
+    ['본문 금칙어', base({ draft: cand({ body: `${DRAFT.body} ${BANNED_WORDS[0]!}` }) }), true],
+  ]
+  const iso = NOW.toISOString()
+  for (const [label, input, wantDominated] of cases) {
+    const d = dominatedBeforeReview(input, iso)
+    const asAdopt = pickV2({ ...input, machineOutcome: 'adopt', machineReason: '' }, iso)
+    const real = (['adopt', 'hold', 'drop'] as const).map((m) => pickV2({ ...input, machineOutcome: m, machineReason: '' }, iso))
+    check(`🔴 🔴 [판정 불변] ${label} — 지배 ${wantDominated ? '예' : '아니오'} · 검수가 무엇을 말했어도 채택이 아니다`,
+      (d !== null) === wantDominated
+      && (d === null ? asAdopt.decision === 'AUTO_ADOPT' : (d.reason === asAdopt.reason && d.decision === asAdopt.decision
+        && real.every((p) => p.decision !== 'AUTO_ADOPT'))),
+      `${d?.decision ?? 'null'}/${d?.reason ?? '-'} · ${real.map((p) => `${p.decision}:${p.reason}`).join(' ')}`)
+  }
+
+  // ── 비용 모델 — 🔴 관측이 아니라 가정이다: 49 slot-valid · $2.4056 · draftQuality 대표 단가 .00605 ──
+  const BASE_USD = 2.4056
+  const SLOTS = 49
+  const DQ_USD = 0.00605
+  const modelOf = (skipped: number): { total: number; perSlot: number } => {
+    const total = BASE_USD - skipped * DQ_USD
+    return { total, perSlot: total / SLOTS }
+  }
+  const pass92 = modelOf(92)
+  check('🔴 [비용 모델 가정] 지배 92건이 검수를 건너뛰면 총 ≤ $1.96 · 슬롯당 ≤ $0.040',
+    pass92.total <= 1.96 && pass92.perSlot <= 0.040, `${pass92.total.toFixed(4)} · ${pass92.perSlot.toFixed(5)}`)
+  const min = [...Array(200).keys()].find((n) => modelOf(n).perSlot <= 0.040)
+  check('🔴 [비용 모델 가정] 통과 최소 건수는 74 — 73 건은 미달 · 30 건(지어낸 끝맺음만)도 미달',
+    min === 74 && modelOf(73).perSlot > 0.040 && modelOf(30).perSlot > 0.040,
+    `min=${String(min)} · 73→${modelOf(73).perSlot.toFixed(5)} · 30→${modelOf(30).perSlot.toFixed(5)}`)
+}
+
+// ─────────────────────────────────────────────────────────
 console.log('\n⑤ 🔴 실제 장부 — 재시도 성공 · 최종 실패 · 사용량 미상 · 상한')
 // ─────────────────────────────────────────────────────────
 type GBeat = 'ok' | 'truncated' | 'timeout' | 'noUsage'
@@ -350,7 +446,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
 
 const LIMITS = { dailyUsd: 5, runRequestCap: 50, headroomMultiplier: 1.2 }
 const dirs: string[] = []
-const ledgerRun = async (o: { beats: GBeat[]; runCap?: number; take?: number }) => {
+const ledgerRun = async (o: { beats: GBeat[]; runCap?: number; take?: number; pre?: RunInput['preReviewTerminal'] }) => {
   const dir = mkdtempSync(join(tmpdir(), 'batch-b-ledger-'))
   dirs.push(dir)
   G_BEATS = [...o.beats]
@@ -365,7 +461,7 @@ const ledgerRun = async (o: { beats: GBeat[]; runCap?: number; take?: number }) 
       stage, model, systemPrompt: system, userPayload: payload, maxOutputTokens: maxOut, timeoutMs: 5000, sourceKey: 'srcBatchB',
     }),
   })
-  const art = await run({ ask })
+  const art = await run({ ask, ...(o.pre === undefined ? {} : { pre: o.pre }) })
   const read = readLedgerDay(ledgerPathOf(dir, ledgerDateOf(NOW)))
   const entries: LedgerEntry[] = read.ok ? read.entries : []
   const paidLines = entries.filter((e) => e.stage !== 'countTokens')
@@ -457,6 +553,16 @@ try {
     // 🔴 나가지 않은 요청은 시도가 아니다 — 단일 권위의 `unattempted`(신규와 같은 자리 · 재선정 몫을 쓰지 않는다)
     && artifactRetryClassOf(closed.review, closed.cost) === 'unattempted',
     `${closed.failure?.kind ?? '-'} · ${closed.review.semanticCompletion.reason} · ${closed.review.machineOutcome}`)
+
+  // ── 🔴 (H2) 검수 앞 지배 — 실제 장부에서 draftQuality 줄이 생기지 않는다 ──
+  const dl = await ledgerRun({ beats: ['ok', 'ok'], pre: () => 'draftGate:x' })
+  const dlStages = dl.paidLines.filter((e) => e.status !== 'reserved').map((e) => e.stage).join(',')
+  check('🔴 🔴 [장부 · H2] 지배 초안은 검수 줄이 없다 — 정산 sourceNeed · draftGen 둘 · provider 유료 2건',
+    dlStages === 'sourceNeed,draftGen' && PAID === 2 && dl.art.review.machineOutcome === 'hold', `${dlStages} · paid ${PAID}`)
+  check('🔴 🔴 [장부 · H2] 지배 artifact 비용 = 장부 정산 합 · 열린 예약 0 · 시도 형식 정상',
+    dl.art.cost.totalUsd !== null && Math.abs(dl.art.cost.totalUsd - sumSettled(dl.paidLines)) < 1e-12
+    && dl.open !== null && dl.open.length === 0 && attemptsWellFormed(dl.rawLines),
+    `${dl.art.cost.totalUsd} vs ${sumSettled(dl.paidLines)}`)
 } finally {
   globalThis.fetch = realFetch
   if (prevKeys.g === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = prevKeys.g

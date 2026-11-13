@@ -40,7 +40,7 @@ import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 // 🔴 기존 템플릿 생성기를 그대로 쓴다. 새 생성 로직을 만들지 않는다
 import {
-  pickDraft, pickV2, summarizeDrafts, violatesDraftProvenance, normalize,
+  pickDraft, pickV2, dominatedBeforeReview, summarizeDrafts, violatesDraftProvenance, normalize,
   hasBannedWord, judgeSourceGate, judgeDraftGate,
   DRAFT_REASON_LABEL, DRAFT_RULE_VERSION, DRAFT_PROVENANCE, BANNED_WORDS,
 } from '../src/lib/micro-seed-auto-draft'
@@ -51,7 +51,7 @@ import {
 import { readQueueSnapshot, planPreDraftExclusion } from '../src/lib/supply-queue-snapshot'
 import {
   MACHINE_AGE_HUMAN_REVIEW_NOTE, AGE_CHECK_MODEL_TRIAL, AGE_CHECK_QUALIFIED_MODEL,
-  type DraftCandidate, type Judgement, type Pick,
+  type DraftCandidate, type Judgement, type Pick, type PreReviewPickInput,
 } from '../src/lib/micro-seed-auto-draft'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import {
@@ -135,7 +135,7 @@ import {
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
-import type { DraftGateSource } from '../src/lib/content-core/draft-life-gates'
+import type { DraftGatePlan, DraftGateSource } from '../src/lib/content-core/draft-life-gates'
 import {
   ARTIFACT_VERSION, violatesArtifact, type HumanReviewArtifact,
 } from '../src/lib/content-core/artifact'
@@ -750,6 +750,8 @@ const callKind = new Map<string, number>()
 let selfAgeCaught = 0
 /** 🔴 위기 신호로 멈춘 회차 — 전용 줄로 따로 보고한다 */
 let crisisHeld = 0
+/** 🔴 (H2) 검수 앞 지배 판정으로 의미 검수를 사지 않은 원천 — 그 자리의 유료 호출이 0 이다 */
+let preReviewSkipped = 0
 /** 🔴 **부르기 전에** 멈춘 원천 — 위기 소재는 생성 자체를 시작하지 않는다(§4) */
 let sourceCrisisHeld = 0
 export function countCall(kind: string): void {
@@ -1163,6 +1165,75 @@ async function main(): Promise<void> {
       artifactVersion: ARTIFACT_VERSION, contractIdentity: generationIdentity(contract), speakerSetKey,
     })}`
 
+    /** 🔴 그날 나이 — 한 번만 계산한다 */
+    const personaAgeOf = (c: { code: string; birthDate?: string; ageBand: string } | undefined): number | null => {
+      if (c === undefined) return null
+      const v = materializePersonaAt({
+        card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now: RUN_AT,
+      })
+      return v.ok ? v.at.exactAge : null
+    }
+    /**
+     * 🔴 **정본 안전 필터를 다시 건다** — 모델 말을 믿지 않는다.
+     *    v2 의 deterministic 은 개인정보·금지 낱말·복제·원자적 사실·나이를 보고,
+     *    위기 신호 taxonomy 는 여기 정본(`safetyFilter`·`judgeDraftGate`)이 본다.
+     */
+    const candOf = (d: { title: string; body: string }): DraftCandidate => ({
+      sourceArticleId: j.sourceArticleId, draftNo: 1,
+      title: d.title, body: d.body,
+      safetyVerdict: safetyFilter({ title: d.title, body: d.body }).verdict,
+      originality: measureOriginality(`${d.title}\n${d.body}`, `${meta.title}\n${meta.bodyHead}`),
+      generatedAt: nowIso,
+    })
+    /**
+     * 🔴 **채택 자리 입력은 여기 하나에서 만든다** (2026-11-14 H2) — 검수 앞 지배 판정과 검수 뒤 `pickV2` 가
+     *    **같은 값**을 본다. 두 곳에서 따로 조립하면 한쪽이 낡아, 검수 앞에서 막은 초안을 뒤에선 채택하는 어긋남이 생긴다.
+     *    🔴 `harm` 은 의미 검수가 말한 위해다 — 검수 앞에서는 `false`(초안만으로 아는 위기 신호만 본다).
+     *
+     *    🔴 **1인칭 나이 판정의 입력** (2026-09-23). 정본 카드의 `ageBand` 와 계획의
+     *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
+     *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
+     */
+    const pickInputOf = (
+      cand: DraftCandidate,
+      plan: (DraftGatePlan & { personaCode: string | null; selfBasis: string | null }) | null,
+      harm: boolean,
+    ): PreReviewPickInput => {
+      const planned = plan?.personaCode ?? null
+      const card = planned === null ? undefined : voice.candidates.find((c) => c.code === planned)
+      return {
+        judgement: j, draft: cand, seenTitles, seenBodies,
+        sourceUsed: usedSources.has(keyOfJ(j)),
+        sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
+        crisisStop: judgeDraftGate({
+          drafts: [cand], allLifeConflict: false, qualityHarms: [harm ? ['crisisSignal'] : []],
+        }).reason,
+        ageFact: {
+          ageBand: card?.ageBand ?? null, selfBasis: plan?.selfBasis ?? null,
+          // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
+          personaExactAge: personaAgeOf(card),
+        },
+        /**
+         * 🔴 **초안 게이트** (2026-09-26). 캐시 hit artifact 는 새 deterministic 을 거치지 않았다 —
+         *    채택 자리에서 계획과 정본 카드로 다시 건다. 카드를 못 찾으면 `null` 이다.
+         *    🔴 (quality-v3) 원천·회차 시각 — 새 생성과 **같은 원문 · 같은 함수**다. 캐시 hit 도 여기서 다시 본다.
+         *    회차 시각(`RUN_AT`)으로 판정한다 — 캐시에 적힌 옛 판정 시각이 아니다.
+         */
+        draftGate: {
+          plan, card: card ?? null,
+          context: {
+            at: RUN_AT,
+            source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
+          },
+        },
+      }
+    }
+    /**
+     * 🔴 (H2) 이 시도의 검수 앞 지배 판정 결과 — 훅이 채운다. 객체로 둔다(콜백 대입을 흐름 분석이 놓치지 않게).
+     *    캐시 hit 은 완주 artifact 뿐이라 이 칸이 비어 있다.
+     */
+    const preReview: { pick: Pick | null } = { pick: null }
+
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
     if (cached?.artifact !== undefined) {
@@ -1212,6 +1283,14 @@ async function main(): Promise<void> {
          *    정상 3 + 조건부 확인 1 + 기술 재시도 1 = 5 — 회차 공동 예산을 넘지 않는다.
          */
         retryCap: GENERATION_RETRY_MAX,
+        /**
+         * 🔴 **검수 앞 지배 판정** (2026-11-14 H2) — 검수를 `adopt` 로 가정해도 채택 자리가 막는 초안이면
+         *    의미 검수(A + 조건부 확인 B)를 사지 않는다. 판정은 채택 자리와 **같은 입력 · 같은 함수**(`pickV2`)다.
+         */
+        preReviewTerminal: (d, plan) => {
+          preReview.pick = dominatedBeforeReview(pickInputOf(candOf(d), plan, false), nowIso)
+          return preReview.pick === null ? null : preReview.pick.reason
+        },
       })
       // 🔴 이 시도의 화자 묶음 열쇠 — 결론 판독이 캐시와 같은 값을 본다
       art = { ...art, speakerSetDigest: speakerSetKey }
@@ -1257,74 +1336,27 @@ async function main(): Promise<void> {
       })
       continue
     }
-    /**
-     * 🔴 **정본 안전 필터를 다시 건다** — 모델 말을 믿지 않는다.
-     *    v2 의 deterministic 은 개인정보·금지 낱말·복제·원자적 사실·나이를 보고,
-     *    위기 신호 taxonomy 는 여기 정본(`safetyFilter`·`judgeDraftGate`)이 본다.
-     */
-    const cand: DraftCandidate = {
-      sourceArticleId: j.sourceArticleId, draftNo: 1,
-      title: art.draft.title, body: art.draft.body,
-      safetyVerdict: safetyFilter({ title: art.draft.title, body: art.draft.body }).verdict,
-      originality: measureOriginality(`${art.draft.title}\n${art.draft.body}`,
-        `${meta.title}\n${meta.bodyHead}`),
-      generatedAt: nowIso,
-    }
-    const crisis = judgeDraftGate({
-      drafts: [cand], allLifeConflict: false,
-      qualityHarms: [art.review.semantic?.issues.includes('harm') === true ? ['crisisSignal'] : []],
-    }).reason
-    if (crisis !== null) {
+    const cand = candOf(art.draft)
+    const pickInput = pickInputOf(cand, art.plan ?? null, art.review.semantic?.issues.includes('harm') === true)
+    if (pickInput.crisisStop !== null) {
       crisisHeld += 1
-      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${crisis})`)
+      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${pickInput.crisisStop})`)
     }
     /**
      * 🔴 **기계 판정을 그대로 채택으로 옮기지 않는다.** v2 가 `adopt` 여도
      *    제목 복제 · 중복 · 안전 · 위기 검사는 기존 정본이 다시 본다.
+     *
+     * 🔴 (H2) 검수 앞 지배 판정으로 멈춘 시도는 **그때 낸 pick** 을 그대로 쓴다 — 같은 입력의 `pickV2` 결과이고,
+     *    지금 `pickV2` 를 다시 부르면 `hold` → `semanticHold` 로 뭉개져 정본 사유 이름이 사라진다.
      */
-    /**
-     * 🔴 **1인칭 나이 판정의 입력** (2026-09-23). 정본 카드의 `ageBand` 와 계획의
-     *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
-     *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
-     */
-    /** 🔴 그날 나이 — 한 번만 계산한다 */
-    const personaAgeOf = (c: { code: string; birthDate?: string; ageBand: string } | undefined): number | null => {
-      if (c === undefined) return null
-      const v = materializePersonaAt({
-        card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now: RUN_AT,
-      })
-      return v.ok ? v.at.exactAge : null
+    if (preReview.pick !== null && art.review.semantic !== null) {
+      fail(`검수 앞 지배 판정 불변식 위반 (${j.sourceArticleId}) — 막았다면서 의미 검수 결과가 있다`)
     }
-    const planned = art.plan?.personaCode ?? null
-    const card = planned === null ? undefined
-      : voice.candidates.find((c) => c.code === planned)
-    const p = pickV2({
-      judgement: j, draft: cand, seenTitles, seenBodies,
-      sourceUsed: usedSources.has(keyOfJ(j)),
+    if (preReview.pick !== null) preReviewSkipped += 1
+    const p = preReview.pick ?? pickV2({
+      ...pickInput,
       machineOutcome: art.review.machineOutcome,
       machineReason: art.review.machineReason,
-      sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
-      crisisStop: crisis,
-      ageFact: {
-        ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null,
-        // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
-        personaExactAge: personaAgeOf(card),
-      },
-      /**
-       * 🔴 **초안 게이트** (2026-09-26). 캐시 hit artifact 는 새 deterministic 을 거치지 않았다 —
-       *    채택 자리에서 계획과 정본 카드로 다시 건다. 카드를 못 찾으면 `null` 이다.
-       */
-      draftGate: {
-        plan: art.plan ?? null, card: card ?? null,
-        /**
-         * 🔴 (quality-v3) 원천·회차 시각 — 새 생성과 **같은 원문 · 같은 함수**다. 캐시 hit 도 여기서 다시 본다.
-         *    회차 시각(`RUN_AT`)으로 판정한다 — 캐시에 적힌 옛 판정 시각이 아니다.
-         */
-        context: {
-          at: RUN_AT,
-          source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
-        },
-      },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {
@@ -1369,6 +1401,7 @@ async function main(): Promise<void> {
   if (LEDGER !== null) console.log(`   ${LEDGER.describe().split('\n').join('\n   ')}`)
   console.log(`   🔴 위기 소재로 **부르기 전에** 멈춘 원천 ${sourceCrisisHeld}건 — AI 를 부르지 않았다 (정본 §4)`)
   console.log(`      위기 신호로 멈춘 회차 ${crisisHeld}건 — 사람이 본다`)
+  console.log(`   🟢 검수 앞 지배 판정으로 의미 검수를 사지 않은 원천 ${preReviewSkipped}건 — 채택 자리가 검수 결과와 무관하게 막았다`)
   console.log(`      자기 나이 모순(결정론) ${selfAgeCaught}건`)
   if (replanExhausted > 0) {
     console.log(`   🟡 적격 화자를 다 써서 더 시도하지 않은 원천 ${replanExhausted}건 — AI 를 부르지 않았다`)
