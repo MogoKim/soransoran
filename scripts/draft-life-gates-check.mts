@@ -277,10 +277,69 @@ console.log('\n⑦ 배선 — 코드 한 벌 · 러너가 실제로 넘긴다')
    */
   const code = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
-  const call = /pickV2\(\{[\s\S]*?\}, nowIso\)/.exec(code)?.[0] ?? ''
-  check('🔴 🔴 **채택 루프가 pickV2 에 draftGate(계획·정본 카드)를 넘긴다**',
-    // 🔴 (quality-v3) 원천·시각 context 가 함께 간다 — 모양은 ⑩-c 가 자세히 본다
-    /draftGate:\s*\{\s*plan:\s*art\.plan\s*\?\?\s*null,\s*card:\s*card\s*\?\?\s*null,\s*context:\s*\{/.test(call), call.slice(-200))
+  /**
+   * 🔴 2026-11-14: 채택 입력은 `pickInputOf` 한 곳에서 조립한다. 예전 검사는 `pickV2({...})`
+   * 호출 안에 `draftGate` 가 인라인이어야 한다는 **코드 모양**을 고정해, 같은 값을 검수 전·후가
+   * 공유하도록 리팩터링한 뒤에도 실제 배선이 살아 있는데 CI를 거짓으로 막았다.
+   *
+   * 여기서는 두 경계를 따로 고정한다.
+   *   1) 공통 조립기가 계획·정본 카드·원천·회차 시각을 싣는다.
+   *   2) 검수 뒤 채택 루프가 그 조립 결과를 `pickV2` 에 그대로 펼친다.
+   * 아래 인메모리 변이는 어느 한 경계만 끊어도 이 검사가 실패함을 증명한다.
+   */
+  const runnerWiring = (source: string): { assembles: boolean; bindsPlan: boolean; consumes: boolean } => {
+    const helper = /const\s+pickInputOf\s*=\s*\([\s\S]*?const\s+preReview\s*:/.exec(source)?.[0] ?? ''
+    const adoption = /const\s+pickInput\s*=\s*pickInputOf\([\s\S]*?picks\.push\(p\)/.exec(source)?.[0] ?? ''
+    const pickCall = /pickV2\(\{[\s\S]*?\}, nowIso\)/.exec(adoption)?.[0] ?? ''
+    /**
+     * 🔴 금지 API 목록은 우회가 끝없이 생긴다. 이 구간에서 `pickInput` 은 조립·위기 읽기·최종 spread
+     * 세 자리에서만 쓸 수 있다. 그 세 모양을 지운 뒤 토큰이 남으면 직접·중첩·별칭·reflection 변경을
+     * 구분하지 않고 모두 실패시킨다.
+     */
+    const unexpectedPickInputUse = adoption
+      .replace(/const\s+pickInput\s*=\s*pickInputOf\(/, '')
+      // 🔴 읽기(`!== null`)만 허용한다 — 대입까지 지우면 위기 신호 게이트를 끈 변이가 숨어든다
+      .replace(/pickInput\.crisisStop(?=\s*!==\s*null\b)/g, '')
+      // 🔴 같은 값을 운영 로그에 기록하는 읽기만 허용한다
+      .replace(/\$\{pickInput\.crisisStop\}/g, '')
+      .replace(/\.\.\.pickInput,/g, '')
+    return {
+      // 🔴 (quality-v3) 원천·시각 context 가 함께 간다 — 모양은 ⑩-c 가 자세히 본다
+      assembles: /draftGate:\s*\{\s*plan,\s*card:\s*card\s*\?\?\s*null,\s*context:\s*\{/.test(helper),
+      // 🔴 캐시 hit 도 그 artifact 가 만든 계획으로 다시 게이트를 돈다 — null·다른 계획으로 바꿔 끼우지 않는다
+      bindsPlan: /const\s+pickInput\s*=\s*pickInputOf\(\s*cand,\s*art\.plan\s*\?\?\s*null,/.test(adoption),
+      // 🔴 spread 뒤 같은 키·다른 spread 를 쓰면 조용히 덮인다 — 허용한 최종 호출 모양 하나만 받는다
+      consumes: /^pickV2\(\{\s*\.\.\.pickInput,\s*machineOutcome:\s*art\.review\.machineOutcome,\s*machineReason:\s*art\.review\.machineReason,?\s*\},\s*nowIso\)$/.test(pickCall)
+        && !/\bpickInput\b/.test(unexpectedPickInputUse),
+    }
+  }
+  const wiring = runnerWiring(code)
+  check('🔴 🔴 **공통 채택 입력이 draftGate(계획·정본 카드·원천·회차)를 조립한다**',
+    wiring.assembles, 'pickInputOf.draftGate')
+  check('🔴 🔴 **채택 입력은 실제 artifact 계획과 최종 초안을 결속한다**',
+    wiring.bindsPlan, 'pickInputOf(cand, art.plan ?? null, ...)')
+  check('🔴 🔴 **채택 루프가 공통 입력을 pickV2 에 그대로 넘긴다**',
+    wiring.consumes, 'pickV2({...pickInput})')
+  check('🔴 🔴 **배선 변이 — 조립·계획 결속·소비·덮어쓰기 결함을 하네스가 모두 잡는다**',
+    !runnerWiring(code.replace('draftGate: {', 'detachedDraftGate: {')).assembles
+    && !runnerWiring(code.replace('art.plan ?? null, art.review', 'null, art.review')).bindsPlan
+    && !runnerWiring(code.replace('...pickInput,', '...detachedPickInput,')).consumes
+    && !runnerWiring(code.replace('machineOutcome: art.review.machineOutcome,',
+      'draftGate: null, machineOutcome: art.review.machineOutcome,')).consumes
+    && !runnerWiring(code.replace('machineReason: art.review.machineReason,',
+      'machineReason: art.review.machineReason, draftGate,')).consumes
+    && !runnerWiring(code.replace('machineReason: art.review.machineReason,',
+      'machineReason: art.review.machineReason, ...override,')).consumes
+    && !runnerWiring(code.replace('const p = preReview.pick ?? pickV2({',
+      'pickInput.draftGate = undefined; const p = preReview.pick ?? pickV2({')).consumes
+    && !runnerWiring(code.replace('const p = preReview.pick ?? pickV2({',
+      'pickInput.draftGate!.plan = null; const p = preReview.pick ?? pickV2({')).consumes
+    && !runnerWiring(code.replace('const p = preReview.pick ?? pickV2({',
+      'const gateAlias = pickInput.draftGate; if (gateAlias) gateAlias.card = null; const p = preReview.pick ?? pickV2({')).consumes
+    && !runnerWiring(code.replace('const p = preReview.pick ?? pickV2({',
+      "Object.defineProperty(pickInput, 'draftGate', { value: undefined }); const p = preReview.pick ?? pickV2({")).consumes
+    && !runnerWiring(code.replace('const p = preReview.pick ?? pickV2({',
+      'pickInput.crisisStop = null; const p = preReview.pick ?? pickV2({')).consumes)
   const run = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   const detAt = run.indexOf('judgeDraftGates(')
