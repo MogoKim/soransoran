@@ -353,7 +353,7 @@ console.log('\n④-b 🔴 (H2) 검수 앞 지배 — adopt 로 가정해도 채�
     && none.review.machineOutcome === 'adopt')
   // (c) 훅 입력 — 결정적 검사를 통과한 바로 그 초안 · 확정된 화자
   const seen: { title: string; body: string; code: string }[] = []
-  await run({ pre: (d, plan) => { seen.push({ title: d.title, body: d.body, code: plan.personaCode }); return null } })
+  await run({ pre: (d, plan) => { seen.push({ title: d.title, body: d.body, code: plan.personaCode ?? '' }); return null } })
   check('🔴 훅은 한 번 · 초안 그대로 · 코드가 정한 화자(P01)를 받는다',
     seen.length === 1 && seen[0]!.title === DRAFT.title && seen[0]!.body === DRAFT.body && seen[0]!.code === 'P01',
     JSON.stringify(seen))

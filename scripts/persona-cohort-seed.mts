@@ -72,15 +72,17 @@ if (EXPANSION_FIXTURE !== undefined) {
     fail(`[CREATIVE_SHA_MISMATCH] fixture ${digest} ≠ 승인 ${EXPANSION_FIXTURE.sha256}`)
   }
   const parsed = parseExpansionFixture(raw)
-  if (!parsed.ok) failAll(parsed.problems.map((p) => `[CREATIVE_INVALID] ${p}`))
-  if (parsed.fixture.cohort !== COHORT) fail(`[CREATIVE_COHORT_MISMATCH] ${parsed.fixture.cohort} ≠ ${COHORT}`)
-  const keys = parsed.fixture.candidates.map((candidate) => candidate.code)
+  const fixture = 'fixture' in parsed
+    ? parsed.fixture
+    : failAll(parsed.problems.map((p) => `[CREATIVE_INVALID] ${p}`))
+  if (fixture.cohort !== COHORT) fail(`[CREATIVE_COHORT_MISMATCH] ${fixture.cohort} ≠ ${COHORT}`)
+  const keys = fixture.candidates.map((candidate) => candidate.code)
   const missing = CODES.filter((code) => !keys.includes(code))
   const extra = keys.filter((code) => !CODES.includes(code))
   if (missing.length + extra.length > 0) {
     fail(`[CREATIVE_SCOPE] 누락 ${missing.join(',') || '0'} · 초과 ${extra.join(',') || '0'}`)
   }
-  creatives = Object.fromEntries(parsed.fixture.candidates.map((candidate) => [candidate.code, candidate.creative]))
+  creatives = Object.fromEntries(fixture.candidates.map((candidate) => [candidate.code, candidate.creative]))
   console.log(`  ✅ 승인 확장 fixture — SHA 일치 · 코드 ${Object.keys(creatives).length}개 · 엄격 파서 통과`)
 } else {
   if (!existsSync(CREATIVE!)) fail(`[CREATIVE] 파일이 없다: ${CREATIVE}`)

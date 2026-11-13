@@ -71,6 +71,7 @@ const MUTATIONS: Mutation[] = [
   { name: '도장 열쇠 대조 제거', from: 'if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey)', to: 'if (false)' },
   { name: '사건 순번을 live 구조 상한으로 오인', from: 'if (!isCount(s.ordinal) || s.ordinal < 2)', to: 'if (!isCount(s.ordinal) || s.ordinal < 2 || s.ordinal > FOLLOWUP_TOTAL_PER_POST_MAX)' },
   { name: '적은 글 먼저 제거', from: 'a.go.extrasSoFar - b.go.extrasSoFar\n    ||', to: '0 ||' },
+  { name: '🔴 출처 문맥 null 글 격리 제거', from: 'if (f.operational === null) blocked.push', to: 'if (false) blocked.push' },
   { name: '🔴 최신 글 우선 제거(hash-only 정렬 복원)',
     from: "(b.publishedAtMs ?? 0) - (a.publishedAtMs ?? 0)\n    || (a.postId < b.postId ? -1 : a.postId > b.postId ? 1 : 0)",
     to: "unitOf('followup-order', a.postId, String(a.go.ordinal)) - unitOf('followup-order', b.postId, String(b.go.ordinal))" },

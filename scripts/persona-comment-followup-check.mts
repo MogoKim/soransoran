@@ -101,6 +101,16 @@ check('① 구조 상한 = 첫 댓글 1 + 선택적 추가 0~9 = 총 10',
   M.FOLLOWUP_EXTRA_PER_POST_MAX === 9 && M.FOLLOWUP_TOTAL_PER_POST_MAX === 10)
 check('① 운영 profile 산출 기준은 추가 4로 동결(구조 상한과 비용 envelope 분리)',
   M.FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST === 4)
+{
+  const p = M.partitionFollowupSourceContexts([
+    { postId: 'good-1', operational: true, reason: '운영 문맥' },
+    { postId: 'unknown-1', operational: null, reason: '원문 판독 불가' },
+    { postId: 'good-2', operational: false, reason: '일반 문맥' },
+  ])
+  check('① 한 글의 출처 문맥 null은 그 글만 막고 정상 글 2건은 계속',
+    p.blocked.length === 1 && p.blocked[0]?.postId === 'unknown-1'
+    && p.runnablePostIds.join(',') === 'good-1,good-2')
+}
 
 // ═════════ ② fixture 시나리오 ═════════
 type FxProfiles = {

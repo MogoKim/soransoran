@@ -7,12 +7,15 @@
  * 🔴 **fixture 가 실제보다 강하면 안 된다.** 말투 근거는 합성 댓글이지만 판정은 운영 검증기를 그대로 지난다.
  *    정본 말투 자산이 없는 CI 에서도 같은 답이 나오도록 실제 자산을 읽지 않는다.
  */
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
 import { autogenCodeOf, RETIRED_AUTOGEN_CODES, type Cadence } from '../src/lib/persona-autogen'
 import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
-import { COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT } from '../src/lib/persona-cohort'
+import {
+  COHORT_EXPANSION_FIXTURES, COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT,
+} from '../src/lib/persona-cohort'
 import {
   activityConcentration, CODE_FORMAT_LIMITS, codeCeiling, codeLimitsToLift, codeOrderSafe, codeRoom,
   diversitySubjectOf, diversitySubjectOfCard, expansionFixtureComparisonInputs, EXPANSION_STEPS,
@@ -39,6 +42,9 @@ console.log('\n══ Persona 확장 계약 fixture ══\n')
 
 const pool = parsePoolDoc(src(PERSONA_POOL_DOC))
 const FIXTURE = 'scripts/__fixtures__/persona-expansion-d30.json'
+const fixtureBytes = readFileSync(FIXTURE)
+const fixtureContract = COHORT_EXPANSION_FIXTURES['wave7-d30']
+const fixtureDigest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
 const promoted = COHORTS['wave7-d30'].codes
 const priorProductionCodes = PRODUCTION_PERSONA_CODES.filter((code) => !promoted.includes(code))
 const priorCards = pool.cards.filter((c) => priorProductionCodes.includes(c.code))
@@ -49,6 +55,12 @@ const fixture: ExpansionFixture = fxRead.fixture
 // ─────────────────────────────────────────────────────────
 console.log('① 정본 파생 · 운영 universe 격리')
 // ─────────────────────────────────────────────────────────
+check('🔴 승인 fixture 경로·SHA-256이 실제 바이트와 같다',
+  fixtureContract?.path === FIXTURE && fixtureContract.sha256 === fixtureDigest(fixtureBytes))
+const mutatedFixture = Buffer.from(fixtureBytes)
+mutatedFixture[mutatedFixture.length - 2] = mutatedFixture[mutatedFixture.length - 2]! ^ 1
+check('🔴 fixture 1바이트 변이를 digest 계약이 잡는다',
+  fixtureContract !== undefined && fixtureContract.sha256 !== fixtureDigest(mutatedFixture))
 check('단계 목표는 정본 표에서 온다 — d20 canary · d20 지속 · d100 지속',
   expansionStepOf('d20-canary')?.target === PERSONA_CANARY_FLOOR.d20
   && expansionStepOf('d20-sustained')?.target === PERSONA_SUSTAINED_TARGET.d20

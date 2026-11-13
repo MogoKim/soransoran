@@ -18,7 +18,8 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   FOLLOWUP_KEY_PREFIX, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
   FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK, addFollowupIsolation, classifyFollowupFailure, followupFailureHaltsRound,
-  followupIsolationOf, followupPersonaCandidates, followupPlanCap, followupStageOf, orderFollowupGo, pickFollowupPersona,
+  followupIsolationOf, followupPersonaCandidates, followupPlanCap, followupStageOf, orderFollowupGo,
+  partitionFollowupSourceContexts, pickFollowupPersona,
   readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
   type FollowupCommentRow, type FollowupFailureCode, type FollowupIsolation, type FollowupPersonaFacts, type FollowupPostFacts,
   type FollowupPostVerdict,
@@ -545,18 +546,28 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     }
   })
   const ordered = orderFollowupGo(eligibleReady)
-  // 🔴 출처 문맥은 글 성격이다 — 회차 앞에서 GO 글 전부를 판정한다. 하나라도 모르면 회차 전체 유료 호출 0
-  //    (옛 규칙은 계획된 글만 봤다 — 재선정으로 어느 글까지 닿을지 미리 모르므로 범위를 넓혀 fail-closed 로 둔다)
-  const ctxByPost = new Map(ordered.flatMap(({ postId }) => {
+  // 🔴 출처 문맥은 글 성격이다. 모르는 글만 이 회차에서 격리하고 정상 글은 계속한다.
+  //    회차 전체를 막는 옛 규칙은 한 글이 모든 정상 후보의 용량을 막는 두 번째 starvation이었다.
+  const ctxByPost = new Map(ordered.map(({ postId }) => {
     const src = srcById.get(postId)
-    return src === undefined ? [] : [[postId, judgeSourceContext({
+    return [postId, src === undefined ? { operational: null, reason: '원문을 찾지 못했다' } : judgeSourceContext({
       visibility: src.visibility, sourceSite: src.sourceSite, boardType: src.boardType, title: src.title, body: src.content,
-    })] as const]
+    })] as const
   }))
+  const sourceContextPartition = partitionFollowupSourceContexts(
+    [...ctxByPost].map(([postId, ctx]) => ({ postId, operational: ctx.operational, reason: ctx.reason })),
+  )
+  const phaseIsolation: FollowupIsolation = {
+    personaCodes: new Set(isolation.personaCodes),
+    postIds: new Set([...isolation.postIds, ...sourceContextPartition.blocked.map((x) => x.postId)]),
+    postPersonaKeys: new Set(isolation.postPersonaKeys),
+  }
+  for (const b of sourceContextPartition.blocked) {
+    lines.push(`출처 문맥 ${b.postId.slice(0, 8)} — ${b.reason} · 이 글만 회차 격리 · provider 0`)
+  }
   const providerBlockers: string[] = []
   if (knownNames === undefined) providerBlockers.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
   if (frequencyRead.corpus === null) providerBlockers.push(`frequencyLookup — ${frequencyRead.reason}`)
-  for (const ctx of ctxByPost.values()) if (ctx.operational === null) providerBlockers.push(`sourceIsCafeOperational — ${ctx.reason}`)
   // 🔴 seed 공유 수를 못 셌으면 회차 전체 유료 호출 0 — 첫 댓글 materializer 와 같은 정본(그 사람만 빼고 계속하지 않는다)
   for (const [code, n] of seedShareByCode) if (n === null) providerBlockers.push(`seedUseCount (${code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
 
@@ -708,7 +719,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   }
   const gen = await runFollowupGeneration({
     store: deps.attemptStore, nowMs, allowed, providerCallBudget: Math.min(tick.providerCallBudget, followupPlanCap(allowed)),
-    slots: ordered.map((x) => ({ ...x, postPublishedAtMs: x.publishedAtMs })), isolation, planFor, attempt,
+    slots: ordered.map((x) => ({ ...x, postPublishedAtMs: x.publishedAtMs })), isolation: phaseIsolation, planFor, attempt,
   })
   for (const w of gen.warnings) lines.push(w)
   for (const l of gen.lines) lines.push(l)

@@ -74,17 +74,19 @@ const M: CohortManifest = cohortOf(COHORT)!
 const approvedExpansionFixture = (): ExpansionFixture | null => {
   const approved = COHORT_EXPANSION_FIXTURES[COHORT]
   if (approved === undefined) return null
-  let raw: string
+  let raw = ''
   try { raw = readFileSync(approved.path, 'utf-8') }
   catch (e) { fail(`${approved.path} 을 읽을 수 없습니다: ${(e as Error).message}`) }
   const digest = createHash('sha256').update(raw).digest('hex')
   if (digest !== approved.sha256) fail(`승인 fixture digest 불일치: ${digest} ≠ ${approved.sha256}`)
   const parsed = parseExpansionFixture(raw)
-  if (!parsed.ok) fail(`승인 fixture 형식 오류: ${parsed.problems.join(' / ')}`)
-  if (parsed.fixture.cohort !== COHORT) fail(`승인 fixture cohort ${parsed.fixture.cohort} ≠ ${COHORT}`)
-  const keyProblems = checkCohortKeys(M, parsed.fixture.candidates.map((c) => c.code))
+  const fixture = 'fixture' in parsed
+    ? parsed.fixture
+    : fail(`승인 fixture 형식 오류: ${parsed.problems.join(' / ')}`)
+  if (fixture.cohort !== COHORT) fail(`승인 fixture cohort ${fixture.cohort} ≠ ${COHORT}`)
+  const keyProblems = checkCohortKeys(M, fixture.candidates.map((c) => c.code))
   if (keyProblems.length > 0) fail(`승인 fixture 범위 오류: ${keyProblems.join(' / ')}`)
-  return parsed.fixture
+  return fixture
 }
 
 const sg = judgeStepArg(arg('step'))

@@ -123,7 +123,7 @@ export const EXCLUDED_CODES: Readonly<Record<string, string>> = {
 export const COHORT_EXPANSION_FIXTURES: Readonly<Partial<Record<CohortId, { path: string; sha256: string }>>> = {
   'wave7-d30': {
     path: 'scripts/__fixtures__/persona-expansion-d30.json',
-    sha256: '522481cc53376dbdde2cb235b477087c73b23a6e2fa405e942fe91e26541fbb9',
+    sha256: '2320a3c97ea8560847bc7222ac129ad161d222b4805074292607a063cf752ee0',
   },
 }
 

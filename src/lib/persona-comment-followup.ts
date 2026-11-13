@@ -514,6 +514,31 @@ export function orderFollowupGo<T extends { postId: string; publishedAtMs?: numb
 // 🔴 실패 격리 — 실패한 Persona 가 매 회차 같은 자리를 다시 먹지 않게 (2026-11-14 H1 · starvation)
 // ─────────────────────────────────────────────────────────
 
+export type FollowupSourceContextFact = {
+  postId: string
+  operational: boolean | null
+  reason: string
+}
+
+/**
+ * 🔴 출처 문맥을 판독할 수 없는 글만 현재 회차에서 격리한다.
+ * 한 글의 `null`은 글 속성이지 provider·DB 전체 장애가 아니다. 정상 글까지 막으면
+ * 실패 글 하나가 모든 호출 용량을 막는 두 번째 starvation이 된다.
+ * 실패 글은 다음 회차에 새 원문 상태로 다시 판독하며 provider를 부르지 않는다.
+ */
+export function partitionFollowupSourceContexts(facts: readonly FollowupSourceContextFact[]): {
+  runnablePostIds: string[]
+  blocked: { postId: string; reason: string }[]
+} {
+  const runnablePostIds: string[] = []
+  const blocked: { postId: string; reason: string }[] = []
+  for (const f of facts) {
+    if (f.operational === null) blocked.push({ postId: f.postId, reason: f.reason })
+    else runnablePostIds.push(f.postId)
+  }
+  return { runnablePostIds, blocked }
+}
+
 const DAY_MS = 24 * 3_600_000
 /** 🔴 시각 t 가 속한 KST 날의 마지막 ms(포함) — 다음 KST 자정 00:00:00.000 에 기억이 끝난다 */
 export const kstDayEndMs = (t: number): number => kstDayStart(new Date(t)).getTime() + DAY_MS - 1
