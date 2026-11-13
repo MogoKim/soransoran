@@ -13,6 +13,7 @@ import { COHORTS, EXCLUDED_CODES } from '../src/lib/persona-cohort'
 import { lifeStageOf, type Cadence, type PersonaCreative } from '../src/lib/persona-autogen'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import { changesOf, type RemediationRow } from '../src/lib/persona-contract-remediation'
+import { verifySeedCard } from '../src/lib/persona-card-verify'
 import {
   buildCohortSeeds, judgeCohortVoice, judgeCreativeAgainstCards, judgeExistingOutput, readApprovedCreative,
   seedPrivacyProblems, serializeSeeds, sha256Hex,
@@ -85,6 +86,9 @@ console.log('① 정상 — wave5 6명')
     ? (buildCohortSeeds({ codes: CODES, cards, creatives, voice: VOICE, cadence: CADENCE }) as { value: Record<string, Record<string, unknown>> }).value : {}) === text)
   check('variations = 승인 creative 그대로 · cap = 운영 cadence', CODES.every((c) => JSON.stringify(seeds[c]?.voiceVariations) === JSON.stringify(creatives[c]!.variations)
     && seeds[c]?.dailyCap === 3 && seeds[c]?.weeklyCap === 12 && seeds[c]?.silenceRate === 0.3))
+  const altered = { ...seeds[CODES[0]!]!, ageBand: '30대' }
+  check('🔴 seed 생활사 한 칸 변조(ageBand)를 정본 대조가 잡는다',
+    verifySeedCard(CODES[0]!, altered, card(CODES[0]!)).some((p) => p.startsWith('ageBand 가 정본과 다르다')))
   check('🔴 privacy — 말투 묶음 원문 · 화자 · URL · 이메일 0', seedPrivacyProblems(text, { texts: [...VOICE.values()].flatMap((v) => v.comments.map((x) => x.text)), speakerIds: ['speaker-abcdef'] }).length === 0)
   check('🔴 seed 에 원문 묶음 칸이 없다(comments · speakerId · lengths 키 0)', !/"comments"|"speakerId"|"lengths"|"anchorCount"/.test(text))
 }
@@ -184,6 +188,11 @@ console.log('⑦ CLI 연결')
   check('🔴 CLI 가 기존 파일 권한을 판정에 넘기고 bad-mode · fix-mode 를 처리한다',
     /judgeExistingOutput\(existsSync\(path\) \? \{ text: readFileSync\(path, 'utf-8'\), mode: modeOf\(path\) \} : null, text, WRITE\)/.test(cli)
     && /\[OUTPUT_PERMISSION\]/.test(cli) && /chmodSync\(path, SEED_FILE_MODE\)/.test(cli))
+  const runner = readFileSync('scripts/persona-cohort-run.mts', 'utf-8')
+  check('🔴 DB seed 적용 직전 승인 fixture·Pool·말투 자산·active cadence 로 seed 바이트를 재조립한다',
+    runner.includes('const expected = buildCohortSeeds({')
+    && runner.includes('const expectedRaw = serializeSeeds(M.codes, expectedSeeds)')
+    && runner.includes('SEED_PROVENANCE_MISMATCH'))
 }
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

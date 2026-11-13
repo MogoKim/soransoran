@@ -25,7 +25,7 @@
 | 보조 Mac D100 runtime HEAD = pin = manifest | `410d9a452228a6aa172a67833325be61980f87f1` · main 차이를 별도 판정: 복구 브랜치와 PR #842 이후 main은 아직 runtime에 배포하지 않음 |
 | 보조 Mac D100 job | 9개 loaded · 2026-11-14 05:35 읽기 전용 관측 · 최근 종료코드 0 |
 | 회사 Mac D100 job | 0 · D100 owner 아님 |
-| 오늘 자연 결정 (2026-11-13) | `PREPARE · 공개 d20 · 준비 d30` · controller 행 1개 |
+| 직전 자연 결정 (2026-11-13) | `PREPARE · 공개 d20 · 준비 d30` · controller 행 1개 |
 | 최신 단계 증거 | 11-12 d20 증거 PASS · 11-13 07:00 controller 확정 |
 | D20 operating | **PASS** · 자동 20/20 · 첫 댓글 20/20 · 감사 표본 4/4 · 같은 runtime SHA |
 | Persona 운영 DB (2026-11-14 05:35 관측) | contract-valid 40 · active 40 · D30 하한 60에 20 부족 |
@@ -112,16 +112,21 @@
 
 1. 전체 회귀검사와 독립 교차검수를 끝낸다.
 2. exact-head CI가 모두 green인 한 PR만 main에 병합한다.
-3. runtime은 22:15 마지막 자연 회차 뒤~05:30, 모든 runner idle인 안전창에 한 번만 배포한다.
-4. 배포 직후 HEAD=pin=manifest, launchd, rollback, profile을 확인한다.
-5. 11-14 07:00 controller 결정은 현재 runtime으로 확인만 한다. 05:30 안전창이 이미 닫혔으므로
-   새 runtime은 11-14 22:15~11-15 05:30 안전창에만 배포한다.
-6. 11-15 07:00 controller가 `PREPARE`를 확정하고 그날이 증명일이 아닐 때만 새 Persona 20명을
+3. runtime 배포 전에 보조 Mac에 말투 보충 묶음 v2를 기록하고 digest `cf3dbdac…`와 기존 40명 배정 diff 0을 확인한다.
+   현재 runtime은 v2를 읽지 않으므로 이 준비만으로 운영은 바뀌지 않는다.
+4. runtime은 23:40 감사 종료 뒤 00:30 수집 전인 **11-15 00:00~00:25**를 1순위로 삼는다.
+   직전 `runner-recover`·observer·다른 job이 실제 idle인지 확인하고 한 번만 배포한다. 예비창은 01:00~01:25이며
+   05:25를 넘기지 않는다. 단순히 22:15~05:30 전체를 idle로 가정하지 않는다.
+5. 배포 직후 HEAD=pin=manifest, 말투 자산 식별자, launchd, rollback, profile, `ops:loop-install --apply`를 확인한다.
+6. 11-14 07:00 controller 결정은 현재 runtime으로 확인만 한다. 05:30 안전창이 이미 닫혔으므로
+   새 runtime은 위의 11-15 00:00~00:25 또는 01:00~01:25에 실제 idle을 확인한 뒤에만 배포한다.
+7. 11-15 07:00 controller가 `PREPARE`를 확정하고 그날이 증명일이 아닐 때만 새 Persona 20명을
    create→seed→check→activate 한다. 수동 stage·READY·장부 보정은 하지 않는다.
-7. 자연 운영으로 비용·댓글·Persona cadence를 관측하고 다음 07:00 controller가 D30을 열게 한다.
+8. 자연 운영으로 비용·댓글·Persona cadence를 관측하고 rolling 72h 비용이 실제 green인 첫 07:00 controller가 D30을 열게 한다.
 
 🔴 11-14 07:00 이전에 Persona를 투입해 억지로 D30을 여는 것은 증명 전날 밤 cohort 변경이므로 하지 않는다.
-가장 빠른 정직한 후보는 11-16 07:00이며, rolling 72h 비용이 아직 red면 green이 되는 첫 07:00으로 자동 이월한다.
+현재 기준선과 새 코드 모델을 섞은 보수 추정상 11-16은 약 $0.045, 11-17은 약 $0.0415다. 창 전체가 새 코드인
+**11-18 07:00**이 첫 현실 후보이며, 실제 rolling 72h 비용이 아직 red면 green이 되는 첫 07:00으로 자동 이월한다.
 
 ## 4. PASS/FAIL/UNKNOWN과 rollback
 
@@ -152,7 +157,7 @@ code·deployed·operating 증거를 서로 대신 쓰지 않는다.
 
 | 우선 | 트랙 | 공격 목표 | 완료 조건 |
 |---:|---|---|---|
-| 1 | D30 복구 | 11-14 밤 안전창 code deploy · 11-15 07 후 Persona · 가장 빠른 11-16 07 D30 | 비용·Persona·댓글·exact-head 모두 green |
+| 1 | D30 복구 | 11-15 00:00 1순위 runtime deploy · 11-15 07 후 Persona · 첫 현실 후보 11-18 07 D30 | 비용·Persona·댓글·exact-head 모두 green |
 | 2 | OP51~90 직접작성 | D30 파일과 겹치지 않는 별도 worktree에서 즉시 rebase·code PASS | 출처·소유권·Dn 증거 제외 replay |
 | 3 | 댓글 PR-2 | H1 운영 표본 뒤 hook·역할 권위 통합 | 실회원 무개입·중복 hook 0 |
 | 4 | #829 | D30 증거와 파일 분리 뒤 canary | 자동 Dn·기억·베스트 제외 |

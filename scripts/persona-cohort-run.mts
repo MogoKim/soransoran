@@ -29,7 +29,7 @@ import {
   COHORTS, cohortOf, verifyAllCohorts, stageOf,
   judgeCreate, judgeSeed, judgeActivate, judgePause, judgePrerequisites, judgeArgs,
   judgeCohortArg, judgeStepArg, requiresActor, checkCohortKeys,
-  COHORT_EXPANSION_FIXTURES, displayNamePathOf, seedPathOf,
+  COHORT_EXPANSION_FIXTURES, displayNamePathOf, seedPathOf, PRODUCTION_PERSONA_CODES,
   type CohortId, type CohortManifest, type CohortMemberState, type CohortStep,
 } from '../src/lib/persona-cohort'
 import { judgeRealMember } from '../src/lib/real-member-gate'
@@ -42,6 +42,9 @@ import { loadNameCollisionSets, describeSets } from './lib/persona-name-collisio
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { parseExpansionFixture, type ExpansionFixture } from './lib/persona-expansion-gate.mjs'
+import { modeCadence, type Cadence } from '../src/lib/persona-autogen'
+import { buildCohortSeeds, judgeCohortVoice, serializeSeeds } from './lib/persona-cohort-seed.mjs'
+import { planBundles, stableAssignment } from './lib/persona-reference-store.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 const DRAFT: PersonaStatus = 'draft'
@@ -350,6 +353,46 @@ if (STEP === 'seed') {
   if (keyProblems.length > 0) { await prisma.$disconnect(); fail(keyProblems.join(' / ')) }
   const dupes = duplicateKeys(raw)
   if (dupes.length > 0) { await prisma.$disconnect(); fail(`seed 파일에 중복 코드: ${dupes.join(', ')}`) }
+
+  /**
+   * 🔴 seed 파일은 승인 fixture 에서 시작한 **결정적 산출물**이어야 한다.
+   *    JSON 한 칸만 손으로 고쳐도 아래 재조립 바이트와 달라져 DB write 전에 멈춘다.
+   *    fixture · Pool · 말투 자산 · 현재 active cadence 중 하나가 달라져도 옛 seed 를 재사용하지 않는다.
+   */
+  const approved = approvedExpansionFixture()
+  if (approved !== null) {
+    const sa = stableAssignment({ repoRoot: process.cwd() })
+    if (!sa.canonicalAsset || sa.rows.length === 0) {
+      await prisma.$disconnect()
+      fail(`정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
+    }
+    const existing = PRODUCTION_PERSONA_CODES.filter((code) => !M.codes.includes(code))
+    const base = new Map(planBundles({ rows: sa.rows, personaCodes: existing }).bundles.map((bundle) => [bundle.personaCode, bundle]))
+    const voiceProblems = judgeCohortVoice({ cohortCodes: M.codes, existingCodes: existing, base, full: sa.byCode })
+    if (voiceProblems.length > 0) { await prisma.$disconnect(); fail(voiceProblems.join(' / ')) }
+
+    const cadenceRows = await prisma.persona.findMany({
+      where: { status: 'active' },
+      select: { dailyCap: true, weeklyCap: true, silenceRate: true, activityRhythm: true },
+    })
+    const cadence = modeCadence(cadenceRows
+      .filter((row) => row.dailyCap !== null && row.weeklyCap !== null && row.silenceRate !== null
+        && row.activityRhythm !== null && typeof row.activityRhythm === 'object')
+      .map((row) => ({
+        dailyCap: row.dailyCap!, weeklyCap: row.weeklyCap!, silenceRate: Number(row.silenceRate),
+        activityRhythm: row.activityRhythm as Cadence['activityRhythm'],
+      })))
+    const creatives = Object.fromEntries(approved.candidates.map((candidate) => [candidate.code, candidate.creative]))
+    const expected = buildCohortSeeds({ codes: M.codes, cards: poolOf, creatives, voice: sa.byCode, cadence })
+    if (!expected.ok) { await prisma.$disconnect(); fail(expected.problems.join(' / ')) }
+    const expectedSeeds = (expected as { ok: true; value: Record<string, Record<string, unknown>> }).value
+    const expectedRaw = serializeSeeds(M.codes, expectedSeeds)
+    if (raw !== expectedRaw) {
+      await prisma.$disconnect()
+      fail(`SEED_PROVENANCE_MISMATCH — 승인 fixture·Pool·말투 자산·active cadence 에서 다시 만든 바이트와 다릅니다`)
+    }
+    ok(`seed provenance 재조립 일치 — 승인 fixture digest · Pool · 말투 자산 · active cadence 결속`)
+  }
 
   // 🔴 정본 대조 — 금지값 · 필수 축 · Pool 카드 일치
   let bad = 0
