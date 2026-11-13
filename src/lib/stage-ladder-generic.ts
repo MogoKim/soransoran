@@ -197,6 +197,12 @@ export const PREFLIGHT_CODES = [
   'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN',
   'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN',
   'PERSONA_SHORT', 'PERSONA_UNKNOWN',
+  /**
+   * 🔴 **D30 이상 — 실제로 투입되는 계약 유효 Persona** (2026-11-13 창업자 결정 · canon §4).
+   *    공급 화자 여력·발행·추가 댓글은 DB `active` 만 쓴다. reserve 만 늘리면 `PERSONA_SHORT` 는 풀려도
+   *    runner 는 옛 active 인원으로 돈다(숫자만 통과하는 죽은 게이트). 그래서 D30 이상은 stage-active 도 하한을 넘어야 연다.
+   */
+  'PERSONA_ACTIVE_SHORT', 'PERSONA_ACTIVE_UNKNOWN',
   'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT',
   'AUDIT_COST_SHORT', 'AUDIT_COST_UNKNOWN',
   'SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOWN',
@@ -204,8 +210,15 @@ export const PREFLIGHT_CODES = [
 ] as const
 export type PreflightCode = (typeof PREFLIGHT_CODES)[number]
 const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
-  'PERSONA_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
+  'PERSONA_UNKNOWN', 'PERSONA_ACTIVE_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
 ]
+
+/**
+ * 🔴 **stage-active 하한을 함께 보는 시험 대상 단계** (2026-11-13 · canon §4).
+ *    D1~D20 은 넣지 않는다 — 이미 인증된 단계의 판정·역사 증거를 소급해 바꾸지 않는다.
+ */
+export const STAGE_ACTIVE_FLOOR_STAGES: readonly GenericStage[] = ['d30', 'd50', 'd100']
+export const requiresStageActiveFloor = (s: GenericStage): boolean => STAGE_ACTIVE_FLOOR_STAGES.includes(s)
 
 /**
  * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다. hard gate 사실을 하나라도 모르면 열지 않고,
@@ -254,6 +267,12 @@ export type PreflightFacts = {
    *    2026-09-30 운영 실측은 0 — D3 하한 24 가 막아 **D1→D3 시험부터** 열리지 않는다(PERSONA_SHORT).
    */
   contractValidPersonas: number | null
+  /**
+   * 🔴 **계약 유효이면서 DB `active` 인 Persona 수**(4상태 정본의 `stage-active`) — Persona 레인이 같은 판독으로 넣는다.
+   *    active 행 수가 아니다 — active 인데 계약을 통과하지 못한 사람은 세지 않는다.
+   *    D30 이상 시험에서만 본다(`STAGE_ACTIVE_FLOOR_STAGES`). 생략(`undefined`)·읽기 실패(`null`)는 모름이다.
+   */
+  stageActivePersonas?: number | null
   /** 댓글 1건 정산 단가(USD) — 장부 실측(최근 3일) */
   commentUsdPerRequest: number | null
   /** 댓글 레인 하루 상한(USD) — 정본 기본 $0.20 · D20 승인 최대 $0.50 */
@@ -482,6 +501,17 @@ export function judgeNextPreflight(
   counts.personaFloor = floor
   if (facts.contractValidPersonas === null) codes.add('PERSONA_UNKNOWN')
   else { counts.personas = facts.contractValidPersonas; if (facts.contractValidPersonas < floor) codes.add('PERSONA_SHORT') }
+  /**
+   * 🔴 D30 이상 — 같은 하한을 **실제 투입 인원**(stage-active)도 넘어야 한다 (2026-11-13 · canon §4).
+   *    stage-active 는 계약 유효의 부분집합이다 — 더 크면 두 판독이 어긋난 것이라 모름으로 닫는다.
+   *    D1~D20 은 보지 않는다(이미 열린 단계의 판정과 역사 판정을 바꾸지 않는다).
+   */
+  if (requiresStageActiveFloor(stage)) {
+    const active = facts.stageActivePersonas
+    if (active === undefined || active === null || !isCount(active)
+      || (facts.contractValidPersonas !== null && active > facts.contractValidPersonas)) codes.add('PERSONA_ACTIVE_UNKNOWN')
+    else { counts.personasActive = active; if (active < floor) codes.add('PERSONA_ACTIVE_SHORT') }
+  }
   // 댓글 — 자동 글마다 첫 댓글 1건(무인 레인 상한) · 하루 비용 상한 · 러너 회차 용량
   const firstComments = n * AUTO_PERSONA_COMMENTS_PER_POST_MAX
   counts.firstComments = firstComments

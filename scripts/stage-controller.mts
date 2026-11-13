@@ -58,7 +58,7 @@ import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
 import { judgeNextPreflight, preflightLogLine, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
-import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
+import { readPersonaCapacity } from './lib/persona-reserve-facts.mjs'
 import { probeSupplyLease } from './lib/supply-lease.mjs'
 import { stageControllerLeaseDisposition } from './lib/ops-loop-templates'
 import { loaderArgs } from './lib/runner-lease.mjs'
@@ -378,8 +378,8 @@ async function computeToday(
           caps: releaseCapsOf(profileOf(target)), evidenceDate: previous.kstDate, env: pe.values,
           dataDir: SUPPLY_DATA_DIR, now: NOW, runnerHealth: errorSignal.health,
           recovery,
-          // 🔴 Persona 4상태 정본의 계약 유효 수 — 활성 행 수를 넣지 않는다(읽지 못하면 null = 모름)
-          contractValidPersonas: () => readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() }),
+          // 🔴 Persona 4상태 정본의 계약 유효 수 + stage-active 수 — 한 판독(활성 행 수 아님 · 못 읽으면 null = 모름)
+          personaCapacity: () => readPersonaCapacity(prisma, { now: NOW, repoRoot: process.cwd() }),
         })
         // 🔴 READY 가산은 final 슬롯 · intent done · lineage 검증을 지난 slot-valid 복구 READY만, 부족분까지
         let boundedRecoveryReadyGain = 0

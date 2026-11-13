@@ -141,6 +141,8 @@ const preflightFacts = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): Prefl
     proofKstDate: '2026-11-05',
     slotValidOpportunities: n, readyCohort: cohort, latencyP50H: 20, latencyP90H: 60,
     contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
+    // 🔴 2026-11-13 — D30 이상 stage-active 하한(canon §4). 기준선은 하한과 같은 수가 active 다
+    stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
     commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
     auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
     supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,

@@ -499,6 +499,8 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
   proofKstDate: '2026-11-05',
   slotValidOpportunities: genericDailyTarget(s), readyCohort: cohortFor(s), latencyP50H: 20, latencyP90H: 60,
   contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
+  // 🔴 2026-11-13 — D30 이상은 stage-active 도 하한을 넘어야 연다(canon §4). 기준선은 하한과 같은 수가 active 다
+  stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
   supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
