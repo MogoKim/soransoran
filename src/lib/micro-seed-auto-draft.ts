@@ -458,6 +458,28 @@ export function pickV2(input: PickV2Input, now: string): Pick {
   }
 }
 
+/**
+ * 🔴 **의미 검수 앞 지배 판정** (2026-11-14 H2 공급 비용).
+ *
+ *    `pickV2` 의 의미 검수 의존은 **단조**다 — 검수가 줄 수 있는 가장 유리한 결과는 `adopt` 이고,
+ *    `hold`·`drop` 은 채택 가능성을 늘리지 못한다(위기 신호도 검수의 `harm` 이 더할 뿐 빼지 않는다).
+ *    그래서 **검수를 `adopt` 로 가정해도 `AUTO_ADOPT` 가 아니면, 실제 검수 결과가 무엇이든 채택되지 않는다.**
+ *    그 초안에 의미 검수(A 1회 + 조건부 확인 B 1회)를 사는 것은 결론을 바꾸지 못하는 지출이다.
+ *
+ *    🔴 이 함수는 판정을 새로 만들지 않는다 — `pickV2` 를 그대로 부른다. 사유도 `pickV2` 의 정본 어휘다.
+ *    🔴 `crisisStop` 은 부르는 쪽이 **초안만으로**(검수 `harm` 없이) 계산해 넘긴다 — 검수 없이 알 수 있는 것만 쓴다.
+ *    🔴 `null` 은 "채택 가능성이 남았다" — 의미 검수를 그대로 산다. 의미 검수 의미·확인 B 는 바뀌지 않는다.
+ *    🔴 알려진 차이 하나: 실제 검수가 `harm` 이었다면 앞판은 `AUTO_DROP(generatedHarm)` 이었고 지금은 이 함수의
+ *       `AUTO_HOLD` 사유다. 완주 뒤 막힌 초안은 `candidate`, 검수 앞 지배는 `deterministicFailed` → `terminal` 로
+ *       상태 표지는 다르지만, 둘 다 결론 집합이라 같은 원천을 유료로 다시 사지 않는다.
+ */
+export type PreReviewPickInput = Omit<PickV2Input, 'machineOutcome' | 'machineReason'>
+
+export function dominatedBeforeReview(input: PreReviewPickInput, now: string): Pick | null {
+  const p = pickV2({ ...input, machineOutcome: 'adopt', machineReason: '' }, now)
+  return p.decision === 'AUTO_ADOPT' ? null : p
+}
+
 export type PickInput = {
   judgement: Judgement
   drafts: readonly DraftCandidate[]

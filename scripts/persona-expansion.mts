@@ -33,7 +33,8 @@ import { voicePoolFor } from './lib/persona-autogen.mjs'
 import type { ExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { judgeExpansionBatch, loadExpansionFixture, nameSpaceCapacity } from './lib/persona-expansion-gate.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readEvidenceSalt, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
+import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
+import { readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import type { LocalComment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -82,6 +83,7 @@ const baselineCodeSet = new Set(baselineCodes)
 let facts: ExpansionFacts | null = null
 if (USE_DB) {
   await loadEnvLocal()
+  if (!fillDbConnection()) fail('canonical env 에 DATABASE_URL 이 없다 — 운영 DB 판정을 시작하지 않는다')
   const { PrismaClient } = await import('@prisma/client')
   const { readExpansionFacts } = await import('./lib/persona-expansion-facts.mjs')
   const prisma = new PrismaClient()
@@ -127,7 +129,9 @@ if (USE_VOICE_EVIDENCE) {
   const measuredFacts = facts as ExpansionFacts
   const measuredMembers = measuredFacts.nameSets.memberNames
     ?? fail('회원 이름 대조 집합을 읽지 못했다 — 보충 말투 근거를 사용하지 않는다')
-  const salt = readEvidenceSalt(process.env)
+  // 운영 증거는 launchd 와 같은 canonical env 가 권위다. 셸·worktree의 .env 누락을
+  // 증거 부재로 오판하지 않고, 값은 메모리에만 올리며 출력하지 않는다.
+  const salt = readEvidenceSalt({ ...process.env, ...readEnvKeys([VOICE_EVIDENCE_SALT_ENV]).values })
   if (!salt.ok) fail(`보충 말투 근거가 꺼져 있다 — ${salt.code}`)
   const evidence = readUsableVoiceEvidence({
     dataDir: arg('voice-evidence-dir') ?? voiceEvidenceDataDir(),

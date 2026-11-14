@@ -202,6 +202,11 @@ import {
  * 옛 의미 감사 `measured yes`도 사후 모델을 다시 부르지 않고, 정확한 글·도장·artifact·Persona 결속과
  * 당시 Content Core 승인을 묶은 append-only 계획으로만 해소한다. 결속은 적용 직전 다시 대조한다.
  *
+ * `quality-v26` (2026-11-14) = **결론을 바꿀 수 없는 의미 검수 구매를 차단한다.**
+ * 결정적 게이트를 통과한 초안도 채택 정본이 `adopt` 최선 결과에서 막는다면 의미 검수를 호출하지 않는다.
+ * 이 지배 판정은 기존 `pickV2` 정본을 재사용하고, 채택 가능성이 남은 초안의 검수·확인 계약은 바꾸지 않는다.
+ * 공식 usage token과 공급비용은 실제 호출 단계만 계상하며, 검수 전 지배 차단은 완주·캐시로 위장하지 않는다.
+ *
  * `quality-v25` (2026-10-26) = **Content Core 단일 권위를 생활 게이트에도 완성한다.**
  * 기존 `lifeReview`의 차단 분류는 Content Core failure로 승격해 Queue로 보내지 않는다.
  * 남편·자녀 건강 이야기에서 생략된 주어를 작성자 질병으로 오판한 경우는 ADOPT 후
@@ -220,7 +225,7 @@ import {
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v25'
+export const QUALITY_CONTRACT_VERSION = 'quality-v26'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

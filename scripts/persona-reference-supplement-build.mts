@@ -11,13 +11,12 @@ import { fileURLToPath } from 'node:url'
 
 import { PrismaClient } from '@prisma/client'
 
-import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 import { loadExpansionFixture } from './lib/persona-expansion-gate.mjs'
 import { readExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readEnvKeys } from './lib/ops-signals.mjs'
+import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import {
-  readEvidenceSalt, voiceEvidenceDataDir,
+  readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir,
 } from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
@@ -44,7 +43,7 @@ const APPROVED_DIGEST = arg('digest')
 const REASON = (arg('reason') ?? '').trim()
 const FIXTURE_ARG = arg('fixture')
 const EVIDENCE_DIR_ARG = arg('voice-evidence-dir')
-const FIXTURE = FIXTURE_ARG ?? 'scripts/__fixtures__/persona-expansion-canary.json'
+const FIXTURE = FIXTURE_ARG ?? 'scripts/__fixtures__/persona-expansion-d30.json'
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 
 if (!has('--db')) fail('--db 가 필요하다 — 정확한 회원·Persona 제외 집합 없이 증거를 고정하지 않는다', 2)
@@ -108,11 +107,23 @@ else if (PRODUCTION || TARGET !== null || APPROVED_DIGEST !== null) {
 }
 
 await loadEnvLocal()
-const salt = readEvidenceSalt(process.env)
+// 읽기 전용 plan도 운영 확장 판정과 같은 canonical DB를 본다. 셸에 DB 주소가
+// 없다는 이유로 plan만 실패하거나, 반대로 임의 셸 주소를 권위로 삼지 않는다.
+if (!fillDbConnection()) fail('canonical env 에 DATABASE_URL 이 없다 — 보충 말투 plan 을 시작하지 않는다')
+const salt = readEvidenceSalt({ ...process.env, ...readEnvKeys([VOICE_EVIDENCE_SALT_ENV]).values })
 const validSalt = salt.ok ? salt : fail(`voice evidence salt: ${salt.code}`)
 const canon = loadCanonAsset()
 if (!canon.ok) fail(`canonical reference: ${canon.code}`)
 const canonDigest = canon.sourceDigest ?? fail('canonical reference digest 가 없다')
+const frozen = readSupplementSnapshot({
+  baseSourceDigest: canonDigest,
+  generation: 1,
+  baseAssignmentDigestFor: (codes) => {
+    const base = planBundles({ rows: canon.rows, personaCodes: codes })
+    return assignmentDigest(new Map(base.bundles.map((bundle) => [bundle.personaCode, bundle])), codes)
+  },
+})
+const validFrozen = frozen.ok ? frozen : fail(`동결 v1 supplement: ${frozen.code}`)
 const fixture = loadExpansionFixture(process.cwd(), FIXTURE)
 const validFixture = fixture.ok ? fixture.fixture : fail(`fixture: ${fixture.problems.join(' / ')}`)
 const newCodes = validFixture.candidates.map((candidate) => candidate.code)
@@ -137,8 +148,9 @@ const generatedAt = new Date().toISOString()
 const plan = planSupplementSnapshot({
   canonRows: canon.rows,
   extraRows: evidence.rows,
-  baseCodes: PRODUCTION_PERSONA_CODES,
+  baseCodes: validFrozen.asset.baseCodes,
   newCodes,
+  frozenBundles: validFrozen.asset.bundles,
   baseSourceDigest: canonDigest,
   saltId: validSalt.saltId,
   generatedAt,
@@ -146,21 +158,21 @@ const plan = planSupplementSnapshot({
 })
 
 console.log('\nPersona reference supplement - read-only plan')
-console.log(`base ${PRODUCTION_PERSONA_CODES.length} / new ${newCodes.length}`)
+console.log(`base ${validFrozen.asset.baseCodes.length} / frozen ${validFrozen.asset.bundles.length} / new ${newCodes.length}`)
 console.log(`evidence files ${evidence.status.files} / usable ${evidence.status.usableRows}`)
 console.log(`speakers ${evidence.status.speakers} / eligible ${evidence.status.eligible} / near-miss ${evidence.status.nearMiss}`)
-console.log(`bundles canon ${plan.fromCanon.length} / supplemental ${plan.fromExtra.length} / missing ${newCodes.length - plan.asset.bundles.length}`)
+console.log(`bundles canon ${plan.fromCanon.length} / supplemental ${plan.fromExtra.length}`)
 console.log(`digest ${plan.planDigest}`)
 for (const problem of plan.problems) console.log(`BLOCK ${problem}`)
 
-if (!plan.ok) fail('10명 전원의 안정 묶음이 서지 않았다')
+if (!plan.ok) fail(`${newCodes.length}명 전원의 안정 묶음이 서지 않았다`)
 if (!APPLY) {
   console.log('DB write 0 / file write 0 / provider 0 / activation 0')
   console.log('apply requires clean merged main + matching digest + reason')
   process.exit(0)
 }
 if (APPROVED_DIGEST !== plan.planDigest) fail('승인 digest 가 지금 계획과 다르다')
-const written = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText })
+const written = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText, generation: 2 })
 const completedWrite = written.ok ? written : fail(written.reason)
 const verified = readSupplementSnapshot({
   baseSourceDigest: canonDigest,

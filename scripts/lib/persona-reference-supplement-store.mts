@@ -8,7 +8,7 @@ import {
   REFERENCE_DIR, REFERENCE_DIR_MODE, REFERENCE_FILE_MODE, isTooOpen,
 } from '../../src/lib/persona-reference-asset'
 import {
-  SUPPLEMENT_ASSET_VERSION, SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE,
+  SUPPLEMENT_ASSET_VERSION, activeSupplementPaths, supplementPaths,
   judgeSupplementAsset, judgeSupplementManifest,
   type SupplementalReferenceAsset, type SupplementalReferenceManifest,
 } from '../../src/lib/persona-reference-supplement'
@@ -93,14 +93,18 @@ export type SupplementSnapshotRead =
 export function readSupplementSnapshot(input: {
   baseSourceDigest: string
   baseAssignmentDigestFor: (codes: readonly string[]) => string
+  generation?: 1 | 2
 }): SupplementSnapshotRead {
-  if (!existsSync(SUPPLEMENT_CORPUS_FILE) && !existsSync(SUPPLEMENT_MANIFEST_FILE)) {
+  const paths = input.generation === undefined
+    ? activeSupplementPaths()
+    : { generation: input.generation, ...supplementPaths(input.generation) }
+  if (!existsSync(paths.corpus) && !existsSync(paths.manifest)) {
     return { ok: false, code: 'SUPPLEMENT_ABSENT', reason: '보충 말투 스냅샷이 없다' }
   }
-  if (!existsSync(SUPPLEMENT_CORPUS_FILE) || !existsSync(SUPPLEMENT_MANIFEST_FILE)) {
+  if (!existsSync(paths.corpus) || !existsSync(paths.manifest)) {
     return { ok: false, code: 'SUPPLEMENT_PARTIAL', reason: '보충 말투 스냅샷 파일이 일부만 있다' }
   }
-  for (const path of [SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE]) {
+  for (const path of [paths.corpus, paths.manifest]) {
     const stat = lstatSync(path)
     if (!stat.isFile() || isTooOpen(stat.mode)) {
       return { ok: false, code: 'SUPPLEMENT_MODE', reason: '보충 말투 스냅샷 권한·파일 모양이 정본이 아니다' }
@@ -111,8 +115,8 @@ export function readSupplementSnapshot(input: {
   let assetParsed: unknown
   let manifestParsed: unknown
   try {
-    assetRaw = readFileSync(SUPPLEMENT_CORPUS_FILE, 'utf8')
-    manifestRaw = readFileSync(SUPPLEMENT_MANIFEST_FILE, 'utf8')
+    assetRaw = readFileSync(paths.corpus, 'utf8')
+    manifestRaw = readFileSync(paths.manifest, 'utf8')
     assetParsed = JSON.parse(assetRaw)
     manifestParsed = JSON.parse(manifestRaw)
   } catch {
@@ -157,9 +161,11 @@ function sameOrMissing(path: string, expected: string): 'missing' | 'same' | 'co
 export function writeSupplementSnapshot(input: {
   assetText: string
   manifestText: string
+  generation?: 1 | 2
 }): { ok: true; action: 'write' | 'noop' } | { ok: false; reason: string } {
-  const assetState = sameOrMissing(SUPPLEMENT_CORPUS_FILE, input.assetText)
-  const manifestState = sameOrMissing(SUPPLEMENT_MANIFEST_FILE, input.manifestText)
+  const paths = supplementPaths(input.generation ?? 1)
+  const assetState = sameOrMissing(paths.corpus, input.assetText)
+  const manifestState = sameOrMissing(paths.manifest, input.manifestText)
   if (assetState === 'conflict' || manifestState === 'conflict') {
     return { ok: false, reason: '기존 보충 말투 스냅샷과 내용이 다르다 — 덮어쓰지 않는다' }
   }
@@ -167,8 +173,8 @@ export function writeSupplementSnapshot(input: {
   mkdirSync(REFERENCE_DIR, { recursive: true, mode: REFERENCE_DIR_MODE })
   chmodSync(REFERENCE_DIR, REFERENCE_DIR_MODE)
   const writes = [
-    [SUPPLEMENT_CORPUS_FILE, input.assetText, assetState],
-    [SUPPLEMENT_MANIFEST_FILE, input.manifestText, manifestState],
+    [paths.corpus, input.assetText, assetState],
+    [paths.manifest, input.manifestText, manifestState],
   ] as const
   const temps: string[] = []
   try {

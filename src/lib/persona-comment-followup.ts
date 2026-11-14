@@ -40,7 +40,12 @@
 import { createHash } from 'node:crypto'
 
 import { authorKindOf, buildCommentThreads, conversationContextFor, type ContextRow } from './comment-thread'
+import {
+  activeAttempts, attemptKeyOf, isVoiceFailure, postPersonaKeyOf, type AttemptEntry, type AttemptLane,
+} from './persona-comment-attempt-policy'
+import { requestShapeRejected, transientProviderError } from './content-core/generation-failure'
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
+import { kstDayStart } from './persona-cap'
 import { MEMBER_COMMENT_LIMIT_ON_PUBLISH } from './persona-comment-queue'
 import { COMMENT_REACTION_ROLES, isReactionType, type ReactionType } from './persona-reaction-roles'
 import {
@@ -141,8 +146,9 @@ export type FollowupProfile = {
 export const FOLLOWUP_CANARY_PROFILE_CANDIDATE: Readonly<Omit<FollowupProfile, 'approvedBy' | 'approvedAt'> & { approvedBy: null; approvedAt: null }> = Object.freeze({
   v: FOLLOWUP_PROFILE_VERSION,
   stage: 'canary',
-  dailyCount: 40,
-  dailyUsd: 0.08,
+  // 🔴 2026-11-13 H1 — 40 · 0.08 에서 올렸다. 전체 댓글 장부 상한(`COMMENT_LOOP_DAILY_USD_DEFAULT` 0.20)은 그대로다
+  dailyCount: 80,
+  dailyUsd: 0.16,
   runMax: 3,
   perPersonaDailyMax: 3,
   approvedBy: null,
@@ -505,6 +511,255 @@ export function orderFollowupGo<T extends { postId: string; publishedAtMs?: numb
 }
 
 // ─────────────────────────────────────────────────────────
+// 🔴 실패 격리 — 실패한 Persona 가 매 회차 같은 자리를 다시 먹지 않게 (2026-11-14 H1 · starvation)
+// ─────────────────────────────────────────────────────────
+
+export type FollowupSourceContextFact = {
+  postId: string
+  operational: boolean | null
+  reason: string
+}
+
+/**
+ * 🔴 출처 문맥을 판독할 수 없는 글만 현재 회차에서 격리한다.
+ * 한 글의 `null`은 글 속성이지 provider·DB 전체 장애가 아니다. 정상 글까지 막으면
+ * 실패 글 하나가 모든 호출 용량을 막는 두 번째 starvation이 된다.
+ * 실패 글은 다음 회차에 새 원문 상태로 다시 판독하며 provider를 부르지 않는다.
+ */
+export function partitionFollowupSourceContexts(facts: readonly FollowupSourceContextFact[]): {
+  runnablePostIds: string[]
+  blocked: { postId: string; reason: string }[]
+} {
+  const runnablePostIds: string[] = []
+  const blocked: { postId: string; reason: string }[] = []
+  for (const f of facts) {
+    if (f.operational === null) blocked.push({ postId: f.postId, reason: f.reason })
+    else runnablePostIds.push(f.postId)
+  }
+  return { runnablePostIds, blocked }
+}
+
+const DAY_MS = 24 * 3_600_000
+/** 🔴 시각 t 가 속한 KST 날의 마지막 ms(포함) — 다음 KST 자정 00:00:00.000 에 기억이 끝난다 */
+export const kstDayEndMs = (t: number): number => kstDayStart(new Date(t)).getTime() + DAY_MS - 1
+
+/**
+ * 🔴 **추가 댓글 실패 분류 코드** — 시도 기억 `blockCodes` 에 그대로 싣는다(파일 모양 v1 · `BLOCK_CODE_RE` 안).
+ *
+ *    근본 원인: `pickFollowupPersona` 는 (글, 순번) 해시로 같은 Persona 를 고른다. 실패를 기억하지 않으면
+ *    **같은 실패 Persona 가 다음 회차에도 같은 자리에 다시 뽑힌다**. 그렇다고 글 전체를 막으면 그 글의 정상 Persona 까지
+ *    하루 동안 못 고른다. 그래서 실패의 원인이 묶인 범위만 막는다.
+ *
+ *    · `FU_PERSONA_DAY` — 원인이 Persona 에 묶인 결정적 실패(⑦ 설정 · ⑧ 말투 · ⑧ bootstrap · prompt 근거 · 비활성 · 실회원).
+ *      그 Persona 를 KST 하루 동안 모든 글에서 빼고, **같은 회차에서** 다음 정상 Persona 를 다시 고른다
+ *    · `FU_POST_DAY` — 원인이 글에 묶인 실패(글 사라짐 · 비공개 · 게시판 바뀜 · Persona 댓글 꽉 참 · 글 상태 모름).
+ *      그 글만 KST 하루 동안 뺀다. 그 Persona 는 다른 글에서 그대로 쓴다
+ *    · `FU_COMBO_DAY` — 그 글 × 그 Persona 의 본문에 묶인 실패(①~⑥ · ⑨ 관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복 · 미완 기록).
+ *      그 글에서 그 Persona 만 뺀다
+ *    · `FU_TRANSIENT` — 일시 provider · IO · 장부 · 환경 실패(429 · 5xx · NETWORK · TIMEOUT · LEDGER_BLOCKED · 정산 모름 · DB ERROR).
+ *      🔴 **아무것도 격리하지 않는다** — 다음 회차에 같은 조합을 다시 고를 수 있다. 이번 회차의 남은 호출은 멈춘다(fail-closed)
+ *    · `FU_HALT` — 모르는 · 내부 실패 · 요청 모양 거부(400). 같은 글 × Persona 를 오늘 다시 보내지 않고 이번 회차를 멈춘다
+ *      (모르는 실패에 돈을 한 번 더 쓰지 않는다 — `transientProviderError` 와 같은 원칙)
+ */
+export const FOLLOWUP_FAILURE_CODES = ['FU_PERSONA_DAY', 'FU_POST_DAY', 'FU_COMBO_DAY', 'FU_TRANSIENT', 'FU_HALT'] as const
+export type FollowupFailureCode = (typeof FOLLOWUP_FAILURE_CODES)[number]
+const isFailureCode = (c: string): c is FollowupFailureCode => (FOLLOWUP_FAILURE_CODES as readonly string[]).includes(c)
+
+/** 🔴 이 분류가 이번 회차의 남은 provider 호출을 멈추는가 */
+export const followupFailureHaltsRound = (c: FollowupFailureCode): boolean => c === 'FU_TRANSIENT' || c === 'FU_HALT'
+
+const PERSONA_BLOCK_CODES: ReadonlySet<string> = new Set([
+  'BOOTSTRAP_NEEDS_HUMAN', 'BOOTSTRAP_CLAIM_INVALID', 'PERSONA_NOT_ACTIVE', 'PERSONA_REAL_MEMBER',
+])
+const POST_BLOCK_CODES: ReadonlySet<string> = new Set([
+  'POST_PERSONA_COMMENTS_FULL', 'POST_STATE_UNKNOWN', 'POST_NOT_PUBLISHED',
+])
+const INTERNAL_BLOCK_CODES: ReadonlySet<string> = new Set(['POST_ID_MISSING', 'TEXT_EMPTY', 'MODEL_NOT_CONFIRMED'])
+/** 🔴 writer(`createPendingCandidateLocked`)의 글 쪽 실패 코드 */
+const POST_WRITE_CODES: ReadonlySet<string> = new Set(['POST_GONE', 'BOARD_UNKNOWN', 'BOARD_CHANGED', 'NOT_PUBLISHED'])
+/** 🔴 provider 앞 · 뒤 단계에서 그 Persona 의 근거로 막힌 코드 — prompt 가 Persona 말투 근거를 요구한다 */
+const PERSONA_PROVIDER_CODES: ReadonlySet<string> = new Set(['PROMPT_BLOCKED'])
+/** 🔴 그 한 번의 생성이 쓸 수 없었다 — 그 글 × Persona 만 */
+const COMBO_PROVIDER_CODES: ReadonlySet<string> = new Set([
+  'FOLLOWUP_TEXT_DUP', 'MAX_TOKENS_REACHED', 'EMPTY', 'JSON_PARSE', 'FIELD_MISSING', 'TOO_SHORT', 'TOO_LONG',
+])
+/** 🔴 일시 · 장부 · 환경 — 격리 없이 회차만 멈춘다 */
+const TRANSIENT_PROVIDER_CODES: ReadonlySet<string> = new Set([
+  'TIMEOUT', 'PROVIDER_EXCEPTION', 'SETTLE_NOT_RECORDED', 'SETTLE_AMOUNT_UNKNOWN', 'NO_API_KEY',
+])
+
+/** ⑦ (Persona 설정 · 금지 역할)이 막았는가 — `notRun` 은 막은 것이 아니다 */
+const isPersonaGateFailure = (failedGates: readonly string[]): boolean =>
+  failedGates.some((g) => g.startsWith('⑦:') && g !== '⑦:notRun')
+
+/**
+ * 🔴 **한 시도의 결과 → 분류 코드.** 적재(`ENQUEUED`)는 실패가 아니다(null).
+ *    겹치면 넓은 원인부터 — Persona → 글 → 내부 → 글 × Persona. 사람이 읽을 문장 · 본문은 받지 않는다.
+ */
+export function classifyFollowupFailure(o: {
+  step: string
+  /** provider 가 돌려준 오류 코드(PROVIDER_FAILED 일 때) */
+  errorCode?: string | null
+  /** writer 의 실패 코드(WRITE_FAILED 일 때) */
+  writeCode?: string | null
+  failedGates?: readonly string[]
+  blockCodes?: readonly string[]
+}): FollowupFailureCode | null {
+  const gates = o.failedGates ?? []
+  const codes = o.blockCodes ?? []
+  switch (o.step) {
+    case 'ENQUEUED':
+      return null
+    case 'STARTED':
+      // 🔴 결과를 못 적은 시도 — 돈이 나갔는지 모른다. 같은 글 × Persona 만 오늘 다시 보내지 않는다(넓히지 않는다)
+      return 'FU_COMBO_DAY'
+    case 'PROVIDER_FAILED': {
+      const c = (o.errorCode ?? '').trim()
+      if (requestShapeRejected(c)) return 'FU_HALT'
+      if (transientProviderError(c) || TRANSIENT_PROVIDER_CODES.has(c) || c.startsWith('LEDGER_BLOCKED')) return 'FU_TRANSIENT'
+      if (PERSONA_PROVIDER_CODES.has(c)) return 'FU_PERSONA_DAY'
+      if (COMBO_PROVIDER_CODES.has(c)) return 'FU_COMBO_DAY'
+      return 'FU_HALT'
+    }
+    case 'PARSE_FAILED':
+      return 'FU_COMBO_DAY'
+    case 'ENQUEUE_BLOCKED':
+      if (isVoiceFailure({ failedGates: gates }) || isPersonaGateFailure(gates) || codes.some((c) => PERSONA_BLOCK_CODES.has(c))) {
+        return 'FU_PERSONA_DAY'
+      }
+      if (codes.some((c) => POST_BLOCK_CODES.has(c))) return 'FU_POST_DAY'
+      if (codes.some((c) => INTERNAL_BLOCK_CODES.has(c))) return 'FU_HALT'
+      // 🔴 관문이 아예 돌지 않았다(관문 오류 · 입력 문맥 없음) — 내부 고장이다
+      if (codes.includes('GATE_MISSING_REQUIRED') && gates.length === 0) return 'FU_HALT'
+      return 'FU_COMBO_DAY'
+    case 'WRITE_FAILED': {
+      const c = (o.writeCode ?? '').trim()
+      if (POST_WRITE_CODES.has(c)) return 'FU_POST_DAY'
+      if (c === 'DUPLICATE') return 'FU_COMBO_DAY'
+      if (c === 'ERROR') return 'FU_TRANSIENT'
+      return 'FU_HALT'
+    }
+    case 'WRITE_SKIPPED':
+      // 🔴 dry-run — 실패가 아니다. 그래도 같은 조합은 시작 기록이 막는다
+      return null
+    default:
+      return 'FU_HALT'
+  }
+}
+
+/** 🔴 기억 한 줄의 분류 — 적힌 `FU_*` 코드가 먼저, 없으면 같은 분류기로 다시 판정한다(미완 `STARTED` 포함) */
+export function followupFailureCodeOf(e: Pick<AttemptEntry, 'step' | 'failedGates' | 'blockCodes'>): FollowupFailureCode | null {
+  if (e.step === 'ENQUEUED' || e.step === 'WRITE_SKIPPED') return null
+  const written = e.blockCodes.find(isFailureCode)
+  if (written !== undefined) return written
+  return classifyFollowupFailure({ step: e.step, failedGates: e.failedGates, blockCodes: e.blockCodes })
+}
+
+/** 🔴 오늘(KST) 막힌 범위 — 세 집합이 전부다. `FU_TRANSIENT` 는 어디에도 들지 않는다 */
+export type FollowupIsolation = {
+  personaCodes: Set<string>
+  postIds: Set<string>
+  /** `postPersonaKeyOf` — 글 × Persona */
+  postPersonaKeys: Set<string>
+}
+
+export function emptyFollowupIsolation(): FollowupIsolation {
+  return { personaCodes: new Set(), postIds: new Set(), postPersonaKeys: new Set() }
+}
+
+/** 🔴 한 분류를 격리 집합에 더한다 — 같은 회차 재선정이 읽는 집합과 다음 회차가 파일에서 읽는 집합이 같은 함수다 */
+export function addFollowupIsolation(
+  iso: FollowupIsolation, e: { postId: string; personaCode: string }, code: FollowupFailureCode | null,
+): void {
+  if (code === 'FU_PERSONA_DAY') iso.personaCodes.add(e.personaCode)
+  else if (code === 'FU_POST_DAY') iso.postIds.add(e.postId)
+  else if (code === 'FU_COMBO_DAY' || code === 'FU_HALT') iso.postPersonaKeys.add(postPersonaKeyOf(e))
+}
+
+/** 🔴 만료되지 않은(같은 KST 날) 기억에서 격리 범위를 만든다 */
+export function followupIsolationOf(entries: readonly AttemptEntry[], nowMs: number): FollowupIsolation {
+  const iso = emptyFollowupIsolation()
+  for (const e of activeAttempts(entries, nowMs, FOLLOWUP_ATTEMPT_LANE)) addFollowupIsolation(iso, e, followupFailureCodeOf(e))
+  return iso
+}
+
+/** 🔴 이 글 × Persona 가 오늘 막혔는가 — 이유 문장(코드 · 본문 없음) 또는 null */
+export function followupIsolationReason(iso: FollowupIsolation, e: { postId: string; personaCode: string }): string | null {
+  if (iso.personaCodes.has(e.personaCode)) return `${e.personaCode} 는 오늘(KST) Persona 실패로 격리됐다`
+  if (iso.postIds.has(e.postId)) return '이 글은 오늘(KST) 글 쪽 실패로 격리됐다'
+  if (iso.postPersonaKeys.has(postPersonaKeyOf(e))) return `이 글에서 ${e.personaCode} 는 오늘(KST) 이미 실패했다`
+  return null
+}
+
+/**
+ * 🔴 **추가 댓글 시도 기억 lane.** 기억은 시도한 KST 날의 자정까지다 — 영구 차단 목록을 만들지 않는다.
+ *    시도는 공개 후 `FOLLOWUP_POST_AGE_MAX_MS` 안에서만 일어난다(식은 글 규칙과 같은 범위).
+ *    · 같은 조합 재시작 — 적재로 끝난 조합(다음 자리의 새 시도)과 `FU_TRANSIENT` 만 새 시작으로 바꾼다
+ *    · 마지막 방어선 — 오늘 격리된 Persona · 글 · 글 × Persona 면 시작 기록을 받지 않는다
+ */
+export const FOLLOWUP_ATTEMPT_LANE: AttemptLane = Object.freeze({
+  name: 'followup',
+  windowLabel: 'KST 하루',
+  expiresAtMs: (e: Pick<AttemptEntry, 'postPublishedAtMs' | 'attemptedAtMs'>) => kstDayEndMs(e.attemptedAtMs),
+  attemptWindowMs: FOLLOWUP_POST_AGE_MAX_MS,
+  allExpiredAtMs: (lastWriteMs: number) => kstDayEndMs(lastWriteMs),
+  replaceableOnRestart: (prev: AttemptEntry) => prev.step === 'ENQUEUED' || followupFailureCodeOf(prev) === 'FU_TRANSIENT',
+  startBlockedBy: (live: readonly AttemptEntry[], e: AttemptEntry) => {
+    const iso = emptyFollowupIsolation()
+    const key = attemptKeyOf(e)
+    for (const x of live) if (attemptKeyOf(x) !== key) addFollowupIsolation(iso, x, followupFailureCodeOf(x))
+    const why = followupIsolationReason(iso, e)
+    return why === null ? null : `${why} — 다시 보내지 않는다`
+  },
+})
+
+/**
+ * 🔴 **같은 회차 재선정.** 자리(`allowed`)마다 예비 호출을 이만큼 더 허락한다 — 앞 Persona 가 실패하면 같은 글에서
+ *    다음 정상 Persona 를 다시 고른다. 🔴 적재 상한은 `allowed` 그대로이고, 호출 상한(`providerCallBudget`)은 이 수와
+ *    비용 잔량 건수 중 작은 쪽이다 — 하루 USD · 공유 장부 상한(첫 댓글 몫 포함)을 넘는 호출은 없다.
+ */
+export const FOLLOWUP_SPARE_PER_SLOT = 1
+export function followupPlanCap(allowed: number): number {
+  return allowed * (1 + FOLLOWUP_SPARE_PER_SLOT)
+}
+/** 🔴 한 회차에 한 글에서 provider 를 부르는 최대 횟수 — 한 글이 회차 예산을 다 먹지 않는다 */
+export const FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK = 1 + FOLLOWUP_SPARE_PER_SLOT
+
+/** 🔴 고를 수 있는 Persona 의 사실 — 자격 판정은 부르는 쪽 정본(`judgeRealMember` · 정적 말투 능력)이 끝낸 값이다 */
+export type FollowupPersonaFacts = {
+  code: string
+  personaId: string | null
+  active: boolean
+  /** 🔴 실회원 Persona — 어떤 경우에도 고르지 않는다 */
+  realMember: boolean
+  /** identity · voiceCore · lifeStage 를 다 갖췄는가 */
+  profileComplete: boolean
+  /** `judgeStaticVoiceCapability` — 후보와 무관하게 ⑧ 이 막는 Persona 는 false */
+  voiceCapable: boolean
+  followupsToday: number
+}
+
+/**
+ * 🔴 **이 글에서 지금 고를 수 있는 Persona 후보.** 자격(활성 · 실회원 아님 · 프로필 · 말투 능력) → 오늘 격리
+ *    (Persona · 글 · 글 × Persona) → 이번 회차 사용을 뺀다. 같은 회차에 같은 글에서 실패한 Persona 는 부르는 쪽이
+ *    격리 집합(사본)에 먼저 더하므로 여기서 빠진다 — 따로 "시도함" 집합을 두지 않는다.
+ *    순서 · 동률은 `pickFollowupPersona` 가 정한다(이 함수는 걸러내기만 한다).
+ */
+export function followupPersonaCandidates(i: {
+  postId: string
+  personas: readonly FollowupPersonaFacts[]
+  isolation: FollowupIsolation
+  usedPersonaIds: ReadonlySet<string>
+}): FollowupPersonaCandidate[] {
+  return i.personas.flatMap((p) => {
+    if (p.personaId === null || !p.active || p.realMember || !p.profileComplete || !p.voiceCapable) return []
+    if (i.usedPersonaIds.has(p.personaId)) return []
+    if (followupIsolationReason(i.isolation, { postId: i.postId, personaCode: p.code }) !== null) return []
+    return [{ personaId: p.personaId, eligible: true, followupsToday: p.followupsToday }]
+  })
+}
+
+// ─────────────────────────────────────────────────────────
 // 🔴 Persona 고르기 — 반복 · 자기 글 · 자기 댓글 · 쏠림 금지
 // ─────────────────────────────────────────────────────────
 
@@ -645,7 +900,17 @@ export function readConversationAudit(raw: unknown): { ok: true } | { ok: false;
   return { ok: true }
 }
 
-export type FollowupTickVerdict = { allowed: number; blockers: string[]; detail: string }
+export type FollowupTickVerdict = {
+  /** 이번 회차에 **적재**할 수 있는 최대 건수 */
+  allowed: number
+  /**
+   * 🔴 이번 회차에 provider 를 **부를** 수 있는 최대 횟수 — `min(followupPlanCap(allowed), 비용 잔량 건수)`.
+   *    실패한 호출도 돈을 쓰므로 예비 후보 재선정은 비용 잔량(첫 댓글 몫을 뗀 공유 장부 · 추가 댓글 하루 USD) 안에서만 한다.
+   */
+  providerCallBudget: number
+  blockers: string[]
+  detail: string
+}
 
 /**
  * 🔴 **이번 회차에 추가 댓글을 최대 몇 건 만들 수 있는가.** 모르면 0 이다.
@@ -667,7 +932,7 @@ export function judgeFollowupTick(f: FollowupTickFacts): FollowupTickVerdict {
   if (money.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0) || !(f.perCallReserveUsd > 0)) {
     blockers.push('비용 값을 읽지 못했다(fail-closed)')
   }
-  if (blockers.length > 0 || !prof.ok) return { allowed: 0, blockers, detail: blockers[0] ?? '' }
+  if (blockers.length > 0 || !prof.ok) return { allowed: 0, providerCallBudget: 0, blockers, detail: blockers[0] ?? '' }
 
   const P = prof.profile
   const countLeft = Math.max(0, P.dailyCount - (f.followupsToday as number))
@@ -676,9 +941,11 @@ export function judgeFollowupTick(f: FollowupTickFacts): FollowupTickVerdict {
   const sharedLeft = Math.max(0, (f.commentLedgerRemainingUsd as number) - (f.firstCommentReserveUsd as number))
   const byMoney = Math.floor(Math.min(ownUsdLeft, sharedLeft) / f.perCallReserveUsd)
   const allowed = Math.min(P.runMax, countLeft, byMoney)
+  // 🔴 같은 회차 재선정의 호출 상한 — 예비 후보 몫까지만 · 비용 잔량 건수를 넘지 않는다
+  const providerCallBudget = Math.min(followupPlanCap(allowed), byMoney)
   return {
-    allowed, blockers: [],
-    detail: `회차 ${allowed}건 = min(회차 ${P.runMax} · 건수 잔량 ${countLeft} · 비용 ${byMoney}) · profile ${P.stage}`,
+    allowed, providerCallBudget, blockers: [],
+    detail: `회차 ${allowed}건 = min(회차 ${P.runMax} · 건수 잔량 ${countLeft} · 비용 ${byMoney}) · 호출 ${providerCallBudget} · profile ${P.stage}`,
   }
 }
 

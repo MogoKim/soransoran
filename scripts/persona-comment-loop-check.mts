@@ -1240,7 +1240,11 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     // 🔴 경고는 lines 한 길로만 찍힌다 — 진입점이 attemptWarnings 를 다시 돌며 찍으면 launchd 로그에 같은 줄이 두 번 남는다
     check('🔴 G 진입점은 attemptWarnings 를 다시 출력하지 않는다(개수만 요약 줄에 싣는다)',
       !/of\s+report\.attemptWarnings/.test(entrySrc) && /attemptWarnings=\$\{report\.attemptWarnings\.length\}/.test(entrySrc))
-    check('🔴 G 추가 댓글(followup)은 시도 기억을 쓰지 않는다', !/attempt/i.test(followSrc))
+    // 🔴 (2026-11-13 H1) 추가 댓글은 시도 기억을 쓰되 **다른 lane 파일**이다 — 첫 댓글 저장소 · 첫 댓글 lease 생성자를 쓰지 않는다
+    check('🔴 G 추가 댓글(followup)은 첫 댓글 시도 기억을 쓰지 않는다(다른 lane 저장소만)',
+      !/attemptStoreInLease\(/.test(followSrc.replace(/followupAttemptStoreInLease\(/g, ''))
+      && !followSrc.includes('first-comment-attempts') && /i\.store\.lane !== 'followup'/.test(followSrc)
+      && /attemptStore:\s*followupAttemptStoreInLease\(proof\)/.test(entrySrc))
     check('🔴 G 전용 파일 이름 — 비용 장부(persona-comment-ledger)와 다른 디렉터리·이름',
       ATTEMPT_JOURNAL_FILE === 'first-comment-attempts.v1.json' && !commentLoopLedgerDir().includes('persona-comment-loop'))
   }

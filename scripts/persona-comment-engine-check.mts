@@ -1547,8 +1547,8 @@ console.log('⑤-d 🔴 Persona reference 안정 배정 (배치가 바뀌어도 
     : '   🟡 자산 없음(CI) — 계약만 본다')
 
   /** 🔴 정본 universe 는 cohort 에서 파생한다 — 목록을 다시 적지 않는다 */
-  check(`🟢 정본 universe 가 40명이다 (${PRODUCTION_PERSONA_CODES.length})`,
-    PRODUCTION_PERSONA_CODES.length === 40)
+  check(`🟢 코드상 준비 universe 가 60명이다 (${PRODUCTION_PERSONA_CODES.length})`,
+    PRODUCTION_PERSONA_CODES.length === 60)
   check('🔴 P09 는 정본에 없다', !isProductionPersonaCode('P09'))
   check('  제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '') !== '')
 
