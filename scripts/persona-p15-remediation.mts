@@ -113,7 +113,7 @@ async function main(): Promise<number> {
       writeFileSync(tmp, JSON.stringify({ code: PINS.code, field: P15_FIELD, beforeValue, beforeIdentityDigest: PINS.beforeIdentityDigest, afterIdentityDigest: PINS.afterIdentityDigest, at: new Date().toISOString() }), { mode: 0o600 })
       renameSync(tmp, RECORD)
       const r = await applyRemediation(db, { pins: PINS, readPlanInput, readCapacity, reason: REASON })
-      log('done', { result: r.code, ...(r.code === 'APPLIED' ? { capacityBefore: r.capacityBefore, capacityAfter: r.capacityAfter } : r.code === 'ALREADY_APPLIED' ? {} : { reason: r.reason }) })
+      log('done', { result: r.code, ...(r.code === 'APPLIED' ? { capacityBefore: r.capacityBefore, capacityAfter: r.capacityAfter } : r.code === 'ALREADY_APPLIED' ? {} : r.code === 'ROLLBACK_FAILED' ? { reason: r.reason, restoreReason: r.restoreReason, action: '사람이 --rollback 으로 처리' } : { reason: r.reason }) })
       return r.code === 'APPLIED' || r.code === 'ALREADY_APPLIED' ? 0 : 4
     } finally { try { unlinkSync(LOCK) } catch { /* 없음 */ } }
   } finally { await db.$disconnect() }

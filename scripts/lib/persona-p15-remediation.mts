@@ -113,7 +113,9 @@ export type ApplyResult =
   | { code: 'APPLIED'; beforeValue: string; capacityBefore: OutcomeInput['capacityBefore']; capacityAfter: OutcomeInput['capacityAfter'] }
   | { code: 'ALREADY_APPLIED' }
   | { code: 'REFUSED'; reason: string }
-  | { code: 'ROLLED_BACK'; reason: string; restored: boolean }
+  | { code: 'ROLLED_BACK'; reason: string; restored: true }
+  /** 🔴 교정은 커밋됐고 되돌림도 실패했다 — 사람이 `--rollback` 으로 처리해야 한다 */
+  | { code: 'ROLLBACK_FAILED'; reason: string; restoreReason: string }
 
 /**
  * 🔴 실행부 — 계획·판독·트랜잭션 · 사후 판정 · 자동 되돌림. 운영 CLI 와 격리 DB 검사가 **같은 함수**를 부른다.
@@ -126,7 +128,10 @@ export async function applyRemediation(db: Db, deps: {
   reason: string
   /** 🔴 시험 전용 — 커밋 뒤 사후 판정 전에 끼어들 자리(부분 실패 반례) */
   afterCommitHook?: () => Promise<void>
+  /** 🔴 시험 전용 — 다른 Persona 지문 판독(기본 `othersFingerprint`) · 실패 주입 자리 */
+  readOthers?: (db: Db, code: string) => Promise<string>
 }): Promise<ApplyResult> {
+  const readOthers = deps.readOthers ?? othersFingerprint
   const firstInput = await deps.readPlanInput(db)
   const first = planRemediation(firstInput)
   if (!first.ok) return { code: 'REFUSED', reason: `${first.code}: ${first.reason}` }
@@ -134,7 +139,7 @@ export async function applyRemediation(db: Db, deps: {
   // 🔴 이전 값 — 되돌림이 쓴다. before digest 로 검증된 행에서만 잡는다(planRemediation 통과)
   const beforeValue = String((firstInput.row!.identity as Record<string, unknown>)[P15_FIELD])
   const capacityBefore = await deps.readCapacity()
-  const othersBefore = await othersFingerprint(db, deps.pins.code)
+  const othersBefore = await readOthers(db, deps.pins.code)
   let newUpdatedAt: Date
   try {
     newUpdatedAt = await db.$transaction(async (tx) => {
@@ -155,13 +160,25 @@ export async function applyRemediation(db: Db, deps: {
   } catch (e) {
     return { code: 'REFUSED', reason: `트랜잭션 롤백(write 0) — ${(e as Error).message}` }
   }
-  if (deps.afterCommitHook !== undefined) await deps.afterCommitHook()
-  const capacityAfter = await deps.readCapacity().catch(() => ({ contractValid: null, stageActive: null }))
-  const othersAfter = await othersFingerprint(db, deps.pins.code)
-  const outcome = judgeRemediationOutcome({ capacityBefore, capacityAfter, othersBefore, othersAfter })
-  if (outcome.code === 'PASS') return { code: 'APPLIED', beforeValue, capacityBefore, capacityAfter }
-  const restored = await restoreRemediation(db, { pins: deps.pins, beforeValue, expectUpdatedAt: newUpdatedAt, reason: `${deps.reason} · 자동 되돌림(${outcome.problems.join(' / ')})` })
-  return { code: 'ROLLED_BACK', reason: outcome.problems.join(' / '), restored: restored.ok }
+  /**
+   * 🔴 **커밋 뒤 구간 전체가 하나의 판정이다.** hook · 용량 판독 · 지문 판독 · 판정 어디서 던져도 PASS 가 아니다 —
+   *    그때는 반드시 되돌림을 시도한다(옛 판은 용량 판독만 잡아, 지문 판독·hook 예외가 교정을 남긴 채 던졌다).
+   */
+  let why: string
+  try {
+    if (deps.afterCommitHook !== undefined) await deps.afterCommitHook()
+    const capacityAfter = await deps.readCapacity()
+    const othersAfter = await readOthers(db, deps.pins.code)
+    const outcome = judgeRemediationOutcome({ capacityBefore, capacityAfter, othersBefore, othersAfter })
+    if (outcome.code === 'PASS') return { code: 'APPLIED', beforeValue, capacityBefore, capacityAfter }
+    why = outcome.problems.join(' / ')
+  } catch (e) {
+    why = `커밋 뒤 판정 중 예외 — ${(e as Error).message}`
+  }
+  const restored = await restoreRemediation(db, { pins: deps.pins, beforeValue, expectUpdatedAt: newUpdatedAt, reason: `${deps.reason} · 자동 되돌림(${why})` })
+  return restored.ok
+    ? { code: 'ROLLED_BACK', reason: why, restored: true }
+    : { code: 'ROLLBACK_FAILED', reason: why, restoreReason: restored.reason }
 }
 
 /**

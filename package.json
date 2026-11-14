@@ -235,6 +235,7 @@
     "persona:p15-remediation": "tsx scripts/persona-p15-remediation.mts",
     "persona:p15-remediation-check": "tsx scripts/persona-p15-remediation-check.mts",
     "persona:p15-remediation-db-check": "tsx scripts/persona-p15-remediation-db-check.mts",
+    "persona:d30-oneshot-exec-db-check": "tsx scripts/persona-d30-oneshot-exec-db-check.mts",
     "release:canary-check": "tsx scripts/release-canary-check.mts",
     "supply:automation-check": "tsx scripts/supply-automation-check.mts",
     "speaker:availability-check": "tsx scripts/speaker-availability-check.mts",

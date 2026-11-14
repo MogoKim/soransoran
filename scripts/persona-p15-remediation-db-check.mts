@@ -6,7 +6,7 @@
 import { PrismaClient } from '@prisma/client'
 
 import { requireIsolatedDb } from './lib/auto-ready-audit-fixtures.mjs'
-import { applyRemediation, digestOf, restoreRemediation, type PlanInput, type RemediationPins } from './lib/persona-p15-remediation.mjs'
+import { applyRemediation, digestOf, othersFingerprint, restoreRemediation, type PlanInput, type RemediationPins } from './lib/persona-p15-remediation.mjs'
 
 requireIsolatedDb()
 const db = new PrismaClient()
@@ -70,7 +70,7 @@ console.log('\n③ 부분 실패 — 커밋 뒤 정본 판독이 +1 이 아니�
   const pins = await world()
   const r = await applyRemediation(db, { pins, readPlanInput: planInput(pins), readCapacity: seq({ contractValid: 39, stageActive: 39 }, { contractValid: 39, stageActive: 39 }), reason: '시험' })
   const now = await p15()
-  check('ROLLED_BACK · restored · identity = before digest', r.code === 'ROLLED_BACK' && r.restored && digestOf(now.identity) === pins.beforeIdentityDigest, r.code)
+  check('ROLLED_BACK · restored · identity = before digest', r.code === 'ROLLED_BACK' && digestOf(now.identity) === pins.beforeIdentityDigest, r.code)
   check('감사 행 2(교정·되돌림)', now.auditLogs.length === 2)
 }
 {
@@ -85,6 +85,34 @@ console.log('\n③ 부분 실패 — 커밋 뒤 정본 판독이 +1 이 아니�
     afterCommitHook: async () => { await db.persona.update({ where: { code: 'P16' }, data: { dailyCap: 7 } }) },
   })
   check('커밋 뒤 다른 Persona 가 바뀌면 → ROLLED_BACK · P15 이전 값', r.code === 'ROLLED_BACK' && digestOf((await p15()).identity) === pins.beforeIdentityDigest, r.code)
+}
+
+console.log('\n③-b 🔴 커밋 뒤 실패 주입 — 어디서 던져도 되돌린다 · 감사 2행')
+for (const [label, mk] of [
+  ['다른 Persona 지문 판독 throw', (pins: RemediationPins) => {
+    let n = 0
+    return { readOthers: async (d: PrismaClient, c: string) => { if (n++ >= 1) throw new Error('지문 판독 실패 주입'); return othersFingerprint(d, c) }, readCapacity: seq({ contractValid: 39, stageActive: 39 }, { contractValid: 40, stageActive: 40 }), pins }
+  }],
+  ['afterCommitHook throw', (pins: RemediationPins) => ({ afterCommitHook: async () => { throw new Error('hook 실패 주입') }, readCapacity: seq({ contractValid: 39, stageActive: 39 }, { contractValid: 40, stageActive: 40 }), pins })],
+  ['커밋 뒤 용량 판독 throw', (pins: RemediationPins) => {
+    let n = 0
+    return { readCapacity: async () => { if (n++ >= 1) throw new Error('용량 판독 실패 주입'); return { contractValid: 39, stageActive: 39 } }, pins }
+  }],
+] as const) {
+  const pins = await world()
+  const extra = mk(pins)
+  const r = await applyRemediation(db, { readPlanInput: planInput(pins), reason: '시험', ...extra })
+  const now = await p15()
+  check(`${label} → ROLLED_BACK · P15 before digest · 감사 2`, r.code === 'ROLLED_BACK' && digestOf(now.identity) === pins.beforeIdentityDigest && now.auditLogs.length === 2, `${r.code} audit=${now.auditLogs.length}`)
+}
+{
+  const pins = await world()
+  const r = await applyRemediation(db, {
+    pins, readPlanInput: planInput(pins), reason: '시험', readCapacity: seq({ contractValid: 39, stageActive: 39 }, { contractValid: 39, stageActive: 39 }),
+    // 🔴 되돌림까지 막히는 경우 — 커밋 직후 다른 writer 가 P15 를 또 바꿨다(updatedAt 변경)
+    afterCommitHook: async () => { await new Promise((r) => setTimeout(r, 10)); await db.persona.update({ where: { code: 'P15' }, data: { dailyCap: 9 } }) },
+  })
+  check('되돌림 실패는 ROLLBACK_FAILED 로 명시된다(조용히 성공 처리 0)', r.code === 'ROLLBACK_FAILED', r.code)
 }
 
 console.log('\n④ 수동 되돌림 — 교정본일 때만')
