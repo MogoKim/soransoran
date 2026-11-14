@@ -1,6 +1,6 @@
 # 현재 실행 — D30 복구와 D100 병행
 
-> as-of: 2026-11-14 06:00 KST
+> as-of: 2026-11-15 00:40 KST
 > 마지막 창업자 동기화: 2026-11-14 (D30 blocker 근본 수리 · 댓글 starvation 제거 · Persona 60 · 비용 4.0¢)
 >
 > 이 문서는 검증된 현재 상태와 다음 실행만 적는다. 정책은
@@ -20,17 +20,17 @@
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-11-14 05:36 관측) | `1e728155de22e58c1c2048d10defcb8e23eedce4` |
-| 원격 main 내용 | PR #842 병합까지 · D30 stage-active 하한·비용 진단·생동감 관측 도구 포함 |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `410d9a452228a6aa172a67833325be61980f87f1` · main 차이를 별도 판정: 복구 브랜치와 PR #842 이후 main은 아직 runtime에 배포하지 않음 |
-| 보조 Mac D100 job | 9개 loaded · 2026-11-14 05:35 읽기 전용 관측 · 최근 종료코드 0 |
+| 원격 main (2026-11-15 00:00 관측) | `63207eca98cb10e7162bda7cfeb0f6c25157f52e` |
+| 원격 main 내용 | PR #844 병합까지 · #843 D30 복구(Persona +20 자산·비용 지배 판정·댓글 starvation 수리) 포함 |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `63207eca98cb10e7162bda7cfeb0f6c25157f52e` · main과 동일 SHA · 2026-11-15 00:01:43 배포(runtime 트리에서 시작한 apply) · strict 격리 532/0 · 🔴 manifest의 Persona 보충 식별자가 옛 코드 측정값(v1)이고 새 코드의 실제 식별자는 v2 — 배포기 측정 결함, §3.2 |
+| 보조 Mac D100 job | 10개 loaded(observer 포함) · 2026-11-15 00:06 읽기 전용 관측 · 재기동 뒤 첫 자연 회차 전 |
 | 회사 Mac D100 job | 0 · D100 owner 아님 |
 | 직전 자연 결정 (2026-11-13) | `PREPARE · 공개 d20 · 준비 d30` · controller 행 1개 |
 | 최신 단계 증거 | 11-12 d20 증거 PASS · 11-13 07:00 controller 확정 |
 | D20 operating | **PASS** · 자동 20/20 · 첫 댓글 20/20 · 감사 표본 4/4 · 같은 runtime SHA |
 | Persona 운영 DB (2026-11-14 05:35 관측) | contract-valid 40 · active 40 · D30 하한 60에 20 부족 |
 | Persona 확장 자산 | P44~P63 20명 · 30대 0 · 기존 40명 말투 배정 불변 · 승인 fixture SHA-256 재대조 green · 운영 DB write 0 |
-| Persona 보충 근거 | 20 bundles · digest `cf3dbdac17476f12a8b8cfe0e4dda0e5d7e350cacbeb3a8e5634be59d833de2c` · dry-run write 0 |
+| Persona 보충 근거 | v2 snapshot 기록됨(2026-11-14 22:37) · 승인 digest `be47bb887a879706e47dd0cd86017d50dbe9f6cd87ff2e1aa55b8765cfda8ad5`(옛 `cf3dbdac…`는 낡음) · 독립 dry-run 4회 동일 · 독립 검사 18/18(기존 40 배정 diff 0 · 동결 10 바이트 동일 · 신규 20/20) · 운영 DB write 0 |
 | 비용 기준선 | 49개 slot-valid · $2.4056 · 약 **$0.04909/result** · D30 기준 $0.040 초과 |
 | 비용 수리 | 유료 의미 검수 전에 지배 판정 · publish/safety/quality gate 완화 0 · 운영 효과 UNKNOWN |
 | 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 · 80건/$0.16 profile은 창업자 승인(아직 미배포) |
@@ -58,7 +58,7 @@
 
 | 축 | code PASS | deployed PASS | operating PASS |
 |---|---|---|---|
-| D20 | ✅ | ✅ runtime `410d9a45` | ✅ 11-12 자연 증명 |
+| D20 | ✅ | ✅ 11-12 증명 당시 runtime(직전 배포 SHA) | ✅ 11-12 자연 증명 |
 | 댓글 starvation 수리 | ✅ targeted·mutation | ❌ | UNKNOWN |
 | 비용 지배 판정 | ✅ targeted·mutation | ❌ | UNKNOWN — rolling 72h 실측 필요 |
 | Persona +20 | ✅ local fixture·digest·mutation | ❌ 운영 DB write 0 | UNKNOWN |
@@ -110,11 +110,21 @@
 | `SUPPLY_COST_SHORT` | rolling 72h 기준 약 $0.04909/result > $0.040 | 지배 판정 코드 배포 뒤 같은 판정창의 자연 정산 실측이 $0.040 이하 |
 | `COMMENT_STARVATION` | 11-12 실패 254건이 두 Persona에 집중 | typed 격리·same-tick 재선정 배포 뒤 자연 회차에서 starvation 0과 불변식 위반 0 |
 
+### 3.2 배포기 Persona 자산 식별자 결함 (2026-11-15 P0)
+
+- 재현: 배포기가 자기 프로세스 코드로 식별자를 한 번 재고, 그 값을 manifest·재기동 대조·rollback 대조에 함께 썼다.
+  runtime 트리(옛 SHA)에서 시작한 11-15 00:00 apply는 옛 코드가 읽는 v1 식별자를 새 runtime manifest에 적었다.
+  재기동 대조도 같은 옛 함수로 재서 통과했다. 운영 소비자는 없지만 deployed 증거로는 red다.
+- 수리: source(runtime 트리 코드)·target(staging 트리 코드)을 각 트리에서 따로 재고, manifest·재기동 대조는 target,
+  rollback 대조는 source로 한다. fixture는 checkout된 SHA별로 다른 식별자를 돌려준다(반례 A-2d~g).
+- 이 수리의 첫 재배포는 옛 runtime 배포기로는 수리가 실행되지 않으므로 **staging 트리(수리 포함 target)의 배포기**로 시작한다.
+- 수동 manifest 수정은 하지 않는다. 재배포 뒤 manifest 식별자 = 실제 식별자를 확인해야 닫힌다.
+
 ### 3.1 배포 순서와 안전창
 
 1. 전체 회귀검사와 독립 교차검수를 끝낸다.
 2. exact-head CI가 모두 green인 한 PR만 main에 병합한다.
-3. runtime 배포 전에 보조 Mac에 말투 보충 묶음 v2를 기록하고 digest `cf3dbdac…`와 기존 40명 배정 diff 0을 확인한다.
+3. ✅ 보조 Mac에 말투 보충 묶음 v2 기록 · digest `be47bb88…` · 기존 40명 배정 diff 0 (2026-11-14 22:37 · 11-15 00:00 재검증).
    현재 runtime은 v2를 읽지 않으므로 이 준비만으로 운영은 바뀌지 않는다.
 4. runtime은 23:40 감사 종료 뒤 00:30 수집 전인 **11-15 00:00~00:25**를 1순위로 삼는다.
    직전 `runner-recover`·observer·다른 job이 실제 idle인지 확인하고 한 번만 배포한다. 예비창은 01:00~01:25이며

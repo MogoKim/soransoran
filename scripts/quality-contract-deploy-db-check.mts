@@ -168,6 +168,7 @@ function makeHost(home: string, o: { stagedHead?: string; sourceTree?: RuntimeTr
     // 🔴 checkout 뒤에는 runtime 트리가 target 이다 — source 를 다시 뜨지 않고 staging 직전의 snapshot 을 쓴다
     contractTransitionGate: () => { h.order.push('recheck'); return cli() },
     runtimePersonaAssets: () => ({ referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }),
+    stagedPersonaAssets: () => ({ referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }),
     readInstalledPlist: (l) => h.plists.get(l) ?? null,
     renderPlist: (_t, l) => JSON.stringify(['npx', 'tsx', `${RT}/scripts/${l}.mts`, '--new']),
     writePlist: (l, xml) => { h.order.push(`write-plist:${l}`); h.plists.set(l, xml); return true },
