@@ -41,6 +41,11 @@ import { validPersonaAssetIdentity } from '../src/lib/runtime-deploy'
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const TARGET_DATE = (argv.find((a) => a.startsWith('--date='))?.split('=')[1] ?? '').trim()
+/**
+ * 🔴 dry-run 전용 시각 가정 — `--assume-kst=2026-11-14T07:05`. 창·날짜를 가정해 **나머지 게이트를 실제 상태로** 평가한다.
+ *    `--apply` 와 함께 쓰면 거부한다. 가정한 날짜의 실제 StageDecision 행을 읽는다(쓰지 않는다).
+ */
+const ASSUME = (argv.find((a) => a.startsWith('--assume-kst='))?.split('=')[1] ?? '').trim() || null
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 const MARKER_DIR = join(CANON_DIR, 'persona-d30-oneshot')
@@ -55,6 +60,11 @@ const read = (cmd: string, args: readonly string[], cwd = RUNTIME_ROOT): string 
   try { return execFileSync(cmd, [...args], { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { return null }
 }
 const kstNow = (): { date: string; minute: number } => {
+  if (ASSUME !== null) {
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(ASSUME)
+    if (m === null) throw new Error('--assume-kst 모양 오류')
+    return { date: m[1]!, minute: Number(m[2]) * 60 + Number(m[3]) }
+  }
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).formatToParts(new Date()).map((x) => [x.type, x.value]))
@@ -163,6 +173,7 @@ const cohortStatuses = async (): Promise<Map<string, string>> =>
   new Map((await prisma.persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true, status: true } })).map((r) => [r.code, r.status]))
 
 async function main(): Promise<number> {
+  if (ASSUME !== null && APPLY) { log('refuse', { code: 'ASSUME_WITH_APPLY' }); return 2 }
   if (process.cwd() !== RUNTIME_ROOT && APPLY) { log('refuse', { code: 'NOT_RUNTIME_TREE', cwd: process.cwd() }); return 2 }
   await loadEnvLocal()
   if (!fillDbConnection()) { log('refuse', { code: 'CREDENTIAL', reason: 'canonical DB env 없음' }); return 2 }
