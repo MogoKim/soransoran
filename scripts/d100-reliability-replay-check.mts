@@ -647,6 +647,7 @@ try {
       checkout: () => true, install: () => true, generate: () => true, offlineGate: () => true,
       runtimeQualityContract: () => `replay:${REFERENCE_DIGEST}`, stagedTransitionCheck: () => true, contractTransitionGate: () => true,
       runtimePersonaAssets: () => ({ referenceDigest: REFERENCE_DIGEST, supplementDigest: SUPPLEMENT_DIGEST }),
+      stagedPersonaAssets: () => ({ referenceDigest: REFERENCE_DIGEST, supplementDigest: SUPPLEMENT_DIGEST }),
       readInstalledPlist: () => null, renderPlist: () => '<plist/>', writePlist: () => true, removePlist: () => true,
       retirePlist: () => true, unretirePlist: () => true, lintPlist: () => true,
       argsOf: () => [], workingDirOf: () => null,

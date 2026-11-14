@@ -42,7 +42,7 @@ import { dirname, join } from 'node:path'
 
 import {
   DEPLOY_FORBIDDEN, DEPLOY_GATES, DEPLOY_STEPS, judgeDeploy, judgeDeployLock, judgeLockRelease,
-  OFFLINE_GATES, runDeploy, type DeployEffects,
+  OFFLINE_GATES, parsePersonaAssetIdentityOutput, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
 import {
   JOB_ENV_REQUIREMENTS, judgeJobEnv, judgeJobState, parseLaunchctlPrint,
@@ -60,7 +60,6 @@ import {
  */
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeGate, sealSnapshot, takeSourceSnapshot } from './lib/source-snapshot.mjs'
-import { readRuntimePersonaAssetIdentity } from '../src/lib/persona-reference-digest'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 /** 🔴 예약 실행이 절대 물으면 안 되는 곳 — 개발 작업트리들 */
@@ -163,6 +162,13 @@ const readRuntimeContract = (): string | null => {
   const last = (out ?? '').split('\n').map((x) => x.trim()).filter((x) => x !== '').pop() ?? ''
   return /^[A-Za-z0-9._-]+:[0-9a-f]{64}$/.test(last) ? last : null
 }
+/**
+ * 🔴 **Persona 말투 자산 식별자는 그 트리의 코드로 잰다** (2026-11-15 · P0).
+ *    배포기 프로세스 코드로 재면 runtime 트리(옛 SHA)에서 시작한 배포가 옛 코드의 식별자를 새 manifest 에 적는다.
+ *    정본 함수(`readRuntimePersonaAssetIdentity`)를 **그 트리에서** 부르고 마지막 줄 JSON 만 받는다. 실패는 null(→ BLOCK).
+ */
+const PERSONA_IDENTITY_SNIPPET = "import('./src/lib/persona-reference-digest.ts').then((m) => console.log(JSON.stringify(m.readRuntimePersonaAssetIdentity())))"
+const personaAssetsIn = (cwd: string): ReturnType<typeof parsePersonaAssetIdentityOutput> => parsePersonaAssetIdentityOutput(read('npx', ['tsx', '-e', PERSONA_IDENTITY_SNIPPET], cwd))
 /** 🔴 staging 트리가 target 에 깨끗하게 준비돼 있는가 — 아니면 그 트리로 잰 값은 target 의 값이 아니다 */
 const stagedAt = (target: string): boolean =>
   existsSync(join(STAGE_ROOT, 'node_modules')) && read('git', ['rev-parse', 'HEAD'], STAGE_ROOT) === target
@@ -325,6 +331,15 @@ if (!APPLY) {
         : installed ? '🟡 설치본은 있는데 unloaded — 그대로 둔다' : '⚪ 미설치 — 건드리지 않는다 · 설치하지 않는다'
     console.log(`     ${what} ${l}`)
   }
+  /**
+   * 🔴 **말투 자산 식별자 두 벌** — source 는 runtime 트리 코드, target 은 staging 트리(target) 코드가 잰다.
+   *    apply 는 target 값을 manifest 에 적고, rollback 은 source 값으로 되돌아간 것을 확인한다.
+   */
+  console.log('\n  ── Persona 말투 자산 식별자 (🔴 각 트리의 코드로 잰다)')
+  const fmt = (x: ReturnType<typeof personaAssetsIn>): string => x === null ? '🔴 측정 실패(fail-closed)'
+    : `reference ${x.referenceDigest.slice(0, 12)} · supplement ${x.supplementDigest === null ? '없음' : x.supplementDigest.slice(0, 12)}`
+  console.log(`     source(runtime 트리) ${fmt(personaAssetsIn(RUNTIME_ROOT))}`)
+  console.log(`     target(staging 트리) ${planTarget !== null && stagedAt(planTarget) ? fmt(personaAssetsIn(STAGE_ROOT)) : '🟡 staging 트리가 target 에 준비되지 않았다 — apply 는 막힌다'}`)
   console.log(`\n  🔴 배포가 하지 않는 것: ${DEPLOY_FORBIDDEN.join(' · ')}`)
   console.log(`\n  실제 배포: npm run runtime:deploy -- --apply --target=${originMainDry ?? '<full sha>'}\n`)
   process.exit(0)
@@ -448,7 +463,8 @@ const fx: DeployEffects = {
   // 🔴 runtime 트리는 이미 target 이다 — source 는 job 을 내리기 전에 뜬 snapshot 그대로(지금 DB 집합과 대조된다)
   contractTransitionGate: (rt) => TARGET !== null && SOURCE_GATE !== null
     && act('npx', ['tsx', TRANSITION_CHECK, `--runtime=${rt}`, ...sourceArgs(TARGET, SOURCE_GATE), `--verify-succession=${successionFileOf(TARGET)}`]),
-  runtimePersonaAssets: () => readRuntimePersonaAssetIdentity(),
+  runtimePersonaAssets: () => personaAssetsIn(RUNTIME_ROOT),
+  stagedPersonaAssets: (target) => (stagedAt(target) ? personaAssetsIn(STAGE_ROOT) : null),
 
   // ── 🔴 plist cutover — **target commit 의** 템플릿을 실제 설치본으로 옮긴다 ──
   readInstalledPlist: (l) => readInstalled(AGENT_DIR, l),

@@ -33,7 +33,7 @@ import {
   judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, parseSuccessRuns, runIdToMs,
 } from '../src/lib/runtime-evidence'
 import {
-  judgeDeploy, judgeDeployLock, judgeLockRelease, runDeploy, type DeployEffects,
+  judgeDeploy, judgeDeployLock, judgeLockRelease, parsePersonaAssetIdentityOutput, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
 import { runtimePersonaAssetIdentityOf } from '../src/lib/persona-reference-digest'
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
@@ -616,6 +616,13 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     /** 🔴 n번째 조회별 자산. preflight→post-load→rollback 대조 사이 drift 반례를 만든다. */
     personaAssetReads?: readonly ({ referenceDigest: string; supplementDigest: string | null } | null)[]
     /**
+     * 🔴 **그 트리의 코드가 읽는 식별자** (2026-11-15 · P0). 실제와 같게 runtime 측정은 지금 checkout 된 SHA 의
+     *    코드가, staged 측정은 target 코드가 잰다. 둘을 다르게 주면 보충 세대 전환(v1→v2)이 된다.
+     *    `personaAssetReads` 가 있으면 runtime 측정은 그 순서를 따른다(drift 반례).
+     */
+    personaAssetsBySha?: { prev: { referenceDigest: string; supplementDigest: string | null } | null
+      next: { referenceDigest: string; supplementDigest: string | null } | null }
+    /**
      * 🔴 **감사 러너의 배포 전 모양** (2026-09-28). 기본은 `absent` — 지금 운영이 그렇다.
      *    absent            설치본 없음 · unloaded
      *    loaded            설치본 있음 · loaded
@@ -745,15 +752,28 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       isAncestor: () => true,
       dirty: () => false,
       runtimePersonaAssets: () => {
+        rec(`persona-assets:runtime:${w.sha === NEXT ? 'target' : 'prev'}`)
         const fallback = f.personaAssets === undefined
           ? { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
           : f.personaAssets
+        const bySha = f.personaAssetsBySha === undefined
+          ? fallback
+          : (w.sha === NEXT ? f.personaAssetsBySha.next : f.personaAssetsBySha.prev)
         const configured = f.personaAssetReads
         const value = configured === undefined || configured.length === 0
-          ? fallback
+          ? bySha
           : configured[Math.min(personaAssetReadCount, configured.length - 1)]!
         personaAssetReadCount += 1
         return value
+      },
+      // 🔴 staging 트리는 target 코드다 — runtime 트리의 SHA 와 무관하다
+      stagedPersonaAssets: (target) => {
+        rec(`persona-assets:staged:${target === NEXT ? 'target' : 'other'}`)
+        if (target !== NEXT) return null
+        if (f.personaAssetsBySha !== undefined) return f.personaAssetsBySha.next
+        return f.personaAssets === undefined
+          ? { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+          : f.personaAssets
       },
       // 🔴 실제 배포기와 같게 — 퇴역 job 도 본다 (돌고 있는 옛 job 위로 배포하지 않는다)
       /**
@@ -2312,6 +2332,77 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [A-2c] rollback 대조 중 Persona 자산 drift가 생기면 복구 불완전으로 남긴다',
       !r.ok && r.rollback?.complete === false
       && (r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+  }
+
+  // ── [A-2d] 🔴 보충 세대 전환(v1→v2): manifest 는 **target 코드**가 잰 식별자다 (2026-11-15 P0 재현) ──
+  //    옛 판은 배포기 프로세스 코드 한 번의 측정을 manifest·재기동 대조·rollback 에 모두 썼다.
+  //    runtime 트리(옛 SHA)에서 시작한 배포는 옛 코드의 v1 식별자를 새 runtime 에 적었다(실측 6d1b8688 vs 실제 b27b0305).
+  {
+    const v1 = { referenceDigest: 'c'.repeat(64), supplementDigest: '1'.repeat(64) }
+    const v2 = { referenceDigest: 'c'.repeat(64), supplementDigest: '2'.repeat(64) }
+    const w = makeWorld({ personaAssetsBySha: { prev: v1, next: v2 } })
+    const r = await deploy(w)
+    const manifest = JSON.parse(readFileSync(w.manifestFile, 'utf-8')) as {
+      personaAssets?: { referenceDigest?: string; supplementDigest?: string | null }
+    }
+    check('🔴 [A-2d] 세대 전환 배포는 성공한다', r.ok)
+    check('🔴 [A-2d] manifest 는 target 코드 식별자(v2)다 — source(v1)를 적지 않는다',
+      manifest.personaAssets?.supplementDigest === v2.supplementDigest
+      && manifest.personaAssets?.referenceDigest === v2.referenceDigest)
+    check('🔴 [A-2d] target 식별자는 staging 트리에서 job 을 내리기 전에 잰다',
+      idx(w, 'persona-assets:staged:target') !== -1 && idx(w, 'persona-assets:staged:target') < idx(w, 'unload'))
+    check('🔴 [A-2d] source 식별자는 checkout 전 runtime 트리(옛 코드)로 잰다',
+      idx(w, 'persona-assets:runtime:prev') !== -1 && idx(w, 'persona-assets:runtime:prev') < idx(w, 'checkout'))
+    check('🔴 [A-2d] 재기동 뒤 대조는 runtime 트리의 target 코드로 잰다',
+      w.order.lastIndexOf('persona-assets:runtime:target') > w.order.lastIndexOf('checkout:target')
+      && w.order.includes('persona-assets:runtime:target'))
+  }
+
+  // ── [A-2e] 🔴 세대 전환 중 실패하면 rollback 은 **source 식별자**로 되돌아간 것을 확인한다 ──
+  {
+    const v1 = { referenceDigest: 'c'.repeat(64), supplementDigest: '1'.repeat(64) }
+    const v2 = { referenceDigest: 'c'.repeat(64), supplementDigest: '2'.repeat(64) }
+    const w = makeWorld({ gateFail: 'gate1', personaAssetsBySha: { prev: v1, next: v2 } })
+    const r = await deploy(w)
+    check('🔴 [A-2e] 게이트 실패 → rollback 이 완전하다(옛 코드가 v1 을 읽는다 = source 와 같다)',
+      !r.ok && r.rollback?.complete === true
+      && !(r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+    check('🔴 [A-2e] 되돌린 뒤 SHA·pin·manifest 가 이전 값이다',
+      w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV)
+  }
+
+  // ── [A-2f] 🔴 target 코드로 식별자를 못 재면 job 을 내리기 전에 멈춘다 ──
+  {
+    const v1 = { referenceDigest: 'c'.repeat(64), supplementDigest: '1'.repeat(64) }
+    for (const [label, next] of [
+      ['측정 실패', null],
+      ['digest 모양 오류', { referenceDigest: 'c'.repeat(64), supplementDigest: 'short' }],
+    ] as const) {
+      const w = makeWorld({ personaAssetsBySha: { prev: v1, next } })
+      const r = await deploy(w)
+      check(`🔴 [A-2f] staged 식별자 ${label} → preflight 차단 · unload/checkout/manifest 0`,
+        !r.ok && r.phase === 'preflight' && r.steps.includes('staged-persona-assets')
+        && idx(w, 'unload') === -1 && idx(w, 'checkout') === -1 && countOf(w, 'write-manifest') === 0
+        && w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV && allLoaded(w))
+    }
+  }
+
+  // ── [A-2g] 식별자 출력 파서 — 마지막 줄 JSON · 키 두 개 · digest 64 hex 만 받는다 ──
+  {
+    const ok = JSON.stringify({ referenceDigest: 'a'.repeat(64), supplementDigest: 'b'.repeat(64) })
+    const none = JSON.stringify({ referenceDigest: 'a'.repeat(64), supplementDigest: null })
+    check('[A-2g] 앞줄 잡음 뒤 마지막 줄 JSON 을 받는다',
+      parsePersonaAssetIdentityOutput(`warn: x\n${ok}\n`)?.supplementDigest === 'b'.repeat(64))
+    check('[A-2g] 보충 미도입(null) 은 정상 값이다', parsePersonaAssetIdentityOutput(none)?.supplementDigest === null)
+    for (const [label, out] of [
+      ['빈 출력', ''], ['null 출력', null], ['JSON null', 'null'], ['깨진 JSON', '{'],
+      ['짧은 digest', JSON.stringify({ referenceDigest: 'a', supplementDigest: null })],
+      ['키 추가', JSON.stringify({ referenceDigest: 'a'.repeat(64), supplementDigest: null, x: 1 })],
+      ['키 누락', JSON.stringify({ referenceDigest: 'a'.repeat(64) })],
+      ['식별자 뒤 다른 줄', `${ok}\ndone`],
+    ] as const) {
+      check(`🔴 [A-2g] ${label} → null(fail-closed)`, parsePersonaAssetIdentityOutput(out) === null)
+    }
   }
 
   // ── [A-3] 자산 식별자는 corpus뿐 아니라 manifest 바이트도 결속한다 ──
