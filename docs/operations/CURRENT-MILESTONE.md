@@ -20,15 +20,15 @@
 
 | 항목 | 현재 사실 |
 |---|---|
-| 원격 main (2026-11-15 00:00 관측) | `63207eca98cb10e7162bda7cfeb0f6c25157f52e` |
-| 원격 main 내용 | PR #844 병합까지 · #843 D30 복구(Persona +20 자산·비용 지배 판정·댓글 starvation 수리) 포함 |
-| 보조 Mac D100 runtime HEAD = pin = manifest | `63207eca98cb10e7162bda7cfeb0f6c25157f52e` · main과 동일 SHA · 2026-11-15 00:01:43 배포(runtime 트리에서 시작한 apply) · strict 격리 532/0 · 🔴 manifest의 Persona 보충 식별자가 옛 코드 측정값(v1)이고 새 코드의 실제 식별자는 v2 — 배포기 측정 결함, §3.2 |
+| 원격 main (2026-11-15 06:30 관측) | `6d23038041799bd2353a92a4aa6ae692bd02330d` |
+| 원격 main 내용 | PR #847 병합까지 · #845 배포기 식별자 수리 · #846 D30 1회 투입기 · #847 실행기 DB 판독 수리 · #843 D30 복구 포함 |
+| 보조 Mac D100 runtime HEAD = pin = manifest | `6d23038041799bd2353a92a4aa6ae692bd02330d` · main과 동일 SHA · 2026-11-15 05:01 배포(staging 배포기 진입) · strict 격리 551/0 · manifest Persona 자산 식별자 = 실측 v2 |
 | 보조 Mac D100 job | 10개 loaded(observer 포함) · 2026-11-15 00:06 읽기 전용 관측 · 재기동 뒤 첫 자연 회차 전 |
 | 회사 Mac D100 job | 0 · D100 owner 아님 |
 | 직전 자연 결정 (2026-11-13) | `PREPARE · 공개 d20 · 준비 d30` · controller 행 1개 |
 | 최신 단계 증거 | 11-12 d20 증거 PASS · 11-13 07:00 controller 확정 |
 | D20 operating | **PASS** · 자동 20/20 · 첫 댓글 20/20 · 감사 표본 4/4 · 같은 runtime SHA |
-| Persona 운영 DB (2026-11-14 05:35 관측) | contract-valid 40 · active 40 · D30 하한 60에 20 부족 |
+| Persona 운영 DB (2026-11-15 06:06 정본 판독) | **contract-valid 39 · stage-active 39** · active 행 40 · P15 qualification-pending(seed≠정본 카드 workStatus) · P44~P63 0행 · D30 하한 60 |
 | Persona 확장 자산 | P44~P63 20명 · 30대 0 · 기존 40명 말투 배정 불변 · 승인 fixture SHA-256 재대조 green · 운영 DB write 0 |
 | Persona 보충 근거 | v2 snapshot 기록됨(2026-11-14 22:37) · 승인 digest `be47bb887a879706e47dd0cd86017d50dbe9f6cd87ff2e1aa55b8765cfda8ad5`(옛 `cf3dbdac…`는 낡음) · 독립 dry-run 4회 동일 · 독립 검사 18/18(기존 40 배정 diff 0 · 동결 10 바이트 동일 · 신규 20/20) · 운영 DB write 0 |
 | 비용 기준선 | 49개 slot-valid · $2.4056 · 약 **$0.04909/result** · D30 기준 $0.040 초과 |
@@ -109,6 +109,16 @@
 | `PERSONA_SHORT` | contract-valid 40 · active 40 < 60 | 비증명일에 P44~P63 전체를 create→seed→check→activate하고 기존 40 배정 diff 0을 재검증 |
 | `SUPPLY_COST_SHORT` | rolling 72h 기준 약 $0.04909/result > $0.040 | 지배 판정 코드 배포 뒤 같은 판정창의 자연 정산 실측이 $0.040 이하 |
 | `COMMENT_STARVATION` | 11-12 실패 254건이 두 Persona에 집중 | typed 격리·same-tick 재선정 배포 뒤 자연 회차에서 starvation 0과 불변식 위반 0 |
+
+### 3.1-b P15 정본 불일치와 11-15 투입 보류 (2026-11-15 06:06)
+
+- 사실: 정본 `readPersonaCapacity`가 39/39다. P15 `identity.workStatus`가 2026-08-30 최초 정본부터 바뀐 적 없는 카드 값과 다르다.
+  저장값은 2026-10-01 이후 불변이고, 9736e70f(#843)가 `verifySeedCard`에 그 축을 더한 뒤 runtime(11-15 00:01)부터 드러났다.
+- 조치: 11-15 07:05 1회 job은 06:07에 내렸다(보관소 보존·실행 0). 운영 DB·StageDecision 변경 0.
+- 수리: P15 정본 교정 1회(`persona:p15-remediation` — 이전 identity 정규 digest·updatedAt 고정 · Serializable 조건부 update ·
+  감사 · 커밋 뒤 정본 판독 정확히 +1·다른 Persona 지문 diff 0 아니면 자동 되돌림)와 1회 투입기의 투입 전 hard gate
+  (정본 contract-valid 40 AND stage-active 40, 마지막 게이트). 39/39이고 다른 게이트가 전부 통과할 때만 교정을 먼저 한 뒤 다시 판정한다.
+- 이 수리는 code·CI·배포·설치 뒤 다음 PREPARE·비증명일 07:05에만 운영에서 실행된다. 그 전에는 운영 PASS가 아니다.
 
 ### 3.2 배포기 Persona 자산 식별자 결함 (2026-11-15 P0)
 
