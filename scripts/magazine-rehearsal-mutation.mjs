@@ -43,6 +43,7 @@ const F = {
   reg: path.join(HERE, 'magazine-register.mjs'),
   plan: path.join(HERE, 'magazine-producer-plan.mjs'),
   dgate: path.join(HERE, 'lib', 'magazine-delivery-gate.mjs'),
+  check: CHECK,
 }
 const MUTATIONS = [
   { name: '① guard 의 임시 루트 밖 쓰기 차단 제거', scenarios: 'S1', edits: [{ file: F.guard,
@@ -210,6 +211,18 @@ const MUTATIONS = [
     find: "    '  summary: [', ...h2s.map((h) => `    ${tsString(h)},`), '  ],',", replace: "    '  summary: [', \"    '카톡 모임 알림에 마음이 무거워지는 장면으로 공감대를 연다.',\", '  ],'," }] },
   { name: '㊿ 금융 상류 brief·review 신원 판정 제거', scenarios: 'S1', edits: [{ file: F.content,
     find: '  if (stale.length) p.push(`옛 사실 문구 ${stale.join(\',\')}`)\n  return p\n', replace: '  if (stale.length) p.push(`옛 사실 문구 ${stale.join(\',\')}`)\n  return []\n' }] },
+  // ── 2026-11-14 S1 달력 경계 — 계절 행 창이 열린 날 fixture 가 밀려나고(11-15) 복사된 같은 날 COMPLETED run 이 producer 를 끝낸다 ──
+  //    🔴 날짜와 무관하게 잡혀야 한다 — 합성 큐 반례(11-15·12-31)와 증거 판정이 실제 회차 날짜와 상관없이 FAIL 을 낸다
+  { name: 'K1 S1 순위 기반 정리 제거 (fixture 보다 앞선 행을 빼지 않는다)', scenarios: 'S1', edits: [{ file: F.scen,
+    find: '  const ahead = before.ranked.slice(0, at)\n', replace: '  const ahead = []\n' }] },
+  { name: 'K2 S1 정리 증거 제거 (prepared.curation 없음)', scenarios: 'S1', edits: [{ file: F.orch,
+    find: '        curation: curationEvidence, isolatedRun }', replace: '        isolatedRun }' }] },
+  { name: 'K3 S1 정리 증거의 뺀 행 기록을 비운다', scenarios: 'S1', edits: [{ file: F.scen,
+    find: '    removed: ahead.map((q, i) => ({', replace: '    removed: [].map((q, i) => ({' }] },
+  { name: 'K4 S1 회차 _runs 격리 제거', scenarios: 'S1', edits: [{ file: F.orch,
+    find: '      const isolatedRun = isolateDirectRunDay(repo, date)\n', replace: '      const isolatedRun = { moved: false }\n' }] },
+  { name: 'K5 checker 판정 가드 제거 (prepared 없는 시나리오도 판정 블록에 들어간다)', scenarios: 'S1', edits: [{ file: F.check,
+    find: '  const s = S[id]\n  if (!s) return false\n', replace: '  const s = S[id]\n  if (!s) return false\n  if (s) return true\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

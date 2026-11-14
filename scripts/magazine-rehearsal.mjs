@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { buildSandbox, readGuard, stageEnv } from './lib/magazine-rehearsal-sandbox.mjs'
 import { pathToFileURL } from 'node:url'
 import net from 'node:net'
-import { KST, SPEED, addDays, collect, curate, leftovers, pickTargets as pickRuntimeTargets, placeHero, runStage, templatePair, writeSlugFiles } from './lib/magazine-rehearsal-scenarios.mjs'
+import { KST, SPEED, addDays, collect, curate, curateTargetFirst, leftovers, pickTargets as pickRuntimeTargets, placeHero, runStage, s1CurationOk, s1IsolationOk, templatePair, writeSlugFiles } from './lib/magazine-rehearsal-scenarios.mjs'
 import { STALE_RUN_MARKER, directFacts, isolateDirectRunDay, plantStaleDirectRun, prepareDirect } from './lib/magazine-rehearsal-direct.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -626,12 +626,26 @@ export const SCENARIOS = {
     async prepare(repo, date) {
       // 🔴 정상 성공 대상은 한 질문 한 묶음 — fixture 출처 글이어야 한다 (다른 질문 제목에 본문을 끼우지 않는다)
       const { fx, removed } = await prepareFinancialCandidate(repo)
+      /**
+       * 🔴 달력 경계 (2026-11-14) — 계절 행이 창을 열면 실제 선정의 SEASONAL 우선 규칙이 fixture 를 밀어낸다
+       *    (2026-11-15 year-end-gathering-reluctance). 운영 선정·운영 큐는 그대로 두고, 그 날짜의 실제 순위에서
+       *    fixture 보다 **앞선 행만** sandbox 사본 큐에서 뺀다. 뺀 행·이유·전후 1순위를 증거로 남긴다.
+       */
+      const qPath = join(repo, 'drafts', 'magazine', 'topic-queue.ts')
+      const curation = await curateTargetFirst({ code: repo, date, target: fx.source.slug, queueSrc: readFileSync(qPath, 'utf8'),
+        articlesSrc: readFileSync(join(repo, 'src', 'content', 'magazine', 'articles.ts'), 'utf8') })
+      writeFileSync(qPath, curation.queueSrc)
       const [t] = await pickRuntimeTargets({ repo, date, selectable: 1 })
       if (t.slug !== fx.source.slug || t.title !== fx.source.title) throw new Error(`S1 대상이 금융 정상 후보 fixture 가 아니다: ${t.slug} 「${t.title}」`)
       await curate({ repo, keep: [t.slug] })
       const C = await imp(repo, 'scripts/lib/magazine-rehearsal-content.mjs')
       const foreign = C.riskSentencesOf(readFileSync(join(repo, 'drafts', 'magazine', C.SKELETON.brief.slug, 'review.ts'), 'utf8'))
-      return { target: t.slug, sourceTitle: fx.source.title, riskSentences: fx.riskSentences, foreignSentences: foreign, foreignTitles: removed.map((r) => r.title) }
+      // 🔴 기준 커밋 전 · sandbox 사본만 — runtime 에서 복사된 같은 날짜의 COMPLETED run 이 producer 를 끝내지 않게 (S15 와 같은 격리)
+      const isolatedRun = isolateDirectRunDay(repo, date)
+      const curationEvidence = { ...curation }
+      delete curationEvidence.queueSrc
+      return { target: t.slug, sourceTitle: fx.source.title, riskSentences: fx.riskSentences, foreignSentences: foreign, foreignTitles: removed.map((r) => r.title),
+        curation: curationEvidence, isolatedRun }
     },
     scenario: { ci: {}, deploy: {} },
     async run(ctx) {
@@ -654,6 +668,9 @@ export const SCENARIOS = {
       const watchLog = readFileSync(join(ctx.sb.root, s.find((x) => x.name === 'watch-after-publish')?.log ?? 'missing'), 'utf8').toString()
       return [
         exp('S1 producer · register · recover · watch 종료 0', ['producer', 'register', 'recover', 'watch-after-publish'].every((n) => stageOk(s, n)), s.map((x) => `${x.name}:${x.exit}`)),
+        // 🔴 달력 경계 (2026-11-14) — 실제 순위 기반 정리 증거 · 그 회차 run 격리 증거
+        exp('S1 준비 — 실제 선정 순위로 정리 (전 1순위 · 뺀 행 · 후 1순위 = 대상 · 그 회차 날짜)', s1CurationOk(ctx.prepared, t, ctx.date), ctx.prepared.curation),
+        exp('S1 준비 — sandbox 사본의 그 회차 _runs 격리 기록 (runtime 사본 COMPLETED 가 producer 를 끝내지 않는다)', s1IsolationOk(ctx.prepared, ctx.date), ctx.prepared.isolatedRun),
         // 🔴 한 질문 한 묶음 (2026-10-19) — 큐 행 · 등록 title · 본문이 fixture 출처 글 하나다
         exp('S1 등록 title = fixture 출처 title (글자 그대로)', ctx.registeredArticle?.title === ctx.prepared.sourceTitle, { got: ctx.registeredArticle?.title, want: ctx.prepared.sourceTitle }),
         exp('S1 등록 본문이 같은 질문에 답한다 — 반드시 넣을 문장 5개 전부', ctx.prepared.riskSentences.length === 5 && ctx.prepared.riskSentences.every((x) => ctx.registeredArticle?.text?.includes(x)), ctx.prepared.riskSentences.filter((x) => !ctx.registeredArticle?.text?.includes(x))),
