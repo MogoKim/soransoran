@@ -137,7 +137,8 @@
    실행 수단은 무인 1회 job `com.soransoran.persona-d30-oneshot`(07:05 · 고정 날짜)이다 — `scripts/persona-d30-oneshot.mts`가
    그날 controller 행 `PREPARE · d20 · d30`·비증명일·origin/main=HEAD=pin=manifest·배포 잠금/실행 중 job 0·승인 digest `be47bb88…`와
    runtime 자산 식별자(따로)·기존 40 말투/상태·P44~P63 전원 미존재·관리자 1명을 모두 확인한 뒤에만 정본 `persona-cohort-run`을 부른다.
-   하나라도 어긋나면 write 0, 켠 뒤 결과가 contract/active 60·기존 40 불변이 아니면 새 cohort만 pause한다. 설치·실행 결과는 관측 뒤에만 적는다.
+   하나라도 어긋나면 write 0. 켠 뒤에는 정본 `readPersonaCapacity` 한 번의 판독이 contract-valid 60·stage-active 60이고, active 행 60·새 cohort active 20·
+   기존 40 행 지문 불변·정본 cohort check 0일 때만 PASS다. 판독 실패(null)·59·61을 포함해 그 밖이면 새 cohort만 pause한다. 설치·실행 결과는 관측 뒤에만 적는다.
 8. 자연 운영으로 비용·댓글·Persona cadence를 관측하고 rolling 72h 비용이 실제 green인 첫 07:00 controller가 D30을 열게 한다.
 
 🔴 11-14 07:00 이전에 Persona를 투입해 억지로 D30을 여는 것은 증명 전날 밤 cohort 변경이므로 하지 않는다.

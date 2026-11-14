@@ -91,14 +91,21 @@ expect('관리자 2(누가 켰는지 모호)', { adminCount: 2 }, 'ACTOR')
 expect('관리자 판독 실패', { adminCount: null }, 'ACTOR')
 
 console.log('\n⑦ 결과 판정 — PASS 가 아니면 새 cohort 만 되돌린다')
-const ok = { activated: true, totalActive: 60, cohortActive: 20, old40Same: true, checkOk: true }
-check('contract 60 · active 60 · 기존 40 불변 → PASS', judgeOutcome(ok).code === 'PASS')
+const ok = { activated: true, contractValid: 60, stageActive: 60, totalActive: 60, cohortActive: 20, old40Same: true, checkOk: true }
+check('contract-valid 60 · stage-active 60 · active 60 · 새 20 · 기존 40 불변 · check 0 → PASS', judgeOutcome(ok).code === 'PASS')
+for (const [label, v] of [['판독 실패(null)', null], ['59', 59], ['61', 61]] as const) {
+  check(`contract-valid ${label} → PAUSE_NEW_COHORT`, judgeOutcome({ ...ok, contractValid: v }).code === 'PAUSE_NEW_COHORT')
+  check(`stage-active ${label} → PAUSE_NEW_COHORT`, judgeOutcome({ ...ok, stageActive: v }).code === 'PAUSE_NEW_COHORT')
+}
+check('정본 판독 오류(둘 다 null) → PAUSE_NEW_COHORT', judgeOutcome({ ...ok, contractValid: null, stageActive: null }).code === 'PAUSE_NEW_COHORT')
+check('contract-valid 60 이어도 active 행 60 이 아니면 PASS 가 아니다', judgeOutcome({ ...ok, totalActive: 59 }).code === 'PAUSE_NEW_COHORT')
+check('active 행 60 이어도 contract-valid 59 면 PASS 가 아니다(행 수로 대신하지 않는다)', judgeOutcome({ ...ok, contractValid: 59 }).code === 'PAUSE_NEW_COHORT')
 check('active 59 → PAUSE_NEW_COHORT', judgeOutcome({ ...ok, totalActive: 59 }).code === 'PAUSE_NEW_COHORT')
 check('active 61 → PAUSE_NEW_COHORT', judgeOutcome({ ...ok, totalActive: 61 }).code === 'PAUSE_NEW_COHORT')
 check('기존 40 바뀜 → PAUSE_NEW_COHORT', judgeOutcome({ ...ok, old40Same: false }).code === 'PAUSE_NEW_COHORT')
 check('check 위반 → PAUSE_NEW_COHORT', judgeOutcome({ ...ok, checkOk: false }).code === 'PAUSE_NEW_COHORT')
 check('판독 실패 → PAUSE_NEW_COHORT', judgeOutcome({ ...ok, totalActive: null }).code === 'PAUSE_NEW_COHORT')
-check('켜기 전 실패(draft) → HOLD_DRAFT', judgeOutcome({ activated: false, totalActive: 40, cohortActive: 0, old40Same: true, checkOk: true }).code === 'HOLD_DRAFT')
+check('켜기 전 실패(draft) → HOLD_DRAFT', judgeOutcome({ activated: false, contractValid: 40, stageActive: 40, totalActive: 40, cohortActive: 0, old40Same: true, checkOk: true }).code === 'HOLD_DRAFT')
 
 console.log('\n⑧ 승인 digest 공식 = 정본 planSupplementSnapshot 공식 (공식 drift 차단)')
 const plan = planSupplementSnapshot({

@@ -28,6 +28,7 @@ import {
   type Identity, type MarkerState, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { readPersonaCapacity } from './lib/persona-reserve-facts.mjs'
 import { fillDbConnection } from './lib/ops-signals.mjs'
 import { assignmentDigest } from './lib/persona-reference-supplement-store.mjs'
 import { stableAssignment } from './lib/persona-reference-store.mjs'
@@ -244,10 +245,12 @@ async function main(): Promise<number> {
     const totalActive = await prisma.persona.count({ where: { status: 'active' } })
     const cohortActive = await prisma.persona.count({ where: { code: { in: [...COHORT_CODES] }, status: 'active' } })
     const old40Same = (await old40Fingerprint(expectedOld40)) === old40Before
-    const outcome = judgeOutcome({ activated, totalActive, cohortActive, old40Same, checkOk })
-    log('outcome', { code: outcome.code, problems: outcome.problems, totalActive, cohortActive, old40Same, checkOk })
+    // 🔴 정본 판독기 — 단계 preflight 와 같은 값. 실패는 null(→ PASS 아님 → 새 cohort 만 pause)
+    const capacity = await readPersonaCapacity(prisma, { now: new Date(), repoRoot: process.cwd() })
+    const outcome = judgeOutcome({ activated, contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive, old40Same, checkOk })
+    log('outcome', { code: outcome.code, problems: outcome.problems, contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive, old40Same, checkOk })
     if (outcome.code !== 'PASS') return await stop(`OUTCOME_${outcome.code}`)
-    writeMarker('done', { totalActive, cohortActive })
+    writeMarker('done', { contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive })
     log('done', { result: 'PASS' })
     return 0
   } finally {

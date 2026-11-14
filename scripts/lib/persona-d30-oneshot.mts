@@ -155,6 +155,12 @@ export function judgeOneShot(f: OneShotFacts): OneShotVerdict {
 export type OutcomeFacts = {
   /** 마지막으로 성공한 정본 단계 */
   activated: boolean
+  /**
+   * 🔴 정본 `readPersonaCapacity` 한 번의 판독 — 계약 유효 수 · stage-active 수. 판독 실패는 둘 다 null(모름).
+   *    단계 preflight 가 받는 값이 이것이다. 활성 행 수(totalActive)로 대신하지 않는다.
+   */
+  contractValid: number | null
+  stageActive: number | null
   totalActive: number | null
   cohortActive: number | null
   /** 기존 40 행 지문(code·status·updatedAt) 전후 동일 */
@@ -166,6 +172,8 @@ export type OutcomeFacts = {
 /** 🔴 결과 판정 — PASS 가 아니면 **새 cohort 만** 되돌린다. 기존 40 은 건드리지 않는다 */
 export function judgeOutcome(o: OutcomeFacts): { code: 'PASS' | 'PAUSE_NEW_COHORT' | 'HOLD_DRAFT'; problems: string[] } {
   const problems: string[] = []
+  if (o.contractValid !== FINAL_ACTIVE) problems.push(`contract-valid ${o.contractValid ?? '판독 실패'} ≠ ${FINAL_ACTIVE}`)
+  if (o.stageActive !== FINAL_ACTIVE) problems.push(`stage-active ${o.stageActive ?? '판독 실패'} ≠ ${FINAL_ACTIVE}`)
   if (o.totalActive !== FINAL_ACTIVE) problems.push(`active ${o.totalActive ?? '?'} ≠ ${FINAL_ACTIVE}`)
   if (o.cohortActive !== COHORT_CODES.length) problems.push(`새 cohort active ${o.cohortActive ?? '?'} ≠ ${COHORT_CODES.length}`)
   if (o.old40Same !== true) problems.push('기존 40 행이 바뀌었거나 읽지 못했다')
