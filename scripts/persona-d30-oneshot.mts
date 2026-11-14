@@ -24,11 +24,12 @@ import { PrismaClient } from '@prisma/client'
 
 import {
   APPROVED_SUPPLEMENT_PLAN_DIGEST, COHORT_CODES, ONESHOT_COHORT, ONESHOT_WINDOW,
-  judgeOneShot, judgeOutcome, supplementApprovalDigestOf,
+  judgeOneShot, judgeOutcome, remediationEligible, supplementApprovalDigestOf,
   type Identity, type MarkerState, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { readPersonaCapacity } from './lib/persona-reserve-facts.mjs'
+import { P15_PRODUCTION_PINS } from './lib/persona-p15-remediation.mjs'
 import { fillDbConnection } from './lib/ops-signals.mjs'
 import { assignmentDigest } from './lib/persona-reference-supplement-store.mjs'
 import { stableAssignment } from './lib/persona-reference-store.mjs'
@@ -171,6 +172,7 @@ async function gather(expectedOld40: readonly string[]): Promise<OneShotFacts> {
     approvalDigest: approvalDigest(), runtimeIdentity,
     old40VoiceSame: old40VoiceSame(expectedOld40), old40ActiveCodes: old40Active, expectedOld40,
     cohortExisting, adminCount, marker: readMarker(),
+    capacity: stage === undefined ? null : await readPersonaCapacity(db(), { now: new Date(), repoRoot: process.cwd() }).catch(() => null),
   }
 }
 
@@ -208,8 +210,10 @@ async function main(): Promise<number> {
     runtime: facts.head?.slice(0, 12) ?? null, approvalDigest: facts.approvalDigest?.slice(0, 12) ?? null,
     expectedApproval: APPROVED_SUPPLEMENT_PLAN_DIGEST.slice(0, 12), cohortExisting: facts.cohortExisting?.length ?? null,
   })
-  if (!verdict.go) { log('done', { result: verdict.noop === true ? 'NOOP' : 'NO_GO', write: 0 }); return verdict.noop === true ? 0 : 3 }
-  if (!APPLY) { log('done', { result: 'DRY_RUN_GO', write: 0 }); return 0 }
+  const needsRemediation = remediationEligible(verdict, facts)
+  log('capacity', { capacity: facts.capacity, remediationEligible: needsRemediation })
+  if (!verdict.go && !needsRemediation) { log('done', { result: verdict.noop === true ? 'NOOP' : 'NO_GO', write: 0 }); return verdict.noop === true ? 0 : 3 }
+  if (!APPLY) { log('done', { result: needsRemediation ? 'DRY_RUN_GO_AFTER_P15_REMEDIATION' : 'DRY_RUN_GO', write: 0 }); return 0 }
 
   // ── 단일 실행 잠금 ──
   mkdirSync(MARKER_DIR, { recursive: true, mode: 0o700 })
@@ -218,8 +222,19 @@ async function main(): Promise<number> {
   writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`); closeSync(fd)
   try {
     // 🔴 잠금 안에서 표식·DB 를 다시 본다 — 두 실행이 겹쳐도 한 번만 간다
-    const again = judgeOneShot(await gather(expectedOld40))
-    if (!again.go) { log('done', { result: 'NO_GO_IN_LOCK', code: again.code, write: 0 }); return 3 }
+    let againFacts = await gather(expectedOld40)
+    let again = judgeOneShot(againFacts)
+    if (!again.go && remediationEligible(again, againFacts)) {
+      // 🔴 교정도 쓰기다 — 표식을 먼저 남긴다(중간 사망 시 다음 실행은 멈춘다)
+      writeMarker('started', { runtime: facts.head, phase: 'p15-remediation' })
+      const fixed = canonical('p15-remediation', ['scripts/persona-p15-remediation.mts', '--apply',
+        `--expect-before=${P15_PRODUCTION_PINS.beforeIdentityDigest}`, `--reason=D30 투입 전 P15 정본 교정 · persona-d30-oneshot · ${TARGET_DATE}`])
+      againFacts = await gather(expectedOld40)
+      // 🔴 표식 자기 자신(started)은 이 판정에서 빼고 본다 — 나머지 게이트는 그대로
+      again = judgeOneShot({ ...againFacts, marker: null })
+      log('after-remediation', { fixed, code: again.code, capacity: againFacts.capacity })
+      if (!fixed || !again.go) { writeMarker('held', { why: `P15_REMEDIATION_${fixed ? again.code : 'FAILED'}` }); log('done', { result: 'NO_GO_AFTER_REMEDIATION', code: again.code, cohortWrite: 0 }); return 3 }
+    } else if (!again.go) { log('done', { result: 'NO_GO_IN_LOCK', code: again.code, write: 0 }); return 3 }
     const old40Before = await old40Fingerprint(expectedOld40)
     const admins = await db().user.findMany({ where: { isAdmin: true }, select: { id: true } })
     if (admins.length !== 1) { log('done', { result: 'NO_GO_IN_LOCK', code: 'ACTOR', write: 0 }); return 3 }
