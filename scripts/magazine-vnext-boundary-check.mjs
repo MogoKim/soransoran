@@ -461,7 +461,9 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
 {
   const ROOTS = ['scripts/lib/magazine-content-plan-input.mjs', 'scripts/lib/magazine-content-plan.mjs']
   const PURE = new Set([...ROOTS, 'scripts/lib/magazine-public-rule.mjs', 'scripts/lib/magazine-graph-control.mjs', 'scripts/lib/magazine-literal.mjs',
-    'scripts/lib/magazine-qa-constants.mjs', 'scripts/lib/magazine-relation-policy.mjs'])
+    'scripts/lib/magazine-qa-constants.mjs', 'scripts/lib/magazine-relation-policy.mjs',
+    // S3 P1 수리 — admission 과 runtime resolver 가 함께 쓰는 출처 overlay 규칙(import 0). 같은 토큰 검사를 받는다
+    'src/lib/magazine-provenance-rule.mjs'])
   const EXTERNAL = new Set(['node:crypto', 'node:vm'])
   // 🔴 토큰 판정(S2 P1-3) — 정규식 · 주석 지우기(codeText)는 `import /* 틈 */ ('node:fs')` · 주석 뒤 static import · re-export ·
   //    process['env'] · Date['now']() 를 놓쳤다. 정본 graph-control 의 lexer 가 주석 · 문자열 · template(안쪽 식은 펼침) · 정규식을 가른다.

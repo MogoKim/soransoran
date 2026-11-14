@@ -26,17 +26,26 @@
  */
 import { createHash } from 'node:crypto'
 
-import { SOURCE_TEXT_RULE, TEXT_PROVENANCE, canonicalJson, byCodeUnit, isDense, parsePlanInputBundle } from './magazine-content-plan-input.mjs'
+import { GRAPH_VERSION_RE, SOURCE_TEXT_RULE, TEXT_PROVENANCE, canonicalJson, byCodeUnit, isDense, parsePlanInputBundle } from './magazine-content-plan-input.mjs'
 import { isHeldStatus, isPublicAt, strictPublishAtMs } from './magazine-public-rule.mjs'
 import { ControlLocateError, locateConstLiteral, parseDataLiteral, parseGraphControl } from './magazine-graph-control.mjs'
 import { BANNED_WORDS } from './magazine-qa-constants.mjs'
 import { RELATION_DISPLAY_TARGET, VNEXT_PUBLICATION_RELATION_MINIMUM } from './magazine-relation-policy.mjs'
+import { NO_RELEASE_BINDING, provenanceOverlay } from '../../src/lib/magazine-provenance-rule.mjs'
 
 export const CONTENT_PLAN_SCHEMA = 'magazine-content-plan/1'
 export const COMPILE_SCHEMA = 'magazine-content-plan-compile/1'
 export const ADMISSION_SCHEMA = 'magazine-plan-admission/1'
 /** S3 release 신원 경계가 stable slug 를 묶어야 한다는 요구 — ContentPlan 필드가 아니다 */
 export const SLUG_BINDING_REQUIRED = 'SLUG_BINDING_REQUIRED'
+/**
+ * Article 행의 vNext 출처(`release`) schema — S3 P1. 공개 신원(intentId ↔ slug)의 merge 뒤 유일한 권위는 Article 행 자신이다
+ * (별도 release-identity 파일 · releasedIdentityText 입력 없음). 출처는 신원만 싣는다 — edge · 공개 시각 · 산출물 해시 0.
+ */
+export const ARTICLE_RELEASE_SCHEMA = 'magazine-article-release/1'
+export const ARTICLE_RELEASE_KEYS = Object.freeze(['bundleHash', 'graphVersion', 'intentId', 'planHash', 'policyBoard', 'schemaVersion'])
+/** 출처의 정책 판 id 접두 — POLICY_IDENTITY_TABLE 의 원문 경계 규칙 행은 정책 판이 아니다 */
+const POLICY_BOARD_ID_PREFIX = 'magazine-content-plan-policy/'
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex')
 const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -104,7 +113,7 @@ export const REASON_ORDER = Object.freeze([
   'CONTROL_UNREADABLE', 'GRAPH_VERSION_MISMATCH', 'KILL_SWITCH_TRIPPED', 'GRAPH_DISABLED', 'ARTICLES_UNREADABLE', 'QUEUE_IDENTITY_UNREADABLE',
   // 동적 — plan
   'CLUSTER_DISABLED', 'NO_ENABLED_DIRECT_SURFACE',
-  'DUPLICATE_MAPPED_ARTICLE', 'DUPLICATE_ARTICLE_TITLE', 'DUPLICATE_QUEUE_INTENT', 'DUPLICATE_QUEUE_SLUG', 'DUPLICATE_QUEUE_TITLE',
+  'DUPLICATE_MAPPED_ARTICLE', 'DUPLICATE_RELEASED_INTENT', 'DUPLICATE_ARTICLE_TITLE', 'DUPLICATE_QUEUE_INTENT', 'DUPLICATE_QUEUE_SLUG', 'DUPLICATE_QUEUE_TITLE',
   'DUPLICATE_SAME_RELEASE', 'IN_FLIGHT', 'WITHDRAWN',
   'RELATION_TARGET_UNAVAILABLE', 'SAME_RELEASE_UNGROUNDED',
 ])
@@ -301,11 +310,34 @@ function readDataDecl(text, spec, codes) {
   }
 }
 
+const HEX64 = /^[0-9a-f]{64}$/
+const exactKeysOf = (v, keys) => isPlain(v) && canonicalJson(Object.keys(v).sort(byCodeUnit)) === canonicalJson([...keys].sort(byCodeUnit))
+
 /**
- * articles.ts 의 신원 투영 — slug · title · cluster · status · publishAt · publishedAt 만.
+ * Article 행의 vNext 출처(`release`) 엄격 판독 — 통과하면 신원 투영, 아니면 null (S3 P1).
+ *   exact key · 알려진 schema · 앞뒤 공백 없는 intentId · graphVersion 형식 · 64-hex 해시 ·
+ *   정책 판 id 는 POLICY_IDENTITY_TABLE 에 **알려진 정책 판** 이고 hash 가 그 행과 같아야 한다.
+ * 🔴 모르는 · 미래 · 깨진 출처를 legacy(출처 없음)로 되돌리지 않는다 — 호출자가 fail-closed 로 쓴다.
+ */
+function parseReleaseProvenance(r) {
+  if (!exactKeysOf(r, ARTICLE_RELEASE_KEYS) || !exactKeysOf(r.policyBoard, ['hash', 'id'])) return null
+  if (r.schemaVersion !== ARTICLE_RELEASE_SCHEMA) return null
+  if (!nonEmpty(r.intentId) || r.intentId !== r.intentId.trim()) return null
+  if (!isStr(r.graphVersion) || !GRAPH_VERSION_RE.test(r.graphVersion)) return null
+  if (!isStr(r.bundleHash) || !HEX64.test(r.bundleHash) || !isStr(r.planHash) || !HEX64.test(r.planHash)) return null
+  const { id, hash } = r.policyBoard
+  if (!isStr(id) || !id.startsWith(POLICY_BOARD_ID_PREFIX) || !Object.prototype.hasOwnProperty.call(POLICY_IDENTITY_TABLE, id)) return null
+  if (!isStr(hash) || hash !== POLICY_IDENTITY_TABLE[id]) return null
+  return { intentId: r.intentId, graphVersion: r.graphVersion, bundleHash: r.bundleHash, planHash: r.planHash, policyBoard: { id, hash } }
+}
+
+/**
+ * articles.ts 의 신원 투영 — slug · title · cluster · status · publishAt · publishedAt · release(vNext 출처 · 없으면 null) 만.
  * 🔴 앵커 없음 · 선언 2개 · 데이터 아님 · **같은 slug 두 번(원시 중복)** 은 { ok: false } — 빈 목록이나 마지막 값으로 넘어가지 않는다.
  * 🔴 공개 · 예약 행(DRAFT · BLOCKED 밖)의 공개 시각이 해석 불가 · 오프셋 없음이면 { ok: false, code: 'ARTICLES_PUBLISH_TIME_INVALID' } —
  *    그 행이 공개인지 예약인지 모르는 채로 중복 · 관계 대상 판정을 하지 않는다.
+ * 🔴 `release` 가 있으면 상태와 무관하게 엄격 판독한다(S3 P1) — 깨진 출처는 ARTICLES_RELEASE_INVALID, 두 행이 같은 release.intentId 면
+ *    ARTICLES_RELEASE_DUPLICATE_INTENT. 둘 다 { ok: false } 라 admission 전체가 ARTICLES_UNREADABLE 로 멈춘다.
  */
 export function parseArticleIdentityText(text) {
   const d = readDataDecl(text, { name: 'MAGAZINE_ARTICLE_RECORD', exported: false, open: '{', prefix: 'ARTICLES' },
@@ -313,11 +345,21 @@ export function parseArticleIdentityText(text) {
   if (!d.ok) return d
   if (!isPlain(d.value)) return { ok: false, code: 'ARTICLES_UNREADABLE' }
   const rows = []
+  const releasedBy = new Map()
   for (const [slug, a] of Object.entries(d.value)) {
     if (!isPlain(a) || !nonEmpty(slug) || !isStr(a.title)) return { ok: false, code: 'ARTICLES_UNREADABLE' }
     for (const k of ['cluster', 'status', 'publishAt', 'publishedAt']) if (a[k] !== undefined && a[k] !== null && !isStr(a[k])) return { ok: false, code: 'ARTICLES_UNREADABLE' }
+    // vNext 출처 — 키가 있으면(null 포함) 엄격 판독. 없으면 legacy 행이다
+    let release = null
+    if (Object.prototype.hasOwnProperty.call(a, 'release')) {
+      release = parseReleaseProvenance(a.release)
+      if (!release) return { ok: false, code: 'ARTICLES_RELEASE_INVALID' }
+      // 🔴 상태와 무관하게(PUBLISHED · SCHEDULED · DRAFT · BLOCKED) 한 intent 는 한 행만 — 어느 행이 정본인지 고르지 않는다
+      if (releasedBy.has(release.intentId)) return { ok: false, code: 'ARTICLES_RELEASE_DUPLICATE_INTENT' }
+      releasedBy.set(release.intentId, slug)
+    }
     const row = { slug, title: a.title, cluster: isStr(a.cluster) ? a.cluster : null, status: isStr(a.status) ? a.status : null,
-      publishAt: isStr(a.publishAt) ? a.publishAt : null, publishedAt: isStr(a.publishedAt) ? a.publishedAt : null }
+      publishAt: isStr(a.publishAt) ? a.publishAt : null, publishedAt: isStr(a.publishedAt) ? a.publishedAt : null, release }
     // 엄격 시각 규칙 하나(public-rule) — 달력에 없는 날 · 24:00 · 오프셋 없음은 실패(Date.parse 정규화에 기대지 않는다 · P1-2)
     if (!isHeldStatus(row) && !Number.isFinite(strictPublishAtMs(row))) return { ok: false, code: 'ARTICLES_PUBLISH_TIME_INVALID' }
     rows.push(row)
@@ -354,10 +396,13 @@ export function parseQueueIdentityText(text) {
  * 동적 admission — 출판 최소의 동적 부분을 판정한다. planHash 는 바꾸지 않는다.
  * @param {{ bundle: string|object, controlText: string, articlesText: string,
  *           legacyQueue: { active: boolean, text: string|null }, nowMs: number,
- *           inFlightPlanIds?: string[], withdrawnPlanIds?: string[] }} input
+ *           inFlightIntentIds?: string[], withdrawnPlanIds?: string[] }} input
+ *   articlesText        공개 · 예약 행과 **vNext 출처(release)** 의 유일한 입력 — 이미 출시된 intent 는 상태 · graphVersion 과 무관하게
+ *                       DUPLICATE_RELEASED_INTENT 다(S3 P1 · 별도 releasedIdentity 입력 없음)
  *   legacyQueue.active  legacy 경로가 남아 있는 동안 true — queue 신원으로 중복을 본다. 삭제 단계 뒤 false(text null)
- *   inFlightPlanIds     진행 중 Job 의 planId — 두 번째 생성을 막는다
- *   withdrawnPlanIds    같은 release 에서 빠진 후보(검증·조립·CI 실패) — 남은 후보를 고정점까지 다시 판정한다
+ *   inFlightIntentIds   진행 중 Job 의 intentId — 두 번째 생성을 막는다. 🔴 planId 가 아니다: graphVersion 이 바뀌면 planId 가 바뀌어
+ *                       같은 intent 의 두 번째 생성을 놓친다(S3 P1). 옛 키 inFlightPlanIds 는 모르는 입력으로 거부한다
+ *   withdrawnPlanIds    같은 release 에서 빠진 후보(검증·조립·CI 실패) — 남은 후보를 고정점까지 다시 판정한다. 한 컴파일 안의 개념이라 plan 단위다
  */
 export function admitContentPlans(input) {
   return admitWithPlans(input).result
@@ -365,12 +410,12 @@ export function admitContentPlans(input) {
 
 /** admission 본체 — 결과와 그 결과를 만든 정적 컴파일을 함께 돌려준다(ProviderPlan 이 같은 컴파일에서 plan 을 꺼낸다) */
 function admitWithPlans(input) {
-  exactInput(input, ['bundle', 'controlText', 'articlesText', 'legacyQueue', 'nowMs', 'inFlightPlanIds', 'withdrawnPlanIds'], 'admission')
+  exactInput(input, ['bundle', 'controlText', 'articlesText', 'legacyQueue', 'nowMs', 'inFlightIntentIds', 'withdrawnPlanIds'], 'admission')
   const { controlText, articlesText, legacyQueue, nowMs } = input
-  for (const k of ['inFlightPlanIds', 'withdrawnPlanIds']) {
-    if (input[k] !== undefined && !(Array.isArray(input[k]) && isDense(input[k]) && input[k].every(isStr))) fail('INPUT_INVALID', `${k} 는 빈 칸 없는 planId 문자열 배열이다`)
+  for (const k of ['inFlightIntentIds', 'withdrawnPlanIds']) {
+    if (input[k] !== undefined && !(Array.isArray(input[k]) && isDense(input[k]) && input[k].every(isStr))) fail('INPUT_INVALID', `${k} 는 빈 칸 없는 문자열 배열이다`)
   }
-  const inFlight = new Set(input.inFlightPlanIds ?? [])
+  const inFlight = new Set(input.inFlightIntentIds ?? [])
   const withdrawn = new Set(input.withdrawnPlanIds ?? [])
   if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || Math.abs(nowMs) > 8.64e15) fail('INPUT_INVALID', 'nowMs 는 Date 범위 안의 유한한 수여야 한다(벽시계를 읽지 않는다 — 호출자가 준다)')
   if (!isPlain(legacyQueue) || typeof legacyQueue.active !== 'boolean' || Object.keys(legacyQueue).some((k) => k !== 'active' && k !== 'text')) fail('INPUT_INVALID', 'legacyQueue 는 { active, text } 다')
@@ -402,9 +447,31 @@ function admitWithPlans(input) {
   const articleTitleKeys = new Set(listedRows.map((a) => normalizeTitleKey(a.title)))
   const mappedSlugs = new Map()
   for (const m of bundle.mappings) (mappedSlugs.get(m.intentId) ?? mappedSlugs.set(m.intentId, []).get(m.intentId)).push(m.slug)
-  /** 대상 intent 의 지금 공개된 mapping slug — 정확히 하나일 때만 대상으로 센다 */
+  // vNext 출처 — 상태와 무관하게 이미 출시된 intent(중복 판정 · 차단 쪽이라 결속과 무관하다)
+  const releasedSlugOf = new Map(articles.ok ? articles.rows.filter((a) => a.release).map((a) => [a.release.intentId, a.slug]) : [])
+  /**
+   * 출처가 **대상**이 되는 신원 — runtime resolver 와 같은 규칙 `provenanceOverlay` 하나로 정한다(S3 P1 수리).
+   * 🔴 runtime 이 버릴 대상을 승인하지 않는다 — canonical 같은 intent(미공개여도) · 같은 slug 충돌 · 출처 intent 중복 · 판에 없는 intent ·
+   *    결속 없음은 runtime 과 똑같이 overlay 0 이다. 같은 공개 관문(이 시각에 공개인 행)만 넘긴다 — runtime 의 공개 목록과 같은 모집단.
+   * 🔴 S3 P1 은 결속이 없다(NO_RELEASE_BINDING) — 출처는 대상이 되지 않는다. S3-P2 가 두 층에 같은 결속을 준다.
+   */
+  const overlaySlugsOf = new Map()
+  if (articles.ok) {
+    const overlay = provenanceOverlay({
+      canonical: bundle.mappings.map((m) => ({ intent: m.intentId, slug: m.slug })),
+      graphIntentIds: bundle.intents.map((x) => x.intentId),
+      rows: articles.rows.filter((a) => a.release && isPublicAt(a, nowMs)).map((a) => ({ slug: a.slug, release: a.release })),
+      binding: NO_RELEASE_BINDING,
+    })
+    for (const o of overlay) overlaySlugsOf.set(o.intent, [...(overlaySlugsOf.get(o.intent) ?? []), o.slug])
+  }
+  /**
+   * 대상 intent 의 지금 공개된 slug — Bundle mapping slug ∪ 공유 규칙이 더한 출처 slug 중 공개된 것이 **정확히 하나일 때만** 센다.
+   * 🔴 둘 이상이면 고르지 않는다(null · 대상 없음) — 어느 글이 그 질문의 답인지 임의로 정하지 않는다.
+   */
   const publicSlugOf = (intentId) => {
-    const s = (mappedSlugs.get(intentId) ?? []).filter((slug) => articleBySlug.has(slug) && isPublicAt(articleBySlug.get(slug), nowMs))
+    const pool = new Set([...(mappedSlugs.get(intentId) ?? []), ...(overlaySlugsOf.get(intentId) ?? [])])
+    const s = [...pool].filter((slug) => articleBySlug.has(slug) && isPublicAt(articleBySlug.get(slug), nowMs))
     return s.length === 1 ? s[0] : null
   }
   const surfaceOn = (placement) => control?.surfaces?.[placement] === true
@@ -418,13 +485,15 @@ function admitWithPlans(input) {
       if (!plan.relations.direct.some((r) => surfaceOn(r.placement))) reasons.push('NO_ENABLED_DIRECT_SURFACE')
       const slugs = mappedSlugs.get(plan.intentId) ?? []
       if (slugs.some((s) => listedSlugs.has(s))) reasons.push('DUPLICATE_MAPPED_ARTICLE')
+      // 🔴 이미 출시된 intent — 상태(DRAFT · BLOCKED 포함) · graphVersion 과 무관하다. rollback(BLOCKED)한 주제를 자동으로 다시 만들지 않는다
+      if (releasedSlugOf.has(plan.intentId)) reasons.push('DUPLICATE_RELEASED_INTENT')
       const titleKey = normalizeTitleKey(plan.primaryQuery)
       if (articleTitleKeys.has(titleKey)) reasons.push('DUPLICATE_ARTICLE_TITLE')
       // 🔴 같은 cluster 라는 이유만으로는 막지 않는다 — 정확한 신원(intentId · mapping slug · 정규화 제목)만 중복이다
       if (queueRows.some((q) => q.intentId === plan.intentId)) reasons.push('DUPLICATE_QUEUE_INTENT')
       if (queueRows.some((q) => slugs.includes(q.slug))) reasons.push('DUPLICATE_QUEUE_SLUG')
       if (queueRows.some((q) => q.titleKey === titleKey)) reasons.push('DUPLICATE_QUEUE_TITLE')
-      if (inFlight.has(plan.planId)) reasons.push('IN_FLIGHT')
+      if (inFlight.has(plan.intentId)) reasons.push('IN_FLIGHT')
       if (withdrawn.has(plan.planId)) reasons.push('WITHDRAWN')
     }
     reasonsOf.set(plan.planId, reasons)

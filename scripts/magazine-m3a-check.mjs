@@ -12,6 +12,7 @@
  *
  * 사용: node scripts/magazine-m3a-check.mjs
  */
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -70,6 +71,46 @@ function spawnSyncTop(cmd, args) {
   const r = nodeSpawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1e8 })
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} → exit ${r.status}: ${r.stderr}`)
   return (r.stdout ?? '').trim()
+}
+
+/**
+ * 🔴 **추적 변경은 절대값이 아니라 시험 전 기준과의 차이(delta)로 본다** (2026-11-13 · S3 검증 실측).
+ *    앞판은 `git status -- drafts public src` 가 비어 있어야 했다. 그래서 개발 중인 브랜치가 `src/` 를 미리 고쳐 둔
+ *    작업 트리에서는 시험이 아무것도 새지 않아도 반례5 · 9-A · 9-B 가 FAIL 했다(CI 의 깨끗한 checkout 에서는 통과).
+ *    이제 회차 직전 스냅샷과 회차 뒤 스냅샷의 차이만 본다.
+ * 🔴 경로만이 아니라 **작업 파일 내용 해시**까지 비교한다 — 이미 바뀐 파일에 시험이 또 쓰는 누출은 경로 목록이 같아서
+ *    이름만 보면 숨는다(자기 시험 N2 가 이것을 막는다).
+ * @returns {Map<string, { code: string, sha: string | null }>} 추적 경로 → 상태 코드(XY) · 작업 파일 sha256(삭제면 null)
+ */
+const DIRTY_SCOPE = ['drafts', 'public', 'src']
+/** 저장소 추적 상태를 읽는 git 은 spawnSyncTop 과 같은 환경으로 부른다(git ls-files 와 같은 기준) */
+function trackedDirtySnapshot(cwd = process.cwd(), env = process.env) {
+  const r = nodeSpawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--', ...DIRTY_SCOPE],
+    { cwd, env, encoding: 'utf8', maxBuffer: 1e8 })
+  if (r.status !== 0) throw new Error(`git status → exit ${r.status}: ${r.stderr}`)
+  const snap = new Map()
+  const parts = (r.stdout ?? '').split('\0')
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i]
+    if (!entry) continue
+    const code = entry.slice(0, 2)
+    const file = entry.slice(3)
+    // -z 의 이름 바꾸기 · 복사는 다음 칸에 원래 경로가 온다 — 새 경로 하나로 센다
+    if (/[RC]/.test(code)) i++
+    const abs = path.join(cwd, file)
+    const sha = fs.existsSync(abs) ? createHash('sha256').update(fs.readFileSync(abs)).digest('hex') : null
+    snap.set(file, { code, sha })
+  }
+  return snap
+}
+/** 두 스냅샷 사이에 새로 생기거나 · 사라지거나 · 상태 코드나 내용이 달라진 추적 경로 (정렬) */
+function dirtyDelta(before, after) {
+  const changed = []
+  for (const f of new Set([...before.keys(), ...after.keys()])) {
+    const b = before.get(f), a = after.get(f)
+    if (!b || !a || b.code !== a.code || b.sha !== a.sha) changed.push(f)
+  }
+  return changed.sort((x, y) => (x < y ? -1 : x > y ? 1 : 0))
 }
 
 let pass = 0, fail = 0
@@ -290,6 +331,69 @@ const FIXTURE_QUEUE = FIXTURE_SLUGS.map((slug, i) => ({
 check('  fixture 후보가 전부 실제 gate 를 통과한다',
   FIXTURE_SLUGS.every((sl) => gate(sl, FIXTURE_QUEUE).ok),
   FIXTURE_SLUGS.map((sl) => `${sl}:${gate(sl, FIXTURE_QUEUE).blockedBy.map((b) => b.code).join('/') || 'ok'}`).join(' · '))
+
+/**
+ * 🔴 **미커밋 변경이 있는 fixture 원고는 덮지 않는다** (2026-11-13).
+ *    원고를 쓰는 반례(4 · 5 · 9 · 13)는 끝에서 fixture 원고를 `git show HEAD:` 로 되돌린다. 그 원고에 사람의 미커밋 변경이 있으면
+ *    되돌리기가 그 변경을 지운다. 그래서 그런 원고가 하나라도 있으면 원고를 쓰는 반례를 돌리지 않고 FAIL 로 센다(조용히 건너뛰지 않는다).
+ *    원복 helper 도 그런 원고는 건드리지 않는다.
+ */
+const FIXTURE_DRAFTS = FIXTURE_SLUGS.map((sl) => `${DRAFT_ROOT}/${sl}/article-draft.ts`)
+const PRE_DIRTY_FIXTURES = (() => { const s = trackedDirtySnapshot(); return FIXTURE_DRAFTS.filter((f) => s.has(f)) })()
+const FIXTURES_WRITABLE = PRE_DIRTY_FIXTURES.length === 0
+check('🔴 fixture 원고에 미커밋 변경이 없다 (PRE_DIRTY_FIXTURE — 있으면 원고를 쓰는 반례 4·5·9·13 을 돌리지 않고 FAIL)',
+  FIXTURES_WRITABLE, PRE_DIRTY_FIXTURES.join(' · ') || '(없음)')
+/** fixture 원고를 HEAD 로 되돌린다 — 🔴 미커밋 변경이 있던 원고는 건드리지 않는다 */
+function restoreFixtureDrafts() {
+  for (const f of FIXTURE_DRAFTS) {
+    if (PRE_DIRTY_FIXTURES.includes(f)) continue
+    try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
+  }
+}
+
+// ── 추적 변경 delta 자기 시험 N1~N4 — 저장소 밖 임시 git 저장소만 쓴다 (실제 저장소 쓰기 0) ──
+{
+  const R = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-dirty-delta-'))
+  /**
+   * 🔴 GIT_DIR · GIT_WORK_TREE 같은 상속 변수가 실제 저장소를 가리키지 않게 GIT_* 를 빼고,
+   *    사용자 · 시스템 git 설정(hooksPath · 서명 · 템플릿)이 임시 저장소에 끼어들지 않게 막는다
+   */
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_'))),
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  }
+  const git = (...a) => {
+    const r = nodeSpawnSync('git', a, { cwd: R, env, encoding: 'utf8' })
+    if (r.status !== 0) throw new Error(`git ${a.join(' ')} → exit ${r.status}: ${r.stderr}`)
+  }
+  const put = (rel, text) => fs.writeFileSync(path.join(R, rel), text)
+  const snap = () => trackedDirtySnapshot(R, env)
+  const show = (d) => JSON.stringify(d)
+  try {
+    git('init', '-q')
+    fs.mkdirSync(path.join(R, 'src')); fs.mkdirSync(path.join(R, 'drafts'))
+    put('src/x.ts', 'base x\n'); put('drafts/y.ts', 'base y\n')
+    git('add', 'src/x.ts', 'drafts/y.ts')
+    git('-c', 'user.email=m3a@test.invalid', '-c', 'user.name=m3a', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'base')
+    put('src/x.ts', 'pre-dirty x\n')
+    const base = snap()
+    const n1 = dirtyDelta(base, snap())
+    check('  N1 시험 전부터 바뀐 파일만 있으면 delta 0 (거짓 FAIL 없음)', base.has('src/x.ts') && n1.length === 0, show(n1))
+    put('src/x.ts', 'pre-dirty x + leak\n')
+    const after2 = snap()
+    const n2 = dirtyDelta(base, after2)
+    check('🔴 N2 이미 바뀐 파일에 또 쓰면 잡는다 — 경로 목록이 같아도 내용 해시로',
+      show([...after2.keys()].sort()) === show([...base.keys()].sort()) && show(n2) === show(['src/x.ts']), show(n2))
+    put('src/x.ts', 'pre-dirty x\n'); put('drafts/y.ts', 'leaked y\n')
+    const n3 = dirtyDelta(base, snap())
+    check('🔴 N3 새로 생긴 누출을 잡는다', show(n3) === show(['drafts/y.ts']), show(n3))
+    put('drafts/y.ts', 'base y\n'); put('src/x.ts', 'base x\n')
+    const n4 = dirtyDelta(base, snap())
+    check('🔴 N4 시험 전 변경을 HEAD 로 되돌린 것도 변화로 센다', show(n4) === show(['src/x.ts']), show(n4))
+  } catch (e) {
+    check('🔴 N1~N4 자기 시험이 끝까지 돌았다', false, String(e?.message ?? e).split('\n')[0])
+  } finally { fs.rmSync(R, { recursive: true, force: true }) }
+}
 
 /** 🔴 바깥 프로세스만 주입한다. drive 의 판단 로직은 그대로 돈다 */
 /**
@@ -1246,10 +1350,13 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
 
   // ── 반례 4 · hero 실패 → article-draft 원상복구 ──
   // ── 반례 5 · 후보 1 실패 → 후보 2 계속 ──
-  {
+  // 🔴 미커밋 변경이 있는 fixture 원고가 있으면 이 블록은 돌지 않는다(위 PRE_DIRTY_FIXTURE 가 FAIL 로 센다)
+  if (FIXTURES_WRITABLE) {
     const AR = await import('./magazine-auto-register.mjs')
     const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-atomic-'))
     const ledgerPath = path.join(T, 'q.json')
+    /** 🔴 회차 직전 추적 변경 — 아래 판정은 이것과의 차이만 본다 */
+    const dirtyBase = trackedDirtySnapshot()
     try {
       const target = `drafts/magazine/${SLUG}/article-draft.ts`
       const before = fs.readFileSync(target)
@@ -1300,19 +1407,19 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       check('🔴 반례5 첫 후보는 BLOCKED', results[0].verdict === 'BLOCKED', results[0].verdict)
       check('🔴 반례5 나머지 후보는 계속 진행했다', results.slice(1).every((x) => x.verdict === 'DONE'),
         results.map((x) => `${x.slug}:${x.verdict}`).join(' · '))
-      /** 🔴 회차가 건드릴 수 있는 곳만 본다 — 개발 중인 scripts/ 변경과 섞으면 뜻이 흐려진다 */
-      const dirty = spawnSyncTop('git', ['status', '--porcelain', '--untracked-files=no', '--', 'drafts', 'public', 'src'])
-      check('🔴 반례5 회차 뒤 원고·이미지·콘텐츠에 추적 변경 0건', dirty === '', dirty.slice(0, 160))
+      /**
+       * 🔴 회차가 건드릴 수 있는 곳만 본다 — 개발 중인 scripts/ 변경과 섞으면 뜻이 흐려진다.
+       * 🔴 회차 직전 스냅샷과의 차이만 센다 — 브랜치가 미리 고친 src/ 를 누출로 오인하지 않는다(내용 해시 비교라 같은 파일 재누출은 잡는다).
+       */
+      const dirty = dirtyDelta(dirtyBase, trackedDirtySnapshot())
+      check('🔴 반례5 회차 뒤 원고·이미지·콘텐츠에 새 추적 변경 0건', dirty.length === 0, dirty.join(' · ').slice(0, 160))
     } finally {
       /**
        * 🔴 **시험이 실패해도 작업 트리를 더럽히지 않는다.**
        *    되돌리기가 고장 난 상태로 이 시험을 돌리면 추적 파일이 바뀐 채 남는다.
        *    그건 이 시험이 잡으려는 바로 그 사고다 — 시험이 그 사고를 일으키면 안 된다.
        */
-      for (const sl of FIXTURE_SLUGS) {
-        const f = `drafts/magazine/${sl}/article-draft.ts`
-        try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
-      }
+      restoreFixtureDrafts()
       fs.rmSync(T, { recursive: true, force: true })
     }
   }
@@ -1392,7 +1499,8 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
   }
 
   // ── 반례 9 · 등록이 막혀도 네 산출물이 BEFORE 그대로 · 다음 후보 계속 ──
-  {
+  // 🔴 미커밋 변경이 있는 fixture 원고가 있으면 이 블록은 돌지 않는다(위 PRE_DIRTY_FIXTURE 가 FAIL 로 센다)
+  if (FIXTURES_WRITABLE) {
     const LOAD = await import('./lib/magazine-load.mjs')
     const HERO = await import('./lib/magazine-hero.mjs')
     const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-reg-atomic-'))
@@ -1438,11 +1546,10 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
     const restoreAll = () => {
       fs.writeFileSync(LOAD.ARTICLES_TS, before.articles)
       fs.writeFileSync(LOAD.QUEUE_TS, before.queue)
-      for (const sl of FIXTURE_SLUGS) {
-        const f = `drafts/magazine/${sl}/article-draft.ts`
-        try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
-      }
+      restoreFixtureDrafts()
     }
+    /** 🔴 회차 직전 추적 변경 — 9-A · 9-B 는 이것과의 차이만 본다 */
+    const dirtyBase = trackedDirtySnapshot()
     try {
       /** 9-A · 섞인 회차 — 첫 후보만 막힌다. **막힌 후보**가 아무것도 남기지 않아야 한다 */
       blockAt = (i) => i === 0
@@ -1459,8 +1566,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
        * 🔴 **성공한 후보의 변경은 남는 것이 정상이다.** 그 파일은 PR 에 실려 나간다.
        *    남으면 안 되는 것은 **막힌 후보**가 만든 중간 변경뿐이다.
        */
-      const dirtyMixed = spawnSyncTop('git', ['status', '--porcelain', '--untracked-files=no', '--', 'drafts', 'public', 'src'])
-        .split('\n').filter(Boolean).map((x) => x.trim().split(/\s+/).pop())
+      const dirtyMixed = dirtyDelta(dirtyBase, trackedDirtySnapshot())
       check('🔴 반례9-A 막힌 후보의 파일은 남지 않았다', !dirtyMixed.includes(target), dirtyMixed.join(' · ') || '(없음)')
       check('  반례9-A 남은 것은 성공한 후보의 것뿐이다',
         dirtyMixed.every((f) => FIXTURE_SLUGS.slice(1).some((sl) => f.includes(`/${sl}/`))), dirtyMixed.join(' · ') || '(없음)')
@@ -1471,8 +1577,8 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       const allBlocked = runRound()
       check('🔴 반례9-B 전부 BLOCKED', allBlocked.every((x) => x.verdict === 'BLOCKED'),
         allBlocked.map((x) => x.verdict).join(','))
-      const dirty = spawnSyncTop('git', ['status', '--porcelain', '--untracked-files=no', '--', 'drafts', 'public', 'src'])
-      check('🔴 반례9-B 최종 tracked diff 0', dirty === '', dirty.slice(0, 200))
+      const dirty = dirtyDelta(dirtyBase, trackedDirtySnapshot())
+      check('🔴 반례9-B 최종 tracked diff 0 (회차 직전 대비)', dirty.length === 0, dirty.join(' · ').slice(0, 200))
       restoreAll()
 
       /**
@@ -1897,53 +2003,53 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
     check('🔴 반례13 runner 사유에 실제 오류가 있다', /Timeout 60000ms exceeded/.test(rr.why ?? ''), rr.why)
 
     /** ② 🔴 drive 의 실제 재생성 경로로 같은 출력을 흘린다 — 최종 BLOCKED 사유를 본다 */
-    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-crash-'))
-    const ledgerPath = path.join(T, 'q.json')
-    try {
-      const calls = []
-      const deps = makeDeps({ qaFailsUntil: 99, ledgerPath, packetDir: path.join(T, 'packets'), calls })
-      // 🔴 `regenRunner` 를 주입하지 않는다 — **실제 webuiRegenRunner** 가 돌아야 한다
-      delete deps.regenRunner
-      const base = deps.run
-      deps.run = (f, a, o) => {
-        const name = path.basename(String(f))
-        if (name === 'magazine-webui-runner.mjs') {
-          calls.push('WEBUI')
-          return { code: 1, stdout: '', stderr: CRASH_STDERR, json: null }
+    // 🔴 ② · ③ 은 write:true 로 fixture 원고를 쓰고 되돌린다 — 미커밋 변경이 있는 fixture 원고가 있으면 돌지 않는다(위 PRE_DIRTY_FIXTURE 가 FAIL 로 센다)
+    if (FIXTURES_WRITABLE) {
+      const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-crash-'))
+      const ledgerPath = path.join(T, 'q.json')
+      try {
+        const calls = []
+        const deps = makeDeps({ qaFailsUntil: 99, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+        // 🔴 `regenRunner` 를 주입하지 않는다 — **실제 webuiRegenRunner** 가 돌아야 한다
+        delete deps.regenRunner
+        const base = deps.run
+        deps.run = (f, a, o) => {
+          const name = path.basename(String(f))
+          if (name === 'magazine-webui-runner.mjs') {
+            calls.push('WEBUI')
+            return { code: 1, stdout: '', stderr: CRASH_STDERR, json: null }
+          }
+          if (name === 'magazine-qa.mjs') { calls.push(name); return { code: 1, stdout: 'QA FAIL', stderr: '', json: null } }
+          return base(f, a, o)
         }
-        if (name === 'magazine-qa.mjs') { calls.push(name); return { code: 1, stdout: 'QA FAIL', stderr: '', json: null } }
-        return base(f, a, o)
-      }
-      const r = drive(SLUG, { write: true, pr: false, publishAt: '2027-04-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps)
-      check('  반례13 실제 runner 가 불렸다 (죽은 시험 아님)', calls.includes('WEBUI'), calls.join('>'))
-      check('🔴 반례13 drive 가 BLOCKED 로 끝난다', r.verdict === 'BLOCKED', r.verdict)
-      const msg = (r.blockedBy ?? []).map((b) => b.message).join(' | ')
-      check('🔴 반례13 최종 사유에 Node.js 꼬리가 없다', !/Node\.js v/.test(msg), msg.slice(0, 160))
-      check('🔴 반례13 최종 사유에 실제 오류가 남는다', /Timeout 60000ms exceeded/.test(msg), msg.slice(0, 160))
+        const r = drive(SLUG, { write: true, pr: false, publishAt: '2027-04-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps)
+        check('  반례13 실제 runner 가 불렸다 (죽은 시험 아님)', calls.includes('WEBUI'), calls.join('>'))
+        check('🔴 반례13 drive 가 BLOCKED 로 끝난다', r.verdict === 'BLOCKED', r.verdict)
+        const msg = (r.blockedBy ?? []).map((b) => b.message).join(' | ')
+        check('🔴 반례13 최종 사유에 Node.js 꼬리가 없다', !/Node\.js v/.test(msg), msg.slice(0, 160))
+        check('🔴 반례13 최종 사유에 실제 오류가 남는다', /Timeout 60000ms exceeded/.test(msg), msg.slice(0, 160))
 
-      /** ③ 🔴 장부 사유까지 같은 문장이 간다 */
-      const report = { blocked: [], done: [] }
-      READY.processCandidates({
-        write: true, wantPr: false, limit: 1, report,
-        quarantinePath: ledgerPath,
-        scanFn: () => ({
-          source: 'fixture', pool: 1,
-          eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
-          skipped: [], quarantined: [],
-        }),
-        driveFn: (sl, opts) => drive(sl, opts, deps),
-      })
-      const entry = readQuarantine(ledgerPath).store[SLUG]
-      const reasons = (entry?.reasons ?? []).join(' | ')
-      check('  반례13 장부에 사유가 남는다', reasons.length > 0, reasons.slice(0, 120))
-      check('🔴 반례13 장부 사유에도 Node.js 꼬리가 없다', !/Node\.js v/.test(reasons), reasons.slice(0, 160))
-      check('🔴 반례13 장부 사유에 실제 오류가 남는다', /Timeout 60000ms exceeded/.test(reasons), reasons.slice(0, 160))
-    } finally {
-      for (const sl of FIXTURE_SLUGS) {
-        const f = `drafts/magazine/${sl}/article-draft.ts`
-        try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
+        /** ③ 🔴 장부 사유까지 같은 문장이 간다 */
+        const report = { blocked: [], done: [] }
+        READY.processCandidates({
+          write: true, wantPr: false, limit: 1, report,
+          quarantinePath: ledgerPath,
+          scanFn: () => ({
+            source: 'fixture', pool: 1,
+            eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
+            skipped: [], quarantined: [],
+          }),
+          driveFn: (sl, opts) => drive(sl, opts, deps),
+        })
+        const entry = readQuarantine(ledgerPath).store[SLUG]
+        const reasons = (entry?.reasons ?? []).join(' | ')
+        check('  반례13 장부에 사유가 남는다', reasons.length > 0, reasons.slice(0, 120))
+        check('🔴 반례13 장부 사유에도 Node.js 꼬리가 없다', !/Node\.js v/.test(reasons), reasons.slice(0, 160))
+        check('🔴 반례13 장부 사유에 실제 오류가 남는다', /Timeout 60000ms exceeded/.test(reasons), reasons.slice(0, 160))
+      } finally {
+        restoreFixtureDrafts()
+        fs.rmSync(T, { recursive: true, force: true })
       }
-      fs.rmSync(T, { recursive: true, force: true })
     }
   }
 

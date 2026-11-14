@@ -54,19 +54,71 @@ export async function curate({ repo, keep }) {
  * 의료 필수 클러스터는 뺀다 — 가짜 원고가 진료 권고 문장을 지어내 QA 를 맞추지 않게 (실제 QA 정본 집합).
  */
 export async function pickTargets({ repo, date, selectable = 1, others = 0 }) {
-  const L = await imp(repo, 'scripts/lib/magazine-load.mjs')
-  const V = await imp(repo, 'scripts/lib/magazine-validation-profile.mjs')
-  const P = await imp(repo, 'scripts/magazine-producer-plan.mjs')
-  const { MEDICAL_REQUIRED } = await imp(repo, 'scripts/lib/magazine-qa-constants.mjs')
-  const queue = L.parseQueueSource(readFileSync(join(repo, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8'))
-  const articles = L.parseArticlesSource(readFileSync(join(repo, 'src', 'content', 'magazine', 'articles.ts'), 'utf8'))
-  const ok = queue.filter((i) => V.isAutoLaneEligible(i).ok && !MEDICAL_REQUIRED.has(i.cluster)).sort((a, b) => a.day - b.day)
-  const { selected } = P.selectItems({ queue: ok, articles, today: date, produceCount: ok.length, draftExists: () => false })
-  const sel = selected.map((x) => ok.find((i) => i.slug === x.slug)).filter(Boolean).slice(0, selectable)
+  const { ok, ranked } = await rankTargets({ repo, date })
+  const sel = ranked.slice(0, selectable)
   if (sel.length < selectable) throw new Error(`${date} 에 실제로 선정될 행이 ${selectable}개 미만이다 (${sel.length})`)
   const rest = ok.filter((i) => !sel.includes(i)).slice(0, others)
   if (rest.length < others) throw new Error(`추가 대상 행이 ${others}개 미만이다 (${rest.length})`)
   return [...sel, ...rest]
+}
+
+/**
+ * 🔴 **그 날짜의 실제 producer 선정 순위** (2026-11-14 · S1 달력 경계 수리) — `pickTargets` 와 같은 한 경로.
+ *    자격(isAutoLaneEligible · 의료 필수 제외) → 실제 `selectItems` 의 순서(SEASONAL 마감 순 → day)를 그대로 돌려준다.
+ *    `code` 는 판정 코드를 읽을 저장소, `queueSrc`·`articlesSrc` 는 주면 그 원문을, 없으면 `repo` 의 파일을 읽는다
+ *    (순수 검사가 파일 없이 같은 경로를 돌린다). 순위를 다시 흉내 내지 않는다.
+ * @returns {Promise<{ ok: object[], ranked: object[] }>}
+ */
+export async function rankTargets({ repo, date, code = repo, queueSrc = null, articlesSrc = null }) {
+  const L = await imp(code, 'scripts/lib/magazine-load.mjs')
+  const V = await imp(code, 'scripts/lib/magazine-validation-profile.mjs')
+  const P = await imp(code, 'scripts/magazine-producer-plan.mjs')
+  const { MEDICAL_REQUIRED } = await imp(code, 'scripts/lib/magazine-qa-constants.mjs')
+  const queue = L.parseQueueSource(queueSrc ?? readFileSync(join(repo, 'drafts', 'magazine', 'topic-queue.ts'), 'utf8'))
+  const articles = L.parseArticlesSource(articlesSrc ?? readFileSync(join(repo, 'src', 'content', 'magazine', 'articles.ts'), 'utf8'))
+  const ok = queue.filter((i) => V.isAutoLaneEligible(i).ok && !MEDICAL_REQUIRED.has(i.cluster)).sort((a, b) => a.day - b.day)
+  const { selected } = P.selectItems({ queue: ok, articles, today: date, produceCount: ok.length, draftExists: () => false })
+  return { ok, ranked: selected.map((x) => ok.find((i) => i.slug === x.slug)).filter(Boolean) }
+}
+
+/**
+ * 🔴 **정상 후보가 그 날짜에 1순위가 되도록 — sandbox 사본 큐에서만 앞선 행을 뺀다** (2026-11-14 · S1 달력 경계 수리).
+ *    운영 선정 함수와 운영 큐는 그대로다. 실제 순위에서 대상보다 **앞선 행만** 빼고(계절 행이 SEASONAL 우선 규칙으로
+ *    앞서는 날 · 낮은 day 가 새로 생긴 날), 뺀 뒤 순위를 같은 경로로 다시 계산해 대상이 1순위인지 확인한다.
+ *    대상이 실제 선정 경로에 아예 없으면(자격·창 밖) 숨기지 않고 거부한다.
+ * @returns {Promise<{ date:string, target:string, selectedBefore:string|null, removed:{slug:string,day:number,contentType:string,publishWindow:object|null,rank:number,reason:string}[], selectedAfter:string|null, queueSrc:string }>}
+ */
+export async function curateTargetFirst({ code, date, target, queueSrc, articlesSrc }) {
+  const QL = await imp(code, 'scripts/lib/magazine-queue-lock.mjs')
+  const before = await rankTargets({ code, date, queueSrc, articlesSrc })
+  const at = before.ranked.findIndex((i) => i.slug === target)
+  if (at < 0) throw new Error(`${date} 에 대상 ${target} 이 실제 선정 경로에 없다 (자격·창 밖) — 앞선 행을 빼서 맞추지 않는다`)
+  const ahead = before.ranked.slice(0, at)
+  let next = queueSrc
+  for (const q of ahead) next = QL.removeQueueDay(next, q.day) ?? (() => { throw new Error(`sandbox 큐에서 ${q.slug} 행을 빼지 못했다`) })()
+  const after = await rankTargets({ code, date, queueSrc: next, articlesSrc })
+  if (after.ranked[0]?.slug !== target) throw new Error(`${date} 앞선 행을 뺀 뒤에도 대상 ${target} 이 1순위가 아니다 (${after.ranked[0]?.slug ?? '없음'})`)
+  return {
+    date, target, selectedBefore: before.ranked[0]?.slug ?? null,
+    removed: ahead.map((q, i) => ({ slug: q.slug, day: q.day, contentType: q.contentType ?? null, publishWindow: q.publishWindow ?? null, rank: i + 1,
+      reason: `${date} 실제 선정 순위 ${i + 1} — 대상(순위 ${at + 1})보다 앞선다${q.contentType === 'SEASONAL' ? ' (SEASONAL 우선)' : ''}` })),
+    selectedAfter: after.ranked[0]?.slug ?? null, queueSrc: next,
+  }
+}
+
+/** S1 정리 증거 판정 — 그 회차 날짜 · 후 1순위 = 대상 · 뺀 행은 전 순위 앞쪽부터 빈틈없이 · 이유에 날짜 (orchestrator·checker 공용) */
+export function s1CurationOk(prepared, target, date) {
+  const c = prepared?.curation
+  if (!c || c.date !== date || c.target !== target || c.selectedAfter !== target || !Array.isArray(c.removed)) return false
+  if (c.selectedBefore === target ? c.removed.length !== 0 : c.removed[0]?.slug !== c.selectedBefore) return false
+  return c.removed.every((r, i) => r.rank === i + 1 && r.slug !== target && typeof r.reason === 'string' && r.reason.includes(date))
+}
+
+/** S1 회차 격리 증거 판정 — 실제 isolateDirectRunDay 의 기록 모양 · 그 날짜 · 옮겼으면 목적지·파일, 아니면 없음 */
+export function s1IsolationOk(prepared, date) {
+  const r = prepared?.isolatedRun
+  if (!r || r.date !== date || typeof r.moved !== 'boolean' || !Array.isArray(r.otherDates) || !Array.isArray(r.files) || r.otherDates.includes(date)) return false
+  return r.moved ? typeof r.dest === 'string' && r.files.length > 0 : r.dest === null && r.files.length === 0
 }
 
 /** hero 재사용 자리 — 저장소에 있는 합격 hero 를 이 글의 자리로 (이미지 생성 경로는 rehearsal 범위 밖) */

@@ -336,7 +336,7 @@ export function runBootstrap(options) {
         bundle: built.text, controlText, articlesText: productText(ARTICLES_REL),
         // legacy 가 남아 있는 동안 adapter 는 켜져 있다 — 파일이 없으면 null 을 넘겨 fail-closed 로 판정받는다
         legacyQueue: { active: true, text: existsSync(queueAbs) ? readFileSync(queueAbs, 'utf8') : null },
-        nowMs: ms, inFlightPlanIds: [], withdrawnPlanIds: [],
+        nowMs: ms, inFlightIntentIds: [], withdrawnPlanIds: [],
       }
       const admission = admitContentPlans(admissionInput)
       summary.admission = {

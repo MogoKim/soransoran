@@ -42,6 +42,7 @@ import type {
 } from '@/content/magazine/graph/types'
 import type { MagazineArticle } from '@/content/magazine/types'
 import { getAllMagazineArticles, getRelatedMagazineArticles } from '@/lib/magazine'
+import { NO_RELEASE_BINDING, provenanceOverlay, type ReleaseBinding } from '@/lib/magazine-provenance-rule.mjs'
 
 /**
  * 🔴 제품에 **실제로 붙어 있는** 표면의 정본이다.
@@ -346,21 +347,55 @@ function fallback(
   }
 }
 
+type GraphMapping = MagazineGraph['mappings'][number]
+
+/**
+ * 유효 mapping — canonical graph mapping 에 **공개된** vNext 글의 출처 신원(slug → release.intentId)을 더한다 (S3 P1).
+ *
+ * 🔴 무엇을 더할지는 `magazine-provenance-rule.mjs` 의 `provenanceOverlay` 하나가 정한다 — admission 도 같은 함수를 쓴다.
+ *    canonical 우선(같은 slug · 같은 intent) · 출처 intent 중복 · rollback · 정확한 컴파일 plan 결속이 전부 거기 있다.
+ * 🔴 출처는 신원만 준다. edge · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위 · 3+1 은 전부 graph.edges 가 정한다.
+ * 🔴 graph 가 intent 목록을 주지 않으면 출처를 하나도 쓰지 않는다(모르면 더하지 않는다).
+ * 🔴 S3 P1 운영 경로는 결속이 없다(`NO_RELEASE_BINDING`) — 출처는 켜지지 않고 결과는 canonical mapping 그대로다.
+ *    버린 출처는 그 글이 폴백 규칙대로 그려질 뿐이다(비차단) — rollback 이 공개 서비스를 막지 않는다.
+ */
+export function effectiveGraphMappings(
+  graph: Pick<MagazineGraph, 'mappings'> & { intents?: MagazineGraph['intents'] },
+  published: readonly MagazineArticle[],
+  binding: ReleaseBinding | null = NO_RELEASE_BINDING,
+): readonly GraphMapping[] {
+  if (!graph.intents) return graph.mappings
+  const rows = published.flatMap((a) => (a.release ? [{ slug: a.slug, release: a.release }] : []))
+  if (rows.length === 0) return graph.mappings
+  const overlay = provenanceOverlay({
+    canonical: graph.mappings,
+    graphIntentIds: graph.intents.map((i) => i.id),
+    rows,
+    binding,
+  })
+  if (overlay.length === 0) return graph.mappings
+  return [...graph.mappings, ...overlay.map((o) => ({ intent: o.intent, slug: o.slug, cluster: null }))]
+}
+
 /**
  * 그래프 하나로 이 글의 하단 목록을 만든다 — 켜짐 · 버전 · cluster 판정이 끝난 뒤의 몫.
  *
  * 🔴 그래프 · 공개 글 · 보충 재료를 인자로 받는다. resolver 는 운영 GRAPH 와 공개 목록을 넘기고,
  *    검사는 같은 함수에 합성 그래프를 넘겨 edge 단위 계약을 **실제 조립 결과로** 본다.
+ * 🔴 vNext 출처 overlay(effectiveGraphMappings)는 여기 안에서만 쓴다 — 켜짐 · 버전 · cluster 관문 뒤다.
  * @param published 공개 관문을 거친 글 전부 (같은 now 로 만든 것)
  * @param legacy    예전 방식 연관 글 — 그래프 후보가 있을 때만 부른다
+ * @param binding   출처 결속 — 운영 호출은 넘기지 않는다(S3 P1 = NO_RELEASE_BINDING · 출처 비활성). 검사만 합성 결속을 넘긴다
  */
 export function resolveFromGraph(
   article: MagazineArticle,
-  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'>,
+  graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'> & { intents?: MagazineGraph['intents'] },
   published: readonly MagazineArticle[],
   legacy: () => readonly MagazineArticle[],
+  binding: ReleaseBinding | null = NO_RELEASE_BINDING,
 ): { resolved: ResolvedRelatedMagazine } | { reason: 'NO_MAPPING' | 'EDITORIAL_NON_SEARCH' | 'NO_RESULT' } {
-  const fromIntents = new Set(graph.mappings.filter((m) => m.slug === article.slug).map((m) => m.intent))
+  const mappings = effectiveGraphMappings(graph, published, binding)
+  const fromIntents = new Set(mappings.filter((m) => m.slug === article.slug).map((m) => m.intent))
   if (fromIntents.size === 0) {
     // 🔴 검색 근거 없음이 증명된 글과 아직 분류되지 않은 글을 폴백 사유로 구분한다. 화면은 같은 폴백이다
     const editorial = (graph.participation ?? []).some((p) => p.slug === article.slug && p.state === 'EDITORIAL_NON_SEARCH'
@@ -369,7 +404,7 @@ export function resolveFromGraph(
   }
 
   const { direct, discovery } = selectGraphPicks(
-    graph,
+    { edges: graph.edges, mappings },
     fromIntents,
     new Map(published.map((a) => [a.slug, a])),
     article.slug,

@@ -87,6 +87,11 @@ const MUTATIONS = [
   { name: '격리 G8 검사가 임시 잠금 폴더를 쓰지 않음', check: 'g8', edits: [{ file: F.g8check, find: 'process.env.SORAN_MAGAZINE_QUEUE_LOCK_DIR = TEST_LOCK_DIR\n', replace: '' }] },
   { name: '격리 잠금 모듈의 시험 모드 운영 위치 거부 제거', check: 'g8', edits: [{ file: F.qlock, find: "  if (ops.includes(dir)) throw blocked(`시험 모드에서 운영 queue-locks 에 닿으려 했다 — 잠금 0: ${dir}`)\n", replace: '' }] },
   { name: '격리 m3a 검사가 임시 잠금 폴더를 쓰지 않음', check: 'm3a', edits: [{ file: F.m3acheck, find: 'setQueueLockDirForTest(M3A_LOCK_DIR)\n', replace: '' }] },
+  // ── m3a 추적 변경 delta (2026-11-13) — 기준 대비 차이만 보되 새 누출은 숨기지 않는다 (자기 시험 N2 · N3 · N4) ──
+  { name: 'm3a delta 가 경로만 비교 (이미 바뀐 파일의 재누출을 놓침)', check: 'm3a', edits: [{ file: F.m3acheck,
+    find: '    if (!b || !a || b.code !== a.code || b.sha !== a.sha) changed.push(f)', replace: '    if (!b || !a || b.code !== a.code) changed.push(f)' }] },
+  { name: 'm3a delta 가 늘 비어 있음 (모든 누출을 숨김)', check: 'm3a', edits: [{ file: F.m3acheck,
+    find: '  return changed.sort((x, y) => (x < y ? -1 : x > y ? 1 : 0))', replace: '  return []' }] },
   // ── 재검토 P1 — 운영 큐 잠금 위치는 고정 하나 ──
   { name: 'P1 운영 모드 임시 폴더 주입 허용 (8a85f18 판 — writer 마다 다른 잠금)', edits: [{ file: F.qlock,
     find: "    if (injected) throw blocked('SORAN_MAGAZINE_QUEUE_LOCK_DIR 는 SORAN_MAGAZINE_TEST_MODE=1 에서만 쓴다 — 운영 writer 는 고정 잠금 위치 하나만 쓴다')",

@@ -84,6 +84,8 @@ function baseWorld() {
 const RESOLVER = `export const IMPLEMENTED_SURFACES = [\n  'CTA_END',\n  'FOOTER_NEXT',\n  'FOOTER_SIBLING',\n  'FOOTER_BRIDGE',\n] as const
 export const FOOTER_SURFACES = ['FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE'] as const
 export const MAGAZINE_RELATION_TYPES = [\n  'PREREQUISITE',\n  'NEXT_QUESTION',\n  'SIBLING',\n  'SERIES',\n  'BRIDGE',\n  'ACTION',\n  'COMMUNITY',\n] as const\n`
+/** 합성 출처 overlay 규칙(S3 P1 수리) — 제품 신원 파일이다. 바이트가 바뀌면 readiness 제품 해시가 바뀌어야 한다 */
+const PROVENANCE_RULE = 'export const NO_RELEASE_BINDING = null\nexport function provenanceOverlay() { return [] }\n'
 const controlText = ({ enabled = true, clusters = ['fam', 'rel'], bridge = true, tripped = false } = {}) => `export const CONTROL: MagazineGraphControl = {
   graphVersion: 'g-00000000-000000',
   enabled: ${enabled},
@@ -110,7 +112,7 @@ const inputTextsOf = (w) => ({
 const EFF = '2026-10-15T13:00:00+09:00'
 const GEN = '2026-10-15T04:43:55.080Z'
 const build = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, generatedAt = GEN, articles = ARTICLES } = {}) =>
-  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles },
+  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control, articles },
     admissionTexts: admission, effectiveAt, generatedAt })
 const row = (b, id) => b.readiness.rows.find((r) => r.intentId === id)
 
@@ -161,7 +163,7 @@ test('반례2b — 시각 형식이 모호하면 거부(벽시계로 대신하�
 test('반례2c — 입력 파일이 없으면 다른 위치로 대신 읽지 않고 INPUT_MISSING', () => {
   const t = inputTextsOf(baseWorld()); delete t['assets-queue.jsonl']
   let code = null
-  try { lib.buildAll({ inputTexts: t, productTexts: { resolver: RESOLVER, control: controlText(), articles: ARTICLES }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
+  try { lib.buildAll({ inputTexts: t, productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control: controlText(), articles: ARTICLES }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
   eq(code, 'INPUT_MISSING', '누락 입력')
 })
 
@@ -176,7 +178,7 @@ const treeHash = (root) => {
 const input1 = join(TMP, 'in1'), input2 = join(TMP, 'deep/other/in2'), product = join(TMP, 'product'), adm = join(TMP, 'adm')
 writeTree(input1, inputTextsOf(baseWorld()))
 writeTree(input2, inputTextsOf(baseWorld()))
-writeTree(product, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': ARTICLES,
+writeTree(product, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/lib/magazine-provenance-rule.mjs': PROVENANCE_RULE, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': ARTICLES,
   'src/content/magazine/graph/current.ts': "export { GRAPH, EXPORT_HASH } from './g-00000000-000000'\n",
   '.git/HEAD': 'ref: refs/heads/main\n', 'scripts/tool.mjs': '// x\n', 'docs/note.md': '# n\n' })
 writeTree(adm, { 'contract/m3-slug-manifest.json': ADMISSION.slugManifest, 'contract/m3-state.jsonl': '' })
@@ -249,7 +251,7 @@ test('반례6c — 생산 최소(2+1)와 표시 목표(3+1)를 섞지 않는다:
   w.published.push({ slug: 'p3b', assetState: 'LIVE' })
   w.graph.push(edge('E-0014', 'I-X', 'I-Q', 'PREREQUISITE', 'FOOTER_SIBLING'))
   const arts = ARTICLES.replace('"w": {', '"p3b": {"title":"t","cluster":"fam","publishedAt":"2026-10-07","status":"SCHEDULED","publishAt":"2026-10-07T10:30:00+09:00"},\n  "w": {')
-  const b = lib.buildAll({ inputTexts: inputTextsOf(w), productTexts: { resolver: RESOLVER, control: controlText(), articles: arts }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN })
+  const b = lib.buildAll({ inputTexts: inputTextsOf(w), productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control: controlText(), articles: arts }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN })
   const x = row(b, 'I-X')
   eq([x.direct.count, x.display.direct.length, x.status], [4, 3, 'GRAPH_READY'], 'X')
   eq(lib.READINESS_POLICY, { productionMinimum: { direct: 2, discovery: 1 }, displayTarget: { directMax: 3, discovery: 1 } }, '정책 숫자')
@@ -652,7 +654,7 @@ test('반례19i — build 는 drift 면 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 멈추
   const r1 = rejectWhy(() => build({ world: w, articles })), r2 = rejectWhy(() => build({ world: w, articles }))
   ok(r1?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r1.why.includes('qpub'), JSON.stringify(r1)); eq(r2, r1, '반복 동일')
   const inDrift = join(TMP, 'in-drift'); writeTree(inDrift, inputTextsOf(w))
-  const prodDrift = join(TMP, 'product-drift'); writeTree(prodDrift, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': articles })
+  const prodDrift = join(TMP, 'product-drift'); writeTree(prodDrift, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/lib/magazine-provenance-rule.mjs': PROVENANCE_RULE, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': articles })
   const before = [treeHash(inDrift), treeHash(prodDrift)]
   const out = join(TMP, 'out-drift')
   let code = null, json = null
@@ -840,7 +842,7 @@ const canonicalJson = (v) => Array.isArray(v) ? `[${v.map(canonicalJson).join(',
   : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
     : JSON.stringify(v)
 const compute = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, articles = ARTICLES, extra = {} } = {}) =>
-  lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles }, admissionTexts: admission, effectiveAt, ...extra })
+  lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control, articles }, admissionTexts: admission, effectiveAt, ...extra })
 test('반례24a — buildAll 의 readiness · 해시 · graph 신원은 computeGraphAndReadiness 와 같다', () => {
   const b = build(), c = compute()
   eq(canonicalJson(b.readiness), canonicalJson(c.readiness), 'readiness 객체')
@@ -894,15 +896,29 @@ test('반례24e — computeGraphAndReadiness 는 generatedAt · 벽시계를 읽
 })
 test('반례24f — readiness.inputs 는 graph 신원 · 제품 3파일 · admission · effectiveAt 를 정확히 싣는다', () => {
   const c = compute()
-  const products = { resolver: RESOLVER, control: controlText(), articles: ARTICLES }
+  const products = { resolver: RESOLVER, control: controlText(), articles: ARTICLES, provenanceRule: PROVENANCE_RULE }
   eq(c.readiness.inputs, {
     graphVersion: c.graphVersion, graphCombined: c.contentHash.combined, graphSemanticHash: c.graphSemanticHash,
-    productHashes: { resolver: sha(products.resolver), control: sha(products.control), articles: sha(products.articles) },
+    productHashes: { resolver: sha(products.resolver), control: sha(products.control), articles: sha(products.articles), provenanceRule: sha(products.provenanceRule) },
     admissionHashes: { 'contract/m3-slug-manifest.json': sha(ADMISSION.slugManifest), 'contract/m3-state.jsonl': sha(ADMISSION.ledger) },
     effectiveAt: EFF,
   }, 'inputs')
   ok(!('semanticHash' in c.readiness), 'graph semanticHash 를 readiness 최상위에 다시 둔다')
   eq(compute({ admission: null }).readiness.inputs.admissionHashes, 'UNREAD', 'admission 미판독')
+})
+test('반례24h — 출처 규칙 바이트만 바뀌어도 제품 신원(readiness productHashes · readinessHash)이 바뀐다 · 규칙이 없으면 멈춘다 (S3 P1 수리)', () => {
+  ok(lib.PRODUCT_FILES.provenanceRule === 'src/lib/magazine-provenance-rule.mjs', '출처 규칙이 제품 신원 파일 목록에 없다')
+  const at = (rule) => lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(baseWorld()),
+    productTexts: { resolver: RESOLVER, provenanceRule: rule, control: controlText(), articles: ARTICLES }, admissionTexts: ADMISSION, effectiveAt: EFF })
+  const a = at(PROVENANCE_RULE), b = at(`${PROVENANCE_RULE}// canonical 우선 제거\n`)
+  ok(a.readiness.inputs.productHashes.provenanceRule !== b.readiness.inputs.productHashes.provenanceRule, '규칙만 바뀐 제품의 productHashes 가 같다')
+  ok(a.readinessHash !== b.readinessHash && a.readinessFileSha256 !== b.readinessFileSha256, '규칙만 바뀐 제품의 readiness 신원이 같다 — 후보가 표류를 못 본다')
+  eq([a.graphVersion, a.graphSemanticHash], [b.graphVersion, b.graphSemanticHash], '규칙은 graph 내용이 아니다 — graph 신원은 그대로')
+  for (const bad of [undefined, null]) {
+    let code = null
+    try { lib.parseProductTexts({ resolver: RESOLVER, control: controlText(), articles: ARTICLES, provenanceRule: bad }) } catch (e) { code = e.code }
+    eq(code, 'PRODUCT_TEXT_MISSING', `규칙 텍스트 ${bad} 를 빈 문자열 해시로 넘겼다`)
+  }
 })
 test('반례24g — buildAll 은 계산을 computeGraphAndReadiness 한 번에 맡긴다 · 그 함수 본문은 시각 · 파일을 읽지 않는다', () => {
   const src = readFileSync(LIB, 'utf8')

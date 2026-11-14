@@ -9,7 +9,7 @@
  *   node scripts/magazine-rehearsal-check.mjs                     전체 (S1~S14 + S8B · S14U · S14B + DIRECT_E2E S15 계열 + S1 반복)
  *   node scripts/magazine-rehearsal-check.mjs --scenario S1,S4    고른 시나리오만 (변이 시험이 쓴다)
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -22,7 +22,8 @@ import { judgeBriefFormatContract } from './lib/magazine-manuscript-format.mjs'
 import { parseReview } from './magazine-brief-auto.mjs'
 import { parseQueueSource } from './lib/magazine-load.mjs'
 import { fixtureQueue } from './fixtures/magazine-format-contract/repair-queue-rows.mjs'
-import { directFixture } from './lib/magazine-rehearsal-direct.mjs'
+import { directFixture, isolateDirectRunDay } from './lib/magazine-rehearsal-direct.mjs'
+import { curateTargetFirst, rankTargets, s1CurationOk, s1IsolationOk } from './lib/magazine-rehearsal-scenarios.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
@@ -39,6 +40,11 @@ const check = (name, ok, detail = '') => {
   else { fail++; console.log(`  ❌ ${name}${detail ? ` — ${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 400)}` : ''}`) }
 }
 const finish = () => { console.log(`\n${fail ? '🔴' : '✅'} 리허설 검사 ${pass}/${pass + fail}\n`); process.exitCode = fail ? 1 : 0 }
+const stage = (s, name) => s?.stages.find((x) => x.name === name) ?? null
+const logText = (s, name) => { const st = stage(s, name); try { return st && s.root ? readFileSync(join(s.root, st.log), 'utf8') : '' } catch { return '' } }
+/** 🔴 준비 실패 시나리오의 증거 모양 — orchestrator 의 runScenario 준비 실패 반환과 같은 빈 값 (모양 결손을 FAIL 로 센 뒤에만 채운다) */
+const EMPTY_EVIDENCE = () => ({ sends: {}, claude: [], prs: [], mergeCalls: [], deployments: [], registered: [], slack: [], leftovers: [], runFiles: {}, hero: {}, regenTyped: [],
+  boundary: { violations: [], networkAttempts: 0, spawnsRefused: 0, fixtureRefusals: [], guardedProcesses: 0 } })
 
 // ── 금융 뼈대 fixture provenance (2026-10-19) — 쓰기 전에 거부되는가 (rehearsal 을 돌리기 전 · 시나리오 선택과 무관) ──
 {
@@ -92,6 +98,73 @@ const finish = () => { console.log(`\n${fail ? '🔴' : '✅'} 리허설 검사 
   check('STANDARD 뼈대 — 출처가 아닌 대상은 정상 뼈대를 받지 않는다 (null → 실패 경로 전용)', standardSkeleton({ repo: ROOT, item: { slug: 'dinner-change-two-weeks', title: '저녁 식사를 바꿔 본 2주' } }) === null)
 }
 
+// ── S1 달력 경계 (2026-11-14 · 2026-11-15 year-end-gathering-reluctance 가 fixture 를 밀어낸 사고) ──
+//    실제 선정 경로(rankTargets → 실제 selectItems)에 합성 큐(금융 fixture 행 + 11-15~12-31 창의 계절 행)를 넣어
+//    날짜 4개에서 ① 정리 전 운영 선정은 SEASONAL 우선 그대로 ② 정리 후 1순위는 fixture · 뺀 행은 앞선 행만 임을 본다.
+//    합성 큐라 운영 큐가 바뀌어도 결과가 같다 (시험 자체가 달력 시한폭탄이 되지 않는다).
+{
+  const ROOT = dirname(HERE)
+  const fx = financialSkeleton(ROOT)
+  const PROBE = 'rehearsal-seasonal-probe'
+  const seasonal = ['  {', '    day: 90,', `    slug: '${PROBE}',`, "    title: '연말 모임 시험 행',", "    contentType: 'SEASONAL',", "    intent: '방법',", "    cluster: 'relationship',",
+    "    target: '40대 중반~60대 중반',", "    validationProfile: 'STANDARD',", "    riskLevel: 'LOW',", "    reviewMode: 'SUMMARY_ONLY',", "    imageMode: 'OPTIONAL',", '    autoEligible: true,', "    season: '겨울',", "    calendarEvent: '송년',",
+    "    publishWindow: { after: '2026-11-15', before: '2026-12-31' },", "    ctaBoard: '/community/free',", "    internalLinks: ['avoiding-gatherings'],", "    whyNow: '시험',", "    notes: '시험',", '  },', ''].join('\n')
+  const queueSrc = `export const TOPIC_QUEUE = [\n${fx.queueBlock}${seasonal}]\n`
+  const articlesSrc = 'const MAGAZINE_ARTICLE_RECORD = {\n}\n'
+  const CASES = [['2026-11-14', fx.source.slug, []], ['2026-11-15', PROBE, [PROBE]], ['2026-12-31', PROBE, [PROBE]], ['2027-01-01', fx.source.slug, []]]
+  for (const [date, top, removed] of CASES) {
+    try {
+      const raw = await rankTargets({ code: ROOT, date, queueSrc, articlesSrc })
+      check(`S1 달력 경계 ${date} — 정리 전 운영 선정 1순위 = ${top}${top === PROBE ? ' (SEASONAL 우선 규칙 그대로)' : ''}`, raw.ranked[0]?.slug === top, raw.ranked.map((i) => i.slug))
+      const c = await curateTargetFirst({ code: ROOT, date, target: fx.source.slug, queueSrc, articlesSrc })
+      check(`S1 달력 경계 ${date} — 정리 후 1순위 = fixture · 뺀 행 [${removed.join(',') || '없음'}] · 이유·순위 증거`,
+        c.selectedBefore === top && c.selectedAfter === fx.source.slug && JSON.stringify(c.removed.map((r) => r.slug)) === JSON.stringify(removed) && s1CurationOk({ curation: c }, fx.source.slug, date),
+        { before: c.selectedBefore, after: c.selectedAfter, removed: c.removed })
+      const again = await rankTargets({ code: ROOT, date, queueSrc, articlesSrc })
+      check(`S1 달력 경계 ${date} — 정리는 사본만 바꾼다 (같은 원문의 운영 선정 결과 그대로)`, again.ranked[0]?.slug === top && (c.queueSrc !== queueSrc) === (removed.length > 0))
+    } catch (e) { check(`S1 달력 경계 ${date} — 예외 없이 판정`, false, String(e?.message ?? e)) }
+  }
+  // 반례 — 대상이 실제 선정 경로에 없으면(이미 등록된 slug) 앞선 행을 빼서 억지로 맞추지 않고 거부한다
+  let refused = false
+  try { await curateTargetFirst({ code: ROOT, date: '2026-11-15', target: fx.source.slug, queueSrc, articlesSrc: `const MAGAZINE_ARTICLE_RECORD = {\n  '${fx.source.slug}': {\n    title: 'x',\n  },\n}\n` }) } catch { refused = true }
+  check('S1 달력 경계 반례 — 대상이 실제 선정 경로에 없으면 거부 (숨기지 않는다)', refused)
+  // 증거 판정 반례 — 계절 행이 앞섰는데 뺀 행 기록이 비면 · 격리 기록이 실제 함수 모양이 아니면 거부
+  try {
+    const c15 = await curateTargetFirst({ code: ROOT, date: '2026-11-15', target: fx.source.slug, queueSrc, articlesSrc })
+    check('S1 정리 증거 반례 — 뺀 행 기록을 비우면 거부', !s1CurationOk({ curation: { ...c15, removed: [] } }, fx.source.slug, '2026-11-15'))
+    check('S1 정리 증거 반례 — 다른 회차 날짜 기록이면 거부', !s1CurationOk({ curation: c15 }, fx.source.slug, '2026-11-16'))
+  } catch (e) { check('S1 정리 증거 반례 — 예외 없이 판정', false, String(e?.message ?? e)) }
+  check('S1 격리 증거 반례 — { moved: false } 만 있으면 거부', !s1IsolationOk({ isolatedRun: { moved: false } }, '2026-11-15'))
+  // 격리 의미 — sandbox 모양 임시 트리에서 실제 isolateDirectRunDay 가 그 날짜 COMPLETED run 만 옮긴다
+  const iso = mkdtempSync(join(tmpdir(), 'rehearsal-check-iso-'))
+  try {
+    const repo = join(iso, 'repo')
+    for (const d of ['2026-11-14', '2026-11-15']) {
+      mkdirSync(join(repo, 'drafts', 'magazine', '_runs', d), { recursive: true })
+      writeFileSync(join(repo, 'drafts', 'magazine', '_runs', d, 'run.json'), JSON.stringify({ schemaVersion: 'producer-run/2', date: d, status: 'COMPLETED' }))
+    }
+    const r = isolateDirectRunDay(repo, '2026-11-15')
+    check('S1 격리 의미 — 그 날짜 COMPLETED run 만 sandbox 밖(isolated-runs)으로 · 다른 날짜 그대로 · 기록 판정 통과',
+      r.moved && r.staleCompleted && !existsSync(join(repo, 'drafts', 'magazine', '_runs', '2026-11-15')) && existsSync(join(repo, 'drafts', 'magazine', '_runs', '2026-11-14', 'run.json')) && s1IsolationOk({ isolatedRun: r }, '2026-11-15'), r)
+    const none = isolateDirectRunDay(repo, '2026-11-16')
+    check('S1 격리 의미 — 그 날짜 run 이 없으면 옮기지 않고 그 모양도 판정 통과', !none.moved && s1IsolationOk({ isolatedRun: none }, '2026-11-16'), none)
+  } finally { rmSync(iso, { recursive: true, force: true }) }
+}
+
+// ── 판정 가드 자체 시험 (2026-11-14) — 준비 실패 보고서(prepared · extras 없음 · evidence 없음)를 같은 판정 함수에 넣는다 ──
+//    TypeError 없이 시나리오마다 구조화된 FAIL 이 나와야 하고, PASS 가 하나도 없어야 한다
+{
+  const JUDGED = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S11']
+  const synth = Object.fromEntries(JUDGED.map((id, i) => [id, { id, ok: false, root: null, date: '2026-11-15', stages: [], checks: [{ id: `${id} 자료 준비`, ok: false, detail: '합성 준비 실패' }],
+    ...(i === 0 ? {} : { evidence: EMPTY_EVIDENCE() }) }]))
+  const got = { pass: 0, fails: [] }
+  const local = (name, ok) => { if (ok) got.pass++; else got.fails.push(name) }
+  let threw = null
+  try { await judgeScenarios(synth, { date: '2026-11-15', scenarios: Object.values(synth) }, local) } catch (e) { threw = String(e?.message ?? e) }
+  check('판정 가드 자체 시험 — 준비 실패 보고서에서 예외 0 · 시나리오마다 「판정 자료」 FAIL · PASS 0',
+    threw === null && got.pass === 0 && JUDGED.every((id) => got.fails.some((f) => f.startsWith(`${id} 판정 자료`))), { threw, pass: got.pass, fails: got.fails })
+}
+
 const work = mkdtempSync(join(tmpdir(), 'rehearsal-check-'))
 const out = join(work, 'report.json')
 console.log(`\n매거진 rehearsal 검사 — ${ids.join(',')}${repeat ? ' + S1 반복' : ''}\n`)
@@ -103,9 +176,18 @@ const report = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : null
 check('rehearsal 이 보고서를 남겼다', Boolean(report), `${r.status} ${r.stderr.slice(-300)}`)
 if (!report) { finish(); process.exit() }
 
+// 🔴 보고서 모양 — checks · stages · evidence 가 없으면 그 시나리오의 FAIL 로 센 뒤 빈 값으로 채운다 (TypeError 로 판정 전체를 잃지 않는다 · PASS 로 바꾸지 않는다)
+if (!Array.isArray(report.scenarios)) { check('보고서 모양 — scenarios 배열', false, typeof report.scenarios); report.scenarios = [] }
+for (const s of report.scenarios) {
+  const miss = [!Array.isArray(s.checks) && 'checks', !Array.isArray(s.stages) && 'stages', (s.evidence === null || typeof s.evidence !== 'object') && 'evidence'].filter(Boolean)
+  if (!miss.length) continue
+  check(`${s.id} 보고서 모양 — checks · stages · evidence`, false, { miss })
+  if (!Array.isArray(s.checks)) s.checks = [{ id: `${s.id} 보고서 모양`, ok: false }]
+  if (!Array.isArray(s.stages)) s.stages = []
+  if (s.evidence === null || typeof s.evidence !== 'object') s.evidence = EMPTY_EVIDENCE()
+  s.ok = false
+}
 const S = Object.fromEntries(report.scenarios.map((s) => [s.id, s]))
-const stage = (s, name) => s?.stages.find((x) => x.name === name) ?? null
-const logText = (s, name) => { const st = stage(s, name); try { return st && s.root ? readFileSync(join(s.root, st.log), 'utf8') : '' } catch { return '' } }
 const BANNER = {
   producer: /매거진 producer 시작/,
   register: /매거진 자동 레인 시작/,
@@ -142,10 +224,30 @@ check('고정 시각 — 모든 단계가 그 시나리오의 KST 회차 날짜 
   report.scenarios.every((s) => !s.stages.some((st) => st.entry === 'producer') || Object.keys(s.evidence.runFiles ?? {}).includes(s.date ?? report.date)), report.scenarios.map((s) => [s.id, s.date, Object.keys(s.evidence.runFiles ?? {})]))
 
 // ── 시나리오별 원시 증거 ──
+await judgeScenarios(S, report, check)
+
+/**
+ * 🔴 시나리오별 원시 증거 판정 (2026-11-14 · 준비 실패 TypeError 수리).
+ *    판정 블록은 `ready(id)` 를 지나야 들어간다 — prepared · extras · evidence 가 없으면(준비 실패 · 모양 결손)
+ *    그 시나리오의 구조화된 FAIL 한 줄(원래 실패 이유 포함)을 남기고 블록을 건너뛴다. PASS 로 바꾸지 않는다.
+ *    `check` 를 받아서 자체 시험이 합성 보고서로 같은 함수를 돌린다.
+ */
+async function judgeScenarios(S, report, check) {
 const ev = (id) => S[id]?.evidence
-if (S.S1) {
+const ready = (id) => {
+  const s = S[id]
+  if (!s) return false
+  const miss = ['prepared', 'extras', 'evidence'].filter((k) => s[k] === null || typeof s[k] !== 'object')
+  check(`${id} 판정 자료 — prepared · extras · evidence 가 있다 (준비·실행이 끝까지 돌았다)`, miss.length === 0,
+    { miss, why: (Array.isArray(s.checks) ? s.checks : []).filter((c) => !c.ok).map((c) => `${c.id}: ${String(c.detail ?? '').slice(0, 200)}`) })
+  return miss.length === 0
+}
+if (ready('S1')) {
   const e = ev('S1')
   const t = S.S1.prepared.target
+  // 🔴 달력 경계 (2026-11-14) — orchestrator 단언과 따로 같은 증거를 다시 판정한다
+  check('S1 준비 — 실제 선정 순위 정리 증거 (그 회차 날짜 · 전 1순위 → 뺀 행 → 후 1순위 = 대상)', s1CurationOk(S.S1.prepared, t, S.S1.date ?? report.date), S.S1.prepared.curation)
+  check('S1 준비 — 그 회차 _runs 격리 기록 (실제 isolateDirectRunDay 모양)', s1IsolationOk(S.S1.prepared, S.S1.date ?? report.date), S.S1.prepared.isolatedRun)
   check('S1 단계 — producer·register·recover·watch 순서와 종료 0', ['producer', 'register', 'recover', 'watch-after-publish'].every((n) => stage(S.S1, n)?.exit === 0), S.S1.stages.map((x) => `${x.name}:${x.exit}`))
   check('S1 전송 — 최초 1 · 재생성 0 · 수리 0', e.sends.initial === 1 && e.sends.regen === 0 && e.sends.repair === 0, e.sends)
   check('S1 PR 1 · merge 1 · --match-head-commit · 배포 1', e.prs.length === 1 && e.prs[0].state === 'MERGED' && e.mergeCalls.length === 1 && e.mergeCalls[0].args.includes('--match-head-commit') && e.deployments.length === 1, { prs: e.prs, merges: e.mergeCalls })
@@ -159,7 +261,7 @@ if (S.S1) {
   check('S1 heroImage 4필드', e.registered[0]?.heroImage?.src === `/magazine/${t}/hero.webp` && e.registered[0]?.heroImage?.width === 1200 && e.registered[0]?.heroImage?.height === 675 && /여성$/.test(e.registered[0]?.heroImage?.alt ?? ''), e.registered[0]?.heroImage)
   check('S1 publishAt 뒤 watch 가 이 글을 확인했다', /✅/.test(logText(S.S1, 'watch-after-publish')) && logText(S.S1, 'watch-after-publish').includes(t))
 }
-if (S.S2) {
+if (ready('S2')) {
   const x = S.S2.extras
   const p = S.S2.prepared
   check('S2 producer 실제 종료 3 · handoff PARTIAL/3', stage(S.S2, 'producer')?.exit === 3 && x.handoff?.verdict === 'PARTIAL' && x.handoff?.code === 3, { exit: stage(S.S2, 'producer')?.exit, handoff: x.handoff?.verdict })
@@ -167,22 +269,22 @@ if (S.S2) {
   check('S2 급사 journal 복구 · gray·cold APPLIED · autumn 실패 · normal 최초 전송', (x.repair?.recovered ?? []).some((r) => r.slug === p.gray && r.rolledBack) &&
     (x.repair?.results ?? []).filter((r) => r.outcome === 'APPLIED').map((r) => r.slug).sort().join(',') === [p.gray, p.cold].sort().join(',') && ev('S2').sends.bySlug[`${p.normal}:initial`] === 1, x.repair)
 }
-if (S.S3) {
+if (ready('S3')) {
   const e = ev('S3')
   const p = S.S3.prepared
   check('S3 HOLD 전송 0 · 장부 행 불변 · held/attempted', !Object.keys(e.sends.bySlug).some((k) => k.startsWith(`${p.hold}:`)) && S.S3.extras.hold?.before === S.S3.extras.hold?.after && (S.S3.extras.register?.held ?? []).includes(p.hold) && S.S3.extras.register?.attempted === 1, { sends: e.sends.bySlug, register: S.S3.extras.register })
   check('S3 정상 글 완주 · 장부 손상 회차 전송 0', e.prs.length === 1 && e.prs[0].state === 'MERGED' && e.sends.initial === 1, { prs: e.prs, sends: e.sends })
 }
-if (S.S4) {
+if (ready('S4')) {
   const e = ev('S4')
   check('S4 01:00 병합 없음 → 02:00 --recover 병합 1 · --match-head-commit · PR 1 · 재전송 0', !S.S4.extras.apply?.merged && stage(S.S4, 'recover')?.exit === 0 && e.mergeCalls.length === 1 && e.mergeCalls[0].args.includes('--match-head-commit') && e.prs.length === 1 && e.sends.initial === 1 && e.sends.regen === 0, { apply: S.S4.extras.apply?.merged, merges: e.mergeCalls })
   check('S4 복구 결과 파일이 최초 결과와 분리돼 있다', (S.S4.extras.recovery ?? []).length === 1 && (e.runFiles[report.date] ?? []).some((f) => /^auto-merge-recovery-/.test(f)) && (e.runFiles[report.date] ?? []).includes('auto-merge.json'), e.runFiles[report.date])
 }
-if (S.S5) {
+if (ready('S5')) {
   const e = ev('S5')
   check('S5 merge 0 · 배포 0 · 01:00 회차 non-zero · CI 실패 이유', e.mergeCalls.length === 0 && e.deployments.length === 0 && stage(S.S5, 'register')?.exit !== 0 && /FAIL|failure/.test(JSON.stringify(S.S5.extras.apply?.blockedBy ?? '')), { merges: e.mergeCalls, exit: stage(S.S5, 'register')?.exit, why: S.S5.extras.apply?.blockedBy })
 }
-if (S.S7) {
+if (ready('S7')) {
   const e = ev('S7')
   const t = S.S7.prepared.target
   const typed = e.regenTyped.find((r) => r.slug === t)?.typed ?? ''
@@ -191,11 +293,17 @@ if (S.S7) {
   check('S7 재생성 요청에 최초 QA 실패 사유 (medical 진료 권고) 가 실렸다', /\[QA_FAIL\][^\n]*진료 권고 문장/.test(typed), typed.split('\n').find((l) => l.includes('QA_FAIL')))
   check('S7 원자 교체 뒤 최종 QA PASS · 등록·PR·merge·배포 1', reg.includes('검증·변환 통과 뒤 원고 교체') && reg.includes('QA FAIL 0 (재생성 1회 뒤)') && e.registered.length === 1 && e.prs.length === 1 && e.prs[0].state === 'MERGED' && e.mergeCalls.length === 1 && e.deployments.length === 1, { prs: e.prs })
 }
-if (S.S6) {
+if (ready('S6')) {
   const x = S.S6.extras
   const t = S.S6.prepared.target
   check('S6 publishAt 전 404 · 목록·sitemap 누출 0 → 뒤 200 · 노출', x.site.before?.[`/magazine/${t}`]?.status === 404 && !x.site.before?.['/magazine']?.lists && !x.site.before?.['/sitemap.xml']?.lists &&
     x.site.after?.[`/magazine/${t}`]?.status === 200 && x.site.after?.['/magazine']?.lists && x.site.after?.['/sitemap.xml']?.lists, x.site)
+}
+if (ready('S11')) {
+  const u = S.S11.prepared.unrelated
+  const row = S.S11.checks.find((c) => c.id.startsWith('S11 무관한 옛 행'))
+  check('S11 실패 경로 뼈대(무관한 옛 행) — 등록 0 · REGEN_EXHAUSTED 로 멈춤 · 재생성 전송 0', !S.S11.evidence.registered.some((r) => r.slug === u) && Boolean(row?.ok) && !S.S11.evidence.sends.bySlug[`${u}:regen`], { registered: S.S11.evidence.registered.map((r) => r.slug), row })
+}
 }
 
 // ── 반복성 ──
@@ -282,11 +390,7 @@ if (fail) console.log(`  실패 증거(임시 루트 보존): ${report.scenarios
   }
   // 실패 경로 전용 뼈대를 쓰는 경로 — 등록 0 · 지정 실패에서 멈춘다
   if (S.S2) check('S2 실패 경로 뼈대(입력 수리 응답) — 등록 0 · producer 단계만 (실제 종료 3)', S.S2.evidence.registered.length === 0 && stage(S.S2, 'producer')?.exit === 3, S.S2.evidence.registered)
-  if (S.S11) {
-    const u = S.S11.prepared.unrelated
-    const row = S.S11.checks.find((c) => c.id.startsWith('S11 무관한 옛 행'))
-    check('S11 실패 경로 뼈대(무관한 옛 행) — 등록 0 · REGEN_EXHAUSTED 로 멈춤 · 재생성 전송 0', !S.S11.evidence.registered.some((r) => r.slug === u) && Boolean(row?.ok) && !S.S11.evidence.sends.bySlug[`${u}:regen`], { registered: S.S11.evidence.registered.map((r) => r.slug), row })
-  }
+  // S11 실패 경로 뼈대 판정은 judgeScenarios 안(ready 가드 뒤)으로 옮겼다 (2026-11-14)
 }
 
 finish()

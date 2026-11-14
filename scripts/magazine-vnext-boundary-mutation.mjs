@@ -158,7 +158,8 @@ try {
   /** 스냅샷 — 숨김 파일 제외 · 이후 디스크를 다시 읽지 않는다 */
   const visible = (d, re) => readdirSync(join(ROOT, d)).filter((f) => !f.startsWith('.') && re.test(f)).map((f) => `${d}/${f}`)
   const snapshot = new Map()
-  for (const f of ['package.json', ...visible('scripts', /\.m[jt]s$/), ...visible('scripts/lib', /\.mjs$/)]) {
+  // S3 P1 수리 — R17 폐포에 든 공유 출처 규칙(src/lib)도 사본에 둔다
+  for (const f of ['package.json', ...visible('scripts', /\.m[jt]s$/), ...visible('scripts/lib', /\.mjs$/), 'src/lib/magazine-provenance-rule.mjs']) {
     try { snapshot.set(f, readFileSync(join(ROOT, f), 'utf8')) } catch (e) {
       if (e?.code !== 'ENOENT') throw e // 목록 뒤 사라진 일반 파일은 이 회차 사본에 없을 뿐이다 — 다른 오류는 숨기지 않는다
     }

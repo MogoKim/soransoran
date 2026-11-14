@@ -105,7 +105,8 @@ let base = null
 try {
   const visible = (d, re) => (existsSync(join(ROOT, d)) ? readdirSync(join(ROOT, d)).filter((f) => !f.startsWith('.') && re.test(f)).map((f) => `${d}/${f}`) : [])
   const snapshot = new Map()
-  for (const f of [...visible('scripts/lib', /\.mjs$/), ...visible('scripts/__fixtures__/magazine/content-plan', /./), CHECK, CLI]) {
+  // S3 P1 수리 — content-plan lib 가 상대 경로로 부르는 공유 출처 규칙도 사본에 둔다
+  for (const f of [...visible('scripts/lib', /\.mjs$/), ...visible('scripts/__fixtures__/magazine/content-plan', /./), CHECK, CLI, 'src/lib/magazine-provenance-rule.mjs']) {
     snapshot.set(f, readFileSync(join(ROOT, f), 'utf8'))
   }
   base = mkdtempSync(join(tmpdir(), 'plan-input-mutation-'))
