@@ -4,7 +4,7 @@
  */
 import {
   APPROVED_SUPPLEMENT_PLAN_DIGEST, COHORT_CODES, EXPECTED_RUNTIME_ASSET_IDENTITY, ONESHOT_LABEL,
-  judgeOneShot, judgeOutcome, renderOneShotPlist, supplementApprovalDigestOf, type OneShotFacts,
+  judgeOneShot, judgeOutcome, remediationEligible, renderOneShotPlist, supplementApprovalDigestOf, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
 import { planSupplementSnapshot } from './lib/persona-reference-supplement-plan.mjs'
 import { readFileSync } from 'node:fs'
@@ -24,6 +24,7 @@ const base = (): OneShotFacts => ({
   manifestIdentity: { ...EXPECTED_RUNTIME_ASSET_IDENTITY }, deployLock: false, runningJobs: [], unknownJobs: [],
   approvalDigest: APPROVED_SUPPLEMENT_PLAN_DIGEST, runtimeIdentity: { ...EXPECTED_RUNTIME_ASSET_IDENTITY },
   old40VoiceSame: true, old40ActiveCodes: [...OLD40], expectedOld40: [...OLD40], cohortExisting: [], adminCount: 1, marker: null,
+  capacity: { contractValid: 40, stageActive: 40 },
 })
 const expect = (label: string, patch: Partial<OneShotFacts>, code: string, noop = false): void => {
   const v = judgeOneShot({ ...base(), ...patch })
@@ -90,6 +91,26 @@ expect('cohort DB 판독 실패', { cohortExisting: null }, 'DB_UNREADABLE')
 expect('관리자 0(감사 행위자 없음)', { adminCount: 0 }, 'ACTOR')
 expect('관리자 2(누가 켰는지 모호)', { adminCount: 2 }, 'ACTOR')
 expect('관리자 판독 실패', { adminCount: null }, 'ACTOR')
+
+console.log('\n⑥-b 🔴 투입 전 정본 용량 hard gate — contract-valid 40 AND stage-active 40')
+expect('정본 39/39(P15 미교정)', { capacity: { contractValid: 39, stageActive: 39 } }, 'CAPACITY_BASELINE')
+expect('contract 40 · stage 39', { capacity: { contractValid: 40, stageActive: 39 } }, 'CAPACITY_BASELINE')
+expect('contract 39 · stage 40', { capacity: { contractValid: 39, stageActive: 40 } }, 'CAPACITY_BASELINE')
+expect('41/41', { capacity: { contractValid: 41, stageActive: 41 } }, 'CAPACITY_BASELINE')
+expect('판독 실패(null)', { capacity: null }, 'CAPACITY_BASELINE')
+expect('판독 일부 실패', { capacity: { contractValid: null, stageActive: 40 } }, 'CAPACITY_BASELINE')
+check('용량 게이트는 마지막이다 — 다른 게이트가 먼저 막히면 그 코드가 나온다',
+  judgeOneShot({ ...base(), capacity: { contractValid: 39, stageActive: 39 }, deployLock: true }).code === 'DEPLOY_LOCK'
+  && judgeOneShot({ ...base(), capacity: { contractValid: 39, stageActive: 39 }, cohortExisting: ['P44'] }).code === 'COHORT_PARTIAL')
+const v39 = judgeOneShot({ ...base(), capacity: { contractValid: 39, stageActive: 39 } })
+check('교정 1회 허용: 다른 게이트 전부 통과 + 정확히 39/39', remediationEligible(v39, { capacity: { contractValid: 39, stageActive: 39 } }))
+for (const [label, cap] of [['38/38', { contractValid: 38, stageActive: 38 }], ['39/40', { contractValid: 39, stageActive: 40 }], ['40/39', { contractValid: 40, stageActive: 39 }], ['null', null]] as const) {
+  const v = judgeOneShot({ ...base(), capacity: cap })
+  check(`교정 불허: ${label}`, !remediationEligible(v, { capacity: cap }))
+}
+const vLock = judgeOneShot({ ...base(), capacity: { contractValid: 39, stageActive: 39 }, deployLock: true })
+check('교정 불허: 39/39 라도 다른 게이트(잠금)가 막히면', !remediationEligible(vLock, { capacity: { contractValid: 39, stageActive: 39 } }))
+check('교정 불허: GO(40/40)면 교정하지 않는다', !remediationEligible(judgeOneShot(base()), { capacity: { contractValid: 40, stageActive: 40 } }))
 
 console.log('\n⑦ 결과 판정 — PASS 가 아니면 새 cohort 만 되돌린다')
 const ok = { activated: true, contractValid: 60, stageActive: 60, totalActive: 60, cohortActive: 20, old40Same: true, checkOk: true }

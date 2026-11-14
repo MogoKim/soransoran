@@ -84,6 +84,8 @@ export type OneShotFacts = {
   /** 활성화 감사 행위자 — 관리자 계정 수 */
   adminCount: number | null
   marker: MarkerState | undefined
+  /** 🔴 정본 `readPersonaCapacity` 한 번의 판독 — 투입 전 기준선. 판독 실패는 null */
+  capacity: { contractValid: number | null; stageActive: number | null } | null
 }
 
 export type OneShotVerdict =
@@ -149,6 +151,11 @@ export function judgeOneShot(f: OneShotFacts): OneShotVerdict {
       `P44~P63 중 ${f.cohortExisting.length}명이 이미 있다 — 전원 미존재일 때만 한다`)
   }
   if (f.adminCount !== 1) return no('ACTOR', f.adminCount === null ? '관리자 계정을 읽지 못했다' : `관리자 계정 ${f.adminCount}개 — 정확히 1개여야 한다`)
+  // 🔴 **마지막 게이트** — 이 코드가 나오면 다른 게이트는 전부 통과한 것이다(교정 1회 허용 판정이 그것을 전제한다)
+  const c = f.capacity
+  if (c === null || c.contractValid !== OLD_COUNT || c.stageActive !== OLD_COUNT) {
+    return no('CAPACITY_BASELINE', `정본 계약 유효 ${c?.contractValid ?? '판독 실패'} · stage-active ${c?.stageActive ?? '판독 실패'} — 투입 전 ${OLD_COUNT}/${OLD_COUNT} 이어야 한다`)
+  }
   return { go: true, code: 'GO', problems: [] }
 }
 
@@ -209,4 +216,13 @@ ${args.map((a) => `    <string>${xmlEscape(a)}</string>`).join('\n')}
 </dict>
 </plist>
 `
+}
+
+/**
+ * 🔴 P15 정본 교정 1회를 먼저 해도 되는가 — 다른 게이트가 전부 통과했고(=`CAPACITY_BASELINE`) 기준선이 **정확히 39/39** 일 때만.
+ *    그 밖(38 · 41 · 판독 실패 · stage 만 39 등)은 교정으로 풀리는 문제가 아니다 — 아무것도 하지 않는다.
+ */
+export function remediationEligible(v: OneShotVerdict, f: Pick<OneShotFacts, 'capacity'>): boolean {
+  return !v.go && v.code === 'CAPACITY_BASELINE' && f.capacity !== null
+    && f.capacity.contractValid === OLD_COUNT - 1 && f.capacity.stageActive === OLD_COUNT - 1
 }

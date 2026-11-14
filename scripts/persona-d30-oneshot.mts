@@ -24,11 +24,13 @@ import { PrismaClient } from '@prisma/client'
 
 import {
   APPROVED_SUPPLEMENT_PLAN_DIGEST, COHORT_CODES, ONESHOT_COHORT, ONESHOT_WINDOW,
-  judgeOneShot, judgeOutcome, supplementApprovalDigestOf,
+  judgeOneShot, judgeOutcome, remediationEligible, supplementApprovalDigestOf,
   type Identity, type MarkerState, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
+import { executeOneShot, type Step } from './lib/persona-d30-oneshot-exec.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { readPersonaCapacity } from './lib/persona-reserve-facts.mjs'
+import { P15_PRODUCTION_PINS } from './lib/persona-p15-remediation.mjs'
 import { fillDbConnection } from './lib/ops-signals.mjs'
 import { assignmentDigest } from './lib/persona-reference-supplement-store.mjs'
 import { stableAssignment } from './lib/persona-reference-store.mjs'
@@ -171,6 +173,7 @@ async function gather(expectedOld40: readonly string[]): Promise<OneShotFacts> {
     approvalDigest: approvalDigest(), runtimeIdentity,
     old40VoiceSame: old40VoiceSame(expectedOld40), old40ActiveCodes: old40Active, expectedOld40,
     cohortExisting, adminCount, marker: readMarker(),
+    capacity: stage === undefined ? null : await readPersonaCapacity(db(), { now: new Date(), repoRoot: process.cwd() }).catch(() => null),
   }
 }
 
@@ -208,8 +211,10 @@ async function main(): Promise<number> {
     runtime: facts.head?.slice(0, 12) ?? null, approvalDigest: facts.approvalDigest?.slice(0, 12) ?? null,
     expectedApproval: APPROVED_SUPPLEMENT_PLAN_DIGEST.slice(0, 12), cohortExisting: facts.cohortExisting?.length ?? null,
   })
-  if (!verdict.go) { log('done', { result: verdict.noop === true ? 'NOOP' : 'NO_GO', write: 0 }); return verdict.noop === true ? 0 : 3 }
-  if (!APPLY) { log('done', { result: 'DRY_RUN_GO', write: 0 }); return 0 }
+  const needsRemediation = remediationEligible(verdict, facts)
+  log('capacity', { capacity: facts.capacity, remediationEligible: needsRemediation })
+  if (!verdict.go && !needsRemediation) { log('done', { result: verdict.noop === true ? 'NOOP' : 'NO_GO', write: 0 }); return verdict.noop === true ? 0 : 3 }
+  if (!APPLY) { log('done', { result: needsRemediation ? 'DRY_RUN_GO_AFTER_P15_REMEDIATION' : 'DRY_RUN_GO', write: 0 }); return 0 }
 
   // ── 단일 실행 잠금 ──
   mkdirSync(MARKER_DIR, { recursive: true, mode: 0o700 })
@@ -217,55 +222,37 @@ async function main(): Promise<number> {
   try { fd = openSync(LOCK, 'wx', 0o600) } catch { log('refuse', { code: 'ONESHOT_LOCK' }); return 3 }
   writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`); closeSync(fd)
   try {
-    // 🔴 잠금 안에서 표식·DB 를 다시 본다 — 두 실행이 겹쳐도 한 번만 간다
-    const again = judgeOneShot(await gather(expectedOld40))
-    if (!again.go) { log('done', { result: 'NO_GO_IN_LOCK', code: again.code, write: 0 }); return 3 }
-    const old40Before = await old40Fingerprint(expectedOld40)
-    const admins = await db().user.findMany({ where: { isAdmin: true }, select: { id: true } })
-    if (admins.length !== 1) { log('done', { result: 'NO_GO_IN_LOCK', code: 'ACTOR', write: 0 }); return 3 }
-    writeMarker('started', { runtime: facts.head })
-
+    // 🔴 잠금 안의 순서는 `executeOneShot` 하나다 — 격리 DB 통합 검사가 같은 함수를 부른다
     const C = `--cohort=${ONESHOT_COHORT}`
     const N = `--limit=${COHORT_CODES.length}`
     const REASON = `D30 cohort 무인 1회 투입 — 창업자 승인(2026-11-15 세션) · 실행기 persona-d30-oneshot · ${TARGET_DATE} PREPARE·d20·d30`
-    let activated = false
-    const stop = async (why: string): Promise<number> => {
-      const st = await cohortStatuses()
-      const active = [...st.values()].filter((s) => s === 'active').length
-      log('stop', { why, cohortRows: st.size, cohortActive: active })
-      if (active > 0) {
-        const paused = canonical('pause', ['scripts/persona-cohort-run.mts', C, '--step=pause', '--apply', N, '--reason', `${REASON} · 자동 되돌림(${why})`], { ...process.env, ACTOR_USER_ID: admins[0]!.id })
-        writeMarker(paused ? 'paused' : 'failed', { why, pauseOk: paused })
-        return 4
-      }
-      writeMarker('held', { why, cohortRows: st.size })
-      return 4
+    const STEP_ARGS: Record<Step, string[]> = {
+      'seed-file': ['scripts/persona-cohort-seed.mts', C, '--write'],
+      create: ['scripts/persona-cohort-run.mts', C, '--step=create', '--apply', N],
+      seed: ['scripts/persona-cohort-run.mts', C, '--step=seed', '--apply', N],
+      'check-before-activate': ['scripts/persona-cohort-run.mts', C, '--step=check'],
+      activate: ['scripts/persona-cohort-run.mts', C, '--step=activate', '--apply', N, '--reason', REASON],
+      'check-after-activate': ['scripts/persona-cohort-run.mts', C, '--step=check'],
     }
-
-    if (!canonical('seed-file', ['scripts/persona-cohort-seed.mts', C, '--write'])) return await stop('SEED_FILE')
-    if (!canonical('create', ['scripts/persona-cohort-run.mts', C, '--step=create', '--apply', N])) {
-      if ((await cohortStatuses()).size !== COHORT_CODES.length) return await stop('CREATE')
-      log('note', { step: 'create', reason: '종료코드 비정상이나 20행 생성 확인 — 사후 대조 경보일 수 있어 멈춘다' })
-      return await stop('CREATE_POSTCHECK')
-    }
-    if (!canonical('seed', ['scripts/persona-cohort-run.mts', C, '--step=seed', '--apply', N])) return await stop('SEED')
-    if (!canonical('check-before-activate', ['scripts/persona-cohort-run.mts', C, '--step=check'])) return await stop('CHECK')
-    const act = canonical('activate', ['scripts/persona-cohort-run.mts', C, '--step=activate', '--apply', N, '--reason', REASON], { ...process.env, ACTOR_USER_ID: admins[0]!.id })
-    activated = [...(await cohortStatuses()).values()].filter((s) => s === 'active').length === COHORT_CODES.length
-    if (!act && !activated) return await stop('ACTIVATE')
-
-    const checkOk = canonical('check-after-activate', ['scripts/persona-cohort-run.mts', C, '--step=check'])
-    const totalActive = await db().persona.count({ where: { status: 'active' } })
-    const cohortActive = await db().persona.count({ where: { code: { in: [...COHORT_CODES] }, status: 'active' } })
-    const old40Same = (await old40Fingerprint(expectedOld40)) === old40Before
-    // 🔴 정본 판독기 — 단계 preflight 와 같은 값. 실패는 null(→ PASS 아님 → 새 cohort 만 pause)
-    const capacity = await readPersonaCapacity(db(), { now: new Date(), repoRoot: process.cwd() })
-    const outcome = judgeOutcome({ activated, contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive, old40Same, checkOk })
-    log('outcome', { code: outcome.code, problems: outcome.problems, contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive, old40Same, checkOk })
-    if (outcome.code !== 'PASS') return await stop(`OUTCOME_${outcome.code}`)
-    writeMarker('done', { contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive })
-    log('done', { result: 'PASS' })
-    return 0
+    const r = await executeOneShot({
+      gather: () => gather(expectedOld40),
+      writeMarker: (state, extra = {}) => writeMarker(state, { runtime: facts.head, ...extra }),
+      remediate: async () => canonical('p15-remediation', ['scripts/persona-p15-remediation.mts', '--apply',
+        `--expect-before=${P15_PRODUCTION_PINS.beforeIdentityDigest}`, `--reason=D30 투입 전 P15 정본 교정 · persona-d30-oneshot · ${TARGET_DATE}`]),
+      step: async (st, actor) => canonical(st, STEP_ARGS[st], actor === null ? process.env : { ...process.env, ACTOR_USER_ID: actor }),
+      pause: async (actor, why) => canonical('pause', ['scripts/persona-cohort-run.mts', C, '--step=pause', '--apply', N, '--reason', `${REASON} · 자동 되돌림(${why})`], { ...process.env, ACTOR_USER_ID: actor }),
+      cohortStatuses,
+      adminIds: async () => (await db().user.findMany({ where: { isAdmin: true }, select: { id: true } })).map((u) => u.id),
+      old40Fingerprint: () => old40Fingerprint(expectedOld40),
+      counts: async () => ({
+        totalActive: await db().persona.count({ where: { status: 'active' } }),
+        cohortActive: await db().persona.count({ where: { code: { in: [...COHORT_CODES] }, status: 'active' } }),
+      }),
+      capacity: () => readPersonaCapacity(db(), { now: new Date(), repoRoot: process.cwd() }),
+      log,
+    })
+    log('done', { ...r })
+    return r.exit
   } finally {
     try { unlinkSync(LOCK) } catch { /* 이미 없다 */ }
   }
