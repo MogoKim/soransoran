@@ -260,11 +260,33 @@ async function mergedArticle(ctx, slug) {
   if (!a) return null
   return { title: a.title, text: (a.body ?? []).map((b) => [b.text ?? '', ...(b.items ?? [])].join('\n')).join('\n') }
 }
-/** 시나리오 대상 선정 — 실제 producer 선정 함수 그대로, 다만 sandbox 큐를 위 규칙으로 먼저 맞춘다 */
+/**
+ * 시나리오 대상 선정 — 실제 producer 선정 함수 그대로, 다만 sandbox 큐를 먼저 맞춘다.
+ *   🔴 불변식: 정상 성공 경로의 첫 대상은 정상 금융 fixture 다. 그 날짜 실제 순위에서 fixture 보다 앞선 행
+ *      (창이 열린 SEASONAL · 더 낮은 day)은 **sandbox 사본 큐에서만** 뺀다 — 운영 선정·운영 큐는 그대로다.
+ *   반환 모양(앞에서부터 selectable 개 + others 개)은 실제 pickTargets 그대로다. 정리 증거는 sandbox 경로별로 남기고
+ *   runScenario 가 그 시나리오의 단언·prepared.targetCuration 으로 싣는다 (호출부는 바꾸지 않는다).
+ */
+const TARGET_CURATION = new Map()
 async function pickTargets(args) {
-  await prepareFinancialCandidate(args.repo)
-  return pickRuntimeTargets(args)
+  const { fx } = await prepareFinancialCandidate(args.repo)
+  const curation = await curateSandboxQueue(args.repo, args.date, fx.source.slug)
+  const picked = await pickRuntimeTargets(args)
+  TARGET_CURATION.set(args.repo, { fixture: fx.source.slug, curation, pickedFirst: picked[0]?.slug ?? null })
+  return picked
 }
+/** sandbox 사본 큐 바이트만 쓴다 — 실제 순위 경로(curateTargetFirst)의 결과에서 큐 원문은 빼고 증거만 돌려준다 */
+async function curateSandboxQueue(repo, date, target) {
+  const qPath = join(repo, 'drafts', 'magazine', 'topic-queue.ts')
+  const c = await curateTargetFirst({ code: repo, date, target, queueSrc: readFileSync(qPath, 'utf8'),
+    articlesSrc: readFileSync(join(repo, 'src', 'content', 'magazine', 'articles.ts'), 'utf8') })
+  writeFileSync(qPath, c.queueSrc)
+  const evidence = { ...c }
+  delete evidence.queueSrc
+  return evidence
+}
+/** 정리 증거 판정 — 정리 기록이 그 날짜 실제 순위 판정을 지나고, 실제로 고른 첫 대상이 fixture 다 */
+const targetCurationOk = (rec, date) => Boolean(rec?.curation) && s1CurationOk({ curation: rec.curation }, rec.fixture, date) && rec.pickedFirst === rec.fixture
 
 /** 등록 모양을 만들 때만 — 항목 원문을 레코드 맨 앞에 넣는다 (sandbox 사본 전용) */
 function withArticleEntry(src, entry) {
@@ -1333,6 +1355,13 @@ export async function runScenario(id, { date: runDate, runtime, base, keep = fal
   let checks
   try { checks = [...def.expect(ev, ctx), ...boundaryChecks(ev)] } catch (e) { checks = [exp(`${id} 기대값 판정 예외`, false, String(e?.message ?? e))] }
   if (error) checks.unshift(exp(`${id} 실행 예외 없음`, false, error))
+  // 🔴 공용 대상 선정을 거친 시나리오 — 첫 대상이 정상 금융 fixture 라는 불변식을 증거로 판정한다
+  const tc = TARGET_CURATION.get(sb.repo)
+  TARGET_CURATION.delete(sb.repo)
+  if (tc) {
+    ctx.prepared.targetCuration = tc
+    checks.push(exp(`${id} 준비 — 공용 대상 선정: 그 날짜 실제 순위에서 앞선 행만 sandbox 사본 큐에서 빼고 첫 대상 = 정상 금융 fixture`, targetCurationOk(tc, date), tc))
+  }
   const ok = checks.every((c) => c.ok)
   const pick = (o, ks) => (o ? Object.fromEntries(ks.filter((k) => k in o).map((k) => [k, o[k]])) : null)
   const probe = (p) => (p ? Object.fromEntries(Object.entries(p).map(([k, v]) => [k, { status: v.status, lists: (ctx.prepared?.target && v.body.includes(ctx.prepared.target)) || false }])) : null)

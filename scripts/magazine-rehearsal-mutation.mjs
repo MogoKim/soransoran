@@ -223,6 +223,9 @@ const MUTATIONS = [
     find: '      const isolatedRun = isolateDirectRunDay(repo, date)\n', replace: '      const isolatedRun = { moved: false }\n' }] },
   { name: 'K5 checker 판정 가드 제거 (prepared 없는 시나리오도 판정 블록에 들어간다)', scenarios: 'S1', edits: [{ file: F.check,
     find: '  const s = S[id]\n  if (!s) return false\n', replace: '  const s = S[id]\n  if (!s) return false\n  if (s) return true\n' }] },
+  // 공용 대상 선정 — 정리 증거가 없으면 어느 날짜든, 앞선 행이 남으면 SEASONAL 이 앞서는 날짜에 구조화된 단언으로 잡힌다
+  { name: 'K6 공용 대상 선정에서 sandbox 큐 정리 제거 (실제 1순위를 그대로 쓴다)', scenarios: 'S3', edits: [{ file: F.orch,
+    find: '  const curation = await curateSandboxQueue(args.repo, args.date, fx.source.slug)\n', replace: '  const curation = null\n' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')
