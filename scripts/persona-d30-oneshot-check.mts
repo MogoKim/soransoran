@@ -7,6 +7,7 @@ import {
   judgeOneShot, judgeOutcome, renderOneShotPlist, supplementApprovalDigestOf, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
 import { planSupplementSnapshot } from './lib/persona-reference-supplement-plan.mjs'
+import { readFileSync } from 'node:fs'
 
 let pass = 0
 let fail = 0
@@ -130,6 +131,18 @@ check('07:05 하루 1번 · RunAtLoad false', xml.includes('<key>Hour</key><inte
 let threw = false
 try { renderOneShotPlist({ npx: 'n', nodebin: 'n', runtimeRoot: 'r', logdir: 'l', date: 'tomorrow' }) } catch { threw = true }
 check('날짜 모양 오류는 렌더하지 않는다', threw)
+
+console.log('\n⑩ 실행기 배선 — DB 클라이언트는 env 판독 뒤에만 만든다(04:10 host dry-run 재현)')
+{
+  const src = readFileSync(new URL('./persona-d30-oneshot.mts', import.meta.url), 'utf-8')
+  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n')
+  const created = code.indexOf('new PrismaClient(')
+  const filled = code.indexOf('if (!fillDbConnection())')
+  const loaded = code.indexOf('await loadEnvLocal()')
+  check('모듈 최상단에서 PrismaClient 를 만들지 않는다', !/^const \w+ = new PrismaClient\(/m.test(code))
+  check('PrismaClient 생성은 loadEnvLocal · fillDbConnection 뒤 한 곳뿐', created > filled && filled > loaded && loaded > 0
+    && code.split('new PrismaClient(').length === 2)
+}
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)
 process.exit(fail === 0 ? 0 : 1)

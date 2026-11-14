@@ -122,10 +122,22 @@ function old40VoiceSame(expectedOld40: readonly string[]): boolean | null {
   } catch { return null }
 }
 
-const prisma = new PrismaClient()
+/**
+ * 🔴 **DB 클라이언트는 env 를 읽은 뒤에 만든다** (2026-11-15 04:10 host dry-run 재현).
+ *    모듈 최상단에서 만들면 `loadEnvLocal()`·`fillDbConnection()` 전이라 DATABASE_URL 이 없어
+ *    `PrismaClientInitializationError` 로 모든 판독이 실패한다(fail-closed 로 write 0 이지만 실행도 0).
+ *    `main()` 이 env 를 채운 직후 한 번만 만든다. 그 전에 부르면 throw 한다.
+ */
+let prismaClient: PrismaClient | null = null
+/** 정리용 — 열린 적 없으면 null */
+const openedClient = (): PrismaClient | null => prismaClient
+const db = (): PrismaClient => {
+  if (prismaClient === null) throw new Error('PrismaClient 를 env 판독 전에 쓰려 했다')
+  return prismaClient
+}
 type Old40Row = { code: string; status: string; updatedAt: Date }
 const old40Fingerprint = async (codes: readonly string[]): Promise<string> => {
-  const rows: Old40Row[] = await prisma.persona.findMany({ where: { code: { in: [...codes] } }, select: { code: true, status: true, updatedAt: true }, orderBy: { code: 'asc' } })
+  const rows: Old40Row[] = await db().persona.findMany({ where: { code: { in: [...codes] } }, select: { code: true, status: true, updatedAt: true }, orderBy: { code: 'asc' } })
   return JSON.stringify(rows.map((r) => [r.code, r.status, r.updatedAt.toISOString()]))
 }
 
@@ -141,11 +153,11 @@ async function gather(expectedOld40: readonly string[]): Promise<OneShotFacts> {
   let cohortExisting: string[] | null = null
   let adminCount: number | null = null
   try {
-    const row = await prisma.stageDecision.findUnique({ where: { kstDate: now.date } })
+    const row = await db().stageDecision.findUnique({ where: { kstDate: now.date } })
     stage = row === null ? null : { kstDate: row.kstDate, state: row.state, release: row.release, capacity: row.capacity, decidedBy: row.decidedBy }
-    old40Active = (await prisma.persona.findMany({ where: { status: 'active' }, select: { code: true } })).map((r) => r.code)
-    cohortExisting = (await prisma.persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true } })).map((r) => r.code)
-    adminCount = await prisma.user.count({ where: { isAdmin: true } })
+    old40Active = (await db().persona.findMany({ where: { status: 'active' }, select: { code: true } })).map((r) => r.code)
+    cohortExisting = (await db().persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true } })).map((r) => r.code)
+    adminCount = await db().user.count({ where: { isAdmin: true } })
   } catch (e) {
     log('db-read-failed', { reason: (e as Error).name })
     stage = undefined
@@ -171,13 +183,14 @@ const canonical = (step: string, args: readonly string[], env: NodeJS.ProcessEnv
   return r.status === 0
 }
 const cohortStatuses = async (): Promise<Map<string, string>> =>
-  new Map((await prisma.persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true, status: true } })).map((r) => [r.code, r.status]))
+  new Map((await db().persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true, status: true } })).map((r) => [r.code, r.status]))
 
 async function main(): Promise<number> {
   if (ASSUME !== null && APPLY) { log('refuse', { code: 'ASSUME_WITH_APPLY' }); return 2 }
   if (process.cwd() !== RUNTIME_ROOT && APPLY) { log('refuse', { code: 'NOT_RUNTIME_TREE', cwd: process.cwd() }); return 2 }
   await loadEnvLocal()
   if (!fillDbConnection()) { log('refuse', { code: 'CREDENTIAL', reason: 'canonical DB env 없음' }); return 2 }
+  prismaClient = new PrismaClient()
   const expectedOld40 = PRODUCTION_PERSONA_CODES.filter((c) => !COHORT_CODES.includes(c))
 
   // ── 판정 — 잠깐 도는 job(observer 60초 주기)은 창 안에서 다시 본다 ──
@@ -208,7 +221,7 @@ async function main(): Promise<number> {
     const again = judgeOneShot(await gather(expectedOld40))
     if (!again.go) { log('done', { result: 'NO_GO_IN_LOCK', code: again.code, write: 0 }); return 3 }
     const old40Before = await old40Fingerprint(expectedOld40)
-    const admins = await prisma.user.findMany({ where: { isAdmin: true }, select: { id: true } })
+    const admins = await db().user.findMany({ where: { isAdmin: true }, select: { id: true } })
     if (admins.length !== 1) { log('done', { result: 'NO_GO_IN_LOCK', code: 'ACTOR', write: 0 }); return 3 }
     writeMarker('started', { runtime: facts.head })
 
@@ -242,11 +255,11 @@ async function main(): Promise<number> {
     if (!act && !activated) return await stop('ACTIVATE')
 
     const checkOk = canonical('check-after-activate', ['scripts/persona-cohort-run.mts', C, '--step=check'])
-    const totalActive = await prisma.persona.count({ where: { status: 'active' } })
-    const cohortActive = await prisma.persona.count({ where: { code: { in: [...COHORT_CODES] }, status: 'active' } })
+    const totalActive = await db().persona.count({ where: { status: 'active' } })
+    const cohortActive = await db().persona.count({ where: { code: { in: [...COHORT_CODES] }, status: 'active' } })
     const old40Same = (await old40Fingerprint(expectedOld40)) === old40Before
     // 🔴 정본 판독기 — 단계 preflight 와 같은 값. 실패는 null(→ PASS 아님 → 새 cohort 만 pause)
-    const capacity = await readPersonaCapacity(prisma, { now: new Date(), repoRoot: process.cwd() })
+    const capacity = await readPersonaCapacity(db(), { now: new Date(), repoRoot: process.cwd() })
     const outcome = judgeOutcome({ activated, contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive, old40Same, checkOk })
     log('outcome', { code: outcome.code, problems: outcome.problems, contractValid: capacity.contractValid, stageActive: capacity.stageActive, totalActive, cohortActive, old40Same, checkOk })
     if (outcome.code !== 'PASS') return await stop(`OUTCOME_${outcome.code}`)
@@ -260,5 +273,5 @@ async function main(): Promise<number> {
 
 let code = 1
 try { code = await main() } catch (e) { log('crash', { error: (e as Error).name, message: (e as Error).message.slice(0, 200) }); code = 1 }
-finally { await prisma.$disconnect().catch(() => undefined) }
+finally { await openedClient()?.$disconnect().catch(() => undefined) }
 process.exit(code)
