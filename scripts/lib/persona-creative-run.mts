@@ -6,8 +6,9 @@
  *
  * 🔴 지키는 것
  *    · 후보 수가 `CREATIVE_MAX_CANDIDATES` 를 넘으면 **한 번도 부르지 않는다**
- *    · 호출 **전** 최악 예약액(입력 상한 = UTF-8 바이트 수 · 출력 상한 = max_tokens)을 더해
+ *    · 호출 **전** 공식 무료 `count_tokens` 입력 추정값과 출력 상한(`max_tokens`)으로 최악 예약액을 계산해
  *      `CREATIVE_COST_CAP_USD` 를 넘으면 그 후보와 뒤 후보를 부르지 않는다
+ *    · 공식 입력 계산이 실패하면 추정값으로 우회하지 않고 provider 호출 0으로 끝낸다
  *    · 사용량을 못 읽으면 실제 비용을 모른다 — 그 뒤로는 부르지 않는다(상한을 지킬 근거가 없다)
  *    · 재시도 0 — 실패 · 형식 위반은 그 후보의 creative 가 없는 것으로 끝난다
  *    · 나가는 글에 이 후보 묶음의 댓글 원문이 실렸으면 부르지 않는다(`payloadLeaks`)
@@ -21,9 +22,10 @@ import {
   type CompactPeer, type CreativeBrief, type CreativePeer,
 } from '../../src/lib/persona-creative'
 import type { PersonaCreative } from '../../src/lib/persona-autogen'
-import type { LlmRequest, LlmResponse } from './voice-m3-provider.mjs'
+import type { CountTokensRequest, CountTokensResult, LlmRequest, LlmResponse } from './voice-m3-provider.mjs'
 
 export type CreativeCall = (req: LlmRequest) => Promise<LlmResponse>
+export type CreativeCount = (req: CountTokensRequest) => Promise<CountTokensResult>
 
 export type CreativeOutcome = {
   code: string
@@ -58,8 +60,6 @@ export type CreativeRun =
   | { ok: true; outcomes: CreativeOutcome[]; ledger: CreativeLedger }
   | { ok: false; reason: string; ledger: CreativeLedger }
 
-const utf8Bytes = (s: string): number => Buffer.byteLength(s, 'utf-8')
-
 /**
  * 🔴 **한 실행.** 브리프는 코드순으로 한 번씩만 부른다. 앞서 생성된 creative 는 뒤 후보의 피할 대상에 더한다.
  *    `forbiddenTextsOf` — 그 후보 말투 묶음의 댓글 원문(나가는 글 대조용 · 밖으로 나가지 않는다).
@@ -70,6 +70,8 @@ export async function generateCreatives(input: {
   avoid: readonly CreativePeer[]
   forbiddenTextsOf: (code: string) => readonly string[]
   call: CreativeCall
+  /** 실제 provider 요청과 같은 입력을 세는 공식 무료 count_tokens 경로 */
+  count: CreativeCount
   capUsd?: number
   maxCandidates?: number
 }): Promise<CreativeRun> {
@@ -98,9 +100,19 @@ export async function generateCreatives(input: {
     const leaks = payloadLeaks(userPayload, input.forbiddenTextsOf(brief.code))
     if (leaks > 0) { blocked('leak-blocked', `나가는 글에 댓글 원문 ${leaks}건 — 부르지 않았다`); continue }
 
-    // 🔴 호출 전 최악 예약 — 입력은 UTF-8 바이트 수(토큰 수 이상) · 출력은 max_tokens(넘을 수 없다)
+    // 🔴 호출 전 최악 예약 — 실제 provider 요청과 같은 입력을 공식 무료 경로로 센다.
+    //    UTF-8 바이트를 토큰으로 간주하면 한글 입력을 과대 계산해 정상 호출도 영구 차단된다.
+    const counted = await input.count({
+      model: CREATIVE_MODEL, systemPrompt: CREATIVE_SYSTEM_PROMPT, userPayload,
+      timeoutMs: CREATIVE_TIMEOUT_MS,
+    })
+    if (!counted.ok || counted.inputTokens === null) {
+      stopped = `공식 입력 토큰 계산 실패 — ${counted.errorCode ?? 'COUNT_UNKNOWN'}`
+      blocked('budget-blocked', stopped)
+      continue
+    }
     const reserve = reserveOf({
-      model: CREATIVE_MODEL, countedInputTokens: utf8Bytes(CREATIVE_SYSTEM_PROMPT) + utf8Bytes(userPayload),
+      model: CREATIVE_MODEL, countedInputTokens: counted.inputTokens,
       maxOutputTokens: CREATIVE_MAX_OUTPUT_TOKENS, headroomMultiplier: 1,
     })
     if (!reserve.known) { stopped = `예약액을 계산하지 못했다 — ${reserve.reason}`; blocked('budget-blocked', stopped); continue }
@@ -189,6 +201,8 @@ export async function generateCreativeBatch(input: {
   avoid: readonly CompactPeer[]
   forbiddenTextsOf: (code: string) => readonly string[]
   call: CreativeCall
+  /** 실제 provider 요청과 같은 입력을 세는 공식 무료 count_tokens 경로 */
+  count: CreativeCount
   capUsd?: number
   maxCandidates?: number
 }): Promise<CreativeBatchRun> {
@@ -205,10 +219,17 @@ export async function generateCreativeBatch(input: {
   const leaks = codes.reduce((n, c) => n + payloadLeaks(userPayload, input.forbiddenTextsOf(c)), 0)
   if (leaks > 0) return { ok: false, reason: `나가는 글에 댓글 원문 ${leaks}건 — 부르지 않았다`, ledger }
 
-  // 🔴 호출 전 최악 예약 — 입력 UTF-8 바이트(토큰 수 이상) + 출력 상한. 상한을 넘으면 호출 0
+  // 🔴 호출 전 최악 예약 — 실제 provider 요청과 같은 입력을 공식 무료 경로로 센다.
+  const counted = await input.count({
+    model: CREATIVE_MODEL, systemPrompt: CREATIVE_BATCH_SYSTEM_PROMPT, userPayload,
+    timeoutMs: CREATIVE_BATCH_TIMEOUT_MS,
+  })
+  if (!counted.ok || counted.inputTokens === null) {
+    return { ok: false, reason: `공식 입력 토큰 계산 실패 — ${counted.errorCode ?? 'COUNT_UNKNOWN'}`, ledger }
+  }
   const reserve = reserveOf({
     model: CREATIVE_MODEL,
-    countedInputTokens: Buffer.byteLength(CREATIVE_BATCH_SYSTEM_PROMPT, 'utf-8') + Buffer.byteLength(userPayload, 'utf-8'),
+    countedInputTokens: counted.inputTokens,
     maxOutputTokens: CREATIVE_BATCH_MAX_OUTPUT_TOKENS, headroomMultiplier: 1,
   })
   if (!reserve.known) return { ok: false, reason: `예약액을 계산하지 못했다 — ${reserve.reason}`, ledger }

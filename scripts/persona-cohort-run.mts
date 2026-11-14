@@ -22,13 +22,14 @@
  *      · 일부만 처리하는 것 — 하나라도 어긋나면 **전원 롤백**한다
  */
 import { PrismaClient, type Prisma, type PersonaStatus } from '@prisma/client'
+import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 
 import {
   COHORTS, cohortOf, verifyAllCohorts, stageOf,
   judgeCreate, judgeSeed, judgeActivate, judgePause, judgePrerequisites, judgeArgs,
   judgeCohortArg, judgeStepArg, requiresActor, checkCohortKeys,
-  displayNamePathOf, seedPathOf,
+  COHORT_EXPANSION_FIXTURES, displayNamePathOf, seedPathOf, PRODUCTION_PERSONA_CODES,
   type CohortId, type CohortManifest, type CohortMemberState, type CohortStep,
 } from '../src/lib/persona-cohort'
 import { judgeRealMember } from '../src/lib/real-member-gate'
@@ -40,6 +41,10 @@ import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
+import { parseExpansionFixture, type ExpansionFixture } from './lib/persona-expansion-gate.mjs'
+import { modeCadence, type Cadence } from '../src/lib/persona-autogen'
+import { buildCohortSeeds, judgeCohortVoice, serializeSeeds } from './lib/persona-cohort-seed.mjs'
+import { stableAssignment } from './lib/persona-reference-store.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 const DRAFT: PersonaStatus = 'draft'
@@ -67,6 +72,25 @@ const cg = judgeCohortArg(arg('cohort'))
 if (!cg.ok) fail(cg.reason)
 const COHORT: CohortId = cg.id!
 const M: CohortManifest = cohortOf(COHORT)!
+
+/** 🔴 승인 fixture 는 경로뿐 아니라 digest 까지 manifest 에 고정한다. */
+const approvedExpansionFixture = (): ExpansionFixture | null => {
+  const approved = COHORT_EXPANSION_FIXTURES[COHORT]
+  if (approved === undefined) return null
+  let raw = ''
+  try { raw = readFileSync(approved.path, 'utf-8') }
+  catch (e) { fail(`${approved.path} 을 읽을 수 없습니다: ${(e as Error).message}`) }
+  const digest = createHash('sha256').update(raw).digest('hex')
+  if (digest !== approved.sha256) fail(`승인 fixture digest 불일치: ${digest} ≠ ${approved.sha256}`)
+  const parsed = parseExpansionFixture(raw)
+  const fixture = 'fixture' in parsed
+    ? parsed.fixture
+    : fail(`승인 fixture 형식 오류: ${parsed.problems.join(' / ')}`)
+  if (fixture.cohort !== COHORT) fail(`승인 fixture cohort ${fixture.cohort} ≠ ${COHORT}`)
+  const keyProblems = checkCohortKeys(M, fixture.candidates.map((c) => c.code))
+  if (keyProblems.length > 0) fail(`승인 fixture 범위 오류: ${keyProblems.join(' / ')}`)
+  return fixture
+}
 
 const sg = judgeStepArg(arg('step'))
 if (!sg.ok) fail(sg.reason)
@@ -236,7 +260,15 @@ if (STEP === 'create') {
    *       창업자가 직접 고르고 싶을 때의 문은 닫지 않는다.
    */
   const path = displayNamePathOf(COHORT)
-  if (existsSync(path)) {
+  const approved = approvedExpansionFixture()
+  if (approved !== null) {
+    creates = M.codes.map((code) => ({
+      code,
+      name: approved.candidates.find((candidate) => candidate.code === code)!.displayName.trim(),
+    }))
+    if (creates.some((c) => c.name === '')) { await prisma.$disconnect(); fail('승인 fixture 에 비어 있는 이름이 있습니다') }
+    ok(`승인 fixture 표시명 사용 (${COHORT_EXPANSION_FIXTURES[COHORT]!.path}) — digest 고정 · ${creates.length}개`)
+  } else if (existsSync(path)) {
     let selection: Record<string, string>
     try { selection = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string> }
     catch (e) { await prisma.$disconnect(); fail(`${path} 을 읽을 수 없습니다: ${(e as Error).message}`) }
@@ -321,6 +353,61 @@ if (STEP === 'seed') {
   if (keyProblems.length > 0) { await prisma.$disconnect(); fail(keyProblems.join(' / ')) }
   const dupes = duplicateKeys(raw)
   if (dupes.length > 0) { await prisma.$disconnect(); fail(`seed 파일에 중복 코드: ${dupes.join(', ')}`) }
+
+  /**
+   * 🔴 seed 파일은 승인 fixture 에서 시작한 **결정적 산출물**이어야 한다.
+   *    JSON 한 칸만 손으로 고쳐도 아래 재조립 바이트와 달라져 DB write 전에 멈춘다.
+   *    fixture · Pool · 말투 자산 · 현재 active cadence 중 하나가 달라져도 옛 seed 를 재사용하지 않는다.
+   */
+  const approved = approvedExpansionFixture()
+  if (approved !== null) {
+    const sa = stableAssignment({ repoRoot: process.cwd() })
+    if (!sa.canonicalAsset || sa.rows.length === 0) {
+      await prisma.$disconnect()
+      fail(`정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
+    }
+    const existing = PRODUCTION_PERSONA_CODES.filter((code) => !M.codes.includes(code))
+    // 🔴 현재 v2를 자기 자신과 비교하지 않는다. wave7 이전 40명의 동결 v1
+    // 배정을 재현해, 새 스냅샷이 기존 말투를 한 바이트라도 바꿨는지 판정한다.
+    const before = stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })
+    if (!before.canonicalAsset || before.rows.length === 0) {
+      await prisma.$disconnect()
+      fail(`투입 전 동결 v1 배정을 읽지 못했다 — ${before.origin}`)
+    }
+    const base = new Map(existing.flatMap((code) => {
+      const bundle = before.byCode.get(code)
+      return bundle === undefined ? [] : [[code, bundle] as const]
+    }))
+    const baselineMissing = existing.filter((code) => !base.has(code))
+    if (baselineMissing.length > 0) {
+      await prisma.$disconnect()
+      fail(`[VOICE_BASELINE_MISSING] 동결 v1에 기존 production 묶음이 없다: ${baselineMissing.join(',')}`)
+    }
+    const voiceProblems = judgeCohortVoice({ cohortCodes: M.codes, existingCodes: existing, base, full: sa.byCode })
+    if (voiceProblems.length > 0) { await prisma.$disconnect(); fail(voiceProblems.join(' / ')) }
+
+    const cadenceRows = await prisma.persona.findMany({
+      where: { status: 'active' },
+      select: { dailyCap: true, weeklyCap: true, silenceRate: true, activityRhythm: true },
+    })
+    const cadence = modeCadence(cadenceRows
+      .filter((row) => row.dailyCap !== null && row.weeklyCap !== null && row.silenceRate !== null
+        && row.activityRhythm !== null && typeof row.activityRhythm === 'object')
+      .map((row) => ({
+        dailyCap: row.dailyCap!, weeklyCap: row.weeklyCap!, silenceRate: Number(row.silenceRate),
+        activityRhythm: row.activityRhythm as Cadence['activityRhythm'],
+      })))
+    const creatives = Object.fromEntries(approved.candidates.map((candidate) => [candidate.code, candidate.creative]))
+    const expected = buildCohortSeeds({ codes: M.codes, cards: poolOf, creatives, voice: sa.byCode, cadence })
+    if (!expected.ok) { await prisma.$disconnect(); fail(expected.problems.join(' / ')) }
+    const expectedSeeds = (expected as { ok: true; value: Record<string, Record<string, unknown>> }).value
+    const expectedRaw = serializeSeeds(M.codes, expectedSeeds)
+    if (raw !== expectedRaw) {
+      await prisma.$disconnect()
+      fail(`SEED_PROVENANCE_MISMATCH — 승인 fixture·Pool·말투 자산·active cadence 에서 다시 만든 바이트와 다릅니다`)
+    }
+    ok(`seed provenance 재조립 일치 — 승인 fixture digest · Pool · 말투 자산 · active cadence 결속`)
+  }
 
   // 🔴 정본 대조 — 금지값 · 필수 축 · Pool 카드 일치
   let bad = 0

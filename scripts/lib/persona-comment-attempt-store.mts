@@ -1,5 +1,5 @@
 /**
- * 첫 댓글 **시도 기억 저장소** — 🔴 짧은 로컬 파일 하나. 비용 장부 · Queue · DB 와 섞이지 않는다
+ * Persona 댓글 **시도 기억 저장소**(첫 댓글 · 추가 댓글 lane 별 파일) — 🔴 짧은 로컬 파일 하나. 비용 장부 · Queue · DB 와 섞이지 않는다
  *
  * 🔴 **무엇을 하나.** `src/lib/persona-comment-attempt-policy.ts` 의 순수 계약을 파일에 얹는다.
  *      · provider 를 부르기 **전에** 시작 기록을 내구적으로 적는다 — 적지 못하면 호출하지 않는다
@@ -12,6 +12,10 @@
  *
  * 🔴 **본문을 받지 않는다.** 타입이 받는 것은 조합 · 시각 · 단계 · 관문 코드뿐이다(정책 모듈이 모양을 강제한다).
  *    오류 사유도 errno 코드만 싣는다 — 경로 · 메시지 원문은 로그에 남기지 않는다.
+ *
+ * 🔴 **lane 마다 파일 하나.** 기본은 첫 댓글 lane(`first-comment-attempts.v1.json` · 60분)이다.
+ *    추가 댓글 lane 은 `followup-attempts.v1.json`(KST 하루) — 같은 잠금 디렉터리 · 같은 쓰기 절차 · 다른 파일이다.
+ *    그래서 추가 댓글 실패 기억이 첫 댓글 조합 · 격리를 바꾸지 않는다(반대도 같다).
  */
 import {
   closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync,
@@ -19,16 +23,21 @@ import {
 import { join } from 'node:path'
 
 import {
-  activeAttempts, parseAttemptJournal, serializeAttemptJournal, withAttemptOutcomes, withAttemptStarted,
-  type AttemptEntry, type AttemptOutcomeUpdate,
+  FIRST_COMMENT_ATTEMPT_LANE, activeAttempts, parseAttemptJournal, serializeAttemptJournal, withAttemptOutcomes,
+  withAttemptStarted, type AttemptEntry, type AttemptLane, type AttemptOutcomeUpdate,
 } from '../../src/lib/persona-comment-attempt-policy'
-import { AUTO_FIRST_COMMENT_WINDOW_MS } from '../../src/lib/persona-comment-auto-lane'
+import { FOLLOWUP_ATTEMPT_LANE } from '../../src/lib/persona-comment-followup'
 import type { LeaseProof } from './runner-lease.mjs'
 
 /** 🔴 잠금 디렉터리 안의 파일 — 비용 장부(`persona-comment-ledger`)와 다른 자리다 */
 export const ATTEMPT_JOURNAL_FILE = 'first-comment-attempts.v1.json'
 export const ATTEMPT_JOURNAL_CORRUPT_FILE = `${ATTEMPT_JOURNAL_FILE}.corrupt`
 export const ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE = `${ATTEMPT_JOURNAL_CORRUPT_FILE}.previous`
+/** 🔴 추가 댓글 lane 파일 — 첫 댓글 파일과 다른 이름이다(손상본 이름도 이 이름에서 만든다) */
+export const FOLLOWUP_ATTEMPT_JOURNAL_FILE = 'followup-attempts.v1.json'
+
+const journalFileOf = (lane: AttemptLane): string =>
+  lane.name === 'followup' ? FOLLOWUP_ATTEMPT_JOURNAL_FILE : ATTEMPT_JOURNAL_FILE
 
 export type AttemptFsOps = {
   readFileSync: (path: string, enc: 'utf-8') => string
@@ -62,6 +71,8 @@ export type AttemptWrite =
 export type AttemptStore = {
   /** 파일 경로 — 진단용 */
   readonly path: string
+  /** 🔴 이 저장소의 lane — 부르는 쪽이 다른 lane 저장소를 받으면 닫는다 */
+  readonly lane: AttemptLane['name']
   /** 🔴 만료되지 않은 기억만 돌려준다. 파일이 없으면 정상 빈 기억이다 */
   /** `repair:false`는 preview 전용 — 손상본 격리·초기화를 포함한 파일 write 0 */
   read: (nowMs: number, options?: { repair?: boolean }) => AttemptRead
@@ -76,11 +87,14 @@ const codeOf = (e: unknown): string => {
   return typeof c === 'string' ? c : 'UNKNOWN'
 }
 
-export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps> }): AttemptStore {
+export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>; lane?: AttemptLane }): AttemptStore {
   const ops: AttemptFsOps = { ...REAL_OPS, ...o.ops }
-  const path = join(o.dir, ATTEMPT_JOURNAL_FILE)
-  const corruptPath = join(o.dir, ATTEMPT_JOURNAL_CORRUPT_FILE)
-  const previousCorruptPath = join(o.dir, ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE)
+  const lane = o.lane ?? FIRST_COMMENT_ATTEMPT_LANE
+  const laneLabel = lane.name === 'first-comment' ? '첫 댓글' : '추가 댓글'
+  const file = journalFileOf(lane)
+  const path = join(o.dir, file)
+  const corruptPath = join(o.dir, `${file}.corrupt`)
+  const previousCorruptPath = join(o.dir, `${file}.corrupt.previous`)
 
   const exists = (p: string): boolean => {
     try { ops.statSync(p); return true } catch (e) {
@@ -90,8 +104,8 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
   }
 
   /**
-   * 🔴 손상 직후에는 이미 시작한 60분 window 를 알 수 없으므로 fail-closed 다.
-   *    파일 mtime 뒤 60분이 지난 뒤에만 손상본을 보존하고 새 장부를 시작한다.
+   * 🔴 손상 직후에는 이미 시작한 기억 기간(첫 댓글 60분 · 추가 댓글 KST 하루)을 알 수 없으므로 fail-closed 다.
+   *    파일 mtime 의 모든 기억이 끝난 뒤(`lane.allExpiredAtMs`)에만 손상본을 보존하고 새 장부를 시작한다.
    *    격리본은 현재·직전 두 개로 제한한다. 어느 파일 작업이든 실패하면 원장 복구를 시도하지 않고 닫는다.
    */
   const quarantineExpiredCorruption = (nowMs: number): { ok: true; warning: string } | { ok: false; reason: string } => {
@@ -99,8 +113,8 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
     try { mtimeMs = ops.statSync(path).mtimeMs } catch (e) {
       return { ok: false, reason: `손상 시각 확인 실패 ${codeOf(e)}` }
     }
-    if (!Number.isFinite(mtimeMs) || nowMs - mtimeMs <= AUTO_FIRST_COMMENT_WINDOW_MS) {
-      return { ok: false, reason: '손상 파일이 첫 댓글 60분 window 안이다 — 자동 복구하지 않는다' }
+    if (!Number.isFinite(mtimeMs) || nowMs <= lane.allExpiredAtMs(mtimeMs)) {
+      return { ok: false, reason: `손상 파일이 ${laneLabel} ${lane.windowLabel} 안이다 — 자동 복구하지 않는다` }
     }
     try {
       if (exists(corruptPath)) {
@@ -108,7 +122,7 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
         ops.renameSync(corruptPath, previousCorruptPath)
       }
       ops.renameSync(path, corruptPath)
-      return { ok: true, warning: '🟡 만료된 첫 댓글 시도 기억 손상본을 격리하고 빈 장부로 복구했다' }
+      return { ok: true, warning: `🟡 만료된 ${laneLabel} 시도 기억 손상본을 격리하고 빈 장부로 복구했다` }
     } catch (e) {
       return { ok: false, reason: `손상본 격리 실패 ${codeOf(e)}` }
     }
@@ -116,7 +130,7 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
 
   /**
    * 🔴 격리본은 있는데 정본 장부가 없다 — 격리 뒤 빈 장부 쓰기가 실패했거나 그 사이 프로세스가 죽었다.
-   *    rename 은 mtime 을 보존하므로 격리본 mtime 이 손상 장부의 마지막 쓰기다. 그 뒤 60분이 지났으면 그 안의
+   *    rename 은 mtime 을 보존하므로 격리본 mtime 이 손상 장부의 마지막 쓰기다. 그 기억 기간이 지났으면 그 안의
    *    시도는 전부 만료됐으니 live 회차가 빈 장부를 다시 만든다. 쓰기 실패는 그 회차만 닫고 다음 live 회차가 다시 시도한다.
    *    preview(`repair:false`)는 write 0 — 닫힌 채로 둔다.
    */
@@ -124,8 +138,8 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
     if (!repair) {
       return { ok: false, code: 'READ_FAILED', reason: '격리된 손상본은 있으나 새 장부가 없다 · read-only preview는 새 장부를 만들지 않는다' }
     }
-    if (!Number.isFinite(quarantinedAtMs) || nowMs - quarantinedAtMs <= AUTO_FIRST_COMMENT_WINDOW_MS) {
-      return { ok: false, code: 'READ_FAILED', reason: '격리된 손상본이 첫 댓글 60분 window 안이다 — 새 장부를 만들지 않는다' }
+    if (!Number.isFinite(quarantinedAtMs) || nowMs <= lane.allExpiredAtMs(quarantinedAtMs)) {
+      return { ok: false, code: 'READ_FAILED', reason: `격리된 손상본이 ${laneLabel} ${lane.windowLabel} 안이다 — 새 장부를 만들지 않는다` }
     }
     const err = writeAtomic(serializeAttemptJournal([]))
     if (err !== null) {
@@ -150,7 +164,7 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
       }
       return { ok: false, code: 'READ_FAILED', reason: `읽기 실패 ${codeOf(e)}` }
     }
-    const parsed = parseAttemptJournal(text)
+    const parsed = parseAttemptJournal(text, lane)
     if (!parsed.ok) {
       if (options.repair === false) {
         return { ok: false, code: parsed.code, reason: `${parsed.reason} · read-only preview는 손상 장부를 수정하지 않는다` }
@@ -200,15 +214,16 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
 
   return {
     path,
+    lane: lane.name,
     read: (nowMs, options) => {
       const r = readAll(nowMs, options)
       if (!r.ok) return r
-      return { ...r, entries: activeAttempts(r.entries, nowMs) }
+      return { ...r, entries: activeAttempts(r.entries, nowMs, lane) }
     },
     recordStart: (entry, nowMs) => {
       const cur = readAll(nowMs)
       if (!cur.ok) return { ok: false, kind: 'IO', reason: `시작 기록 전 읽기 실패 ${cur.code}` }
-      const next = withAttemptStarted(cur.entries, entry, nowMs)
+      const next = withAttemptStarted(cur.entries, entry, nowMs, lane)
       if (!next.ok) return { ok: false, kind: 'ALREADY_ATTEMPTED', reason: next.reason }
       const err = writeAtomic(serializeAttemptJournal(next.entries))
       return err === null ? { ok: true } : { ok: false, kind: 'IO', reason: `시작 기록 쓰기 실패 ${err}` }
@@ -217,7 +232,7 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
       if (updates.length === 0) return { ok: true }
       const cur = readAll(nowMs)
       if (!cur.ok) return { ok: false, kind: 'IO', reason: `결과 갱신 전 읽기 실패 ${cur.code}` }
-      const next = withAttemptOutcomes(cur.entries, updates, nowMs)
+      const next = withAttemptOutcomes(cur.entries, updates, nowMs, lane)
       const err = writeAtomic(serializeAttemptJournal(next.entries))
       if (err !== null) return { ok: false, kind: 'IO', reason: `결과 갱신 쓰기 실패 ${err}` }
       return next.missing.length === 0
@@ -230,4 +245,9 @@ export function createAttemptStore(o: { dir: string; ops?: Partial<AttemptFsOps>
 /** 🔴 커널 lease 증명에서 만든다 — lease 를 쥔 회차만 이 저장소를 얻는다(잠금 디렉터리와 같은 자리) */
 export function attemptStoreInLease(proof: LeaseProof, ops?: Partial<AttemptFsOps>): AttemptStore {
   return createAttemptStore({ dir: proof.followUpDir, ...(ops === undefined ? {} : { ops }) })
+}
+
+/** 🔴 추가 댓글 lane 저장소 — 같은 lease 잠금 디렉터리 · 다른 파일(`followup-attempts.v1.json`) */
+export function followupAttemptStoreInLease(proof: LeaseProof, ops?: Partial<AttemptFsOps>): AttemptStore {
+  return createAttemptStore({ dir: proof.followUpDir, lane: FOLLOWUP_ATTEMPT_LANE, ...(ops === undefined ? {} : { ops }) })
 }

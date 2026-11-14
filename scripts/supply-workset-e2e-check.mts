@@ -464,11 +464,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     [...latestOutcomes(got).values()].every((o) => o.stage === 'draft'),
     [...latestOutcomes(got).values()].map((o) => `${o.sourceArticleId}:${o.stage}:${o.state}`).join(' '))
 
-  const terminal = concludedIds(got)
-  // 🔴 2026-11-10 retry-authority-v7 — 상태는 candidate(terminal 아님)이되 유료 재생성 풀에서 빠진다. 적재 못 한 후보는 이월이 살린다(⑥ ⑦)
-  check('🔴 🔴 **채택된 원천은 candidate 상태 — 그리고 유료 재생성 풀(결론 집합)로 빠진다**',
-    terminal.size === 5 && [...latestOutcomes(got).values()].every((o) => o.state === 'candidate'),
-    [...latestOutcomes(got).values()].map((o) => o.state).join(','))
+  const concluded = concludedIds(got)
 
   /**
    * 🔴 **적재된 원천은 큐 형제로 걸린다.** 적재 단계가 후보를 Queue 에 넣으므로
@@ -480,6 +476,57 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     { candidates: { sourceArticleId?: string }[] }).candidates)
     .map((c) => String(c.sourceArticleId ?? '')))
   check('🔴 후보 파일에서 적재 대상이 나온다', queued.size >= 1, [...queued].join(','))
+  /**
+   * 🔴 2026-11-14 H2 — 같은 제목 픽스처(varyTitle 꺼짐)는 첫 원천 하나만 채택되고,
+   *    나머지는 의미 검수를 사기 전에 `duplicateTitle` 로 지배된다. 채택 원천은
+   *    candidate, 지배 원천은 terminal 이지만 둘 다 결론 집합이라 다시 사지 않는다.
+   */
+  const latest = latestOutcomes(got)
+  const pickFile = `auto-draft-${RUN}.picks.jsonl`
+  const pickRows = readFileSync(join(w.dd, pickFile), 'utf-8').split('\n')
+    .filter((l) => l.trim() !== '')
+    .map((l) => JSON.parse(l) as {
+      sourceArticleId: string; decision: string; reason: string
+    })
+  const adoptedIds = new Set(pickRows.filter((p) => p.decision === 'AUTO_ADOPT')
+    .map((p) => p.sourceArticleId))
+  const artifactRows = arts as unknown as {
+    sourceArticleId?: unknown
+    review?: {
+      semantic?: unknown
+      semanticCompletion?: { complete?: boolean; cause?: string | null }
+      machineOutcome?: string
+    }
+    cost?: { calls?: { stage?: string }[] }
+  }[]
+  const artifactOf = new Map(artifactRows.map((a) => [String(a.sourceArticleId ?? ''), a]))
+  const boughtSemanticReview = (id: string): boolean =>
+    (artifactOf.get(id)?.cost?.calls ?? []).some((c) => c.stage === 'semanticReview')
+  check('🔴 🔴 **채택 원천만 candidate · 지배 원천은 terminal · 전부 결론 집합이라 재구매 0**',
+    latest.size === 5 && pickRows.length === 5
+    && adoptedIds.size === 1 && queued.size === 1
+    && [...adoptedIds].every((id) => queued.has(id))
+    && [...queued].every((id) => adoptedIds.has(id))
+    && [...latest.values()].every((o) => adoptedIds.has(o.sourceArticleId)
+      ? o.state === 'candidate'
+      : o.state === 'terminal')
+    && pickRows.filter((p) => !adoptedIds.has(p.sourceArticleId)).every((p) =>
+      p.decision === 'AUTO_HOLD' && p.reason === 'duplicateTitle')
+    && pickRows.every((p) => {
+      const a = artifactOf.get(p.sourceArticleId)
+      return adoptedIds.has(p.sourceArticleId)
+        ? boughtSemanticReview(p.sourceArticleId)
+          && a?.review?.semantic !== null
+          && a?.review?.semanticCompletion?.complete === true
+        : !boughtSemanticReview(p.sourceArticleId)
+          && a?.review?.semantic === null
+          && a?.review?.semanticCompletion?.complete === false
+          && a?.review?.semanticCompletion?.cause === 'deterministicFailed'
+          && a?.review?.machineOutcome === 'hold'
+    })
+    && concluded.size === 5 && [...latest.values()].every((o) => concluded.has(o.sourceArticleId)),
+    [...latest.values()].map((o) => `${o.sourceArticleId}:${o.state}`).join(' ')
+      + ` | ${pickRows.map((p) => `${p.sourceArticleId}:${p.decision}/${p.reason}`).join(' ')}`)
   NEXT.queued = queued
 
   /** 🔴 지금 데이터 폴더의 **실제 파일**만 보고 다음 묶음을 고른다 */

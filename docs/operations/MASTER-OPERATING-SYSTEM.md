@@ -1507,7 +1507,7 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 
 | 축 | 수 | 뜻 |
 |---|---|---|
-| production 정본 universe | **40명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) — wave6-d20-canary(P34~P43) 코드 준비 포함 · 운영 active 는 wave6 적재·활성화 전까지 30명 |
+| production 정본 universe | **60명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) — 기존 40명과 D30 복구 cohort(P44~P63) 코드 자산을 포함한다. 이 설계 universe는 운영 active 수가 아니다. 운영 DB는 2026-11-14 05:35 관측 기준 contract-valid 40 · active 40이며, 새 20명은 비증명일의 원자적 create·seed·activate와 재검증 뒤에만 운영 용량이 된다 |
 | 측정 기준 universe | **24명** | 아래 bundle · 입력 · shadow 수는 2026-09-10 회차 당시 24명 기준 측정이다 — wave5 6명은 아직 재지 않았다 |
 | **reference bundle 성립** | **18명** | P01~P08 P10~P19 · 한 화자 3~8건 |
 | bundle 미성립 | **6명** | P20 P21 P22 P23 P24 P25 — 화자 부족 |

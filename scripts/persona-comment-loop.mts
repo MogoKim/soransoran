@@ -34,7 +34,7 @@ import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-leas
 import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
 import { followupEligibleFor, readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
-import { attemptStoreInLease } from './lib/persona-comment-attempt-store.mjs'
+import { attemptStoreInLease, followupAttemptStoreInLease } from './lib/persona-comment-attempt-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
 import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
@@ -144,6 +144,8 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
         makeGenerate: (codes) => makeGenerate(codes, 'commentFollowupGen'),
         generation: gate,
         ledger: { entries: ledgerRead.entries, capUsd: budget.limits.dailyUsd, headroom: budget.limits.headroomMultiplier },
+        // 🔴 추가 댓글 실패 격리(KST 하루) — 같은 lease 디렉터리의 다른 파일. 첫 댓글 시도 기억을 쓰지 않는다
+        attemptStore: followupAttemptStoreInLease(proof),
         ...fctx,
       })
     }

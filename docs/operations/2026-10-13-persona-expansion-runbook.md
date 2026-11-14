@@ -126,6 +126,17 @@
 7. **관측** — `persona:expansion -- --db`의 계약 유효가 40이고, 다음 자연 회차에서 새 10명이 배정 후보에 들어오는지
    본다. 문제가 있으면 `--step=pause`(actor·reason 필요)로 멈춘다.
 
+**runtime과 cohort를 함께 되돌리는 순서**
+
+1. 새 runtime이 아직 동작하는 동안 승인된 actor·reason으로 문제 cohort 전체를 `--step=pause --apply` 한다.
+   일부만 pause하지 않는다.
+2. read-only `--step=check`와 `persona:expansion -- --db`로 새 cohort active 0, 직전 production cohort의
+   contract-valid·active 수, 기존 말투 배정 digest 불변을 확인한다.
+3. 그 뒤에만 runtime을 직전 pin으로 되돌리고 HEAD=pin=manifest와 launchd를 다시 확인한다. 순서를 바꾸면 이전
+   runtime이 새 cohort를 해석하는 위험이 있으므로 금지한다.
+4. append-only 말투 supplement 파일은 삭제하거나 덮어쓰지 않는다. 해당 generation을 비활성 cohort와 함께 보존하고,
+   재개는 새 exact-head 검증과 별도 승인 뒤에 한다.
+
 ### 3.2 d20-sustained (계약 유효 60)
 
 3.1이 운영 증거로 닫힌 뒤. 3.1과 같은 순서로 진행한다.

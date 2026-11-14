@@ -12,11 +12,12 @@
  *    "운영 active cadence 없음" 반례는 다른 검사의 cadence 있는 active 행이 0 일 때만 성립한다 —
  *    있으면 건너뛰지 않고 FAIL 한다(그 수를 함께 적는다).
  *
- *   ① dry-run → 현재 runnable cohort 전원 seed · lifeStage · 파일 0
+ *   ① dry-run → 현재 runnable D30 cohort 전원 seed · lifeStage · 파일 0
  *   ② --write → 원자적 파일 · 권한 600 · cohort 전원 key · privacy · 같은 내용 재실행 no-op · 다른 내용 기존 파일 → 거부
  *   ②-b 🔴 기존 파일 권한 경계 — 같은 내용 0600 no-op · 같은 내용 0644 dry-run 거부 · --write 는 권한만 고침 ·
  *       다른 내용 0644 → 내용 · 권한 모두 그대로
- *   ③ 잘못된 SHA · creative 누락 · 추가 · 중복 · 카드 불일치 · variation 개수 · 말투 묶음 누락 · cadence 없음 → 파일 0
+ *   ③ 승인 D30 fixture SHA·카드·creative는 실제 CLI가 재검증하고,
+ *      말투 세대(v1 → v2) 누락 · cadence 없음 → 파일 0
  *   🔴 모든 회차 DB write 0 · provider 요청 0
  */
 import { spawnSync } from 'node:child_process'
@@ -42,10 +43,11 @@ const REPO = process.cwd()
 const { PrismaClient } = await import('@prisma/client')
 const { writeFakePersonaAsset } = await import('./lib/fake-persona-asset.mjs')
 const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
-const { COHORTS, PRODUCTION_PERSONA_CODES } = await import('../src/lib/persona-cohort')
+const { COHORTS, COHORT_EXPANSION_FIXTURES, PRODUCTION_PERSONA_CODES } = await import('../src/lib/persona-cohort')
 const { lifeStageOf } = await import('../src/lib/persona-autogen')
 const { sha256Hex } = await import('./lib/persona-cohort-seed.mjs')
 const { PERSONA_POOL_DOC } = await import('./lib/voice-runtime.mjs')
+const { parseExpansionFixture } = await import('./lib/persona-expansion-gate.mjs')
 type PersonaCreative = import('../src/lib/persona-autogen').PersonaCreative
 
 let pass = 0
@@ -70,66 +72,85 @@ async function cleanup(): Promise<void> {
   await prisma.user.deleteMany({ where: { name: { startsWith: NAME_PREFIX }, accounts: { none: {} } } })
 }
 
-const COHORT = 'wave6-d20-canary'
+const COHORT = 'wave7-d30'
 const CODES = COHORTS[COHORT].codes
 const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
 const card = (c: string) => pool.cards.find((x) => x.code === c)!
-const BEHAVIORS = ['짧게 공감하고 끝내기', '경험을 한 줄 나누기', '되물어 보기', '웃으며 넘기기', '조용히 응원하기', '살림 요령 하나 건네기',
-  '날씨 얘기로 말 걸기', '천천히 하라고 다독이기']
-const creativeOf = (c: string): PersonaCreative => ({
-  title: card(c).title, personality: [...card(c).personality], noGoTopics: [...card(c).noGoTopics], noGoExpressions: [...card(c).noGoExpressions],
-  variations: BEHAVIORS.slice(0, card(c).variationCount).map((b) => `${b} (${c})`),
-})
-const GOOD: Record<string, PersonaCreative> = Object.fromEntries(CODES.map((c) => [c, creativeOf(c)]))
-const FIRST = CODES[0]!
-const SECOND = CODES[1]!
-const THIRD = CODES[2]!
-const FOURTH = CODES[3]!
+const expansionRef = COHORT_EXPANSION_FIXTURES[COHORT]!
+const expansionRaw = readFileSync(join(REPO, expansionRef.path), 'utf-8')
+if (sha256Hex(expansionRaw) !== expansionRef.sha256) throw new Error('D30 승인 fixture SHA가 manifest와 다르다')
+const expansionParsed = parseExpansionFixture(expansionRaw)
+if (!('fixture' in expansionParsed)) throw new Error(`D30 승인 fixture 판독 실패: ${expansionParsed.problems.join(' / ')}`)
+const GOOD: Record<string, PersonaCreative> = Object.fromEntries(
+  expansionParsed.fixture.candidates.map((candidate) => [candidate.code, candidate.creative]),
+)
 
 const T = mkdtempSync(join(tmpdir(), 'soran-cohort-seed-'))
 const HOME_OK = join(T, 'home-ok')
 const HOME_THIN = join(T, 'home-thin')
-mkdirSync(HOME_OK); mkdirSync(HOME_THIN)
-const asset = writeFakePersonaAsset({ home: HOME_OK, speakers: PRODUCTION_PERSONA_CODES.length + CODES.length })
-// 🔴 화자가 production 수보다 적다 — 코드순 배정에서 현재 cohort가 묶음을 못 받는다
-writeFakePersonaAsset({ home: HOME_THIN, speakers: PRODUCTION_PERSONA_CODES.length - CODES.length })
+const HOME_NO_V1 = join(T, 'home-no-v1')
+const HOME_NO_V2 = join(T, 'home-no-v2')
+mkdirSync(HOME_OK); mkdirSync(HOME_THIN); mkdirSync(HOME_NO_V1); mkdirSync(HOME_NO_V2)
+const BASE_CODES = PRODUCTION_PERSONA_CODES.slice(0, 30)
+const V1_CODES = COHORTS['wave6-d20-canary'].codes
+const asset = writeFakePersonaAsset({ home: HOME_OK, speakers: BASE_CODES.length })
+// 🔴 보충 세대가 둘 다 없으면 canonical fallback은 base30뿐이라
+// 기존 wave6 기준선부터 닫힌다. 화자 수를 늘려도 세대 snapshot을 대신할 수 없다.
+writeFakePersonaAsset({ home: HOME_THIN, speakers: BASE_CODES.length })
+const assetNoV1 = writeFakePersonaAsset({ home: HOME_NO_V1, speakers: BASE_CODES.length })
+const assetNoV2 = writeFakePersonaAsset({ home: HOME_NO_V2, speakers: BASE_CODES.length })
 const assetRows = (JSON.parse(readFileSync(asset.corpus, 'utf-8')) as { comments: { speakerId: string; content: string }[] }).comments
 const assetManifest = JSON.parse(readFileSync(asset.manifest, 'utf-8')) as { sourceDigest: string }
-// wave6 is fail-closed without the append-only snapshot. Build the same shape
-// in the temporary HOME from synthetic rows only; production assets stay unread.
+// 현재 운영과 같은 세대 계약: canonical base30 → 동결 v1(+10) → active v2(+20).
+// 임시 HOME의 합성 행만 쓰고 운영 자산은 읽지 않는다.
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const canonRows = assetRows.map((row) => ({ speakerId: row.speakerId, text: row.content }))
-const extraRows = CODES.flatMap((_, speakerIndex) => [
-  { speakerId: `cohort-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 차분히 읽어 보니 마음이 놓이네요` },
-  { speakerId: `cohort-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 무리하지 말고 천천히 쉬어 가세요` },
-  { speakerId: `cohort-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 서두르지 않아도 괜찮으니 편하게 나눠요` },
+const extraRows = (prefix: string, codes: readonly string[]) => codes.flatMap((_, speakerIndex) => [
+  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 차분히 읽어 보니 마음이 놓이네요 (${prefix})` },
+  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 무리하지 말고 천천히 쉬어 가세요 (${prefix})` },
+  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 서두르지 않아도 괜찮으니 편하게 나눠요 (${prefix})` },
 ])
-const supplement = planSupplementSnapshot({
+const supplementV1 = planSupplementSnapshot({
   canonRows,
-  extraRows,
-  baseCodes: PRODUCTION_PERSONA_CODES.filter((code) => !CODES.includes(code)),
-  newCodes: CODES,
+  extraRows: extraRows('v1', V1_CODES),
+  baseCodes: BASE_CODES,
+  newCodes: V1_CODES,
   baseSourceDigest: assetManifest.sourceDigest,
   saltId: 'c'.repeat(12),
   generatedAt: '2026-10-15T00:00:00.000Z',
-  reason: 'fixture',
+  reason: 'fixture generation one',
 })
-if (!supplement.ok) throw new Error(`합성 보충 snapshot 계획 실패: ${supplement.problems.join(' / ')}`)
-writeFileSync(join(asset.dir, 'supplement-v1.json'), supplement.assetText, { mode: 0o600 })
-writeFileSync(join(asset.dir, 'supplement-v1-manifest.json'), supplement.manifestText, { mode: 0o600 })
+if (!supplementV1.ok) throw new Error(`합성 v1 snapshot 계획 실패: ${supplementV1.problems.join(' / ')}`)
+const supplementV2 = planSupplementSnapshot({
+  canonRows,
+  extraRows: extraRows('v2', CODES),
+  baseCodes: BASE_CODES,
+  newCodes: CODES,
+  frozenBundles: supplementV1.asset.bundles,
+  baseSourceDigest: assetManifest.sourceDigest,
+  saltId: 'd'.repeat(12),
+  generatedAt: '2026-11-14T00:00:00.000Z',
+  reason: 'fixture generation two',
+})
+if (!supplementV2.ok) throw new Error(`합성 v2 snapshot 계획 실패: ${supplementV2.problems.join(' / ')}`)
+writeFileSync(join(asset.dir, 'supplement-v1.json'), supplementV1.assetText, { mode: 0o600 })
+writeFileSync(join(asset.dir, 'supplement-v1-manifest.json'), supplementV1.manifestText, { mode: 0o600 })
+writeFileSync(join(asset.dir, 'supplement-v2.json'), supplementV2.assetText, { mode: 0o600 })
+writeFileSync(join(asset.dir, 'supplement-v2-manifest.json'), supplementV2.manifestText, { mode: 0o600 })
+// 🔴 세대별 누락을 각각 재현한다. 둘 다 없는 HOME_THIN 하나로는
+// v1 baseline 누락과 v2 target 누락을 구분해 검증할 수 없다.
+writeFileSync(join(assetNoV1.dir, 'supplement-v2.json'), supplementV2.assetText, { mode: 0o600 })
+writeFileSync(join(assetNoV1.dir, 'supplement-v2-manifest.json'), supplementV2.manifestText, { mode: 0o600 })
+writeFileSync(join(assetNoV2.dir, 'supplement-v1.json'), supplementV1.assetText, { mode: 0o600 })
+writeFileSync(join(assetNoV2.dir, 'supplement-v1-manifest.json'), supplementV1.manifestText, { mode: 0o600 })
 // 🔴 임시 cwd — 출력 `tmp/` 가 저장소에 생기지 않는다. 정본 Pool 문서만 그대로 연결한다
 const CWD = join(T, 'cwd')
 mkdirSync(join(CWD, 'docs'), { recursive: true })
 symlinkSync(join(REPO, 'docs', 'operations'), join(CWD, 'docs', 'operations'))
+mkdirSync(join(CWD, 'scripts', '__fixtures__'), { recursive: true })
+const CWD_EXPANSION_FIXTURE = join(CWD, expansionRef.path)
+symlinkSync(join(REPO, expansionRef.path), CWD_EXPANSION_FIXTURE)
 const OUT = join(CWD, 'tmp', `persona-${COHORT}-seed.json`)
-
-const writeCreative = (name: string, raw: string): { path: string; sha: string } => {
-  const path = join(T, name)
-  writeFileSync(path, raw)
-  return { path, sha: sha256Hex(raw) }
-}
-const fileOf = (m: Record<string, PersonaCreative>): string => `${JSON.stringify(m, null, 2)}\n`
-const good = writeCreative('good.json', fileOf(GOOD))
 
 const cli = (args: string[], home = HOME_OK) => {
   const log = join(T, `fetch-${Date.now()}-${Math.random().toString(36).slice(2)}.log`)
@@ -145,7 +166,6 @@ const cli = (args: string[], home = HOME_OK) => {
   const requests = readFileSync(log, 'utf-8').split('\n').filter((l) => l.trim() !== '').length
   return { status: run.status, out: `${run.stdout ?? ''}${run.stderr ?? ''}`, requests }
 }
-const args = (c: { path: string; sha: string }, extra: string[] = []): string[] => [`--creative=${c.path}`, `--expect-sha=${c.sha}`, ...extra]
 const tmpLeft = (): string[] => (existsSync(join(CWD, 'tmp')) ? readdirSync(join(CWD, 'tmp')).filter((f) => f.includes('.tmp-')) : [])
 
 console.log('\n══ Persona cohort seed — 실제 CLI · 격리 DB · 임시 cwd · 가짜 fetch ══\n')
@@ -164,7 +184,7 @@ try {
 
   // ── ① dry-run ──
   console.log('① dry-run')
-  const d = cli(args(good))
+  const d = cli([])
   check('CLI 종료 0', d.status === 0, d.out.slice(-600))
   check('🔴 반례 12 — --write 없음 → 파일 0', !existsSync(OUT) && /dry-run — 파일 0/.test(d.out))
   check(`🔴 반례 1 — ${CODES.length}명 전원 verifySeedCard ✅`, CODES.every((c) => new RegExp(`^  ${c}  .*verifySeedCard ✅`, 'm').test(d.out)) && !/불일치/.test(d.out))
@@ -173,7 +193,7 @@ try {
 
   // ── ② --write ──
   console.log('② --write')
-  const w = cli(args(good, ['--write']))
+  const w = cli(['--write'])
   check('CLI 종료 0', w.status === 0, w.out.slice(-400))
   const raw = existsSync(OUT) ? readFileSync(OUT, 'utf-8') : ''
   const seeds = raw === '' ? {} : JSON.parse(raw) as Record<string, Record<string, unknown>>
@@ -187,23 +207,23 @@ try {
   console.log('②-b 🔴 기존 파일 권한 경계')
   const modeOf = (): number => statSync(OUT).mode & 0o777
   const mtime = existsSync(OUT) ? statSync(OUT).mtimeMs : 0
-  const again = cli(args(good, ['--write']))
+  const again = cli(['--write'])
   check('🔴 권한 반례 1 — 같은 내용 + 0600 → 성공 · no-op · 내용 · mtime 불변', again.status === 0 && /이미 같은 내용이다/.test(again.out)
     && statSync(OUT).mtimeMs === mtime && readFileSync(OUT, 'utf-8') === raw && modeOf() === 0o600)
   chmodSync(OUT, 0o644)
   const mtime644 = statSync(OUT).mtimeMs
-  const permDry = cli(args(good))
+  const permDry = cli([])
   check('🔴 권한 반례 2 — 같은 내용 + 0644 + dry-run → exit 1 · [OUTPUT_PERMISSION] · 내용 · 권한 · mtime 불변',
     permDry.status === 1 && /\[OUTPUT_PERMISSION\]/.test(permDry.out) && readFileSync(OUT, 'utf-8') === raw && modeOf() === 0o644
     && statSync(OUT).mtimeMs === mtime644, `${modeOf().toString(8)} · ${permDry.out.split('\n').find((l) => l.includes('[')) ?? ''}`)
-  const permFix = cli(args(good, ['--write']))
+  const permFix = cli(['--write'])
   check('🔴 권한 반례 3 — 같은 내용 + 0644 + --write → 내용 다시 쓰지 않음(mtime 불변) · 권한 0600 · 임시 파일 0',
     permFix.status === 0 && /권한 644 → 600/.test(permFix.out) && readFileSync(OUT, 'utf-8') === raw && modeOf() === 0o600
     && statSync(OUT).mtimeMs === mtime644 && tmpLeft().length === 0, `${modeOf().toString(8)} · ${permFix.out.slice(-200)}`)
   const other = `${raw.trimEnd().slice(0, -1)},"note":"다른 실행"}\n`
   writeFileSync(OUT, other)
   chmodSync(OUT, 0o644)
-  const conflict = cli(args(good, ['--write']))
+  const conflict = cli(['--write'])
   check('🔴 권한 반례 4 — 다른 내용 + 0644 + --write → exit 1 · [OUTPUT_CONFLICT] · 내용 · 권한 모두 불변',
     conflict.status === 1 && /\[OUTPUT_CONFLICT\]/.test(conflict.out) && readFileSync(OUT, 'utf-8') === other && modeOf() === 0o644 && tmpLeft().length === 0)
   rmSync(join(CWD, 'tmp'), { recursive: true, force: true })
@@ -213,19 +233,21 @@ try {
   const bad = (label: string, run: ReturnType<typeof cli>, tag: string): void =>
     check(`🔴 ${label} → exit 1 · [${tag}] · 파일 0 · provider 0`, run.status === 1 && run.out.includes(`[${tag}]`) && !existsSync(OUT) && run.requests === 0,
       run.out.split('\n').filter((l) => l.includes('[')).slice(0, 2).join(' | ').slice(0, 300))
-  bad('반례 6 — 잘못된 SHA', cli([`--creative=${good.path}`, `--expect-sha=${'0'.repeat(64)}`, '--write']), 'CREATIVE_SHA_MISMATCH')
-  bad('반례 7a — creative 코드 누락', cli(args(writeCreative('miss.json', fileOf(Object.fromEntries(CODES.slice(1).map((c) => [c, GOOD[c]!])))), ['--write'])), 'CREATIVE_MISSING_CODE')
-  bad('반례 7b — creative 코드 추가', cli(args(writeCreative('extra.json', fileOf({ ...GOOD, P44: { ...GOOD[FIRST]!, title: '다른 사람', variations: GOOD[FIRST]!.variations.map((v) => `${v}!`) } })), ['--write'])), 'CREATIVE_EXTRA_CODE')
-  const goodText = fileOf(GOOD)
-  bad('반례 7c — creative 코드 중복', cli(args(writeCreative('dup.json', `${goodText.trimEnd().slice(0, -1)},"${SECOND}":${JSON.stringify(GOOD[SECOND])}}\n`), ['--write'])), 'CREATIVE_DUPLICATE_CODE')
-  bad('반례 8 — 카드와 creative 불일치(title)', cli(args(writeCreative('title.json', fileOf({ ...GOOD, [THIRD]: { ...GOOD[THIRD]!, title: `${GOOD[THIRD]!.title} 다르게` } })), ['--write'])), 'CARD_CREATIVE_MISMATCH')
-  bad('반례 9 — variation 개수 불일치', cli(args(writeCreative('vcount.json', fileOf({ ...GOOD, [FOURTH]: { ...GOOD[FOURTH]!, variations: [...GOOD[FOURTH]!.variations, `추가 변형 (${FOURTH})`] } })), ['--write'])), 'VARIATION_COUNT_MISMATCH')
-  bad('반례 10 — 말투 묶음 누락(화자 부족 자산)', cli(args(good, ['--write']), HOME_THIN), 'VOICE_BUNDLE_MISSING')
+  // 승인 fixture의 실제 CLI 분기까지 검증한다. 저장소 fixture는 건드리지 않고
+  // 임시 CWD의 symlink만 변조 사본으로 잠깐 바꾼 뒤 즉시 복원한다.
+  rmSync(CWD_EXPANSION_FIXTURE)
+  writeFileSync(CWD_EXPANSION_FIXTURE, `${expansionRaw}\n`)
+  bad('반례 6a — 승인 fixture SHA 불일치', cli(['--write']), 'CREATIVE_SHA_MISMATCH')
+  rmSync(CWD_EXPANSION_FIXTURE)
+  symlinkSync(join(REPO, expansionRef.path), CWD_EXPANSION_FIXTURE)
+  bad('반례 6b — 말투 v1 baseline 누락(v2만 있음)', cli(['--write'], HOME_NO_V1), 'VOICE_BASELINE_MISSING')
+  bad('반례 6c — 말투 v2 target 누락(v1만 있음)', cli(['--write'], HOME_NO_V2), 'VOICE_BUNDLE_MISSING')
+  bad('반례 6d — 말투 v1·v2 모두 누락(합성 자산만 있음)', cli(['--write'], HOME_THIN), 'VOICE_BASELINE_MISSING')
   const mineOnly = { user: { name: { startsWith: NAME_PREFIX } } }
   await prisma.persona.updateMany({ where: mineOnly, data: { status: 'paused' } })
   const foreign = await prisma.persona.count({ where: { status: 'active', dailyCap: { not: null }, weeklyCap: { not: null }, silenceRate: { not: null } } })
   check('반례 11 전제 — 이 검사 밖 cadence 있는 active 행 0', foreign === 0, `${foreign}행 — 다른 검사가 남긴 행이다`)
-  bad('반례 11 — 운영 active cadence 없음', cli(args(good, ['--write'])), 'CADENCE_UNMEASURED')
+  bad('반례 7 — 운영 active cadence 없음', cli(['--write']), 'CADENCE_UNMEASURED')
   await prisma.persona.updateMany({ where: mineOnly, data: { status: 'active' } })
 
   // ── 전 회차 ──

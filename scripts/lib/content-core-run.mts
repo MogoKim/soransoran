@@ -259,7 +259,25 @@ export type RunInput = {
    *    같은 계획을 되풀이하지 않게 한다. 🔴 유료 호출을 늘리지 않는다 — 입력만 늘린다.
    */
   priorFailures?: readonly PriorPlanFailure[]
+  /**
+   * 🔴 **의미 검수 앞 지배 판정** (2026-11-14 H2 공급 비용) — 결정적 검사를 통과한 초안에 대해, 의미 검수를
+   *    `adopt` 로 가정해도 채택 자리가 막는지 묻는다. 막으면 **그 사유(정본 어휘)** 를, 채택 가능성이 남았으면 `null` 을 준다.
+   *
+   *    🔴 non-null 이면 의미 검수(A + 조건부 확인 B)를 **부르지 않는다** — 결론을 바꾸지 못하는 지출이다.
+   *       결과는 `notRun('deterministicFailed')` · `hold` 다: 완주가 아니므로 캐시하지 않고, 재선정은 `terminal` 이다.
+   *       완주한 검수 뒤 막힌 초안은 `candidate` 로 기록될 수 있어 상태 표지는 다르지만, 둘 다 결론 집합이라
+   *       같은 원천을 유료로 다시 사지 않는다는 결과는 같다.
+   *    🔴 없으면 앞판과 같다(다른 호출부의 동작이 바뀌지 않는다). 운영 러너는 `dominatedBeforeReview` 로 준다.
+   *    🔴 artifact 판·프롬프트·캐시 열쇠를 바꾸지 않는다 — 옛 결론이 재구매 대상이 되지 않는다.
+   */
+  preReviewTerminal?: (
+    draft: { title: string; body: string },
+    plan: SpeakerPlan,
+  ) => string | null
 }
+
+/** 🔴 지배 판정으로 의미 검수를 부르지 않았다는 기록 — 사람이 읽는 문구다. 분기는 `semanticCompletion.cause` 로 한다 */
+export const PRE_REVIEW_DOMINATED_LABEL = '의미 검수를 adopt 로 가정해도 채택 자리가 막는다 — 검수를 부르지 않았다'
 
 /**
  * 🔴 **유료 단계 셋은 전부 같은 기준으로 완주를 본다** (2026-09-19 보정).
@@ -811,6 +829,15 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const stop = notRun('deterministicFailed')
     const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: stop })
     return blank(plan, dropped, voice, draft, det, null, stop, j.outcome, j.reason)
+  }
+  /**
+   * 🔴 **④-b 검수 앞 지배 판정** (2026-11-14 H2) — 채택 자리가 의미 검수 결과와 무관하게 막는 초안이면
+   *    유료 검수 앞에서 멈춘다. 판정은 부르는 쪽(`preReviewTerminal`)의 정본 함수다 — 여기서 새로 만들지 않는다.
+   */
+  const dominated = input.preReviewTerminal?.(draft, plan) ?? null
+  if (dominated !== null) {
+    return blank(plan, dropped, voice, draft, det, null, notRun('deterministicFailed'), 'hold',
+      `${PRE_REVIEW_DOMINATED_LABEL} (${dominated})`)
   }
 
   // ── ⑤ 의미 검수 — 차단 finding이 있을 때만 같은 요청으로 1회 확인 ──

@@ -18,7 +18,7 @@ import {
   type ReferenceAsset,
 } from './persona-reference-asset'
 import {
-  judgeSupplementAsset, judgeSupplementManifest, SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE,
+  activeSupplementPaths, judgeSupplementAsset, judgeSupplementManifest,
 } from './persona-reference-supplement'
 
 export type AssetDigests = {
@@ -107,13 +107,14 @@ export function readRuntimePersonaAssetIdentity(): RuntimePersonaAssetIdentity |
     if (![REFERENCE_CORPUS_FILE, REFERENCE_MANIFEST_FILE].every(existsSync)) return null
     const referenceRaw = readFileSync(REFERENCE_CORPUS_FILE, 'utf-8')
     const referenceManifestRaw = readFileSync(REFERENCE_MANIFEST_FILE, 'utf-8')
-    const supplementFiles = [SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE].map(existsSync)
+    const supplementPaths = activeSupplementPaths()
+    const supplementFiles = [supplementPaths.corpus, supplementPaths.manifest].map(existsSync)
     if (supplementFiles[0] !== supplementFiles[1]) return null
     return runtimePersonaAssetIdentityOf({
       referenceRaw,
       referenceManifestRaw,
-      supplementRaw: supplementFiles[0] ? readFileSync(SUPPLEMENT_CORPUS_FILE, 'utf-8') : null,
-      supplementManifestRaw: supplementFiles[1] ? readFileSync(SUPPLEMENT_MANIFEST_FILE, 'utf-8') : null,
+      supplementRaw: supplementFiles[0] ? readFileSync(supplementPaths.corpus, 'utf-8') : null,
+      supplementManifestRaw: supplementFiles[1] ? readFileSync(supplementPaths.manifest, 'utf-8') : null,
     })
   } catch { return null }
 }

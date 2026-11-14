@@ -695,7 +695,7 @@ try {
     check(`증명일 N-1(${n - 1}) → FAIL PUBLISH_NOT_AUTO_READY`, under.verdict === 'FAIL' && under.codes.includes('PUBLISH_NOT_AUTO_READY'), under.codes.join(','))
     check(`증명일 N(${n}) → PASS`, exact.verdict === 'PASS', exact.codes.join(','))
     check(`증명일 N+1(${n + 1}) → FAIL PUBLISH_OVER`, over.verdict === 'FAIL' && over.codes.includes('PUBLISH_OVER'), over.codes.join(','))
-    const lateEntry = { postPublishedAtMs: kstAt(D, '23:30').getTime() }
+    const lateEntry = { postPublishedAtMs: kstAt(D, '23:30').getTime(), attemptedAtMs: kstAt(D, '23:30').getTime() }
     check('첫 댓글 시도 기억 TTL 은 자정을 넘어 발행 + 60분(경계 포함)이다',
       isAttemptActive(lateEntry, kstAt(D1, '00:20').getTime()) && isAttemptActive(lateEntry, kstAt(D1, '00:30').getTime())
       && !isAttemptActive(lateEntry, kstAt(D1, '00:30').getTime() + 1))
