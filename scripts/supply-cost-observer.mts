@@ -67,7 +67,7 @@ try {
   }
   if (process.argv.includes('--json')) console.log(JSON.stringify(out, null, 2))
   else {
-    const u = (v: unknown): string => (v === null || v === undefined ? 'UNKNOWN' : String(v))
+    const u = (v: unknown): string => (v === null || v === undefined ? 'UNKNOWN' : typeof v === 'object' ? JSON.stringify(v, (_k, x: unknown) => (x === null ? 'UNKNOWN' : x)) : String(v))
     console.log(`\n══ 공급 비용 관측(진단 전용) · 증거일 ${EVIDENCE} · runtime ${pinNow?.slice(0, 12) ?? '모름'} · read-only ══`)
     console.log(`  창 ${out.window.from} ~ ${out.window.to} (rolling 72h)`)
     console.log(`  권위 결과당 단가 UNKNOWN — ${out.authoritativeReason}`)

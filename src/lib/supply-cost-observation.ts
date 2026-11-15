@@ -98,17 +98,38 @@ export function costCoverageOf(i: {
   }
 }
 
-/** 🔴 정본 귀속의 칸을 그대로 옮긴다 — 없거나 비유한이면 null(UNKNOWN). 다시 계산하지 않는다 */
+/**
+ * 🔴 **정본 `CostAttribution` 의 칸을 그대로 옮긴다** — 다시 계산하지 않는다. 칸 목록은 원본 타입의 수치 칸 전부다.
+ *    · 원본이 null 인 칸(`trialRisk…` · `usdPerSlotValidResult` · `usdPerPublished` · `wasteUsd` · `noReadyUsd`)은 원본에서 이미 "모름"이다 → null
+ *    · 칸이 없거나 숫자가 아니거나 비유한이면 오염이다 → null(UNKNOWN). 🔴 0 으로 채우지 않는다
+ */
 export const CANONICAL_COST_FIELDS = [
-  'totalUsd', 'settledRequests', 'usageUnknownRequests', 'recoverySettledRequests', 'recoveryUsageUnknownRequests',
-  'trialOverrunRequests', 'trialIneligibleRequests', 'trialRiskUsdPerSlotValidResult',
-  'openRequests', 'openReservedUsd', 'legacyUsd', 'unlinkedUsd', 'usdPerSlotValidResult', 'wasteUsd',
+  'totalUsd', 'unlinkedUsd', 'legacyUsd', 'openRequests', 'openReservedUsd', 'legacyOpenRequests',
+  'settledRequests', 'usageUnknownRequests', 'recoverySettledRequests', 'recoveryUsageUnknownRequests',
+  'trialOverrunRequests', 'trialIneligibleRequests', 'trialRiskUsdPerSlotValidResult', 'otherCohortUsd',
+  'usdPerSlotValidResult', 'usdPerPublished', 'wasteUsd', 'noReadyUsd',
 ] as const
-export function canonicalCostFieldsOf(attribution: Record<string, unknown> | null): Record<(typeof CANONICAL_COST_FIELDS)[number], N> {
-  return Object.fromEntries(CANONICAL_COST_FIELDS.map((k) => {
+/** 원본 `CostFate` 의 키 — `ready-fate.ts` 의 byFate 초기값과 같은 다섯 개 */
+export const COST_FATES = ['published', 'scheduled', 'lost', 'unknown', 'noReady'] as const
+export type CanonicalCost = Record<(typeof CANONICAL_COST_FIELDS)[number], N> & {
+  /** 운명별 정산액 — 키마다 검증. 원본 칸 자체가 없거나 객체가 아니면 null */
+  byFate: Record<(typeof COST_FATES)[number], N> | null
+  /** 단계별 noReady 정산액 — 🔴 원본 null 은 "연결 불완전"이라는 뜻이라 null 로 보존한다 */
+  noReadyByStage: Record<string, N> | null
+}
+const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
+export function canonicalCostFieldsOf(attribution: Record<string, unknown> | null): CanonicalCost {
+  const flat = Object.fromEntries(CANONICAL_COST_FIELDS.map((k) => {
     const v = attribution?.[k]
     return [k, finite(v) ? v : null]
   })) as Record<(typeof CANONICAL_COST_FIELDS)[number], N>
+  const bf = attribution?.byFate
+  const byFate = isObj(bf)
+    ? Object.fromEntries(COST_FATES.map((f) => [f, finite(bf[f]) ? bf[f] : null])) as Record<(typeof COST_FATES)[number], N>
+    : null
+  const ns = attribution?.noReadyByStage
+  const noReadyByStage = isObj(ns) ? Object.fromEntries(Object.entries(ns).map(([k, v]) => [k, finite(v) ? v : null])) : null
+  return { ...flat, byFate, noReadyByStage }
 }
 
 /** 🔴 상한 대비 — 진단 단가로만. 권위 단가가 아니다. null 이면 UNKNOWN. 상한은 바꾸지 않는다 */

@@ -75,12 +75,15 @@ try {
   })
   const comments = await db.comment.findMany({
     where: { postId: { in: posts.map((p) => p.id) }, isDeleted: false },
-    select: { postId: true, parentId: true, personaId: true, createdAt: true, author: { select: { isAdmin: true } } },
+    select: { postId: true, parentId: true, personaId: true, operatorWriterId: true, authorId: true, createdAt: true, author: { select: { isAdmin: true } } },
   })
   const days = observeComments({
     dates, nowMs: Date.now(), attempts, ledgerByDate,
     posts: posts.map((p) => ({ id: p.id, createdAtMs: p.createdAt.getTime() })),
-    comments: comments.map((c) => ({ postId: c.postId, parentId: c.parentId, isPersona: c.personaId !== null, isAdmin: c.author?.isAdmin === true, createdAtMs: c.createdAt.getTime() })),
+    comments: comments.map((c) => ({
+      postId: c.postId, parentId: c.parentId, createdAtMs: c.createdAt.getTime(),
+      isPersona: c.personaId !== null, isOperator: c.operatorWriterId !== null, isAdmin: c.author?.isAdmin === true, isGuest: c.authorId === null,
+    })),
   })
   if (process.argv.includes('--json')) {
     console.log(JSON.stringify({ tool: 'comment-observer', readOnly: true, runtimeSha, window: { from: FROM, to: TO }, days, notes }, null, 2))
@@ -88,8 +91,11 @@ try {
     const u = (v: unknown): string => (v === null || v === undefined ? 'UNKNOWN' : typeof v === 'object' ? JSON.stringify(v) : String(v))
     console.log(`\n══ 자동 댓글 자연 관측 ${FROM}~${TO} KST · runtime ${runtimeSha?.slice(0, 12) ?? '모름'} · read-only ══`)
     for (const d of days) {
-      console.log(`\n${d.kstDate}  관리형 글 ${d.managedPosts} · 댓글 ${d.comments.total}(첫 ${d.comments.first} · 추가 ${d.comments.followup} · 답글 ${d.comments.reply} · 실회원 ${d.comments.member})`
-        + ` · 실회원 참여 글 ${d.memberParticipatedPosts} · 글당 ${u(d.avgCommentsPerPost)}(결과값)`)
+      const a = d.comments.byAuthor; const s = d.comments.byStructure; const p = d.comments.personaTopLevel
+      console.log(`\n${d.kstDate}  관리형 공개 글 ${d.managedPosts} · 공개 가시 댓글 ${d.comments.total} · 글당 ${u(d.avgCommentsPerPost)}(결과값 = 공개 가시 댓글 ÷ 관리형 공개 글)`)
+      console.log(`  작성자 분할(합=${d.comments.total}) Persona ${a.persona} · 운영 ${a.operator} · 관리자 ${a.admin} · 비회원 ${a.guest} · 회원 ${a.member}`)
+      console.log(`  구조 분할(합=${d.comments.total}) 최상위 ${s.topLevel} · 답글 ${s.reply}   🔴 두 분할은 서로 겹친다 — 더하지 않는다`)
+      console.log(`  Persona 최상위의 부분집합 — 첫 ${p.first} · 추가 ${p.followup} · 회원 참여 글 ${d.memberParticipatedPosts} · 비회원 참여 글 ${d.guestParticipatedPosts}`)
       for (const [lane, l] of Object.entries(d.lanes)) {
         console.log(`  ${lane.padEnd(13)} coverage ${l.coverage} · 장부 ${l.source} · 시도 ${u(l.attempts)} · step ${u(l.steps)} · blockCode ${u(l.blockCodes)}`
           + ` · 추정 재선정(120초) ${u(l.inferredReselectionsWithin120s)} · 정확한 같은 tick ${u(l.exactSameTick)}`)

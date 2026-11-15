@@ -26,9 +26,18 @@ export type ObservedAttempt = {
 }
 export type ObservedLedger = { stage: string; runId: string; startedAt: string; status: string; settledUsd: number | null }
 export type ObservedPost = { id: string; createdAtMs: number }
+/**
+ * 🔴 **공개 가시 댓글 하나** — 호출부가 `isDeleted=false` 인 것만 넘긴다(가시성 칸은 그것 하나다).
+ *    작성자 종류는 우선순위로 **하나만** 정한다: Persona(`personaId`) > 운영 작성자(`operatorWriterId`)
+ *    > 관리자(`author.isAdmin`) > 비회원(`authorId` 없음) > 회원.
+ */
 export type ObservedComment = {
-  postId: string; parentId: string | null; isPersona: boolean; isAdmin: boolean; createdAtMs: number
+  postId: string; parentId: string | null; createdAtMs: number
+  isPersona: boolean; isOperator: boolean; isAdmin: boolean; isGuest: boolean
 }
+export type AuthorKind = 'persona' | 'operator' | 'admin' | 'guest' | 'member'
+export const authorKindOf = (c: ObservedComment): AuthorKind =>
+  c.isPersona ? 'persona' : c.isOperator ? 'operator' : c.isAdmin ? 'admin' : c.isGuest ? 'guest' : 'member'
 
 export const kstDateOfMs = (ms: number): string => new Date(ms + 9 * 3600_000).toISOString().slice(0, 10)
 
@@ -92,9 +101,22 @@ export type StageDay = {
 }
 export type CommentDay = {
   kstDate: string
+  /** 그날 만들어진 관리형 공개 글(커뮤니티 게시판 · Persona 작성 · status PUBLISHED) */
   managedPosts: number
-  comments: { first: number; followup: number; reply: number; member: number; total: number }
+  comments: {
+    /** 🔴 그 글들의 **공개 가시 댓글 전체**(isDeleted=false) — 아래 두 분할의 합이 각각 이 값이다 */
+    total: number
+    /** 🔴 작성자 분할 — 서로 겹치지 않는다 · 합 = total */
+    byAuthor: Record<AuthorKind, number>
+    /** 🔴 구조 분할 — 서로 겹치지 않는다 · 합 = total. 🔴 작성자 분할과는 **겹친다**(답글도 누군가 쓴다) — 두 축을 더하지 않는다 */
+    byStructure: { topLevel: number; reply: number }
+    /** 🔴 Persona 최상위 댓글의 **부분집합** — 합계 분해가 아니다(첫 = 글마다 처음 Persona 최상위 · 추가 = 그 뒤) */
+    personaTopLevel: { first: number; followup: number }
+  }
+  /** 회원(가입 · 비관리자 · Persona/운영 작성자 아님)이 공개 가시 댓글을 단 관리형 글 수 — 비회원은 따로 */
   memberParticipatedPosts: number
+  guestParticipatedPosts: number
+  /** 🔴 분자 = comments.total(공개 가시 댓글 전체) · 분모 = managedPosts. 글이 0 이면 null */
   avgCommentsPerPost: number | null
   lanes: Record<Lane, LaneDay>
   provider: Record<(typeof COMMENT_STAGES)[number], StageDay>
@@ -121,16 +143,28 @@ export function observeComments(i: {
     const posts = i.posts.filter((p) => postDay.get(p.id) === d)
     const ids = new Set(posts.map((p) => p.id))
     const cs = i.comments.filter((c) => ids.has(c.postId))
-    const c = { first: 0, followup: 0, reply: 0, member: 0, total: cs.length }
+    const c: CommentDay['comments'] = {
+      total: cs.length,
+      byAuthor: { persona: 0, operator: 0, admin: 0, guest: 0, member: 0 },
+      byStructure: { topLevel: 0, reply: 0 },
+      personaTopLevel: { first: 0, followup: 0 },
+    }
     const memberPosts = new Set<string>()
+    const guestPosts = new Set<string>()
     const byPost = new Map<string, ObservedComment[]>()
     for (const x of cs) byPost.set(x.postId, [...(byPost.get(x.postId) ?? []), x])
     for (const list of byPost.values()) {
       let seenPersonaTop = false
       for (const x of [...list].sort((a, b) => a.createdAtMs - b.createdAtMs)) {
-        if (x.parentId !== null) c.reply += 1
-        else if (x.isPersona) { if (seenPersonaTop) c.followup += 1; else { c.first += 1; seenPersonaTop = true } }
-        if (!x.isPersona && !x.isAdmin) { c.member += 1; memberPosts.add(x.postId) }
+        const kind = authorKindOf(x)
+        c.byAuthor[kind] += 1
+        if (x.parentId !== null) c.byStructure.reply += 1
+        else {
+          c.byStructure.topLevel += 1
+          if (kind === 'persona') { if (seenPersonaTop) c.personaTopLevel.followup += 1; else { c.personaTopLevel.first += 1; seenPersonaTop = true } }
+        }
+        if (kind === 'member') memberPosts.add(x.postId)
+        if (kind === 'guest') guestPosts.add(x.postId)
       }
     }
     const laneDay = (lane: Lane): LaneDay => {
@@ -167,7 +201,7 @@ export function observeComments(i: {
       requestsPerRun = { runs: counts.length, max: counts.length === 0 ? 0 : Math.max(...counts), avg: counts.length === 0 ? null : Math.round((counts.reduce((a, b) => a + b, 0) / counts.length) * 100) / 100 }
     }
     return {
-      kstDate: d, managedPosts: posts.length, comments: c, memberParticipatedPosts: memberPosts.size,
+      kstDate: d, managedPosts: posts.length, comments: c, memberParticipatedPosts: memberPosts.size, guestParticipatedPosts: guestPosts.size,
       avgCommentsPerPost: posts.length === 0 ? null : Math.round((cs.length / posts.length) * 100) / 100,
       lanes: { 'first-comment': laneDay('first-comment'), followup: laneDay('followup') },
       provider, requestsPerRun, slotCapacity: null,
