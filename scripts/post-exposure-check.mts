@@ -184,6 +184,40 @@ check('runtime fixture는 additive 원장만 허용하고 기존 Prisma 계약 �
   assert.equal(schemaCompatibleForBorrowedClient(parent, changedField), false)
   assert.equal(schemaCompatibleForBorrowedClient(parent, schema.replace('model User {', 'model User {\n  unsafeRequired String')), false)
   assert.equal(schemaCompatibleForBorrowedClient(parent, schema.replace('enum PostStatus {', 'enum PostStatus {\n  UNSAFE')), false)
+
+  const oneToOneParent = `
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+model Existing {
+  id String @id
+}
+`
+  const additiveOneToOne = `
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+model Existing {
+  id String @id
+  ledger NewLedger?
+}
+enum NewLedgerKind {
+  MANUAL
+}
+model NewLedger {
+  id String @id
+  existingId String @unique
+  existing Existing @relation(fields: [existingId], references: [id])
+  kind NewLedgerKind
+}
+`
+  assert.equal(schemaCompatibleForBorrowedClient(oneToOneParent, additiveOneToOne), true)
+  assert.equal(
+    schemaCompatibleForBorrowedClient(oneToOneParent, additiveOneToOne.replace('ledger NewLedger?', 'ledger NewLedger')),
+    false,
+  )
+  const unsafeForwardRelation = additiveOneToOne
+    .replace('  ledger NewLedger?', '  ledgerId String?\n  ledger NewLedger? @relation(fields: [ledgerId], references: [id])')
+    .replace('  existingId String @unique\n  existing Existing @relation(fields: [existingId], references: [id])\n', '')
+  assert.equal(schemaCompatibleForBorrowedClient(oneToOneParent, unsafeForwardRelation), false)
 })
 
 console.log(`\nPASS ${pass} · FAIL 0`)

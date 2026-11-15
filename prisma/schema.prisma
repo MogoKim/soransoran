@@ -65,6 +65,14 @@ enum CommentOrigin {
   OPERATOR // 🔴 창업자가 운영용 닉네임으로 **직접** 쓴 댓글 (자동 생성이 아니다)
 }
 
+/// 관리자가 기존 Persona 글에 직접 설계한 대화를 넣을 때의 발화 역할.
+/// CommentOrigin 은 계속 PERSONA 다. 이 enum 은 공개 출처가 아니라 수동 감사 역할만 기록한다.
+enum ManualPersonaThreadKind {
+  COMMENT
+  REPLY
+  AUTHOR_REPLY
+}
+
 enum ReportStatus {
   PENDING
   REVIEWED
@@ -163,6 +171,9 @@ model User {
   /// 🔴 이 **관리자**가 운영용 작성자 이름으로 실행한 작성·수정·삭제 이력.
   ///    공개 작성자(operatorWriter)와 실제 조작자(여기)는 다른 축이다.
   operatorWrites OperatorWriteLog[] @relation("OperatorWriteActor")
+
+  /// 이 관리자가 직접 실행한 Persona 대화. 공개 작성자는 Persona 이고 실제 조작자는 여기 남는다.
+  manualPersonaThreadWrites ManualPersonaThreadLog[] @relation("ManualPersonaThreadActor")
 
   /// 이 운영자가 만들거나 고친 홈 히어로 배너.
   /// 🔴 SetNull — 사람이 떠나도 배너와 그 이력은 남는다 (홈 노출 예외와 같은 원칙)
@@ -365,6 +376,8 @@ model Post {
   bestReactionWeight Int   @default(0)
 
   comments              Comment[]
+  /// 수동 Persona 대화 감사 역관계 — 기존 Post 칼럼은 추가하지 않는다.
+  manualPersonaThreadLogs ManualPersonaThreadLog[]
   likes                 Like[]
   scraps                Scrap[]
   reports               Report[]
@@ -477,6 +490,9 @@ model Comment {
 
   reports Report[]
   likes   CommentLike[]
+
+  /// 수동 Persona 대화 감사 기록. 있으면 이 댓글은 Dn 자연 증명에서 제외된다.
+  manualPersonaThreadLog ManualPersonaThreadLog?
 
   @@index([postId, createdAt])
   @@index([authorId])
@@ -1363,6 +1379,9 @@ model Persona {
   auditLogs         PersonaAuditLog[]
   activityLogs      PersonaActivityLog[]
 
+  /// 관리자가 이 Persona 이름으로 직접 남긴 대화. 자동 활동 로그와 섞지 않는다.
+  manualThreadLogs ManualPersonaThreadLog[]
+
   /// 🔴 이 페르소나가 쓴 글·댓글. Restrict 라 남아 있으면 Persona 삭제가 막힌다
   posts    Post[]
   comments Comment[]
@@ -1984,6 +2003,39 @@ model OperatorWriteLog {
   @@index([operatorWriterId, createdAt])
   @@index([createdAt])
   @@index([kind, createdAt])
+}
+
+/// 관리자 수동 Persona 대화 감사 원장.
+///
+/// 🔴 자동 Persona 생성·후보·발행 경로를 흉내 내지 않는다. 공개 Comment 는 PERSONA 로 저장하되,
+///    이 행이 수동 provenance 의 유일한 근거다. Comment 와 같은 Serializable 트랜잭션에서 생성한다.
+/// 🔴 원문은 보관하지 않는다. 공개 Comment 가 원문이고, 여기에는 누가 어떤 역할로 실행했는지만 남긴다.
+/// 🔴 commentId · requestKey 가 unique 다. 재전송은 새 댓글 없이 전체 트랜잭션이 롤백된다.
+model ManualPersonaThreadLog {
+  id String @id @default(cuid())
+
+  commentId String  @unique
+  comment   Comment @relation(fields: [commentId], references: [id], onDelete: Restrict)
+
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Restrict)
+
+  personaId String
+  persona   Persona @relation(fields: [personaId], references: [id], onDelete: Restrict)
+
+  /// 답글 대상 Comment.id. 역할별 감사 스냅샷이며 FK 는 commentId 관계 하나만 둔다.
+  parentId String?
+
+  /// 실제 버튼을 누른 관리자. SetNull — 관리자가 떠나도 수동 발화 provenance 는 남는다.
+  actorUserId String?
+  actor       User?   @relation("ManualPersonaThreadActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  kind       ManualPersonaThreadKind
+  requestKey String                  @unique
+  createdAt  DateTime                @default(now())
+
+  @@index([postId, createdAt])
+  @@index([personaId, createdAt])
 }
 
 /// 🔴 **하루 단계 결정 — KST 날짜당 하나** (2026-09-25)
