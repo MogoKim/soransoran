@@ -6,21 +6,22 @@
  *   · 댓글 전용 LLM 장부 — stage `commentGen`(첫 댓글) · `commentFollowupGen`(추가 댓글)
  *   · DB — 관리형 공개 글(커뮤니티 게시판 · Persona 작성) · 그 글의 댓글(`parentId` 실데이터)
  *
- * 🔴 숫자는 결과값이다. 평균·분포는 quota 가 아니다(평균 5 는 자연 생동감 관측치일 뿐).
- * 🔴 출력은 개수·코드·SHA 만 — 본문·표시명·회원 정보·id 0.
- *
- * 정의
- *   · 첫 댓글 = 그 글에 처음 달린 Persona 최상위 댓글 · 추가 댓글 = 그 뒤 Persona 최상위 댓글 · 답글 = `parentId` 가 있는 댓글
- *   · 실회원 댓글 = Persona 도 관리자도 아닌 작성자의 댓글
- *   · 같은 tick 재선정 = 같은 lane · 같은 글에서, 직전 시도(≤ RESELECT_WINDOW_MS)가 ENQUEUED 가 아니었고 다른 Persona 로 다시 시도한 것
- *   · 회차 용량 = 같은 runId 의 댓글 LLM 요청 수(최대 · 평균)
+ * 🔴 **모르는 것은 0 이 아니다.** 장부가 없거나 깨졌으면 그 축은 `null`(UNKNOWN)이다.
+ *    시도 장부는 **굴러가는 기억**이다(첫 댓글 lane 은 공개 뒤 60분 · 추가 댓글 lane 은 시도한 KST 날 자정까지).
+ *    기억 기간 밖의 날은 지워졌을 수 있으므로 UNKNOWN 이다 — 증명된 범위 밖을 0 으로 세지 않는다.
+ * 🔴 정확한 "같은 tick" 은 시도 장부에 tick 식별자가 없어 알 수 없다(`exactSameTick: null`).
+ *    대신 같은 lane·같은 글에서 막힌 직후 120초 안에 다른 Persona 로 다시 시도한 것을 **추정 재선정**으로 센다.
+ * 🔴 회차당 LLM 요청 수는 슬롯 용량이 아니다. 실제 슬롯 용량은 권위 원천이 없어 `null`(UNKNOWN)이다.
+ * 🔴 숫자는 결과값이다. 평균·분포는 quota 가 아니다. 출력은 개수·코드·SHA 만(본문·표시명·회원 정보·id 0).
  */
 
-export const RESELECT_WINDOW_MS = 120_000
+export const INFERRED_RESELECT_WINDOW_MS = 120_000
 export const COMMENT_STAGES = ['commentGen', 'commentFollowupGen'] as const
+export type Lane = 'first-comment' | 'followup'
+export type SourceStatus = 'ok' | 'missing' | 'corrupt'
 
 export type ObservedAttempt = {
-  lane: 'first-comment' | 'followup'
+  lane: Lane
   postId: string; personaCode: string; attemptedAtMs: number; step: string; blockCodes: readonly string[]
 }
 export type ObservedLedger = { stage: string; runId: string; startedAt: string; status: string; settledUsd: number | null }
@@ -30,28 +31,6 @@ export type ObservedComment = {
 }
 
 export const kstDateOfMs = (ms: number): string => new Date(ms + 9 * 3600_000).toISOString().slice(0, 10)
-
-export type LaneDay = {
-  attempts: number
-  steps: Record<string, number>
-  blockCodes: Record<string, number>
-  sameTickReselections: number
-}
-export type StageDay = { requests: number; settled: number; usageUnknown: number; reserved: number; blocked: number; settledUsd: number }
-export type CommentDay = {
-  kstDate: string
-  managedPosts: number
-  comments: { first: number; followup: number; reply: number; member: number; total: number }
-  memberParticipatedPosts: number
-  avgCommentsPerPost: number | null
-  lanes: Record<ObservedAttempt['lane'], LaneDay>
-  provider: Record<(typeof COMMENT_STAGES)[number], StageDay>
-  runCapacity: { runs: number; maxRequestsPerRun: number; avgRequestsPerRun: number | null }
-}
-
-const bump = (r: Record<string, number>, k: string): void => { r[k] = (r[k] ?? 0) + 1 }
-const emptyLane = (): LaneDay => ({ attempts: 0, steps: {}, blockCodes: {}, sameTickReselections: 0 })
-const emptyStage = (): StageDay => ({ requests: 0, settled: 0, usageUnknown: 0, reserved: 0, blocked: 0, settledUsd: 0 })
 
 /** 🔴 KST 날짜 목록(포함 · 포함). 모양이 틀리거나 뒤집히면 빈 목록 */
 export function kstDatesBetween(from: string, to: string): string[] {
@@ -66,8 +45,18 @@ export function kstDatesBetween(from: string, to: string): string[] {
   return out
 }
 
-/** 같은 tick 재선정 수 — 시각 순으로 같은 lane·같은 글을 본다 */
-export function countReselections(attempts: readonly ObservedAttempt[]): number {
+/**
+ * 🔴 시도 장부가 그 날을 **온전히 또는 부분적으로** 덮는가 — lane 의 기억 규칙에서 나온다.
+ *    · followup — 시도한 KST 날 자정까지 기억 → 오늘만 덮는다(지금까지의 부분) · 그 전 날은 지워졌을 수 있다
+ *    · first-comment — 공개 뒤 60분만 기억 → 어떤 날도 하루 전체를 증명하지 못한다
+ */
+export function laneCoverage(lane: Lane, date: string, nowMs: number): 'PARTIAL_TODAY' | 'UNKNOWN' {
+  if (lane === 'followup' && date === kstDateOfMs(nowMs)) return 'PARTIAL_TODAY'
+  return 'UNKNOWN'
+}
+
+/** 추정 재선정 수 — 같은 lane · 같은 글 · 막힌 직후 120초 안 다른 Persona */
+export function countInferredReselections(attempts: readonly ObservedAttempt[]): number {
   const byKey = new Map<string, ObservedAttempt[]>()
   for (const a of attempts) {
     const k = `${a.lane}|${a.postId}`
@@ -78,20 +67,55 @@ export function countReselections(attempts: readonly ObservedAttempt[]): number 
     const s = [...list].sort((x, y) => x.attemptedAtMs - y.attemptedAtMs)
     for (let i = 1; i < s.length; i++) {
       const prev = s[i - 1]!; const cur = s[i]!
-      if (cur.attemptedAtMs - prev.attemptedAtMs <= RESELECT_WINDOW_MS && prev.step !== 'ENQUEUED' && prev.personaCode !== cur.personaCode) n += 1
+      if (cur.attemptedAtMs - prev.attemptedAtMs <= INFERRED_RESELECT_WINDOW_MS && prev.step !== 'ENQUEUED' && prev.personaCode !== cur.personaCode) n += 1
     }
   }
   return n
 }
 
+export type LaneDay = {
+  coverage: 'PARTIAL_TODAY' | 'UNKNOWN'
+  source: SourceStatus
+  /** 🔴 coverage 가 UNKNOWN 이거나 장부가 ok 가 아니면 아래는 전부 null */
+  attempts: number | null
+  steps: Record<string, number> | null
+  blockCodes: Record<string, number> | null
+  inferredReselectionsWithin120s: number | null
+  /** 🔴 시도 장부에 tick 식별자가 없다 — 언제나 UNKNOWN */
+  exactSameTick: null
+}
+export type StageDay = {
+  /** 🔴 그날 장부가 없거나 깨졌으면 전부 null */
+  requests: number | null; settled: number | null; usageUnknown: number | null; reserved: number | null; blocked: number | null
+  /** 🔴 정산 줄 중 금액이 null·비유한이면 null(UNKNOWN) */
+  settledUsd: number | null
+}
+export type CommentDay = {
+  kstDate: string
+  managedPosts: number
+  comments: { first: number; followup: number; reply: number; member: number; total: number }
+  memberParticipatedPosts: number
+  avgCommentsPerPost: number | null
+  lanes: Record<Lane, LaneDay>
+  provider: Record<(typeof COMMENT_STAGES)[number], StageDay>
+  /** 🔴 회차당 댓글 LLM 요청 — 용량이 아니다. 장부를 못 읽은 날은 null */
+  requestsPerRun: { runs: number; max: number; avg: number | null } | null
+  /** 🔴 실제 슬롯 용량 — 권위 원천 없음 */
+  slotCapacity: null
+}
+
+const bump = (r: Record<string, number>, k: string): void => { r[k] = (r[k] ?? 0) + 1 }
+const UNKNOWN_STAGE: StageDay = { requests: null, settled: null, usageUnknown: null, reserved: null, blocked: null, settledUsd: null }
+
 export function observeComments(i: {
   dates: readonly string[]
+  nowMs: number
   posts: readonly ObservedPost[]
   comments: readonly ObservedComment[]
-  attempts: readonly ObservedAttempt[]
-  ledger: readonly ObservedLedger[]
+  attempts: Readonly<Record<Lane, { status: SourceStatus; entries: readonly ObservedAttempt[] }>>
+  /** 날짜 → 그날 댓글 장부 줄. 없거나 깨진 날은 null */
+  ledgerByDate: ReadonlyMap<string, readonly ObservedLedger[] | null>
 }): CommentDay[] {
-  const want = new Set(i.dates)
   const postDay = new Map(i.posts.map((p) => [p.id, kstDateOfMs(p.createdAtMs)]))
   return i.dates.map((d): CommentDay => {
     const posts = i.posts.filter((p) => postDay.get(p.id) === d)
@@ -109,34 +133,44 @@ export function observeComments(i: {
         if (!x.isPersona && !x.isAdmin) { c.member += 1; memberPosts.add(x.postId) }
       }
     }
-    const lanes = { 'first-comment': emptyLane(), followup: emptyLane() }
-    const dayAttempts = i.attempts.filter((a) => want.has(d) && kstDateOfMs(a.attemptedAtMs) === d)
-    for (const a of dayAttempts) {
-      const l = lanes[a.lane]
-      l.attempts += 1; bump(l.steps, a.step)
-      for (const b of a.blockCodes) bump(l.blockCodes, b)
+    const laneDay = (lane: Lane): LaneDay => {
+      const src = i.attempts[lane]
+      const coverage = laneCoverage(lane, d, i.nowMs)
+      if (src.status !== 'ok' || coverage === 'UNKNOWN') {
+        return { coverage, source: src.status, attempts: null, steps: null, blockCodes: null, inferredReselectionsWithin120s: null, exactSameTick: null }
+      }
+      const day = src.entries.filter((a) => kstDateOfMs(a.attemptedAtMs) === d)
+      const steps: Record<string, number> = {}; const blockCodes: Record<string, number> = {}
+      for (const a of day) { bump(steps, a.step); for (const b of a.blockCodes) bump(blockCodes, b) }
+      return { coverage, source: 'ok', attempts: day.length, steps, blockCodes, inferredReselectionsWithin120s: countInferredReselections(day), exactSameTick: null }
     }
-    for (const lane of ['first-comment', 'followup'] as const) lanes[lane].sameTickReselections = countReselections(dayAttempts.filter((a) => a.lane === lane))
-    const provider = { commentGen: emptyStage(), commentFollowupGen: emptyStage() }
-    const runs = new Map<string, number>()
-    for (const e of i.ledger) {
-      if (!(COMMENT_STAGES as readonly string[]).includes(e.stage)) continue
-      const at = Date.parse(e.startedAt)
-      if (Number.isNaN(at) || kstDateOfMs(at) !== d) continue
-      const s = provider[e.stage as (typeof COMMENT_STAGES)[number]]
-      s.requests += 1
-      if (e.status === 'settled') { s.settled += 1; s.settledUsd += e.settledUsd ?? 0 }
-      else if (e.status === 'usageUnknown') s.usageUnknown += 1
-      else if (e.status === 'reserved') s.reserved += 1
-      else if (e.status === 'blocked') s.blocked += 1
-      if (e.status !== 'blocked') runs.set(e.runId, (runs.get(e.runId) ?? 0) + 1)
+    const lines = i.ledgerByDate.get(d) ?? null
+    let provider: CommentDay['provider'] = { commentGen: { ...UNKNOWN_STAGE }, commentFollowupGen: { ...UNKNOWN_STAGE } }
+    let requestsPerRun: CommentDay['requestsPerRun'] = null
+    if (lines !== null) {
+      const mk = (): StageDay => ({ requests: 0, settled: 0, usageUnknown: 0, reserved: 0, blocked: 0, settledUsd: 0 })
+      provider = { commentGen: mk(), commentFollowupGen: mk() }
+      const runs = new Map<string, number>()
+      for (const e of lines) {
+        if (!(COMMENT_STAGES as readonly string[]).includes(e.stage)) continue
+        const s = provider[e.stage as (typeof COMMENT_STAGES)[number]]
+        s.requests! += 1
+        if (e.status === 'settled') {
+          s.settled! += 1
+          s.settledUsd = s.settledUsd === null || typeof e.settledUsd !== 'number' || !Number.isFinite(e.settledUsd) ? null : s.settledUsd + e.settledUsd
+        } else if (e.status === 'usageUnknown') s.usageUnknown! += 1
+        else if (e.status === 'reserved') s.reserved! += 1
+        else if (e.status === 'blocked') s.blocked! += 1
+        if (e.status !== 'blocked') runs.set(e.runId, (runs.get(e.runId) ?? 0) + 1)
+      }
+      const counts = [...runs.values()]
+      requestsPerRun = { runs: counts.length, max: counts.length === 0 ? 0 : Math.max(...counts), avg: counts.length === 0 ? null : Math.round((counts.reduce((a, b) => a + b, 0) / counts.length) * 100) / 100 }
     }
-    const counts = [...runs.values()]
     return {
       kstDate: d, managedPosts: posts.length, comments: c, memberParticipatedPosts: memberPosts.size,
       avgCommentsPerPost: posts.length === 0 ? null : Math.round((cs.length / posts.length) * 100) / 100,
-      lanes, provider,
-      runCapacity: { runs: counts.length, maxRequestsPerRun: counts.length === 0 ? 0 : Math.max(...counts), avgRequestsPerRun: counts.length === 0 ? null : Math.round((counts.reduce((a, b) => a + b, 0) / counts.length) * 100) / 100 },
+      lanes: { 'first-comment': laneDay('first-comment'), followup: laneDay('followup') },
+      provider, requestsPerRun, slotCapacity: null,
     }
   })
 }

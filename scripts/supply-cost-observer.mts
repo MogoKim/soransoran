@@ -1,20 +1,21 @@
 #!/usr/bin/env tsx
 /**
- * 공급 비용 동일 분모 관측 — 🔴 read-only. DB `findMany` 만 · 장부 읽기만 · write 0 · provider 0
+ * 공급 비용 관측 — 🔴 **진단 전용** · read-only. DB `findMany` 만 · 장부 읽기만 · write 0 · provider 0
  *   npm run supply:cost-observe -- [--evidence-date=YYYY-MM-DD] [--since=ISO] [--json]
  *
- * 🔴 결과당 단가는 preflight 와 **같은 조립**이다 — `preflightWindowsOf` → `readReadyCohort` → 공급 장부 → `costAttributionOf`.
- *    단 하나 다른 점: 대기 결말 분류에 쓰는 "다가오는 슬롯 짝짓기"(`matched`)를 비운다(관측 시각엔 controller 의 슬롯이 없다).
- *    그래서 이 값은 controller 판정을 **대신하지 않는다** — 같은 분모의 참고 관측이다(출력에 적는다).
+ * 🔴 정본 조립(`preflightWindowsOf` → `readReadyCohort` → 공급 장부 → `costAttributionOf`)을 부르지만,
+ *    controller 가 판정 시각에 가진 다가오는 슬롯 짝짓기(`matched`·`horizon`)를 재현하지 못한다(비운다).
+ *    그래서 **권위 결과당 단가는 UNKNOWN** 이고, 정본 함수의 값은 진단값으로만 낸다. controller 판정을 대신하지 않는다.
+ * 🔴 coverage 기준 시각은 `--since` 또는 실제 배포 증거(manifest.sha = pin 의 deployedAt)에서만 온다.
  * 🔴 상한 $0.040 은 비교만 한다. 바꾸지 않는다.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { PrismaClient } from '@prisma/client'
 
-import { costCoverageOf, costDaysOf, costVersusCap } from '../src/lib/supply-cost-observation'
+import { canonicalCostFieldsOf, costCoverageOf, costDaysOf, costVersusCap, coverageSinceOf } from '../src/lib/supply-cost-observation'
 import { costAttributionOf, type CostFate } from '../src/lib/ready-fate'
 import { isSupplyContentCostStage, type LedgerEntry, type LedgerStage } from '../src/lib/llm-ledger'
 import { runIdStartMs } from '../src/lib/ops-shadow-plan'
@@ -25,15 +26,14 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { fillDbConnection } from './lib/ops-signals.mjs'
 
 export const COST_CAP_USD = 0.04
-/** 🔴 기본 기준 시각 — #843(비용 지배 판정·count_tokens) 이 처음 runtime 에 올라간 시각(63207eca · 2026-11-15 00:01 KST) */
-export const DEFAULT_SINCE = '2026-11-14T15:01:43.524Z'
 
 const arg = (k: string): string | null => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? null
 const NOW = new Date()
-const kstToday = new Date(NOW.getTime() + 9 * 3600_000).toISOString().slice(0, 10)
-const EVIDENCE = arg('evidence-date') ?? kstToday
-const SINCE = arg('since') ?? DEFAULT_SINCE
-const sinceMs = Number.isNaN(Date.parse(SINCE)) ? null : Date.parse(SINCE)
+const EVIDENCE = arg('evidence-date') ?? new Date(NOW.getTime() + 9 * 3600_000).toISOString().slice(0, 10)
+const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')
+const readJson = (p: string): Record<string, unknown> | null => { try { return JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown> } catch { return null } }
+const pinNow = ((): string | null => { try { return readFileSync(join(CANON_DIR, 'runtime-pinned-sha'), 'utf-8').trim() } catch { return null } })()
+const since = coverageSinceOf({ explicitSince: arg('since'), manifest: readJson(join(CANON_DIR, 'runtime-manifest.json')), pin: pinNow })
 
 await loadEnvLocal()
 if (!fillDbConnection()) { console.error('🔴 canonical DB env 없음'); process.exit(2) }
@@ -42,7 +42,9 @@ try {
   const win = preflightWindowsOf(EVIDENCE, NOW)
   const cohort = await readReadyCohort(db, { windowFrom: win.capacity.from, windowTo: win.capacity.to, dataDir: SUPPLY_DATA_DIR, matched: new Set(), horizon: [], now: NOW })
   const perDay = win.capacity.ledgerDates.map((d) => {
-    const r = readLedgerDay(ledgerPathOf(defaultLedgerDir(), d))
+    const path = ledgerPathOf(defaultLedgerDir(), d)
+    if (!existsSync(path)) return { date: d, entries: null }
+    const r = readLedgerDay(path)
     return { date: d, entries: r.ok ? r.entries : null }
   })
   const entries = pooledEntries(perDay.map((x) => x.entries)) as LedgerEntry[] | null
@@ -50,33 +52,31 @@ try {
   for (const r of cohort.rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
   const attribution = cohort.rows === null || cohort.fates === null ? null
     : costAttributionOf({ entries, fateByKey, counts: cohort.fates, cohortRuns: cohort.cohortRuns })
+  const canonical = canonicalCostFieldsOf(attribution as unknown as Record<string, unknown> | null)
   const days = costDaysOf(perDay, (s) => isSupplyContentCostStage(s as LedgerStage))
-  const coverage = costCoverageOf({ days, cohortRuns: [...cohort.cohortRuns], runStartMs: (r) => runIdStartMs(r), sinceMs })
-  const unit = attribution?.usdPerSlotValidResult ?? null
-  const runtimeSha = ((): string | null => {
-    try { return readFileSync(join(homedir(), 'Library', 'Application Support', 'soransoran', 'runtime-pinned-sha'), 'utf-8').trim() } catch { return null }
-  })()
+  const coverage = costCoverageOf({ days, cohortRuns: cohort.rows === null ? null : [...cohort.cohortRuns], runStartMs: (r) => runIdStartMs(r), sinceMs: since.sinceMs })
   const out = {
-    tool: 'supply-cost-observer', readOnly: true, runtimeSha, evidenceDate: EVIDENCE, window: { from: win.capacity.from.toISOString(), to: win.capacity.to.toISOString() },
-    sameDenominatorAs: 'preflight costAttributionOf (matched=∅ — controller 판정 대체 아님)',
-    attribution: attribution === null ? null : {
-      totalUsd: attribution.totalUsd, settledRequests: attribution.settledRequests, usageUnknownRequests: attribution.usageUnknownRequests,
-      openRequests: attribution.openRequests, openReservedUsd: attribution.openReservedUsd, legacyUsd: attribution.legacyUsd, unlinkedUsd: attribution.unlinkedUsd,
-      usdPerSlotValidResult: unit,
-    },
-    cap: { usd: COST_CAP_USD, verdict: costVersusCap(unit, COST_CAP_USD) },
-    coverage: { since: SINCE, ...coverage }, days, notes: cohort.notes,
+    tool: 'supply-cost-observer', readOnly: true, diagnosticOnly: true, runtimeSha: pinNow, evidenceDate: EVIDENCE,
+    window: { from: win.capacity.from.toISOString(), to: win.capacity.to.toISOString() },
+    authoritativeUsdPerSlotValidResult: null,
+    authoritativeReason: 'controller 판정 시각의 matched·horizon 입력을 재현하지 못함 — 진단값만 낸다',
+    diagnostic: { inputs: 'matched=∅ · horizon=∅', canonical },
+    cap: { usd: COST_CAP_USD, diagnosticVerdict: costVersusCap(canonical.usdPerSlotValidResult, COST_CAP_USD) },
+    coverage: { since: since.sinceMs === null ? null : new Date(since.sinceMs).toISOString(), sinceBasis: since.basis, ...coverage },
+    days, notes: cohort.notes,
   }
   if (process.argv.includes('--json')) console.log(JSON.stringify(out, null, 2))
   else {
-    console.log(`\n══ 공급 비용 동일 분모 관측 · 증거일 ${EVIDENCE} · runtime ${runtimeSha?.slice(0, 12) ?? '모름'} · read-only ══`)
+    const u = (v: unknown): string => (v === null || v === undefined ? 'UNKNOWN' : String(v))
+    console.log(`\n══ 공급 비용 관측(진단 전용) · 증거일 ${EVIDENCE} · runtime ${pinNow?.slice(0, 12) ?? '모름'} · read-only ══`)
     console.log(`  창 ${out.window.from} ~ ${out.window.to} (rolling 72h)`)
-    if (attribution === null) console.log('  🟡 결과당 단가 UNKNOWN — cohort 판독 실패')
-    else console.log(`  정산 $${attribution.totalUsd.toFixed(4)} · 정산 요청 ${attribution.settledRequests} · 미상 ${attribution.usageUnknownRequests} · 미정산 ${attribution.openRequests}`
-      + ` · legacy $${attribution.legacyUsd.toFixed(4)} · 미연결 $${attribution.unlinkedUsd.toFixed(4)} · 결과당 ${unit === null ? 'UNKNOWN' : `$${unit.toFixed(5)}`}`)
-    console.log(`  상한 $${COST_CAP_USD.toFixed(3)} 대비: ${out.cap.verdict}`)
-    console.log(`  coverage 장부 ${coverage.readableDays}/${coverage.ledgerDays}일 · cohort 회차 ${coverage.cohortRuns} · 기준(${SINCE}) 뒤 ${coverage.runsAfterSince ?? '—'} (${coverage.afterSinceRatio ?? '—'}) · 시각 미상 ${coverage.unparsedRuns}`)
-    for (const d of days) console.log(`  ${d.ledgerDate} ${d.readable ? '' : '🔴 판독 실패 '}요청 ${d.requests} · 정산 ${d.settled}($${d.settledUsd.toFixed(4)}) · 미상 ${d.usageUnknown} · 예약 ${d.reserved} · 차단 ${d.blocked}`)
-    console.log('  🔴 controller 판정을 대신하지 않는다 · DB write 0 · 파일 write 0 · provider 0')
+    console.log(`  권위 결과당 단가 UNKNOWN — ${out.authoritativeReason}`)
+    console.log(`  진단(정본 귀속 · 비운 입력): ${Object.entries(canonical).map(([k, v]) => `${k}=${u(v)}`).join(' · ')}`)
+    console.log(`  상한 $${COST_CAP_USD.toFixed(3)} 대비(진단): ${out.cap.diagnosticVerdict}`)
+    console.log(`  coverage 장부 ${coverage.readableDays}/${coverage.ledgerDays}일 · cohort 회차 ${u(coverage.cohortRuns)} · 기준(${u(out.coverage.since)} · ${since.basis}) 뒤 ${u(coverage.runsAfterSince)} (${u(coverage.afterSinceRatio)}) · 시각 미상 ${u(coverage.unparsedRuns)}`)
+    for (const d of days) {
+      console.log(`  ${d.ledgerDate} ${d.readable ? '' : '🔴 UNKNOWN(없음/판독 실패) '}요청 ${u(d.requests)} · 정산 ${u(d.settled)}($${u(d.settledUsd)}) · 미상 ${u(d.usageUnknown)}($${u(d.unknownReservedUsd)} 예약) · 예약 ${u(d.reserved)} · 차단 ${u(d.blocked)}`)
+    }
+    console.log('  🔴 진단 전용 · controller 판정을 대신하지 않는다 · DB write 0 · 파일 write 0 · provider 0')
   }
 } finally { await db.$disconnect() }
