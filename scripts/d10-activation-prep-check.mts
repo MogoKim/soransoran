@@ -4,7 +4,7 @@
  *
  * 일곱 가지를 고정한다.
  *   ① (지움 2026-09-30) 14일 준비도 시간축 — 정본은 다음 단계 preflight 다
- *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 두세 글자인가
+ *   ② persona 24명    얇은 축을 **측정해서** 메웠는가 · 닉네임이 정본 2~10자인가
  *   ③ (지움 2026-09-30) freshness TTL — 정본은 `judgeSlotRelease` 다
  *   ④ 수집원 다회      1,147 을 페이지로 쓰지 않는가 · 성공률을 곱하는가 · 보호장치가 있는가
  *   ⑤ d10 dry-run     24명·140건에서 140/140 인가 · 수집 준비도가 **BLOCKED** 인가
@@ -116,7 +116,7 @@ const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => (
 // 🔴 (2026-09-30 · source-slot-v1) 이 절은 지웠다 — ① 14일 준비도 시간축(`simulateStage` · `horizonStart` 지평) — 14일치 완성 글 재고를 준비도로 쓰던 정본. 대신 다음 단계 preflight(`judgeNextPreflight` · `stage:scheduler-check`) 가 본다.
 
 // ── ② persona 24명 · 닉네임 ──
-console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 글자')
+console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 2~10자')
 {
   const full = parsePoolDoc(read(POOL_DOC))
   check('정본 Pool 파싱 문제 0', full.problems.length === 0)
@@ -168,33 +168,34 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   check('🔴 문체 세 밴드가 모두 2명 이상', voice.every((c) => c.holders.length >= THIN_THRESHOLD))
   check('🔴 측정 당시 문체 합이 24명 (P09 제외)', voice.reduce((n, c) => n + c.holders.length, 0) === 24)
 
-  // 🔴 cohort — 현재 정본: 여섯 회차 40명 (wave6-d20-canary 준비 · 2026-10-15)
+  // 🔴 cohort — 현재 정본: 일곱 회차 60명 (wave7-d30 준비 · 2026-11-14)
   check('🔴 manifest 전체가 성립한다', verifyAllCohorts().length === 0)
   check('🔴 wave4-depth 가 P21~P25 다', COHORTS['wave4-depth'].codes.join() === NEW.join())
   check('🔴 wave4 는 wave3 를 선행으로 요구한다', COHORTS['wave4-depth'].requires.includes('wave3-scale'))
   const total = Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0)
-  check('🔴 여섯 회차 합이 40명 = 목표 인원', total === 40 && TARGET_PERSONA_COUNT === 40)
-  check('🔴 그 수가 현재 Pool 유효 카드 수(41 − P09)와 같다', total === full.cards.length - Object.keys(EXCLUDED_CODES).length && full.cards.length === 41)
-  check('🔴 열린 회차는 wave6-d20-canary 하나뿐이다', RUNNABLE_COHORTS.join() === 'wave6-d20-canary')
-  check('🔴 wave1~wave5 는 끝난 회차다',
-    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10'].every((c) => CLOSED_COHORTS.includes(c as CohortId)))
+  check('🔴 일곱 회차 합이 60명 = 목표 인원', total === 60 && TARGET_PERSONA_COUNT === 60)
+  check('🔴 그 수가 현재 Pool 유효 카드 수(61 − P09)와 같다', total === full.cards.length - Object.keys(EXCLUDED_CODES).length && full.cards.length === 61)
+  check('🔴 열린 회차는 wave7-d30 하나뿐이다', RUNNABLE_COHORTS.join() === 'wave7-d30')
+  check('🔴 wave1~wave6 는 끝난 회차다',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary'].every((c) => CLOSED_COHORTS.includes(c as CohortId)))
   const codes = new Set(full.cards.map((c) => c.code))
   check('🔴 manifest 코드가 전부 Pool 카드에 있다',
     Object.values(COHORTS).every((m) => m.codes.every((c) => codes.has(c))))
 
   /**
-   * 🔴 **닉네임 — 정본은 "두세 글자" 다** (Pool §3-2).
-   *    예전 판은 "조합형은 6자까지" 라는 예외를 코드에만 두고 `봄볕나무` 를 만들었다.
-   *    정본에 그런 예외가 없다.
+   * 🔴 **닉네임 — D100 canon §4.2 · runbook §2.1 (2026-10-16) 기준.**
+   *    옛 Pool §3-2 는 "두세 글자 순우리말"을 정본으로 적었으나 새 권위가 커뮤니티
+   *    실분포(반복 리듬·구어체·영문·숫자·2~10자)로 대체했다. NAME_LENGTH 상수가 이를 못박는다.
    */
-  check('🔴 정본이 두세 글자라고 적어 두었다', doc.includes('두세 글자 순우리말'))
-  check('🔴 길이 상수가 2~3 이다', NAME_LENGTH.min === 2 && NAME_LENGTH.max === 3)
-  check('🔴 네 글자는 정책 위반이다 — 예전 판의 조합형이 여기서 걸린다',
-    !verifyNamePolicy('봄볕나무').ok
-    && verifyNamePolicy('봄볕나무').problems.some((p) => p.includes('두세 글자')))
+  check('🔴 길이 하한은 2이다 — 한 글자는 여전히 위반', NAME_LENGTH.min === 2)
+  check('🔴 길이 상한이 커뮤니티 스타일 4자 이상을 허용한다 — canon §4.2', NAME_LENGTH.max >= 4)
+  check('🟢 네 글자 반복 리듬 이름은 통과한다 — 커뮤니티 스타일 canon §4.2', verifyNamePolicy('도란도란').ok)
+  check('🔴 상한 초과는 여전히 위반 — 11자', !verifyNamePolicy('도란도란도란도란도란도').ok && verifyNamePolicy('도란도란도란도란도란').ok)
   check('🔴 한 글자도 위반', !verifyNamePolicy('가').ok)
   check('🟢 두 글자·세 글자는 통과', verifyNamePolicy('수국').ok && verifyNamePolicy('도라지').ok)
-  check('🔴 숫자·영문은 정책 위반', !verifyNamePolicy('수국2').ok && !verifyNamePolicy('sugukk').ok)
+  check('🟢 영문·숫자는 정책 위반이 아니다 — 섞인 작명 canon §4.2', verifyNamePolicy('수국2').ok && verifyNamePolicy('sugukk').ok && verifyNamePolicy('a2z').ok)
+  check('🔴 숫자만 · 숫자 5연속 · 허용 밖 문자 · 같은 글자 4연속은 위반',
+    !verifyNamePolicy('12345').ok && !verifyNamePolicy('수국12345').ok && !verifyNamePolicy('수국_2').ok && !verifyNamePolicy('ａｂ').ok && !verifyNamePolicy('수수수수국').ok)
   check('🔴 봇/AI·운영자 연상 차단', !verifyNamePolicy('수국봇').ok && !verifyNamePolicy('운영수국').ok)
   check('🔴 출처 커뮤니티 계열 차단', !verifyNamePolicy('레몬수국').ok)
   check('🔴 지역명 차단', !verifyNamePolicy('서울수국').ok)
@@ -206,7 +207,7 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   const c1 = candidatesFor('P21')
   check('🔴 후보가 충분하다', c1.length >= 20)
   check('🔴 후보가 전부 정책을 통과한다', c1.every((n) => verifyNamePolicy(n).ok))
-  check('🔴 후보가 전부 두세 글자다 — 생성기와 검사기가 같은 상수를 쓴다',
+  check('🔴 후보가 전부 정책 길이 범위 안이다 — 생성기와 검사기가 같은 상수를 쓴다',
     c1.every((n) => [...n].length >= NAME_LENGTH.min && [...n].length <= NAME_LENGTH.max))
   check('🔴 결정적이다 — 같은 코드는 같은 목록', candidatesFor('P21').join() === c1.join())
   check('🔴 코드가 다르면 목록도 다르다', candidatesFor('P22').join() !== c1.join())
@@ -214,14 +215,14 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   const auto = assignCandidates(wave, () => false)
   check('🔴 16명 전원에게 서로 다른 이름을 고른다',
     auto.ok && auto.picked.size === 16 && new Set(auto.picked.values()).size === 16)
-  check('🔴 고른 이름이 전부 두세 글자다',
-    [...auto.picked.values()].every((n) => [...n].length >= 2 && [...n].length <= 3))
+  check('🔴 고른 이름이 전부 정책 길이 범위 안이다',
+    [...auto.picked.values()].every((n) => [...n].length >= NAME_LENGTH.min && [...n].length <= NAME_LENGTH.max))
   check('🔴 전부 막히면 실패로 돌려준다 — 일부만 만들지 않는다',
     !assignCandidates(wave, () => true).ok)
   // 🔴 코드에 "이 사람은 이 이름" 배정표가 없다 (Pool §3-2 이유 ②)
   const nick = codeOf('src/lib/persona-nickname-candidates.ts')
   check('🔴 persona 코드별 이름 배정표가 없다', !/P0[1-9]|P1[0-9]|P2[0-5]/.test(nick))
-  check('🔴 네 글자 조합을 만드는 경로가 없다 — 머리가 한 글자다',
+  check('🔴 HEAD1 구조 유지 — 한 글자 머리로 세 글자 조합만 만든다 (4~5자는 RHYTHM·TALK 단독)',
     /HEAD1/.test(nick) && !/const HEAD:/.test(nick))
 
   /**
@@ -374,15 +375,15 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
   check('🔴 유효 처리량은 성공률을 곱한 값이다',
     evidenceAdjustedDetailPerDay('start') === wantEffective('start')
     && evidenceAdjustedDetailPerDay('stable') === wantEffective('stable'))
-  /** 🔴 확정 일정에서의 실측값 — 82cook 30×5×0.8 + remonterrace 10×5 + wgang 10×4 */
+  /** 🔴 확정 일정에서의 계획값 — 82cook thin 17×5×0.8 + remonterrace 11×5 + wgang 16×5 */
   /**
-   * 🔴 **설정 상한 204 = 82cook thin 85 + remonterrace 55 + wgang 64** (2026-09-14).
-   *    근거 보정 추정치는 여기에 실측 성공률을 곱한 **187** 이다.
+   * 🔴 **설정 상한 220 = 82cook thin 85 + remonterrace 55 + wgang 80** (2026-10-31).
+   *    근거 보정 추정치는 여기에 실측 성공률을 곱한 **203** 이다.
    *    옛 값 210·158 은 세 번 틀렸다 — raw 목록 job 의 죽은 상세를 세고,
    *    실제로 상세를 여는 thin 을 빼고, 네이버를 옛 1페이지·10건으로 계산했다.
    */
-  check('🔴 설정 상한은 204건/day · 근거 보정 추정치는 187건/day 다',
-    configuredDetailCeilingPerDay('start') === 204 && evidenceAdjustedDetailPerDay('start') === 187)
+  check('🔴 설정 상한은 220건/day · 근거 보정 추정치는 203건/day 다',
+    configuredDetailCeilingPerDay('start') === 220 && evidenceAdjustedDetailPerDay('start') === 203)
   check('🔴 raw 목록 job 은 유효 처리량에 0 을 보탠다 — 상세를 열지 않는다',
     factsOf('82cook').detailPerRun === 0)
   check('🔴 82cook 몫은 thin 경로에서 나온다 — 상한 85 · 보정 68', (() => {
@@ -550,7 +551,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 그래서 current 는 관측된 job 몫뿐이다',
     cur.effectivePerDay === observedDetailPerDay(OBSERVED_NOW))
   check('🔴 prepared 는 정본 계획값이다 — current 와 합치지 않는다',
-    prep.effectivePerDay === evidenceAdjustedDetailPerDay('start') && prep.effectivePerDay === 187)
+    prep.effectivePerDay === evidenceAdjustedDetailPerDay('start') && prep.effectivePerDay === 203)
   check('🔴 82cook 은 미등록이라 current 기여가 0 이다',
     cur.perSource.find((x) => x.id === '82cook')!.effectivePerDay === 0)
 
@@ -595,7 +596,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 안정 단계도 BLOCKED 다', readyStable.status === 'BLOCKED')
   check('🔴 current · prepared · required 를 각각 낸다',
     readyStart.configuredPerDay === observedDetailPerDay(OBSERVED_NOW)
-      && readyStart.preparedPerDay === 187
+      && readyStart.preparedPerDay === 203
     && readyStart.requiredPerDay === 382)
   check('🔴 지금 열리는 것이 모자란다고 숫자로 적는다', (() => {
     // 🔴 이름을 `설정된 것` 으로 바꿨다 — 등록은 능력이 아니다(2026-09-10)
@@ -606,7 +607,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   })())
   check('🔴 전부 올려도 모자란다는 것을 따로 적는다',
     readyStart.reasons.some((r) => r.includes('전부 올려도')
-      && r.includes(`${382 - 187}건 모자란다`)))
+      && r.includes(`${382 - 203}건 모자란다`)))
   check('🔴 판정은 이론 최대로 하지 않는다',
     readyStart.theoreticalPerDay === wantTheoretical('start')
     && readyStart.theoreticalPerDay > readyStart.preparedPerDay)
@@ -680,7 +681,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   for (const cafe of ['remonterrace', 'wgang'] as const) {
     check(`🔴 ${cafe} 다회 템플릿이 있다`,
       read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`).includes('multi'))
-    // 🔴 슬롯 수의 정본은 `RUNS_PER_DAY` 다 — 카페마다 다르다(remonterrace 5 · wgang 4)
+    // 🔴 슬롯 수의 정본은 `RUNS_PER_DAY` 다 — 현재 두 카페 모두 5회다
     check(`🔴 ${cafe} 다회 템플릿 슬롯 수가 정본과 같다`, (() => {
       const t = read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`)
       return (t.match(/<key>Hour<\/key>/g) ?? []).length === RUNS_PER_DAY[`navercafe:${cafe}`].start
@@ -1480,12 +1481,12 @@ console.log('\n⑰ 문서 정합 — 낡은 숫자·낡은 절차를 남기지 �
 }
 
 // ── ⑧ wave5-d10 — Persona 30 준비 (2026-10-08) ──
-console.log('\n⑧ wave5-d10 보존 — 카드 41 · production 40 · 역사적 cohort 6')
+console.log('\n⑧ wave5-d10 보존 — 카드 61 · production 60 · 역사적 cohort 7')
 {
   const { cards, problems } = parsePoolDoc(read(POOL_DOC))
   const WAVE5 = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
-  check('🔴 카드 41장 · 파싱 문제 0', cards.length === 41 && problems.length === 0)
-  check('🔴 production universe 40명 = 카드 41 − P09', PRODUCTION_PERSONA_CODES.length === 40
+  check('🔴 카드 61장 · 파싱 문제 0', cards.length === 61 && problems.length === 0)
+  check('🔴 production universe 60명 = 카드 61 − P09', PRODUCTION_PERSONA_CODES.length === 60
     && PRODUCTION_PERSONA_CODES.length === cards.length - Object.keys(EXCLUDED_CODES).length)
   check('🔴 P09 는 카드에 있지만 어느 cohort 에도 없다', cards.some((c) => c.code === 'P09')
     && Object.values(COHORTS).every((m) => !m.codes.includes('P09')) && !PRODUCTION_PERSONA_CODES.includes('P09'))
@@ -1495,9 +1496,9 @@ console.log('\n⑧ wave5-d10 보존 — 카드 41 · production 40 · 역사적 
   check('🔴 wave5 의 선행은 앞 네 회차 전부다',
     ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'].every((r) => COHORTS['wave5-d10'].requires.includes(r as CohortId))
     && COHORTS['wave5-d10'].requires.length === 4)
-  check('🔴 끝난 옛 회차는 CLI 가 다시 열지 못하고 wave6만 열린다',
-    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10'].every((c) => !judgeCohortArg(c).ok)
-    && judgeCohortArg('wave6-d20-canary').ok)
+  check('🔴 끝난 옛 회차는 CLI 가 다시 열지 못하고 wave7만 열린다',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary'].every((c) => !judgeCohortArg(c).ok)
+    && judgeCohortArg('wave7-d30').ok)
   const args = (limit: number | null) => judgeArgs({ apply: true, limit, actorUserId: 'u', reason: 'r', cohortSize: COHORTS['wave5-d10'].codes.length, requireActor: false })
   check('🔴 --limit=6 이 아니면 적용 거부', args(6).ok && !args(5).ok && !args(7).ok && !args(null).ok)
   check('🔴 manifest 전체가 성립한다(중복 코드 · 선행 누락 0)', verifyAllCohorts().length === 0)

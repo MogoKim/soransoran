@@ -14,21 +14,22 @@
  * 🔴 DB 0 · provider 0 · 운영 HOME 0 — 모든 실행은 임시 HOME · 임시 cwd 다. 운영 lockf 잠금 파일을 건드리지 않는다.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   FOLLOW_UP_FILE, LEASE_FD_ENV, LEASE_INNER_ENV, LOCKF_PATH, MAX_FOLLOW_UPS,
-  followUpTriggerOf, lockfUsable, mergePassTrigger, probeKernelLease, shouldRunFollowUp,
+  followUpTriggerOf, lockfUsable, mergePassTrigger, probeKernelLease, requestFollowUp, shouldRunFollowUp,
+  takeFollowUpRecord,
 } from './lib/runner-lease.mjs'
 import {
   FAKE_LOCKF_MARK, SUPPLY_LOCK_FILE, SUPPLY_PASS_ENV, SUPPLY_RUN_TOKEN_ENV, SUPPLY_RUN_TOKEN_FILE,
-  stageSpawnOf, supplyLaunchTrigger, supplyLockDir, supplyLockfPath, writeRunTokenAtomic,
+  mayStartSupplyPass, stageSpawnOf, supplyLaunchTrigger, supplyLockDir, supplyLockfPath, writeRunTokenAtomic,
 } from './lib/supply-lease.mjs'
 import {
   RUN_TOKEN_TTL_MS, RUN_TOKEN_VERSION, budgetWindowShadowOf, buildRunToken, judgeRunTokenShadow, parseRunToken,
-  shadowTagOf, supplyRunIdOf, type RunToken,
+  isNaturalScheduledRunTag, naturalScheduledRunEvidenceAt, parseRunTokenShadowTag, shadowTagOf, supplyRunIdOf, type RunToken,
 } from '../src/lib/supply-run-token'
 import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, supplyRunKindOf, supplySpendProtectAt,
@@ -82,6 +83,28 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
   })
   const code = (s: ReturnType<typeof judgeRunTokenShadow>): string => (s.ok ? 'OK' : s.code)
   check('shadow — 다섯 칸이 다 맞으면 ok · trigger · 창', (() => { const s = J({}); return s.ok && s.trigger === 'event' && s.budgetWindowShadow === '2026-10-12 08:15' })())
+  check('🔴 저장 shadow가 최종 trigger뿐 아니라 launch·흡수 표식·pass를 보존한다', (() => {
+    const tag = shadowTagOf(J({}))
+    const parsed = parseRunTokenShadowTag(tag)
+    return parsed?.ok === true && parsed.trigger === 'event' && parsed.launchTrigger === 'manual'
+      && parsed.absorbedTrigger === 'event' && parsed.absorbedAt === '2026-10-12T02:59:00.000Z'
+      && parsed.pass === 0 && !isNaturalScheduledRunTag(parsed)
+  })())
+  check('🔴 옛 trigger-only tag는 자연 회차로 추정하지 않고, 첫 예약·예약 follow-up만 원시각으로 자연 증거다', (() => {
+    const old = { ok: true, code: null, tokenId: 'old', trigger: 'scheduled', budgetWindow: '2026-10-12 08:15' }
+    const natural = {
+      ok: true, code: null, tokenId: 'new', trigger: 'scheduled', launchTrigger: 'scheduled',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-10-12 08:15',
+    }
+    const followUp = {
+      ...natural, tokenId: 'follow', absorbedTrigger: 'scheduled' as const,
+      absorbedAt: '2026-10-12T03:15:00.000Z', pass: 1,
+    }
+    return parseRunTokenShadowTag(old) === null && !isNaturalScheduledRunTag(old)
+      && isNaturalScheduledRunTag(natural)
+      && naturalScheduledRunEvidenceAt(followUp, '2026-10-12T05:30:00.000Z') === '2026-10-12T03:15:00.000Z'
+      && naturalScheduledRunEvidenceAt(followUp, '2026-10-12T03:14:59.999Z') === null
+  })())
   check('🔴 shadow — lease 표식 없음(손 실행) → NO_LEASE', code(J({ lease: { kind: 'absent' } })) === 'NO_LEASE')
   check('🔴 shadow — lease 증명 실패(fd 위조) → LEASE_NOT_PROVEN', code(J({ lease: { kind: 'unproven' } })) === 'LEASE_NOT_PROVEN')
   check('🔴 shadow — token env 없음 → NO_TOKEN_ENV', code(J({ envTokenId: null })) === 'NO_TOKEN_ENV' && code(J({ envTokenId: '' })) === 'NO_TOKEN_ENV')
@@ -95,7 +118,8 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
   check('🔴 shadow — 미래 발급(시계 오차 1분 초과) → TOKEN_NOT_YET_VALID', code(J({ now: new Date(at.getTime() - 61_000) })) === 'TOKEN_NOT_YET_VALID')
   check('장부 칸 모양 — 실패면 trigger · 창을 싣지 않는다', (() => {
     const t = shadowTagOf(J({ envTokenId: 't-2' }))
-    return !t.ok && t.code === 'TOKEN_ID_MISMATCH' && t.trigger === null && t.budgetWindow === null
+    return !t.ok && t.code === 'TOKEN_ID_MISMATCH' && t.trigger === null && t.launchTrigger === null
+      && t.absorbedTrigger === null && t.absorbedAt === null && t.pass === null && t.budgetWindow === null
   })())
 
   check('follow-up 표식 trigger — 네 값은 그대로 · 깨짐 · 모르는 값 · 칸 없음은 unknown(추정 0)',
@@ -106,7 +130,25 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
     mergePassTrigger('manual', 'event') === 'event' && mergePassTrigger('scheduled', 'manual') === 'scheduled'
     && mergePassTrigger('manual', 'unknown') === 'manual' && mergePassTrigger('recovery', null) === 'recovery'
     && mergePassTrigger('event', 'scheduled') === 'scheduled')
+  check('🔴 제한 복구는 token 발급 실패면 시작 0 · 기존 자연·event·수동 shadow 계약은 유지',
+    !mayStartSupplyPass('recovery', null) && mayStartSupplyPass('recovery', 'token-1')
+    && mayStartSupplyPass('scheduled', null) && mayStartSupplyPass('event', null) && mayStartSupplyPass('manual', null))
   check('follow-up 상한 — 첫 회차 뒤 한 번', MAX_FOLLOW_UPS === 1 && shouldRunFollowUp(0, 'TAKEN') && !shouldRunFollowUp(1, 'TAKEN'))
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'follow-up-read-error-'))
+    try {
+      requestFollowUp(dir, at.getTime(), 'scheduled')
+      const proof = { lockPath: join(dir, 'lock'), followUpDir: dir, lockf: LOCKF_PATH, fd: 9 }
+      const taken = takeFollowUpRecord(proof, () => {
+        const claim = readdirSync(dir).find((name) => name.startsWith(`.${FOLLOW_UP_FILE}.claim-`))
+        if (claim !== undefined) chmodSync(join(dir, claim), 0o000)
+      })
+      const restored = join(dir, FOLLOW_UP_FILE)
+      check('🔴 follow-up marker 읽기 실패는 ERROR이고 정본 이름으로 보존된다(조용한 삭제 0)',
+        taken.take === 'ERROR' && existsSync(restored))
+      if (existsSync(restored)) chmodSync(restored, 0o600)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
 
   // 띄운 이유 = 지금 예산 판정의 실행 종류(같은 함수)
   const label = { [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL }
@@ -145,6 +187,29 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
       /globalThis\[Symbol\.for\('soransoran\.test\.fake-runner-lockf'\)\] = process\.env\.FAKE_RUNNER_LOCKF/.test(hook)
       && JSON.stringify(users) === JSON.stringify(['scripts/lib/fake-provider-hook.mjs', 'scripts/lib/supply-lease.mts']), users.join(','))
     const leaseSrc = readFileSync('scripts/lib/supply-lease.mts', 'utf-8')
+    check('🔴 holder가 제한 복구 token 실패를 자식 spawn 전에 fail-closed 한다', (() => {
+      const issued = leaseSrc.indexOf('const tokenId = issueRunToken')
+      const guarded = leaseSrc.indexOf('if (!mayStartSupplyPass(ctx.trigger, tokenId))', issued)
+      const spawned = leaseSrc.indexOf('return runPassChild(', issued)
+      return issued >= 0 && guarded > issued && spawned > guarded
+        && leaseSrc.slice(guarded, spawned).includes('provider 0 · DB 0')
+    })())
+    check('🔴 회차 자식은 제한 복구 token을 body 전에 강제 검증한다', (() => {
+      const child = leaseSrc.indexOf('if (o.env[SUPPLY_PASS_ENV] !== undefined)')
+      const guarded = leaseSrc.indexOf("if (o.trigger === 'recovery')", child)
+      const gate = leaseSrc.indexOf('recoveryRunTokenGateFromEnv(o.env, now())', guarded)
+      const body = leaseSrc.indexOf('return o.body(v.proof)', child)
+      return child >= 0 && guarded > child && gate > guarded && body > gate
+        && leaseSrc.slice(gate, body).includes('intent claim 0 · provider 0 · DB 0')
+    })())
+    check('🔴 제한 복구 token gate는 trigger·pass·runId를 회차 env와 다시 묶는다', (() => {
+      const start = leaseSrc.indexOf('export function recoveryRunTokenGateFromEnv')
+      const end = leaseSrc.indexOf('\n}\n', start)
+      const gate = leaseSrc.slice(start, end)
+      return start >= 0 && gate.includes("shadow.trigger !== 'recovery'") && gate.includes("shadow.launchTrigger !== 'recovery'")
+        && gate.includes('shadow.absorbedTrigger !== null') && gate.includes('shadow.pass !== Number(passRaw)')
+        && gate.includes('supplyRunIdOf(runClockFrom(env).at)') && gate.includes('shadow.runId !== expectedRunId')
+    })())
     check('🔴 supply-lease 는 가짜 provider 격리 표식 · FAKE_RUNNER_LOCKF env 를 읽지 않는다', !/fake-provider-ledger-isolation|env\[FAKE_LOCKF_ENV\]/.test(leaseSrc))
   }
   check('잠금 디렉터리 — Application Support 아래 공급 전용', supplyLockDir('/h') === '/h/Library/Application Support/soransoran/supply-process'
@@ -169,8 +234,10 @@ console.log('\n② 예산 판정 불변 — token · lease 표식은 예산 허�
   check('🔴 같은 시각 · 같은 라벨이면 lease · token 표식이 있어도 예산 판정(종류 · 몫 · 천장) 결과가 바이트 단위로 같다', same)
   const call = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
   const code = call.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  const tokenShadowUses = code.match(/\btokenShadow\b/g) ?? []
+  const tokenShadowSpreads = code.match(/\.\.\.tokenShadow,/g) ?? []
   check('🔴 장부 세션 — shadow 는 줄에 나란히 적기만 한다(판정 함수 · 보호 판정 인자에 들어가지 않는다)',
-    (code.match(/tokenShadow/g) ?? []).length === 3 && (code.match(/\.\.\.tokenShadow,/g) ?? []).length === 2
+    tokenShadowSpreads.length >= 2 && tokenShadowUses.length === tokenShadowSpreads.length + 1
     && !/protectAt\([^)]*tokenShadow|judgeSpend\(\{[^}]*tokenShadow/.test(code))
   const reserve = readFileSync('src/lib/supply-scheduled-reserve.ts', 'utf-8')
   check('🔴 예산 판정 정본이 token · lease 를 보지 않는다', !/run-token|runToken|supply-lease|LEASE_|SORAN_SUPPLY_RUN_TOKEN/.test(reserve))
@@ -198,15 +265,35 @@ writeFileSync(LEAF, [
 ].join('\n'))
 /** 🔴 실제 진입 함수(`supplyEntry`)와 실제 자식 띄우기(`stageSpawnOf`)를 그대로 쓰는 하네스 — 본체만 시작 · 끝을 적고 잔다 */
 writeFileSync(HARNESS, [
-  "import { appendFileSync, writeFileSync } from 'node:fs'",
+  "import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'",
   "import { spawnSync } from 'node:child_process'",
   "import { join } from 'node:path'",
   "import { fileURLToPath } from 'node:url'",
   `import { supplyEntry, stageSpawnOf, runTokenShadowFromEnv, supplyLockDir, SUPPLY_RUN_TOKEN_FILE, FAKE_LOCKF_MARK } from ${lib('scripts/lib/supply-lease.mjs')}`,
   'const [log, holdMs, leaf] = process.argv.slice(2)',
   "if ((process.env.HARNESS_FAKE_LOCKF ?? '') !== '') (globalThis as Record<symbol, unknown>)[FAKE_LOCKF_MARK] = process.env.HARNESS_FAKE_LOCKF",
+  "if (process.env.SORAN_SUPPLY_PASS !== undefined && (process.env.HARNESS_RECOVERY_TOKEN_FAULT ?? '') !== '') {",
+  "  const tokenPath = join(supplyLockDir(), SUPPLY_RUN_TOKEN_FILE)",
+  "  const fault = process.env.HARNESS_RECOVERY_TOKEN_FAULT",
+  "  if (fault === 'missing') rmSync(tokenPath, { force: true })",
+  "  else if (fault === 'env-id') process.env.SORAN_SUPPLY_RUN_TOKEN = 'not-the-token'",
+  "  else {",
+  "    const token = JSON.parse(readFileSync(tokenPath, 'utf-8')) as Record<string, unknown>",
+  "    if (fault === 'corrupt') writeFileSync(tokenPath, '{broken')",
+  "    else if (fault === 'expired') {",
+  "      const ttl = Date.parse(String(token.expiresAt)) - Date.parse(String(token.issuedAt))",
+  "      const expiresAt = Date.now() - 1",
+  "      token.issuedAt = new Date(expiresAt - ttl).toISOString()",
+  "      token.expiresAt = new Date(expiresAt).toISOString()",
+  "      writeFileSync(tokenPath, JSON.stringify(token))",
+  "    } else if (fault === 'trigger') { token.trigger = 'manual'; writeFileSync(tokenPath, JSON.stringify(token)) }",
+  "    else if (fault === 'pass') { token.pass = Number(token.pass) + 1; writeFileSync(tokenPath, JSON.stringify(token)) }",
+  "    else if (fault === 'run-id') { token.runId = 'wrong-run'; writeFileSync(tokenPath, JSON.stringify(token)) }",
+  "  }",
+  "}",
   'const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))',
   'const code = await supplyEntry({ scriptPath: fileURLToPath(import.meta.url), argv: process.argv.slice(2), env: process.env, log: () => undefined,',
+  "  ...((process.env.HARNESS_TRIGGER ?? '') === 'recovery' ? { trigger: 'recovery' as const } : {}),",
   '  body: async (proof) => {',
   "    const pass = Number(process.env.SORAN_SUPPLY_PASS)",
   "    const token = process.env.SORAN_SUPPLY_RUN_TOKEN ?? null",
@@ -227,7 +314,15 @@ writeFileSync(HARNESS, [
 ].join('\n'))
 
 type Line = { kind: string; pid: number; ppid: number; pass: number; at: number; runAt?: string; token?: string | null; tag?: string
-  shadow?: { ok: boolean; code?: string; trigger?: string; tokenId?: string | null } }
+  shadow?: {
+    ok: boolean
+    code?: string
+    trigger?: string
+    launchTrigger?: string
+    absorbedTrigger?: string | null
+    pass?: number
+    tokenId?: string | null
+  } }
 const lines = (): Line[] => (existsSync(LOG) ? readFileSync(LOG, 'utf-8') : '').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Line)
 const starts = (): Line[] => lines().filter((l) => l.kind === 'start')
 const leaves = (): Line[] => lines().filter((l) => l.kind === 'leaf')
@@ -276,6 +371,7 @@ try {
 
   const REAL_CASES = [
     '최초 실행(디렉터리 없음) · 0700 · token 0600', 'holder 1 + contender 5 → 본체 1 · follow-up 1 · 상한', '시작 전 event 표식 → pass0 event · pass1 없음',
+    '제한 복구 경합 → marker 0 · 기존 marker 흡수 0', '제한 복구 token 누락·손상·불일치·만료 → 본체 0',
     '깨진 표식 → unknown 기록 · 올리지 않음', 'holder SIGKILL → 즉시 재획득', '부모 종료 뒤 자식 생존 → 자식 끝까지 진입 0',
     'fd 9 실제 자식 전달 · token 일치', 'fd 미전달 · npx 경유 → 증명 실패', '자식 token 위조 · corrupt', '바깥 위조(fd 없음 · 같은 파일 · 다른 파일)',
     '회차 자식 위조 → 본체 0', 'busy 재시도 — probe 순간 충돌 구제', 'probe free/busy · 파일 생성 0', 'token 원자 쓰기(새 inode · 0600)', '실제 러너 진입',
@@ -305,7 +401,9 @@ try {
     await waitFor(() => leaves().length >= 1)
     const leaf0 = leaves()[0]
     check('🔴 🔴 fd 9 실제 자식 전달 — 회차 자식이 stageSpawnOf 로 띄운 자식이 같은 lease 를 증명하고 token 이 일치한다(shadow ok)',
-      leaf0?.shadow?.ok === true && leaf0.shadow.tokenId === t0?.tokenId && leaf0.ppid === s0?.pid, JSON.stringify(leaf0?.shadow))
+      leaf0?.shadow?.ok === true && leaf0.shadow.tokenId === t0?.tokenId && leaf0.ppid === s0?.pid
+      && leaf0.shadow.launchTrigger === 'manual' && leaf0.shadow.absorbedTrigger === null && leaf0.shadow.pass === 0,
+      JSON.stringify(leaf0?.shadow))
     check('회차 자식 자신의 shadow 도 ok · token 의 trigger = manual(라벨 없음)', s0?.shadow?.ok === true && t0?.trigger === 'manual' && t0.pass === 0)
     const contenders = [run(0), run(0), run(0), run(0), run(0)]
     const cExits = await Promise.all(contenders.map(exitOf))
@@ -330,6 +428,33 @@ try {
     check('🔴 🔴 반례 probe 가 잠금 파일을 지우거나 바꾸지 않는다(-k) — 지우면 holder 의 inode 와 새 실행의 inode 가 갈라져 두 본체가 겹친다',
       existsSync(LOCKP) && statSync(LOCKP).ino === inoBefore)
 
+    // ── 단계 제한 복구는 자연 follow-up marker와 완전히 격리 ──
+    reset()
+    const recoveryBlocker = run(6_000)
+    const recoveryBlockerExit = exitOf(recoveryBlocker)
+    check('제한 복구 경합용 holder가 본체에 들어갔다', await waitFor(() => starts().length === 1))
+    const heldRecovery = await exitOf(run(0, { env: { ...baseEnv(), HARNESS_TRIGGER: 'recovery' } }))
+    check('🔴 🔴 제한 복구가 lease 경합하면 본체 0 · follow-up marker 0',
+      heldRecovery === 0 && starts().length === 1 && !existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+    await recoveryBlockerExit
+
+    reset()
+    writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'event' }), { mode: 0o600 })
+    const isolatedRecovery = await exitOf(run(200, { env: { ...baseEnv(), HARNESS_TRIGGER: 'recovery' } }))
+    const recoveryToken = tokenNow()
+    check('🔴 🔴 제한 복구 holder는 기존 marker를 흡수하지 않고 pass 0 한 번만 실행한다',
+      isolatedRecovery === 0 && starts().length === 1 && starts()[0]?.pass === 0
+      && recoveryToken?.trigger === 'recovery' && recoveryToken.launchTrigger === 'recovery'
+      && recoveryToken.absorbedTrigger === null && existsSync(join(LOCKD, FOLLOW_UP_FILE)),
+      JSON.stringify(recoveryToken))
+
+    // ── 제한 복구는 회차 자식이 token을 본체 전에 다시 증명한다 ──
+    for (const fault of ['missing', 'corrupt', 'env-id', 'expired', 'trigger', 'pass', 'run-id']) {
+      reset()
+      const exit = await exitOf(run(0, { env: { ...baseEnv(), HARNESS_TRIGGER: 'recovery', HARNESS_RECOVERY_TOKEN_FAULT: fault } }))
+      check(`🔴 🔴 제한 복구 token ${fault} → exit 1 · 본체 0(intent claim · provider · DB 0)`, exit === 1 && starts().length === 0, `${exit}`)
+    }
+
     // ── 시작 전에 있던 event 표식 ──
     reset()
     writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'event' }), { mode: 0o600 })
@@ -346,6 +471,25 @@ try {
     const tc = tokenNow()
     check('🔴 🔴 반례 깨진 표식 → 추정하지 않고 unknown 으로 기록 · trigger 는 띄운 이유 그대로 · 표식은 거둔다',
       cr === 0 && starts().length === 1 && tc?.absorbedTrigger === 'unknown' && tc.trigger === 'manual' && !existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+
+    // ── 읽을 수 없는 표식 ──
+    reset()
+    writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'scheduled' }), { mode: 0o000 })
+    const unreadable = await exitOf(run(200))
+    check('🔴 🔴 반례 읽을 수 없는 표식 → holder exit 1 · 본체 0 · marker 보존',
+      unreadable === 1 && starts().length === 0 && existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+    if (existsSync(join(LOCKD, FOLLOW_UP_FILE))) chmodSync(join(LOCKD, FOLLOW_UP_FILE), 0o600)
+
+    // ── 첫 회차 중 들어온 표식을 follow-up 직전에 읽지 못함 ──
+    reset()
+    const loopErrorHolder = run(2_000)
+    const loopErrorExit = exitOf(loopErrorHolder)
+    check('첫 회차가 시작된 뒤 follow-up 표식 오류를 주입한다', await waitFor(() => starts().length === 1))
+    writeFileSync(join(LOCKD, FOLLOW_UP_FILE), JSON.stringify({ at: new Date().toISOString(), trigger: 'scheduled' }), { mode: 0o000 })
+    const loopUnreadable = await loopErrorExit
+    check('🔴 🔴 반례 첫 회차 뒤 표식을 읽지 못하면 exit 1 · 추가 회차 0 · marker 보존',
+      loopUnreadable === 1 && starts().length === 1 && starts()[0]?.pass === 0 && existsSync(join(LOCKD, FOLLOW_UP_FILE)))
+    if (existsSync(join(LOCKD, FOLLOW_UP_FILE))) chmodSync(join(LOCKD, FOLLOW_UP_FILE), 0o600)
 
     // ── holder SIGKILL → 즉시 재획득 ──
     reset()

@@ -34,7 +34,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
 import { checkAlt } from './magazine-hero.mjs'
-import { BANNED_WORDS } from '../magazine-qa.mjs'
+import { BANNED_WORDS } from './magazine-qa-constants.mjs'
 
 /**
  * 장면 서술에 들어오면 안 되는 것.

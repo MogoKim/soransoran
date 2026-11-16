@@ -33,7 +33,22 @@ import { judgeNextPreflight, type PreflightFacts } from '../src/lib/stage-ladder
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { judgeCost } from '../src/lib/ops-status'
-import { relevantUsageUnknownCount, tallyOf, type DayTally, type LedgerEntry } from '../src/lib/llm-ledger'
+import {
+  recordedSupplyBudgetOf, relevantUsageUnknownCount, supplyProofCostObservationOf, tallyOf,
+  type DayTally, type LedgerEntry,
+} from '../src/lib/llm-ledger'
+import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
+import { PRICING_VERSION } from '../src/lib/llm-pricing'
+import {
+  judgeSupplyCostEnvelope, supplyCostContractOf, supplyCostProofBudgetUsd,
+  supplyCostScheduledSlotOf, usesSupplyCostEnvelope, SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
+  supplyCostContractHistory, validSupplyCostContractHistory,
+} from '../src/lib/supply-cost-envelope'
+import {
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_FIRST_DAILY_USD,
+  SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_RUNS_PER_DAY,
+} from '../src/lib/supply-schedule-contract'
+import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -64,7 +79,10 @@ const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
   postId: `p-${i}`, queueId: `q-${i}`,
   publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `author-${i}`,
   decider: 'auto', release: 'STAMPED_ELIGIBLE',
-  personaComments: [{ personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true, provenance: 'auto' as const }],
+  personaComments: [{
+    personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN,
+    topLevel: true, provenance: 'auto' as const,
+  }],
   ...o,
 })
 /** 🔴 감사 표본 한 행 — 그날 자동 target(postId·queueId)에 속해야 표본으로 센다 */
@@ -84,12 +102,18 @@ const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}):
 /** 🔴 비용은 정본 `judgeCost` 로 만든다 — health 를 손으로 적지 않는다 */
 const tally = (usd: number, overruns = 0): DayTally => ({ ...tallyOf([]), settledUsd: usd, overruns })
 const costOk = judgeCost({ uses: true, tally: tally(0.01), ledgerError: null, settleHold: null, capUsd: 1 })
+const SUPPLY_COST_OK = {
+  legacyUsageUnknownRequests: 0,
+  wholeDayCriticalHealth: 'ok',
+  envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
+} as const
 const side = (o: Partial<EvidenceSideSignals> = {}): EvidenceSideSignals => ({
   cost: [
-    { name: '공급 장부', health: costOk.health }, { name: '댓글 장부', health: costOk.health },
-    { name: '감사 장부', health: costOk.health },
+    { lane: 'supply', name: '공급 장부', health: costOk.health },
+    { lane: 'comment', name: '댓글 장부', health: costOk.health },
+    { lane: 'audit', name: '감사 장부', health: costOk.health },
   ],
-  errors: 'ok', ...o,
+  errors: 'ok', supplyCostEvidence: SUPPLY_COST_OK, ...o,
 })
 const judge = (f: StageEvidenceFacts | null, s: EvidenceSideSignals | null = side(), stage: RuntimeStage = 'd3') =>
   judgeStageEvidence(D, stage, f, s)
@@ -159,10 +183,10 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   check('경계 — 정확히 60분은 시한 안이다', judge(facts('d3', { posts: [post(0, {
     personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })).verdict === 'PASS')
   // (b) 추가 댓글 계약 — 상한은 댓글 단계의 정본 상수다
-  check('상한 — bootstrap-auto 1 · review/organic 5 · shadow 0 (정본 상수 그대로)',
+  check('상한 — bootstrap-auto 1 · review/organic 10 · shadow 0 (정본 상수 그대로)',
     personaCommentCapFor('bootstrap-auto') === AUTO_PERSONA_COMMENTS_PER_POST_MAX && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1
-    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === 5
-    && personaCommentCapFor('bootstrap-review') === 5 && personaCommentCapFor('shadow') === 0)
+    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === 10
+    && personaCommentCapFor('bootstrap-review') === 10 && personaCommentCapFor('shadow') === 0)
   const withComments = (n: number, o: { same?: boolean; self?: boolean } = {}): EvidencePost => post(0, {
     personaComments: Array.from({ length: n }, (_, k) => ({
       personaId: o.self === true && k === n - 1 ? 'author-0' : o.same === true ? 'c-same' : `c${k}`,
@@ -175,13 +199,13 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     const v = judge(capFacts(withComments(2), 1))
     return v.codes.length === 1 && v.counts.firstCommentOk === 3
   })())
-  for (const n of [2, 3, 4, 5]) {
-    const v = judge(capFacts(withComments(n), 5))
-    check(`🟢 장기 1~5(상한 5) — 60분 안 서로 다른 Persona ${n}건 → PASS`, v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+  for (const n of [2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+    const v = judge(capFacts(withComments(n), 10))
+    check(`🟢 장기 1~10(상한 10) — 60분 안 서로 다른 Persona ${n}건 → PASS`, v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
-  failWith('🔴 상한 5 — 6건 → 상한 초과 FAIL', judge(capFacts(withComments(6), 5)), 'COMMENT_OVER_CAP')
-  failWith('🔴 상한 5 — 같은 Persona 2건 → FAIL', judge(capFacts(withComments(2, { same: true }), 5)), 'DUP_COMMENT')
-  failWith('🔴 상한 5 — 자기 글 댓글 → FAIL', judge(capFacts(withComments(3, { self: true }), 5)), 'COMMENT_SELF')
+  failWith('🔴 상한 10 — 11건 → 상한 초과 FAIL', judge(capFacts(withComments(11), 10)), 'COMMENT_OVER_CAP')
+  failWith('🔴 상한 10 — 같은 Persona 2건 → FAIL', judge(capFacts(withComments(2, { same: true }), 10)), 'DUP_COMMENT')
+  failWith('🔴 상한 10 — 자기 글 댓글 → FAIL', judge(capFacts(withComments(3, { self: true }), 10)), 'COMMENT_SELF')
   const capUnknown = judge(capFacts(withComments(1), null))
   check('⬚ 댓글 단계(상한)를 모른다 → UNKNOWN', capUnknown.verdict === 'UNKNOWN' && has(capUnknown, 'COMMENT_CAP_UNKNOWN'), capUnknown.codes.join(','))
   failWith('🔴 글쓴 Persona 가 자기 글에 단 댓글은 세지 않고 FAIL', judge(facts('d3', { posts: [post(0, {
@@ -249,45 +273,45 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   const ledgerErr = judgeCost({ uses: true, tally: null, ledgerError: '장부 3번째 줄이 JSON 이 아니다', settleHold: null, capUsd: 1 })
   const exhausted = judgeCost({ uses: true, tally: tally(1.2), ledgerError: null, settleHold: null, capUsd: 1 })
   const noCap = judgeCost({ uses: true, tally: tally(0.01), ledgerError: null, settleHold: null, capUsd: null })
-  failWith('🔴 장부 초과(UNSETTLED_OVERRUN) → FAIL', judge(facts(), side({ cost: [{ name: '댓글 장부', health: over.health }] })), 'COST_BAD')
-  failWith('🔴 장부 읽기 오류(LEDGER_ERROR) → FAIL', judge(facts(), side({ cost: [{ name: '감사 장부', health: ledgerErr.health }] })), 'COST_BAD')
-  failWith('🔴 하루 상한 소진 → FAIL', judge(facts(), side({ cost: [{ name: '공급 장부', health: exhausted.health }] })), 'COST_BAD')
-  const unk = judge(facts(), side({ cost: [{ name: '공급 장부', health: noCap.health }] }))
+  failWith('🔴 장부 초과(UNSETTLED_OVERRUN) → FAIL', judge(facts(), side({ cost: [{ lane: 'comment', name: '댓글 장부', health: over.health }] })), 'COST_BAD')
+  failWith('🔴 장부 읽기 오류(LEDGER_ERROR) → FAIL', judge(facts(), side({ cost: [{ lane: 'audit', name: '감사 장부', health: ledgerErr.health }] })), 'COST_BAD')
+  failWith('🔴 시행일 전 공급 하루 상한 소진 → FAIL', judge(facts(), side({ cost: [{ lane: 'supply', name: '공급 장부', health: exhausted.health }] })), 'COST_BAD')
+  const unk = judge(facts(), side({ cost: [{ lane: 'supply', name: '공급 장부', health: noCap.health }] }))
   check('⬚ 상한 없음(NO_BUDGET) → UNKNOWN (PASS 아님)', unk.verdict === 'UNKNOWN' && has(unk, 'COST_UNKNOWN'), unk.verdict)
   failWith('🔴 러너 최근 회차 실패 → FAIL', judge(facts(), side({ errors: 'bad' })), 'RUNNER_BAD')
   check('⬚ 러너 모름 → UNKNOWN', judge(facts(), side({ errors: 'unknown' })).verdict === 'UNKNOWN')
   check('⬚ 비용 칸이 비었다 → UNKNOWN', judge(facts(), side({ cost: [] })).verdict === 'UNKNOWN')
 
-  // ⑥-b 🔴 **proof-day 관련 natural supply usageUnknown** — canon §3.4 (2026-10-16 D5 보정 B)
+  // ⑥-b 공급 비용 증거 — 옛 날짜는 옛 계약, 시행일부터 자연 proof 슬롯 envelope 하나를 쓴다.
   {
     const base = facts()  // d3 PASS 기준선
-    const sideU = (u: number | null | undefined) => side({ supplyUsageUnknown: u })
-    const vZero = judge(base, sideU(0))
-    check('🟢 반례 B-0 — 관련 usageUnknown 0 → PASS (counts.supplyUsageUnknown=0)',
+    const legacySide = (u: number) => side({ supplyCostEvidence: {
+      legacyUsageUnknownRequests: u,
+      wholeDayCriticalHealth: 'ok',
+      envelope: SUPPLY_COST_OK.envelope,
+    } })
+    const vZero = judge(base, legacySide(0))
+    check('🟢 옛 날짜 B-0 — 관련 usageUnknown 0 → PASS',
       vZero.verdict === 'PASS' && vZero.counts.supplyUsageUnknown === 0, `${vZero.verdict} ${vZero.codes.join(',')}`)
-    failWith('🔴 반례 B-1 — 관련 usageUnknown 1 → FAIL (SUPPLY_USAGE_UNKNOWN · counts.supplyUsageUnknown=1)',
-      judge(base, sideU(1)), 'SUPPLY_USAGE_UNKNOWN')
-    check('그때 counts — supplyUsageUnknown=1', judge(base, sideU(1)).counts.supplyUsageUnknown === 1)
-    const vNull = judge(base, sideU(null))
-    check('⬚ 반례 B-null — 공급 장부를 못 읽었다 → UNKNOWN (COST_UNKNOWN)',
+    failWith('🔴 옛 날짜 B-1 — usageUnknown 1은 소급 승격 없이 FAIL',
+      judge(base, legacySide(1)), 'SUPPLY_USAGE_UNKNOWN')
+    const vNull = judge(base, side({ supplyCostEvidence: null }))
+    check('⬚ 공급 장부를 못 읽었다 → UNKNOWN (COST_UNKNOWN)',
       vNull.verdict === 'UNKNOWN' && has(vNull, 'COST_UNKNOWN'), `${vNull.verdict} ${vNull.codes.join(',')}`)
-    const vUndef = judge(base, sideU(undefined))
-    check('🟢 반례 B-skip — supplyUsageUnknown 를 안 넘기면(옛 호출) 체크 skip · PASS 유지',
-      vUndef.verdict === 'PASS' && vUndef.counts.supplyUsageUnknown === undefined,
-      `${vUndef.verdict} ${vUndef.codes.join(',')}`)
 
-    // 🔴 helper 자체의 분리 반례 — relevantUsageUnknownCount
+    // helper 자체의 분리 반례 — 옛 whole-day count와 새 proof-slot envelope를 함께 고정한다.
     const PROOF = '2026-10-16'
-    const START = (iso: string): string => iso  // 가독성
     const base0 = (o: Partial<LedgerEntry>): LedgerEntry => ({
-      runId: 'r', stage: 'draftGen', attemptId: 'a', requestNo: 0,
+      runId: '20261016-141500-d', stage: 'draftGen', attemptId: 'a', requestNo: 0,
       provider: 'google', apiModelId: 'm', model: 'm',
       status: 'usageUnknown', blockCode: null,
       countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006, inputTokens: null,
       outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
-      settledUsd: null, pricingVersion: 'p1',
+      settledUsd: null, pricingVersion: PRICING_VERSION,
       startedAt: `${PROOF}T14:15:30+09:00`, endedAt: `${PROOF}T14:16:00+09:00`,
-      errorCode: 'TIMEOUT', runKind: 'scheduled', runSlot: `${PROOF} 14:15`, ...o,
+      errorCode: 'TIMEOUT', runKind: 'scheduled', runSlot: `${PROOF} 14:15`,
+      budgetCapUsd: 1.2, budgetSource: 'process-override',
+      sourceKey: 'src-hash-A', supplyContract: SUPPLY_JIT_CONTRACT, ...o,
     })
     const emp = relevantUsageUnknownCount([])
     check('🟢 helper 반례 — 빈 장부 → 0', emp === 0)
@@ -323,12 +347,467 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     ]
     check('🟢 반례 B-timeout+retry — 재시도가 정산돼도 원 요청 미상이면 여전히 1',
       relevantUsageUnknownCount(retryTimeoutSettled) === 1)
-    const vRetry = judge(base, sideU(relevantUsageUnknownCount(retryTimeoutSettled)))
+    const vRetry = judge(base, legacySide(relevantUsageUnknownCount(retryTimeoutSettled)))
     check('🔴 반례 B-timeout+retry — stage-evidence 도 FAIL (SUPPLY_USAGE_UNKNOWN)',
       vRetry.verdict === 'FAIL' && has(vRetry, 'SUPPLY_USAGE_UNKNOWN'), `${vRetry.verdict} ${vRetry.codes.join(',')}`)
-    // 🔴 mutation 반례: judgeEvidenceForTarget 의 `side.supplyUsageUnknown > 0` 조건을 지우거나 반대로 바꾸면
-    //    위 B-1 · B-timeout+retry 가 바로 FAIL → PASS 로 뒤집혀 이 테스트가 그 변이를 즉시 잡는다.
-    //    문법 오류는 compile 실패로 거르고, 조건 반전은 B-1 case 를 PASS 로 만들어 FAIL. 유효 mutation 이다.
+
+    const EFFECTIVE = '2026-11-05'
+    const ledgerRunIdAt = (at: string): string => `${supplyRunIdOf(new Date(at))}-d`
+    const naturalShadow = (slot: string): NonNullable<LedgerEntry['runTokenShadow']> => ({
+      ok: true, code: null, tokenId: `token-${slot}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+    })
+    const newFacts = {
+      ...base, kstDate: EFFECTIVE,
+      decision: { ...base.decision!, kstDate: EFFECTIVE },
+    }
+    const settled = Array.from({ length: 20 }, (_, i) => base0({
+      runId: ledgerRunIdAt(`${EFFECTIVE}T14:15:02+09:00`), attemptId: `s-${i}`, requestNo: i,
+      status: 'settled', settledUsd: 0.004, inputTokens: 100, outputTokens: 200, errorCode: null,
+      startedAt: `${EFFECTIVE}T14:15:30+09:00`, endedAt: `${EFFECTIVE}T14:16:00+09:00`,
+      runSlot: `${EFFECTIVE} 14:15`, sourceKey: `src-${i}`,
+      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
+      runTokenShadow: naturalShadow(`${EFFECTIVE} 14:15`),
+    }))
+    const proofUnknown = base0({
+      runId: ledgerRunIdAt(`${EFFECTIVE}T14:15:02+09:00`), attemptId: 'u-proof', requestNo: 21,
+      startedAt: `${EFFECTIVE}T14:17:00+09:00`, endedAt: `${EFFECTIVE}T14:17:25+09:00`,
+      runSlot: `${EFFECTIVE} 14:15`, sourceKey: 'src-u-proof',
+      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
+      runTokenShadow: naturalShadow(`${EFFECTIVE} 14:15`),
+    })
+    const lateUnknown = base0({
+      runId: ledgerRunIdAt(`${EFFECTIVE}T21:15:03+09:00`), attemptId: 'u-late', requestNo: 22,
+      startedAt: `${EFFECTIVE}T21:16:00+09:00`, endedAt: `${EFFECTIVE}T21:16:25+09:00`,
+      runSlot: `${EFFECTIVE} 21:15`, sourceKey: 'src-u-late',
+      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
+      runTokenShadow: naturalShadow(`${EFFECTIVE} 21:15`),
+    })
+    check('🟢 실제 UTC runId를 KST 자연 슬롯으로 변환한다 — 06:15·14:15·21:15·22:15',
+      [
+        ['2026-11-05T06:15:04+09:00', `${EFFECTIVE} 06:15`, 6 * 60 + 15],
+        ['2026-11-05T14:15:02+09:00', `${EFFECTIVE} 14:15`, 14 * 60 + 15],
+        ['2026-11-05T21:15:03+09:00', `${EFFECTIVE} 21:15`, 21 * 60 + 15],
+        ['2026-11-05T22:15:03+09:00', `${EFFECTIVE} 22:15`, 22 * 60 + 15],
+      ].every(([at, slot, minute]) => supplyCostScheduledSlotOf({
+        runId: ledgerRunIdAt(at as string), runKind: 'scheduled', runSlot: slot as string,
+      })?.minute === minute))
+    check('🔴 KST를 UTC처럼 적은 가짜 runId는 자연 슬롯 증거가 아니다',
+      supplyCostScheduledSlotOf({
+        runId: '20261105-141502-d', runKind: 'scheduled', runSlot: `${EFFECTIVE} 14:15`,
+      }) === null)
+    const observation = supplyProofCostObservationOf([...settled, proofUnknown, lateUnknown], EFFECTIVE)
+    check('🟢 새 계약 — 21:15 다음날 준비 미상은 당일 proof 분모에서 제외',
+      observation.settledRequests === 20 && observation.usageUnknownRequests === 1
+      && observation.ineligibleRequests === 0 && observation.recordedDailyCapUsd === 1.2,
+      JSON.stringify(observation))
+    const boundedSide = side({ supplyCostEvidence: {
+      legacyUsageUnknownRequests: 2,
+      wholeDayCriticalHealth: 'ok',
+      envelope: { ...observation, budgetUsd: 1 },
+    } })
+    const bounded = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, boundedSide)
+    check('🟢 새 계약 — 정산 20 + proof 미상 1, 비율·예약·예산 충족 → PASS',
+      bounded.verdict === 'PASS' && bounded.counts.supplyUsageUnknown === 1,
+      `${bounded.verdict} ${bounded.codes.join(',')}`)
+    const lateWholeDayBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
+      cost: [
+        { lane: 'supply', name: '공급 장부', health: 'bad' },
+        { lane: 'comment', name: '댓글 장부', health: 'ok' },
+        { lane: 'audit', name: '감사 장부', health: 'ok' },
+      ],
+      supplyCostEvidence: boundedSide.supplyCostEvidence,
+    }))
+    check('🟢 새 계약 — 늦은 준비 회차가 만든 whole-day 공급 bad는 끝난 당일 proof를 소급 파괴하지 않는다',
+      lateWholeDayBad.verdict === 'PASS' && !has(lateWholeDayBad, 'COST_BAD'),
+      `${lateWholeDayBad.verdict} ${lateWholeDayBad.codes.join(',')}`)
+    const criticalWholeDayBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
+      supplyCostEvidence: boundedSide.supplyCostEvidence === null ? null : {
+        ...boundedSide.supplyCostEvidence, wholeDayCriticalHealth: 'bad',
+      },
+    }))
+    failWith('🔴 새 계약 — 장부 판독·정산 보류·예약 초과 같은 whole-day 중대 결함은 계속 FAIL',
+      criticalWholeDayBad, 'COST_BAD')
+    const nonSupplyBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
+      cost: [
+        { lane: 'supply', name: '공급 장부', health: 'ok' },
+        { lane: 'comment', name: '댓글 장부', health: 'bad' },
+        { lane: 'audit', name: '감사 장부', health: 'ok' },
+      ],
+      supplyCostEvidence: boundedSide.supplyCostEvidence,
+    }))
+    failWith('🔴 새 계약 — 댓글·감사 장부 bad는 계속 당일 proof를 막는다', nonSupplyBad, 'COST_BAD')
+    const missingAuditLane = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
+      cost: [{ lane: 'comment', name: '댓글 장부', health: 'ok' }],
+      supplyCostEvidence: boundedSide.supplyCostEvidence,
+    }))
+    check('⬚ 새 계약 — 댓글·감사 lane 중 하나라도 누락되면 PASS가 아니다',
+      missingAuditLane.verdict === 'UNKNOWN' && has(missingAuditLane, 'COST_UNKNOWN'),
+      `${missingAuditLane.verdict} ${missingAuditLane.codes.join(',')}`)
+
+    const tooThin = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({ supplyCostEvidence: {
+      legacyUsageUnknownRequests: 1,
+      wholeDayCriticalHealth: 'ok',
+      envelope: { settledRequests: 18, usageUnknownRequests: 1, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.1, budgetUsd: 1 },
+    } }))
+    check('⬚ 새 계약 — 정산 표본 20 미만은 PASS가 아니라 UNKNOWN',
+      tooThin.verdict === 'UNKNOWN' && has(tooThin, 'COST_UNKNOWN'), `${tooThin.verdict} ${tooThin.codes.join(',')}`)
+    const tooRisky = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({ supplyCostEvidence: {
+      legacyUsageUnknownRequests: 1,
+      wholeDayCriticalHealth: 'ok',
+      envelope: { settledRequests: 20, usageUnknownRequests: 1, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.01, budgetUsd: 1 },
+    } }))
+    failWith('🔴 새 계약 — 예약 포함 위험액이 예산을 넘으면 FAIL', tooRisky, 'COST_BAD')
+    const noReservation = supplyProofCostObservationOf([...settled, { ...proofUnknown, reservedUsd: null }], EFFECTIVE)
+    check('⬚ 새 계약 — 미상 요청의 양수 예약이 없으면 ineligible로 닫힌다',
+      noReservation.ineligibleRequests === 1 && noReservation.usageUnknownRequests === 0,
+      JSON.stringify(noReservation))
+
+    const productionShape = supplyProofCostObservationOf([...settled, lateUnknown], EFFECTIVE)
+    const productionDayTally = tallyOf([...settled, lateUnknown])
+    check('🟢 11/03 실전 모양 — 늦은 미상은 당일 proof에서만 제외되고 하루 열린 예약에는 남는다',
+      productionShape.settledRequests === 20 && productionShape.usageUnknownRequests === 0
+      && productionShape.ineligibleRequests === 0
+      && productionDayTally.usageUnknownUsd === lateUnknown.reservedUsd
+      && productionDayTally.openReservedUsd === lateUnknown.reservedUsd,
+      `${JSON.stringify(productionShape)} ${JSON.stringify(productionDayTally)}`)
+
+    const badLabel = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, runSlot: `${EFFECTIVE} 21:15` },
+    ], EFFECTIVE)
+    check('⬚ 실제 proof 시각과 늦은 회차 라벨이 다르면 조용히 버리지 않고 ineligible',
+      badLabel.ineligibleRequests === 1 && badLabel.usageUnknownRequests === 0, JSON.stringify(badLabel))
+    const badTokenWindow = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, runTokenShadow: naturalShadow(`${EFFECTIVE} 06:15`) },
+    ], EFFECTIVE)
+    check('⬚ 자연 token의 budgetWindow과 장부 runSlot이 다르면 ineligible로 닫는다',
+      badTokenWindow.ineligibleRequests === 1 && badTokenWindow.usageUnknownRequests === 0,
+      JSON.stringify(badTokenWindow))
+    const badStart = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, startedAt: `${EFFECTIVE}T21:16:00+09:00` },
+    ], EFFECTIVE)
+    check('🟢 proof 라벨이 손상돼도 실제 시작이 늦은 준비 회차면 끝난 당일 proof에서 제외',
+      badStart.ineligibleRequests === 0 && badStart.usageUnknownRequests === 0, JSON.stringify(badStart))
+    const manualProof = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, runKind: 'manual', runSlot: null },
+    ], EFFECTIVE)
+    check('⬚ proof 시각의 수동 요청은 숨기지 않고 ineligible — 자연 proof를 만들지 못한다',
+      manualProof.ineligibleRequests === 1 && manualProof.usageUnknownRequests === 0,
+      JSON.stringify(manualProof))
+    const manualAt = (time: string): LedgerEntry => ({
+      ...proofUnknown, attemptId: `manual-${time}`, runKind: 'manual', runSlot: null,
+      startedAt: `${EFFECTIVE}T${time}:00+09:00`, endedAt: `${EFFECTIVE}T${time}:10+09:00`,
+    })
+    const manual1000 = supplyProofCostObservationOf([...settled, manualAt('10:00')], EFFECTIVE)
+    const manual1830 = supplyProofCostObservationOf([...settled, manualAt('18:30')], EFFECTIVE)
+    const manual0530 = supplyProofCostObservationOf([...settled, manualAt('05:30')], EFFECTIVE)
+    check('⬚ 수동 요청 경계 — proof 관측 구간 안 10:00은 ineligible, 05:30·18:30은 proof 표본 밖',
+      manual1000.ineligibleRequests === 1 && manual1000.usageUnknownRequests === 0
+      && manual1830.ineligibleRequests === 0 && manual1830.usageUnknownRequests === 0
+      && manual0530.ineligibleRequests === 0 && manual0530.usageUnknownRequests === 0,
+      JSON.stringify({ manual1000, manual1830, manual0530 }))
+    const legacyDayRow = {
+      ...proofUnknown, attemptId: 'legacy-day-row', startedAt: '2026-11-04T14:16:00+09:00',
+      endedAt: '2026-11-04T14:16:10+09:00', runSlot: '2026-11-04 14:15',
+      runTokenShadow: naturalShadow('2026-11-04 14:15'),
+    }
+    const mixedDate = supplyProofCostObservationOf([...settled, legacyDayRow], EFFECTIVE)
+    check('⬚ 날짜 혼합 — 11-04 producer 행을 11-05 proof에 섞으면 조용히 포함하지 않고 ineligible',
+      mixedDate.ineligibleRequests === 1 && mixedDate.settledRequests === 20,
+      JSON.stringify(mixedDate))
+    const corruptStartedAt = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, startedAt: 'not-an-instant', runSlot: null },
+    ], EFFECTIVE)
+    check('⬚ 해당 날짜 장부의 손상된 요청 시각은 조용히 버리지 않고 ineligible',
+      corruptStartedAt.ineligibleRequests === 1 && corruptStartedAt.usageUnknownRequests === 0,
+      JSON.stringify(corruptStartedAt))
+    const badPrice = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, pricingVersion: 'old-price' },
+    ], EFFECTIVE)
+    check('⬚ 현재 가격표와 다른 요청은 bounded 근거로 쓰지 않는다',
+      badPrice.ineligibleRequests === 1 && badPrice.usageUnknownRequests === 0, JSON.stringify(badPrice))
+    const mixedBudget = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, budgetDailyUsd: 0.5, budgetCapUsd: 0.5 },
+    ], EFFECTIVE)
+    check('🟢 같은 proof 표본의 승인된 cap이 달라도 가장 큰 유효 cap으로 위험을 판정한다',
+      mixedBudget.ineligibleRequests === 0 && mixedBudget.usageUnknownRequests === 1
+      && mixedBudget.recordedDailyCapUsd === 1.2, JSON.stringify(mixedBudget))
+    const missingBudgetSource = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, budgetSource: undefined },
+    ], EFFECTIVE)
+    check('⬚ 기록 예산의 출처가 없으면 bounded 근거로 쓰지 않는다',
+      missingBudgetSource.ineligibleRequests === 1 && missingBudgetSource.usageUnknownRequests === 0,
+      JSON.stringify(missingBudgetSource))
+
+    const at1259 = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T12:15:02+09:00`),
+        startedAt: `${EFFECTIVE}T12:59:00+09:00`, runSlot: `${EFFECTIVE} 12:15`,
+        runTokenShadow: naturalShadow(`${EFFECTIVE} 12:15`),
+      },
+    ], EFFECTIVE)
+    const at1300 = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T12:15:02+09:00`),
+        startedAt: `${EFFECTIVE}T13:00:00+09:00`, runSlot: `${EFFECTIVE} 12:15`,
+        runTokenShadow: naturalShadow(`${EFFECTIVE} 12:15`),
+      },
+    ], EFFECTIVE)
+    const at1759 = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T17:15:02+09:00`),
+        startedAt: `${EFFECTIVE}T17:59:00+09:00`, runSlot: `${EFFECTIVE} 17:15`,
+        runTokenShadow: naturalShadow(`${EFFECTIVE} 17:15`),
+      },
+    ], EFFECTIVE)
+    const at1800 = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T17:15:02+09:00`),
+        startedAt: `${EFFECTIVE}T18:00:00+09:00`, runSlot: `${EFFECTIVE} 17:15`,
+        runTokenShadow: naturalShadow(`${EFFECTIVE} 17:15`),
+      },
+    ], EFFECTIVE)
+    check('🟢 proof 슬롯 창은 시작 포함·45분 끝 제외 — 12:59/17:59 포함, 13:00/18:00 ineligible',
+      at1259.usageUnknownRequests === 1 && at1259.ineligibleRequests === 0
+      && at1759.usageUnknownRequests === 1 && at1759.ineligibleRequests === 0
+      && at1300.usageUnknownRequests === 0 && at1300.ineligibleRequests === 1
+      && at1800.usageUnknownRequests === 0 && at1800.ineligibleRequests === 1)
+    const unlabeledLate = supplyProofCostObservationOf([
+      ...settled, { ...lateUnknown, runKind: null },
+    ], EFFECTIVE)
+    check('🟢 실제 21:15 준비 시각이면 runKind가 손상돼도 이미 끝난 당일 proof에서 제외',
+      unlabeledLate.usageUnknownRequests === 0 && unlabeledLate.ineligibleRequests === 0,
+      JSON.stringify(unlabeledLate))
+    const manualDifferentCap = recordedSupplyBudgetOf([
+      ...settled, {
+        ...lateUnknown, runKind: 'manual', runSlot: null,
+        budgetDailyUsd: 0.5, budgetCapUsd: 0.5,
+      },
+    ], EFFECTIVE)
+    check('🟢 같은 날 요청의 승인된 cap이 달라도 whole-day 예산은 가장 큰 유효 cap을 쓴다',
+      manualDifferentCap.kind === 'valid' && manualDifferentCap.capUsd === 1.2,
+      JSON.stringify(manualDifferentCap))
+    const mixedContractDay = recordedSupplyBudgetOf([
+      ...settled, { ...lateUnknown, supplyContract: 'supply-jit-v1' },
+    ], EFFECTIVE)
+    check('🟢 하루 예산은 콘텐츠 계약과 분리 — 늦은 옛 계약 행도 기록 상한·출처가 같으면 예산 근거는 유효',
+      mixedContractDay.kind === 'valid' && mixedContractDay.capUsd === 1.2,
+      JSON.stringify(mixedContractDay))
+    const missingDayCap = recordedSupplyBudgetOf([
+      ...settled, { ...lateUnknown, budgetCapUsd: null },
+    ], EFFECTIVE)
+    check('⬚ 계약과 무관하게 하루 기록 상한이 빠지면 예산은 invalid로 닫는다',
+      missingDayCap.kind === 'invalid' && missingDayCap.capUsd === null, JSON.stringify(missingDayCap))
+    const unapprovedDayCap = recordedSupplyBudgetOf([
+      ...settled, {
+        ...lateUnknown, budgetDailyUsd: 2, budgetCeilingUsd: 2, budgetCapUsd: 2,
+      },
+    ], EFFECTIVE)
+    check('🔴 승인 천장보다 큰 기록 cap은 whole-day 예산 근거가 아니다',
+      unapprovedDayCap.kind === 'invalid' && unapprovedDayCap.capUsd === null,
+      JSON.stringify(unapprovedDayCap))
+    const lateAfterWindow = supplyProofCostObservationOf([
+      ...settled,
+      {
+        ...lateUnknown, runKind: 'manual', runSlot: null,
+        startedAt: `${EFFECTIVE}T22:05:00+09:00`, endedAt: `${EFFECTIVE}T22:05:10+09:00`,
+      },
+      {
+        ...lateUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T22:15:03+09:00`), attemptId: 'u-late-22',
+        runKind: 'manual', runSlot: null,
+        startedAt: `${EFFECTIVE}T23:05:00+09:00`, endedAt: `${EFFECTIVE}T23:05:10+09:00`,
+        runTokenShadow: naturalShadow(`${EFFECTIVE} 22:15`),
+      },
+    ], EFFECTIVE)
+    check('🟢 45분 창을 벗어난 지연 요청은 manual이며 당일 자연 proof를 얻지 않는다',
+      lateAfterWindow.settledRequests === 20 && lateAfterWindow.usageUnknownRequests === 0
+      && lateAfterWindow.ineligibleRequests === 0, JSON.stringify(lateAfterWindow))
+    const eventProof = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown,
+        runTokenShadow: {
+          ...naturalShadow(`${EFFECTIVE} 14:15`), trigger: 'event', launchTrigger: 'event',
+        },
+      },
+    ], EFFECTIVE)
+    check('🔴 event token은 scheduled 라벨을 흉내 내도 자연 proof를 얻지 못한다',
+      eventProof.usageUnknownRequests === 0 && eventProof.ineligibleRequests === 1,
+      JSON.stringify(eventProof))
+    const recoveryStartedAt = `${EFFECTIVE}T07:05:00+09:00`
+    const recoveryRunId = ledgerRunIdAt(recoveryStartedAt)
+    const recoveryShadow = {
+      ok: true as const, code: null, tokenId: 'token-recovery',
+      trigger: 'recovery' as const, launchTrigger: 'recovery' as const,
+      absorbedTrigger: null, absorbedAt: null, pass: 0,
+      budgetWindow: budgetWindowShadowOf(new Date(recoveryStartedAt)),
+    }
+    const recoveryProof = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery', runKind: 'manual', runSlot: null,
+        runId: recoveryRunId,
+        startedAt: recoveryStartedAt, endedAt: `${EFFECTIVE}T07:05:10+09:00`,
+        sourceKey: 'src-u-recovery', runTokenShadow: recoveryShadow,
+      },
+    ], EFFECTIVE)
+    check('🟢 제한 복구 비용은 자연 정산 표본을 바꾸지 않고 당일 위험액에는 들어간다',
+      recoveryProof.settledRequests === 20 && recoveryProof.usageUnknownRequests === 0
+      && recoveryProof.recoverySettledRequests === 0 && recoveryProof.recoveryUsageUnknownRequests === 1
+      && recoveryProof.recoveryUsageUnknownReservedUsd === proofUnknown.reservedUsd
+      && recoveryProof.ineligibleRequests === 0
+      && recoveryProof.riskUsd === recoveryProof.settledUsd + recoveryProof.recoveryUsageUnknownReservedUsd,
+      JSON.stringify(recoveryProof))
+    const duplicateRecoveryRuns = supplyProofCostObservationOf([
+      ...settled,
+      {
+        ...proofUnknown, attemptId: 'u-recovery-1', runId: recoveryRunId,
+        runKind: 'manual', runSlot: null, startedAt: recoveryStartedAt,
+        endedAt: `${EFFECTIVE}T07:05:10+09:00`, sourceKey: 'src-u-recovery-1',
+        runTokenShadow: recoveryShadow,
+      },
+      {
+        ...proofUnknown, attemptId: 'u-recovery-2',
+        runId: ledgerRunIdAt(`${EFFECTIVE}T07:06:00+09:00`),
+        runKind: 'manual', runSlot: null, startedAt: `${EFFECTIVE}T07:06:00+09:00`,
+        endedAt: `${EFFECTIVE}T07:06:10+09:00`, sourceKey: 'src-u-recovery-2',
+        runTokenShadow: { ...recoveryShadow, tokenId: 'token-recovery-2' },
+      },
+    ], EFFECTIVE)
+    check('🔴 하루 복구 pipeline run이 둘이면 비용 위험은 보존하되 증거는 fail-closed',
+      duplicateRecoveryRuns.recoveryUsageUnknownRequests === 2
+      && duplicateRecoveryRuns.ineligibleRequests === 2,
+      JSON.stringify(duplicateRecoveryRuns))
+    const malformedRecovery = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery-malformed', runId: recoveryRunId,
+        runKind: 'manual', runSlot: null, startedAt: recoveryStartedAt,
+        endedAt: `${EFFECTIVE}T07:05:10+09:00`, sourceKey: 'src-u-recovery-malformed',
+        runTokenShadow: { ...recoveryShadow, tokenId: '' },
+      },
+    ], EFFECTIVE)
+    check('🔴 손상된 recovery tag는 자연 요청으로 떨어지지 않고 ineligible',
+      malformedRecovery.recoveryUsageUnknownRequests === 0
+      && malformedRecovery.ineligibleRequests === 1,
+      JSON.stringify(malformedRecovery))
+    const recoveryFollowup = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery-followup', runKind: 'manual', runSlot: null,
+        runId: recoveryRunId,
+        startedAt: recoveryStartedAt, endedAt: `${EFFECTIVE}T07:05:10+09:00`,
+        sourceKey: 'src-u-recovery-followup', runTokenShadow: { ...recoveryShadow, pass: 1 },
+      },
+    ], EFFECTIVE)
+    check('🔴 제한 복구 follow-up은 비용 귀속을 얻지 못하고 ineligible로 닫힌다',
+      recoveryFollowup.recoveryUsageUnknownRequests === 0 && recoveryFollowup.ineligibleRequests === 1,
+      JSON.stringify(recoveryFollowup))
+    const recoveryLate = supplyProofCostObservationOf([
+      ...settled, {
+        ...proofUnknown, attemptId: 'u-recovery-late', runKind: 'manual', runSlot: null,
+        runId: ledgerRunIdAt(`${EFFECTIVE}T07:30:00+09:00`),
+        startedAt: `${EFFECTIVE}T07:30:00+09:00`, endedAt: `${EFFECTIVE}T07:30:10+09:00`,
+        sourceKey: 'src-u-recovery-late', runTokenShadow: recoveryShadow,
+      },
+    ], EFFECTIVE)
+    check('🔴 07:30 이후 recovery tag는 비용 귀속을 얻지 못하고 ineligible로 닫힌다',
+      recoveryLate.recoveryUsageUnknownRequests === 0 && recoveryLate.ineligibleRequests === 1,
+      JSON.stringify(recoveryLate))
+    const humanProof = supplyProofCostObservationOf([
+      ...settled, { ...proofUnknown, resolvedBy: 'human' },
+    ], EFFECTIVE)
+    check('🔴 사람이 마감한 장부 줄은 자연 proof를 만들지 못한다',
+      humanProof.usageUnknownRequests === 0 && humanProof.ineligibleRequests === 1,
+      JSON.stringify(humanProof))
+
+    const ratio95 = judgeSupplyCostEnvelope({
+      settledRequests: 38, usageUnknownRequests: 2, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.2, budgetUsd: 1.2,
+    })
+    check('🟢 정산 38 + 미상 2 = 정확히 95%이고 위험액=예산이면 bounded',
+      ratio95.kind === 'bounded' && ratio95.settledRatio === 0.95, JSON.stringify(ratio95))
+    const recoveryBounded = judgeSupplyCostEnvelope({
+      settledRequests: 20, usageUnknownRequests: 0, recoveryUsageUnknownRequests: 1,
+      overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.09, budgetUsd: 1,
+    })
+    check('🟢 복구 미상은 자연 정산 비율 100%를 유지하되 clean이 아닌 bounded로 남는다',
+      recoveryBounded.kind === 'bounded' && recoveryBounded.settledRatio === 1,
+      JSON.stringify(recoveryBounded))
+    const ratioBelow = judgeSupplyCostEnvelope({
+      settledRequests: 37, usageUnknownRequests: 2, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.19, budgetUsd: 1.2,
+    })
+    check('⬚ 정산 37 + 미상 2는 95% 미만이라 UNKNOWN', ratioBelow.kind === 'unknown', JSON.stringify(ratioBelow))
+    const overBudget = judgeSupplyCostEnvelope({
+      settledRequests: 38, usageUnknownRequests: 2, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.200001, budgetUsd: 1.2,
+    })
+    check('🔴 정산 비율이 충분해도 위험액>예산이면 bad', overBudget.kind === 'bad', JSON.stringify(overBudget))
+    const overBudgetAndUnknown = judgeSupplyCostEnvelope({
+      settledRequests: 38, usageUnknownRequests: 2, overrunRequests: 0, ineligibleRequests: 1, riskUsd: 1.200001, budgetUsd: 1.2,
+    })
+    check('🔴 귀속 불명이 함께 있어도 알려진 예산 초과는 UNKNOWN으로 약화하지 않는다',
+      overBudgetAndUnknown.kind === 'bad', JSON.stringify(overBudgetAndUnknown))
+    const overrun = judgeSupplyCostEnvelope({
+      settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 1, ineligibleRequests: 1, riskUsd: 0.08, budgetUsd: 1,
+    })
+    check('🔴 예약 초과는 귀속 불명과 함께 있어도 UNKNOWN으로 약화하지 않고 bad',
+      overrun.kind === 'bad' && overrun.reasons.some((reason) => reason.includes('예약액을 넘은')),
+      JSON.stringify(overrun))
+    const clean = judgeSupplyCostEnvelope({
+      settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
+    })
+    check('🟢 미상 0도 최소 표본·귀속·예산을 모두 통과해야 clean', clean.kind === 'clean', JSON.stringify(clean))
+    const cleanSmallSample = judgeSupplyCostEnvelope({
+      settledRequests: 1, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.004, budgetUsd: 1,
+    })
+    check('🟢 미상 0이고 모든 근거가 완전하면 소표본 1건도 clean — 효율 개선을 실패로 만들지 않는다',
+      cleanSmallSample.kind === 'clean', JSON.stringify(cleanSmallSample))
+    const cleanOverBudget = judgeSupplyCostEnvelope({
+      settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.01, budgetUsd: 1,
+    })
+    check('🔴 미상 0이어도 위험액이 예산을 넘으면 bad', cleanOverBudget.kind === 'bad', JSON.stringify(cleanOverBudget))
+    const emptyEnvelope = judgeSupplyCostEnvelope({
+      settledRequests: 0, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0, budgetUsd: null,
+    })
+    check('⬚ 빈 장부는 clean이 아니라 UNKNOWN', emptyEnvelope.kind === 'unknown', JSON.stringify(emptyEnvelope))
+    const zeroSettledWithNumbers = judgeSupplyCostEnvelope({
+      settledRequests: 0, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.01, budgetUsd: 1,
+    })
+    check('🔴 위험액·예산 숫자만 있어도 정산 0건이면 clean이 아니다',
+      zeroSettledWithNumbers.kind === 'unknown', JSON.stringify(zeroSettledWithNumbers))
+    check('🟢 시행일 경계는 엄격한 KST 날짜만 받는다',
+      !usesSupplyCostEnvelope('2026-11-04') && usesSupplyCostEnvelope('2026-11-05')
+      && !usesSupplyCostEnvelope('2026-11-99') && !usesSupplyCostEnvelope('not-a-date'))
+    const contract = supplyCostContractOf(EFFECTIVE)
+    const history = supplyCostContractHistory()
+    check('🟢 시행일 계약 창은 계약·가격·예산·출처·proof 몫을 날짜에 고정하고 과거 날짜에는 적용되지 않는다',
+      contract?.supplyContract === SUPPLY_JIT_CONTRACT && contract.pricingVersion === PRICING_VERSION
+      && contract.approvedDailyUsd === SUPPLY_DAILY_USD_APPROVED
+      && contract.trustedBudgetSources.join(',') === 'env.local,process,process-override'
+      && contract.proofFullBudgetAtUsd === SUPPLY_PROOF_FIRST_DAILY_USD
+      && contract.proofBudgetNumerator === SUPPLY_PROOF_RUNS_PER_DAY
+      && contract.proofBudgetDenominator === SUPPLY_RUNS_PER_DAY
+      && supplyCostProofBudgetUsd(EFFECTIVE, 1.19) === 1.19 * 5 / 7
+      && supplyCostContractOf('2026-11-04') === null, JSON.stringify(contract))
+    check('🔴 첫 비용 계약 역사 행은 현재 상수 참조가 아니라 11-05 literal로 불변이고 날짜가 엄격히 증가한다',
+      validSupplyCostContractHistory(history)
+      && history[0]?.fromKstDate === '2026-11-05'
+      && history[0]?.supplyContract === 'supply-jit-v2'
+      && history[0]?.pricingVersion === 'supply-2026-09-19'
+      && history[0]?.approvedDailyUsd === 1.2
+      && history[0]?.proofBudgetNumerator === 5 && history[0]?.proofBudgetDenominator === 7,
+      JSON.stringify(history))
+    const latestContract = history.at(-1)
+    check('🔴 최신 비용 계약 창은 현재 producer 계약·가격·승인 예산·proof 몫과 일치한다',
+      latestContract?.supplyContract === SUPPLY_JIT_CONTRACT
+      && latestContract.pricingVersion === PRICING_VERSION
+      && latestContract.approvedDailyUsd === SUPPLY_DAILY_USD_APPROVED
+      && latestContract.trustedBudgetSources.join(',') === 'env.local,process,process-override'
+      && latestContract.proofFullBudgetAtUsd === SUPPLY_PROOF_FIRST_DAILY_USD
+      && latestContract.proofBudgetNumerator === SUPPLY_PROOF_RUNS_PER_DAY
+      && latestContract.proofBudgetDenominator === SUPPLY_RUNS_PER_DAY,
+      JSON.stringify(latestContract))
+    check('🔴 비용 계약 창의 중복·역순·시행일 교체는 validator가 거절한다',
+      !validSupplyCostContractHistory([...history, { ...history[0]! }])
+      && !validSupplyCostContractHistory([{ ...history[0]!, fromKstDate: '2026-11-06' }])
+      && !validSupplyCostContractHistory([
+        history[0]!, { ...history[0]!, fromKstDate: '2026-11-03' },
+      ]))
   }
 
   // 못 읽음
@@ -342,6 +821,23 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   const r = evidenceReasonOf(manual)
   check('reasons 에는 코드와 개수만 — id·원문 없음', r.startsWith(`EVIDENCE ${D} d3 FAIL [`) && !/author-|commenter-/.test(r), r)
   check('코드는 정본 목록 안에서만 나온다', manual.codes.every((c) => (STAGE_EVIDENCE_CODES as readonly string[]).includes(c)))
+
+  // 계약이 리팩터링 중 조용히 약해지지 않게 권위 지점 자체도 고정한다.
+  const envelopeSource = readFileSync('src/lib/supply-cost-envelope.ts', 'utf-8')
+  const ledgerSource = readFileSync('src/lib/llm-ledger.ts', 'utf-8')
+  const evidenceSource = readFileSync('src/lib/stage-evidence.ts', 'utf-8')
+  check('🔴 비용 envelope 시행일·clean 최소 1·bounded 최소 20·95%는 코드 정본 한 곳에 남는다',
+    /SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE = '2026-11-05'/.test(envelopeSource)
+    && /SUPPLY_COST_ENVELOPE_MIN_CLEAN_SETTLED_REQUESTS = 1/.test(envelopeSource)
+    && /SUPPLY_COST_ENVELOPE_MIN_BOUNDED_SETTLED_REQUESTS = 20/.test(envelopeSource)
+    && /SUPPLY_COST_ENVELOPE_MIN_SETTLED_RATIO = 0\.95/.test(envelopeSource))
+  check('🔴 실제 늦은 준비 시각은 손상된 tag와 무관하게 당일 proof에서 제외하고 당시 예산을 장부에서 읽는다',
+    /actualSlot !== null && lateMinutes\.has\(actualSlot\)/.test(ledgerSource)
+    && /recordedDailyCapUsd/.test(ledgerSource)
+    && /budgetCapUsd/.test(ledgerSource) && /budgetSource/.test(ledgerSource))
+  check('🔴 운영 비용 증거는 optional이 아니다 — 누락을 검사 skip으로 되돌리지 못한다',
+    /supplyCostEvidence: SupplyCostEvidence \| null/.test(evidenceSource)
+    && !/supplyCostEvidence\?: SupplyCostEvidence/.test(evidenceSource))
 }
 
 // ── 전날 결정 fixture — 정본 validator 를 지나야만 만들어진다 ──
@@ -465,11 +961,28 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
   for (const [name, f] of fuBroken) check(`🔴 추가 댓글 ${name} → followup-broken`, personaCommentProvenanceOf(f) === 'followup-broken', personaCommentProvenanceOf(f))
 
   // 판정 본체
-  const first = { personaId: 'commenter-0', createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: 'auto' as const }
-  const fu = (k: number, o: Partial<EvidencePost['personaComments'][number]> = {}) =>
-    ({ personaId: `fu-${k}`, createdAtMs: T0 + (90 + 40 * k) * MIN, topLevel: false, provenance: 'followup' as const, ...o })
-  const withThread = (cs: EvidencePost['personaComments'], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
-    judge(facts('d3', { commentCapPerPost: cap, posts: [post(0, { personaComments: cs }), post(1), post(2)] }))
+  type ThreadComment = EvidencePost['personaComments'][number] & {
+    id: string; parentId: string | null; reportedAtMs?: number | null; isDeleted?: boolean
+  }
+  const first: ThreadComment = {
+    id: 'first-0', personaId: 'commenter-0', parentId: null,
+    createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: 'auto' as const,
+  }
+  const fu = (k: number, o: Partial<ThreadComment> = {}): ThreadComment =>
+    ({
+      id: `fu-${k}`, personaId: `fu-${k}`, parentId: k === 1 ? first.id : `fu-${k - 1}`,
+      createdAtMs: T0 + (90 + 40 * k) * MIN, topLevel: false, provenance: 'followup' as const, ...o,
+    })
+  const conversationOf = (cs: readonly ThreadComment[]) => cs.map((c) => ({
+    id: c.id, personaId: c.personaId, parentId: c.parentId, commentOrigin: 'PERSONA',
+    isDeleted: c.isDeleted ?? false, createdAtMs: c.createdAtMs, reportedAtMs: c.reportedAtMs ?? null,
+    provenance: c.provenance,
+  }))
+  const withThread = (cs: readonly ThreadComment[], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
+    judge(facts('d3', { commentCapPerPost: cap, posts: [post(0, {
+      personaComments: cs,
+      conversationComments: conversationOf(cs),
+    }), post(1), post(2)] }))
   check('🔴 상한은 그대로 1 이다(bootstrap-auto) — 1→5 로 바꾸지 않았다', personaCommentCapFor('bootstrap-auto') === 1)
 
   const four = withThread([first, fu(1), fu(2), fu(3), fu(4)])
@@ -513,24 +1026,88 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
   const dupFu = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
   check('🔴 추가 댓글끼리 같은 Persona → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
-  // 🔴 (2026-10-24) 글쓴이는 자기 글의 Persona 댓글에 답글로 한 번만 답할 수 있다 — 최상위 · 두 번째부터는 FOLLOWUP_SELF
+  // 🔴 (2026-11-04) 글쓴이는 자기 글의 서로 다른 Persona 발화에 답글로 최대 세 번 답할 수 있다.
   const authorReply = withThread([first, fu(1, { personaId: 'author-0' })])
   check('🟢 글쓴이 답글 한 번(최상위 아님) → 대화 감사 PASS · 단계 COMMENT_SELF 아님',
     authorReply.verdict === 'PASS' && authorReply.conversation?.verdict === 'PASS', JSON.stringify(authorReply.conversation))
-  const self = withThread([first, fu(1, { personaId: 'author-0', topLevel: true })])
+  const self = withThread([first, fu(1, { personaId: 'author-0', parentId: null, topLevel: true })])
   check('🔴 글쓴이의 최상위 추가 댓글(자기 글) → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
     self.verdict === 'PASS' && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
-  const selfTwice = withThread([first, fu(1, { personaId: 'author-0' }), fu(2, { personaId: 'author-0' })])
-  check('🔴 글쓴이 답글 두 번 → 대화 감사 FOLLOWUP_SELF', selfTwice.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTwice.conversation))
-  const over = withThread([first, fu(1), fu(2), fu(3), fu(4), fu(5)])
-  check('🔴 첫 댓글 1 + 추가 5(총 6 > 5) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
+  const authorConversation = (n: number): ThreadComment[] => [
+    first,
+    ...Array.from({ length: n }, (_, i) => fu(20 + i, {
+      id: `target-${i + 1}`, personaId: `speaker-${i + 1}`, parentId: null, topLevel: true,
+    })),
+    ...Array.from({ length: n }, (_, i) => fu(30 + i, {
+      id: `author-reply-${i + 1}`, personaId: 'author-0', parentId: `target-${i + 1}`, topLevel: false,
+    })),
+  ]
+  const selfThree = withThread(authorConversation(3))
+  check('🟢 글쓴이 답글 세 번 → 대화 감사 PASS', selfThree.conversation?.verdict === 'PASS', JSON.stringify(selfThree.conversation))
+  const selfFour = withThread(authorConversation(4))
+  check('🔴 글쓴이 답글 네 번 → 대화 감사 FOLLOWUP_SELF', selfFour.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfFour.conversation))
+  const authorFourHistory = authorConversation(4)
+  const deletedAuthorId = 'author-reply-1'
+  const deletedAuthorStillCounts = judgeConversationAudit([post(0, {
+    personaComments: authorFourHistory.filter((c) => c.id !== deletedAuthorId),
+    conversationComments: conversationOf(authorFourHistory.map((c) => c.id === deletedAuthorId ? { ...c, isDeleted: true } : c)),
+  })])
+  check('🔴 삭제된 글쓴이 답글도 과거 턴이다 — 4회를 3회로 축소하지 않음',
+    deletedAuthorStillCounts.codes.includes('FOLLOWUP_SELF'), JSON.stringify(deletedAuthorStillCounts))
+  const over = withThread([first, ...Array.from({ length: 10 }, (_, i) => fu(i + 1, { personaId: `fu-${i + 1}` }))])
+  check('🔴 첫 댓글 1 + 추가 10(총 11 > 10) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
     over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
   const early = withThread([first, fu(1, { createdAtMs: T0 + 6 * MIN })])
   check('🔴 첫 댓글보다 앞선 추가 댓글 → FOLLOWUP_WITHOUT_FIRST', early.conversation?.codes.includes('FOLLOWUP_WITHOUT_FIRST') === true)
+  const depth6 = withThread([first, ...Array.from({ length: 5 }, (_, i) => fu(i + 1))])
+  check('🟢 루트 포함 사슬 깊이 6 → 대화 감사 PASS', depth6.conversation?.verdict === 'PASS', JSON.stringify(depth6.conversation))
+  const depth7 = withThread([first, ...Array.from({ length: 6 }, (_, i) => fu(i + 1))])
+  check('🔴 루트 포함 사슬 깊이 7 → FOLLOWUP_CHAIN_OVER_DEPTH',
+    depth7.conversation?.codes.includes('FOLLOWUP_CHAIN_OVER_DEPTH') === true, JSON.stringify(depth7.conversation))
+  const reused = withThread([first, fu(1), fu(2, { parentId: first.id })])
+  check('🔴 같은 답글 대상을 두 번 소비 → FOLLOWUP_TARGET_REUSED',
+    reused.conversation?.codes.includes('FOLLOWUP_TARGET_REUSED') === true, JSON.stringify(reused.conversation))
+  const missingTarget = withThread([first, fu(1, { parentId: 'missing-target' })])
+  check('🔴 없는·삭제된 답글 대상 → FOLLOWUP_TARGET_INVALID',
+    missingTarget.conversation?.codes.includes('FOLLOWUP_TARGET_INVALID') === true, JSON.stringify(missingTarget.conversation))
+  const missingStructure = judgeConversationAudit([post(0, { personaComments: [first, fu(1)], conversationComments: undefined })])
+  check('🔴 대화 시간순 장부를 못 읽음 → FOLLOWUP_TARGET_INVALID(fail-closed)',
+    missingStructure.codes.includes('FOLLOWUP_TARGET_INVALID'), JSON.stringify(missingStructure))
+  const reportedTarget = withThread([{ ...first, reportedAtMs: T0 + 20 * MIN }, fu(1)])
+  check('🔴 발행 전에 신고된 답글 대상 → FOLLOWUP_TARGET_INVALID',
+    reportedTarget.conversation?.codes.includes('FOLLOWUP_TARGET_INVALID') === true, JSON.stringify(reportedTarget.conversation))
+  const lateMemberReply = {
+    id: 'member-later', personaId: null, parentId: first.id, commentOrigin: 'MEMBER', isDeleted: false,
+    createdAtMs: T0 + 300 * MIN, reportedAtMs: null, provenance: null,
+  }
+  const laterInteraction = judgeConversationAudit([post(0, {
+    personaComments: [first, fu(1)], conversationComments: [...conversationOf([first, fu(1)]), lateMemberReply],
+  })])
+  check('🟢 Persona 답글 발행 뒤 실회원이 같은 대상에 답해도 소급 실패 없음',
+    laterInteraction.verdict === 'PASS', JSON.stringify(laterInteraction))
+  const laterReport = judgeConversationAudit([post(0, {
+    personaComments: [first, fu(1)], conversationComments: conversationOf([{ ...first, reportedAtMs: T0 + 300 * MIN }, fu(1)]),
+  })])
+  check('🟢 Persona 답글 발행 뒤 신고는 소급 실패를 만들지 않음', laterReport.verdict === 'PASS', JSON.stringify(laterReport))
+  const deletedTarget = judgeConversationAudit([post(0, {
+    personaComments: [first, fu(2, { id: 'later-live', parentId: 'deleted-mid' })],
+    conversationComments: conversationOf([
+      first,
+      fu(1, { id: 'deleted-mid', isDeleted: true }),
+      fu(2, { id: 'later-live', parentId: 'deleted-mid' }),
+    ]),
+  })])
+  check('🟢 정상 발행 뒤 중간 Persona 댓글이 삭제돼도 사슬 사실은 보존',
+    deletedTarget.verdict === 'PASS', JSON.stringify(deletedTarget))
+  const selfTarget = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
+  check('🔴 자기 댓글에 답글 → FOLLOWUP_SELF',
+    selfTarget.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTarget.conversation))
   check('대화 감사 코드는 단계 코드 목록 밖이다', CONVERSATION_AUDIT_CODES.every((c) => !(STAGE_EVIDENCE_CODES as readonly string[]).includes(c)))
   check('⬚ 사실을 못 읽었으면 대화 감사도 없다', judge(null).conversation === undefined)
   check('🟢 추가 댓글이 없는 날 → 대화 감사 PASS(이어지지 않는 글이 정상)', judge(facts()).conversation?.verdict === 'PASS')
-  check('대화 감사는 단계 판정 함수와 같은 결과다(직접 호출)', judgeConversationAudit([post(0, { personaComments: [first, fu(1)] })]).verdict === 'PASS')
+  check('대화 감사는 단계 판정 함수와 같은 결과다(직접 호출)', judgeConversationAudit([post(0, {
+    personaComments: [first, fu(1)], conversationComments: conversationOf([first, fu(1)]),
+  })]).verdict === 'PASS')
 }
 
 console.log('\n② 시험 계획 — 날짜가 아니라 증거로')
@@ -558,8 +1135,13 @@ const PERSONAS = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards.fil
  *    넉넉한 사실(기회 · 수율 · 지연 · 계약 유효 Persona · 비용 · 러너)이면 PASS 가 **나와야** 한다.
  */
 const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
+  proofKstDate: SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
   slotValidOpportunities: PROFILES[s].dailyTarget * 2,
-  readyCohort: { sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.001 },
+  readyCohort: {
+    sources: PROFILES[s].dailyTarget, published: PROFILES[s].dailyTarget, lost: 0, scheduled: 0, unknown: 0,
+    usdPerSlotValidResult: 0.001,
+    trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001 },
+  },
   latencyP50H: 20, latencyP90H: 50,
   contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
   supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
@@ -633,7 +1215,8 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
   const hold3 = run(PREV_HOLD_D3, null)
   check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS → d3 재인증(REPROVE = 현재 단계 RETEST · 내리지 않는다)',
     hold3.decision.release === 'd3' && hold3.decision.state === 'REPROVE', `${hold3.decision.state} ${hold3.decision.release}`)
-  const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 1 }) })
+  /** 🔴 PR1b(2026-11-06): 기회 부족은 이제 막지 않는 예측 경고다 — "막힘"은 실제 hard gate(Persona 부족)로 만든다 */
+  const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { contractValidPersonas: 1 }) })
   check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (매일 REPROVE 없음 · 0..3)',
     hold3Blocked.decision.release === 'd3' && hold3Blocked.decision.state === 'PREPARE',
     `${hold3Blocked.decision.state} ${hold3Blocked.decision.release}`)
@@ -650,7 +1233,16 @@ console.log('\n③ controller 끝까지 — 09-29 운영 반례')
     noPersona.release === 'd3' && noPersona.state !== 'TRIAL' && noPersona.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN')
     && noPersona.reasons.some((r) => r.includes('PERSONA_UNKNOWN')), `${noPersona.state} ${noPersona.release}`)
   const shortOpp = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 2 }) }).decision
-  check('🔴 slot-valid 기회가 d5 목표(5)보다 적으면 PREFLIGHT_FAIL', shortOpp.release === 'd3' && shortOpp.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
+  /** 🔴 PR1b(2026-11-06 · canon §3.1·§3.2): 기회 예측은 시험을 막지 않고 v6 `supply.forecastWarnings` 로 남는다 */
+  check('🟢 slot-valid 기회가 d5 목표(5)보다 적어도 시험은 열리고 OPPORTUNITY_SHORT 는 예측 경고로 남는다',
+    shortOpp.state === 'TRIAL' && shortOpp.release === 'd5' && !shortOpp.blocks.some((b) => b.code === 'PREFLIGHT_FAIL')
+    && shortOpp.supply !== null && 'forecastWarnings' in shortOpp.supply
+    && shortOpp.supply.forecastWarnings.includes('OPPORTUNITY_SHORT'),
+    `${shortOpp.state} ${shortOpp.release} ${JSON.stringify(shortOpp.supply)}`)
+  const shortPersona = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { contractValidPersonas: 2 }) }).decision
+  check('🔴 계약 유효 Persona 가 d5 목표(5)보다 적으면 여전히 PREFLIGHT_FAIL (hard gate)',
+    shortPersona.release === 'd3' && shortPersona.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
+    `${shortPersona.state} ${shortPersona.release} ${shortPersona.blocks.map((b) => b.code).join(',')}`)
   /** 🔴 계약 경계 — 옛 판(v4) 전날 결정은 PASS 여도 근거가 아니다 */
   const legacyPrev = validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL', contractVersion: 'stage-decision-v4',
     transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV2, target: 'd3' } }), expectKstDate: PREV })

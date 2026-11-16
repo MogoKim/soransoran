@@ -22,17 +22,19 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import { modeCadence, RETIRED_AUTOGEN_CODES } from '../src/lib/persona-autogen'
-import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
+import { COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS } from '../src/lib/persona-cohort'
 import {
   activityConcentration, codeCeiling, codeLimitsToLift, codeOrderSafe, codeRoom, EXPANSION_STEPS,
-  planExpansionStep, PROPOSED_COHORTS, type ActivityConcentration, type ExpansionResources,
+  expansionFixtureComparisonInputs, judgeExpansionFixtureScope, planExpansionStep, PROPOSED_COHORTS,
+  type ActivityConcentration, type ExpansionResources,
 } from '../src/lib/persona-expansion'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { voicePoolFor } from './lib/persona-autogen.mjs'
 import type { ExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { judgeExpansionBatch, loadExpansionFixture, nameSpaceCapacity } from './lib/persona-expansion-gate.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readEvidenceSalt, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
+import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
+import { readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import type { LocalComment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -65,13 +67,23 @@ const fx = loadExpansionFixture(repoRoot, FIXTURE)
 if (!fx.ok) fail(`fixture ${FIXTURE}: ${fx.problems.join(' / ')}`)
 const fixture = fx.ok ? fx.fixture : null!
 const batchCodes = fixture.candidates.map((c) => c.code)
-const leaked = batchCodes.filter((c) => PRODUCTION_PERSONA_CODES.includes(c))
-if (leaked.length > 0) fail(`후보 코드가 이미 운영 universe 에 있다: ${leaked.join(',')} — 제안 cohort 는 COHORTS 밖이어야 한다`)
+const fixtureScopeResult = judgeExpansionFixtureScope({
+  fixtureCohort: fixture.cohort,
+  fixtureCodes: batchCodes,
+  productionCodes: PRODUCTION_PERSONA_CODES,
+  runnableCohorts: RUNNABLE_COHORTS.map((id) => COHORTS[id]),
+})
+const fixtureScope = fixtureScopeResult.ok
+  ? fixtureScopeResult
+  : fail(fixtureScopeResult.reason)
+const baselineCodes = fixtureScope.baselineCodes
+const baselineCodeSet = new Set(baselineCodes)
 
 // ── ① 운영 DB read-only ──
 let facts: ExpansionFacts | null = null
 if (USE_DB) {
   await loadEnvLocal()
+  if (!fillDbConnection()) fail('canonical env 에 DATABASE_URL 이 없다 — 운영 DB 판정을 시작하지 않는다')
   const { PrismaClient } = await import('@prisma/client')
   const { readExpansionFacts } = await import('./lib/persona-expansion-facts.mjs')
   const prisma = new PrismaClient()
@@ -117,7 +129,9 @@ if (USE_VOICE_EVIDENCE) {
   const measuredFacts = facts as ExpansionFacts
   const measuredMembers = measuredFacts.nameSets.memberNames
     ?? fail('회원 이름 대조 집합을 읽지 못했다 — 보충 말투 근거를 사용하지 않는다')
-  const salt = readEvidenceSalt(process.env)
+  // 운영 증거는 launchd 와 같은 canonical env 가 권위다. 셸·worktree의 .env 누락을
+  // 증거 부재로 오판하지 않고, 값은 메모리에만 올리며 출력하지 않는다.
+  const salt = readEvidenceSalt({ ...process.env, ...readEnvKeys([VOICE_EVIDENCE_SALT_ENV]).values })
   if (!salt.ok) fail(`보충 말투 근거가 꺼져 있다 — ${salt.code}`)
   const evidence = readUsableVoiceEvidence({
     dataDir: arg('voice-evidence-dir') ?? voiceEvidenceDataDir(),
@@ -139,10 +153,22 @@ const names = nameSpaceCapacity({
   takenNames: [...takenNames, ...fixture.candidates.map((c) => c.displayName)],
   memberNames: memberNames === null ? null : [...memberNames],
 })
-const usedCodes = [...pool.cards.map((c) => c.code), ...(facts?.dbCodes ?? [])]
+const poolCodes = pool.cards.map((card) => card.code)
+const dbCodes = facts?.dbCodes ?? []
+const usedCodes = [...poolCodes, ...dbCodes]
+const comparisonResult = expansionFixtureComparisonInputs({
+  mode: fixtureScope.mode,
+  fixtureCodes: batchCodes,
+  poolCodes,
+  dbCodes,
+})
+const comparison = comparisonResult.ok
+  ? comparisonResult
+  : fail(comparisonResult.reason)
+const existingCardCodeSet = new Set(comparison.existingCardCodes)
 const ceiling = codeCeiling()
 const room = codeRoom({ usedCodes, retiredCodes: Object.keys(RETIRED_AUTOGEN_CODES), ceiling })
-const orderSafeAll = codeOrderSafe([...PRODUCTION_PERSONA_CODES, ...batchCodes])
+const orderSafeAll = codeOrderSafe([...baselineCodes, ...batchCodes])
 
 console.log('── ② 확장 자원')
 console.log(`  말투 화자   정본 자산 ${voice.eligibleSpeakers > 0 ? 'OK' : voice.code} · 근거 화자 ${voice.eligibleSpeakers}`
@@ -189,15 +215,18 @@ console.log('')
 const cadence = facts === null ? null : modeCadence(facts.cadences)
 const batch = judgeExpansionBatch({
   fixture,
-  existingCards: pool.cards,
-  productionCodes: PRODUCTION_PERSONA_CODES,
-  takenCodes: new Set(usedCodes),
+  existingCards: pool.cards.filter((card) => existingCardCodeSet.has(card.code)),
+  productionCodes: baselineCodes,
+  takenCodes: comparison.takenCodes,
   voiceByCode: voice.byCode,
-  productionBundles: voice.productionBundles,
+  productionBundles: voice.productionBundles.filter((bundle) => baselineCodeSet.has(bundle.personaCode)),
   cadence,
   nameSets: facts?.nameSets ?? null,
 })
-console.log(`── ④ 제안 cohort ${fixture.cohort} — ${fixture.candidates.length}명 (🔴 COHORTS 밖 · 운영 DB 행 0 · 기본 비활성)`)
+const scopeLabel = fixtureScope.mode === 'runnable'
+  ? '승격된 runnable cohort · 운영 DB 적재/활성화는 별도'
+  : '제안 cohort · COHORTS 밖 · 기본 비활성'
+console.log(`── ④ ${fixture.cohort} — ${fixture.candidates.length}명 (🔴 ${scopeLabel})`)
 for (const c of batch.candidates) {
   const f = fixture.candidates.find((x) => x.code === c.code)!
   const l = f.life

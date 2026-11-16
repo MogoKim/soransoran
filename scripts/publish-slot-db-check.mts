@@ -25,7 +25,9 @@ import { join } from 'node:path'
 
 import { Prisma, PrismaClient } from '@prisma/client'
 
-import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
+import {
+  publishOriginalPostTx, RECHECK_DELAYS_MS, settleAfterConflicts, type PlannedTarget, type PublishResult, type RecheckResult,
+} from '../src/lib/original-post-publish-tx'
 import { NORMAL_NO_PUBLISH_CODES } from '../src/lib/original-post-publish'
 import { publishEventAtOf, releaseStampStatusOf, RELEASE_STAMP_KEY, RELEASE_CONTRACT } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
@@ -380,10 +382,21 @@ async function main(): Promise<void> {
     const p2034 = (): Error => new Prisma.PrismaClientKnownRequestError(
       'Transaction failed due to a write conflict or a deadlock. Please retry your transaction', { code: 'P2034', clientVersion: 'fixture' })
     type FaultAt = { attempt: 1 | 2; point: 'begin' | 'written' }
-    const withFault = async (id: string, at: Date, stage: string, outsideSeen: number, plan: PlannedTarget, fault: (f: FaultAt) => Promise<void>): Promise<PublishResult> =>
-      publishOriginalPostTx(prisma, {
+    /**
+     * 🔴 대기 주입점(`deps.sleep` · 검사 전용) — 실제로 기다리지 않고 대기 길이만 적는다. `onSleep` 은 그 대기 **동안**
+     *    일어나는 일(예: 승자의 commit)을 결정론으로 넣는 자리다. 운영 기본은 실제 대기다.
+     */
+    let sleeps: number[] = []
+    let onSleep: ((ms: number, nth: number) => Promise<void>) | null = null
+    const fakeSleep = async (ms: number): Promise<void> => { sleeps.push(ms); if (onSleep !== null) await onSleep(ms, sleeps.length) }
+    const withFault = async (id: string, at: Date, stage: string, outsideSeen: number, plan: PlannedTarget, fault: (f: FaultAt) => Promise<void>): Promise<PublishResult> => {
+      sleeps = []
+      return publishOriginalPostTx(prisma, {
         queueId: id, publishedToday: outsideSeen, mode: { kind: 'scheduled', releaseStage: stage, planned: plan, unattended: true }, autoReadyEnv: envOf(stage),
-      }, { now: () => at, fault })
+      }, { now: () => at, fault, sleep: fakeSleep })
+    }
+    const FULL = RECHECK_DELAYS_MS.filter((d) => d > 0)
+    const sumOf = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0)
     const normal = (r: PublishResult): boolean => r.kind === 'blocked' && (NORMAL_NO_PUBLISH_CODES as readonly string[]).includes(r.code)
 
     // (a) 같은 후보 · 도래 1(d10 08:10) — 승자가 시도 1 도중 발행 → 패자 두 번 충돌 → SLOT_CONSUMED
@@ -411,6 +424,7 @@ async function main(): Promise<void> {
         `${JSON.stringify(w)} / ${JSON.stringify(loser)}`)
       check('🔴 write 시도는 정확히 2 — 다시 읽기는 세 번째 write 시도가 아니다(주입점 호출 1:begin · 2:begin 뿐)',
         calls.join(',') === '1:begin,2:begin', calls.join(','))
+      check('🔴 첫 다시 읽기에서 소비 증거 → 대기 0', sleeps.length === 0, sleeps.join(','))
     }
 
     // (b) 두 번 연속 충돌 · 아무도 발행하지 않았다 → 소비 증거 없음 → error · write 0
@@ -418,8 +432,10 @@ async function main(): Promise<void> {
     evidenceAt = K('2026-10-23T00:00:00')
     const b = await cand()
     const rb = await withFault(b, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(b), async (f) => { if (f.point === 'begin') throw p2034() })
-    check('🔴 🔴 **[반례] 두 번 연속 충돌 · 소비 증거 없음(다시 읽으니 낼 수 있다) → error · Post 0 · ActivityLog 0 · Queue 그대로**',
+    check('🔴 🔴 **[반례] 두 번 연속 충돌 · 끝까지 소비 증거 미출현 → 일정을 다 쓰고 error · Post 0 · ActivityLog 0 · Queue 그대로**',
       rb.kind === 'error' && /소비 증거가 없다/.test(rb.message) && (await posts()) === 0 && (await logs()) === 0 && (await q(b)).status === 'APPROVED', JSON.stringify(rb))
+    check(`🔴 🔴 끝까지 미출현 — 일정 경계: 다시 읽기 ${RECHECK_DELAYS_MS.length}회 · 대기 ${FULL.join('/')}ms(누적 ${sumOf(FULL)} · 트랜잭션 timeout 한 창 30000 이상 관측) · 그 뒤 더 없음 · 실패`,
+      sleeps.join(',') === FULL.join(',') && sumOf(sleeps) >= 30_000 && RECHECK_DELAYS_MS.length === 8, sleeps.join(','))
 
     // (c) 도래 2 · 승자는 **다른** 후보를 냈다 — 슬롯도 이 후보도 소비되지 않았다 → error
     await wipe()
@@ -432,7 +448,7 @@ async function main(): Promise<void> {
       throw p2034()
     })
     check('🔴 🔴 **[반례] 다른 후보 발행 · 도래 2 중 1 소비 → 이 회차의 소비 증거 아님 → error (정상 무발행으로 숨기지 않는다)**',
-      rc.kind === 'error' && (await posts()) === 1 && (await q(c1)).status === 'APPROVED', JSON.stringify(rc))
+      rc.kind === 'error' && (await posts()) === 1 && (await q(c1)).status === 'APPROVED' && sleeps.join(',') === FULL.join(','), `${JSON.stringify(rc)} · ${sleeps.join(',')}`)
 
     // (d) 선택기 결함 — 전날 발행된 행을 오늘 골랐다 + 두 번 연속 충돌 → ALREADY_PUBLISHED 를 정상으로 바꾸지 않는다
     await wipe()
@@ -443,6 +459,57 @@ async function main(): Promise<void> {
     const rd = await withFault(old, K('2026-10-24T09:30:00'), 'd10', 0, await planOf(old), async (f) => { if (f.point === 'begin') throw p2034() })
     check('🔴 🔴 **[반례] 선택기 결함(전날 발행 행) + 두 번 연속 충돌 → error(ALREADY_PUBLISHED) · 정상 무발행 아님**',
       y.kind === 'published' && t1.kind === 'published' && rd.kind === 'error' && /ALREADY_PUBLISHED/.test(rd.message) && (await posts()) === 2, JSON.stringify(rd))
+    check('🔴 🔴 다른 차단(ALREADY_PUBLISHED)은 대기 없이 즉시 실패 — 다시 읽기 1회 · 대기 0', sleeps.length === 0, sleeps.join(','))
+
+    // (g) 🔴 2026-11-08 PR #835 CI ⑧ — 충돌 2회 뒤 첫 다시 읽기는 "아직 낼 수 있다" · 대기 동안 승자가 commit → 소비 증거 출현
+    for (const [label, at, code] of [
+      ['도래 1(08:10) → SLOT_CONSUMED', K('2026-10-23T08:10:00'), 'SLOT_CONSUMED'],
+      ['도래 2(09:30) → TARGET_RACE_LOST', K('2026-10-23T09:30:00'), 'TARGET_RACE_LOST'],
+    ] as const) {
+      await wipe()
+      evidenceAt = K('2026-10-23T00:00:00')
+      const g = await cand()
+      const [planW, planL] = [await planOf(g), await planOf(g)]
+      let winner: PublishResult | null = null
+      const calls: string[] = []
+      // 🔴 승자는 패자의 세 번째 대기(1000ms) 동안 commit 한다 — 앞 두 번의 다시 읽기는 승자를 보지 못한다
+      onSleep = async (_ms, nth) => { if (nth === 3) winner = await scheduled(g, at, 'd10', envOf('d10'), 0, planW) }
+      const loser = await withFault(g, at, 'd10', 0, planL, async (f) => { calls.push(`${f.attempt}:${f.point}`); if (f.point === 'begin') throw p2034() })
+      onSleep = null
+      const w = winner as PublishResult | null
+      check(`🔴 🔴 **[반례] 대기 뒤 소비 증거 출현 — ${label} · 정상 무발행 · Post 1 · ActivityLog 1 · 대기 250/500/1000 에서 멈춘다**`,
+        w?.kind === 'published' && loser.kind === 'blocked' && loser.code === code && normal(loser)
+        && (await posts()) === 1 && (await logs()) === 1 && sleeps.join(',') === '250,500,1000', `${JSON.stringify(loser)} · ${sleeps.join(',')}`)
+      check('🔴 대기 뒤에도 write 시도는 정확히 2 — 다시 읽기는 결함 주입점을 부르지 않는다', calls.join(',') === '1:begin,2:begin', calls.join(','))
+    }
+
+    // (h) 🔴 되풀이 판정 자체 — 가짜 다시 읽기(DB 0). 다시 읽기의 충돌 · 즉시 실패 · 끝까지 열림
+    {
+      const run = async (seq: readonly RecheckResult[]): Promise<{ r: PublishResult; reads: number; waits: number[] }> => {
+        let i = 0
+        const waits: number[] = []
+        const r = await settleAfterConflicts(async () => seq[Math.min(i++, seq.length - 1)]!, async (ms) => { waits.push(ms) })
+        return { r, reads: i, waits }
+      }
+      const consumed: RecheckResult = { kind: 'blocked', code: 'SLOT_CONSUMED', detail: 'x' }
+      const c1 = await run([{ kind: 'conflict' }, { kind: 'recheck-open' }, consumed])
+      check('🔴 🔴 다시 읽기의 충돌 · 열림 뒤 회복 — 세 번째 다시 읽기에서 소비 증거 → 정상 무발행 · 대기 250/500',
+        c1.r.kind === 'blocked' && c1.r.code === 'SLOT_CONSUMED' && c1.reads === 3 && c1.waits.join(',') === '250,500', JSON.stringify(c1))
+      for (const [label, res] of [
+        ['ALREADY_PUBLISHED', { kind: 'blocked', code: 'ALREADY_PUBLISHED', detail: 'x' }],
+        ['AUTO_READY_RECHECK', { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: 'x' }],
+        ['SLOT_CLOSED(소비 증거 아님)', { kind: 'blocked', code: 'SLOT_CLOSED', detail: 'x' }],
+        ['직렬화가 아닌 오류', { kind: 'error', message: '발행하지 못했습니다.' }],
+      ] as const) {
+        const x = await run([{ kind: 'recheck-open' }, res as RecheckResult])
+        check(`🔴 🔴 ${label} 는 대기 없이 즉시 실패 — 다시 읽기 2회 · 대기 250 하나`, x.r.kind === 'error' && x.reads === 2 && x.waits.join(',') === '250', JSON.stringify(x))
+      }
+      const never = await run([{ kind: 'conflict' }])
+      check(`🔴 다시 읽기가 끝까지 충돌 — 일정 ${RECHECK_DELAYS_MS.length}회 뒤 error(무한 반복 없음)`,
+        never.r.kind === 'error' && never.reads === RECHECK_DELAYS_MS.length && never.waits.join(',') === FULL.join(','), JSON.stringify(never))
+      check('🔴 대기 일정 정본 — 0/250/500/1000/2000/4000/8000/16000ms · 고정(freeze)',
+        RECHECK_DELAYS_MS.join(',') === '0,250,500,1000,2000,4000,8000,16000' && Object.isFrozen(RECHECK_DELAYS_MS))
+    }
 
     // (e) 직렬화가 아닌 DB 오류 — 재시도도 다시 읽기도 없이 error
     await wipe()
@@ -472,6 +539,18 @@ async function main(): Promise<void> {
 
   await wipe()
   await prisma.$disconnect()
+
+  /**
+   * 🔴 **변이 시험 전용 정지 — ⑫ 까지만 돌고 정리(wipe · disconnect)를 마친 뒤 정상 종료한다** (2026-11-08 · PR #835).
+   *    `publish-recheck-mutation` 만 이 env 를 정확한 값으로 넘긴다. ⑪ E2E 를 **시작하지 않으므로** 자식 프로세스가 남지 않는다
+   *    (앞판 하네스는 ⑪ 헤더에서 이 프로세스를 SIGTERM 했고, 이미 띄운 E2E 가 고아로 남아 다음 검사 DB 에 썼다).
+   *    env 가 없거나 다른 값이면 아래 ⑪ 이 그대로 돈다. 격리 DB 가드는 이미 위에서 통과했다 · 운영 코드 영향 0.
+   */
+  if ((process.env.SORAN_SLOT_DB_STOP_AFTER_SECTION_12 ?? '') === 'yes-recheck-mutation') {
+    console.log(`\nSLOT_DB_STOPPED_AFTER_12 · ${pass} pass · ${fail} fail`)
+    if (fail > 0) process.exit(1)
+    return
+  }
 
   console.log('\n⑪ 🔴 🔴 원천 기회 → 공개 글 결정론적 전체 E2E — 검사 파일을 같은 격리 DB 로 실행한다')
   {

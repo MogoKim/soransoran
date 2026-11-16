@@ -14,7 +14,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT, DRAFTS_DIR } from './magazine-load.mjs'
-import { HERO_WIDTH, HERO_HEIGHT, readWebpSize } from '../magazine-qa.mjs'
+import { HERO_WIDTH, HERO_HEIGHT } from './magazine-qa-constants.mjs'
+import { readWebpSize } from './magazine-webp.mjs'
 
 export { HERO_WIDTH, HERO_HEIGHT }
 

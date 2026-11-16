@@ -168,11 +168,15 @@ import { anyNoGo, noGoHits } from '../../src/lib/persona-no-go'
 import {
   DEFAULT_FINGERPRINT_THRESHOLDS, type FingerprintThresholds,
 } from '../../src/lib/persona-fingerprint-thresholds'
+import { formatVoiceCause, judgeRepeatAxes, type RepeatAxis } from '../../src/lib/persona-voice-repeat'
 
 export type FingerprintInput = {
-  /** 같은 persona 의 최근 발화 — 발행물 + 같은 배치의 앞선 후보 */
+  /**
+   * 같은 persona 의 이전 발화 — 🔴 운영은 **삭제되지 않은 공개 댓글 전체**를 넘긴다(창 · 상한 없음).
+   *    표본이 커도 영구 잠금이 생기지 않는 것은 반복 축이 후보 귀속으로 판정하기 때문이다(`persona-voice-repeat`).
+   */
   priorTexts?: readonly string[]
-  /** 이 후보가 쓴 seed 가 **전체에서** 쓰인 횟수 (자기 자신 포함) */
+  /** 이 Persona 의 voice seed 를 **함께 받은 Persona 수** (자기 자신 포함 · 전체 단위 · 고정 배정에서 나온다) */
   seedUseCount?: number
   /** 구조화 나열 · 마크다운 — 🔴 "AI 말투" 는 별도 관문이 아니라 ⑧의 축 하나다 */
   tidyMarks?: boolean
@@ -183,46 +187,16 @@ export type FingerprintAxis = 'ENDING' | 'HOOK' | 'NGRAM' | 'SEED_REUSE' | 'TIDY
 
 export type FingerprintVerdict = {
   status: Gate78Status
+  /** 막은 축 — 반복 축은 **후보가 원인일 때만** 여기 들어온다 */
   axes: FingerprintAxis[]
+  /** 🔴 prior 만 임계를 넘은 반복 축 — 막지 않는다. 관측 · 회복 신호다 */
+  baselineOnly: RepeatAxis[]
   sampleSize: number
   detail: string
 }
 
-/** 말끝 — 종결 기호 · 웃음 표기를 떼고 마지막 3자 */
-const endingOf = (t: string): string => t.replace(/[\s.!?~ㅋㅎ,]+$/u, '').slice(-3)
-/** 시작 — 첫 어절 */
-const hookOf = (t: string): string => t.trim().split(/\s+/)[0] ?? ''
-
-const gramsOf = (t: string): string[] => {
-  const s = t.replace(/\s+/g, '')
-  const out: string[] = []
-  for (let i = 0; i + 3 <= s.length; i++) out.push(s.slice(i, i + 3))
-  return out
-}
-
-/** 최빈값의 점유율 */
-const topShare = (values: readonly string[]): number => {
-  const counts = new Map<string, number>()
-  for (const v of values) {
-    if (v === '') continue
-    counts.set(v, (counts.get(v) ?? 0) + 1)
-  }
-  if (counts.size === 0) return 0
-  return Math.max(...counts.values()) / values.length
-}
-
-/** 최빈 3-gram 이 **몇 건의 발화에** 나오는가 (문서빈도 — 한 발화 안 반복은 세지 않는다) */
-const topNgramShare = (texts: readonly string[]): number => {
-  const df = new Map<string, number>()
-  for (const t of texts) for (const g of new Set(gramsOf(t))) df.set(g, (df.get(g) ?? 0) + 1)
-  if (df.size === 0) return 0
-  return Math.max(...df.values()) / texts.length
-}
-
-const band = (v: number, review: number, regen: number): Gate78Status =>
-  v >= regen ? 'regenerate' : v >= review ? 'review' : 'pass'
-
 const pct = (v: number): string => `${Math.round(v * 100)}%`
+const AXIS_LABEL: Readonly<Record<RepeatAxis, string>> = { ENDING: '말끝', HOOK: '시작어절', NGRAM: '3-gram' }
 
 /**
  * ⑧ — 고정 말투 하나가 반복되어 사람 글로 읽히지 않는 것을 막는다.
@@ -237,9 +211,13 @@ export function checkVoiceFingerprint(
   const th = { ...DEFAULT_FINGERPRINT_THRESHOLDS, ...(input.thresholds ?? {}) }
   const text = (candidateText ?? '').trim()
   const prior = (input.priorTexts ?? []).map((t) => t.trim()).filter((t) => t !== '')
-  const sample = text === '' ? prior : [...prior, text]
+  // 🔴 빈 후보에는 귀속할 말이 없다 — 통과로 세지 않는다(파이프라인은 그 전에 PARSE_FAILED 로 멈춘다)
+  if (text === '') {
+    return { status: 'regenerate', axes: [], baselineOnly: [], sampleSize: prior.length, detail: '빈 후보 — 판정할 말이 없다' }
+  }
 
   const axes: FingerprintAxis[] = []
+  const baselineOnly: RepeatAxis[] = []
   const why: string[] = []
   let status: Gate78Status = 'notRun'
 
@@ -247,29 +225,31 @@ export function checkVoiceFingerprint(
   //    그 축은 조용히 무력해진다 — 표본 부족으로 seed 재사용을 놓친 적이 있다.
   //    그래서 어떤 축도 early return 하지 않고, 끝에서 한 번만 판정한다.
 
-  // ── 축 1. 구조화 나열 — 🔴 대조 집합 없이 확정적으로 잡힌다 ──
+  // ── 축 1. 구조화 나열 — 🔴 후보 자체의 위반 · 대조 집합 없이 확정적으로 잡힌다 ──
   if (input.tidyMarks === true) {
     axes.push('TIDY')
     why.push('구조화 나열 · 마크다운')
     status = stricter(status, 'regenerate')
   }
 
-  // ── 축 2~4. 반복 — 🔴 표본이 모자라면 비율이 튄다. 재지 않는다 ──
-  const repeatRan = sample.length >= th.minSamples
-  if (repeatRan) {
-    const e = topShare(sample.map(endingOf))
-    const h = topShare(sample.map(hookOf))
-    const g = topNgramShare(sample)
-    const eb = band(e, th.endingReview, th.endingRegen)
-    const hb = band(h, th.hookReview, th.hookRegen)
-    const gb = band(g, th.ngramReview, th.ngramRegen)
-    if (eb !== 'pass') { axes.push('ENDING'); why.push(`말끝 ${pct(e)}`) }
-    if (hb !== 'pass') { axes.push('HOOK'); why.push(`시작어절 ${pct(h)}`) }
-    if (gb !== 'pass') { axes.push('NGRAM'); why.push(`3-gram ${pct(g)}`) }
-    status = stricter(stricter(status, eb), stricter(hb, gb))
+  // ── 축 2~4. 반복 — 🔴 후보 귀속 판정. 표본이 모자라면 재지 않는다(notRun) ──
+  const repeat = judgeRepeatAxes(prior, text, th)
+  if (repeat.ran) {
+    status = stricter(status, 'pass')
+    for (const v of repeat.axes) {
+      if (v.cause === 'CANDIDATE') {
+        axes.push(v.axis)
+        why.push(`후보 ${AXIS_LABEL[v.axis]} ${pct(v.candidateShare)}`)
+        status = stricter(status, v.band)
+      } else if (v.cause === 'BASELINE_ONLY') {
+        baselineOnly.push(v.axis)
+        why.push(`기준선 ${AXIS_LABEL[v.axis]} ${pct(v.baselineShare)}(후보 무관 · 통과)`)
+      }
+    }
   }
 
-  // ── 축 5. seed 재사용 — 🔴 전체 단위이고, 표본 수와 무관하다 ──
+  // ── 축 5. seed 재사용 — 🔴 후보와 무관한 고정값 · 전체 단위 · 표본 수와 무관하다 ──
+  //    planner 가 유료 호출 전에 `judgeStaticVoiceCapability` 로 이미 뺀다. 여기는 마지막 방어선이다.
   if (input.seedUseCount !== undefined) {
     const n = input.seedUseCount
     const sb: Gate78Status = n >= th.seedReuseRegen ? 'regenerate' : n >= th.seedReuseReview ? 'review' : 'pass'
@@ -280,18 +260,18 @@ export function checkVoiceFingerprint(
   // ── 판정 ──
   //    🔴 위반이 없더라도 반복 축을 못 봤으면 pass 가 아니다.
   //       ⑧ 의 본질은 반복이다. 구조 축만 깨끗한 것을 "통과" 로 세면 통계가 거짓이 된다.
-  const sampleNote = `표본 ${sample.length}`
-  if (axes.length === 0) {
-    return repeatRan
-      ? { status: 'pass', axes, sampleSize: sample.length, detail: `반복 없음 (${sampleNote})` }
-      : {
-          status: 'notRun',
-          axes,
-          sampleSize: sample.length,
-          detail: `대조 발화 부족 — ${sampleNote} (최소 ${th.minSamples})`,
-        }
+  const sampleNote = `표본 ${repeat.sampleSize}`
+  const cause = formatVoiceCause(repeat.axes)
+  if (!repeat.ran && axes.length === 0) {
+    return {
+      status: 'notRun', axes, baselineOnly, sampleSize: repeat.sampleSize,
+      detail: `대조 발화 부족 — ${sampleNote} (최소 ${th.minSamples})`,
+    }
   }
-  // 🔴 본문이 아니라 축 이름 · 비율만
-  const note = repeatRan ? sampleNote : `반복 축 미실행 · ${sampleNote}`
-  return { status, axes, sampleSize: sample.length, detail: `${why.join(' · ')} (${note})` }
+  if (why.length === 0) {
+    return { status, axes, baselineOnly, sampleSize: repeat.sampleSize, detail: `반복 없음 (${sampleNote})` }
+  }
+  // 🔴 본문 · 패턴이 아니라 원인 · 축 이름 · 비율만
+  const note = repeat.ran ? sampleNote : `반복 축 미실행 · ${sampleNote}`
+  return { status, axes, baselineOnly, sampleSize: repeat.sampleSize, detail: `${cause}${why.join(' · ')} (${note})` }
 }

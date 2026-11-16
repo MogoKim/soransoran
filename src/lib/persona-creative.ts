@@ -352,7 +352,7 @@ export function payloadLeaks(payload: string, forbidden: readonly string[]): num
 //    혼인 · 주거 상태명 하나로 불렀다. 겹침 판정(Jaccard > 0.5)은 낱말 하나 겹침을 통과시킨다.
 //    그래서 ① 한 번에 함께 설계하게 하고 ② 결과를 **하나의 품질 판정**(`judgeCreativeQuality`)으로 본다.
 
-/** 🔴 batch 한 번의 hard cap (USD) — 호출 전 최악 예약(입력 바이트 + 출력 상한)이 넘으면 호출 0 */
+/** 🔴 batch 한 번의 hard cap (USD) — 호출 전 최악 예약(공식 입력 토큰 계산 + 출력 상한)이 넘으면 호출 0 */
 export const CREATIVE_BATCH_COST_CAP_USD = 0.03
 /** 여섯 명 JSON — 한 명 ≈ 300~450 tok. 넘치면 잘림 → 전체 fail-closed */
 export const CREATIVE_BATCH_MAX_OUTPUT_TOKENS = 3200

@@ -114,7 +114,7 @@ import { ARTICLE_SPEC_SCHEMA } from './lib/magazine-article-spec.mjs'
 import { mkdirSync as _mkdirSync, existsSync } from 'node:fs'
 import { drive } from './magazine-auto-register.mjs'
 import {
-  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
+  ARTICLE_PLAN_OPTIONAL, ARTICLE_PLAN_REQUIRED, DIRECT_SPEC_SOURCE_SCHEMA_V2, directSpecSourceHash, directSpecSourcePath, productBasisFor, queueRowFromEntry,
   readProductGraphState, readProductGraphVersion,
 } from './lib/magazine-direct-spec-source.mjs'
 
@@ -150,7 +150,7 @@ function makeSandbox(prefix) {
   input.queueItem = queueRowFromEntry(entry, { day: input.queueItem.day })
   const sp = directSpecSourcePath(d, gv)
   _mkdirSync(dirname(sp), { recursive: true })
-  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA, graphVersion: gv, entries: [entry] }))
+  writeFileSync(sp, JSON.stringify({ schema: DIRECT_SPEC_SOURCE_SCHEMA_V2, graphVersion: gv, entries: [entry] }))
   const directSourceDeps = { queue: () => [input.queueItem], expectedGraphVersion: () => gv, productRoot: () => ROOT }
   return { input, draftsDir: d, slug, specHash: persisted.specHash, quarantinePath, directSourceDeps }
 }

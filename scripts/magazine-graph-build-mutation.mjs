@@ -213,6 +213,11 @@ const MUTATIONS = [
   { id: 'M115 readiness inputs 에서 control 해시 누락', file: 'lib',
     from: 'Object.entries(PRODUCT_FILES).map(([k, rel]) => [k, product.hashes[rel]])',
     to: "Object.entries(PRODUCT_FILES).filter(([k]) => k !== 'control').map(([k, rel]) => [k, product.hashes[rel]])", expect: '반례24f' },
+  // S3 P1 수리 (2026-11-13) — 출처 overlay 규칙은 resolver 행동의 권위다. 제품 신원에서 빠지면 규칙만 바뀐 표류를 후보가 못 본다
+  { id: 'MP1 제품 신원 파일 목록에서 출처 규칙을 뺀다', file: 'lib',
+    from: "  provenanceRule: 'src/lib/magazine-provenance-rule.mjs',\n", to: '', expect: '반례24h' },
+  { id: 'MP2 빠진 제품 텍스트를 빈 문자열 해시로 넘긴다(fail-open)', file: 'lib',
+    from: "  if (missing.length) fail('PRODUCT_TEXT_MISSING', `제품 신원 파일이 없다: ${missing.join(', ')}`)\n", to: '', expect: '반례24h' },
   { id: 'M116 buildAll 이 readiness 를 별도 계산 복사본으로 만든다', file: 'lib',
     from: "    'readiness.json': serializeReadiness(core.readiness),",
     to: "    'readiness.json': serializeReadiness(buildReadiness({ layers, product, admission: parseAdmissionTexts(admissionTexts), effective: eff, graphVersion, inputs: core.readiness.inputs }).report),",

@@ -5086,18 +5086,22 @@ dry-run     collect --auto (네트워크 0) · import --raw-only (DB write 0)
 누군가 하루에 다섯 번 명령을 쳐야 큐가 채워졌다. 이 절은 그 다섯 번을 없앤다.
 
 ```
-[수집 — source 마다 독립 job]  🔴 전부 KST (2026-09-11 확정)
+[수집 — source 마다 독립 job]  🔴 전부 KST (2026-10-31 D20 target-date 정렬)
   82cook 목록             raw-collect-82cook           5회  07:00 10:00 13:00 16:00 19:00
   82cook 본문(얇은 상세)   supply-collect-82cook-thin   5회  07:40 10:40 13:40 16:40 19:40
-  navercafe:remonterrace  navercafe-collect-…-multi    5회  07:30 10:30 13:30 16:30 21:30
-  navercafe:wgang         navercafe-collect-…-multi    4회  09:30 11:30 15:30 20:30
+  navercafe:remonterrace  navercafe-collect-…-multi    5회  00:30 02:30 05:30 13:30 21:30
+  navercafe:wgang         navercafe-collect-…-multi    5회  01:30 03:30 04:30 11:30 20:30
 
 [처리 — 독립 drain job]
-  com.soransoran.supply-process  6회  08:15 12:15 14:15 17:15 21:15 22:15
+  com.soransoran.supply-process  7회  06:15 08:15 12:15 14:15 17:15 21:15 22:15
     source 별 (얇은 변환 → 검수용 변환) → 공통 (AI 판정 → AI 초안 → Queue 보충)
 ```
 
-🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 하루에 고르게 폈고,
+🔴 **2026-10-31 D20 target-date 정렬:** 네이버 수집 6회가 06:15 공급 전에 끝나고,
+07:00 controller가 같은 날짜의 재료를 판정한다. 새벽 슬롯은 AC 전원·로그인·덮개 열림·
+keep-awake를 모두 만족하는 상시 호스트에서만 유효하다.
+
+📜 앞선 판은 하루에 고르게 폈고,
 그래서 02:50 · 04:20 · 01:10 처럼 기계가 꺼져 있는 시각에 슬롯이 있었다 —
 예약은 있는데 회차는 돌지 않았다. **돌지 않는 슬롯은 능력이 아니다.**
 🔴 처리는 **수집 뒤에** 붙인다. 입력이 생긴 뒤에 비워야 대기 시간이 줄고,

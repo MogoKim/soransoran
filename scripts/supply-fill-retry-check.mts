@@ -25,7 +25,7 @@ import {
 } from '../src/lib/supply-fill-retry'
 import { planBoundedCommonPhase, planCarryOverFill, runFileName, type Pending } from '../src/lib/supply-process'
 import { qualityContractDigest } from '../src/lib/quality-contract'
-import { planCarryOver } from './lib/fill-carry-over.mjs'
+import { planCarryOver, planPostRunCarryOver } from './lib/fill-carry-over.mjs'
 
 type Check = (label: string, ok: boolean, detail?: string) => void
 
@@ -248,6 +248,17 @@ export async function runFillRetryChecks(check: Check): Promise<void> {
         p.picked.map((x) => x.runId).join(',') === A
         && p.rejected.some((r) => r.code === 'CONTRACT') && p.rejected.some((r) => r.code === 'UNREADABLE')
         && p.staleCount === 1, JSON.stringify(p))
+      w(`auto-draft-${cur}.candidates.json`, {
+        qualityContractDigest: qualityContractDigest(),
+        candidates: [{ sourceSite: 'fixture', sourceArticleId: 'current-candidate' }],
+      })
+      w(runFileName(cur), { runId: cur, stages: st('failed') })
+      const postRun = planPostRunCarryOver({ dataDir: T, nowMs: NOW_MS })
+      check('[FR] 🔴 회차 후 inventory는 방금 만든 미적재 후보를 다음 회차 이월로 본다',
+        postRun.picked.some((x) => x.runId === cur && x.sources.some((s) => s.sourceArticleId === 'current-candidate')),
+        JSON.stringify(postRun.picked))
+      rmSync(join(T, `auto-draft-${cur}.candidates.json`))
+      rmSync(join(T, runFileName(cur)))
       // 그 회차를 이월로 끝낸 기록이 생기면 다음 회차는 다시 얹지 않는다
       w(runFileName(J), {
         runId: J, stages: st('ok'),

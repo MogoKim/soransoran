@@ -87,6 +87,20 @@ const MUTATIONS: Mutation[] = [
     checks: ['lease'],
   },
   {
+    name: 'follow-up 읽기 실패를 삼킨다 — 본체가 자연 회차처럼 진행한다',
+    edits: [{ file: F.kernel,
+      find: "  if (start.take === 'ERROR') {\n    o.log('🔴 follow-up 표식을 안전하게 읽거나 보존하지 못했다 — 본체 0 · provider 0 · DB 0')\n    return 1\n  }",
+      replace: "  if (false && start.take === 'ERROR') return 1" }],
+    checks: ['lease'],
+  },
+  {
+    name: '회차 뒤 follow-up 읽기 실패를 성공으로 삼킨다',
+    edits: [{ file: F.kernel,
+      find: "    if (next.take === 'ERROR') {\n      o.log('🔴 follow-up 표식을 안전하게 읽거나 보존하지 못했다 — 추가 회차를 열지 않고 실패로 끝낸다')\n      worst = Math.max(worst, 1)\n      break\n    }",
+      replace: "    if (next.take === 'ERROR') {\n      o.log('🔴 follow-up 표식을 안전하게 읽거나 보존하지 못했다 — 추가 회차를 열지 않는다')\n      break\n    }" }],
+    checks: ['lease'],
+  },
+  {
     name: '깨진 표식 추정 — JSON 이 아니면 event 로 읽는다',
     edits: [{ file: F.kernel, find: "  try { v = JSON.parse(raw) } catch { return { trigger: 'unknown', at: null } }",
       replace: "  try { v = JSON.parse(raw) } catch { return { trigger: 'event', at: null } }" }],

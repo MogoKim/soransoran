@@ -1,9 +1,11 @@
 /**
  * 🔴 **무인 운영 루프 launchd 템플릿 셋 — 문자열만 만든다. 등록 0 · 파일 write 0** (2026-09-28)
  *
- *   ① `com.soransoran.stage-controller` 하루 단계 결정(07:00 · 07:20 · 07:40 — 발행 창 08:00 전)
+ *   ① `com.soransoran.stage-controller` 하루 단계 결정(07:00 · 07:20 · 07:40 · 07:55 · 07:58 — 발행 창 08:00 전)
  *   ② `com.soransoran.runner-recover`   실패·누락 회차 복구(30분마다 · 기본 dry-run 아님 → `--apply` 로 등록)
  *   ③ `com.soransoran.keep-awake`       `caffeinate -i -s` 로 **유휴·AC 전원 잠자기**를 막는다
+ *   ④ `com.soransoran.ops-shadow-observer` 자연 공급 회차가 끝나면 shadow 계획을 한 번 관측해 감사 장부에 적는다
+ *      (60초마다 · 권위 0 · 공급 · controller · 발행 · 댓글을 부르지도 기다리지도 않는다 · 2026-11-11 Phase 2)
  *
  * 🔴 **③ 이 막지 못하는 것 — 정직하게 적는다.**
  *    · 노트북 **덮개를 닫으면** 외부 모니터·전원·입력장치가 없는 한 macOS 는 잔다(clamshell).
@@ -18,17 +20,29 @@ import { PUBLISH_RUNNER_LABEL, runnerPathValue, type RunnerPlistInput } from './
 import { PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
 import { COMMENT_RUNNER_LABEL } from './persona-comment-runner-template'
 import type { RecoveryPolicy } from '../../src/lib/runner-recovery'
+import { OBSERVER_INTERVAL_SEC } from '../../src/lib/ops-shadow-observer'
 
 export const STAGE_CONTROLLER_LABEL = 'com.soransoran.stage-controller'
 export const STAGE_CONTROLLER_SCRIPT = 'scripts/stage-controller.mts'
 /** 🔴 예약 실행은 `--apply` — 그래도 `STAGE_CONTROLLER_ENABLED=on` 이 아니면 쓰지 않는다 */
 export const STAGE_CONTROLLER_ARGS: readonly string[] = ['--apply']
+/** 07:55가 운영상 최종 판정 시각이고 07:58은 같은 결정을 다시 저장하는 fallback이다. */
+export const STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST = PUBLISH_WINDOW_START_MINUTE - 5
 
 export const RUNNER_RECOVER_LABEL = 'com.soransoran.runner-recover'
 export const RUNNER_RECOVER_SCRIPT = 'scripts/runner-recover.mts'
 export const RUNNER_RECOVER_ARGS: readonly string[] = ['--apply']
 /** 🔴 복구 점검 간격(초) — launchd `StartInterval`. 잠에서 깨면 놓친 한 번을 바로 돈다 */
 export const RUNNER_RECOVER_INTERVAL_SEC = 1800
+
+/**
+ * 🔴 **ops shadow observer** (2026-11-11 Phase 2) — 권위 0. 공급 job(`RUNTIME_JOBS`)이 아니다 —
+ *    배포 동안만 잠시 멈추고(`DEPLOY_QUIESCE_JOBS`) 이 설치기가 render · install · snapshot · rollback 을 소유한다.
+ *    인자가 없다 — 실행 명령(`--apply` 등)을 받지 않는 관측 전용 진입점이다.
+ */
+export const OPS_SHADOW_OBSERVER_LABEL = 'com.soransoran.ops-shadow-observer'
+export const OPS_SHADOW_OBSERVER_SCRIPT = 'scripts/ops-shadow-observer.mts'
+export const OPS_SHADOW_OBSERVER_ARGS: readonly string[] = []
 
 export const KEEP_AWAKE_LABEL = 'com.soransoran.keep-awake'
 export const CAFFEINATE_PATH = '/usr/bin/caffeinate'
@@ -37,13 +51,25 @@ export const CAFFEINATE_ARGS: readonly string[] = ['-i', '-s']
 
 /**
  * 🔴 **controller 는 발행 창보다 먼저 돈다** — 첫 발행 전에 그날 결정이 있어야 consumer 가
- *    safest 로 떨어지지 않는다. 세 번 깨우는 것은 **재시도**다(같은 날 결정은 하나 · 이미 있으면 읽기만).
+ *    safest 로 떨어지지 않는다. 다섯 번 깨우는 것은 **재시도**다(같은 날 결정은 하나 · 이미 있으면 읽기만).
+ *    07:58은 07:55의 일시 저장 장애만 받는 최종 fallback이다.
  */
 export function stageControllerSlots(): { hour: number; minute: number }[] {
-  return [60, 40, 20].map((before) => {
+  return [60, 40, 20, 5, 2].map((before) => {
     const m = PUBLISH_WINDOW_START_MINUTE - before
     return { hour: Math.floor(m / 60), minute: m % 60 }
   })
+}
+
+export type StageControllerLeaseDisposition = 'proceed' | 'defer' | 'safe-hold'
+
+/** 공급 lease가 마지막 예약까지 이어지면 부분 재고 대신 지속 단계 HOLD를 선택한다. */
+export function stageControllerLeaseDisposition(
+  lease: 'free' | 'busy' | 'unknown', now: Date,
+): StageControllerLeaseDisposition {
+  if (lease === 'free') return 'proceed'
+  const kstMinute = ((now.getUTCHours() + 9) % 24) * 60 + now.getUTCMinutes()
+  return kstMinute >= STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST ? 'safe-hold' : 'defer'
 }
 
 const header = `<?xml version="1.0" encoding="UTF-8"?>
@@ -109,6 +135,31 @@ ${tsxArgs(input, RUNNER_RECOVER_SCRIPT, RUNNER_RECOVER_ARGS)}
 }
 
 /**
+ * 🔴 **ops shadow observer** — `StartInterval` 60초 · `RunAtLoad` 없음. 디렉터리 감시(WatchPaths)를 쓰지 않는다 —
+ *    공급 회차 기록은 한 회차에 여러 번 원자 교체되므로 감시는 같은 회차로 여러 번 깨운다. 무엇을 볼지는 observer 가 정한다.
+ */
+export function renderOpsShadowObserverPlist(input: RunnerPlistInput): string {
+  return `${header}
+    <key>Label</key><string>${OPS_SHADOW_OBSERVER_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+${tsxArgs(input, OPS_SHADOW_OBSERVER_SCRIPT, OPS_SHADOW_OBSERVER_ARGS)}
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>${runnerPathValue(input.nodeBinDir)}</string>
+    </dict>
+    <key>WorkingDirectory</key><string>${input.runtimeRoot}</string>
+    <key>StartInterval</key><integer>${OBSERVER_INTERVAL_SEC}</integer>
+    <key>StandardOutPath</key><string>${input.logDir}/ops-shadow-observer.log</string>
+    <key>StandardErrorPath</key><string>${input.logDir}/ops-shadow-observer-error.log</string>
+    <key>RunAtLoad</key><false/>
+</dict>
+</plist>
+`
+}
+
+/**
  * 🔴 **keep-awake — node 도 저장소도 쓰지 않는다.** 시스템 `caffeinate` 하나다.
  *    `KeepAlive` 로 죽으면 launchd 가 다시 띄운다. `RunAtLoad` 로 로그인 즉시 잡는다.
  *    🔴 sudo · pmset 쓰기 없음. 끄는 법 = `launchctl bootout gui/<uid>/com.soransoran.keep-awake`.
@@ -158,9 +209,9 @@ export const RECOVERY_POLICY_OF: Readonly<Record<string, RecoveryPolicy>> = {
 
 /** 설치 절차 — 공식 설치기 한 명령으로 적용하고 같은 설치기로 되돌린다. */
 export const OPS_LOOP_INSTALL_STEPS: readonly string[] = [
-  '① runtime 을 이 PR 이 들어간 main SHA 로 배포한다 (npm run runtime:deploy — 기존 절차)',
-  '② 계획: npm run ops:loop-install',
-  '③ 적용: npm run ops:loop-install -- --apply',
+  '① runtime 을 이 PR 이 들어간 main SHA 로 배포한다 (npm run runtime:deploy — controller plist 는 아직 갱신되지 않는다)',
+  '② 필수 계획: npm run ops:loop-install (stage-controller 07:00·07:20·07:40·07:55·07:58 다섯 슬롯 대조)',
+  '③ 필수 적용: npm run ops:loop-install -- --apply (runtime deploy 만 하고 끝내지 않는다)',
   '④ 단계 ON: npm run stage:switch -- --on --apply 뒤 npm run stage:controller -- --apply',
   '⑤ 되돌리기: npm run stage:switch -- --off --apply 뒤 npm run ops:loop-install -- --rollback=<백업 경로>',
 ]

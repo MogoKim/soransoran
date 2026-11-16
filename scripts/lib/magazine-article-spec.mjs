@@ -11,7 +11,20 @@ import { isAutoLaneEligible, VALIDATION_PROFILES } from './magazine-validation-p
 import { RELATION_CONTRACT_LABEL, RELATION_POLICY, isValidDirectCount } from './magazine-relation-policy.mjs'
 
 export const ARTICLE_SPEC_SCHEMA = 'magazine-article-spec/1'
+/**
+ * 🔴 **spec/2 — 글별 주제 금지 패턴** (2026-10-28 · age-learning batch QA 차단).
+ *    spec/1 은 공통 고정 목록(bannedTerms · forbiddenAssertions)과 자연어 지침(topicConstraints)만 싣는다.
+ *    legacy 는 review.ts.forbiddenPatterns 가 글별 주제 위험을 맡았는데 DIRECT 에는 그 자리가 없어
+ *    자동 batch QA 가 매번 FORBIDDEN_PATTERNS_ABSENT 로 막혔다.
+ *    spec/2 는 사람이 승인한 비어 있지 않은 `safety.topicForbiddenPatterns` 를 싣는다.
+ *    spec/1 은 그대로 검증한다 — 운영 디스크의 옛 spec 을 바이트 그대로 읽고 supersedes 로 대체할 수 있어야 한다.
+ *    어느 판을 만들지는 호출자가 `topicForbiddenPatterns` 를 넘기는가로 **명시적으로** 정한다(source/3 → spec/2).
+ */
+export const ARTICLE_SPEC_SCHEMA_V2 = 'magazine-article-spec/2'
 export const ARTICLE_SPEC_MODE = 'DIRECT_SPEC_V1'
+/** 주제 금지 패턴 한 개의 글자 수 — 너무 짧으면 일상어를 막고, 너무 길면 문장(자연어 지침)이다 */
+export const TOPIC_PATTERN_LENGTH = Object.freeze({ min: 2, max: 40 })
+export const TOPIC_PATTERN_MAX_COUNT = 30
 
 const RELATION_SOURCES = new Set(['M-GRAPH', 'SERIES', 'HUB'])
 const IMAGE_MODES = new Set(['REQUIRED', 'OPTIONAL', 'NO_IMAGE'])
@@ -158,6 +171,34 @@ function heroOf(hero, queueItem) {
   return { mode, required: mode === 'REQUIRED', alt, scene }
 }
 
+/**
+ * 🔴 **글별 주제 금지 패턴** — 원고에 그대로 대조하는 literal 이다. 자연어 지침(topicConstraints)이 아니다.
+ *    비어 있지 않은 배열 · 한 줄 · 2~40자 · 중복 0.
+ *    공통 고정 목록(bannedTerms · forbiddenAssertions)을 다시 적은 것은 주제별 패턴이 아니다 — 거부한다.
+ *    topicConstraints 문장을 그대로 옮긴 것도 거부한다 — 지침 문장은 literal 금지어가 아니다.
+ */
+export function topicForbiddenPatternsOf(value, { topicConstraints = [] } = {}) {
+  if (!Array.isArray(value) || value.length === 0) fail('ARTICLE_SPEC_TOPIC_PATTERNS', 'topicForbiddenPatterns 는 비어 있지 않은 배열이어야 한다')
+  if (value.length > TOPIC_PATTERN_MAX_COUNT) fail('ARTICLE_SPEC_TOPIC_PATTERNS', `topicForbiddenPatterns 는 ${TOPIC_PATTERN_MAX_COUNT}개 이하여야 한다`)
+  const common = new Set([...BANNED_WORDS, ...MEDICAL_ASSERTIONS])
+  const constraints = new Set(strings(topicConstraints))
+  const out = []
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== 'string' || item !== item.trim() || /[\r\n]/.test(item)) {
+      fail('ARTICLE_SPEC_TOPIC_PATTERNS', `topicForbiddenPatterns[${index}] 는 앞뒤 공백 없는 한 줄 문자열이어야 한다`)
+    }
+    const length = [...item].length
+    if (length < TOPIC_PATTERN_LENGTH.min || length > TOPIC_PATTERN_LENGTH.max) {
+      fail('ARTICLE_SPEC_TOPIC_PATTERNS', `topicForbiddenPatterns[${index}] 는 ${TOPIC_PATTERN_LENGTH.min}~${TOPIC_PATTERN_LENGTH.max}자여야 한다`)
+    }
+    if (common.has(item)) fail('ARTICLE_SPEC_TOPIC_PATTERNS', `topicForbiddenPatterns[${index}] 는 공통 고정 목록이다 — 주제별 패턴이 아니다`)
+    if (constraints.has(item)) fail('ARTICLE_SPEC_TOPIC_PATTERNS', `topicForbiddenPatterns[${index}] 는 topicConstraints 문장이다 — 지침을 literal 로 쓰지 않는다`)
+    out.push(item)
+  }
+  if (new Set(out).size !== out.length) fail('ARTICLE_SPEC_TOPIC_PATTERNS', 'topicForbiddenPatterns 에 중복이 있다')
+  return out
+}
+
 function seriesOf(queueItem) {
   const id = text(queueItem?.seriesId)
   if (!id) return null
@@ -171,8 +212,9 @@ function seriesOf(queueItem) {
 /**
  * 승인된 graph node와 queue 행을 버전 고정 원고 계약으로 컴파일한다.
  * 입력이 같으면 canonical JSON과 specHash가 항상 같다.
+ * 🔴 `topicForbiddenPatterns` 를 넘기지 않으면 spec/1(바이트 그대로) · 넘기면 spec/2 다. 빈 배열은 spec/2 가 아니라 거부다.
  */
-export function compileArticleSpec({ node, queueItem, relations, publication, hero = null }) {
+export function compileArticleSpec({ node, queueItem, relations, publication, hero = null, topicForbiddenPatterns = undefined }) {
   if (!node || typeof node !== 'object' || Array.isArray(node)) fail('ARTICLE_SPEC_INPUT', 'node 가 객체가 아니다')
   if (!queueItem || typeof queueItem !== 'object' || Array.isArray(queueItem)) fail('ARTICLE_SPEC_INPUT', 'queueItem 이 객체가 아니다')
   if (node.status !== 'APPROVED') fail('ARTICLE_SPEC_NODE_NOT_APPROVED', `승인 노드가 아니다: ${String(node.status)}`)
@@ -196,8 +238,9 @@ export function compileArticleSpec({ node, queueItem, relations, publication, he
     fail('ARTICLE_SPEC_CTA', `CTA 는 ${CTA_HREF_PREFIX} 아래여야 한다`)
   }
 
+  const v2 = topicForbiddenPatterns !== undefined
   const spec = {
-    schemaVersion: ARTICLE_SPEC_SCHEMA,
+    schemaVersion: v2 ? ARTICLE_SPEC_SCHEMA_V2 : ARTICLE_SPEC_SCHEMA,
     mode: ARTICLE_SPEC_MODE,
     identity: {
       slug,
@@ -250,6 +293,9 @@ export function compileArticleSpec({ node, queueItem, relations, publication, he
     hero: heroOf(hero, queueItem),
     publication: publicationOf(publication, queueItem),
   }
+  if (v2) {
+    spec.safety.topicForbiddenPatterns = topicForbiddenPatternsOf(topicForbiddenPatterns, { topicConstraints: spec.safety.topicConstraints })
+  }
 
   return Object.freeze({ ...spec, specHash: articleSpecHash(spec) })
 }
@@ -258,16 +304,19 @@ export function verifyArticleSpec(spec) {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
     return { ok: false, code: 'ARTICLE_SPEC_INVALID', why: 'spec 이 객체가 아니다' }
   }
-  if (spec.schemaVersion !== ARTICLE_SPEC_SCHEMA || spec.mode !== ARTICLE_SPEC_MODE) {
+  const v2 = spec.schemaVersion === ARTICLE_SPEC_SCHEMA_V2
+  if ((spec.schemaVersion !== ARTICLE_SPEC_SCHEMA && !v2) || spec.mode !== ARTICLE_SPEC_MODE) {
     return { ok: false, code: 'ARTICLE_SPEC_VERSION', why: 'spec 판 또는 mode 가 다르다' }
   }
+  const SAFETY_KEYS = ['validationProfile', 'riskLevel', 'reviewMode', 'bannedTerms', 'forbiddenAssertions', 'topicConstraints']
   try {
     exactKeys(spec, ['audience', 'editorial', 'evidence', 'format', 'hero', 'identity', 'mode', 'navigation', 'publication', 'safety', 'schemaVersion', 'specHash'], 'spec')
     exactKeys(spec.identity, ['slug', 'title', 'graphVersion', 'graphNodeId', 'intentId', 'cluster', 'contentType', 'admissionManifestHash'], 'identity')
     exactKeys(spec.audience, ['target', 'readerQuestion', 'searchIntent'], 'audience')
     exactKeys(spec.editorial, ['whyNow', 'include', 'exclude', 'outline'], 'editorial')
     exactKeys(spec.evidence, ['factsToVerify', 'sourceRequirements'], 'evidence')
-    exactKeys(spec.safety, ['validationProfile', 'riskLevel', 'reviewMode', 'bannedTerms', 'forbiddenAssertions', 'topicConstraints'], 'safety')
+    // 🔴 판마다 safety 키가 정확히 정해져 있다 — spec/1 에 패턴이 끼거나 spec/2 에서 빠지면 거부다
+    exactKeys(spec.safety, v2 ? [...SAFETY_KEYS, 'topicForbiddenPatterns'] : SAFETY_KEYS, 'safety')
     exactKeys(spec.format, ['frontmatter', 'allowedNotations', 'forbiddenNotations', 'ctaCount', 'ctaMustBeLast', 'bodyLength'], 'format')
     exactKeys(spec.format?.bodyLength, ['hard', 'soft'], 'format.bodyLength')
     exactKeys(spec.navigation, ['direct', 'discovery', 'series', 'hub', 'community'], 'navigation')
@@ -302,6 +351,7 @@ export function verifyArticleSpec(spec) {
     required(spec.safety?.riskLevel, 'safety.riskLevel')
     required(spec.safety?.reviewMode, 'safety.reviewMode')
     uniqueNonEmpty(spec.safety?.topicConstraints, 'safety.topicConstraints')
+    if (v2) topicForbiddenPatternsOf(spec.safety.topicForbiddenPatterns, { topicConstraints: spec.safety.topicConstraints })
     sameCanonical(spec.safety?.bannedTerms, BANNED_WORDS, 'safety.bannedTerms')
     sameCanonical(spec.safety?.forbiddenAssertions, MEDICAL_ASSERTIONS, 'safety.forbiddenAssertions')
     sameCanonical(spec.format?.frontmatter, ['title', 'description', 'cluster', 'publishedAt'], 'format.frontmatter')

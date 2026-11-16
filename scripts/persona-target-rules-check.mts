@@ -102,16 +102,16 @@ console.log('\n══════ ⑤ 공개 글만 대상이다')
   expect('PUBLISHED → 통과', has(base(), 'POST_NOT_PUBLISHED'), false)
 }
 
-console.log('\n══════ ⑥ 한 글에 페르소나 댓글 1~5건 (2026-09-11 계약 교체)')
+console.log('\n══════ ⑥ 한 글에 Persona 댓글 1~10건 (2026-11-04 계약 교체)')
 {
-  expect('상한 상수', PERSONA_COMMENTS_PER_POST_MAX, 5)
-  // 🔴 경계값만 본다 — 4 는 자리가 남았고 5 는 찼다
-  const four = base()
-  four.post = { ...goodPost(), personaComments: PERSONA_COMMENTS_PER_POST_MAX - 1 }
-  expect('4건 → 통과(자리 1개 남음)', has(four, 'POST_PERSONA_COMMENTS_FULL'), false)
-  const five = base()
-  five.post = { ...goodPost(), personaComments: PERSONA_COMMENTS_PER_POST_MAX }
-  expect('5건 → POST_PERSONA_COMMENTS_FULL', has(five, 'POST_PERSONA_COMMENTS_FULL'), true)
+  expect('상한 상수', PERSONA_COMMENTS_PER_POST_MAX, 10)
+  // 🔴 경계값만 본다 — 9 는 자리가 남았고 10 은 찼다
+  const nine = base()
+  nine.post = { ...goodPost(), personaComments: PERSONA_COMMENTS_PER_POST_MAX - 1 }
+  expect('9건 → 통과(자리 1개 남음)', has(nine, 'POST_PERSONA_COMMENTS_FULL'), false)
+  const ten = base()
+  ten.post = { ...goodPost(), personaComments: PERSONA_COMMENTS_PER_POST_MAX }
+  expect('10건 → POST_PERSONA_COMMENTS_FULL', has(ten, 'POST_PERSONA_COMMENTS_FULL'), true)
   const one = base()
   one.post = { ...goodPost(), personaComments: 1 }
   expect('🔴 1건은 더 이상 막지 않는다(옛 계약 폐기)', has(one, 'POST_PERSONA_COMMENTS_FULL'), false)
@@ -162,7 +162,11 @@ console.log('\n══════ ⑨ 사유를 하나만 내고 멈추지 않�
   const input = base()
   input.candidate.status = 'DECLINED'
   input.candidate.publishedCommentId = 'cmt_x'
-  input.post = { status: 'HIDDEN', personaComments: 5, memberComments: 4 }
+  input.post = {
+    status: 'HIDDEN',
+    personaComments: PERSONA_COMMENTS_PER_POST_MAX,
+    memberComments: 4,
+  }
   const c = codes(input)
   expect(
     '5개 사유를 한 번에 보고',

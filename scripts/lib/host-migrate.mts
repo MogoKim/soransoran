@@ -53,6 +53,12 @@ export const D100_LANE_LABELS: readonly string[] = [
   'com.soransoran.stage-controller',
   'com.soransoran.runner-recover',
   'com.soransoran.keep-awake',
+  /**
+   * 🔴 ops shadow observer(2026-11-11 Phase 2 · 권위 0 · ops-loop 설치기 소유 · 선택 설치) — 설치돼 있을 때만 묶음에 실린다.
+   *    레인에 두는 이유: 원 호스트에 남으면 handoff 뒤에도 원 호스트 DB · 공급 기록을 계속 읽고, 대상은 잃는다.
+   *    quiesce 가 내리고 옮기며, 대상 설치는 다른 레인 job 과 같은 경로다. 공급 · controller 권위와 무관하다.
+   */
+  'com.soransoran.ops-shadow-observer',
 ]
 
 /**
@@ -195,6 +201,16 @@ const EXACT_RULES: Readonly<Record<string, EntryRule>> = {
    */
   [PUBLISH_RUN_DIR_NAME]: { kind: 'exclude', reason: '원 호스트 발행 회차 기록 — 대상은 첫 회차로 새로 쓴다(옮기면 안 돈 러너가 정상으로 읽힌다)' },
   'runner-recover': { kind: 'state', reason: '러너 복구 표식' },
+  /**
+   * 🔴 ops shadow 감사 장부(2026-11-11 · 권위 0) — 날짜별 append-only jsonl(정제된 관측 · 비밀 없음).
+   *    옮겨야 대상 observer 가 같은 회차를 다시 적지 않는다(seen). 잠금(`.lock` · `.observer.lock` · `.observer-cleanup.lock`)과
+   *    임시(`.observer.tmp-*`)는 호스트마다 새로 잡으므로 걷기에서 빠진다(isTransientFile). 그 밖의 것이 있으면 export 를 멈춘다.
+   */
+  'ops-shadow': {
+    kind: 'state',
+    reason: 'ops shadow 감사 장부(권위 0) — 옮겨야 대상 observer 가 같은 회차를 다시 적지 않는다',
+    contents: { allow: /^(?:\d{4}-\d{2}-\d{2}\.jsonl|\.lock|\.observer\.lock|\.observer-cleanup\.lock|\.observer\.tmp-[0-9a-f-]+)$/, what: 'ops shadow 날짜 jsonl · 잠금' },
+  },
   'auto-ready-audit': { kind: 'state', reason: '감사 러너 잠금 디렉터리(잠금 파일은 뺀다)' },
   'auto-ready-audit-ledger': { kind: 'state', reason: '감사 예산 장부' },
   'auto-ready-review': { kind: 'state', reason: '자동 READY 검토 묶음' },

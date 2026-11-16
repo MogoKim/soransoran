@@ -16,12 +16,16 @@ import { join } from 'node:path'
 
 import { judgeOrphanWake, judgeRecovery, parseHandledWake, type HandledWake } from '../src/lib/runner-recovery'
 import { FOLLOW_UP_FILE, followUpTriggerOf } from './lib/runner-lease.mjs'
-import { EVENT_WAKE_ENV, WAKE_TARGETS, eventWakeModeOf, wakeAllowed } from './lib/runner-wake.mjs'
+import {
+  EVENT_WAKE_ENV, KICKSTART_TIMEOUT_MS, LAUNCHCTL_PATH, WAKE_TARGETS,
+  eventWakeModeOf, wakeAllowed,
+} from './lib/runner-wake.mjs'
 import { readEnvKeys } from './lib/ops-signals.mjs'
 import { RECOVERABLE_LABELS, RECOVERY_POLICY_OF } from './lib/ops-loop-templates'
 import { observeJob, readProcessRuns } from './lib/runner-health.mjs'
 import { AGENT_DIR, slotsOfPlist } from './lib/launchd-observe.mjs'
 import { LOG_DIR, tailFile } from './lib/ops-signals.mjs'
+import { SUPPLY_PROCESS_LAUNCHD_LABEL } from '../src/lib/supply-scheduled-reserve'
 
 const APPLY = process.argv.slice(2).includes('--apply')
 const NOW = new Date()
@@ -54,12 +58,14 @@ function writeMark(label: string, reason: string): void {
 
 /**
  * 🔴 **고아 사건 깨움 표식** (2026-10-12 Batch C2) — 발행 뒤 깨움이 러너에 닿지 못하고 남은 follow-up 표식.
- *    대상은 사건 깨움이 있는 러너(지금은 댓글 러너 하나)뿐이다. 판정은 `judgeOrphanWake`(표식 하나에 최대 1회).
+ *    대상은 사건 깨움이 있는 댓글 러너다. 공급 사건 깨움은 자연 증명과 충돌할 수 있어 닫혀 있다.
  *    🔴 다시 깨운 표식의 시각을 **kickstart 전에** 따로 적는다(`<label>.wake.json`) — kickstart 가 실패해도 같은 표식으로 반복하지 않는다.
  *       슬롯 복구 표식(`<label>.json`)과 섞지 않는다 — 섞으면 고아 깨움 하나가 그 슬롯 창의 누락 복구를 막는다.
  */
-const WAKE_DIR_OF: Readonly<Record<string, string>> = { [WAKE_TARGETS.comment.label]: WAKE_TARGETS.comment.lockDir() }
-const WAKE_ENABLED = wakeAllowed(eventWakeModeOf(readEnvKeys([EVENT_WAKE_ENV]).values).mode, 'comment')
+const WAKE_TARGET_OF_LABEL = new Map(Object.entries(WAKE_TARGETS).map(([target, value]) => [value.label, {
+  target: target as keyof typeof WAKE_TARGETS, dir: value.lockDir(),
+}]))
+const WAKE_MODE = eventWakeModeOf(readEnvKeys([EVENT_WAKE_ENV]).values).mode
 
 function readWakeMarker(dir: string): { trigger: string | null; at: string | null } | null {
   const p = join(dir, FOLLOW_UP_FILE)
@@ -94,16 +100,20 @@ for (const label of RECOVERABLE_LABELS) {
     lastRecoveryAt: readMark(label), now: NOW, policy: RECOVERY_POLICY_OF[label] ?? 'stale',
   })
   console.log(`   ${v.action === 'kickstart' ? '🔁' : '·'} ${label.padEnd(40)} ${v.reason}`)
+  const supplyRecoveryClosed = label === SUPPLY_PROCESS_LAUNCHD_LABEL && v.action === 'kickstart'
+  if (supplyRecoveryClosed) console.log('   · 공급 비예약 복구는 닫힘 — 자연 증명과 충돌하지 않게 다음 정기 회차가 받는다')
   // 🔴 고아 사건 표식 — 이번 틱에 슬롯 복구로 이미 깨우는 job 은 건드리지 않는다(한 틱에 kickstart 하나)
-  const wakeDir = WAKE_DIR_OF[label]
-  if (v.action !== 'kickstart' && wakeDir !== undefined) {
-    const marker = readWakeMarker(wakeDir)
-    const ow = judgeOrphanWake({ enabled: WAKE_ENABLED, state: o.state, running: o.run.running, marker, handled: readHandledWake(label), now: NOW })
+  const wakeTarget = WAKE_TARGET_OF_LABEL.get(label)
+  if (v.action !== 'kickstart' && wakeTarget !== undefined) {
+    const marker = readWakeMarker(wakeTarget.dir)
+    const ow = judgeOrphanWake({ enabled: wakeAllowed(WAKE_MODE, wakeTarget.target), state: o.state, running: o.run.running, marker, handled: readHandledWake(label), now: NOW })
     console.log(`   ${ow.action === 'kickstart' ? '🔔' : '·'} ${`${label} (사건 깨움)`.padEnd(40)} ${ow.reason}`)
     if (ow.action === 'kickstart' && APPLY && marker?.at != null) {
       try {
         writeHandledWake(label, marker.at)
-        execFileSync('launchctl', ['kickstart', `gui/${process.getuid?.() ?? 0}/${label}`], { stdio: 'ignore' })
+        execFileSync(LAUNCHCTL_PATH, ['kickstart', `gui/${process.getuid?.() ?? 0}/${label}`], {
+          stdio: 'ignore', timeout: KICKSTART_TIMEOUT_MS,
+        })
         console.log('      → kickstart 보냈다(이 표식으로는 다시 깨우지 않는다)')
       } catch (e) {
         failed += 1
@@ -111,11 +121,13 @@ for (const label of RECOVERABLE_LABELS) {
       }
     }
   }
-  if (v.action !== 'kickstart' || !APPLY) continue
+  if (supplyRecoveryClosed || v.action !== 'kickstart' || !APPLY) continue
   try {
     // 🔴 표식을 **먼저** 남긴다 — kickstart 뒤에 죽어도 다음 회차가 같은 창에서 반복하지 않는다
     writeMark(label, v.reason)
-    execFileSync('launchctl', ['kickstart', `gui/${process.getuid?.() ?? 0}/${label}`], { stdio: 'ignore' })
+    execFileSync(LAUNCHCTL_PATH, ['kickstart', `gui/${process.getuid?.() ?? 0}/${label}`], {
+      stdio: 'ignore', timeout: KICKSTART_TIMEOUT_MS,
+    })
     console.log('      → kickstart 보냈다')
   } catch (e) {
     failed += 1

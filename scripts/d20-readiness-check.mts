@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 
 import { deriveFollowupProfile, type FollowupMeasure } from '../src/lib/followup-profile-derive'
 import {
-  FOLLOWUP_EXTRA_PER_POST_MAX, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
+  FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
 } from '../src/lib/persona-comment-followup'
 import { COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import { profileOf } from '../src/lib/scale-profile'
@@ -72,8 +72,8 @@ console.log('\n② 식 — 실측에서만 나온다')
   const d = derive(measure())
   check('정상 실측 → CANDIDATE', d.verdict === 'CANDIDATE' && d.candidate !== null, `${d.verdict} ${d.codes.join(',')}`)
   const c = d.candidate!
-  check('하루 건수 = D20 목표 × 글당 추가 상한', c.dailyCount === D20_POSTS * FOLLOWUP_EXTRA_PER_POST_MAX && c.dailyCount === 80, String(c.dailyCount))
-  check('D10 profile 도 같은 규칙(10 × 4 = 40)', D10_PROFILE.dailyCount === profileOf('d10').dailyTarget * FOLLOWUP_EXTRA_PER_POST_MAX)
+  check('하루 건수 = D20 목표 × 운영 예산 기준 4(구조 상한 9와 분리)', c.dailyCount === D20_POSTS * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST && c.dailyCount === 80, String(c.dailyCount))
+  check('D10 profile 도 같은 운영 예산 기준(10 × 4 = 40)', D10_PROFILE.dailyCount === profileOf('d10').dailyTarget * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST)
   check('🔴 하루 USD = 하루 건수 × (정산 USD / 실제 발행 추가 댓글) — 버린 요청 비용 포함', c.dailyUsd === 0.24, String(c.dailyUsd))
   check('🔴 단가가 바뀌면 하루 USD 도 그만큼 — 상수가 아니다',
     derive(measure({ followup: { settled: 12, settledUsd: 0.06, open: 0 } }), { cap: 1 }).candidate?.dailyUsd === 0.48)
@@ -118,6 +118,12 @@ console.log('\n④ 도구가 쓰지 않는다')
   const cli = readFileSync('scripts/d20-readiness.mts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   check('🔴 CLI 에 DB 쓰기 호출이 없다', !/\.(create|update|upsert|delete)[A-Za-z]*\(|\$executeRaw/.test(cli))
   check('🔴 --apply · --write 를 거부한다', /'--apply' \|\| a === '--write'/.test(cli))
+  check('🔴 다음날 리허설은 --next-day 전용 경로다', /NEXT_DAY = argv\.includes\('--next-day'\)/.test(cli)
+    && /NEXT_DAY \? nextCalendarDate\(TODAY\) : TODAY/.test(cli))
+  check('🔴 --next-day 와 --date 동시 입력은 실패한다', /NEXT_DAY && EXPLICIT_DATE !== null\) fail/.test(cli))
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts?: Record<string, string> }
+  check('🔴 사람이 날짜를 생략하지 않도록 next-day 명령이 고정돼 있다',
+    pkg.scripts?.['d20:readiness:next-day'] === 'tsx scripts/d20-readiness.mts --next-day')
   check('🔴 후보 파일은 새 경로에만(덮어쓰기 0 · 0600)', /flag: 'wx'/.test(cli) && /mode: 0o600/.test(cli))
   check('🔴 preflight 는 controller 와 같은 판정 함수', /judgeNextPreflight\(TARGET, r\.facts, RUNNER_GRID\)/.test(cli) && /readPreflightFacts\(prisma/.test(cli))
   check('🔴 첫 댓글 분모는 정본 증거 firstCommentOk 에서만 온다', /acceptedFirstComments: typeof evidence\.counts\?\.firstCommentOk === 'number'/.test(cli))

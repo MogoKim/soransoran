@@ -18,7 +18,10 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { ledgerDateOf } from '../src/lib/llm-ledger'
+import { PRICING_VERSION } from '../src/lib/llm-pricing'
+import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import { readCostSignals } from './lib/ops-signals.mjs'
+import { settleHoldPathOf, writeSettleHold } from './lib/llm-ledger-store.mjs'
 
 import {
   parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing, collectCapabilityFailing,
@@ -36,17 +39,26 @@ import { PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { judgeRecovery, latestSlotAtOrBefore, RECOVERY_SLOT_GRACE_MS } from '../src/lib/runner-recovery'
 import { staleAfterFromSlots } from '../src/lib/supply-health'
 import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS } from './lib/persona-comment-runner-template'
-import { publishFailing, supplyFailing, type JobObservation } from './lib/runner-health.mjs'
+import {
+  proofDaySupplyHealth, publishFailing, readProcessRuns, supplyFailing,
+  type JobObservation, type ProcessRunRead, type ProcessRunLite,
+} from './lib/runner-health.mjs'
+import { createProcessRunRecord, writeProcessRunRecord } from './lib/process-run-record.mjs'
+import type { ProcessRun } from '../src/lib/supply-process'
+import { buildRunToken, judgeRunTokenShadow, shadowTagOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from './lib/publish-run-record.mjs'
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS, KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL,
+  stageControllerLeaseDisposition,
+  OPS_LOOP_INSTALL_STEPS, RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS,
+  KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OPS_SHADOW_OBSERVER_LABEL,
 } from './lib/ops-loop-templates'
-import { applyInstall, desiredPlists, runningBlockers } from './lib/ops-loop-install-core.mjs'
+import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
+import { applyInstall, desiredPlists, observerIntentOf, observerWanted, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
 import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
-import { RUNTIME_JOBS } from '../src/lib/runtime-isolation'
+import { OPS_LOOP_TEMPLATE_DEFER_LABELS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 import { programArguments, render, valueOf } from './lib/launchd-install.mjs'
 import {
   renderPublishHeartbeatPlist, renderPublishRunnerPlist, STAGE_CONSUMER_SCRIPT, PUBLISH_RUNNER_LABEL,
@@ -98,12 +110,167 @@ console.log('\n① readiness 오판 — 근본 원인 반례')
     const run = parseLaunchdRunInfo(print)
     return { label: 'x', installed: true, state: 'loaded', stateReason: '', run, launchdFailing: failingFromLaunchd(run) }
   }
-  const done = [{ runId: 'a', startedAt: '2026-09-28T08:00:00Z', status: 'done', completedAt: null, runtimeSha: null, failedStages: [] }]
+  const done = [{ runId: 'a', startedAt: '2026-09-28T08:00:00Z', status: 'done', completedAt: null, runtimeSha: null, runTokenShadow: null, failedStages: [] }]
   const failed = [{ ...done[0]!, status: 'failed' }]
   check('🔴 공급: 다시 load 뒤 아직 안 돈 job(never exited) 은 **마지막 실제 회차 기록**으로 판정한다',
     supplyFailing(obs(PRINT_NEVER), done) === false && supplyFailing(obs(PRINT_NEVER), failed) === true)
   check('공급: launchd exit 1 이면 기록이 done 이어도 실패', supplyFailing(obs(PRINT_FAIL), done) === true)
   check('공급: launchctl 을 못 읽었으면 기록이 있어도 모른다', supplyFailing(obs(null), done) === null)
+
+  const shadow = (
+    trigger: 'scheduled' | 'event' | 'recovery' | 'manual' | 'unknown' = 'scheduled',
+    launchTrigger: 'scheduled' | 'event' | 'recovery' | 'manual' | 'unknown' = trigger,
+    absorbedTrigger: 'scheduled' | 'event' | 'recovery' | 'manual' | 'unknown' | null = null,
+    pass = 0,
+    absorbedAt: string | null = absorbedTrigger === null ? null : '2026-10-30T08:15:00.000Z',
+  ): NonNullable<ProcessRunLite['runTokenShadow']> => {
+    const issuedAt = new Date('2026-10-30T09:00:00.000Z')
+    const lock = { dev: 17, ino: 29 }
+    const token = buildRunToken({
+      tokenId: `fixture-${trigger}-${pass}`, trigger, launchTrigger, absorbedTrigger, absorbedAt,
+      issuedAt, lock, runId: `fixture-${pass}`, pass,
+    })
+    const judged = judgeRunTokenShadow({
+      lease: { kind: 'proven', identity: lock }, envTokenId: token.tokenId,
+      file: { kind: 'raw', raw: JSON.stringify(token) }, now: new Date(issuedAt.getTime() + 1_000),
+    })
+    if (!judged.ok) throw new Error(`fixture token failed: ${judged.code}`)
+    return shadowTagOf(judged)
+  }
+  const processRun = (
+    startedAt: string, status: string, completedAt: string | null,
+    runTokenShadow: ProcessRunLite['runTokenShadow'] = shadow(), runtimeSha: string | null = 'fixture',
+  ): ProcessRunLite => ({
+    runId: `${startedAt}-${status}`, startedAt, status, completedAt, runtimeSha, runTokenShadow, failedStages: [],
+  })
+  const processRead = (
+    runs: ProcessRunLite[], unreadableFiles: string[] = [],
+  ): ProcessRunRead => ({ runs, unreadable: unreadableFiles.length, unreadableFiles })
+  const proofDone = [
+    ['2026-10-29T21:16:00.000Z', '2026-10-29T21:30:00.000Z'], // 10/30 06:16 KST(슬롯 창 안)
+    ['2026-10-29T23:15:00.000Z', '2026-10-29T23:30:00.000Z'], // 10/30 08:15 KST
+    ['2026-10-30T03:15:00.000Z', '2026-10-30T03:30:00.000Z'], // 10/30 12:15 KST
+    ['2026-10-30T05:15:00.000Z', '2026-10-30T05:30:00.000Z'], // 10/30 14:15 KST
+    ['2026-10-30T08:15:00.000Z', '2026-10-30T08:30:00.000Z'], // 10/30 17:15 KST
+  ].map(([startedAt, completedAt]) => processRun(startedAt!, 'done', completedAt!))
+  const proofFailed = processRun('2026-10-29T23:15:00.000Z', 'failed', '2026-10-29T23:20:00.000Z') // 10/30 08:15 KST
+  const lateFailed = processRun('2026-10-30T12:15:00.000Z', 'failed', '2026-10-30T12:20:00.000Z') // 10/30 21:15 KST
+  check('🔴 과거 proof day는 자연 공급 5개 슬롯이 허용 창 안에 모두 완료되고 runtime SHA가 같아야 정상이다',
+    proofDaySupplyHealth(processRead(proofDone), '2026-10-30') === 'ok')
+  check('🔴 과거 proof day 자연 공급 슬롯이 하나라도 없으면 정상으로 지어내지 않는다',
+    proofDaySupplyHealth(processRead(proofDone.slice(0, -1)), '2026-10-30') === 'unknown')
+  check('🔴 과거 proof day 자연 공급 슬롯 실패는 bad다',
+    proofDaySupplyHealth(processRead([...proofDone, proofFailed]), '2026-10-30') === 'bad')
+  check('🔴 21:15·22:15 준비 회차 실패는 과거 proof day를 오염시키지 않는다',
+    proofDaySupplyHealth(processRead([...proofDone, lateFailed]), '2026-10-30') === 'ok')
+  check('🔴 준비 회차만 있고 자연 증명 슬롯이 없으면 성공을 지어내지 않는다',
+    proofDaySupplyHealth(processRead([lateFailed]), '2026-10-30') === 'unknown')
+  check('🔴 수동·사건 회차는 빈 자연 증명 슬롯을 채우지 못한다', (() => {
+    const manual = processRun('2026-10-30T08:15:00.000Z', 'done', '2026-10-30T08:30:00.000Z', shadow('manual'))
+    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), manual]), '2026-10-30') === 'unknown'
+  })())
+  check('🔴 슬롯 창 안 event kickstart가 최종 scheduled로 보여도 자연 회차를 대신하지 못한다', (() => {
+    const eventKickstart = processRun(
+      '2026-10-30T08:20:00.000Z', 'done', '2026-10-30T08:30:00.000Z',
+      shadow('scheduled', 'scheduled', 'event'),
+    )
+    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), eventKickstart]), '2026-10-30') === 'unknown'
+  })())
+  check('🔴 슬롯 창 안 recovery kickstart도 최종 scheduled로 보여도 자연 회차를 대신하지 못한다', (() => {
+    const recoveryKickstart = processRun(
+      '2026-10-30T08:25:00.000Z', 'done', '2026-10-30T08:35:00.000Z',
+      shadow('scheduled', 'scheduled', 'recovery'),
+    )
+    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), recoveryKickstart]), '2026-10-30') === 'unknown'
+  })())
+  check('🔴 겹친 scheduled 요청은 follow-up의 실제 시작이 늦어도 marker 원시각의 자연 슬롯을 채운다', (() => {
+    const followUp = processRun(
+      '2026-10-30T09:05:00.000Z', 'done', '2026-10-30T09:20:00.000Z',
+      shadow('scheduled', 'scheduled', 'scheduled', 1, '2026-10-30T08:15:00.000Z'),
+    )
+    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), followUp]), '2026-10-30') === 'ok'
+  })())
+  check('🔴 follow-up의 event·recovery·manual·미래 marker는 자연 슬롯을 채우지 못한다', (() => {
+    const base = proofDone.slice(0, -1)
+    const run = (tag: NonNullable<ProcessRunLite['runTokenShadow']>) => processRun(
+      '2026-10-30T09:05:00.000Z', 'done', '2026-10-30T09:20:00.000Z', tag,
+    )
+    return ['event', 'recovery', 'manual'].every((trigger) => proofDaySupplyHealth(processRead([
+      ...base, run(shadow('scheduled', 'scheduled', trigger as 'event' | 'recovery' | 'manual', 1, '2026-10-30T08:15:00.000Z')),
+    ]), '2026-10-30') === 'unknown')
+      && proofDaySupplyHealth(processRead([
+        ...base, run(shadow('scheduled', 'scheduled', 'scheduled', 1, '2026-10-30T10:00:00.000Z')),
+      ]), '2026-10-30') === 'unknown'
+  })())
+  check('🔴 자연 증명 5회에 서로 다른 runtime SHA가 섞이면 bad',
+    proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runtimeSha: 'other' } : run)), '2026-10-30') === 'bad')
+  check('🔴 자연 증명 runtime SHA·완료 시각·trigger를 모르거나 값이 비면 PASS를 지어내지 않는다',
+    proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runtimeSha: null } : run)), '2026-10-30') === 'unknown'
+    && proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runtimeSha: '  ' } : run)), '2026-10-30') === 'unknown'
+    && proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, completedAt: 'not-a-date' } : run)), '2026-10-30') === 'unknown'
+    && proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runTokenShadow: null } : run)), '2026-10-30') === 'unknown')
+  check('🔴 깨진 자연 증명 슬롯 파일은 unknown · 깨진 준비 회차 파일은 무관하다',
+    proofDaySupplyHealth(processRead(proofDone, ['supply-process-20261029-211500.run.json']), '2026-10-30') === 'unknown'
+    && proofDaySupplyHealth(processRead(proofDone, ['supply-process-20261030-121500.run.json']), '2026-10-30') === 'ok')
+
+  /**
+   * 🔴 실제 장부 모양을 파일에 적고 다시 읽는 최소 종단 관통.
+   *    메모리에서 태그를 직접 만들면 공급 러너의 ProcessRun JSON 저장 계약과
+   *    관제 판독기 사이가 엇갈려도 검사가 통과한다. 신 태그는 PASS, 예전 trigger-only 태그는 UNKNOWN이다.
+   */
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'proof-process-run-'))
+    try {
+      for (const [index, run] of proofDone.entries()) {
+        const record = createProcessRunRecord({
+          runId: `proof-${index}`,
+          runtimeSha: run.runtimeSha!,
+          startedAt: run.startedAt,
+          jit: { slots: 0, readyFilled: 0, upTo: 0, reason: 'fixture' },
+          runTokenShadow: run.runTokenShadow as ProcessRun['runTokenShadow'],
+        })
+        record.status = 'done'
+        record.completedAt = run.completedAt
+        writeProcessRunRecord(join(dir, `supply-process-proof-${index}.run.json`), record)
+      }
+      const persisted = readProcessRuns(dir)
+      check('🔴 ProcessRun JSON 저장 → 재판독 → proof-day 사슬이 신 기원 태그 5회를 그대로 증명한다',
+        persisted.unreadable === 0 && persisted.runs.length === 5
+        && proofDaySupplyHealth(persisted, '2026-10-30') === 'ok')
+
+      const legacy = JSON.parse(readFileSync(join(dir, 'supply-process-proof-2.run.json'), 'utf-8')) as Record<string, unknown>
+      legacy.runTokenShadow = {
+        ok: true, code: null, tokenId: 'legacy-token', trigger: 'scheduled', budgetWindow: '2026-10-30 12:15',
+      }
+      writeFileSync(join(dir, 'supply-process-proof-2.run.json'), `${JSON.stringify(legacy, null, 2)}\n`)
+      const mixed = readProcessRuns(dir)
+      check('🔴 구·신 태그가 섞인 저장 장부를 자연 5회 PASS로 지어내지 않는다',
+        mixed.runs.some((run) => run.runTokenShadow === null)
+        && proofDaySupplyHealth(mixed, '2026-10-30') === 'unknown')
+
+      // 🔴 같은 슬롯(08:15 KST)에 파싱은 되지만 startedAt 이 없거나 날짜가 아닌 기록 — 사라지지 않고 unknown
+      const sameSlotFile = join(dir, 'supply-process-20261029-231500.run.json')
+      const goodShape = JSON.parse(readFileSync(join(dir, 'supply-process-proof-1.run.json'), 'utf-8')) as Record<string, unknown>
+      const healthWith = (startedAt: unknown): { health: string; unreadable: number } => {
+        const record: Record<string, unknown> = { ...goodShape }
+        if (startedAt === undefined) delete record.startedAt; else record.startedAt = startedAt
+        writeFileSync(sameSlotFile, `${JSON.stringify(record)}\n`)
+        const read = readProcessRuns(dir)
+        return { health: proofDaySupplyHealth(read, '2026-10-30'), unreadable: read.unreadable }
+      }
+      // 같은 장부에서 정상 기록으로는 ok 임을 먼저 고정한다(위 mixed 의 구 태그 파일은 되돌린다)
+      writeFileSync(join(dir, 'supply-process-proof-2.run.json'), `${JSON.stringify({ ...legacy, runTokenShadow: proofDone[2]!.runTokenShadow })}\n`)
+      check('🔴 startedAt 반례의 기준선 — 복원한 정상 장부는 ok', proofDaySupplyHealth(readProcessRuns(dir), '2026-10-30') === 'ok')
+      const missing = healthWith(undefined)
+      const invalid = healthWith('not-a-date')
+      const numeric = healthWith(12345)
+      rmSync(sameSlotFile)
+      check('🔴 같은 슬롯의 파싱 가능 JSON 이 startedAt 없음·날짜 아님이면 읽지 못한 파일로 세어 ok 가 되지 않는다',
+        missing.health === 'unknown' && invalid.health === 'unknown' && numeric.health === 'unknown'
+        && missing.unreadable === 1 && invalid.unreadable === 1 && numeric.unreadable === 1,
+        JSON.stringify({ missing, invalid, numeric }))
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
 
   // 🔴 앞판의 실제 결함: 관측값이 있어도 `failing: null` 상수가 넘어가 healthUnknown → canRun false
   const before = runnerFactsOf({ installed: true, loaded: true, enabled: true, failing: null })
@@ -167,6 +334,171 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       c.commentLedger.health === 'bad' && c.commentLedger.codes.includes('DAILY_EXHAUSTED') && c.commentLedger.spentUsd === 0.25)
     check('🔴 댓글 상한은 댓글 계약값 $0.20 이다 (env 미설정 → 기본값)', c.commentLedger.capUsd === 0.2)
     check('댓글 지출이 공급 축을 오염시키지 않는다', c.supplyLedger.spentUsd === 0 && c.supplyLedger.health !== 'bad')
+    rmSync(root, { recursive: true, force: true })
+  }
+
+  /**
+   * 2026-11-03 운영 모양의 파일 왕복: 낮 proof 요청은 당시 장부 예산으로 판정하고,
+   * 21:15 다음 날 준비 미상은 whole-day 비용에는 남되 같은 날 proof 표본에는 섞지 않는다.
+   */
+  {
+    const root = mkdtempSync(join(tmpdir(), 'ops-proof-cost-'))
+    const dirs = { supply: join(root, 's'), audit: join(root, 'a'), comment: join(root, 'c') }
+    for (const d of Object.values(dirs)) mkdirSync(d)
+    const now = new Date('2026-11-05T13:30:00Z') // 22:30 KST
+    const date = ledgerDateOf(now)
+    const entry = (i: number, late = false) => {
+      const slot = `${date} ${late ? '21:15' : '14:15'}`
+      const launchAt = `${date}T${late ? '21:15:03' : '14:15:02'}+09:00`
+      return {
+        runId: `${supplyRunIdOf(new Date(launchAt))}-d`, stage: 'draftGen',
+        attemptId: late ? 'late-u' : `settled-${i}`, requestNo: i, provider: 'google',
+        apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash',
+        status: late ? 'usageUnknown' : 'settled', blockCode: null,
+        countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006,
+        inputTokens: late ? null : 100, outputTokens: late ? null : 200,
+        cacheWriteTokens: late ? null : 0, cacheReadTokens: late ? null : 0, usageKeys: [],
+        settledUsd: late ? null : 0.004, pricingVersion: PRICING_VERSION,
+        startedAt: late ? `${date}T21:16:00+09:00` : `${date}T14:15:30+09:00`,
+        endedAt: late ? `${date}T21:16:25+09:00` : `${date}T14:16:00+09:00`,
+        errorCode: late ? 'TIMEOUT' : null, runKind: 'scheduled',
+        runSlot: slot, budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2,
+        budgetSource: 'process-override',
+        sourceKey: late ? 'src-late' : `src-${i}`, supplyContract: SUPPLY_JIT_CONTRACT,
+        runTokenShadow: {
+          ok: true, code: null, tokenId: `token-${i}-${late}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+          absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+        },
+      }
+    }
+    const rows = [...Array.from({ length: 20 }, (_, i) => entry(i)), entry(20, true)]
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    // 현재 env를 일부러 당시 장부값과 다르게 둬도 과거 proof 예산은 장부의 1.20이어야 한다.
+    const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.50', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30' }
+    const c = readCostSignals(now, env, dirs)
+    check('🟢 proof 비용 파일 왕복 — 낮 정산 20건·늦은 미상 0건·당시 예산 $1.20',
+      c.supplyCostEvidence?.envelope.settledRequests === 20
+      && c.supplyCostEvidence.envelope.usageUnknownRequests === 0
+      && c.supplyCostEvidence.envelope.ineligibleRequests === 0
+      && c.supplyCostEvidence.envelope.budgetUsd === 1.2,
+      JSON.stringify(c.supplyCostEvidence))
+    check('🟢 늦은 미상은 proof 밖이어도 whole-day 장부의 열린 예약·legacy 증거에는 남는다',
+      c.supplyLedger.spentUsd !== null && Math.abs(c.supplyLedger.spentUsd - 0.086) < 1e-9
+      && c.supplyCostEvidence?.legacyUsageUnknownRequests === 1,
+      `${JSON.stringify(c.supplyLedger)} ${JSON.stringify(c.supplyCostEvidence)}`)
+    check('🟢 whole-day와 proof 예산은 현재 env $0.50으로 소급 변경되지 않는다',
+      c.supplyLedger.capUsd === 1.2 && c.supplyCostEvidence?.envelope.budgetUsd === 1.2)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), '{깨진 공급 장부\n')
+    const corrupt = readCostSignals(now, env, dirs)
+    check('🔴 시행일 이후 공급 장부를 못 읽으면 비용 UNKNOWN으로 약화하지 않고 whole-day hard bad를 보존한다',
+      corrupt.supplyLedger.health === 'bad'
+      && corrupt.supplyLedger.codes.includes('LEDGER_ERROR')
+      && corrupt.supplyCostEvidence?.wholeDayCriticalHealth === 'bad'
+      && corrupt.supplyCostEvidence.envelope.riskUsd === null,
+      `${JSON.stringify(corrupt.supplyLedger)} ${JSON.stringify(corrupt.supplyCostEvidence)}`)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const mixedCapRows = rows.map((row, i) => i === 0
+      ? { ...row, budgetDailyUsd: 0.5, budgetCapUsd: 0.5 }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${mixedCapRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const mixedCap = readCostSignals(now, env, dirs)
+    check('🟢 하루 중 승인 cap이 달라도 유효한 기록의 가장 큰 cap $1.20으로 whole-day와 proof를 판정한다',
+      mixedCap.supplyLedger.health === 'ok' && mixedCap.supplyLedger.capUsd === 1.2
+      && mixedCap.supplyCostEvidence?.envelope.budgetUsd === 1.2
+      && mixedCap.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(mixedCap.supplyLedger)} ${JSON.stringify(mixedCap.supplyCostEvidence)}`)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const contractlessLateRows = rows.map((row) => row.attemptId === 'late-u'
+      ? { ...row, supplyContract: undefined }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${contractlessLateRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const contractlessLate = readCostSignals(now, env, dirs)
+    check('🟢 늦은 다음날 준비 행의 계약 표식은 하루 예산을 무효화하지 않는다',
+      contractlessLate.supplyLedger.health === 'ok' && contractlessLate.supplyLedger.capUsd === 1.2
+      && contractlessLate.supplyCostEvidence?.envelope.settledRequests === 20
+      && contractlessLate.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(contractlessLate.supplyLedger)} ${JSON.stringify(contractlessLate.supplyCostEvidence)}`)
+    const unbudgetedLateRows = rows.map((row) => row.attemptId === 'late-u'
+      ? { ...row, budgetSource: undefined }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${unbudgetedLateRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const unbudgetedLate = readCostSignals(now, env, dirs)
+    check('🔴 늦은 준비 행도 whole-day 예산 provenance가 깨지면 당일 proof를 UNKNOWN으로 닫는다',
+      unbudgetedLate.supplyLedger.health === 'unknown'
+      && unbudgetedLate.supplyLedger.capUsd === null
+      && unbudgetedLate.supplyCostEvidence?.wholeDayCriticalHealth === 'unknown'
+      && unbudgetedLate.supplyCostEvidence.envelope.settledRequests === 20
+      && unbudgetedLate.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(unbudgetedLate.supplyLedger)} ${JSON.stringify(unbudgetedLate.supplyCostEvidence)}`)
+    const overBudgetLateRows = rows.map((row) => row.attemptId === 'late-u'
+      ? { ...row, reservedUsd: 1.15 }
+      : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${overBudgetLateRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const overBudgetLate = readCostSignals(now, env, dirs)
+    check('🔴 늦은 준비 미상도 whole-day 총위험이 기록 예산을 넘으면 당일 proof를 hard FAIL로 닫는다',
+      overBudgetLate.supplyLedger.health === 'bad'
+      && overBudgetLate.supplyCostEvidence?.wholeDayCriticalHealth === 'bad'
+      && overBudgetLate.supplyCostEvidence.envelope.settledRequests === 20
+      && overBudgetLate.supplyCostEvidence.envelope.ineligibleRequests === 0,
+      `${JSON.stringify(overBudgetLate.supplyLedger)} ${JSON.stringify(overBudgetLate.supplyCostEvidence)}`)
+    const manualRow = {
+      ...entry(30), runId: 'manual-cost-row', attemptId: 'manual-cost-row', requestNo: 30,
+      runKind: 'manual', runSlot: null, supplyContract: undefined, settledUsd: 0.004,
+    }
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${[...rows, manualRow].map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const withManual = readCostSignals(now, env, dirs)
+    check('⬚ 증명 시간대 수동 행은 하루 실지출에는 남고 자연 proof는 ineligible로 닫는다',
+      withManual.supplyLedger.health === 'ok'
+      && withManual.supplyCostEvidence?.envelope.settledRequests === 20
+      && withManual.supplyCostEvidence.envelope.ineligibleRequests === 1,
+      `${JSON.stringify(withManual.supplyLedger)} ${JSON.stringify(withManual.supplyCostEvidence)}`)
+    const missingSourceRows = rows.map((row, i) => i === 0 ? { ...row, budgetSource: undefined } : row)
+    writeFileSync(join(dirs.supply, `${date}.jsonl`), `${missingSourceRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const missingSource = readCostSignals(now, env, dirs)
+    check('⬚ current 요청의 기록 예산 출처가 빠지면 현재 env로 대체하지 않고 UNKNOWN',
+      missingSource.supplyLedger.health === 'unknown' && missingSource.supplyLedger.capUsd === null
+      && missingSource.supplyCostEvidence?.envelope.ineligibleRequests === 1,
+      `${JSON.stringify(missingSource.supplyLedger)} ${JSON.stringify(missingSource.supplyCostEvidence)}`)
+    const legacyDate = '2026-11-03'
+    const legacyRows = rows.map((row) => ({
+      ...row,
+      runId: row.runId.replace('20261105', '20261103'),
+      startedAt: row.startedAt.replace(date, legacyDate),
+      endedAt: row.endedAt.replace(date, legacyDate),
+      runSlot: row.runSlot.replace(date, legacyDate),
+    }))
+    writeFileSync(join(dirs.supply, `${legacyDate}.jsonl`), `${legacyRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const legacy = readCostSignals(new Date('2026-11-03T13:30:00Z'), env, dirs)
+    check('🟢 시행일 전 whole-day 비용은 옛 env 계약을 유지해 과거 판정을 바꾸지 않는다',
+      legacy.supplyLedger.capUsd === 0.5)
+    writeSettleHold(dirs.supply, {
+      runId: 'future-hold', attemptId: 'future-hold', date,
+      reservedUsd: 0.01, at: now.toISOString(), reason: '뒤 날짜 hold',
+    })
+    const legacyWithFutureHold = readCostSignals(new Date('2026-11-03T13:30:00Z'), env, dirs)
+    const currentWithHold = readCostSignals(now, env, dirs)
+    check('🔴 뒤 날짜 settle hold가 과거 proof를 소급 오염시키지 않지만 hold 당일은 hard bad다',
+      legacyWithFutureHold.supplyLedger.health !== 'bad'
+      && legacyWithFutureHold.supplyCostEvidence?.wholeDayCriticalHealth !== 'bad'
+      && currentWithHold.supplyLedger.health === 'bad'
+      && currentWithHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
+      `${JSON.stringify(legacyWithFutureHold)} ${JSON.stringify(currentWithHold)}`)
+    rmSync(settleHoldPathOf(dirs.supply), { force: true })
+    writeSettleHold(dirs.supply, {
+      runId: 'old-hold', attemptId: 'old-hold', date: legacyDate,
+      reservedUsd: 0.01, at: new Date(`${legacyDate}T14:15:00+09:00`).toISOString(), reason: '앞 날짜 hold',
+    })
+    const currentWithOldHold = readCostSignals(now, env, dirs)
+    check('🔴 대상 날짜 이전부터 풀리지 않은 settle hold는 현재 proof를 hard bad로 닫는다',
+      currentWithOldHold.supplyLedger.health === 'bad'
+      && currentWithOldHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
+      JSON.stringify(currentWithOldHold))
+    writeFileSync(settleHoldPathOf(dirs.supply), 'null\n', 'utf-8')
+    const legacyWithBrokenHold = readCostSignals(new Date('2026-11-03T13:30:00Z'), env, dirs)
+    check('🔴 깨진 settle hold는 날짜를 비교하지 못하므로 과거 proof도 hard bad로 닫는다',
+      legacyWithBrokenHold.supplyLedger.health === 'bad'
+      && legacyWithBrokenHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
+      JSON.stringify(legacyWithBrokenHold))
     rmSync(root, { recursive: true, force: true })
   }
 
@@ -249,15 +581,27 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
 
   for (const axis of ['quality', 'cost', 'errors'] as const) {
     const r = decideStage(inputs({ previousDecision: prevOf('d5', 'HOLD'), signals: withSignal(axis, 'bad') }))
-    check(`🔴 ${axis} 나쁨 → 시험 없이 한 칸 감속 d5 → d3`,
-      r.brake === 'slowdown' && r.decision.release === 'd3' && r.decision.state !== 'TRIAL' && r.decision.transition === null
+    // 🔴 이 판은 CERTIFIED reader 판이다(`CERTIFIED_ROLLOUT_PHASE`) — 감속 행에 인증 칸을 쓰지 않는다(write 0)
+    check(`🔴 ${axis} 나쁨 → 시험 없이 한 칸 감속 d5 → d3 · 인증 d5 · reader 판은 CERTIFIED 를 쓰지 않는다`,
+      r.brake === 'slowdown' && r.decision.release === 'd3' && r.decision.state !== 'TRIAL' && r.sustained === 'd5'
+      && r.decision.transition === null
       && validateForToday(r.decision).ok, `${r.decision.state} ${r.decision.release}`)
+    const validatedBrake = validateStoredDecision({ row: r.decision, expectKstDate: KST })
+    if (!validatedBrake.ok) throw new Error(`감속 fixture가 저장 계약을 어긴다 — ${validatedBrake.reason}`)
+    const carried = { base: 'd5' as const, target: 'd10' as const, basis: 'PASS' as const }
+    const recovered = decideStage({
+      ...inputs({}), kstDate: '2026-09-29', decidedAt: '2026-09-28T22:10:00.000Z',
+      previousDecision: validatedBrake.decision, carriedPlan: carried,
+    })
+    check(`🔴 ${axis} 일시 감속 다음 날 정상 → 인증 d5를 잃지 않고 d5 운영으로 복귀`,
+      recovered.sustained === 'd5' && recovered.decision.release === 'd5',
+      `${recovered.sustained} ${recovered.decision.state} ${recovered.decision.release}`)
   }
   const floor = decideStage(inputs({ signals: withSignal('cost', 'bad') }))
   check('감속은 d1 아래로 가지 않는다', floor.decision.release === 'd1' && validateForToday(floor.decision).ok)
 
   // 🔴 d5 preflight 초록 — 사다리는 REPROVE d3(현재 단계 재인증)를 낸다. 모르는 신호가 그것을 되돌리는지 본다
-  const greenD5 = { stage: 'd5' as const, verdict: 'PASS' as const, codes: [], warnings: [], counts: {} }
+  const greenD5 = { stage: 'd5' as const, verdict: 'PASS' as const, codes: [], forecastWarnings: [], warnings: [], counts: {} }
   const unkPlanned = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5 }))
   check('기준선 — 신호가 정상이면 같은 입력은 REPROVE d3', unkPlanned.decision.state === 'REPROVE' && unkPlanned.decision.release === 'd3',
     `${unkPlanned.decision.state} ${unkPlanned.decision.release}`)
@@ -298,10 +642,49 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
     && errorSignalOf([{ label: 'p', loaded: true, failing: false }]).health === 'ok')
 
   const cli = readFileSync('scripts/stage-controller.mts', 'utf-8')
-  check('🔴 저장은 --apply 이면서 flag on 일 때만', /if \(!APPLY\)[\s\S]{0,200}return 0/.test(cli) && /if \(!flagOn\)[\s\S]{0,200}return 0/.test(cli))
+  // 배선만 본다. dry-run·flag off에서 write 0은 stage:active-recovery-check ⑦이 실행부를 돌려 증명한다.
+  check('🔴 저장은 --apply 이면서 flag on 일 때만',
+    /writeMode: !APPLY \? 'dry-run' : flagOn \? 'apply' : 'flag-off'/.test(cli))
   check('🔴 쓰는 길은 ensureStageDecision 하나 — create/update/upsert/delete 직접 호출 0',
     /ensureStageDecision\(/.test(cli) && !/stageDecision\.(create|update|upsert|delete)/.test(cli))
-  check('🔴 입력 실패는 holdAtCurrent 로 간다', /failures\.length > 0[\s\S]{0,200}holdAtCurrent/.test(cli))
+  const mainSrc = cli.slice(cli.indexOf('async function main()'))
+  const leaseGate = mainSrc.indexOf('const supplyLease = probeSupplyLease()')
+  const dbFill = mainSrc.indexOf('if (!fillDbConnection())')
+  const prismaOpen = mainSrc.indexOf('const prisma = new PrismaClient()')
+  check('🔴 apply controller는 앞 예약의 busy/unknown에서 DB를 열기 전에 물러나고 마지막 예약은 안전 HOLD를 쓴다',
+    leaseGate >= 0 && leaseGate < dbFill && dbFill < prismaOpen
+      && /stageControllerLeaseDisposition\(supplyLease, NOW\)/.test(mainSrc)
+      && /disposition === 'safe-hold'[\s\S]{0,150}holdForSupplyLease/.test(mainSrc)
+      && /supplyLease === 'busy' \? 0 : 1/.test(mainSrc))
+  check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
+    stageControllerLeaseDisposition('free', new Date('2026-10-30T07:00:00+09:00')) === 'proceed'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:54:00+09:00')) === 'defer'
+    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T07:20:00+09:00')) === 'defer'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:55:00+09:00')) === 'safe-hold'
+    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T08:01:00+09:00')) === 'safe-hold'
+    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T08:16:00+09:00')) === 'safe-hold')
+  const holdStart = cli.indexOf('async function holdForSupplyLease(')
+  const holdEnd = cli.indexOf('/** 🔴 `--evidence-date`', holdStart)
+  const holdSrc = holdStart >= 0 && holdEnd > holdStart ? cli.slice(holdStart, holdEnd) : ''
+  const safeHoldContract = (src: string): boolean =>
+    /carriedPlanFor\(prisma, previous\)/.test(src)
+    && /leaseSafeHoldOf\(\{/.test(src)
+    && /ensureStageDecision\(/.test(src)
+    && !/(loadPublishableStock|readPreflightFacts|decideStage|trialPlanOf|nextStage|genericNextStage|auditAwareGate)/.test(src)
+    && !/readStageDecision\(prisma, TODAY\)/.test(src)
+  // 🔴 공개·인증 값의 정본 증거는 stage-scheduler-check S-CERT(`leaseSafeHoldOf` 동작 반례)다. 여기는 배선만 본다
+  const leaseCall = 'const { decision, certified } = leaseSafeHoldOf({'
+  check('🔴 lease 안전 HOLD는 전날 결정·증거·과거 계획만 `leaseSafeHoldOf` 에 넘기고 오늘 Queue·preflight·승격 계산을 읽지 않는다',
+    holdSrc.includes(leaseCall) && safeHoldContract(holdSrc))
+  check('🔴 변이 검출 — lease 안전 HOLD가 오늘 Queue를 읽으면 계약 위반',
+    !safeHoldContract(holdSrc.replace(leaseCall, `const partial = await loadPublishableStock(prisma)\n    ${leaseCall}`)))
+  check('🔴 변이 검출 — lease 안전 HOLD가 오늘 결정을 승격 입력으로 다시 읽으면 계약 위반',
+    !safeHoldContract(holdSrc.replace(leaseCall, `const today = await readStageDecision(prisma, TODAY)\n    ${leaseCall}`)))
+  // 배선만 본다 — 동작 증거는 stage-scheduler-check S-BLIND(`inputFailureHoldOf` · `leaseSafeHoldOf` 직접 호출)
+  check('🔴 입력 실패는 인접 행 여부를 가르는 `inputFailureHoldOf` 로 가고 heldReleaseOf 를 직접 쓰지 않는다',
+    /failures\.length > 0[\s\S]{0,300}inputFailureHoldOf\(/.test(cli) && !/heldReleaseOf/.test(cli.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')))
+  check('🔴 lease 안전 HOLD는 `authority` 를 넘긴다(전날 행 여부를 호출자가 밝힌다)',
+    /leaseSafeHoldOf\(\{[\s\S]{0,200}authority,/.test(holdSrc) && !/previousDecision:/.test(holdSrc))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -362,8 +745,15 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
   const sc = renderStageControllerPlist(input)
   const slots = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
-  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 세 번(재시도)',
-    slots.length === 3 && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE) && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 다섯 번(07:55 최종 + 07:58 fallback)',
+    slots.length === 5 && slots.at(-2) === PUBLISH_WINDOW_START_MINUTE - 5
+    && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 2
+    && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE)
+    && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 다섯 슬롯 대조가 필수다',
+    OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('controller plist 는 아직 갱신되지 않는다'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55·07:58 다섯 슬롯 대조'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('runtime deploy 만 하고 끝내지 않는다')))
   check('controller 는 runtime 의 스크립트를 --apply 로 부른다', sc.includes('<string>/r/scripts/stage-controller.mts</string>') && sc.includes('<string>--apply</string>')
     && sc.includes('<key>WorkingDirectory</key><string>/r</string>'))
   const rr = renderRunnerRecoverPlist(input)
@@ -409,7 +799,18 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const installer = readFileSync('scripts/ops-loop-install.mts', 'utf-8')
   check('🔴 공식 설치기는 runtime/pin·공급 consumer·실행 중 job을 모두 확인한다',
     /runtime HEAD와 pin/.test(installer) && /samePlist\(installedSupply, expectedSupply\)/.test(installer)
-    && /runningBlockers\(desired\.keys\(\), running\)/.test(installer))
+    && /runningBlockers\(touched, running\)/.test(installer)
+    && /const touched: string\[\] = \[\.\.\.desired\.keys\(\), \.\.\.\(observerIntent === 'remove' \? \[OPS_SHADOW_OBSERVER_LABEL\] : \[\]\)\]/.test(installer)
+    && /for \(const label of touched\) \{/.test(installer))
+  // 🔴 observer 는 apply 경로에서도 같은 의도 판정 하나로만 바뀐다 — desired 는 한 번만 만들고 applyInstall 이 그것을 쓴다 ·
+  //    제거는 의도가 remove 일 때만 · snapshot 뒤 · 교체 전
+  check('🔴 공식 설치기 apply — observer 설치 · 제거는 명시 의도(observerIntentOf)에서만 · desired 한 번 · 제거는 snapshot 뒤',
+    (installer.match(/desiredPlists\(/g) ?? []).length === 1
+    && /const desired = desiredPlists\(publishMode, input, \{ observer: observerWanted\(observerIntent\) \}\)/.test(installer)
+    && /const outcome = applyInstall\(desired, runtimeRoot,/.test(installer)
+    && (installer.match(/removeInstalled\(agentDir, OPS_SHADOW_OBSERVER_LABEL\)/g) ?? []).length === 1
+    && /if \(observerIntent === 'remove'\) \{\n  bootout\(OPS_SHADOW_OBSERVER_LABEL\)/.test(installer)
+    && installer.indexOf("writeFileSync(join(backupDir, 'manifest.json')") < installer.indexOf('removeInstalled(agentDir, OPS_SHADOW_OBSERVER_LABEL)'))
   check('🔴 runtime deploy가 제거한 plist 끝 개행만으로 consumer를 거절하지 않는다',
     /installed\.trimEnd\(\) === expected\.trimEnd\(\)/.test(installer))
   const installCore = readFileSync('scripts/lib/ops-loop-install-core.mts', 'utf-8')
@@ -417,6 +818,16 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
     /manifest\.json/.test(installer) && /설치 검증 실패/.test(installCore)
     && /applyInstall\(desired, runtimeRoot, \{/.test(installer) && /restore: \(\) => restore\(backupDir\),/.test(installer)
     && /process\.exit\(outcome\.restored \? 1 : 2\)/.test(installer))
+  {
+    // 🔴 D20 rollout 순서 배선 — 설치기는 strict 격리 검사를 **유예 플래그 없이** 붙이고, 실패면 restore 경로로 간다
+    const isoWire = /isolation: \(\) => \{\n\s+const iso = run\(npxPath, \['tsx', 'scripts\/runtime-isolation-check\.mts', '--require-runtime'\]\)\n\s+if \(!iso\.ok\) console\.log\(iso\.out\)\n\s+return iso\.ok\n\s+\},/
+    check('🔴 공식 설치기는 loaded 검증 뒤 strict runtime:isolation-check --require-runtime 을 붙인다(유예 플래그 0)',
+      isoWire.test(installer) && !installer.includes("'--defer-ops-loop-templates'"))
+    check('🔴 설치 판정부는 loaded 검증 통과 뒤 io.isolation() 이 false 면 io.restore() 로 되돌린다',
+      /const isolated = io\.isolation\(\)/.test(installCore)
+      && /if \(isolated\) return \{ ok: true \}\n\s+io\.log\('🔴 strict 격리 검사 실패 — 설치 전 상태로 되돌린다'\)\n\s+return \{ ok: false, restored: io\.restore\(\) \}/.test(installCore)
+      && installCore.indexOf('const isolated = io.isolation()') > installCore.indexOf('verifyLoaded(label, xml, io.print(label), runtimeRoot)'))
+  }
   check('🔴 공식 설치기는 발행 러너의 렌더 표식과 **loaded** 표식·label 을 둘 다 확인하고, 틀리면 rollback 한다',
     /judgeLaunchdRunMarker\(plistEnvironmentOf\(desired\.get\(PUBLISH_RUNNER_LABEL\)!\)\)/.test(installer)
     && /judgeLaunchdRunMarker\(launchctlEnvironmentOf\(printOut\)\)/.test(installCore)
@@ -491,6 +902,33 @@ console.log('\n⑥ 복구 판정')
     && lastNight.getTime() < kst('2026-10-12T00:00:00').getTime())
   const rr0 = readFileSync('scripts/runner-recover.mts', 'utf-8')
   check('🔴 복구 실행기가 label 의 정책을 판정에 넘긴다', /policy: RECOVERY_POLICY_OF\[label\] \?\? 'stale'/.test(rr0))
+  check('🔴 일반 runner-recover 공급 복구는 닫혀 있고 recovery 표식으로 예약 회차를 흉내 내지 않는다',
+    /supplyRecoveryClosed = label === SUPPLY_PROCESS_LAUNCHD_LABEL && v\.action === 'kickstart'/.test(rr0)
+    && /if \(supplyRecoveryClosed \|\| v\.action !== 'kickstart' \|\| !APPLY\) continue/.test(rr0)
+    && !/requestFollowUp\([^)]*'recovery'/.test(rr0) && !/withdrawFollowUp\(/.test(rr0))
+  const activeRecovery = readFileSync('src/lib/stage-active-recovery.ts', 'utf-8')
+  const controller = readFileSync('scripts/stage-controller.mts', 'utf-8')
+  const recoveryWorker = readFileSync('scripts/stage-active-recovery.mts', 'utf-8')
+  check('🔴 단계 제한 복구는 공급으로 해소 가능한 기회·처리량 복합 부족만, runtime D20~D50·07:30 전에 연다',
+    /'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN', 'THROUGHPUT_SHORT'/.test(activeRecovery)
+    && /preflight\.codes\.every\(\(code\) => ACTIVE_RECOVERY_SHORTAGE_CODES\.has\(code\)\)/.test(activeRecovery)
+    && /badSignals\.length > 0/.test(activeRecovery)
+    && /\['d20', 'd30', 'd50'\]/.test(activeRecovery)
+    && /ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST/.test(activeRecovery))
+  // 배선만 본다. "recovery 산출물이 있는 날 07:55 전 write 0"은 stage:active-recovery-check ⑦이
+  // 실제 실행부(runStageRecoveryStep)를 07:00→07:20→07:40→07:55 순서로 돌려 증명한다.
+  const recoveryStep = readFileSync('scripts/lib/stage-controller-recovery-step.mts', 'utf-8')
+  check('🔴 controller는 recovery 단계를 주입 실행부 하나에 맡기고, 실행권 선점은 그 실행부만 한다',
+    /phase: activeRecoveryPhaseOf\(NOW\)/.test(controller)
+    && (controller.match(/runStageRecoveryStep\(/g) ?? []).length === 1
+    && !/claimStageRecoveryLaunch|createStageRecoveryIntent/.test(controller)
+    && /claimStageRecoveryLaunch\(/.test(recoveryStep) && /activeRecoveryDirective\(/.test(recoveryStep))
+  check('🔴 제한 worker는 기존 수집·공급만 부르고 07:50 종료·07:30 유료 시작 마감을 지킨다',
+    /ACTIVE_RECOVERY_MAX_RUNTIME_MS = 50 \* 60_000/.test(activeRecovery)
+    && /activeRecoveryDeadlineAt/.test(recoveryWorker)
+    && /ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST/.test(recoveryWorker)
+    && /micro-seed-collect-navercafe\.mts/.test(recoveryWorker)
+    && /supply-process\.mts/.test(recoveryWorker))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -613,11 +1051,31 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
 // ─────────────────────────────────────────────────────────
 {
   const KA = KEEP_AWAKE_LABEL
-  const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL] as const
+  const OBS = OPS_SHADOW_OBSERVER_LABEL
+  const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OBS] as const
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
-  const desired = desiredPlists('fixed', input)
-  check('교체 대상은 발행·controller·복구·keep-awake 넷이다 — keep-awake 도 같은 적용 경로를 탄다',
-    JSON.stringify([...desired.keys()]) === JSON.stringify([...BLOCKING, KA]))
+  const desired = desiredPlists('fixed', input, { observer: true })
+  check('교체 대상은 발행·controller·복구·keep-awake(+ 설치 의도가 있으면 ops shadow observer) — 모두 같은 적용 · snapshot · rollback 경로를 탄다',
+    JSON.stringify([...desired.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, OBS])
+    && JSON.stringify([...desiredPlists('fixed', input, { observer: false }).keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA]))
+  // 🔴 observer 설치 의도 — merge · 배포만으로는 설치되지 않는다(플래그 없으면 지금 상태 유지)
+  check('🔴 observer 의도 — 플래그 없음: 설치본 있으면 keep · 없으면 absent · on: install/keep · off: remove/absent · 그 밖은 null',
+    observerIntentOf(null, false) === 'absent' && observerIntentOf(null, true) === 'keep'
+    && observerIntentOf('on', false) === 'install' && observerIntentOf('on', true) === 'keep'
+    && observerIntentOf('off', true) === 'remove' && observerIntentOf('off', false) === 'absent' && observerIntentOf('yes', false) === null
+    && !observerWanted('absent') && !observerWanted('remove') && observerWanted('install') && observerWanted('keep'))
+  // 🔴 observer 템플릿 계약(2026-11-11 Phase 2) — 60초 StartInterval · 감시(WatchPaths) 0 · 실행 인자 0 · runtime 트리 · 공급 job 아님
+  {
+    const xml = desired.get(OBS)!
+    check('🔴 observer plist — StartInterval 60 · WatchPaths/KeepAlive/RunAtLoad true 0 · 인자는 observer 스크립트뿐 · WD=runtime',
+      /<key>StartInterval<\/key><integer>60<\/integer>/.test(xml) && !/WatchPaths|QueueDirectories|KeepAlive|StartCalendarInterval/.test(xml)
+      && /<key>RunAtLoad<\/key><false\/>/.test(xml)
+      && JSON.stringify(programArguments(xml)) === JSON.stringify(['/n/npx', 'tsx', '/r/scripts/ops-shadow-observer.mts'])
+      && /<key>WorkingDirectory<\/key><string>\/r<\/string>/.test(xml))
+    check('🔴 observer 는 공급 job(RUNTIME_JOBS) · 복구 대상이 아니고 배포 quiesce · ops-loop 원문 유예 소유에만 든다',
+      !RUNTIME_JOBS.includes(OBS) && !RECOVERABLE_LABELS.includes(OBS) && DEPLOY_QUIESCE_JOBS.includes(OBS)
+      && OPS_LOOP_TEMPLATE_DEFER_LABELS.includes(OBS) && !ALWAYS_RUNNING_LABELS.includes(OBS))
+  }
   check('🔴 예외 정본(호스트 이전 ALWAYS_RUNNING_LABELS)은 keep-awake 하나뿐이다 — 넓히면 여기서 막힌다',
     JSON.stringify(ALWAYS_RUNNING_LABELS) === JSON.stringify([KA]))
 
@@ -665,7 +1123,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       const agentDir = join(home, 'Library', 'LaunchAgents')
       mkdirSync(agentDir, { recursive: true })
       writeFileSync(join(agentDir, `${PUBLISH_RUNNER_LABEL}.plist`),
-        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }).get(PUBLISH_RUNNER_LABEL)!)
+        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: false }).get(PUBLISH_RUNNER_LABEL)!)
       writeFileSync(join(agentDir, 'com.soransoran.supply-process.plist'), render(readFileSync(tplRel, 'utf-8'), {
         npx: npxBesideNode, node: process.execPath, repo: rt, nodebin: nodeBinDir, logdir: logDir,
       }))
@@ -688,8 +1146,9 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       const callLog = join(home, 'launchctl.log')
       const tsxCli = createRequire(import.meta.url).resolve('tsx/cli')
       const installerPath = join(process.cwd(), 'scripts', 'ops-loop-install.mts')
-      const plan = (runningSet: readonly string[]): { status: number | null; out: string } => {
-        const r = spawnSync(process.execPath, [tsxCli, installerPath], {
+      // 기존 시험은 observer 설치 의도(--observer=on)를 명시한 판으로 돈다 — 기본 경로는 아래에서 따로 잰다
+      const plan = (runningSet: readonly string[], args: readonly string[] = ['--observer=on']): { status: number | null; out: string } => {
+        const r = spawnSync(process.execPath, [tsxCli, installerPath, ...args], {
           cwd: rt, encoding: 'utf8',
           env: { HOME: home, PATH: bin, FAKE_RUNNING: runningSet.join(' '), FAKE_LAUNCHCTL_LOG: callLog },
         })
@@ -707,8 +1166,27 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
           r.status === 1 && r.out.includes(`${label}이 실행 중이다`) && r.out.includes('🔴 막힘 1건'), r.out.slice(-600))
       }
       const all = plan([KA, ...BLOCKING])
-      check('(b) 설치기 plan: 넷 다 running → 막힘 3건(keep-awake 제외)',
-        all.status === 1 && all.out.includes('🔴 막힘 3건') && !all.out.includes(`${KA}이 실행 중이다`), all.out.slice(-600))
+      check(`(b) 설치기 plan: 다섯 다 running → 막힘 ${BLOCKING.length}건(keep-awake 제외 · observer 포함)`,
+        all.status === 1 && all.out.includes(`🔴 막힘 ${BLOCKING.length}건`) && all.out.includes(`${OBS}이 실행 중이다`) && !all.out.includes(`${KA}이 실행 중이다`), all.out.slice(-600))
+      // 🔴 기본 경로(플래그 없음) — code-only merge 뒤 배포의 필수 ops-loop-install 이 observer 를 설치하지 않는다
+      const obsLine = (out: string): string => out.split('\n').find((l) => l.includes(OBS)) ?? ''
+      const dflt = plan([], [])
+      check('🔴 설치기 plan · 플래그 없음 · observer 미설치 → 미설치 유지(교체 대상 아님) · 적용 가능',
+        dflt.status === 0 && obsLine(dflt.out).includes('미설치 유지') && !/신규|교체|최신/.test(obsLine(dflt.out)), dflt.out.slice(-600))
+      check('🔴 설치기 plan · 플래그 없음 · observer 미설치면 observer 가 돌고 있어도 막지 않는다(교체 대상 아님)',
+        plan([OBS], []).status === 0)
+      const on = plan([], ['--observer=on'])
+      check('설치기 plan · --observer=on · 미설치 → 신규', on.status === 0 && obsLine(on.out).includes('신규'), on.out.slice(-400))
+      check('설치기 plan · --observer 에 on/off 밖의 값 → exit 2', plan([], ['--observer=yes']).status === 2)
+      const obsInstalled = join(agentDir, `${OBS}.plist`)
+      writeFileSync(obsInstalled, desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: true }).get(OBS)!)
+      const keep = plan([], [])
+      check('🔴 설치기 plan · 플래그 없음 · observer 설치돼 있으면 keep(새 원문 대조 · 최신)', keep.status === 0 && obsLine(keep.out).includes('최신'), keep.out.slice(-400))
+      const off = plan([], ['--observer=off'])
+      check('🔴 설치기 plan · --observer=off · 설치돼 있으면 제거 계획(교체 대상 아님) · 계획은 아무것도 바꾸지 않는다',
+        off.status === 0 && obsLine(off.out).includes('제거') && existsSync(obsInstalled), off.out.slice(-400))
+      check('🔴 설치기 plan · --observer=off 여도 observer 가 돌고 있으면 막는다', plan([OBS], ['--observer=off']).status === 1)
+      rmSync(obsInstalled)
       const calls = existsSync(callLog) ? readFileSync(callLog, 'utf-8').trim().split('\n') : []
       check('🔴 plan 은 가짜 launchctl 을 실제로 불렀고(print) 그 밖의 하위 명령은 0이다',
         calls.length > 0 && calls.every((c) => c.startsWith('print ')), calls.slice(0, 5).join(' | '))
@@ -729,8 +1207,9 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   type Sim = { calls: string[]; restores: number; loaded: Map<string, string> }
   const simulate = (opt: {
     failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
+    isolationOk?: boolean
   } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
-    const old = desiredPlists('heartbeat', input)
+    const old = desiredPlists('heartbeat', input, { observer: true })
     const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
     const written = new Map(old)
     const outcome = applyInstall(desired, '/r', {
@@ -748,7 +1227,8 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
         const out = x === undefined ? null : printOf(l, x)
         return opt.printOverride === undefined ? out : opt.printOverride(l, out)
       },
-      restore: () => { sim.restores += 1; return opt.restoreOk ?? true },
+      isolation: () => { sim.calls.push('isolation'); return opt.isolationOk ?? true },
+      restore: () => { sim.calls.push('restore'); sim.restores += 1; return opt.restoreOk ?? true },
       log: () => {},
     })
     return { outcome, sim }
@@ -781,6 +1261,23 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   const restoreFail = simulate({ failBootstrap: KA, restoreOk: false })
   check('(d) rollback 자체가 실패하면 restored=false 로 알린다(설치기는 exit 2)',
     !restoreFail.outcome.ok && !restoreFail.outcome.restored && restoreFail.sim.restores === 1)
+
+  // ── (e) 🔴 D20 rollout 순서 — loaded 검증 뒤 strict 격리 검사 · 실패면 snapshot 복원 ──
+  check('(e) 🔴 strict 격리 true → 설치 성공 · rollback 0 · 격리 검사는 정확히 한 번',
+    good.outcome.ok && good.sim.restores === 0 && good.sim.calls.filter((c) => c === 'isolation').length === 1)
+  check('(e) 🔴 strict 격리는 **모든 bootstrap 뒤**에 돈다(loaded 검증 다음)',
+    idx('isolation') > lastOf('bootstrap'))
+  {
+    const isoFail = simulate({ isolationOk: false })
+    check('(e) 🔴 strict 격리 false → 전체 rollback(snapshot 복원) · 설치 실패',
+      rolledBack(isoFail) && isoFail.sim.calls.indexOf('restore') > isoFail.sim.calls.indexOf('isolation'))
+    const isoFailRestoreFail = simulate({ isolationOk: false, restoreOk: false })
+    check('(e) 🔴 strict 격리 false + rollback 실패 → restored=false(설치기는 exit 2)',
+      !isoFailRestoreFail.outcome.ok && !isoFailRestoreFail.outcome.restored && isoFailRestoreFail.sim.restores === 1)
+    const loadedFail = simulate({ failBootstrap: KA })
+    check('(e) loaded 검증이 이미 실패하면 격리 검사 없이 바로 rollback 한다(잴 것이 없다)',
+      rolledBack(loadedFail) && !loadedFail.sim.calls.includes('isolation'))
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

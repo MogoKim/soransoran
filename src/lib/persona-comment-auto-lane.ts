@@ -9,7 +9,7 @@
  *
  *    무인으로 잇는 순간 새로 생기는 축은 넷뿐이다. 그 넷을 여기 한 곳에 둔다.
  *      ① 글이 공개된 뒤 **60분 안**에만 단다 — 늦은 첫 댓글은 대화가 아니라 발굴이다
- *      ② bootstrap-auto 에서는 **글당 1건**이다 — 글당 5건 자리는 organic 뒤의 일이다
+ *      ② bootstrap-auto 에서는 **글당 1건**이다 — 선택적 추가 대화는 별도 followup 레인이 맡는다
  *      ③ 글을 쓴 Persona 는 **자기 글에** 달지 않는다 — 대화가 아니라 연출이다
  *      ④ 사람이 누르지 않은 발행은 **이 단계 · 자동 주체 · PENDING** 에서만 연다
  *
@@ -156,7 +156,7 @@ export function isAutoLaneCandidatePost(p: AutoLanePostFacts, nowMs: number): bo
 
 /**
  * 🔴 **글마다 첫 대상 하나만 남긴다.** planner 는 라운드로빈으로 한 글에 둘째 자리를
- *    채울 수 있다(글당 5건 계약). 이 레인은 글당 1건이므로 둘째부터는 만들지도 부르지도 않는다.
+ *    채울 수 있다(구조 상한 10). 이 레인은 글당 1건이므로 둘째부터는 만들지도 부르지도 않는다.
  */
 export function firstPerPost<T>(items: readonly T[], postIdOf: (t: T) => string): T[] {
   const seen = new Set<string>()

@@ -21,12 +21,13 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
 import { verifySeedCard } from '../../src/lib/persona-card-verify'
 import {
-  historyFromEvents, type ActivityHistory, type CommentEvent, type PostEvent, type QualificationEvidence,
+  historyFromEvents, personaCapacityOf, type ActivityHistory, type CommentEvent, type PostEvent, type QualificationEvidence,
 } from '../../src/lib/persona-reserve'
 import type { PersonaReserveFacts, PersonaReserveRepo, PersonaReserveRow } from './d100-persona-tiers.mjs'
 import { readPersonaReserve } from './d100-persona-tiers.mjs'
 import { checkNameCollision, type NameCollisionSets } from './persona-gate-name-collision.mjs'
-import { bundlesForPersonas } from './persona-reference-store.mjs'
+import { bundlesForPersonas, referenceSeedShareCount, stableAssignment } from './persona-reference-store.mjs'
+import { commentCapableOf, type StaticVoiceCode } from '../../src/lib/persona-voice-repeat'
 import { PERSONA_POOL_DOC } from './voice-runtime.mjs'
 
 type Reader = PrismaClient | Prisma.TransactionClient
@@ -182,13 +183,48 @@ export function prismaReserveRepo(prisma: Reader, opts: ReserveFactsOptions): Pe
  * 🔴 **계약 유효 Persona 수 — 단계 preflight·D100 계기판이 받는 값은 이것 하나다.**
  *    읽기 실패는 0 이 아니라 null 이다. 활성 행 수로 대신하지 않는다.
  */
+/**
+ * 🔴 **첫 댓글을 실제로 쓸 수 있는 계약 유효 Persona** (2026-11-07) — read-only.
+ *    계약 유효(reserve + stage-active) 가운데 **후보와 무관하게 Gate ⑧ 이 막는 사람**(seed 공유 · `judgeStaticVoiceCapability`)을 뺀다.
+ *    seed 공유 수는 운영 댓글 경로(`persona-comment-source-db`)와 같은 고정 배정(`stableAssignment`) · 같은 함수로 센다.
+ *    반복 이력만으로는 빼지 않는다 — 후보 귀속 판정이라 반복 축에는 영구 잠금이 없다.
+ *    못 읽으면 `null`(모름) — 0 이 아니다.
+ */
+export async function readCommentCapablePersonas(
+  prisma: Reader, opts: { now: Date; repoRoot: string },
+): Promise<{ contractValid: number | null; commentCapable: number | null; staticLocked: { code: string; codes: StaticVoiceCode[] }[] }> {
+  let codes: string[]
+  try {
+    const r = await readPersonaReserve(prismaReserveRepo(prisma, { now: opts.now, repoRoot: opts.repoRoot }))
+    if (r.contractValid === null) return { contractValid: null, commentCapable: null, staticLocked: [] }
+    codes = [...r.byState.reserve, ...r.byState['stage-active']]
+  } catch {
+    return { contractValid: null, commentCapable: null, staticLocked: [] }
+  }
+  let byCode: ReturnType<typeof stableAssignment>['byCode']
+  try { byCode = stableAssignment({ repoRoot: opts.repoRoot }).byCode } catch {
+    return { contractValid: codes.length, commentCapable: null, staticLocked: [] }
+  }
+  const cap = commentCapableOf(codes, (code) => referenceSeedShareCount(byCode, code))
+  return { contractValid: codes.length, ...cap }
+}
+
 export async function readContractValidPersonas(
   prisma: Reader, opts: { now: Date; repoRoot: string },
 ): Promise<number | null> {
+  return (await readPersonaCapacity(prisma, opts)).contractValid
+}
+
+/**
+ * 🔴 **계약 유효 수와 stage-active 수를 한 번의 판독으로** (2026-11-13) — 단계 preflight 가 받는다.
+ *    두 값을 따로 읽으면 사이에 상태가 바뀐 두 스냅숏이 섞인다. 읽기 실패는 둘 다 `null`(모름) — 0 이 아니다.
+ */
+export async function readPersonaCapacity(
+  prisma: Reader, opts: { now: Date; repoRoot: string },
+): Promise<{ contractValid: number | null; stageActive: number | null }> {
   try {
-    const r = await readPersonaReserve(prismaReserveRepo(prisma, { now: opts.now, repoRoot: opts.repoRoot }))
-    return r.contractValid
+    return personaCapacityOf(await readPersonaReserve(prismaReserveRepo(prisma, { now: opts.now, repoRoot: opts.repoRoot })))
   } catch {
-    return null
+    return { contractValid: null, stageActive: null }
   }
 }

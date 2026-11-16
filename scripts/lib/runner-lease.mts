@@ -23,8 +23,11 @@
  * 🔴 **하지 않는 것** — 시각 · PID · 부모 명령줄 · rename 으로 판정하거나 뺏지 않는다. 잠금 파일을 지우지 않는다.
  *    lockf 가 없거나 실행할 수 없으면 본체를 띄우지 않는다(fail-closed · provider 0 · DB 0).
  */
-import { accessSync, constants, existsSync, fstatSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  accessSync, constants, existsSync, fstatSync, linkSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+} from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -68,6 +71,8 @@ export function runUnderKernelLease(i: {
    *    남기고 사라지지 않게 하려는 것이다. 살아 있는 holder 를 기다리거나 뺏는 장치가 아니다.
    */
   busyRetryMs?: number
+  /** false면 잠금 경합을 다음 holder의 추가 회차로 바꾸지 않는다. 제한 복구가 기존 자연 회차에 흡수되는 것을 막는다. */
+  followUpOnBusy?: boolean
 }): OuterOutcome {
   const lockf = i.lockf ?? LOCKF_PATH
   if (!lockfUsable(lockf)) return { kind: 'UNAVAILABLE', reason: `${lockf} 를 실행할 수 없다 — 본체를 띄우지 않는다(provider 0 · DB 0)` }
@@ -80,7 +85,10 @@ export function runUnderKernelLease(i: {
     r = spawnSync('/bin/sh', [LEASE_WRAPPER, i.lockPath, lockf, i.command, ...i.args], { stdio: 'inherit', env })
   }
   if (r.error !== undefined) return { kind: 'UNAVAILABLE', reason: `wrapper 실행 실패 — ${(r.error as { code?: string }).code ?? r.error.name}` }
-  if (r.status === LEASE_BUSY_EXIT) return { kind: 'HELD', followUp: requestFollowUp(i.followUpDir, i.nowMs, i.trigger) }
+  if (r.status === LEASE_BUSY_EXIT) return {
+    kind: 'HELD',
+    followUp: i.followUpOnBusy === false ? 'DISABLED' : requestFollowUp(i.followUpDir, i.nowMs, i.trigger),
+  }
   if (r.status !== null && LEASE_UNAVAILABLE_EXITS.includes(r.status)) return { kind: 'UNAVAILABLE', reason: `wrapper exit ${r.status} — 잠금을 걸지 못했다` }
   if (r.status === null) return { kind: 'RAN', code: 1 }
   return { kind: 'RAN', code: r.status }
@@ -116,18 +124,29 @@ export function verifyInKernelLease(i: {
   return { ok: true, proof: { lockPath: i.lockPath, followUpDir: i.followUpDir, lockf, fd: LEASE_FD } }
 }
 
-export type FollowUpRequest = 'REQUESTED' | 'COALESCED' | 'ERROR'
+export type FollowUpRequest = 'REQUESTED' | 'COALESCED' | 'DISABLED' | 'ERROR'
 
 /**
  * 🔴 **잠금을 못 얻은 실행이 남기는 깨움** — `wx` 하나. 이미 있으면 합쳐진 것이다.
  *    🔴 이것은 잠금이 아니다 — 이 파일이 남아도 아무것도 막지 않는다(다음 holder 가 거둔다).
  */
 export function requestFollowUp(dir: string, nowMs: number, trigger: LeaseTrigger): FollowUpRequest {
+  const path = join(dir, FOLLOW_UP_FILE)
+  const temporary = join(dir, `.${FOLLOW_UP_FILE}.write-${process.pid}-${randomUUID()}`)
   try {
-    writeFileSync(join(dir, FOLLOW_UP_FILE), JSON.stringify({ at: new Date(nowMs).toISOString(), trigger }), { flag: 'wx', mode: 0o600 })
-    return 'REQUESTED'
+    // 완성된 임시 파일을 hard-link로 한 번에 공개한다. 직접 `wx`로 본 파일을 쓰면
+    // 쓰기 실패 시 빈 파일·부분 JSON이 정본 경로에 남을 수 있다.
+    writeFileSync(temporary, JSON.stringify({ at: new Date(nowMs).toISOString(), trigger }), { flag: 'wx', mode: 0o600 })
+    try {
+      linkSync(temporary, path)
+      return 'REQUESTED'
+    } catch (e) {
+      return (e as { code?: string }).code === 'EEXIST' ? 'COALESCED' : 'ERROR'
+    }
   } catch (e) {
-    return (e as { code?: string }).code === 'EEXIST' ? 'COALESCED' : 'ERROR'
+    return 'ERROR'
+  } finally {
+    try { unlinkSync(temporary) } catch { /* 정본 marker와 무관한 임시 파일만 남을 수 있다 */ }
   }
 }
 
@@ -154,20 +173,33 @@ export function followUpTriggerOf(raw: string): { trigger: PassTrigger; at: stri
 export type FollowUpRecord = { take: FollowUpTake; trigger: PassTrigger | null; at: string | null }
 
 /**
- * 🔴 **표식 거두기 — 지우기 전에 trigger 를 읽는다** (2026-10-12 Batch C1).
- *    표식은 `wx` 로만 생기고 지우는 쪽은 holder 하나라, 읽은 뒤 지우기 전까지 내용이 바뀌지 않는다.
+ * 🔴 **표식 거두기 — 정본 이름을 claim 이름으로 원자 이동한 뒤 trigger 를 읽는다**.
+ *    claim 뒤 새 깨움은 정본 이름으로 새 marker를 만들 수 있고, 옛 claim의 읽기·삭제가 새 marker를 건드리지 않는다.
  *    못 읽으면(깨진 내용) `unknown` 으로 남기고 거둔다 — 다음 holder 가 같은 깨진 표식을 또 받지 않게.
- *    읽기 자체가 실패(권한 등)하면 지우지 않고 `ERROR` 다 — 내용을 모르는 깨움을 없애지 않는다.
+ *    읽기 자체가 실패(권한 등)하면 정본 이름으로 다시 공개할 수 있을 때 복원하고 `ERROR` 다.
+ *    새 marker가 이미 있으면 옛 claim도 보존한다. 내용을 모르는 깨움을 조용히 없애지 않는다.
  */
-export function takeFollowUpRecord(proof: LeaseProof): FollowUpRecord {
+export function takeFollowUpRecord(proof: LeaseProof, afterClaimForTest?: () => void): FollowUpRecord {
   const path = join(proof.followUpDir, FOLLOW_UP_FILE)
-  let raw: string
-  try { raw = readFileSync(path, 'utf-8') } catch (e) {
+  const claimed = join(proof.followUpDir, `.${FOLLOW_UP_FILE}.claim-${process.pid}-${randomUUID()}`)
+  // 이름을 먼저 원자적으로 옮긴다. 이 뒤 들어온 새 marker는 정본 경로에 새로 생기며,
+  // 아래 읽기·삭제가 그 새 marker를 건드릴 수 없다.
+  try { renameSync(path, claimed) } catch (e) {
     return { take: (e as { code?: string }).code === 'ENOENT' ? 'NONE' : 'ERROR', trigger: null, at: null }
   }
+  afterClaimForTest?.()
+  let raw: string
+  try { raw = readFileSync(claimed, 'utf-8') } catch {
+    try {
+      linkSync(claimed, path)
+      try { unlinkSync(claimed) } catch { /* 두 이름이 같은 inode를 보존한다 */ }
+    } catch { /* 새 marker가 있거나 claim 자체를 잃었다 — holder는 반드시 실패한다 */ }
+    return { take: 'ERROR', trigger: null, at: null }
+  }
   const read = followUpTriggerOf(raw)
-  try { unlinkSync(path) } catch (e) {
-    return { take: (e as { code?: string }).code === 'ENOENT' ? 'NONE' : 'ERROR', trigger: null, at: null }
+  try { unlinkSync(claimed) } catch {
+    try { linkSync(claimed, path) } catch { /* 새 marker가 있으면 claim을 보존한다 */ }
+    return { take: 'ERROR', trigger: null, at: null }
   }
   return { take: 'TAKEN', ...read }
 }
@@ -190,7 +222,7 @@ export function mergePassTrigger(launch: LeaseTrigger, absorbed: PassTrigger | n
   return rank(absorbed) > rank(launch) ? absorbed : launch
 }
 
-/** 🔴 회차 하나를 연 깨움 — 본체가 기록에 남긴다(진단 · shadow). 잠금 · 장부 · 상한은 이 값으로 갈리지 않는다 */
+/** 🔴 회차 하나를 연 깨움 — 역사적 필드명은 shadow지만 이제 증명 provenance로 영속화한다. 잠금 · 장부 · 상한은 이 값으로 갈리지 않는다. */
 export type PassContext = {
   trigger: PassTrigger
   /** 이 프로세스를 띄운 이유(바깥이 정한 값) */
@@ -235,6 +267,10 @@ export async function leaseEntry(o: {
   env: NodeJS.ProcessEnv; trigger: LeaseTrigger; lockf?: string
   /** 🔴 생략하면 0 — `runUnderKernelLease.busyRetryMs` */
   busyRetryMs?: number
+  /** 제한 복구처럼 경합 시 조용히 실패해야 하는 실행은 marker를 남기지 않는다. */
+  followUpOnBusy?: boolean
+  /** false면 앞 marker를 흡수하거나 뒤 follow-up pass를 열지 않는다. marker는 다음 자연 holder에 남긴다. */
+  absorbFollowUp?: boolean
   /** 🔴 세 번째 인자는 그 회차를 연 깨움이다(생략해도 된다 — 앞판 본체는 두 인자만 받는다) */
   pass: (pass: number, proof: LeaseProof, ctx: PassContext) => Promise<number>
   log: (line: string) => void
@@ -247,6 +283,7 @@ export async function leaseEntry(o: {
       args: [...loaderArgs(), o.scriptPath, ...o.argv],
       env: o.env, nowMs: Date.now(), trigger: o.trigger, ...(o.lockf === undefined ? {} : { lockf: o.lockf }),
       ...(o.busyRetryMs === undefined ? {} : { busyRetryMs: o.busyRetryMs }),
+      ...(o.followUpOnBusy === undefined ? {} : { followUpOnBusy: o.followUpOnBusy }),
     })
     if (out.kind === 'HELD') {
       o.log(`⏭️  LEASE_HELD — 다른 회차가 커널 잠금을 쥐고 있다 · follow-up ${out.followUp} · 본체에 들어가지 않는다`)
@@ -259,7 +296,13 @@ export async function leaseEntry(o: {
   if (!v.ok) { o.log(`🔴 LEASE_NOT_PROVEN — ${v.reason} · provider 0 · DB 0`); return 1 }
   // 🔴 잠금 수명 = 이 프로세스 수명 — 증명은 한 번이면 된다(회차마다 다시 볼 실패 경로가 없다 · 죽은 게이트를 두지 않는다)
   // 🔴 시작할 때 이미 있던 깨움은 이번 회차가 받는다 — 그 trigger 를 첫 회차에 싣는다
-  const start = takeFollowUpRecord(v.proof)
+  const start = o.absorbFollowUp === false
+    ? { take: 'NONE' as const, trigger: null, at: null }
+    : takeFollowUpRecord(v.proof)
+  if (start.take === 'ERROR') {
+    o.log('🔴 follow-up 표식을 안전하게 읽거나 보존하지 못했다 — 본체 0 · provider 0 · DB 0')
+    return 1
+  }
   if (start.take === 'TAKEN') o.log(`  follow-up 표식을 거뒀다(${start.trigger}) — 이번 회차가 그 깨움을 받는다`)
   const absorbed = start.take === 'TAKEN' ? start.trigger : null
   let ctx: PassContext = {
@@ -271,9 +314,15 @@ export async function leaseEntry(o: {
     const code = raw === LEASE_BUSY_EXIT ? 1 : raw
     worst = Math.max(worst, code)
     if (code === 1) break
+    if (o.absorbFollowUp === false) break
     // 🔴 상한에 닿았으면 표식을 거두지 않는다 — 남은 깨움은 다음 holder 가 시작할 때 받는다
     if (pass >= MAX_FOLLOW_UPS) break
     const next = takeFollowUpRecord(v.proof)
+    if (next.take === 'ERROR') {
+      o.log('🔴 follow-up 표식을 안전하게 읽거나 보존하지 못했다 — 추가 회차를 열지 않고 실패로 끝낸다')
+      worst = Math.max(worst, 1)
+      break
+    }
     if (!shouldRunFollowUp(pass, next.take)) break
     // 🔴 follow-up 회차의 trigger 는 거둔 표식 그대로다(띄운 이유는 앞 회차의 것이다)
     ctx = { trigger: next.trigger ?? 'unknown', launch: o.trigger, absorbed: next.trigger, absorbedAt: next.at }

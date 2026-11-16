@@ -9,10 +9,11 @@
  *   ⑤ 댓글 1건의 실제 비용 계산(가격표 정본 · 운영 장부 실측 토큰)
  *   ⑥ 오케스트레이터 — 단계·모델이 아니면 provider 0 · write 0 · 9관문 정본 그대로
  *   ⑦ schedule 템플릿 · 배포 quiesce 목록
+ *   ⑨ 첫 댓글 재시도 — 같은 글 60분 window 안에서 post×Persona×role 을 다시 보내지 않는다(2026-11-01 D20 재현)
  *
  *   npm run persona:comment-loop-check
  */
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
@@ -33,7 +34,19 @@ import {
 import { MAX_OUTPUT_TOKENS } from './lib/persona-prompt'
 import {
   commentLoopLedgerDir, makeCanonGate, runCommentLoop, generationGateOf, COMMENT_LOOP_LOCK_FILE, type CommentGenerate,
+  autoLaneTargetSource,
 } from './lib/persona-comment-loop.mjs'
+import { materializeTargets, type SourcePersona, type SourcePost } from './lib/persona-comment-targets'
+import { legacyRepeatBand } from './lib/persona-voice-legacy-oracle.mjs'
+import { RATIO_WINDOW_DAYS } from '../src/lib/persona-comment-governor'
+import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
+import { dedupKeyOf } from '../src/lib/persona-comment-queue'
+import {
+  ATTEMPT_JOURNAL_CORRUPT_FILE, ATTEMPT_JOURNAL_FILE, ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE, createAttemptStore,
+  type AttemptFsOps, type AttemptStore,
+} from './lib/persona-comment-attempt-store.mjs'
+import { parseAttemptJournal, serializeAttemptJournal } from '../src/lib/persona-comment-attempt-policy'
+import { BOOTSTRAP_SLOTS_PER_POST } from '../src/lib/persona-comment-bootstrap-budget'
 import { lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, LEASE_FD_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
 import { spawn } from 'node:child_process'
 import type { TargetSource, GateContext } from './lib/persona-comment-targets'
@@ -293,9 +306,11 @@ console.log('\n⑥ 오케스트레이터 — 단계·모델 관문 · 9관문 �
     canon: { runId: 'r', artifactSha: { summary: 'a', samples: 'b', key: 'c' }, winner: 'gemini-3.7-flash', decidedBy: 'x', decidedAt: 'y', scoredSamples: 9 },
     detail: 'ok',
   }
+  const noStore = new Proxy({}, { get: () => { throw new Error('시도 기억 저장소에 닿았다') } }) as AttemptStore
   const deps = (stage: string | undefined, over: Partial<Parameters<typeof runCommentLoop>[0]> = {}) => ({
     prisma: noDb, now: new Date(NOW), env: { SORAN_PERSONA_COMMENT_STAGE: stage }, live: true,
-    source: noSource, canon: canonOk, makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: 6, ...over,
+    source: noSource, canon: canonOk, makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: 6,
+    attemptStore: noStore, ...over,
   })
   for (const stage of [undefined, 'shadow', 'bootstrap-review', 'organic', 'release', 'bootstrap-autoo']) {
     const r = await runCommentLoop(deps(stage))
@@ -551,8 +566,8 @@ console.log('\n⑧ 🔴 공통 lease · 겹친 깨움 합치기 · 예산 선검
     && wcode.indexOf('-s -t 0 9') < wcode.indexOf('exec "$@"'))
   const lease = readFileSync('scripts/lib/runner-lease.mts', 'utf-8')
   const leaseCode = lease.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
-  check('🔴 🔴 lease 모듈 — wrapper 를 인자 배열로만 띄운다 · 부모 명령줄 · ppid · rename · kill · wx 잠금(collect-lock) 0',
-    !/rename|process\.kill|ppid|\/bin\/ps|exec\(|execSync\(|shell: true|collect-lock|acquireLock/.test(leaseCode)
+  check('🔴 🔴 lease 모듈 — wrapper 를 인자 배열로만 띄운다 · 부모 명령줄 · ppid · kill · wx 잠금(collect-lock) 0 (follow-up marker 원자 claim rename 은 허용)',
+    !/process\.kill|ppid|\/bin\/ps|exec\(|execSync\(|shell: true|collect-lock|acquireLock/.test(leaseCode)
     && /spawnSync\('\/bin\/sh', \[LEASE_WRAPPER, i\.lockPath, lockf, i\.command, \.\.\.i\.args\]/.test(leaseCode)
     && /fstatSync\(LEASE_FD\)/.test(leaseCode) && /a\.dev === b\.dev && a\.ino === b\.ino/.test(leaseCode))
   const entry = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
@@ -574,6 +589,667 @@ console.log('\n⑧ 🔴 공통 lease · 겹친 깨움 합치기 · 예산 선검
     && !generationGateOf({ missingEnv: [], ledger: { health: 'unknown', codes: ['NO_BUDGET'], reasons: [] } }).ok
     && !generationGateOf({ missingEnv: ['X'], ledger: { health: 'ok', codes: [], reasons: [] } }).ok)
   check('기준선 — 장부 ok · env 있음 → 열림', generationGateOf({ missingEnv: [], ledger: { health: 'ok', codes: [], reasons: [] } }).ok)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에서 이미 보낸 post×Persona×role 을 다시 보내지 않는다 (2026-11-01 D20)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 운영 모양을 줄인 결정적 재현. **운영 경로 그대로** — `runCommentLoop` → 진짜 `autoLaneTargetSource` → `materializeTargets` →
+   *    `runEnqueuePipeline` → 진짜 9관문(`makeCanonGate`) 을 부르고, 읽기(TargetSource) · provider · DB(prisma) 만 가짜다.
+   *    시도 기억은 **진짜 파일 저장소**(임시 디렉터리)다. 네트워크 0 · 운영 DB 0 · 운영 파일 0.
+   *
+   *    · 14:20 KST 발행 · 20분 간격 3회차(+15 · +35 · +55분) — 전부 60분 window 안
+   *    · 경쟁 대상 글은 발행 시각만 다르다 — 대상 수 1 → 2 → 3 은 정본 필터가 만든다
+   *    · 회차 provider 호출 상한은 운영 기본(runRequestCap) → 이 글의 호출 기회 5 → 3 → 2
+   *    · 모든 후보가 Gate 에서 막힌다(생성문이 글 본문 그대로 → ① 복제) → 적재 0 → 다음 회차가 읽는 DB 상태는 그대로다
+   */
+  const MIN = 60_000
+  const PUBLISHED_MS = Date.parse('2026-11-01T05:20:00.000Z') // 14:20 KST
+  const WINDOW_MS = AUTO_FIRST_COMMENT_WINDOW_MINUTES * MIN
+  const ROUND_OFFSETS_MIN = [15, 35, 55] as const
+  const TARGET_ID = 'cmvxdsy4u0001xm0ihsm8u05w'
+  const POOL = ['P14', 'P17', 'P24', 'P26', 'P28'] as const
+  const BODY = '오늘 동네를 한 바퀴 걸었어요. 바람이 선선했어요.'
+  const ENV = { SORAN_PERSONA_COMMENT_STAGE: 'bootstrap-auto' }
+  const winner = 'gemini-3.7-flash'
+  const canon = {
+    selection: { status: 'confirmed' as const, winner },
+    canon: { runId: 'r', artifactSha: { summary: 'a', samples: 'b', key: 'c' }, winner, decidedBy: 'x', decidedAt: 'y', scoredSamples: 9 },
+    detail: 'ok',
+  }
+
+  const persona = (code: string, forbidden: readonly string[] = []): SourcePersona => ({
+    code, status: 'active',
+    identity: { job: '강사', maritalStatus: '기혼' },
+    voiceCore: { ending: '~해요', register: '존댓말', emoji: '가끔', length: '짧은 문장' },
+    voiceVariations: ['질문형'],
+    ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
+    noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [...forbidden],
+    user: { providerId: null, accountCount: 0 },
+    recentRoles: { roleCounts: {}, unresolvedRoleEvents: 0 },
+    comments: [
+      '저도 그런 날이 있었어요', '무릎이 시큰해서 병원에 갔어요', '햇살이 좋더라고요',
+      '같이 걸으면 더 좋아요', '오늘은 좀 쉬려고요',
+    ].map((content, i) => ({ content, createdAtMs: PUBLISHED_MS - (i + 1) * 3_600_000 })),
+  })
+  const postAt = (id: string, publishedAtMs: number, title: string): SourcePost => ({
+    id, source: 'SYSTEM', title, content: BODY,
+    boardType: 'FREE', publishAtMs: publishedAtMs, category: null,
+    sourceSite: null, authorPersonaCode: 'P02', authorOperatorWriterId: null, author: null,
+    visibility: { status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false },
+    comments: [], personaCodesEverOnPost: [],
+  })
+  const sourceOf = (posts: readonly SourcePost[], personas: readonly SourcePersona[]): TargetSource => ({
+    posts: async () => posts,
+    personas: async () => personas,
+    openDedupKeys: async () => [],
+    recentRoleCounts: async () => ({}),
+    knownNames: async () => ['홍길동'],
+    frequency: async () => ({ corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스' }),
+    seedUseCount: async () => 1,
+  })
+
+  /** 🔴 DB 는 읽기 몇 개만 안다. create · $transaction 등 그 밖의 접근은 `bypass` 에 남는다 — 0 이어야 한다 */
+  const makeDb = () => {
+    const bypass: string[] = []
+    const calls = { sweepFind: 0 }
+    const known: Record<string, unknown> = {
+      personaApprovalQueue: new Proxy({
+        findMany: async () => { calls.sweepFind += 1; return [] },
+      }, { get: (t, k) => (k in t ? (t as Record<string | symbol, unknown>)[k] : (bypass.push(`personaApprovalQueue.${String(k)}`), async () => { throw new Error('우회') })) }),
+      comment: { findMany: async () => [], count: async () => 0 },
+      personaGlobalSwitch: { findUnique: async () => null },
+      // 🔴 오늘 예산(`countManagedPostsToday`)이 읽는 모양 — 관리형 Persona 글 6편 × 운영 예산 자리 5 = 30자리
+      post: { findMany: async () => Array.from({ length: 6 }, () => ({
+        source: 'SYSTEM', status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
+        persona: { code: 'P02' }, operatorWriterId: null, author: null, comments: [],
+      })) },
+    }
+    const prisma = new Proxy(known, {
+      get: (t, k) => (k in t ? t[k as string] : (bypass.push(String(k)), async () => { throw new Error('우회') })),
+    }) as unknown as PrismaClient
+    return { prisma, bypass, calls }
+  }
+
+  type Sent = { round: number; postId: string; personaCode: string; role: string }
+  const newDir = (): string => mkdtempSync(join(tmpdir(), 'comment-attempt-check-'))
+  const keyOfSent = (s: Sent): string => `${s.postId.slice(0, 8)}:${s.personaCode}:${s.role}`
+  const dirs: string[] = []
+  const freshDir = (): string => { const d = newDir(); dirs.push(d); return d }
+
+  /** 한 회차를 운영 경로 그대로 돌린다 */
+  const runRound = async (o: {
+    round: number; nowMs: number; source: TargetSource; store: ReturnType<typeof createAttemptStore>
+    db: ReturnType<typeof makeDb>; sent: Sent[]; text?: string
+  }) => runCommentLoop({
+    prisma: o.db.prisma, now: new Date(o.nowMs), env: ENV, live: true, source: o.source, canon,
+    makeGenerate: () => async ({ input }) => {
+      o.sent.push({ round: o.round, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
+      return { ok: true, text: o.text ?? BODY, errorCode: null }
+    },
+    generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+    attemptStore: o.store,
+  })
+
+  // ── A. 2026-11-01 운영 재현 — 수정 뒤 반복 0 · 후속 회차가 새 조합으로 채운다 ──
+  {
+    const dir = freshDir()
+    const store = createAttemptStore({ dir })
+    const db = makeDb()
+    const posts: readonly SourcePost[] = [
+      postAt(TARGET_ID, PUBLISHED_MS, '동네 산책'),
+      postAt('cmvxe0competitor1aaaaaaaaa', PUBLISHED_MS + 20 * MIN, '오늘 저녁 반찬'),
+      postAt('cmvxe0competitor2bbbbbbbbb', PUBLISHED_MS + 40 * MIN, '요즘 잠이 안 와요'),
+    ]
+    const source = sourceOf(posts, POOL.map((c) => persona(c)))
+    const sent: Sent[] = []
+    const steps: string[] = []
+    const reports = []
+    for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
+      const r = await runRound({ round: i + 1, nowMs: PUBLISHED_MS + offsetMin * MIN, source, store, db, sent })
+      reports.push(r)
+      for (const o of r.outcomes) if (o.postId === TARGET_ID) steps.push(o.step)
+    }
+    const onTarget = sent.filter((x) => x.postId === TARGET_ID)
+    const perRound = [1, 2, 3].map((r) => onTarget.filter((x) => x.round === r).length)
+    for (let r = 1; r <= ROUND_OFFSETS_MIN.length; r += 1) {
+      console.log(`     회차 ${r} (+${ROUND_OFFSETS_MIN[r - 1]}분) 이 글 → ${onTarget.filter((x) => x.round === r).map((x) => `${x.personaCode}/${x.role}`).join(' · ')}`)
+    }
+    const seen = new Map<string, number[]>()
+    for (const x of onTarget) seen.set(keyOfSent(x), [...(seen.get(keyOfSent(x)) ?? []), x.round])
+    const repeated = [...seen.entries()].filter(([, rounds]) => rounds.length > 1)
+    console.log(`     distinct Persona ${new Set(onTarget.map((x) => x.personaCode)).size}명 · 호출 ${onTarget.length}회 · distinct 조합 ${seen.size}개`)
+    for (const [k, rounds] of repeated) console.log(`     ↻ 반복 ${k} — 회차 ${rounds.join('·')}`)
+
+    check('🟢 재현 모양 — 세 회차 모두 발행 후 60분 window 안 · 20분 간격',
+      ROUND_OFFSETS_MIN.every((m) => m * MIN <= WINDOW_MS) && ROUND_OFFSETS_MIN.every((m, i) => i === 0 || m - ROUND_OFFSETS_MIN[i - 1]! === 20))
+    check('🔴 재현 모양 유지 — 이 글의 호출 기회 5 → 3 → 2 (호출 수를 잃지 않고 새 조합으로 채운다)',
+      perRound.join(',') === '5,3,2', `호출 ${perRound.join(',')}`)
+    check('🔴 구조 상한 10이 첫 댓글 한 글의 provider 기회를 운영 예산 기준 5보다 크게 만들지 않는다',
+      perRound[0] !== undefined && perRound[0] <= BOOTSTRAP_SLOTS_PER_POST,
+      `첫 회차 ${perRound[0] ?? '없음'} · 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST}`)
+    check('🔴 🔴 같은 글 60분 window — provider 로 보낸 post×Persona×role 조합 반복 0 (이전 회차 실패를 기억한다)',
+      repeated.length === 0,
+      `반복 ${repeated.length}개 — ${repeated.map(([k, rounds]) => `${k}(회차 ${rounds.join('·')})`).join(' · ')}`)
+    check('🔴 총 10회 호출이면 distinct 조합도 10 — 후속 회차가 새 조합으로 채운다',
+      onTarget.length === 10 && seen.size === 10, `호출 ${onTarget.length} · distinct ${seen.size}`)
+    check('🔴 Gate 우회 0 — 이 글 호출 10회 전부 진짜 9관문에서 막힘(ENQUEUE_BLOCKED) · 첫 댓글 적재 0',
+      steps.length === 10 && steps.every((x) => x === 'ENQUEUE_BLOCKED') && reports.every((r) => r.enqueued === 0),
+      `${steps.join(',')}`)
+    check('🔴 Queue · publish 우회 0 — 가짜 DB 의 읽기 밖 접근 0 · 발행 sweep 은 회차마다 앞뒤로 돈다',
+      db.bypass.length === 0 && db.calls.sweepFind === 6 && reports.every((r) => r.sweepBefore !== null && r.sweepAfter !== null),
+      `우회 [${db.bypass.join(',')}] · sweep 조회 ${db.calls.sweepFind}`)
+    const second = reports[1]!
+    check('🟢 2회차 — 이미 보낸 조합을 제외했다고 말한다(attemptExcluded > 0 · 줄 있음)',
+      second.attemptExcluded > 0 && second.lines.some((l) => l.includes('이미 보낸 조합')), `제외 ${second.attemptExcluded}`)
+    const read = store.read(PUBLISHED_MS + 55 * MIN)
+    check('🔴 기억의 모양 — 조합·시각·단계·실패 관문만(전부 ENQUEUE_BLOCKED + 실패 관문 기록) · 후보 본문 없음 · 0600',
+      read.ok && read.entries.filter((e) => e.postId === TARGET_ID).length === 10
+      && read.entries.every((e) => e.step === 'ENQUEUE_BLOCKED' && e.failedGates.some((g) => g.startsWith('①:')))
+      && !readFileSync(store.path, 'utf-8').includes(BODY.slice(0, 10))
+      && (statSync(store.path).mode & 0o777) === 0o600 && readdirSync(dir).length === 1,
+      read.ok ? JSON.stringify(read.entries[0]) : read.reason)
+  }
+
+  // ── A-2. 🔴 2026-11-07 D20 COMMENT_MISSING 재현 — 혼자 공개된 글 · 이력이 잠긴 Persona 5명이 매 회차 맨 앞 ──
+  {
+    /**
+     * 운영 모양(본문은 합성):
+     *   · 12:10 KST 공개된 글 하나 · 경쟁 글 없음 · 정기 회차 12:25 · 12:45 · 13:05(+15 · +35 · +55분)
+     *   · P14 · P24(3-gram 4/4) · P17 · P26(시작어절 2/4) · P39(말끝 2/4)는 이력 4건 — 최근 댓글이 가장 적어 planner 맨 앞
+     *   · 나머지는 이력 5~6건 · 서로 겹치지 않는 말투
+     *   · 옛 판정은 이 5명에게 어떤 후보에도 ⑧ regenerate 였다(실측 11회 중 10회) → 60분 동안 적재 0
+     */
+    const PUB = Date.parse('2026-11-07T03:10:00.000Z')
+    const LONELY = 'cmw5tsxvh0001xm1z7dddww50'
+    const u = (j: number): string => String.fromCharCode(0xAC00 + j)
+    /** 서로 겹치지 않는 발화 — 시작 · 말끝 · 3글자 조각이 전부 다르다 */
+    const distinct = (base: number, k: number): string[] =>
+      Array.from({ length: k }, (_, i) => `${u(base + i * 9)}${u(base + i * 9 + 1)} ${u(base + i * 9 + 2)}${u(base + i * 9 + 3)}${u(base + i * 9 + 4)}`)
+    const LOCKED_PRIOR: Record<string, string[]> = {
+      P14: ['아침에 저도요 걸었어요', '점심엔 국수 먹고 저도요 쉬었네요', '비가 와서 저도요 집에 있었죠', '주말엔 저도요 시장 가요'],
+      P24: ['커피 한잔 맞는말 이에요', '그 말이 맞는말 같네요', '다들 맞는말 하시네', '역시 맞는말 이지요'],
+      P17: ['저는 산책이 좋아요', '저는 오늘 쉬어요', '요즘 무릎이 아파서요', '날이 추워졌네요'],
+      P26: ['그냥 웃고 말아요', '그냥 넘기셔도 돼요', '시장 다녀왔어요', '바람이 차네요'],
+      P39: ['오늘 비 오는 것 같아요', '내일은 맑을 것 같아요', '산책 다녀왔어요', '점심은 김밥이에요'],
+    }
+    const LOCKED_CODES = Object.keys(LOCKED_PRIOR)
+    const withHistory = (code: string, texts: readonly string[]): SourcePersona => ({
+      ...persona(code),
+      comments: texts.map((content, i) => ({ content, createdAtMs: PUB - (i + 1) * 3_600_000 })),
+    })
+    const pool: SourcePersona[] = [
+      ...LOCKED_CODES.map((c) => withHistory(c, LOCKED_PRIOR[c]!)),
+      withHistory('P37', distinct(3000, 5)),
+      // 🔴 P02 는 글쓴이다 — 자기 글에 첫 댓글을 달지 않으므로 pool 에 넣지 않는다
+      ...['P01', 'P03', 'P04', 'P05', 'P06'].map((c, i) => withHistory(c, distinct(4000 + i * 200, 6))),
+    ]
+    // 🔴 ② 가 흔한 말로 보도록 — 이 재현은 ⑧ 만 본다(다른 관문은 진짜 정본이 그대로 돈다)
+    const replaySource = (): TargetSource => ({
+      ...sourceOf([postAt(LONELY, PUB, '대구공항 주정차 라인이 궁금해서 여쭤봐요')], pool),
+      frequency: async () => ({ corpus: { lookup: () => 10_000, size: 100_000, corpusName: 'comment' }, reason: '시험 코퍼스' }),
+    })
+    /** PENDING 쓰기까지 받는 가짜 DB — 잠금(findUnique · updateMany)과 create 만 안다. 그 밖은 bypass */
+    const makeWriteDb = () => {
+      const base = makeDb()
+      const created: { dedupKey: string; personaCode: string }[] = []
+      const tx = {
+        post: {
+          findUnique: async () => ({ id: LONELY, boardType: 'FREE', status: 'PUBLISHED', updatedAt: new Date(PUB) }),
+          updateMany: async () => ({ count: 1 }),
+        },
+        personaApprovalQueue: {
+          create: async ({ data }: { data: { dedupKey: string; persona: { connect: { code: string } } } }) => {
+            created.push({ dedupKey: data.dedupKey, personaCode: data.persona.connect.code })
+            return { id: `q${created.length}` }
+          },
+        },
+      }
+      const prisma = new Proxy(base.prisma as unknown as Record<string, unknown>, {
+        get: (t, k) => (k === '$transaction' ? async (fn: (x: typeof tx) => Promise<unknown>) => fn(tx) : t[k as string]),
+      }) as unknown as PrismaClient
+      return { ...base, prisma, created }
+    }
+    const CLEAN = '이런 얘기 들으니 마음이 편해지네'
+    /** 잠긴 5명은 자기 말버릇을 다시 쓰는 생성(최악) · 나머지는 깨끗한 생성 */
+    const TIC: Record<string, string> = {
+      P14: '오늘도 저도요 그랬어', P24: '오늘도 맞는말 이네', P17: '저는 이번에도 그래', P26: '그냥 그렇게 해요', P39: '이번에도 그럴 것 같아요',
+    }
+    type Out = { round: number; persona: string; step: string; line: string }
+    const replay = async (gen: (code: string) => string) => {
+      const store = createAttemptStore({ dir: freshDir() })
+      const db = makeWriteDb()
+      const sent: Sent[] = []
+      const outs: Out[] = []
+      const reports = []
+      for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
+        const r = await runCommentLoop({
+          prisma: db.prisma, now: new Date(PUB + offsetMin * MIN), env: ENV, live: true, source: replaySource(), canon,
+          makeGenerate: () => async ({ input }) => {
+            sent.push({ round: i + 1, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
+            return { ok: true, text: gen(input.personaCode), errorCode: null }
+          },
+          generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          attemptStore: store,
+        })
+        reports.push(r)
+        for (const o of r.outcomes) outs.push({ round: i + 1, persona: o.personaCode, step: o.step, line: r.lines.find((l) => l.includes(`${o.personaCode} → 글`)) ?? '' })
+        if (db.created.length > 0) break // 🔴 적재되면 그 글은 끝 — 다음 회차의 대상이 아니다(운영은 열린 Queue 가 막는다)
+      }
+      return { sent, outs, reports, created: db.created }
+    }
+
+    // S1 — 깨끗한 생성: 잠긴 5명도 첫 회차에 통과한다(옛 판정은 막았다)
+    const s1 = await replay(() => CLEAN)
+    const first1 = s1.outs[0]
+    console.log(`     S1 깨끗한 생성 — 첫 시도 ${first1?.persona ?? '없음'} ${first1?.step ?? ''} · 적재 ${s1.created.map((c) => c.personaCode).join(',')}`)
+    check('🔴 재현 — planner 가 이력 4건인 잠긴 Persona 를 맨 앞에 세운다(정렬은 바꾸지 않았다)',
+      first1 !== undefined && LOCKED_CODES.includes(first1.persona))
+    // 🔴 같은 3회차에 옛 판정을 실제로 적용한다 — planner · 회차 상한 · 조합 범위 시도 기억은 그대로, ⑧ 반복 축만 옛 oracle.
+    //    다른 관문은 S1 에서 실제로 통과한 같은 문장이라 같다(이 비교는 ⑧ 의 차이만 잰다).
+    const legacy = await (async () => {
+      const attempted = new Set<string>()
+      const sentL: { round: number; persona: string; band: string }[] = []
+      let firstEnqueueRound: number | null = null
+      for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
+        const nowMs = PUB + offsetMin * MIN
+        const mat = await materializeTargets({
+          source: autoLaneTargetSource(replaySource(), nowMs), limit: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          nowMs, windowMs: RATIO_WINDOW_DAYS * 86_400_000, attemptedCombos: attempted,
+        })
+        for (const t of mat.targets) {
+          const prior = pool.find((x) => x.code === t.target.facts.personaCode)!.comments.map((c) => c.content)
+          const band = legacyRepeatBand(prior, CLEAN)
+          sentL.push({ round: i + 1, persona: t.target.facts.personaCode, band })
+          attempted.add(dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole))
+          if (band === 'pass') { firstEnqueueRound = i + 1; break }
+        }
+        if (firstEnqueueRound !== null) break
+      }
+      return { sentL, firstEnqueueRound }
+    })()
+    console.log(`     옛 판정 같은 3회차 — ${legacy.sentL.map((x) => `${x.round}:${x.persona}:${x.band}`).join(' ')} · 첫 적재 회차 ${legacy.firstEnqueueRound ?? '없음(60분 0)'}`)
+    check('🔴 🔴 옛 판정(같은 planner · 같은 회차 · 조합 범위 기억)은 1회차를 잠긴 5명에게 모두 쓰고 전부 막는다',
+      legacy.sentL.filter((x) => x.round === 1).length > 0
+      && legacy.sentL.filter((x) => x.round === 1).every((x) => LOCKED_CODES.includes(x.persona) && x.band !== 'pass'),
+      legacy.sentL.map((x) => `${x.round}:${x.persona}:${x.band}`).join(' '))
+    check(`🔴 옛 판정의 첫 적재는 ${legacy.firstEnqueueRound === null ? '60분 안에 없다' : `${legacy.firstEnqueueRound}회차(+${ROUND_OFFSETS_MIN[legacy.firstEnqueueRound - 1]}분)`} — 새 판정은 1회차`,
+      legacy.firstEnqueueRound === null || legacy.firstEnqueueRound > 1)
+    check('🔴 🔴 S1 — 혼자 공개된 글이 첫 회차(+15분)에 첫 댓글 후보를 적재한다',
+      s1.created.length === 1 && s1.outs.filter((o) => o.round === 1).some((o) => o.step === 'ENQUEUED'),
+      s1.outs.map((o) => `${o.round}:${o.persona}:${o.step}`).join(' '))
+    check('🔴 S1 — 잠긴 Persona 의 통과는 기준선 초과(후보 무관)로 로그에 남는다',
+      s1.outs.some((o) => o.step === 'ENQUEUED' && o.line.includes('기준선 초과(후보 무관 · 통과)')))
+
+    // S2 — 최악: 잠긴 5명이 자기 말버릇을 다시 쓴다 → ⑧ 이 막고 · 다음 회차에는 그 글에서 그 5명을 다시 부르지 않는다
+    const s2 = await replay((code) => TIC[code] ?? CLEAN)
+    const r1 = s2.sent.filter((x) => x.round === 1)
+    const later = s2.sent.filter((x) => x.round > 1)
+    console.log(`     S2 말버릇 재사용 — 1회차 ${r1.map((x) => `${x.personaCode}/${x.role}`).join(' · ')} | 이후 ${later.map((x) => `${x.round}:${x.personaCode}/${x.role}`).join(' · ')} · 적재 ${s2.created.map((c) => c.personaCode).join(',')}`)
+    check('🔴 S2 — 우세 패턴을 다시 쓴 후보는 ⑧ 후보 원인으로 막힌다(완화 0)',
+      s2.outs.filter((o) => o.round === 1 && LOCKED_CODES.includes(o.persona)).every((o) => o.step === 'ENQUEUE_BLOCKED' && o.line.includes('⑧ 후보 원인'))
+      && s2.outs.some((o) => o.round === 1 && LOCKED_CODES.includes(o.persona)))
+    const blockedR1 = new Set(s2.outs.filter((o) => o.round === 1 && o.step === 'ENQUEUE_BLOCKED' && o.line.includes('⑧ 후보 원인')).map((o) => o.persona))
+    check('🔴 🔴 S2 — ⑧ 로 막힌 Persona 는 그 글에서 역할만 바꿔 다시 부르지 않는다(post × Persona)',
+      blockedR1.size > 0 && later.every((x) => !blockedR1.has(x.personaCode)), [...blockedR1].join(','))
+    check('🔴 S2 — 다음 회차가 다른 Persona 로 이어 60분 안에 적재한다',
+      s2.created.length === 1 && !blockedR1.has(s2.created[0]!.personaCode))
+    check('🔴 S2 — planner skip 이 원인별로 로그에 남는다(⑧ 시도)',
+      s2.reports.slice(1).some((r) => r.lines.some((l) => l.startsWith('planner skip ⑧ 시도'))))
+  }
+
+  // ── 같은 Persona 의 다른 허용 role 은 별 조합 — planner feasible 단계에서 정확한 조합만 뺀다 ──
+  {
+    const posts = [postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')]
+    const attempted = new Set([dedupKeyOf(TARGET_ID, 'P14', 'empathy')])
+    const mat = await materializeTargets({
+      source: autoLaneTargetSource(sourceOf(posts, [persona('P14')]), PUBLISHED_MS + 15 * MIN), limit: 6,
+      nowMs: PUBLISHED_MS + 15 * MIN, windowMs: RATIO_WINDOW_DAYS * 86_400_000, attemptedCombos: attempted,
+    })
+    const roles = mat.targets.map((t) => t.target.facts.reactionRole)
+    check('🔴 같은 Persona 의 다른 허용 role 은 별 조합 — empathy 만 빠지고 다른 role 로 이어진다',
+      roles.length > 0 && !roles.includes('empathy') && mat.targets.every((t) => t.target.facts.personaCode === 'P14')
+      && mat.counts.attemptExcluded >= 1, `roles ${roles.join(',')} · 제외 ${mat.counts.attemptExcluded}`)
+    const plain = await materializeTargets({
+      source: autoLaneTargetSource(sourceOf(posts, [persona('P14')]), PUBLISHED_MS + 15 * MIN), limit: 6,
+      nowMs: PUBLISHED_MS + 15 * MIN, windowMs: RATIO_WINDOW_DAYS * 86_400_000,
+    })
+    check('🟢 기억을 넘기지 않으면 옛 동작 그대로 — 제외 0', plain.counts.attemptExcluded === 0 && plain.targets.length > 0)
+  }
+
+  // ── B·C. 가능한 조합이 하나뿐인 글 — 소진되면 유료 호출 0 · 자정을 넘겨도 기억 유지 · 발행+60분 뒤 만료 ──
+  {
+    const ONLY = 'empathy'
+    const oneCombo = persona('P14', COMMENT_REACTION_ROLES.filter((r) => r !== ONLY))
+    const KST_2350 = Date.parse('2026-11-01T14:50:00.000Z') // 23:50 KST
+    const posts = [postAt(TARGET_ID, KST_2350, '밤 산책')]
+    const source = sourceOf(posts, [oneCombo])
+    const dir = freshDir()
+    const store = createAttemptStore({ dir })
+    const db = makeDb()
+    const sent: Sent[] = []
+    const r1 = await runRound({ round: 1, nowMs: KST_2350 + 5 * MIN, source, store, db, sent })
+    const r2 = await runRound({ round: 2, nowMs: KST_2350 + 30 * MIN, source, store, db, sent }) // 00:20 KST — 날짜가 바뀌었다
+    check('🔴 B 소진 — 1회차는 유일한 조합을 보내고, 2회차는 새 조합이 없어 provider 0 · 반복 0',
+      sent.length === 1 && r1.providerCalls === 1 && r2.providerCalls === 0, `보냄 ${sent.length} · ${r1.providerCalls}/${r2.providerCalls}`)
+    check('🔴 B 소진 — 이유를 말한다(generationSkipped · 줄)',
+      (r2.generationSkipped ?? '').includes('새 조합이 없다') && r2.lines.some((l) => l.includes('이미 보낸 조합 1건 제외')),
+      `${r2.generationSkipped} · ${r2.lines.join(' / ')}`)
+    check('🔴 C 자정 — 23:50 발행 글의 기억이 다음날 00:20 에도 유지된다(KST 날짜가 아니라 발행+60분)',
+      new Date(KST_2350 + 30 * MIN).toISOString().slice(0, 13) === '2026-11-01T15' // 00:20 KST = 11-02
+      && r2.attemptExcluded === 1 && r2.sweepBefore !== null && r2.sweepAfter !== null)
+    const exp = KST_2350 + 60 * MIN
+    const at = (ms: number) => { const r = store.read(ms); return r.ok ? r.entries.length : -1 }
+    check('🔴 C 만료 — 발행+60분까지(포함) 유지, 1ms 뒤 만료', at(exp) === 1 && at(exp + 1) === 0, `${at(exp)} / ${at(exp + 1)}`)
+    check('🔴 C 만료 — 같은 store 에 만료 뒤 새 유효 entry 를 쓰면 실제 파일에 새 entry 만 남는다(만료 기억을 턴다)', (() => {
+      // 🔴 recordOutcomes([]) 는 no-op 이라 털기를 증명하지 못한다 — 실제 쓰기(recordStart)로 본다
+      const before = (JSON.parse(readFileSync(store.path, 'utf-8')).entries as { postId: string }[]).map((e) => e.postId)
+      const next = { postId: 'p-next', personaCode: 'P01', reactionRole: 'empathy', postPublishedAtMs: exp - 5 * MIN, attemptedAtMs: exp + 2, step: 'STARTED' as const, failedGates: [], blockCodes: [] }
+      const w = store.recordStart(next, exp + 2)
+      const kept = (JSON.parse(readFileSync(store.path, 'utf-8')).entries as { postId: string }[]).map((e) => e.postId)
+      const reread = store.read(exp + 2)
+      return before.length === 1 && before[0] === TARGET_ID && w.ok
+        && kept.length === 1 && kept[0] === 'p-next' && reread.ok && reread.entries.length === 1
+    })())
+    check('🔴 G 우회 0 — 소진·자정 회차도 가짜 DB 의 읽기 밖 접근 0', db.bypass.length === 0, db.bypass.join(','))
+  }
+
+  // ── D. 파일 없음 = 정상 빈 기억 ──
+  {
+    const store = createAttemptStore({ dir: join(freshDir(), 'not-created-yet') })
+    const r = store.read(PUBLISHED_MS)
+    check('🟢 D 파일이 없다 → 정상 빈 기억(ok · missing · 0건)', r.ok && r.missing && r.entries.length === 0)
+    const db = makeDb(); const sent: Sent[] = []
+    const rep = await runRound({
+      round: 1, nowMs: PUBLISHED_MS + 15 * MIN, store, db, sent,
+      source: sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], [persona('P14')]),
+    })
+    check('🟢 D 파일이 없어도 첫 회차는 평소처럼 보낸다 · 경고 0', rep.providerCalls > 0 && rep.attemptWarnings.length === 0 && existsSync(store.path))
+  }
+
+  // ── E. 손상 · 스키마 불일치 · 읽기 실패 → 첫 댓글 유료 생성 0 · sweep 은 돈다 · 경고 ──
+  {
+    const good = { postId: 'p1', personaCode: 'P01', reactionRole: 'empathy', postPublishedAtMs: PUBLISHED_MS, attemptedAtMs: PUBLISHED_MS + MIN, step: 'STARTED', failedGates: [], blockCodes: [] }
+    const bad: [string, (dir: string) => void][] = [
+      ['JSON 손상', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), '{"version":1,"entries":[')],
+      ['버전 불일치', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 2, entries: [] }))],
+      ['entries 가 배열 아님', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: {} }))],
+      ['항목에 본문 키가 끼어듦', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [{ ...good, text: '후보 본문' }] }))],
+      ['step 이 계약 밖', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [{ ...good, step: 'DONE' }] }))],
+      ['실패 관문이 자유 문장', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [{ ...good, failedGates: ['후보 본문이 이상함'] }] }))],
+      ['시각이 문자열', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [{ ...good, postPublishedAtMs: 'x' }] }))],
+      ['시도 시각이 발행 시각보다 이름', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [{ ...good, attemptedAtMs: PUBLISHED_MS - 1 }] }))],
+      ['시도 시각이 발행+60분을 1ms 넘김', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [{ ...good, attemptedAtMs: PUBLISHED_MS + WINDOW_MS + 1 }] }))],
+      ['같은 조합이 두 줄', (d) => writeFileSync(join(d, ATTEMPT_JOURNAL_FILE), JSON.stringify({ version: 1, entries: [good, { ...good, attemptedAtMs: PUBLISHED_MS + 2 * MIN, step: 'ENQUEUE_BLOCKED' }] }))],
+      ['읽기 실패(경로가 디렉터리)', (d) => mkdirSync(join(d, ATTEMPT_JOURNAL_FILE))],
+    ]
+    for (const [label, arrange] of bad) {
+      const dir = freshDir(); arrange(dir)
+      const store = createAttemptStore({ dir })
+      const db = makeDb(); const sent: Sent[] = []
+      const rep = await runRound({
+        round: 1, nowMs: PUBLISHED_MS + 15 * MIN, store, db, sent,
+        source: sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], POOL.map((c) => persona(c))),
+      })
+      check(`🔴 🔴 E ${label} → 유료 provider 0 · sweep 앞뒤로 실행 · 경고 · 생성 건너뜀 이유`,
+        sent.length === 0 && rep.providerCalls === 0 && rep.outcome === 'RAN'
+        && rep.sweepBefore !== null && rep.sweepAfter !== null && db.calls.sweepFind === 2
+        && rep.attemptWarnings.length === 1 && rep.attemptWarnings[0]!.includes('유료 생성은 0')
+        && (rep.generationSkipped ?? '').includes('시도 기억을 읽지 못했다') && db.bypass.length === 0,
+        `보냄 ${sent.length} · 경고 ${rep.attemptWarnings.length} · ${rep.generationSkipped}`)
+      // 🔴 안내는 실제 동작만 말한다 — 손상 JSON 은 시간이 지나도 읽기 실패가 계속되므로 자동 복구를 암시하면 안 된다
+      check(`🔴 E ${label} → 경고는 로그 줄(lines)에 한 번만 · 자동 복구를 암시하지 않고 복구 전까지 0 이라고만 말한다`,
+        rep.lines.filter((l) => l === rep.attemptWarnings[0]).length === 1
+        && rep.attemptWarnings[0]!.includes('복구되기 전까지') && !/window\s*가\s*지난|비운다/.test(rep.attemptWarnings[0]!),
+        rep.attemptWarnings[0] ?? '(경고 없음)')
+    }
+    // 같은 읽기 실패에서 dry-run 도 경고를 보인다(쓰지 않는다)
+    const dir = freshDir(); bad[0]![1](dir)
+    const dry = await runCommentLoop({
+      prisma: makeDb().prisma, now: new Date(PUBLISHED_MS + 15 * MIN), env: ENV, live: false,
+      source: sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], [persona('P14')]), canon,
+      makeGenerate: () => { throw new Error('dry-run 에서 생성기를 만들면 안 된다') },
+      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: createAttemptStore({ dir }),
+    })
+    check('🟢 E dry-run — 읽기 실패 경고를 보이되 쓰지 않는다(provider 0 · 파일 그대로)',
+      dry.outcome === 'DRY_RUN' && dry.attemptWarnings.length === 1 && readFileSync(join(dir, ATTEMPT_JOURNAL_FILE), 'utf-8') === '{"version":1,"entries":[')
+    check('🔴 E dry-run — 경고도 lines 에 한 번만 실린다', dry.lines.filter((l) => l === dry.attemptWarnings[0]).length === 1)
+
+    // 🔴 시각 스키마 경계 — 런타임이 쓰는 [발행, 발행+60분](양끝 포함)은 유효하고, 한 칸 밖은 SCHEMA_MISMATCH 다
+    const parseAt = (attemptedAtMs: number, extra: readonly object[] = []) =>
+      parseAttemptJournal(JSON.stringify({ version: 1, entries: [{ ...good, attemptedAtMs }, ...extra] }))
+    check('🟢 E 시각 경계 — 발행 시각 · 발행+60분 정각은 유효',
+      parseAt(PUBLISHED_MS).ok && parseAt(PUBLISHED_MS + WINDOW_MS).ok)
+    const early = parseAt(PUBLISHED_MS - 1)
+    const late = parseAt(PUBLISHED_MS + WINDOW_MS + 1)
+    const dup = parseAt(PUBLISHED_MS + MIN, [{ ...good, attemptedAtMs: PUBLISHED_MS + 2 * MIN }])
+    const otherRole = parseAt(PUBLISHED_MS + MIN, [{ ...good, reactionRole: 'question' }])
+    check('🔴 E 시각 범위 밖(발행 전 · +60분 1ms 초과)과 같은 조합 중복은 SCHEMA_MISMATCH · 다른 role 은 별 조합이라 유효',
+      !early.ok && early.code === 'SCHEMA_MISMATCH' && !late.ok && late.code === 'SCHEMA_MISMATCH'
+      && !dup.ok && dup.code === 'SCHEMA_MISMATCH' && otherRole.ok)
+  }
+
+  // ── E-2. 손상본은 60분 동안 fail-closed, 그 뒤 격리 보존 + 새 장부로 자동 복구 ──
+  {
+    const dir = freshDir()
+    const path = join(dir, ATTEMPT_JOURNAL_FILE)
+    writeFileSync(path, '{oops')
+    utimesSync(path, new Date(PUBLISHED_MS), new Date(PUBLISHED_MS))
+    const store = createAttemptStore({ dir })
+    const fresh = store.read(PUBLISHED_MS + WINDOW_MS)
+    check('🔴 E-2 손상 직후 60분 경계까지는 fail-closed · 격리 0',
+      !fresh.ok && fresh.code === 'JSON_INVALID' && existsSync(path)
+      && !existsSync(join(dir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+
+    const later = PUBLISHED_MS + WINDOW_MS + 86_400_000
+    const previewDir = freshDir()
+    const previewPath = join(previewDir, ATTEMPT_JOURNAL_FILE)
+    writeFileSync(previewPath, '{expired-corrupt')
+    utimesSync(previewPath, new Date(PUBLISHED_MS), new Date(PUBLISHED_MS))
+    const preview = await runCommentLoop({
+      prisma: makeDb().prisma, now: new Date(later), env: ENV, live: false,
+      source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], [persona('P14')]), canon,
+      makeGenerate: () => { throw new Error('preview에서 생성기를 만들면 안 된다') },
+      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: createAttemptStore({ dir: previewDir }),
+    })
+    check('🔴 E-2 만료된 손상 장부여도 dry-run preview는 격리·초기화·새 파일 write 0',
+      preview.outcome === 'DRY_RUN' && preview.providerCalls === 0
+      && readFileSync(previewPath, 'utf-8') === '{expired-corrupt'
+      && readdirSync(previewDir).join(',') === ATTEMPT_JOURNAL_FILE,
+      readdirSync(previewDir).join(','))
+    const db = makeDb(); const sent: Sent[] = []
+    const rep = await runRound({
+      round: 1, nowMs: later, store, db, sent,
+      source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], POOL.map((c) => persona(c))),
+    })
+    const restored = store.read(later)
+    check('🔴 E-2 60분이 지난 손상본 → 격리 보존 · 새 장부 유효 · 새 글 provider 재개',
+      sent.length > 0 && rep.providerCalls > 0 && restored.ok && existsSync(path)
+      && existsSync(join(dir, ATTEMPT_JOURNAL_CORRUPT_FILE)),
+      `보냄 ${sent.length} · provider ${rep.providerCalls} · 파일 ${readdirSync(dir).join(',')}`)
+    check('🔴 E-2 복구는 구조화 경고 한 번 · 본문/경로 노출 0',
+      rep.attemptWarnings.length === 1 && rep.attemptWarnings[0]!.includes('격리하고 빈 장부로 복구')
+      && rep.lines.filter((line) => line === rep.attemptWarnings[0]).length === 1
+      && !rep.attemptWarnings[0]!.includes(BODY.slice(0, 10)) && !rep.attemptWarnings[0]!.includes(dir),
+      rep.attemptWarnings.join(' / '))
+
+    const oldCorrupt = (targetDir: string): string => {
+      const target = join(targetDir, ATTEMPT_JOURNAL_FILE)
+      writeFileSync(target, '{oops')
+      utimesSync(target, new Date(PUBLISHED_MS), new Date(PUBLISHED_MS))
+      return target
+    }
+    {
+      const statDir = freshDir(); const statPath = oldCorrupt(statDir)
+      const r = createAttemptStore({ dir: statDir, ops: { statSync: (p) => {
+        if (p === statPath) throw Object.assign(new Error('x'), { code: 'EIO' })
+        return statSync(p)
+      } } }).read(later)
+      check('🔴 E-2 손상 시각 stat 실패 → 자동 비우기 0 · 원본 유지 · fail-closed',
+        !r.ok && r.reason.includes('손상 시각 확인 실패 EIO') && existsSync(statPath)
+        && !existsSync(join(statDir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+    }
+    {
+      const renameDir = freshDir(); const renamePath = oldCorrupt(renameDir)
+      const r = createAttemptStore({ dir: renameDir, ops: { renameSync: () => {
+        throw Object.assign(new Error('x'), { code: 'EIO' })
+      } } }).read(later)
+      check('🔴 E-2 손상본 rename 실패 → 자동 비우기 0 · 원본 유지 · fail-closed',
+        !r.ok && r.reason.includes('손상본 격리 실패 EIO') && existsSync(renamePath)
+        && !existsSync(join(renameDir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+    }
+    {
+      const resetDir = freshDir(); oldCorrupt(resetDir)
+      const r = createAttemptStore({ dir: resetDir, ops: { writeSync: () => {
+        throw Object.assign(new Error('x'), { code: 'ENOSPC' })
+      } } }).read(later)
+      check('🔴 E-2 격리 뒤 새 장부 쓰기 실패(ENOSPC) → 그 회차만 fail-closed · 손상본 보존 · 정본 장부 없음',
+        !r.ok && r.code === 'READ_FAILED' && r.reason.includes('새 장부 쓰기 실패 ENOSPC')
+        && existsSync(join(resetDir, ATTEMPT_JOURNAL_CORRUPT_FILE)) && !existsSync(join(resetDir, ATTEMPT_JOURNAL_FILE)))
+      // 프로세스가 죽은 뒤와 같다 — 메모리 상태 없이 새 인스턴스가 정본 없음 + 격리본을 본다
+      const previewBefore = readdirSync(resetDir).sort().join(',')
+      const preview = createAttemptStore({ dir: resetDir }).read(later + 1, { repair: false })
+      check('🔴 E-2 그 상태의 preview(repair:false) → 닫힌 채 write 0',
+        !preview.ok && preview.code === 'READ_FAILED' && readdirSync(resetDir).sort().join(',') === previewBefore)
+      const failedAgain = createAttemptStore({ dir: resetDir, ops: { writeSync: () => {
+        throw Object.assign(new Error('x'), { code: 'ENOSPC' })
+      } } }).read(later + 2)
+      check('🔴 E-2 새 인스턴스 재시도도 ENOSPC 면 그 회차만 실패 · 정본 없음 · 격리본 그대로',
+        !failedAgain.ok && failedAgain.reason.includes('재생성 실패 ENOSPC')
+        && !existsSync(join(resetDir, ATTEMPT_JOURNAL_FILE)) && existsSync(join(resetDir, ATTEMPT_JOURNAL_CORRUPT_FILE)))
+      const second = createAttemptStore({ dir: resetDir }).read(later + 3)
+      check('🔴🔴 E-2 디스크가 회복된 뒤 새 인스턴스 live 읽기 → 빈 장부를 다시 만들고 진행 · 격리본 한 개 보존',
+        second.ok && second.entries.length === 0 && second.warning !== undefined
+        && readFileSync(join(resetDir, ATTEMPT_JOURNAL_FILE), 'utf-8') === serializeAttemptJournal([])
+        && readdirSync(resetDir).sort().join(',') === [ATTEMPT_JOURNAL_FILE, ATTEMPT_JOURNAL_CORRUPT_FILE].sort().join(','),
+        second.ok ? readdirSync(resetDir).join(',') : second.reason)
+      const resumed = createAttemptStore({ dir: resetDir })
+      const db = makeDb(); const sent: Sent[] = []
+      const rep2 = await runRound({
+        round: 1, nowMs: later + 4, store: resumed, db, sent,
+        source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], POOL.map((c) => persona(c))),
+      })
+      check('🔴 E-2 복구된 장부로 다음 회차 첫 댓글 provider 재개', rep2.providerCalls > 0 && sent.length > 0,
+        `provider ${rep2.providerCalls} · 보냄 ${sent.length}`)
+    }
+    {
+      // 격리본 mtime 이 60분 window 안이면(그 안의 시도를 모른다) 정본이 없어도 새 장부를 만들지 않는다
+      const recentDir = freshDir()
+      const recentCorrupt = join(recentDir, ATTEMPT_JOURNAL_CORRUPT_FILE)
+      writeFileSync(recentCorrupt, '{oops')
+      utimesSync(recentCorrupt, new Date(later - 10 * MIN), new Date(later - 10 * MIN))
+      const r = createAttemptStore({ dir: recentDir }).read(later)
+      check('🔴 E-2 격리본이 60분 window 안이면 정본 없음이어도 fail-closed · write 0',
+        !r.ok && r.reason.includes('60분 window 안') && readdirSync(recentDir).join(',') === ATTEMPT_JOURNAL_CORRUPT_FILE)
+    }
+    {
+      const boundedDir = freshDir()
+      for (let i = 0; i < 3; i += 1) {
+        oldCorrupt(boundedDir)
+        const recovered = createAttemptStore({ dir: boundedDir }).read(later + i)
+        if (!recovered.ok) break
+      }
+      const files = readdirSync(boundedDir).sort()
+      check('🔴 E-2 반복 손상 격리본은 현재·직전 두 개만 보존한다',
+        files.length === 3 && files.includes(ATTEMPT_JOURNAL_FILE)
+        && files.includes(ATTEMPT_JOURNAL_CORRUPT_FILE)
+        && files.includes(ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE), files.join(','))
+    }
+  }
+
+  // ── F. 시작 기록의 atomic write 실패 → provider 0 · 원본 그대로 · 임시 파일 정리 ──
+  {
+    const fails: [string, Partial<AttemptFsOps>][] = [
+      ['rename 실패', { renameSync: () => { throw Object.assign(new Error('x'), { code: 'EIO' }) } }],
+      ['임시 파일 열기 실패', { openSync: (p, f, m) => { if (String(p).endsWith('.tmp')) throw Object.assign(new Error('x'), { code: 'EACCES' }); return openSync(p, f, m) } }],
+      ['쓰기 실패', { writeSync: () => { throw Object.assign(new Error('x'), { code: 'ENOSPC' }) } }],
+      ['fsync 실패', { fsyncSync: () => { throw Object.assign(new Error('x'), { code: 'EIO' }) } }],
+      // 🔴 writeSync 가 던지지 않고 "일부만 썼다 / 하나도 못 썼다" 고 돌아오는 경우 — 성공으로 세면 잘린 파일이 rename 된다
+      ['0 byte 쓰기', { writeSync: () => 0 }],
+      ['부분 쓰기 뒤 진전 없음', (() => {
+        let first = true
+        return { writeSync: (fd: number, b: Uint8Array, off: number, len: number) => {
+          if (!first) return 0
+          first = false
+          return writeSync(fd, b, off, Math.max(1, Math.floor(len / 2)))
+        } }
+      })()],
+      ['요청보다 많이 썼다고 보고', { writeSync: (_fd: number, _b: Uint8Array, _off: number, len: number) => len + 1 }],
+    ]
+    for (const [label, ops] of fails) {
+      const dir = freshDir()
+      const seed = createAttemptStore({ dir })
+      const e0 = { postId: 'other', personaCode: 'P01', reactionRole: 'empathy', postPublishedAtMs: PUBLISHED_MS, attemptedAtMs: PUBLISHED_MS + MIN, step: 'STARTED' as const, failedGates: [], blockCodes: [] }
+      seed.recordStart(e0, PUBLISHED_MS + MIN)
+      const before = readFileSync(seed.path, 'utf-8')
+      const store = createAttemptStore({ dir, ops })
+      const db = makeDb(); const sent: Sent[] = []
+      const rep = await runRound({
+        round: 1, nowMs: PUBLISHED_MS + 15 * MIN, store, db, sent,
+        source: sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], POOL.map((c) => persona(c))),
+      })
+      check(`🔴 🔴 F 시작 기록 ${label} → provider 0 · 호출 수 0 · 경고 · 원본 그대로 · 임시 파일 없음`,
+        sent.length === 0 && rep.providerCalls === 0 && rep.attemptWarnings.some((w) => w.includes('시도 기록을 남기지 못했다'))
+        && rep.outcomes.length === 1 && rep.outcomes[0]!.step === 'ATTEMPT_BLOCKED'
+        && readFileSync(seed.path, 'utf-8') === before && readdirSync(dir).length === 1 && rep.sweepAfter !== null,
+        `보냄 ${sent.length} · 결과 ${rep.outcomes.map((o) => o.step).join(',')} · 파일 ${readdirSync(dir).join(',')}`)
+    }
+    // 🟢 부분 쓰기는 offset 을 전진시켜 끝까지 쓰면 정상이다 — 7바이트씩만 받아도 온전한 파일이 남는다
+    {
+      const dir = freshDir()
+      let calls = 0
+      const chunked = createAttemptStore({ dir, ops: { writeSync: (fd, b, off, len) => { calls += 1; return writeSync(fd, b, off, Math.min(7, len)) } } })
+      const e0 = { postId: 'other', personaCode: 'P01', reactionRole: 'empathy', postPublishedAtMs: PUBLISHED_MS, attemptedAtMs: PUBLISHED_MS + MIN, step: 'STARTED' as const, failedGates: [], blockCodes: [] }
+      const w = chunked.recordStart(e0, PUBLISHED_MS + MIN)
+      check('🟢 F 부분 쓰기(7바이트씩) → 끝까지 쓴다 · 파일이 온전하다 · 임시 파일 없음',
+        w.ok && calls > 1 && readFileSync(chunked.path, 'utf-8') === serializeAttemptJournal([e0])
+        && readdirSync(dir).length === 1, `쓰기 호출 ${calls}`)
+    }
+    // 결과 갱신만 실패 — 조용히 사라지지 않고, 시작 기록이 남아 같은 조합은 다시 가지 않는다
+    const dir = freshDir()
+    let renames = 0
+    const flaky = createAttemptStore({ dir, ops: { renameSync: (a, b) => {
+      renames += 1
+      // 1회차의 시작 기록 5건은 통과, 그 뒤(결과 갱신)만 실패
+      if (renames > 5) throw Object.assign(new Error('x'), { code: 'EIO' })
+      renameSync(a, b)
+    } } })
+    const source = sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], POOL.map((c) => persona(c)))
+    const db = makeDb(); const sent: Sent[] = []
+    const r1 = await runRound({ round: 1, nowMs: PUBLISHED_MS + 15 * MIN, source, store: flaky, db, sent })
+    const afterFail = createAttemptStore({ dir }).read(PUBLISHED_MS + 16 * MIN)
+    check('🔴 F 결과 갱신 실패 → 경고가 남고 · 시작 기록(STARTED)은 그대로',
+      r1.providerCalls === 5 && r1.attemptWarnings.some((w) => w.includes('시도 결과를 갱신하지 못했다'))
+      && afterFail.ok && afterFail.entries.length === 5 && afterFail.entries.every((e) => e.step === 'STARTED'),
+      `${r1.providerCalls} · ${r1.attemptWarnings.join('/')}`)
+    const r2 = await runRound({ round: 2, nowMs: PUBLISHED_MS + 35 * MIN, source, store: createAttemptStore({ dir }), db, sent })
+    const keys = sent.map(keyOfSent)
+    check('🔴 F 결과 갱신이 실패했어도 같은 조합은 다시 가지 않는다(STARTED 가 막는다)',
+      r2.providerCalls > 0 && new Set(keys).size === keys.length, `${keys.length} / distinct ${new Set(keys).size}`)
+  }
+
+  // ── G. 구조 — 첫 댓글 lane 에만 · 진입점과 production 이 같은 store · 후속 댓글 무관 ──
+  {
+    const loopSrc = readFileSync('scripts/lib/persona-comment-loop.mts', 'utf-8')
+    const entrySrc = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
+    const followSrc = readFileSync('scripts/lib/persona-comment-followup-run.mts', 'utf-8')
+    check('🔴 G 진입점은 커널 lease 증명(proof)에서 만든 저장소를 runCommentLoop 에 넘긴다',
+      /attemptStore:\s*attemptStoreInLease\(proof\)/.test(entrySrc) && /attemptStore:\s*AttemptStore/.test(loopSrc))
+    // 🔴 경고는 lines 한 길로만 찍힌다 — 진입점이 attemptWarnings 를 다시 돌며 찍으면 launchd 로그에 같은 줄이 두 번 남는다
+    check('🔴 G 진입점은 attemptWarnings 를 다시 출력하지 않는다(개수만 요약 줄에 싣는다)',
+      !/of\s+report\.attemptWarnings/.test(entrySrc) && /attemptWarnings=\$\{report\.attemptWarnings\.length\}/.test(entrySrc))
+    // 🔴 (2026-11-13 H1) 추가 댓글은 시도 기억을 쓰되 **다른 lane 파일**이다 — 첫 댓글 저장소 · 첫 댓글 lease 생성자를 쓰지 않는다
+    check('🔴 G 추가 댓글(followup)은 첫 댓글 시도 기억을 쓰지 않는다(다른 lane 저장소만)',
+      !/attemptStoreInLease\(/.test(followSrc.replace(/followupAttemptStoreInLease\(/g, ''))
+      && !followSrc.includes('first-comment-attempts') && /i\.store\.lane !== 'followup'/.test(followSrc)
+      && /attemptStore:\s*followupAttemptStoreInLease\(proof\)/.test(entrySrc))
+    check('🔴 G 전용 파일 이름 — 비용 장부(persona-comment-ledger)와 다른 디렉터리·이름',
+      ATTEMPT_JOURNAL_FILE === 'first-comment-attempts.v1.json' && !commentLoopLedgerDir().includes('persona-comment-loop'))
+  }
+
+  for (const d of dirs) rmSync(d, { recursive: true, force: true })
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

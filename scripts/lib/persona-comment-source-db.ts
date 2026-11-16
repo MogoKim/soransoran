@@ -54,10 +54,9 @@ export function makeDbTargetSource(args: {
           operatorWriterId: true,
           author: { select: { providerId: true, isAdmin: true, _count: { select: { accounts: true } } } },
           comments: {
-            where: { isDeleted: false },
             // 🔴 `persona.code` 까지 읽는다 — "누가 달았나" 를 모르면
             //    같은 Persona 가 같은 글에 두 번 다는 것을 막을 수 없다
-            select: { commentOrigin: true, content: true, persona: { select: { code: true } } },
+            select: { isDeleted: true, commentOrigin: true, content: true, persona: { select: { code: true } } },
           },
         },
       })
@@ -79,9 +78,14 @@ export function makeDbTargetSource(args: {
         },
         // 🔴 축 이름은 정본만 안다 — 같은 추출 함수를 쓴다(C-2)
         visibility: pickPostVisibility(p),
-        comments: p.comments.map((c) => ({
+        // 공개 맥락과 구조 상한은 살아 있는 댓글만 본다.
+        comments: p.comments.filter((c) => !c.isDeleted).map((c) => ({
           origin: String(c.commentOrigin), content: c.content, personaCode: c.persona?.code ?? null,
         })),
+        // 삭제해도 같은 Persona가 다시 말할 자격은 복원되지 않는다.
+        personaCodesEverOnPost: p.comments
+          .filter((c) => c.commentOrigin === 'PERSONA' && c.persona?.code !== undefined)
+          .map((c) => c.persona!.code),
       }))
     },
 

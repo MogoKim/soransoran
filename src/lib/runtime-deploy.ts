@@ -6,6 +6,10 @@
  */
 
 import { judgeLoadedConfig, type EnvBlocker, type JobState, type LoadedJobConfig } from './runtime-isolation'
+import {
+  sameRuntimePersonaAssetIdentity,
+  type RuntimePersonaAssetIdentity,
+} from './persona-reference-digest'
 
 /** 🔴 배포가 남기는 기록. 이것이 있어야 "언제 무엇을 올렸는가" 를 나중에 대조할 수 있다 */
 export type RuntimeManifest = {
@@ -16,9 +20,38 @@ export type RuntimeManifest = {
   gates: readonly string[]
   /** 직전 SHA — 되돌릴 곳 */
   previousSha: string | null
+  /** 🔴 이 SHA 가 실제로 사용한 기본·보충 Persona 말투 자산(보충 미도입은 null) */
+  personaAssets: RuntimePersonaAssetIdentity
 }
 
 export type DeployGate = { ok: true } | { ok: false; code: string; reason: string }
+
+const HEX64 = /^[0-9a-f]{64}$/
+
+/** 🔴 digest 모양까지 맞는 식별자만 받는다. 보충 `null` 은 두 파일 모두 없는 정상 미도입이다 */
+export function validPersonaAssetIdentity(value: unknown): value is RuntimePersonaAssetIdentity {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const v = value as Record<string, unknown>
+  const keys = Object.keys(v).sort()
+  return keys.length === 2 && keys[0] === 'referenceDigest' && keys[1] === 'supplementDigest'
+    && typeof v.referenceDigest === 'string' && HEX64.test(v.referenceDigest)
+    && (v.supplementDigest === null || (typeof v.supplementDigest === 'string' && HEX64.test(v.supplementDigest)))
+}
+
+/**
+ * 🔴 **어느 트리의 코드가 쟀는가가 식별자의 일부다** (2026-11-15 · P0).
+ *    Persona 자산 식별자는 파일 바이트만이 아니라 **그 코드가 어느 세대의 보충 파일을 읽는가**로 정해진다.
+ *    배포기가 자기 프로세스 코드로 재면, runtime 트리(옛 SHA)에서 시작한 배포는 옛 코드의 v1 식별자를
+ *    새 runtime 의 manifest 에 적는다(11-15 00:01 실측 — 새 코드는 v2 를 읽는다). 그래서 식별자는 언제나
+ *    **그 트리 안에서 그 트리의 코드로** 재고, 그 출력의 마지막 줄 JSON 만 받는다. 모양이 틀리면 `null`(fail-closed).
+ */
+export function parsePersonaAssetIdentityOutput(out: string | null): RuntimePersonaAssetIdentity | null {
+  const last = (out ?? '').split('\n').map((x) => x.trim()).filter((x) => x !== '').pop() ?? ''
+  try {
+    const parsed: unknown = JSON.parse(last)
+    return validPersonaAssetIdentity(parsed) ? parsed : null
+  } catch { return null }
+}
 
 /**
  * 배포해도 되는가 — 🔴 **하나라도 어긋나면 시작하지 않는다.**
@@ -135,8 +168,10 @@ export const DEPLOY_STEPS: readonly string[] = [
   '⑩-b 🔴 **잠시 멈춘 발행 러너를 원래 설치본 그대로 되올린다** —'
   + ' 배포 전 loaded 였을 때만. plist 원문 · ProgramArguments · WorkingDirectory 를 값으로 대조한다'
   + ' (🔴 render·write 하지 않는다 — 공급 job 과 책임을 섞지 않는다)',
-  '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime',
-  '⑫ 여기까지 통과해야 "배포 완료" 다',
+  '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime --defer-ops-loop-templates',
+  '⑫ 여기까지 통과하면 runtime 단계가 끝난다 — 🔴 **배포 완료는 아직 아니다**.'
+  + ' ops-loop 소유 job(runner-recover·stage-controller)의 원문 유예가 남아 있을 수 있다',
+  '⑫-b 🔴 `ops:loop-install --apply` 가 새 원문을 설치하고 **유예 없는 strict** 격리 검사까지 통과해야 "배포 완료" 다',
   '🔴 어느 단계든 실패하면 ⑬ 으로 간다',
   '⑬ rollback(best-effort) — 🔴 **다 내리고 → 파일을 원래대로 → 원래 돌던 것만 올린다**:'
   + ' ⓐ 영향받는 job 을 label 기반으로 **전부 정지**(plist 경로에 의존하지 않는다) →'
@@ -159,9 +194,13 @@ export const OFFLINE_GATES: readonly string[] = [
   'launchd:template-check',
 ]
 
-/** 🔴 job 을 **다시 올린 뒤에만** 의미가 있는 검사 */
+/**
+ * 🔴 job 을 **다시 올린 뒤에만** 의미가 있는 검사.
+ *    `--defer-ops-loop-templates` 는 ops-loop 소유 job 둘의 **설치본 원문 불일치 하나만** pending 으로 돌린다 —
+ *    배포기는 그 둘을 옛 설치본 그대로 되올리고, 새 원문은 ops-loop-install 이 설치한 뒤 strict 로 다시 잰다.
+ */
 export const POST_LOAD_GATES: readonly string[] = [
-  'runtime:isolation-check --require-runtime',
+  'runtime:isolation-check --require-runtime --defer-ops-loop-templates',
 ]
 
 /** 예전 이름 — 화면 안내용으로 남긴다 */
@@ -240,6 +279,17 @@ export type DeployEffects = {
    *    main 최신 판정(`judgeDeploy`)을 대신하지 않는다.
    */
   contractTransitionGate: (runtimeContract: string) => boolean
+  /**
+   * 🔴 **runtime 트리에 지금 checkout 된 코드**가 읽는 실제 Persona 말투 자산 식별자. 못 읽으면 `null`.
+   *    배포기 프로세스의 코드로 재지 않는다 — checkout 전에는 source(옛 SHA) 코드, checkout 뒤에는 target 코드,
+   *    rollback 뒤에는 다시 source 코드가 잰다.
+   */
+  runtimePersonaAssets: () => RuntimePersonaAssetIdentity | null
+  /**
+   * 🔴 **staging 트리(target) 코드**가 읽는 식별자 — job 을 내리기 **전**이다. manifest 에 적을 값이다.
+   *    staging 트리가 target 에 깨끗하게 있지 않으면 `null`.
+   */
+  stagedPersonaAssets: (target: string) => RuntimePersonaAssetIdentity | null
 
   // ── 🔴 plist cutover — 이것이 없으면 배포해도 **옛 인자가 그대로 돈다** ──
   /**
@@ -293,7 +343,7 @@ export type DeployEffects = {
    *    판정은 `judgeLoadedConfig` 정본이 한다 — 여기서 따로 정규식을 쓰지 않는다.
    */
   loadedConfig: (label: string) => LoadedJobConfig
-  /** runtime:isolation-check --require-runtime */
+  /** runtime:isolation-check --require-runtime --defer-ops-loop-templates (🔴 ops-loop 원문 유예만 · 나머지 strict) */
   isolationGate: () => boolean
 
   readManifest: () => string | null
@@ -510,6 +560,25 @@ export async function runDeploy(input: {
   }
 
   /**
+   * 🔴 코드 SHA 만으로는 같은 실행을 재현할 수 없다. 실제 말투 자산도 job 을 내리기 전에 **두 벌** 결속한다.
+   *    · source — 지금 runtime 트리 코드가 읽는 것. rollback 이 되돌아가야 할 값이다
+   *    · target — staging 트리(target) 코드가 읽는 것. manifest 에 적고, 재기동 뒤 runtime 이 이 값이어야 한다
+   *    🔴 둘은 다를 수 있다(보충 세대 전환). 하나로 합쳐 쓰면 새 runtime 에 옛 코드의 식별자가 적힌다.
+   */
+  steps.push('runtime-persona-assets')
+  const sourcePersonaAssets = fx.runtimePersonaAssets()
+  steps.push('staged-persona-assets')
+  const personaAssets = fx.stagedPersonaAssets(input.target)
+  if (!validPersonaAssetIdentity(sourcePersonaAssets) || !validPersonaAssetIdentity(personaAssets)) {
+    return {
+      ok: false, phase: 'preflight', steps,
+      problems: [`Persona 말투 자산의 실제 상태를 확인하지 못했다(${validPersonaAssetIdentity(sourcePersonaAssets) ? 'target' : 'source'})`
+        + ' — 코드 SHA 만으로 배포하지 않는다(fail-closed · job·코드·plist 그대로)'],
+      rollback: null,
+    }
+  }
+
+  /**
    * 🔴 **render 를 unload 보다 먼저 한다.** 템플릿이 없거나 치환이 남아 있으면
    *    job 을 내리기 전에 멈춘다 — 내려놓고 나서야 "설치할 것이 없다" 를 알면
    *    되돌리는 일이 늘어난다.
@@ -696,6 +765,12 @@ export async function runDeploy(input: {
     if (fx.currentSha() !== prevSha) residual.push('사후 대조: SHA 가 이전 값이 아니다')
     if (fx.readPin() !== prevSha) residual.push('사후 대조: pin 이 이전 값이 아니다')
     if (fx.readManifest() !== prevManifest) residual.push('사후 대조: manifest 가 이전 값이 아니다')
+    // 🔴 되돌린 runtime 은 source 코드다 — target 식별자가 아니라 **배포 전 source 식별자**와 대조한다
+    const restoredPersonaAssets = fx.runtimePersonaAssets()
+    if (restoredPersonaAssets === null
+      || !sameRuntimePersonaAssetIdentity(restoredPersonaAssets, sourcePersonaAssets)) {
+      residual.push('사후 대조: Persona 말투 자산이 배포 전 source 식별자와 다르다')
+    }
     return residual
   }
 
@@ -837,6 +912,7 @@ export async function runDeploy(input: {
   // ── ⑩ manifest·pin 준비 후 load ──
   const manifest: RuntimeManifest = {
     sha: input.target, deployedAt: now(), gates: [...gates, ...POST_LOAD_GATES], previousSha: prevSha,
+    personaAssets,
   }
   steps.push('write-manifest')
   if (!fx.writeManifest(JSON.stringify(manifest, null, 2))) return failWith('manifest', 'manifest 기록 실패')
@@ -938,10 +1014,19 @@ export async function runDeploy(input: {
     }
   }
   steps.push('isolation-gate')
-  if (!fx.isolationGate()) return failWith('post-load', 'runtime:isolation-check --require-runtime 실패')
+  if (!fx.isolationGate()) return failWith('post-load', 'runtime:isolation-check --require-runtime --defer-ops-loop-templates 실패')
+
+  // 🔴 manifest 에 적은 target 식별자와, 재기동 뒤 **runtime 트리의 target 코드**가 실제로 읽는 값이 같아야 한다.
+  //    preflight 와 load 사이에 외부 자산이 바뀌면 코드 SHA 만 맞는 거짓 배포가 된다.
+  steps.push('persona-assets-verify')
+  const loadedPersonaAssets = fx.runtimePersonaAssets()
+  if (loadedPersonaAssets === null
+    || !sameRuntimePersonaAssetIdentity(loadedPersonaAssets, personaAssets)) {
+    return failWith('post-load', 'Persona 말투 자산이 manifest(target 코드 측정)와 실제 runtime 측정이 다르다')
+  }
 
   steps.push('done')
-  fx.log(`배포 완료 — ${prevSha.slice(0, 7)} → ${input.target.slice(0, 7)}`)
+  fx.log(`runtime 단계 완료 · ops-loop strict 대기 — ${prevSha.slice(0, 7)} → ${input.target.slice(0, 7)}`)
   return { ok: true, phase: 'done', steps, problems: [], rollback: null }
 }
 

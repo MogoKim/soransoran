@@ -35,6 +35,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { loadArticles, loadQueue, sliceLiteral, evalLiteral, ROOT, ARTICLES_TS, QUEUE_TS, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { withQueueWriteLock, removeQueueDay, queueTestPause, QUEUE_LOCKED_CODE } from './lib/magazine-queue-lock.mjs'
+import { DIRECT_SPEC_MODE, LEGACY_BRIEF_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import { readProductGraphVersion, verifyDirectSpecOnDisk } from './lib/magazine-direct-spec-source.mjs'
 
 /**
  * 🔴 큐 writer 잠금을 기다리는 최대 시간. G8 편입기 apply 의 임계구역은 짧다(ms) —
@@ -162,7 +164,6 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
 
   const dir = join(DRAFTS_DIR, slug)
   if (!existsSync(join(dir, 'article-draft.ts'))) reasons.push(`article-draft.ts 가 없다: drafts/magazine/${slug}/`)
-  if (!existsSync(join(dir, 'review.ts'))) reasons.push(`review.ts 가 없다: drafts/magazine/${slug}/`)
 
   let articles = []
   let queue = []
@@ -185,6 +186,26 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
   else if (inQueue.length > 1) reasons.push(`topic-queue.ts 에 ${inQueue.length}개 있다 — 1개여야 제거할 수 있다`)
 
   const item = inQueue[0]
+
+  /**
+   * 🔴 **review.ts 는 legacy 글의 재료다** (2026-10-31 · age-learning 첫 DIRECT 등록이 여기서 막혔다).
+   *    DIRECT_SPEC_V1 글은 review.ts 를 만들지 않는다 — 대신 정본 큐 · 승인 source · 제품 판 · 디스크 spec 을
+   *    `verifyDirectSpecOnDisk` 로 다시 맞춘다(batch-qa · 전송 경계와 같은 함수). 우회가 아니라 다른 정본이다.
+   *    mode 판정은 공용 `resolveMagazineAutoMode` 하나 — 모르는 mode · G8 신원 불일치는 legacy 로 내리지 않고 막는다.
+   *    큐에 행이 없으면 mode 를 알 수 없다 — legacy 기준(review.ts 필수)을 그대로 둔다(어차피 큐 사유로 막힌다).
+   */
+  const mode = item ? resolveMagazineAutoMode(item) : { ok: true, mode: LEGACY_BRIEF_MODE }
+  if (!mode.ok) {
+    reasons.push(`${mode.code} — ${mode.why}`)
+  } else if (mode.mode === DIRECT_SPEC_MODE) {
+    const v = verifyDirectSpecOnDisk({ slug, queue, draftsDir: DRAFTS_DIR,
+      expectedGraphVersion: readProductGraphVersion(join(ROOT, 'src/content/magazine/graph/current.ts')), productRoot: ROOT })
+    if (!v.ok) reasons.push(`${v.code} — ${v.why}`)
+    else notes.push(`directSpec=${v.spec.specHash}`)
+  } else if (!existsSync(join(dir, 'review.ts'))) {
+    reasons.push(`review.ts 가 없다: drafts/magazine/${slug}/`)
+  }
+
   if (item) {
 
     /**

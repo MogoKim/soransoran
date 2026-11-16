@@ -97,14 +97,14 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
 {
   const doc = readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')
   const { cards, problems } = parsePoolDoc(doc)
-  check('🔴 카드 41장을 전부 읽는다', cards.length === 41)
+  check('🔴 현재 정본 카드 61장을 전부 읽는다', cards.length === 61)
   check('🔴 파싱 문제 0건', problems.length === 0)
   // 🔴 P31 · P33 은 VOICE_TOO_CLOSE 로 카드가 없다(2026-10-08 wave5)
-  check('코드가 P01~P30 · P32 · P34~P43 이다',
+  check('코드가 P01~P30 · P32 · P34~P63 이다',
     cards.map((c) => c.code).join(',') === [
       ...Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`),
       'P32',
-      ...Array.from({ length: 10 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
+      ...Array.from({ length: 30 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
     ].join(','))
   check('🔴 카드마다 제목이 있다', cards.every((c) => c.title.trim() !== ''))
   check('🔴 카드마다 성격이 있다', cards.every((c) => c.personality.length >= 3))
@@ -113,8 +113,8 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
     cards.every((c) => (c.childrenCount > 0) === (c.childrenAgeBands.length > 0)))
   check('variation 이 전부 5~8개다', cards.every((c) => c.variationCount >= 5 && c.variationCount <= 8))
   // 🔴 마지막 카드가 뒤 절을 먹지 않는다 — 코드펜스로 자르지 않으면 여기서 걸린다
-  check('🔴 마지막 카드(P25)가 뒤 절을 먹지 않는다',
-    cards.find((c) => c.code === 'P25')?.variationCount === 6)
+  check('🔴 마지막 카드(P63)가 뒤 절을 먹지 않는다',
+    cards.at(-1)?.code === 'P63' && cards.at(-1)?.variationCount === 5)
   check('혼인 상태를 전부 읽었다', cards.every((c) => c.maritalStatus !== ''))
   // 🔴 얇은 축이 실재함을 문서로 확인한다 — 중고등 자녀는 소수다
   // 🔴 측정 기록 — wave4 시점(P01~P25) 에 얇은 축이 실재했다. wave5(2026-10-08) 가 더해져 두터워진 것은 기록을 바꾸지 않는다
@@ -293,6 +293,25 @@ console.log('\n⑥ 설계 카드 검증 (persona-card-verify)')
     bad((c) => { (c.identity as Record<string, unknown>).childrenAgeBands = [] }).some((p) => p.includes('childrenAgeBands')))
   check('🔴 매칭 축이 정본과 다르면 FAIL',
     bad((c) => { (c.identity as Record<string, unknown>).parentCare = '상시' }).some((p) => p.includes('정본과 다르다')))
+  check('🔴 ageBand 가 정본과 다르면 FAIL',
+    bad((c) => { c.ageBand = '60대 이상' }).some((p) => p.includes('ageBand 가 정본과 다르다')))
+  check('🔴 region 이 정본과 다르면 FAIL',
+    bad((c) => { c.region = '충청권' }).some((p) => p.includes('region 이 정본과 다르다')))
+  check('🔴 spouseRelationship 가 정본과 다르면 FAIL',
+    bad((c) => { (c.identity as Record<string, unknown>).spouseRelationship = '소원' })
+      .some((p) => p.includes('spouseRelationship 가 정본과 다르다')))
+  check('🔴 workStatus 가 정본과 다르면 FAIL',
+    bad((c) => { (c.identity as Record<string, unknown>).workStatus = '전업' })
+      .some((p) => p.includes('workStatus 가 정본과 다르다')))
+  check('🔴 economicStatus 가 정본과 다르면 FAIL',
+    bad((c) => { (c.identity as Record<string, unknown>).economicStatus = '여유' })
+      .some((p) => p.includes('economicStatus 가 정본과 다르다')))
+  check('🔴 housing 이 정본과 다르면 FAIL',
+    bad((c) => { (c.identity as Record<string, unknown>).housing = '자가' })
+      .some((p) => p.includes('housing 가 정본과 다르다')))
+  check('🔴 personality 가 정본과 다르면 FAIL',
+    bad((c) => { (c.identity as Record<string, unknown>).personality = ['어느 정도 섹', '감정적', '직설'] })
+      .some((p) => p.includes('identity.personality 가 정본과 다르다')))
   check('🔴 voiceVariations 가 범위를 벗어나면 FAIL',
     bad((c) => { c.voiceVariations = ['a', 'b'] }).some((p) => p.includes('voiceVariations')))
   check('🔴 정본 카드를 못 찾으면 FAIL', verifySeedCard('P99', good(), null).some((p) => p.includes('정본')))
@@ -303,8 +322,11 @@ console.log('\n⑥ 설계 카드 검증 (persona-card-verify)')
     const c = good()
     const id = c.identity as Record<string, unknown>
     id.childrenCount = 0; id.childrenAgeBands = []
+    c.ageBand = p04.ageBand; c.region = p04.region
     id.maritalStatus = p04.maritalStatus; id.parentCare = p04.parentCare
     id.menopauseStatus = p04.menopauseStatus; id.spouseRelationship = p04.spouseRelationship ?? '해당없음'
+    id.workStatus = p04.workStatus; id.economicStatus = p04.economicStatus
+    id.housing = p04.housing; id.personality = [...p04.personality]
     ;(c.voiceCore as Record<string, unknown>).length = p04.voiceLength
     c.noGoTopics = [...p04.noGoTopics]; c.noGoExpressions = [...p04.noGoExpressions]
     c.forbiddenReactionRoles = [...p04.forbiddenReactionRoles]

@@ -7,8 +7,8 @@ const home = mkdtempSync(join(tmpdir(), 'persona-reference-supplement-'))
 process.env.HOME = home
 
 const {
-  SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE, judgeSupplementAsset,
-  supplementFallbackPartition,
+  SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE, SUPPLEMENT_MANIFEST_FILE_V2,
+  activeSupplementPaths, judgeSupplementAsset, supplementFallbackPartition,
 } = await import('../src/lib/persona-reference-supplement')
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const {
@@ -162,6 +162,63 @@ try {
     bundles: [{ ...plan.asset.bundles[0], author: 'must-not-exist' }],
   }
   check('unknown identity-shaped field rejected', !judgeSupplementAsset(leakedField).ok)
+
+  const v2 = planSupplementSnapshot({
+    canonRows: canon,
+    extraRows: rows('v2', 2),
+    baseCodes,
+    newCodes: ['P36', 'P37'],
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-14T00:00:00.000Z',
+    reason: 'append generation two',
+    frozenBundles: plan.asset.bundles,
+  })
+  check('v2 plan keeps both frozen v1 bundles and appends both new bundles',
+    v2.ok && v2.asset.bundles.map((bundle) => bundle.personaCode).join(',') === 'P34,P35,P36,P37')
+  check('v2 plan preserves frozen v1 bundle bytes',
+    JSON.stringify(v2.asset.bundles.slice(0, 2)) === JSON.stringify(plan.asset.bundles))
+  const sequentialCanon = rows('seq', 4)
+  const sequentialV1 = planSupplementSnapshot({
+    canonRows: sequentialCanon,
+    extraRows: [],
+    baseCodes,
+    newCodes,
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-14T00:00:00.000Z',
+    reason: 'sequential generation one',
+  })
+  const sequentialV2 = planSupplementSnapshot({
+    canonRows: sequentialCanon,
+    extraRows: rows('seq-extra', 2),
+    baseCodes,
+    newCodes: ['P36', 'P37'],
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-14T01:00:00.000Z',
+    reason: 'sequential generation two',
+    frozenBundles: sequentialV1.asset.bundles,
+  })
+  check('next generation allocates after frozen codes instead of reusing their canonical speakers',
+    sequentialV1.ok && sequentialV2.ok
+    && sequentialV2.problems.every((problem) => !problem.startsWith('FROZEN_BUNDLE_REUSE')))
+  const v2Write = writeSupplementSnapshot({
+    assetText: v2.assetText,
+    manifestText: v2.manifestText,
+    generation: 2,
+  })
+  check('v2 write succeeds without touching v1', v2Write.ok && v2Write.action === 'write')
+  check('runtime selects complete v2 over v1', activeSupplementPaths().generation === 2)
+  const v2Loaded = read()
+  check('active v2 snapshot verifies and covers frozen plus appended bundles',
+    v2Loaded.ok && v2Loaded.byCode.size === 4)
+  const v2Manifest = readFileSync(SUPPLEMENT_MANIFEST_FILE_V2, 'utf8')
+  rmSync(SUPPLEMENT_MANIFEST_FILE_V2)
+  const partialV2 = read()
+  check('partial v2 fails closed instead of silently falling back to v1',
+    !partialV2.ok && partialV2.code === 'SUPPLEMENT_PARTIAL')
+  writeFileSync(SUPPLEMENT_MANIFEST_FILE_V2, v2Manifest, { encoding: 'utf8', mode: 0o600 })
 
   const cli = readFileSync(join(process.cwd(), 'scripts/persona-reference-supplement-build.mts'), 'utf8')
   check('production apply reads canonical DB addresses',

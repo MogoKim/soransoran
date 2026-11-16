@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 글당 Persona 추가 댓글(첫 댓글 뒤 0~4건) 검사 — 🔴 DB · provider · 네트워크 · env 파일 · launchd 없음
+ * 글당 Persona 추가 댓글(첫 댓글 뒤 0~9건) 검사 — 🔴 DB · provider · 네트워크 · env 파일 · launchd 없음
  *
  *   npx tsx scripts/persona-comment-followup-check.mts
  *
@@ -8,7 +8,7 @@
  *   ① 스위치 기본 OFF · 오타로 켜지지 않는다
  *   ② fixture 시나리오(scripts/fixtures/persona-comment-followup) — GO · WAIT · STOP · BLOCK
  *   ③ 회차 판정 — kill switch · 첫 댓글 양보 · 공유 장부의 첫 댓글 몫 · 상한 · 모르면 0
- *   ④ 24시간 시뮬레이션 불변식 — 글당 ≤5 · 같은 Persona 0 · 자기 글 0 · 시간차 · 실회원 우선 ·
+ *   ④ 24시간 시뮬레이션 불변식 — 글당 ≤10 · 일반 Persona 반복 0 · 글쓴이 답글 ≤3 · 시간차 · 실회원 우선 ·
  *      추가 댓글마다 그때 미해결이던 hook 하나를 소비 · 근거 없는 글은 0 · 글 id 무관 · 같은 입력 같은 결과
  *   ③ profile — 주입 없음·후보·손상·단계 불일치 → 0 · D100 profile 은 40건에 묶이지 않는다
  *   ⑤ 실제 소비자 접점 — #707 정본(`personaCommentProvenanceOf` · `FOLLOWUP_LANE_*` · `judgeConversationAudit`)을
@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 
 import type * as FollowupModule from '../src/lib/persona-comment-followup'
 import type { ReactionType } from '../src/lib/persona-reaction-roles'
+import type { AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
 import {
   FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, commentProvenanceOf, judgeConversationAudit,
   personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
@@ -38,6 +39,7 @@ import { kstDateString } from '../src/lib/release-canary'
 import { followupEligibleFor } from './lib/persona-comment-followup-run.mjs'
 import { COMMENT_CONSUMER_BY, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
 import { DECISION_CONSUMERS } from '../src/lib/stage-decision-store'
+import { PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.FOLLOWUP_MODULE ?? join(here, '../src/lib/persona-comment-followup.ts')
@@ -95,7 +97,20 @@ for (const v of ['1', 'true', 'ON', 'On', 'yes', 'enabled', ' on2']) {
   check(`① ${JSON.stringify(v)} → OFF`, M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: v }).enabled === false)
 }
 check('① 정확히 on → ON', M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: 'on' }).enabled === true)
-check('① 추가 상한 = 5 − 1 = 4', M.FOLLOWUP_EXTRA_PER_POST_MAX === 4 && M.FOLLOWUP_TOTAL_PER_POST_MAX === 5)
+check('① 구조 상한 = 첫 댓글 1 + 선택적 추가 0~9 = 총 10',
+  M.FOLLOWUP_EXTRA_PER_POST_MAX === 9 && M.FOLLOWUP_TOTAL_PER_POST_MAX === 10)
+check('① 운영 profile 산출 기준은 추가 4로 동결(구조 상한과 비용 envelope 분리)',
+  M.FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST === 4)
+{
+  const p = M.partitionFollowupSourceContexts([
+    { postId: 'good-1', operational: true, reason: '운영 문맥' },
+    { postId: 'unknown-1', operational: null, reason: '원문 판독 불가' },
+    { postId: 'good-2', operational: false, reason: '일반 문맥' },
+  ])
+  check('① 한 글의 출처 문맥 null은 그 글만 막고 정상 글 2건은 계속',
+    p.blocked.length === 1 && p.blocked[0]?.postId === 'unknown-1'
+    && p.runnablePostIds.join(',') === 'good-1,good-2')
+}
 
 // ═════════ ② fixture 시나리오 ═════════
 type FxProfiles = {
@@ -122,6 +137,29 @@ for (const s of fx.scenarios) {
     }
   }
   check(`② ${s.name}`, ok, `${v.verdict} · ${v.reason}`)
+}
+
+/** 🔴 삭제 뒤 live 수가 줄어도 followup 멱등 순번은 재사용하지 않는다. */
+{
+  const base = factsOf(FX_POST, fx.scenarios[0]!)
+  const first = base.comments[0]!
+  const deletedSecond: FollowupModule.FollowupCommentRow = {
+    ...first, id: 'deleted-f2', parentId: first.id, personaId: 'pDeleted',
+    createdAt: new Date(T0 + 60 * MIN), isDeleted: true, provenance: 'followup', reaction: 'question',
+  }
+  const liveThird: FollowupModule.FollowupCommentRow = {
+    ...first, id: 'live-f3', parentId: first.id, personaId: 'pLive',
+    createdAt: new Date(T0 + 100 * MIN), isDeleted: false, provenance: 'followup', reaction: 'question',
+  }
+  const v = M.judgeFollowupPost({ ...base, comments: [first, deletedSecond, liveThird] }, T0 + 200 * MIN)
+  check('② 🔴 삭제 이력을 포함한 다음 순번은 4 — live 순번 3 재사용 금지',
+    v.verdict === 'GO' && v.ordinal === 4 && v.key === M.followupKeyOf(FX_POST, 4),
+    v.verdict === 'GO' ? `ordinal=${v.ordinal}` : `${v.verdict} · ${v.reason}`)
+  check('② 🔴 사건 순번 11도 유효 — 구조 상한 10과 멱등 순번을 섞지 않는다',
+    M.verifyStamp(
+      { v: M.FOLLOWUP_STAMP_VERSION, postId: FX_POST, ordinal: 11, parentCommentId: first.id, hook: 'question' },
+      { postId: FX_POST, dedupKey: M.followupKeyOf(FX_POST, 11) },
+    ).ok)
 }
 
 // ═════════ ③ 회차 판정 ═════════
@@ -154,8 +192,8 @@ check('③ 예약액 0 → 0', tick({ perCallReserveUsd: 0 }).allowed === 0)
 check('③ 🔴 canary 후보는 승인 전이라 쓰지 않는다',
   !M.validateFollowupProfile(M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, 'canary').ok
   && tick({ profile: M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, runtimeStage: 'canary' }).allowed === 0)
-check('③ 후보 숫자는 40건·$0.08 (상한이 아니라 후보값)',
-  M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyCount === 40 && M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyUsd === 0.08)
+check('③ 후보 숫자는 80건·$0.16 (상한이 아니라 후보값 · 2026-11-13 H1)',
+  M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyCount === 80 && M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyUsd === 0.16)
 for (const b of fx.profiles.broken) {
   const profile = b.profile === 'CANDIDATE' ? M.FOLLOWUP_CANARY_PROFILE_CANDIDATE
     : b.patch !== undefined ? { ...fx.profiles.approved, ...b.patch } : b.profile
@@ -276,12 +314,13 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   for (const [postId, rows] of perPost) {
     const persona = rows.filter((r) => r.commentOrigin === 'PERSONA').sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const members = rows.filter((r) => r.commentOrigin !== 'PERSONA').length
-    if (persona.length > 5) violations.push(`${postId} Persona ${persona.length}건`)
-    const ids = persona.map((r) => r.personaId)
-    if (new Set(ids).size !== ids.length) violations.push(`${postId} 같은 Persona 반복`)
-    // 🔴 글쓴이는 다른 Persona 댓글에 답글로 한 번까지 — 첫 댓글 · 최상위 · 두 번째는 자기 글 댓글이다
+    if (persona.length > M.FOLLOWUP_TOTAL_PER_POST_MAX) violations.push(`${postId} Persona ${persona.length}건`)
+    const otherIds = persona.filter((r) => r.personaId !== author.get(postId)).map((r) => r.personaId)
+    if (new Set(otherIds).size !== otherIds.length) violations.push(`${postId} 일반 Persona 반복`)
+    // 🔴 글쓴이만 서로 다른 대화 대상에 답글로 최대 세 번까지 반복할 수 있다.
     const own = persona.filter((r) => r.personaId === author.get(postId))
-    if (own.length > 1 || own.some((r) => r.parentId === null || r.provenance !== 'followup')) violations.push(`${postId} 자기 글 댓글`)
+    if (own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX
+      || own.some((r) => r.parentId === null || r.provenance !== 'followup')) violations.push(`${postId} 자기 글 댓글`)
     for (let k = 1; k < persona.length; k++) {
       if (persona[k]!.createdAt.getTime() - persona[k - 1]!.createdAt.getTime() < M.FOLLOWUP_MIN_GAP_MS) violations.push(`${postId} 시간차 미달`)
       if (persona[k]!.createdAt.getTime() - T0 > M.FOLLOWUP_POST_AGE_MAX_MS) violations.push(`${postId} 식은 글에 이음`)
@@ -312,7 +351,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   const b = simulate({ posts: 10, salt: 'd10' })
   check('④ 같은 입력 → 같은 결과(멱등 · 결정적)', a.trace === b.trace && a.trace.length > 0)
   const counts = [...a.perPost.values()].map((rows) => rows.filter((r) => r.commentOrigin === 'PERSONA').length)
-  check('④ D10 글마다 Persona 1~5건', counts.every((n) => n >= 1 && n <= 5), counts.join(','))
+  check('④ D10 글마다 Persona 1~10건', counts.every((n) => n >= 1 && n <= 10), counts.join(','))
   check('④ D10 모든 글을 같은 수로 맞추지 않는다', new Set(counts).size > 1, counts.join(','))
 
   // 🔴 근거가 있는 글은 상한이 묶이지 않는 한 실제로 잇는다(필요성을 해시가 지우지 않는다)
@@ -438,27 +477,42 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   }
 
   // ── 대화 감사 브레이크 — 실제 judgeConversationAudit 출력을 그대로 넣는다 ──
-  const ep = (personaComments: EvidencePost['personaComments'], author: string | null = 'pA'): EvidencePost => ({
+  type ThreadComment = EvidencePost['personaComments'][number] & { id: string; parentId: string | null }
+  const ep = (personaComments: readonly ThreadComment[], author: string | null = 'pA'): EvidencePost => ({
     postId: 'P', queueId: 'Q', publishedAtMs: T0, unattended: true, queueRows: 1, publishLogs: 1,
-    authorPersonaId: author, decider: 'auto', personaComments, release: 'STAMPED_ELIGIBLE',
+    authorPersonaId: author, decider: 'auto', personaComments,
+    conversationComments: personaComments.map((c) => ({
+      id: c.id, personaId: c.personaId, parentId: c.parentId, commentOrigin: 'PERSONA', isDeleted: false,
+      createdAtMs: c.createdAtMs, reportedAtMs: null, provenance: c.provenance,
+    })),
+    release: 'STAMPED_ELIGIBLE',
   })
-  const first = { personaId: 'pB', createdAtMs: T0 + 10 * MIN, topLevel: true, provenance: 'auto' as const }
-  const good = judgeConversationAudit([ep([first, { personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])])
+  const first: ThreadComment = {
+    id: 'first', personaId: 'pB', parentId: null,
+    createdAtMs: T0 + 10 * MIN, topLevel: true, provenance: 'auto' as const,
+  }
+  const follow = (id: string, personaId: string, parentId: string | null, atMin: number, topLevel = parentId === null): ThreadComment => ({
+    id, personaId, parentId, createdAtMs: T0 + atMin * MIN, topLevel, provenance: 'followup' as const,
+  })
+  const good = judgeConversationAudit([ep([first, follow('good', 'pC', first.id, 90)])])
   const none = judgeConversationAudit([ep([first])])
   check('⑤ 실제 감사 PASS(추가 댓글 정상) → 회차 허용', good.verdict === 'PASS' && tick({ conversationAudit: good }).allowed === 3)
   check('⑤ 실제 감사 PASS(추가 댓글 0 — 아직 켠 적 없음) → 회차 허용', none.verdict === 'PASS' && tick({ conversationAudit: none }).allowed === 3)
-  const authorOnce = judgeConversationAudit([ep([first, { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])])
-  check('⑤ 🟢 실제 감사 — 글쓴이 답글 한 번은 자기 글 결함이 아니다 → PASS · 회차 허용',
-    authorOnce.verdict === 'PASS' && tick({ conversationAudit: authorOnce }).allowed === 3, authorOnce.codes.join(','))
+  const authorTargets = [1, 2, 3].map((n) => follow(`target-${n}`, `speaker-${n}`, null, 40 + n * 10))
+  const authorReplies = [1, 2, 3].map((n) => follow(`author-${n}`, 'pA', `target-${n}`, 100 + n * 40))
+  const authorThree = judgeConversationAudit([ep([first, ...authorTargets, ...authorReplies])])
+  check('⑤ 🟢 실제 감사 — 글쓴이 답글 세 번까지 자기 글 결함이 아니다 → PASS · 회차 허용',
+    authorThree.verdict === 'PASS' && tick({ conversationAudit: authorThree }).allowed === 3, authorThree.codes.join(','))
   const failCases: [string, EvidencePost][] = [
-    ['출처 깨짐', ep([first, { personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup-broken' }])],
-    ['첫 댓글 없음', ep([{ personaId: 'pC', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
-    ['같은 Persona', ep([first, { personaId: 'pB', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' }])],
-    ['자기 글(글쓴이 최상위 추가 댓글)', ep([first, { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: true, provenance: 'followup' }])],
-    ['자기 글(글쓴이 답글 두 번)', ep([first,
-      { personaId: 'pA', createdAtMs: T0 + 90 * MIN, topLevel: false, provenance: 'followup' },
-      { personaId: 'pA', createdAtMs: T0 + 140 * MIN, topLevel: false, provenance: 'followup' }])],
-    ['총 6건', ep([first, ...['p1', 'p2', 'p3', 'p4', 'p5'].map((p, i) => ({ personaId: p, createdAtMs: T0 + (90 + i * 40) * MIN, topLevel: false, provenance: 'followup' as const }))])],
+    ['출처 깨짐', ep([first, { ...follow('broken', 'pC', first.id, 90), provenance: 'followup-broken' }])],
+    ['첫 댓글 없음', ep([follow('no-first', 'pC', null, 90)])],
+    ['같은 Persona', ep([first, follow('same', 'pB', first.id, 90)])],
+    ['자기 글(글쓴이 최상위 추가 댓글)', ep([first, follow('author-top', 'pA', null, 90)])],
+    ['자기 글(글쓴이 답글 네 번)', ep([first,
+      ...[1, 2, 3, 4].map((n) => follow(`four-target-${n}`, `four-speaker-${n}`, null, 30 + n * 10)),
+      ...[1, 2, 3, 4].map((n) => follow(`four-author-${n}`, 'pA', `four-target-${n}`, 100 + n * 40))])],
+    ['총 11건', ep([first, ...Array.from({ length: 10 }, (_, i) =>
+      follow(`over-${i + 1}`, `p${i + 1}`, i === 0 ? first.id : `over-${i}`, 90 + i * 40))])],
   ]
   for (const [name, post] of failCases) {
     const a = judgeConversationAudit([post])
@@ -550,7 +604,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     followupsTodayInTx: 0, personaFollowupsTodayInTx: 0, nowMs: T0 + 200 * MIN,
   }
   const pub = (over: Partial<FollowupModule.FollowupPublishFacts>) => M.judgeFollowupPublish({ ...ok, ...over })
-  check('⑦ 기준선 — 글쓴이 답글(다른 Persona 질문에 한 번) · 온전한 도장 → 발행', pub({}).ok, pub({}).blockers.join(' | '))
+  const baselinePublish = pub({})
+  check('⑦ 기준선 — 글쓴이 답글(다른 Persona 질문에 한 번) · 온전한 도장 → 발행', baselinePublish.ok, baselinePublish.blockers.join(' | '))
+  check('⑦ 추가 댓글 하루 잔량은 승인 profile에서만 나온다', baselinePublish.profileDailyRemaining === 40)
+  check('⑦ 추가 댓글 39건 사용 → profile 잔량 1건', pub({ followupsTodayInTx: 39 }).profileDailyRemaining === 1)
   check('⑦ 운영 공통 profile — d5에서도 같은 트랜잭션 관문으로 발행', pub({
     profile: { ...fx.profiles.approved, stage: M.FOLLOWUP_PROFILE_ALL_STAGES }, runtimeStage: 'd5',
   }).ok)
@@ -575,6 +632,14 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     dedupKey: M.followupKeyOf(FX_POST, 3), editDiff: M.followupEditDiffOf({ ...st, ordinal: 3 } as FollowupModule.FollowupStamp),
   }, '도장 순번')
   no('직전 Persona 댓글과 간격 짧음', { nowMs: T0 + 25 * MIN }, '간격')
+  {
+    const blockedAuthor = pub({ switch: M.readFollowupSwitch({}) })
+    check(
+      '⑦ 🔴 글쓴이 반복 예외는 다른 blocker가 하나라도 있으면 전달하지 않는다',
+      !blockedAuthor.ok && blockedAuthor.personaRepeatAllowed === false && blockedAuthor.profileDailyRemaining === null,
+      blockedAuthor.blockers.join(' | '),
+    )
+  }
   no('🔴 글쓴이 답글 자리에 다른 Persona(무작위 대체)', { candidatePersonaId: 'pZ' }, '글쓴이 답글 자리')
   no('🔴 글쓴이 답글 자리에 이미 단 Persona', { candidatePersonaId: 'pB' }, '글쓴이 답글 자리')
   no('답글 대상이 이 글에 없음(고아)', {
@@ -594,8 +659,16 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       pub({ ...base2, candidatePersonaId: 'pZ' }).blockers.join(' | '))
     const self = pub({ ...base2, candidatePersonaId: 'pA' })
     check('⑦ 🔴 글쓴이가 자기 댓글에 답글(자기 답글) → 막음', !self.ok && self.blockers.some((b) => b.includes('이미 썼거나 글쓴이')), self.blockers.join(' | '))
-    const twice = pub({ ...base2, candidatePersonaId: 'pA', editDiff: M.followupEditDiffOf({ ...onA1, parentCommentId: 'c1' } as FollowupModule.FollowupStamp) })
-    check('⑦ 🔴 글쓴이 두 번째 답글 → 막음(한 번뿐)', !twice.ok && twice.blockers.some((b) => b.includes('이미 썼거나 글쓴이')), twice.blockers.join(' | '))
+    const consumed = pub({ ...base2, candidatePersonaId: 'pA', editDiff: M.followupEditDiffOf({ ...onA1, parentCommentId: 'c1' } as FollowupModule.FollowupStamp) })
+    check('⑦ 🔴 글쓴이라도 이미 답한 같은 대상을 재소비하지 못한다', !consumed.ok && consumed.blockers.some((b) => b.includes('이미 답이 있다')), consumed.blockers.join(' | '))
+    const freshForAuthor: FollowupModule.FollowupPostFacts = {
+      ...answeredByAuthor,
+      comments: [...answeredByAuthor.comments, { ...post.comments[0]!, id: 'c2', parentId: null, personaId: 'pC', createdAt: new Date(T0 + 100 * MIN), provenance: 'followup' as const }],
+    }
+    const secondStamp = { ...st, ordinal: 4, parentCommentId: 'c2', hook: 'question' }
+    const second = pub({ post: freshForAuthor, candidatePersonaId: 'pA', dedupKey: M.followupKeyOf(FX_POST, 4),
+      editDiff: M.followupEditDiffOf(secondStamp as FollowupModule.FollowupStamp) })
+    check('⑦ 🟢 글쓴이 두 번째 답글은 서로 다른 열린 대상이면 허용', second.ok && second.personaRepeatAllowed, second.blockers.join(' | '))
     const dup = pub({ ...base2, candidatePersonaId: 'pB' })
     check('⑦ 🔴 이미 단 Persona(pB) → 같은 Persona 규칙으로 막음', !dup.ok && dup.blockers.some((b) => b.includes('이미 썼거나')), dup.blockers.join(' | '))
   }
@@ -703,8 +776,14 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const runSrc = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
   check('⑩ 🔴 run 파일에 dedupKey 선제 제거 쿼리가 있다(provider 전에 기존 키 확인)',
     runSrc.includes('existingDedupKeys') && runSrc.includes('dedupKey: { in:'))
-  check('⑩ 🔴 run 파일 providerCallLimit 이 planned.length 다(선제 차단 후보가 allowed 를 먹지 않는다)',
-    runSrc.includes('providerCallLimit: planned.length'))
+  // 🔴 (2026-11-14 H1) 대상은 하나씩 — 시도 한 번 = 호출 1 · 적재 1. 회차 호출 상한은 min(호출 예산, 계획 상한)
+  check('⑩ 🔴 run 파일이 대상 하나씩 부른다(providerCallLimit 1 · limit 1) — 다음 대상은 이 결과를 분류한 뒤 고른다',
+    runSrc.includes('targets: [target],') && runSrc.includes('providerCallLimit: 1, limit: 1, oneCreatedPerPost: true, beforeProvider'))
+  check('⑩ 🔴 run 파일 회차 호출 상한이 min(회차 판정 호출 예산, followupPlanCap(allowed)) 다',
+    runSrc.includes('providerCallBudget: Math.min(tick.providerCallBudget, followupPlanCap(allowed))'))
+  check('⑩ 🔴 dedupKey 선제 제거가 글 순서 정하기보다 앞이다(이미 있는 열쇠는 후보에 없다)',
+    runSrc.indexOf('existingDedupKeys.has(r.go.key)') > 0
+    && runSrc.indexOf('existingDedupKeys.has(r.go.key)') < runSrc.indexOf('const ordered = orderFollowupGo(eligibleReady)'))
   check('⑩ 🔴 run 파일 orderFollowupGo 호출에 publishedAtMs 가 있다(최신 글 우선)',
     runSrc.includes('publishedAtMs'))
   // 🔴 (2026-10-24) 첫 댓글의 역할은 정본 `followupRoleOf` 로 읽고, 글쓴이 자리는 생성 입력에 표시한다 — 회차와 트랜잭션이 같은 함수
@@ -757,7 +836,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑪ 🔴 실회원 질문 → 자동 답글 대상이 아니다(글쓴이 포함) · 거리 없으면 STOP',
     v2.verdict === 'STOP' && M.followupSpeakerOf(withMember, 'm1').kind === 'other', `${v2.verdict} · ${v2.reason}`)
 
-  // 3 · 자기 답글 금지 · 글쓴이 답글은 한 번
+  // 3 · 자기 답글 금지 · 글쓴이 답글은 서로 다른 대상에 최대 세 번
   const authorAnswered = fxFacts([first, { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'question', provenance: 'followup', role: 'experience' }])
   const g3 = goOf(authorAnswered)
   check('⑪ 🔴 글쓴이 댓글의 질문 → 글쓴이 자리 아님(자기 답글 금지) · 글쓴이는 제외 목록',
@@ -767,8 +846,18 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     g3 !== null && M.pickFollowupPersona(g3, FX_POST, cands(['pA', 'pB', 'pZ']), 3).personaId === 'pZ')
   const later = fxFacts([first, { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'other', provenance: 'followup', role: 'experience' },
     { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', reaction: 'question', provenance: 'followup', role: 'question' }])
-  check('⑪ 🔴 글쓴이가 이미 한 번 답했으면 다른 Persona 의 새 질문도 글쓴이 자리가 아니다',
-    M.followupSpeakerOf(later, 'c2').kind === 'other')
+  check('⑪ 🟢 글쓴이가 한 번 답했어도 다른 Persona 의 새 질문에는 두 번째 답글 자리',
+    M.followupSpeakerOf(later, 'c2').kind === 'author')
+  const authorAtMax = fxFacts([first,
+    { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'other', provenance: 'followup' },
+    { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', reaction: 'question', provenance: 'followup' },
+    { id: 'a2', atMin: 140, parent: 'c2', origin: 'PERSONA', persona: 'pA', reaction: 'other', provenance: 'followup' },
+    { id: 'c3', atMin: 180, parent: 'a2', origin: 'PERSONA', persona: 'pD', reaction: 'question', provenance: 'followup' },
+    { id: 'a3', atMin: 220, parent: 'c3', origin: 'PERSONA', persona: 'pA', reaction: 'other', provenance: 'followup' },
+    { id: 'c4', atMin: 260, origin: 'PERSONA', persona: 'pE', reaction: 'question', provenance: 'followup' },
+  ])
+  check('⑪ 🔴 글쓴이 세 번 답한 뒤 네 번째 질문은 글쓴이 자리가 아니다',
+    M.followupSpeakerOf(authorAtMax, 'c4').kind === 'other')
 
   // 4 · 첫 댓글과 같은 일반 반응(칭찬)을 최상위로 되풀이하지 않는다
   const praise = fxFacts([{ id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: 'empathy' }], 'empathy')
@@ -790,16 +879,147 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑪ 첫 댓글(그냥 한마디) 뒤 글의 질문 → 다른 기능(경험) 새 댓글은 열린다',
     g5 !== null && g5.target.kind === 'post' && g5.roles.includes('experience') && !g5.roles.includes('other'), JSON.stringify(g5?.roles))
 
-  // 6 · 총량 상한 그대로 — 글쓴이 답글도 글당 5건에 센다
+  // 6 · 총량 상한 — 글쓴이 답글도 글당 10건에 센다
   const full = fxFacts([
     first,
     { id: 'a1', atMin: 60, parent: 'c1', origin: 'PERSONA', persona: 'pA', reaction: 'question', provenance: 'followup' },
     { id: 'c2', atMin: 100, parent: 'a1', origin: 'PERSONA', persona: 'pC', reaction: 'question', provenance: 'followup' },
     { id: 'c3', atMin: 140, origin: 'PERSONA', persona: 'pD', reaction: 'question', provenance: 'followup', role: 'experience' },
     { id: 'c4', atMin: 180, parent: 'c3', origin: 'PERSONA', persona: 'pE', reaction: 'question', provenance: 'followup' },
+    { id: 'c5', atMin: 220, parent: 'c4', origin: 'PERSONA', persona: 'pF', reaction: 'question', provenance: 'followup' },
+    { id: 'c6', atMin: 260, parent: 'c5', origin: 'PERSONA', persona: 'pG', reaction: 'other', provenance: 'followup' },
+    { id: 'c7', atMin: 300, parent: 'c2', origin: 'PERSONA', persona: 'pH', reaction: 'other', provenance: 'followup' },
+    { id: 'c8', atMin: 340, parent: 'c7', origin: 'PERSONA', persona: 'pI', reaction: 'other', provenance: 'followup' },
+    { id: 'c9', atMin: 380, parent: 'c8', origin: 'PERSONA', persona: 'pJ', reaction: 'question', provenance: 'followup' },
   ], 'question')
-  const v6 = M.judgeFollowupPost(full, T0 + 400 * MIN)
-  check('⑪ 🔴 글쓴이 답글 포함 Persona 5건 → STOP(글당 5 상한 그대로)', v6.verdict === 'STOP' && v6.reason.includes('상한'), `${v6.verdict} · ${v6.reason}`)
+  const v6 = M.judgeFollowupPost(full, T0 + 500 * MIN)
+  check('⑪ 🔴 글쓴이 답글 포함 Persona 10건 → STOP(글당 10 상한)', v6.verdict === 'STOP' && v6.reason.includes('상한'), `${v6.verdict} · ${v6.reason}`)
+}
+
+// ═════════ ⑫ H1 — 실패 분류 · 최소 범위 격리 · KST 자정 · 같은 회차 재선정 후보 ═════════
+{
+  const C = M.classifyFollowupFailure
+  const cases: [string, Parameters<typeof C>[0], ReturnType<typeof C>][] = [
+    ['⑧ regenerate → Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:regenerate'] }, 'FU_PERSONA_DAY'],
+    ['⑦ 금지 역할 → Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:reject'] }, 'FU_PERSONA_DAY'],
+    ['⑦:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:notRun', '②:regenerate'] }, 'FU_COMBO_DAY'],
+    ['⑧:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:notRun', '③:reject'] }, 'FU_COMBO_DAY'],
+    ['BOOTSTRAP_NEEDS_HUMAN → Persona', { step: 'ENQUEUE_BLOCKED', blockCodes: ['BOOTSTRAP_NEEDS_HUMAN'] }, 'FU_PERSONA_DAY'],
+    ['PERSONA_REAL_MEMBER → Persona', { step: 'ENQUEUE_BLOCKED', blockCodes: ['PERSONA_REAL_MEMBER'] }, 'FU_PERSONA_DAY'],
+    ['PROMPT_BLOCKED → Persona', { step: 'PROVIDER_FAILED', errorCode: 'PROMPT_BLOCKED' }, 'FU_PERSONA_DAY'],
+    ['POST_PERSONA_COMMENTS_FULL → 글', { step: 'ENQUEUE_BLOCKED', blockCodes: ['POST_PERSONA_COMMENTS_FULL'] }, 'FU_POST_DAY'],
+    ['writer POST_GONE → 글', { step: 'WRITE_FAILED', writeCode: 'POST_GONE' }, 'FU_POST_DAY'],
+    ['writer BOARD_CHANGED → 글', { step: 'WRITE_FAILED', writeCode: 'BOARD_CHANGED' }, 'FU_POST_DAY'],
+    ['FOLLOWUP_TEXT_DUP → 글 × Persona', { step: 'PROVIDER_FAILED', errorCode: 'FOLLOWUP_TEXT_DUP' }, 'FU_COMBO_DAY'],
+    ['PARSE_FAILED → 글 × Persona', { step: 'PARSE_FAILED' }, 'FU_COMBO_DAY'],
+    ['writer DUPLICATE → 글 × Persona', { step: 'WRITE_FAILED', writeCode: 'DUPLICATE' }, 'FU_COMBO_DAY'],
+    ['미완 STARTED → 글 × Persona(넓히지 않는다)', { step: 'STARTED' }, 'FU_COMBO_DAY'],
+    ['HTTP_429 → 일시', { step: 'PROVIDER_FAILED', errorCode: 'HTTP_429' }, 'FU_TRANSIENT'],
+    ['HTTP_503 → 일시', { step: 'PROVIDER_FAILED', errorCode: 'HTTP_503' }, 'FU_TRANSIENT'],
+    ['NETWORK → 일시', { step: 'PROVIDER_FAILED', errorCode: 'NETWORK' }, 'FU_TRANSIENT'],
+    ['TIMEOUT → 일시', { step: 'PROVIDER_FAILED', errorCode: 'TIMEOUT' }, 'FU_TRANSIENT'],
+    ['LEDGER_BLOCKED_CAP → 일시', { step: 'PROVIDER_FAILED', errorCode: 'LEDGER_BLOCKED_CAP' }, 'FU_TRANSIENT'],
+    ['writer ERROR(DB · IO) → 일시', { step: 'WRITE_FAILED', writeCode: 'ERROR' }, 'FU_TRANSIENT'],
+    ['HTTP_400(요청 모양 거부) → 멈춤', { step: 'PROVIDER_FAILED', errorCode: 'HTTP_400' }, 'FU_HALT'],
+    ['모르는 provider 코드 → 멈춤', { step: 'PROVIDER_FAILED', errorCode: 'WHAT_IS_THIS' }, 'FU_HALT'],
+    ['모르는 writer 코드 → 멈춤', { step: 'WRITE_FAILED', writeCode: 'WHAT_IS_THIS' }, 'FU_HALT'],
+    ['내부 TEXT_EMPTY → 멈춤', { step: 'ENQUEUE_BLOCKED', blockCodes: ['TEXT_EMPTY'] }, 'FU_HALT'],
+    ['적재 ENQUEUED → 실패 아님', { step: 'ENQUEUED' }, null],
+    ['dry-run WRITE_SKIPPED → 실패 아님', { step: 'WRITE_SKIPPED' }, null],
+  ]
+  for (const [name, input, want] of cases) {
+    const got = C(input)
+    check(`⑫ 분류 — ${name}`, got === want, got === want ? '' : `${String(got)} ≠ ${String(want)}`)
+  }
+  check('⑫ 🔴 일시 · 멈춤만 회차를 멈춘다(Persona · 글 · 쌍 실패는 같은 회차에서 다음 후보로 간다)',
+    M.followupFailureHaltsRound('FU_TRANSIENT') && M.followupFailureHaltsRound('FU_HALT')
+    && !M.followupFailureHaltsRound('FU_PERSONA_DAY') && !M.followupFailureHaltsRound('FU_POST_DAY') && !M.followupFailureHaltsRound('FU_COMBO_DAY'))
+
+  // 격리 범위 — 분류마다 정확히 한 집합 · 일시 실패는 어디에도 없다
+  const at = { postId: 'post-1', personaCode: 'pc-a' }
+  const isoOf = (code: Parameters<typeof M.addFollowupIsolation>[2]) => {
+    const iso = M.emptyFollowupIsolation()
+    M.addFollowupIsolation(iso, at, code)
+    return iso
+  }
+  const sizes = (iso: ReturnType<typeof isoOf>) => `${iso.personaCodes.size}/${iso.postIds.size}/${iso.postPersonaKeys.size}`
+  const pIso = isoOf('FU_PERSONA_DAY')
+  check('⑫ 🔴 Persona 실패 → 그 Persona 만(글 전체를 막지 않는다)',
+    sizes(pIso) === '1/0/0' && M.followupIsolationReason(pIso, { postId: 'post-1', personaCode: 'pc-b' }) === null
+    && M.followupIsolationReason(pIso, { postId: 'post-2', personaCode: 'pc-a' }) !== null, sizes(pIso))
+  const gIso = isoOf('FU_POST_DAY')
+  check('⑫ 🔴 글 실패 → 그 글만(그 Persona 는 다른 글에서 산다)',
+    sizes(gIso) === '0/1/0' && M.followupIsolationReason(gIso, { postId: 'post-2', personaCode: 'pc-a' }) === null
+    && M.followupIsolationReason(gIso, { postId: 'post-1', personaCode: 'pc-b' }) !== null, sizes(gIso))
+  for (const code of ['FU_COMBO_DAY', 'FU_HALT'] as const) {
+    const cIso = isoOf(code)
+    check(`⑫ 🔴 ${code} → 그 글 × Persona 쌍만`,
+      sizes(cIso) === '0/0/1' && M.followupIsolationReason(cIso, at) !== null
+      && M.followupIsolationReason(cIso, { postId: 'post-1', personaCode: 'pc-b' }) === null
+      && M.followupIsolationReason(cIso, { postId: 'post-2', personaCode: 'pc-a' }) === null, sizes(cIso))
+  }
+  check('⑫ 🔴 일시 실패 · 적재 → 아무것도 격리하지 않는다',
+    sizes(isoOf('FU_TRANSIENT')) === '0/0/0' && sizes(isoOf(null)) === '0/0/0')
+
+  // KST 자정 — 시도한 날 23:59:59.999 KST 까지 · 다음 날 00:00 KST 에 풀린다(영구 차단 목록 없음)
+  const pub = Date.parse('2026-11-13T22:00:00+09:00')
+  const tried = Date.parse('2026-11-13T23:10:00+09:00')
+  const entry = (o: Partial<AttemptEntry>): AttemptEntry => ({
+    postId: 'post-1', personaCode: 'pc-a', reactionRole: 'experience', postPublishedAtMs: pub, attemptedAtMs: tried,
+    step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:regenerate'], blockCodes: ['FU_PERSONA_DAY'], ...o,
+  })
+  check('⑫ KST 자정 — kstDayEndMs 는 그날 23:59:59.999 KST',
+    M.kstDayEndMs(tried) === Date.parse('2026-11-14T00:00:00+09:00') - 1, new Date(M.kstDayEndMs(tried)).toISOString())
+  const before = M.followupIsolationOf([entry({})], Date.parse('2026-11-13T23:59:59.999+09:00'))
+  const after = M.followupIsolationOf([entry({})], Date.parse('2026-11-14T00:00:00+09:00'))
+  check('⑫ 🔴 KST 23:59:59.999 에는 격리 · 00:00 에는 풀린다',
+    before.personaCodes.has('pc-a') && after.personaCodes.size === 0, `${sizes(before)} → ${sizes(after)}`)
+  check('⑫ 🔴 파일에 적힌 FU 코드가 다시 판정보다 먼저다(글 실패로 적었으면 Persona 로 넓히지 않는다)',
+    M.followupFailureCodeOf(entry({ blockCodes: ['FU_POST_DAY'] })) === 'FU_POST_DAY'
+    && M.followupFailureCodeOf(entry({ blockCodes: [] })) === 'FU_PERSONA_DAY')
+
+  // lane — 일시 · 적재만 다시 시작할 수 있다 · 마지막 방어선
+  const L = M.FOLLOWUP_ATTEMPT_LANE
+  check('⑫ 🔴 lane 재시작 — 일시 실패 · 적재는 새 시작으로 바꾼다',
+    L.replaceableOnRestart(entry({ step: 'PROVIDER_FAILED', failedGates: [], blockCodes: ['FU_TRANSIENT'] }))
+    && L.replaceableOnRestart(entry({ step: 'ENQUEUED', failedGates: [], blockCodes: [] })))
+  check('⑫ 🔴 lane 재시작 — Persona · 글 · 쌍 · 멈춤 · 미완은 바꾸지 않는다',
+    (['FU_PERSONA_DAY', 'FU_POST_DAY', 'FU_COMBO_DAY', 'FU_HALT'] as const)
+      .every((c) => !L.replaceableOnRestart(entry({ blockCodes: [c] })))
+    && !L.replaceableOnRestart(entry({ step: 'STARTED', failedGates: [], blockCodes: [] })))
+  const live = [entry({})]
+  check('⑫ 🔴 lane 마지막 방어선 — 오늘 격리된 Persona 의 다른 글 시작을 거절 · 다른 Persona 는 받는다',
+    L.startBlockedBy(live, entry({ postId: 'post-2', step: 'STARTED', failedGates: [], blockCodes: [] })) !== null
+    && L.startBlockedBy(live, entry({ personaCode: 'pc-b', step: 'STARTED', failedGates: [], blockCodes: [] })) === null)
+  check('⑫ 🔴 lane 마지막 방어선 — 일시 실패 기억은 아무 시작도 막지 않는다',
+    L.startBlockedBy([entry({ step: 'PROVIDER_FAILED', failedGates: [], blockCodes: ['FU_TRANSIENT'] })],
+      entry({ postId: 'post-2', step: 'STARTED', failedGates: [], blockCodes: [] })) === null)
+
+  // 후보 — 자격 · 격리 · 이번 회차 사용 · 이 글에서 시도함
+  const facts = (code: string, o: Partial<Parameters<typeof M.followupPersonaCandidates>[0]['personas'][number]> = {}) => ({
+    code, personaId: `id-${code}`, active: true, realMember: false, profileComplete: true, voiceCapable: true, followupsToday: 0, ...o,
+  })
+  const iso = M.emptyFollowupIsolation()
+  M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-iso' }, 'FU_PERSONA_DAY')
+  M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-pair' }, 'FU_COMBO_DAY')
+  const cands = M.followupPersonaCandidates({
+    postId: 'post-1',
+    personas: [
+      facts('pc-ok'), facts('pc-real', { realMember: true }), facts('pc-off', { active: false }),
+      facts('pc-noprof', { profileComplete: false }), facts('pc-novoice', { voiceCapable: false }),
+      facts('pc-noid', { personaId: null }), facts('pc-iso'), facts('pc-pair'), facts('pc-used'),
+    ],
+    isolation: iso, usedPersonaIds: new Set(['id-pc-used']),
+  }).map((c) => c.personaId)
+  check('⑫ 🔴 후보 — 실회원 · 비활성 · 프로필 · 말투 · 격리 · 쌍 · 이번 회차 사용을 전부 빼고 정상 Persona 만 남는다',
+    cands.length === 1 && cands[0] === 'id-pc-ok', cands.join(','))
+  const otherPost = M.followupPersonaCandidates({
+    postId: 'post-2', personas: [facts('pc-pair')], isolation: iso, usedPersonaIds: new Set(),
+  })
+  check('⑫ 🔴 쌍 격리는 다른 글의 그 Persona 를 막지 않는다', otherPost.length === 1)
+
+  check('⑫ 호출 상한 — followupPlanCap(allowed) = allowed × 2 · 글당 회차 시도 2',
+    M.followupPlanCap(0) === 0 && M.followupPlanCap(3) === 6 && M.FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK === 2)
 }
 
 for (const l of lines) console.log(l)

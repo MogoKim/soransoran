@@ -1,7 +1,7 @@
 /**
  * 🔴 **공급 러너 진입 — 커널 lease 안에서만 본체를 돈다** (2026-10-12 Batch C1)
  *
- *   launchd · 사람 · (다음) 복구 kickstart
+ *   launchd · 사람 · 검증된 단계 제한 복구
  *     → supply-process.mts (바깥)  — DB · provider 0. 잠금 디렉터리만 만든다
  *     → runner-lease.sh            — 잠금 파일을 fd 9 로 열고 `lockf -s -t 0 9` → Node 로 exec
  *     → supply-process.mts (holder) — 커널 잠금 fd 를 쥔다. 회차(pass)마다 실행 token 을 발급하고
@@ -32,7 +32,7 @@ import {
 import { RUN_AT_ENV, runClockFrom } from './run-clock.mjs'
 import {
   buildRunToken, judgeRunTokenShadow, supplyRunIdOf,
-  type LockIdentity, type RunToken, type RunTokenShadow,
+  type LockIdentity, type RunToken, type RunTokenShadow, type RunTokenShadowCode,
 } from '../../src/lib/supply-run-token'
 import { supplyRunKindOf } from '../../src/lib/supply-scheduled-reserve'
 
@@ -71,10 +71,45 @@ export function supplyLockfPath(): string {
 
 /**
  * 🔴 **띄운 이유** — 지금 예산 판정과 **같은 함수**(`supplyRunKindOf`)로 정한다: 공급 job 라벨 + 슬롯 창 안이면 `scheduled`,
- *    그 밖은 전부 `manual`. 복구 · 사건 trigger 는 C1 에서 만들지 않는다(follow-up 표식으로만 들어온다).
+ *    그 밖은 전부 `manual`. 일반 사건·복구는 이 함수에서 추정하지 않는다. 단계 제한 복구만
+ *    controller intent를 검증한 호출자가 `trigger: recovery`를 명시한다.
  */
 export function supplyLaunchTrigger(env: Readonly<Record<string, string | undefined>>, now: Date): LeaseTrigger {
   return supplyRunKindOf(env, now).kind === 'scheduled' ? 'scheduled' : 'manual'
+}
+
+/**
+ * 복구 회차는 실행 token이 비용·원천 lineage의 필수 증거다. 자연·event·수동 회차의 token은 기존 shadow 계약을
+ * 유지하지만, 복구 회차가 token 없이 돌면 자연 cohort와 복구 비용 양쪽에서 잘못 분류될 수 있으므로 시작하지 않는다.
+ */
+export function mayStartSupplyPass(trigger: PassContext['trigger'], tokenId: string | null): boolean {
+  return trigger !== 'recovery' || tokenId !== null
+}
+
+export type RecoveryRunTokenGateCode = RunTokenShadowCode
+  | 'RECOVERY_TRIGGER_MISMATCH' | 'RECOVERY_PASS_MISMATCH' | 'RECOVERY_RUN_ID_MISMATCH' | 'RECOVERY_RUN_CLOCK_INVALID'
+
+/**
+ * 제한 복구 본체의 마지막 진입문. holder에서 token을 발급했다는 사실만으로는 부족하다. 회차 자식이 실제로
+ * 받은 lease·token·회차 시각을 다시 묶어 검증한 뒤에만 intent claim·provider·DB write가 있는 body를 연다.
+ * 일반 자연·event·수동 회차는 기존 shadow 계약을 유지한다.
+ */
+export function recoveryRunTokenGateFromEnv(
+  env: Readonly<Record<string, string | undefined>>, now: Date, home?: string,
+): { ok: true; tokenId: string } | { ok: false; code: RecoveryRunTokenGateCode } {
+  const shadow = runTokenShadowFromEnv(env, now, home)
+  if (!shadow.ok) return { ok: false, code: shadow.code }
+  if (shadow.trigger !== 'recovery' || shadow.launchTrigger !== 'recovery' || shadow.absorbedTrigger !== null) {
+    return { ok: false, code: 'RECOVERY_TRIGGER_MISMATCH' }
+  }
+  const passRaw = env[SUPPLY_PASS_ENV]
+  if (passRaw === undefined || !/^\d+$/.test(passRaw) || shadow.pass !== Number(passRaw)) {
+    return { ok: false, code: 'RECOVERY_PASS_MISMATCH' }
+  }
+  let expectedRunId: string
+  try { expectedRunId = supplyRunIdOf(runClockFrom(env).at) } catch { return { ok: false, code: 'RECOVERY_RUN_CLOCK_INVALID' } }
+  if (shadow.runId !== expectedRunId) return { ok: false, code: 'RECOVERY_RUN_ID_MISMATCH' }
+  return { ok: true, tokenId: shadow.tokenId }
 }
 
 /** 🔴 관측 전용 — 관제 · dry-run 이 쓴다. 파일을 만들지 않는다 */
@@ -138,7 +173,8 @@ function runPassChild(i: {
 
 /**
  * 🔴 **공급 진입 하나** — 바깥 · holder · 회차 자식이 모두 이 함수를 지난다.
- *    · 회차 자식(`SORAN_SUPPLY_PASS`): lease 를 다시 증명한다. 실패면 exit 1 — DB · provider 0.
+ *    · 회차 자식(`SORAN_SUPPLY_PASS`): lease 를 다시 증명한다. 제한 복구면 token·pass·runId도 본체 전에
+ *      강제 검증한다. 실패면 exit 1 — intent claim · DB · provider 0.
  *    · 바깥: 잠금 디렉터리(0700)를 만들고 wrapper 로 다시 띄운다(`leaseEntry`).
  *    · holder: 회차마다 token 을 발급하고 회차 자식을 띄운다. follow-up 은 `leaseEntry` 상한(1) 그대로다.
  */
@@ -146,6 +182,8 @@ export async function supplyEntry(o: {
   scriptPath: string; argv: readonly string[]; env: NodeJS.ProcessEnv
   body: (proof: LeaseProof) => Promise<number>
   log: (line: string) => void
+  /** 검증된 복구 worker만 명시한다. 일반 실행은 기존 시각 기반 분류를 그대로 쓴다. */
+  trigger?: LeaseTrigger
   now?: () => Date
 }): Promise<number> {
   const now = o.now ?? ((): Date => new Date())
@@ -154,6 +192,13 @@ export async function supplyEntry(o: {
   if (o.env[SUPPLY_PASS_ENV] !== undefined) {
     const v = verifyInKernelLease({ lockPath: join(lockDir, SUPPLY_LOCK_FILE), followUpDir: lockDir, env: o.env, lockf })
     if (!v.ok) { o.log(`🔴 LEASE_NOT_PROVEN(회차 자식) — ${v.reason} · provider 0 · DB 0`); return 1 }
+    if (o.trigger === 'recovery') {
+      const gate = recoveryRunTokenGateFromEnv(o.env, now())
+      if (!gate.ok) {
+        o.log(`🔴 RECOVERY_TOKEN_NOT_PROVEN(회차 자식) — ${gate.code} · intent claim 0 · provider 0 · DB 0`)
+        return 1
+      }
+    }
     return o.body(v.proof)
   }
   if (o.env[LEASE_INNER_ENV] === undefined) {
@@ -164,7 +209,8 @@ export async function supplyEntry(o: {
   }
   return leaseEntry({
     lockDir, lockFile: SUPPLY_LOCK_FILE, scriptPath: o.scriptPath, argv: o.argv, env: o.env,
-    trigger: supplyLaunchTrigger(o.env, now()), lockf, busyRetryMs: SUPPLY_BUSY_RETRY_MS, log: o.log,
+    trigger: o.trigger ?? supplyLaunchTrigger(o.env, now()), lockf, busyRetryMs: SUPPLY_BUSY_RETRY_MS, log: o.log,
+    ...(o.trigger === 'recovery' ? { followUpOnBusy: false, absorbFollowUp: false } : {}),
     pass: async (pass: number, _proof: LeaseProof, ctx: PassContext): Promise<number> => {
       // 🔴 회차 시각 — 첫 회차는 부모가 준 값(없으면 지금), follow-up 은 지금. 모양이 틀린 값은 회차를 열지 않는다
       let runAt: Date
@@ -173,12 +219,19 @@ export async function supplyEntry(o: {
         return 1
       }
       const tokenId = issueRunToken({ lockDir, ctx, pass, runAt, issuedAt: now(), log: o.log })
+      if (!mayStartSupplyPass(ctx.trigger, tokenId)) {
+        o.log('🔴 제한 복구 실행 token을 발급하지 못했다 — 회차를 열지 않는다 · provider 0 · DB 0')
+        return 1
+      }
       return runPassChild({ scriptPath: o.scriptPath, argv: o.argv, env: o.env, pass, tokenId, runAt })
     },
   })
 }
 
-/** 🔴 token 발급 — shadow 라 실패해도 회차를 막지 않는다(실패는 그대로 적고 자식 shadow 가 `NO_TOKEN_ENV` 로 남긴다) */
+/**
+ * 🔴 token 발급 — 자연·event·수동 회차는 shadow라 실패해도 기존처럼 회차를 막지 않는다.
+ * 제한 복구는 정확한 비용·원천 lineage가 필수라 호출자가 token 없음으로 회차를 fail-closed 한다.
+ */
 function issueRunToken(i: {
   lockDir: string; ctx: PassContext; pass: number; runAt: Date; issuedAt: Date; log: (l: string) => void
 }): string | null {

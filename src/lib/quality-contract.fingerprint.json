@@ -1,21 +1,21 @@
 {
-  "version": "quality-v25",
-  "digest": "df29a10fc92d1f165944f97264169ed96dc4a5f92b7793b2f202993dcc380945",
+  "version": "quality-v26",
+  "digest": "eb5000a18491ef928672be43039d5853c6b23f866dec7ef60dc291a7adb07163",
   "files": {
-    "src/lib/quality-contract.ts": "99277524450229a69d44b2429a32cca22a80fa3d71cd371945be7139a554b8eb",
+    "src/lib/quality-contract.ts": "843629941c72525a01adc76e35693e4ebb3233ae328d016714e03b74371adcb9",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
     "src/lib/content-core/draft-life-gates.ts": "5e192419adf1e05b9e5718c2eefe361d7406545da3627430eb287dce6bbfdac4",
-    "src/lib/content-core/review.ts": "18c2867d12de4cbb7fdd7940a28e182e7ee1044d368c346fa4fa56a8739ea396",
+    "src/lib/content-core/review.ts": "fb8f476346b2ed561f221c282846ef36412a2f52e625082780242b856af5a33c",
     "src/lib/content-core/pipeline.ts": "19271911d1168118f396f31e2d2f946ae9068a29c5409de280d2a6a27b711ce8",
     "src/lib/content-core/evidence.ts": "5d057ae291e865cbc3131bb51a858e2568b351239f993c38c4d9453c95980e2e",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
-    "src/lib/micro-seed-auto-draft.ts": "73ee0c560dafe57285559ee7ea8f836d434992e6dbb2acb964c5d97e32dd1408",
+    "src/lib/micro-seed-auto-draft.ts": "808e7263f27d1943840a99518c4df35c483d33e02d159708f94bd6214a791a5e",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
-    "src/lib/supply-schedule-contract.ts": "42436dd62c8c4b72ed2d4792c0cc06570aa28aa2c92ebd24bda6e938ea6e51a0",
+    "src/lib/supply-schedule-contract.ts": "6523604d2e982d9a7f9dacfcba070189f4588da4a328cc1091b30227758c6b84",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
-    "scripts/lib/content-core-run.mts": "7bb5c25a71d3abfa34bc38f4e49039c1692380e436189bfb34b1ede7d8be4865",
+    "scripts/lib/content-core-run.mts": "924ee65a7c60f2914b19fa36ce48037a9d3d21883fd203eab8e89c1eb9c5454b",
     "scripts/lib/content-core-prompts.mts": "37460ae9e74940d63ac92411caf0aed9f1270a46873a76bcc829cf511a259d20",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
@@ -35,12 +35,12 @@
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v25 digest 546cac2a83d4… → df29a10fc92d… · v25 배포 전 가족 건강 제목의 단수 아이 주체를 계약 digest에 포함",
+    "kind": "bump",
+    "reason": "판 quality-v25 → quality-v26",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/auto-ready-defect-resolution-store.ts"
+      "src/lib/micro-seed-auto-draft.ts",
+      "scripts/lib/content-core-run.mts"
     ]
   }
 }

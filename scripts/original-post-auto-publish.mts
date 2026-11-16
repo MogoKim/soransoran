@@ -48,7 +48,8 @@ import { describeRelease } from '../src/lib/source-slot-release'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 /** 🔴 commit 뒤 댓글 러너 깨움 — failure-open · kill switch `SORAN_EVENT_WAKE` (2026-10-12 Batch C2) */
-import { describeWake, publishWakeGate, wakeRunner } from './lib/runner-wake.mjs'
+import { describeWake, EVENT_WAKE_ENV, publishWakeGate, wakeRunner } from './lib/runner-wake.mjs'
+import { readEnvKeys } from './lib/ops-signals.mjs'
 import { RUN_AT_ENV, runClockFrom } from './lib/run-clock.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
@@ -512,7 +513,8 @@ if (AUTO_READY_ON) {
  *    🔴 failure-open — `wakeRunner` 는 던지지 않고, 그 결과는 종료 코드에 들어가지 않는다(종료 코드는 아래 한 줄 그대로).
  */
 const wakeGate = publishWakeGate({ verifyOk: v.ok, auditIntegrityOk })
-console.log(`   ${wakeGate.ok ? describeWake('comment', wakeRunner({ target: 'comment', env: process.env, nowMs: Date.now() })) : `깨움(comment) 0 — ${wakeGate.why}`}`)
+// 🔴 모드는 정본 env 하나에서 읽는다 — 고아 표식 복구(`runner-recover`) · readiness 와 같은 파일 · 같은 키(process.env 가 아니다)
+console.log(`   ${wakeGate.ok ? describeWake('comment', wakeRunner({ target: 'comment', env: readEnvKeys([EVENT_WAKE_ENV]).values, nowMs: Date.now() })) : `깨움(comment) 0 — ${wakeGate.why}`}`)
 
 await prisma.$disconnect()
 process.exit(v.ok && auditIntegrityOk ? 0 : 1)

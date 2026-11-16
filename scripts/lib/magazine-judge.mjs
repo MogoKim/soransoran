@@ -23,7 +23,7 @@
  * 🔴 이 파일은 등록을 열지 않는다. register·batch-qa 에 연결되어 있지 않다.
  */
 
-import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from '../magazine-qa.mjs'
+import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa-constants.mjs'
 
 export const VERDICT = { PASS: 'PASS', FAIL: 'FAIL', UNKNOWN: 'UNKNOWN' }
 

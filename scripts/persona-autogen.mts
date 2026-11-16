@@ -243,7 +243,7 @@ if (GENERATE) {
     const ev = voice.byCode.get(v.code)!
     return creativeBriefOf({ code: v.code, life: lifeOf.get(v.code)!, voiceCore: voiceCoreFromBundle(ev.bundle), style: ev.bundle.style })
   })
-  const { callProvider } = await import('./lib/voice-m3-provider.mjs')
+  const { callProvider, countInputTokens } = await import('./lib/voice-m3-provider.mjs')
   /**
    * 🔴 **원문 · 화자 대조 목록 = 말투 정본 자산 전체** — 나가는 요청과 돌아온 응답(실패 파일 보존) 양쪽에 쓴다.
    *    후보 묶음 것만 보면 다른 화자의 댓글이 섞여도 못 잡는다. 화자 id 도 넣는다
@@ -258,7 +258,8 @@ if (GENERATE) {
   if (BATCH) {
     // 🔴 batch — 호출 정확히 1회. 기존 Persona 는 압축(제목 · 핵심 성격)만 보낸다
     batchRun = await generateCreativeBatch({
-      briefs, avoid: pool.cards.map(compactPeerOf), forbiddenTextsOf, call: callProvider, capUsd: RUN_CAP,
+      briefs, avoid: pool.cards.map(compactPeerOf), forbiddenTextsOf,
+      call: callProvider, count: countInputTokens, capUsd: RUN_CAP,
     })
     gen = { ok: true, outcomes: outcomesOfBatch(batchRun, briefs.map((b) => b.code)), ledger: batchRun.ledger }
   } else gen = await generateCreatives({
@@ -270,6 +271,7 @@ if (GENERATE) {
     ],
     forbiddenTextsOf,
     call: callProvider,
+    count: countInputTokens,
     capUsd: RUN_CAP,
   })
   if (gen.ok) for (const o of gen.outcomes) if (o.creative !== null) creative[o.code] = o.creative

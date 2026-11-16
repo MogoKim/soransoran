@@ -3,6 +3,7 @@ import {
   SUPPLEMENT_ASSET_VERSION, judgeSupplementAsset, judgeSupplementManifest,
   type SupplementalReferenceAsset, type SupplementalReferenceManifest,
 } from '../../src/lib/persona-reference-supplement'
+import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import {
   planAppendOnlyBundles, planBundles, type LocalComment,
 } from './persona-reference-store.mjs'
@@ -19,6 +20,8 @@ export function planSupplementSnapshot(input: {
   saltId: string
   generatedAt: string
   reason: string
+  /** 이미 운영에서 동결된 append-only 묶음. 새 계획보다 항상 우선하고 v2에 바이트 의미 그대로 포함한다. */
+  frozenBundles?: readonly VoiceReferenceBundle[]
 }): {
   ok: boolean
   problems: string[]
@@ -32,20 +35,43 @@ export function planSupplementSnapshot(input: {
 } {
   const baseCodes = sortPersonaCodes(new Set(input.baseCodes))
   const newCodes = sortPersonaCodes(new Set(input.newCodes))
+  const frozenBundles = [...(input.frozenBundles ?? [])]
+  const frozenCodes = new Set(frozenBundles.map((bundle) => bundle.personaCode))
+  const overlap = newCodes.filter((code) => frozenCodes.has(code))
+  // 다음 세대는 base 바로 뒤가 아니라 이미 동결된 append-only 세대 뒤에서
+  // 배정한다. frozen 코드를 빼고 다시 계획하면 P44부터가 P34부터의 화자를
+  // 재사용해도 오직 사후 중복 검사에서만 드러난다.
+  const occupiedCodes = sortPersonaCodes([...baseCodes, ...frozenCodes])
   const plan = planAppendOnlyBundles({
     canonRows: input.canonRows,
     extraRows: input.extraRows,
-    productionCodes: baseCodes,
+    productionCodes: occupiedCodes,
     newCodes,
+    occupiedBundles: frozenBundles,
   })
   const problems: string[] = []
+  if (overlap.length > 0) problems.push(`FROZEN_NEW_OVERLAP:${overlap.join(',')}`)
   if (plan.productionDrift.length > 0) problems.push(`BASE_DRIFT:${plan.productionDrift.join(',')}`)
   const missing = newCodes.filter((code) => !plan.byCode.has(code))
   if (missing.length > 0) problems.push(`BUNDLE_MISSING:${missing.join(',')}`)
-  const bundles = newCodes.flatMap((code) => {
+  const plannedBundles = newCodes.flatMap((code) => {
     const bundle = plan.byCode.get(code)
     return bundle === undefined ? [] : [{ ...bundle, personaCode: code }]
   })
+  const body = (bundle: VoiceReferenceBundle): string => JSON.stringify({
+    comments: bundle.comments, lengths: bundle.lengths, anchorCount: bundle.anchorCount,
+    supplementCount: bundle.supplementCount, anchorRatio: bundle.anchorRatio,
+    observedCount: bundle.observedCount, styleOnlyCount: bundle.styleOnlyCount, style: bundle.style,
+  })
+  const frozenBodies = new Set(frozenBundles.map(body))
+  const reused = plannedBundles.filter((bundle) => frozenBodies.has(body(bundle))).map((bundle) => bundle.personaCode)
+  if (reused.length > 0) problems.push(`FROZEN_BUNDLE_REUSE:${reused.join(',')}`)
+  const bundles = sortPersonaCodes([...frozenBundles.map((bundle) => bundle.personaCode), ...newCodes])
+    .flatMap((code) => {
+      const bundle = frozenBundles.find((candidate) => candidate.personaCode === code)
+        ?? plannedBundles.find((candidate) => candidate.personaCode === code)
+      return bundle === undefined ? [] : [bundle]
+    })
   const asset: SupplementalReferenceAsset = {
     version: SUPPLEMENT_ASSET_VERSION,
     generatedAt: input.generatedAt,

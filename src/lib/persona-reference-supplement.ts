@@ -7,6 +7,7 @@
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 
 import { isPersonaCode, sortPersonaCodes } from './persona-code'
 import {
@@ -27,6 +28,28 @@ export const SUPPLEMENT_CORPUS_FILE = join(
   'persona-reference', 'supplement-v1.json',
 )
 export const SUPPLEMENT_MANIFEST_FILE = join(REFERENCE_DIR, 'supplement-v1-manifest.json')
+export const SUPPLEMENT_CORPUS_FILE_V2 = join(
+  homedir(), 'Library', 'Application Support', 'soransoran',
+  'persona-reference', 'supplement-v2.json',
+)
+export const SUPPLEMENT_MANIFEST_FILE_V2 = join(REFERENCE_DIR, 'supplement-v2-manifest.json')
+export type SupplementGeneration = 1 | 2
+
+export function supplementPaths(generation: SupplementGeneration): { corpus: string; manifest: string } {
+  return generation === 2
+    ? { corpus: SUPPLEMENT_CORPUS_FILE_V2, manifest: SUPPLEMENT_MANIFEST_FILE_V2 }
+    : { corpus: SUPPLEMENT_CORPUS_FILE, manifest: SUPPLEMENT_MANIFEST_FILE }
+}
+
+/**
+ * 🔴 v2 파일이 하나라도 보이면 v2만 읽는다. v2가 반쪽이면 v1으로 조용히 후퇴하지 않고
+ *    호출부가 SUPPLEMENT_PARTIAL 로 막는다. 둘 다 없을 때만 동결 v1을 쓴다.
+ */
+export function activeSupplementPaths(): { generation: SupplementGeneration; corpus: string; manifest: string } {
+  const v2 = supplementPaths(2)
+  if (existsSync(v2.corpus) || existsSync(v2.manifest)) return { generation: 2, ...v2 }
+  return { generation: 1, ...supplementPaths(1) }
+}
 
 export type SupplementalReferenceAsset = {
   version: typeof SUPPLEMENT_ASSET_VERSION

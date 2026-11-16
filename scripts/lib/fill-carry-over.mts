@@ -89,3 +89,22 @@ export function planCarryOver(input: {
   })
   return { ...sel, staleCount: st.staleNames.length }
 }
+
+/**
+ * 🔴 **회차 종료 후 다음 회차가 이월할 후보** — 방금 만든 현재 회차 후보도 포함한다.
+ *    별도 규칙을 만들지 않고 `selectCarryOver` 정본을 같은 상태에 다시 적용한다.
+ */
+export function planPostRunCarryOver(input: {
+  dataDir: string; nowMs: number; lookbackMs?: number; maxFiles?: number
+}): ReturnType<typeof selectCarryOver> & { staleCount: number } {
+  const lookbackMs = input.lookbackMs ?? CARRY_OVER_LOOKBACK_MS
+  const st = readCarryOverState(input.dataDir, input.nowMs, lookbackMs)
+  const sel = selectCarryOver({
+    files: st.files, runs: st.runs,
+    // 파일 이름으로 올 수 없는 값 — 현재 회차 후보도 다음 회차 관점에서 판정한다.
+    currentRunId: '__post-run-opportunity-inventory__',
+    nowMs: input.nowMs, lookbackMs,
+    ...(input.maxFiles === undefined ? {} : { maxFiles: input.maxFiles }),
+  })
+  return { ...sel, staleCount: st.staleNames.length }
+}

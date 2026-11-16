@@ -1,0 +1,28 @@
+{
+  "schema": "rehearsal-direct-e2e/1",
+  "note": "I-T6-03 resume-age DIRECT_E2E 입력. bundle=실제 graph build CLI 산출 · source=실제 ArticlePlan approve 산출(scratch G8 receipt 위, 사람 승인 아님) · queueRow=실제 materialize 산출 · draft=승인 spec 을 지키는 고정 원고. 손으로 고치지 않는다 — 다시 만들 때는 같은 entrypoint 로 다시 산출하고 sha256 을 갱신한다",
+  "names": {
+    "bundle": "g-20261102-427d4d.ts.txt",
+    "source": "article-spec-source.g-20261102-427d4d.json",
+    "queueRow": "queue-row.ts.txt",
+    "draft": "resume-age.draft.md"
+  },
+  "files": {
+    "g-20261102-427d4d.ts.txt": "26988e25fd06671563ff855418add012d6614083021b54b77a7db95d9d5c10bf",
+    "article-spec-source.g-20261102-427d4d.json": "fcef0146af23dfee31c0560ef9d81ceaa59645842b1211bc65848ce188335d78",
+    "queue-row.ts.txt": "90b2a993939aa70a7bc6a7217348a96b0dbfce4dcf075f991aa82bc960f09c37",
+    "resume-age.draft.md": "ec2dc04719794fab88ff432820b19104819fb9404245534bec1c464972877c02"
+  },
+  "identity": {
+    "graphVersion": "g-20261102-427d4d",
+    "exportHash": "cb57795ed0dd8ec4",
+    "slug": "resume-age",
+    "intentId": "I-T6-03",
+    "g8ManifestHash": "b5dc90be4649d59760c03aefd1c6cc68055e13300c15322689cc8b0ef06839c0",
+    "sourceHash": "sha256:d84a3253707ea8ec86581b84be936cad5cdd51fe3d22ce4e8bdd7c9c9b652788",
+    "specHash": "sha256:aa3c99d66fd7a48995c9508b259662a54a981c043a543e824d6fd333d54ebb40",
+    "publishAt": "2026-11-04T10:30:00+09:00",
+    "producerAt": "2026-11-03 00:10",
+    "registerAt": "2026-11-03 01:00"
+  }
+}

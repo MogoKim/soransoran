@@ -47,6 +47,7 @@ import {
   judgeCreate, judgeSeed, judgeActivate, judgePause, judgePrerequisites, judgeArgs,
   judgeCohortArg, judgeStepArg, requiresActor, checkCohortKeys,
   displayNamePathOf, seedPathOf, RUNNABLE_COHORTS, CLOSED_COHORTS, COHORT_STEPS,
+  PRODUCTION_PERSONA_CODES, TARGET_PERSONA_COUNT,
   type CohortMemberState, type CohortId,
 } from '../src/lib/persona-cohort'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
@@ -862,8 +863,10 @@ console.log('\n⑦ cohort manifest')
   check('wave3 는 11명이다', COHORTS['wave3-scale'].codes.length === 11)
   check('🔴 P09 가 어느 cohort 에도 없다', Object.values(COHORTS).every((m) => !m.codes.includes('P09')))
   check('🔴 P09 제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '').includes('readLengthBand'))
-  check('🔴 여섯 cohort 합이 40명 (Pool 41 - P09)',
-    Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === 40)
+  check('🔴 일곱 cohort 합이 D30 정본 universe 60명이다',
+    TARGET_PERSONA_COUNT === 60
+    && Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === TARGET_PERSONA_COUNT
+    && PRODUCTION_PERSONA_CODES.length === TARGET_PERSONA_COUNT)
   check('wave3 는 선행 두 개를 요구한다', COHORTS['wave3-scale'].requires.length === 2)
   check('알 수 없는 id 는 null', cohortOf('nope') === null)
   check('🔴 제외 대상이 들어가면 잡는다',
@@ -953,9 +956,12 @@ console.log('\n⑨ 실행 게이트 (--cohort · --step · --apply · --limit)')
   check('생성·seed 는 actor 를 요구하지 않는다', judgeArgs({ ...base, actorUserId: null, reason: null, requireActor: false }).ok)
 
   // 🔴 --cohort allowlist
-  check('🟢 wave6-d20-canary 는 열려 있다', judgeCohortArg('wave6-d20-canary').ok)
-  check('🔴 끝난 회차는 거부(wave1~wave5)',
-    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10'].every((c) => !judgeCohortArg(c).ok && /이미 끝난 회차/.test(judgeCohortArg(c).reason)))
+  check('🟢 wave7-d30 만 열려 있다',
+    RUNNABLE_COHORTS.length === 1 && RUNNABLE_COHORTS[0] === 'wave7-d30'
+    && judgeCohortArg('wave7-d30').ok)
+  check('🔴 끝난 회차는 거부(wave1~wave6)',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary']
+      .every((c) => !judgeCohortArg(c).ok && /이미 끝난 회차/.test(judgeCohortArg(c).reason)))
   check('🔴 없는 id 는 거부', !judgeCohortArg('wave9').ok)
   check('🔴 비면 거부 (fail-closed)', !judgeCohortArg(null).ok && !judgeCohortArg('  ').ok)
   check('🔴 allowlist 와 끝난 회차가 겹치지 않는다', RUNNABLE_COHORTS.every((c) => !CLOSED_COHORTS.includes(c)))

@@ -42,6 +42,17 @@ export function normalizeN1(raw: string): string {
   return raw.trim().normalize('NFC').toLowerCase()
 }
 
+/**
+ * 완전 일치 접기 — NFKC + 소문자 + 허용 문자(완성형 한글·영문·숫자) 밖 제거.
+ *
+ * 🔴 전각 영문·숫자(`ＡＢ１`)와 제로폭 문자(`a\u200Bb`)로 N2 완전 일치를 우회하지 못하게 한다.
+ *    합성 이름은 허용 문자만 쓰므로(`verifyNamePolicy`) 접어도 합성 이름끼리의 비교는 바뀌지 않는다.
+ *    N0·N1·N2 와 달리 판정 단계가 아니라 같은 N2 완전 일치의 **추가 키**다(반복 축약 대조가 이 꼴로 비교한다) — 반환 타입은 그대로다.
+ */
+export function foldName(raw: string): string {
+  return raw.normalize('NFKC').toLowerCase().replace(/[^가-힣a-z0-9]/gu, '')
+}
+
 /** N2 — N1 + 공백·기호 제거. 🔴 판정 경계는 여기까지다 */
 export function normalizeN2(raw: string): string {
   return normalizeN1(raw).replace(/[\s._\-~·♡★☆!@#$%^&*()+=|\\/[\]{}<>?,;:'"`]/g, '')
@@ -125,13 +136,22 @@ export function jamoOf(value: string): string {
  *    🔴 코드별 예외가 아니다. 완전 일치 · 정규화 일치 · 반복 축약 일치는 이 판정 **앞에서** 그대로 reject 다.
  */
 export const JAMO_CONFUSION_MAX = 2
+const isHangulOnly = (value: string): boolean => /^[가-힣]+$/u.test(value)
+const hasHangul = (value: string): boolean => /[가-힣]/u.test(value)
 export function nameConfusion(a: string, b: string): { confusable: boolean; distance: number; jamoDistance: number } {
   const x = normalizeN2(a)
   const y = normalizeN2(b)
   const distance = editDistance(x, y)
   const jamoDistance = editDistance(jamoOf(x), jamoOf(y))
-  const allowed = Math.max(1, Math.floor(Math.max(charLength(x), charLength(y)) / 2))
-  return { confusable: distance > 0 && (distance <= allowed || jamoDistance <= JAMO_CONFUSION_MAX), distance, jamoDistance }
+  const maxLen = Math.max(charLength(x), charLength(y))
+  // 🔴 영문·숫자만인 쌍은 덜 공격적인 ⌊긴 쪽/3⌋ — 짧은 영단어가 한 글자 차이로 전부 혼동되지 않게 한다.
+  //    한글이 든 쌍은 옛 절반 기준을 그대로 쓴다.
+  const allowed = hasHangul(x) || hasHangul(y)
+    ? Math.max(1, Math.floor(maxLen / 2))
+    : Math.max(1, Math.floor(maxLen / 3))
+  // 🔴 자모 거리는 **둘 다 한글만**일 때만 본다 — 영문·숫자가 든 이름에서는 자모 거리가 편집 거리와 같아 의미가 없다.
+  const jamoClose = isHangulOnly(x) && isHangulOnly(y) && jamoDistance <= JAMO_CONFUSION_MAX
+  return { confusable: distance > 0 && (distance <= allowed || jamoClose), distance, jamoDistance }
 }
 
 // ── 판정 대상 · 결과 타입 ────────────────────────────────────
@@ -206,10 +226,10 @@ const OPERATOR_PATTERNS: ReadonlyArray<{ term: string; re: RegExp }> = [
   { term: 'OPERATOR_매니저', re: /매니저/u },
   { term: 'OPERATOR_운영자', re: /운영자/u },
 ]
+// 🔴 영문·숫자 자체는 AI 느낌이 아니다 — 합성 이름은 한글·영문·숫자가 섞인다(D100 canon §4.2).
+//    명시적 AI/봇 제품어만 막는다. `ai`·`bot` 은 독립 토큰일 때만 — `rain` · `mailbox` 는 통과한다.
 const AI_PATTERNS: ReadonlyArray<{ term: string; re: RegExp }> = [
-  { term: 'AI_어휘', re: /(ai|gpt|bot|봇)/iu },
-  { term: 'AI_숫자접미', re: /[0-9]+$/u },
-  { term: 'AI_영문혼용', re: /[a-z]/iu },
+  { term: 'AI_어휘', re: /(?<![a-z])(?:ai|bot)(?![a-z])|bot$|gpt|openai|claude|gemini|copilot|chatbot|봇|지피티|에이아이/iu },
 ]
 
 // ── B6 식별 정보 노출 (설계 §5-5) ────────────────────────────
@@ -236,7 +256,9 @@ function matchRules(
   rules: ReadonlyArray<{ term: string; re: RegExp }>,
   kind: CollisionKind,
 ): NameCollisionHit[] {
-  return rules.filter((r) => r.re.test(candidate)).map((r) => ({ kind, term: r.term }))
+  // 🔴 원문과 접은 꼴 둘 다 본다 — 전각·제로폭 문자로 규칙을 우회하지 못하게 한다
+  const folded = foldName(candidate)
+  return rules.filter((r) => r.re.test(candidate) || r.re.test(folded)).map((r) => ({ kind, term: r.term }))
 }
 
 /** B4 — 출처 커뮤니티 marker. 🔴 term 을 그대로 남긴다(코드 상수의 집단 호칭) */
@@ -286,7 +308,9 @@ function matchNames(
     }
 
     // ── 반복 문자 축약 후 재대조 (설계 §5-2)
-    if (collapseRepeats(normalizeN2(candidate)) === collapseRepeats(normalizeN2(name))) {
+    //    🔴 접은 꼴(foldName)로 비교한다 — 축약이 없는 이름도 접은 꼴이 같으면 여기서 N2 완전 일치(d0)로 잡히므로
+    //       전각·제로폭 우회를 막는 완전 일치 키가 이 한 줄이다(별도 단계를 두지 않는다)
+    if (collapseRepeats(foldName(candidate)) === collapseRepeats(foldName(name)) && foldName(candidate) !== '') {
       hits.push({ kind, stage: 'N2', distance: 0, refType })
       continue
     }

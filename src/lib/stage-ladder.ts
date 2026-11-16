@@ -19,7 +19,8 @@
  *   · `stageVerdicts`/`safeStageFor` 14일 준비도 감속 — 14일 완성 글 재고를 지속 성공으로 보던 규칙
  *   · `judgeOneDayCanary` 하루 시뮬레이션 관문(D3~D10) — 기존 완성 글 큐로 하루를 흉내 내던 판정
  *   · `checkProvenance` 의 `PROVENANCE_CURRENT/NEXT` — 단계 출처가 둘(env · 결정)이라 생긴 가드
- *   · 승인 천장(`SORAN_CAPACITY_STAGE` env)을 넘는 공개를 막던 `CEILING` — 천장은 이제 비용 preflight 가 정한다
+ *   · 승인 천장(`SORAN_CAPACITY_STAGE` env)을 넘는 공개를 막던 `CEILING` — 별도 승인 천장은 없다. 시험은 preflight 의
+ *     hard gate(대상 단계 scheduler/profile 지원 · 슬롯 물리 발행 용량 · Persona · 비용 · runner 등)가 연다
  *
  * 🔴 **capacity 칸의 뜻** — "다음에 증명할 단계"(= 공개 단계의 다음 칸). 공급(JIT)이 다음 증명일 슬롯을
  *    준비하는 눈금이다. 공개가 이것을 넘지 못한다(저장 검증). 사람이 올리는 값이 아니다.
@@ -39,7 +40,7 @@ import {
   type ValidatedStageDecision, type ValidateResult,
 } from './stage-decision-contract'
 import { trialPlanOf, evidenceReasonOf, type StageEvidenceVerdict, type TrialPlan } from './stage-evidence'
-import { trialBlocks, lateStartBlocks, type PreflightVerdict } from './stage-ladder-generic'
+import { trialBlocks, lateStartBlocks, forecastSupplyOf, type PreflightVerdict } from './stage-ladder-generic'
 
 /**
  * 🔴 **계약 정의는 `stage-decision-contract` 하나다** (2026-09-24 7차) — 호출부 호환을 위해 그대로 재수출한다.
@@ -73,7 +74,6 @@ export type StageInputs = {
    */
   nextPreflight: PreflightVerdict | null
   publishedToday: number
-  supply?: SupplySignal
   decidedAt: string
 }
 
@@ -119,7 +119,8 @@ function authoritativeTrialPlan(input: StageInputs, out: StageBlock[]): TrialPla
 export function planStageDecision(input: StageInputs): StageDecision {
   const base = {
     kstDate: input.kstDate,
-    supply: input.supply ?? null,
+    // 🔴 v6 supply 는 이 preflight 의 예측 경고 투영 하나다 — 주입 입력이 없다(운영 호출자도 없었다)
+    supply: forecastSupplyOf(input.nextPreflight),
     decidedAt: input.decidedAt,
     contractVersion: STAGE_DECISION_VERSION,
     decidedBy: DECISION_WRITER as string,

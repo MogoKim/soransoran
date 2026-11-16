@@ -3,10 +3,16 @@ import {
   type AutoDecision, type JudgeInput,
 } from './micro-seed-auto-judge'
 import {
-  artifactRetryable, MACHINE_OUTCOMES, type IncompleteCause,
+  INCOMPLETE_CAUSES as INCOMPLETE_CAUSE_VALUES, MACHINE_OUTCOMES, reviewShapeOk, type IncompleteCause,
 } from './content-core/review'
+/** 🔴 재선정 자격의 단일 권위 — 이 파일은 부르기만 한다(같은 판정을 두 벌 두지 않는다) */
 import {
-  readGenerationContract, sameGenerationContract,
+  completionRetryClass, CROSS_RUN_TRANSIENT_RETRY_MAX, evidenceFingerprintOf, failureFingerprintOf,
+  isSpeakerSetKey, lastCallOutcomeOf, retrySlotsFor, speakerRemedyOf,
+  type CallOutcome, type RetryClass, type RetryMode,
+} from './content-core/generation-failure'
+import {
+  generationIdentity, readGenerationContract, sameGenerationContract,
   type ContractBase, type GenerationContract,
 } from './content-core/pipeline'
 /** 🔴 원래 원천 복원(`originalSourceOf`)은 synthetic 사이트 접두의 주인인 적재 모듈에 있다 — 옮겼을 뿐 두 벌이 아니다 */
@@ -64,7 +70,8 @@ export const worksetFileName = (runId: string): string => `supply-workset-${runI
 /** 🔴 JIT 공급 계약 · 의도 — 정본은 `supply-intent`(적재 모듈과 순환하지 않게 따로 둔다). 여기서 다시 내보낸다 */
 import {
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
-  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, type SupplyIntent, type SupplyQualityContractMark,
+  SUPPLY_INTENT_KEY, readSupplyIntent, readSupplyQualityContract, sameSupplyQualityContract,
+  type SupplyIntent, type SupplyQualityContractMark,
 } from './supply-intent'
 export {
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
@@ -75,50 +82,94 @@ export {
 export const WORKSET_FILE_RE = /^supply-workset-(\d{8}-\d{6})\.json$/
 
 // ─────────────────────────────────────────────────────────
-// 🔴 원천 기회 스냅샷 — 초안이 아직 없는 slot-valid 원천 (2026-09-30)
+// 🔴 원천 기회 inventory — 초안이 아직 없는 stage-neutral 원천 (2026-10-30)
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 공급 러너가 회차마다 적는다 — **생성 전 판정(예정 슬롯 · 참여 동력 · 배정 대기)이 eligible 이고
+ * 🔴 공급 러너가 회차마다 적는다 — lifecycle · hard gate · pre-gate 를 통과했고
  *    자동 유료 공급이 소비할 수 있는(`isAutoSupplyConsumable` — 지금은 seed 만) 원천의 증거 기록**.
- *    다음 단계 preflight 가 "증명일 슬롯을 채울 기회가 있는가" 를 이 파일과 READY 로 센다.
+ *    현재 회차의 release horizon 은 저장하지 않고, preflight 가 자기 증명 슬롯에서 다시 판정한다.
+ *    회차가 끝난 뒤 실제 큐 · 생성 후보 · 결론 상태를 다시 적용한다. 선택만 됐지만 예산 등으로
+ *    처리되지 않은 원천은 다음 회차가 다시 쓸 수 있으므로 inventory 에 남는다.
  *    🔴 원문 제목 · 본문 · URL 없음 — `source-evidence-v1` 기록뿐이다(해시 · 시각 · 수).
  *
- * 🔴 **opportunities-v2 = 자동 seed 전용** (2026-10-10 P0-B1). v1 은 생성 가능 원천 **전체**(raw 포함)를 적었다 —
- *    자동 공급이 raw 를 사지 않는데 preflight 가 raw 를 증명일 기회로 세면 D10 용량이 부푼다.
- *    v1 은 읽지 않는다(`readOpportunitySnapshot` → null · preflight 는 가장 최근 파일이 v1 이면 기회를 모른다).
- *    새 자연 공급 회차가 v2 를 쓰면 그대로 복구된다. 옛 파일을 고쳐 쓰지 않는다.
+ * 🔴 **opportunities-v3 = stage-neutral lifecycle inventory** (2026-10-30). v1 은 raw 를 포함했고,
+ *    v2 는 현재 JIT release horizon 을 저장해 다음 단계 기회를 잘라냈다. 둘 다 옛 판이다.
+ *    최신 파일이 옛 판이거나 손상되면 더 오래된 파일로 내려가지 않고 기회를 모른다.
  */
 export const OPPORTUNITY_KIND = 'supply-opportunities'
-export const OPPORTUNITY_VERSION = 'opportunities-v2'
-/** 🔴 옛 판 — 읽지 않는다. preflight 가 "손상" 과 "옛 판" 을 구분해 적으려고만 이름을 둔다 */
-export const OPPORTUNITY_VERSION_LEGACY = 'opportunities-v1'
+export const OPPORTUNITY_VERSION = 'opportunities-v3'
+/** 🔴 옛 판 — v1 은 raw 포함, v2 는 현재 release horizon 에 종속된 부분집합이다. */
+export const OPPORTUNITY_VERSIONS_LEGACY = ['opportunities-v1', 'opportunities-v2'] as const
+export const OPPORTUNITY_INVENTORY_BASIS = 'stage-neutral-lifecycle-v1' as const
+export const OPPORTUNITY_INVENTORY_AXIS = 'auto-seed' as const
 export const opportunitiesFileName = (runId: string): string => `supply-opportunities-${runId}.json`
-export const OPPORTUNITY_FILE_RE = /^supply-opportunities-\d{8}-\d{6}\.json$/
+export const OPPORTUNITY_FILE_RE = /^supply-opportunities-(\d{8}-\d{6})\.json$/
+
+export type OpportunityInventoryCounts = {
+  inputRows: number
+  lifecyclePassed: number
+  autoSeed: number
+  evidenceMissing: number
+  written: number
+}
 
 export type OpportunitySnapshot = {
   kind: typeof OPPORTUNITY_KIND
   version: typeof OPPORTUNITY_VERSION
   runId: string
   takenAt: string
-  /** 예정 슬롯(판정 기준) */
-  slotAt: string
+  inventory: {
+    basis: typeof OPPORTUNITY_INVENTORY_BASIS
+    axis: typeof OPPORTUNITY_INVENTORY_AXIS
+    counts: OpportunityInventoryCounts
+  }
   evidence: SourceEvidenceRecord[]
 }
 
-/** 🔴 모양이 틀리면 `null` — 부르는 쪽이 다음 파일을 본다(지어내지 않는다) */
+const nonNegativeInteger = (v: unknown): v is number => Number.isInteger(v) && Number(v) >= 0
+
+/** 🔴 inventory 판은 증거 한 건이라도 손상되면 전체를 모른다. 조용히 건너뛰지 않는다. */
 export function readOpportunitySnapshot(raw: unknown): OpportunitySnapshot | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
   if (r.kind !== OPPORTUNITY_KIND || r.version !== OPPORTUNITY_VERSION) return null
-  if (typeof r.runId !== 'string' || typeof r.takenAt !== 'string' || !Number.isFinite(Date.parse(r.takenAt))) return null
-  if (typeof r.slotAt !== 'string' || !Array.isArray(r.evidence)) return null
+  if (typeof r.runId !== 'string' || !/^\d{8}-\d{6}$/.test(r.runId)) return null
+  if (typeof r.takenAt !== 'string' || !Number.isFinite(Date.parse(r.takenAt))) return null
+  if (r.inventory === null || typeof r.inventory !== 'object' || Array.isArray(r.inventory) || !Array.isArray(r.evidence)) return null
+  const inventory = r.inventory as Record<string, unknown>
+  if (inventory.basis !== OPPORTUNITY_INVENTORY_BASIS || inventory.axis !== OPPORTUNITY_INVENTORY_AXIS) return null
+  if (inventory.counts === null || typeof inventory.counts !== 'object' || Array.isArray(inventory.counts)) return null
+  const c = inventory.counts as Record<string, unknown>
+  const values = [c.inputRows, c.lifecyclePassed, c.autoSeed, c.evidenceMissing, c.written]
+  if (!values.every(nonNegativeInteger)) return null
+  const counts: OpportunityInventoryCounts = {
+    inputRows: c.inputRows as number,
+    lifecyclePassed: c.lifecyclePassed as number,
+    autoSeed: c.autoSeed as number,
+    evidenceMissing: c.evidenceMissing as number,
+    written: c.written as number,
+  }
+  if (counts.lifecyclePassed > counts.inputRows || counts.autoSeed > counts.lifecyclePassed) return null
+  if (counts.evidenceMissing + counts.written !== counts.autoSeed) return null
+  if (counts.written !== r.evidence.length) return null
   const evidence: SourceEvidenceRecord[] = []
+  const hashes = new Set<string>()
   for (const e of r.evidence) {
     const p = parseEvidence(e)
-    if (p.ok) evidence.push(p.record)
+    if (!p.ok || p.record.provenance.articleIdHash === null || hashes.has(p.record.provenance.articleIdHash)) return null
+    hashes.add(p.record.provenance.articleIdHash)
+    evidence.push(p.record)
   }
-  return { kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId: r.runId, takenAt: r.takenAt, slotAt: r.slotAt, evidence }
+  return {
+    kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId: r.runId, takenAt: r.takenAt,
+    inventory: {
+      basis: OPPORTUNITY_INVENTORY_BASIS,
+      axis: OPPORTUNITY_INVENTORY_AXIS,
+      counts,
+    },
+    evidence,
+  }
 }
 
 /**
@@ -134,11 +185,11 @@ export const WORKSET_TOTAL_PER_SOURCE = 5
 /**
  * 기본 묶음 크기 — 🔴 `--workset-limit` 이 없으면 이 값이다.
  *
- * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 회차 요청 상한도 같이 움직인다 —
- *    judge 10 · draft 40 · 합 50 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
+ * 🔴 **10 → 20** (2026-10-28 D20 전환일 처리량). 회차 요청 상한도 같이 움직인다 —
+ *    judge 20 · draft 80 · 합 100 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
  *    검사가 두 값이 같은지 본다.
  */
-export const WORKSET_DEFAULT_LIMIT = 10
+export const WORKSET_DEFAULT_LIMIT = SUPPLY_WORKSET_PER_RUN
 
 /**
  * 🔴 **묶음 크기 천장.** `--workset-limit` 으로도 이보다 크게 부를 수 없다 —
@@ -267,7 +318,7 @@ export const WORKSET_AXES = ['seed', 'raw'] as const
 export type WorksetAxis = (typeof WORKSET_AXES)[number]
 
 /**
- * 🔴 **raw 한 자리당 묶음 크기.** 기본 상한 10 → raw 최대 2 · seed 최소 8 (seed 가 있으면).
+ * 🔴 **raw 한 자리당 묶음 크기.** 기본 상한 20 → raw 최대 4 · seed 최소 16 (seed 가 있으면).
  *    (상한 5 였을 때는 raw 최대 1 · seed 최소 4 — 같은 규칙이다)
  *
  *    다른 상한은 비례로 늘린다 — `floor(limit / 5)` 자리를 raw 에 **남기고**, 그만큼이 raw 의 상한이다.
@@ -289,7 +340,7 @@ export const worksetAxisOf = (r: WorksetRow): WorksetAxis =>
 /**
  * 🔴 **자동 유료 공급이 소비할 수 있는 원천인가 — 정본 하나** (2026-10-10 P0-B1 · 마스터 결정).
  *    지금 계약: seed 축만 true. raw 축은 판정이 AUTO_RAW 로 보내도 사람 검토 레인으로만 가서 자동 초안 · 자동 READY 가 없다.
- *    🔴 JIT 선택(`selectJitWorkset`)과 원천 기회 스냅샷(→ preflight 증명일 기회)이 **이 함수 하나**를 부른다 —
+ *    🔴 JIT 선택(`selectJitWorkset`)과 stage-neutral 원천 기회 inventory가 **이 함수 하나**를 부른다 —
  *       축 비교를 두 곳에 다시 적지 않는다. raw 자료 · 수집 · 사람 검토 경로는 그대로다.
  */
 export const isAutoSupplyConsumable = (r: WorksetRow): boolean => worksetAxisOf(r) === 'seed'
@@ -334,9 +385,10 @@ export function worksetAxisQuota(
  * `seeded`    판정이 통과시켰다 — 생성으로 간다
  * `terminal`  이 원천은 끝났다 — 다음 회차에서 뺀다
  * `rawLane`   판정이 **다른 레인(원문 그대로)** 으로 보냈다 — 이 생성 레인에서는 끝이다
- * `retryable` 못 물어봤거나 못 끝냈다 — 다시 본다
- * `candidate` 초안이 나왔다 — 적재되면 큐 형제로 걸린다
- * `unknown`   읽지 못했다 — 결론이 아니다. 영구 제외하지 않는다
+ * `retryable` 끝나지 않았다(판정 미완 · 생성 transient · speakerBound · unattempted) — 처리(`retryClass`)에 따라
+ *             신규 자리(unattempted) 또는 재선정 자리(몫 10% · 근거 지문당 한 번)에 선다 (2026-11-10 retry-authority-v7)
+ * `candidate` 초안이 채택됐다 — 유료로 다시 만들지 않는다(결론 집합). 적재 못 한 후보는 이월이 같은 후보를 다시 적재한다
+ * `unknown`   읽지 못했다 — 결론은 아니지만 돈을 쓴 시도일 수 있다. 재선정 자리 · 근거 지문당 상한에 함께 센다
  */
 export const OUTCOME_STATES = [
   'seeded', 'terminal', 'rawLane', 'retryable', 'candidate', 'unknown',
@@ -374,6 +426,17 @@ export type PriorOutcome = {
   suggestedPersonaCodes?: readonly string[]
   /** 🔴 왜 실패했나 — 코드로 분기한다. 문자열을 파싱하지 않는다 */
   failedCause?: string | null
+  /**
+   * 🔴 **재선정 처리 — 단일 권위(`artifactRetryClass`)의 값 그대로** (2026-11-10 retry-authority-v7).
+   *    생성 단계 결과에만 있다. 판정 단계 · 읽지 못한 기록은 없다(`undefined`).
+   */
+  retryClass?: RetryClass | null
+  /** 🔴 근거 지문(`evidenceFingerprintOf`) — 원문 지문 · 계약 · 정책판이 같으면 같은 값. transient 상한이 여기 걸린다. 원문 없음 */
+  fingerprint?: string | null
+  /** 🔴 실패 지문(`failureFingerprintOf`) — 근거 지문 + 화자 묶음 + 원인 + 마지막 요청 결과. 비용 귀속 · 결론의 열쇠 */
+  failureFingerprint?: string | null
+  /** 🔴 그 시도가 받은 화자 묶음 열쇠(`speakerSetKeyOf`) — 옛 artifact 에는 없다(`null`). 같은 묶음 재구매 차단의 열쇠 */
+  speakerSetKey?: string | null
   /**
    * 🔴 **명시 시각을 epoch 로 바꾼 값.** 판정은 `decidedAt`, 생성은 `generatedAt` 이다.
    *
@@ -452,8 +515,12 @@ export type PriorArtifactRow = {
   artifactVersion: string
   contract: GenerationContract | null
   outcome: string
-  /** 🔴 `null` 은 **모양을 읽지 못했다** 는 뜻이다 — 재시도도 결론도 아니다 */
-  retryable: boolean | null
+  /** 🔴 단일 권위(`completionRetryClass`)의 값. `null` 은 **모양을 읽지 못했다** 는 뜻이다 — 재시도도 결론도 아니다 */
+  retryClass: RetryClass | null
+  /** 🔴 실패 지문 재료 — 마지막 요청 결과(모양을 못 읽었으면 `null`). 원인은 아래 `cause` 한 칸이다(두 칸 0) */
+  lastCall?: CallOutcome | null
+  /** 🔴 그 시도의 화자 묶음 열쇠 — artifact 의 `speakerSetDigest`(옛 artifact 에는 없다) */
+  speakerSetKey?: string | null
   generatedAt: string
   /** 🔴 그 회차가 고른 화자 — 다음 시도에서 제외하려면 필요하다 (2026-09-23) */
   personaCode?: string
@@ -561,13 +628,30 @@ export function artifactOutcome(
   if (S(a.artifactVersion) !== artifactVersion) return null
   if (!sameGenerationContract(a.contract, currentContract)) return null
   const outcome = S(a.outcome)
+  /**
+   * 🔴 **재선정 처리는 단일 권위의 값 그대로다** (2026-11-10 retry-authority-v7).
+   *    `terminal` 은 결론 · `transient`·`unattempted` 만 다시 볼 수 있다(신규 우선 · 몫 상한은 선택이 정한다).
+   *    모양을 읽지 못했으면(`null`) 결론이 아니다 — `unknown`.
+   */
   const state: OutcomeState =
-    // 🔴 모양을 읽지 못했으면(`retryable === null`) 결론이 아니다
-    a.retryable === null || !(MACHINE_OUTCOMES as readonly string[]).includes(outcome) ? 'unknown'
-      : a.retryable ? 'retryable'
-        : outcome === 'adopt' ? 'candidate' : 'terminal'
+    a.retryClass === null || !(MACHINE_OUTCOMES as readonly string[]).includes(outcome) ? 'unknown'
+      : outcome === 'adopt' && a.retryClass === 'terminal' ? 'candidate'
+        : a.retryClass === 'terminal' ? 'terminal' : 'retryable'
   return {
     sourceKey: key, sourceArticleId: id, atMs, stage: 'draft', state,
+    retryClass: a.retryClass,
+    speakerSetKey: a.speakerSetKey ?? null,
+    ...(() => {
+      const fingerprint = evidenceFingerprintOf({ artifactVersion, contractIdentity: generationIdentity(currentContract) })
+      return {
+        fingerprint,
+        failureFingerprint: a.retryClass === null ? null
+          : failureFingerprintOf({
+            evidenceFingerprint: fingerprint, speakerSetKey: a.speakerSetKey ?? null,
+            cause: incompleteCauseOf(a.cause), lastCall: a.lastCall ?? null,
+          }),
+      }
+    })(),
     failedPersonaCode: state === 'retryable' ? (S(a.personaCode) || null) : null,
     failedStance: state === 'retryable' ? (S(a.stance) || null) : null,
     suggestedPersonaCodes: state === 'retryable'
@@ -636,6 +720,20 @@ function readCause(review: unknown): unknown {
   return (c as Record<string, unknown>).cause
 }
 
+/** 🔴 원인 칸 문자열 → 정본 원인 값. 모르는 값 · 빈 값은 `null` (지문은 `complete` 로 접지 않고 그대로 모른다고 적는다) */
+const incompleteCauseOf = (v: unknown): IncompleteCause | null =>
+  typeof v === 'string' && (INCOMPLETE_CAUSE_VALUES as readonly string[]).includes(v) ? v as IncompleteCause : null
+
+/**
+ * 🔴 **artifact 한 장 → 재선정 처리.** 검수 칸 모양(`reviewShapeOk` · review 의 주인)을 먼저 보고, 읽은 완주 기록만
+ *    단일 권위(`completionRetryClass`)에 넘긴다. 모양을 못 읽었으면 `null` — 재시도도 결론도 아니다.
+ */
+export function artifactRetryClassOf(review: unknown, cost: unknown): RetryClass | null {
+  if (!reviewShapeOk(review)) return null
+  const c = (review as { semanticCompletion: { complete: boolean; cause: IncompleteCause | null } }).semanticCompletion
+  return completionRetryClass(c, lastCallOutcomeOf(cost))
+}
+
 export function artifactRecordOutcome(
   raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>,
   base: ContractBase, artifactVersion: string,
@@ -646,8 +744,16 @@ export function artifactRecordOutcome(
     // 🔴 계약 칸이 하나라도 빠진 옛 artifact 는 `null` — 지금 계약과 같을 수 없다
     contract: readGenerationContract(raw.contract),
     outcome: S((review as Record<string, unknown> | undefined)?.machineOutcome),
-    // 🔴 모양을 읽지 못하면 `null` 이고, 그러면 `unknown` 이다
-    retryable: artifactRetryable(review),
+    /**
+     * 🔴 단일 권위 — 모양을 읽지 못하면 `null` 이고, 그러면 `unknown` 이다.
+     *    🔴 화자 묶음 칸이 **있는데 모양이 틀리면** 그 기록 전체를 믿지 않는다(fail-closed → `unknown`): 같은 묶음 차단을
+     *       피해 가는 임의 문자열이 될 수 있고, `unknown` 은 근거 지문당 상한에 그대로 센다(무한 재구매 0).
+     *       칸이 없는 옛 artifact 는 화자 묶음을 모르는 것일 뿐이다(`null`).
+     */
+    retryClass: raw.speakerSetDigest !== undefined && !isSpeakerSetKey(raw.speakerSetDigest)
+      ? null : artifactRetryClassOf(review, raw.cost),
+    lastCall: reviewShapeOk(review) ? lastCallOutcomeOf(raw.cost) : null,
+    speakerSetKey: isSpeakerSetKey(raw.speakerSetDigest) ? raw.speakerSetDigest : null,
     generatedAt: S(raw.generatedAt),
     /**
      * 🔴 **그 회차가 고른 화자와 실패 사유** (2026-09-23).
@@ -763,24 +869,100 @@ export function attributeRuns(
 }
 
 /**
- * 🔴 **다음 회차에서 뺄 원천.** 최신 상태가 이 레인에서 끝난 것만이다.
- *
- *    `retryable` · `unknown` 은 다시 본다 — 결론이 아니라 못 물어본 것이다.
- *    `candidate` 는 여기서 빼지 않는다 — 큐·글에 이미 있으면 `queuedSources` 가, 적재가 실패했으면
- *    이월(`carriedOver`)이 묶음에서 뺀다(2026-09-28). 둘 다 아니면(기한 밖 등) 다시 볼 수 있다.
+ * 🔴 **다음 회차에서 뺄 원천 — 결론 집합의 정본 하나** (2026-11-10 retry-authority-v7). 공급 선택 · 생성 러너의
+ *    회차 안 재계획(`personasForAttempt`) · 기회 inventory 가 모두 이 함수를 쓴다.
+ *      · 최신 상태가 `terminal` · `rawLane`(이 레인의 일이 아니다)
+ *      · 최신 상태가 `candidate` — 채택 초안을 유료로 다시 만들지 않는다. 적재 못 한 후보는 이월(`planCarryOver`)이
+ *        같은 후보 파일을 다시 적재한다(재생성 0 · e2e ⑦). 앞판(2026-09-28)은 여기서 빼지 않아 채택 원천을 다시 샀다
+ *      · 같은 근거 지문의 끝나지 않은 생성 시도(transient · speakerBound · unknown)가 상한(첫 시도 + 1)을 넘었다
+ *    🔴 `retryable` · `unknown` 은 상한 안에서만 다시 볼 수 있다 — 자리 · 몫은 `selectionLaneOf` · `retrySlotsFor` 가 정한다.
  */
 export function concludedSourceKeys(rows: readonly PriorOutcome[]): Set<string> {
   const out = new Set<string>()
   for (const [id, v] of latestOutcomes(rows)) {
     if ((CONCLUDED_STATES as readonly OutcomeState[]).includes(v.state)) out.add(id)
   }
+  /**
+   * 🔴 **같은 지문의 transient 는 회차를 넘어 한 번만 다시 본다** (2026-11-10 retry-authority-v7).
+   *    첫 transient + 재선정 한 번 = 2회 시도. 그 뒤에도 끝나지 않으면 결론이다. 읽지 못한 artifact(`unknown`)도
+   *    돈을 쓴 시도라 같은 칸으로 센다 — 깨진 기록 하나가 무한 재구매가 되지 않게 한다.
+   */
+  for (const [id, n] of unfinishedAttemptsBySource(rows)) {
+    if (n > CROSS_RUN_TRANSIENT_RETRY_MAX) out.add(id)
+  }
+  /**
+   * 🔴 **이미 채택된 초안(`candidate`)은 유료로 다시 만들지 않는다** (2026-11-10 retry-authority-v7).
+   *    앞판은 큐·이월에 없으면 "다시 볼 수 있다" 로 두어, 같은 원천의 채택 초안을 다시 샀다. 적재 실패분은 이월이 그
+   *    후보를 다시 적재한다 — 새 유료 생성의 사유가 아니다. 계약(지문)이 바뀌면 옛 candidate 는 지금 결과가 아니므로 다시 볼 수 있다.
+   */
+  for (const [id, v] of latestOutcomes(rows)) {
+    if (selectionLaneOf(v) === 'excluded') out.add(id)
+  }
   return out
 }
 
 /**
+ * 🔴 **원천 · 근거 지문별 끝나지 않은 생성 시도 수** — 생성 단계의 `transient` · `speakerBound` · `unknown` 을 센다.
+ *    `unattempted`(나가지 않은 요청)는 시도가 아니다. 지문이 다르면(계약 · 정책판이 바뀌면) 따로 센다 —
+ *    원천 열쇠당 **가장 최신 지문**의 수를 낸다.
+ */
+export function unfinishedAttemptsBySource(rows: readonly PriorOutcome[]): Map<string, number> {
+  const latestFp = new Map<string, string | null>()
+  for (const [id, v] of latestOutcomes(rows.filter((r) => r.stage === 'draft'))) latestFp.set(id, v.fingerprint ?? null)
+  const out = new Map<string, number>()
+  for (const r of rows) {
+    if (r.stage !== 'draft') continue
+    if ((r.fingerprint ?? null) !== (latestFp.get(r.sourceKey) ?? null)) continue
+    const unfinished = r.state === 'unknown'
+      || (r.state === 'retryable' && (r.retryClass === 'transient' || r.retryClass === 'speakerBound'))
+    if (unfinished) out.set(r.sourceKey, (out.get(r.sourceKey) ?? 0) + 1)
+  }
+  return out
+}
+
+/**
+ * 🔴 **같은 화자 묶음으로 이미 Persona 부적격(`speakerBound`)을 받았는가** — 생성 러너가 유료 호출 앞에서 묻는다.
+ *    해법이 "다른 화자 묶음"(`speakerRemedyOf` = `speakerSet`)인 원인만 막는다 — 해법이 "다른 자리"(`stance`)이면
+ *    같은 사람이어도 자리를 바꾼 다른 시도다(회차를 넘는 상한 한 번은 그대로 걸린다).
+ *    같은 근거 지문(가장 최신 지문)의 시도만 본다. 화자 묶음을 모르는 옛 기록은 같은 묶음으로 보지 않는다.
+ */
+export function speakerSetAlreadyFailed(rows: readonly PriorOutcome[], sourceKey: string, speakerSetKey: string): boolean {
+  const latestDraft = latestOutcomes(rows.filter((r) => r.stage === 'draft' && r.sourceKey === sourceKey)).get(sourceKey)
+  const fp = latestDraft?.fingerprint ?? null
+  return rows.some((r) => r.stage === 'draft' && r.sourceKey === sourceKey && (r.fingerprint ?? null) === fp
+    && r.retryClass === 'speakerBound' && r.speakerSetKey === speakerSetKey
+    && speakerRemedyOf(incompleteCauseOf(r.failedCause)) === 'speakerSet')
+}
+
+/**
+ * 🔴 **선택 자리** — 유료 생성을 한 번이라도 산 원천만 재선정이다. 판정만 통과한 원천(`seeded` · 생성 전 여력 대기)과
+ *    요청이 나가지 않은 원천(`unattempted`)은 신규와 같은 자리에 선다.
+ */
+export type SelectionLane = 'fresh' | 'retry' | 'excluded'
+export function selectionLaneOf(prior: PriorOutcome | undefined): SelectionLane {
+  if (prior === undefined) return 'fresh'
+  switch (prior.state) {
+    // 🔴 결론 · 다른 레인 · 이미 채택된 초안 — 유료로 다시 사지 않는다
+    case 'terminal': case 'rawLane': case 'candidate': return 'excluded'
+    // 🔴 판정만 통과하고 생성은 사지 않았다(여력 대기 등) — 신규와 같은 자리
+    case 'seeded': return 'fresh'
+    // 🔴 나가지 않은 요청(예산·상한 차단)은 시도가 아니다 — 신규와 같은 자리. 그 밖의 retryable 은 transient 다
+    case 'retryable': return prior.stage === 'draft' && prior.retryClass === 'unattempted' ? 'fresh' : 'retry'
+    // 🔴 읽지 못한 기록 — 결론이 아니지만 돈을 쓴 시도일 수 있다. 몫 안에서만 · 지문당 한 번
+    case 'unknown': return 'retry'
+    default: {
+      const never: never = prior.state
+      return never
+    }
+  }
+}
+
+/**
  * 🔴 **지금 계약으로 이미 한 번 돌려 본 원천과 그 시각.** 결론이 나지 않았어도
- *    **다시 볼 수는 있다** — 그래서 빼지 않는다. 시각과 단계는 관측·진단에 남긴다.
- *    다만 재시도 신분이나 대기 시간은 신선도 순서를 뒤집지 않는다.
+ *    **다시 볼 수는 있다** — 그래서 빼지 않는다. 시각과 단계는 관측·진단에 남긴다(정렬 열쇠가 아니다).
+ *    🔴 선택 순서는 **lane 먼저**다(2026-11-10 retry-authority-v7): `selectionLaneOf` 로 신규(fresh)·재선정(retry)을
+ *       가르고 신규 lane 을 앞에 세운 뒤, **각 lane 안에서만** 정본 순위 `compareReleaseRank`(원문 나이 1순위)로 정렬한다.
+ *       재선정 lane 은 `retrySlotsFor` 몫 안에서만 자리를 받는다. 대기 시간은 어느 lane 에서도 순서에 쓰지 않는다.
  */
 export function attemptedOutcomes(rows: readonly PriorOutcome[]): Map<string, PriorOutcome> {
   return latestOutcomes(rows)
@@ -874,8 +1056,8 @@ export function humanDecisionFor(ix: HumanDecisionIndex, site: string, articleId
  *    1 생성 단계 결과(`retryable`·`unknown`·`candidate`) — 판정은 이미 통과했다
  *    2 판정 단계 `retryable`·`unknown` — 판정부터 다시 물어야 한다
  *
- * 🔴 2026-10-19부터 신규/재시도 여부·단계·대기 시간은 순위를 바꾸지 않는다.
- *    선택은 실제 원문 시각이 1순위인 `compareReleaseRank` 하나가 정한다.
+ * 🔴 단계 · 대기 시간은 순위를 바꾸지 않는다. 신규/재선정 자리는 `selectionLaneOf` 가 정하고(신규 먼저 · 재선정 몫 10%),
+ *    각 자리 안에서는 실제 원문 시각이 1순위인 `compareReleaseRank` 하나가 정한다 (2026-11-10 · 앞판 2026-10-19 단일 줄 대체).
  */
 export function retryTierOf(o: PriorOutcome | undefined): number {
   if (o === undefined) return 2
@@ -941,9 +1123,19 @@ export type WorksetTraceSink = {
   jit(e: { key: string; step: JitSelectStep; slotAt: Date | null; position: number | null; retryReserved: boolean }): void
 }
 
-/** 🔴 생성 가능 판정에 쓰는 입력 — 묶음 선택과 기회 스냅샷이 **같은 값**을 넘긴다 */
-export type WorksetEligibilityInput = Pick<SelectWorksetInput,
-  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded' | 'releaseOf' | 'trace'>
+/** 🔴 슬롯과 무관한 원천 lifecycle 판정 입력. */
+export type WorksetLifecycleInput = Pick<SelectWorksetInput,
+  'rows' | 'humanDecided' | 'queuePending' | 'queuedSources' | 'carriedOver' | 'concluded'>
+
+/** 🔴 현재 JIT 슬롯의 생성 가능 판정 입력. */
+export type WorksetEligibilityInput = WorksetLifecycleInput & Pick<SelectWorksetInput, 'releaseOf' | 'trace'>
+
+export type WorksetInventory = {
+  /** 🔴 슬롯 판정 전 lifecycle 통과 원천. */
+  candidates: WorksetRow[]
+  dropped: Record<WorksetDrop, number>
+  keyOf: (r: WorksetRow) => string
+}
 
 export type WorksetEligibility = {
   /** 🔴 지금 실제로 생성 가능한 원천(상한 적용 전) — 마지막 행 기준 · 사이트 · id 정리됨 */
@@ -956,27 +1148,27 @@ export type WorksetEligibility = {
 }
 
 /**
- * 🔴 **생성 가능 원천 — 정본 판정 하나** (2026-10-01 Lane B). 묶음 선택(`selectWorkset`)과
- *    원천 기회 스냅샷(공급 러너 → preflight)이 **이 함수 하나**를 부른다. 두 번째 판정을 만들지 않는다.
+ * 🔴 **현재 JIT 슬롯에서 생성 가능한 원천 — 정본 판정** (2026-10-30).
+ *    `lifecycleInventory` 결과에 현재 부족 슬롯의 release 판정만 더한다. 다음 단계 preflight가 쓰는
+ *    기회 inventory는 같은 lifecycle을 쓰되, 현재 슬롯 release는 저장하지 않고 대상 단계 슬롯에서 다시 판정한다.
  *    빼는 것: 사이트 · id 모름 · 사람 판정 · 큐 형제 · 이미 큐/글 · 이월 · 끝난 원천 · hard block ·
  *    물어봐도 HOLD · 예정 슬롯 ineligible · unknown. 앞판 스냅샷은 슬롯 판정만 거쳐 끝난 · 큐 원천까지 셌다.
  */
-export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
-  const dropped: Record<WorksetDrop, number> = {
-    identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
-    slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0, rawNotAutoConsumed: 0,
-  }
-  const releaseByKey = new Map<string, SlotReleaseVerdict>()
-  /**
-   * 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다 — 원천은 **(사이트, id)** 다.
-   *    앞판은 id 하나로 모아 같은 id 두 사이트 중 한쪽을 지웠다(P0-B). 사이트나 id 를 모르면 고르지 않는다.
-   */
+const emptyWorksetDrops = (): Record<WorksetDrop, number> => ({
+  identityMissing: 0, humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
+  slotIneligible: 0, slotUnknown: 0, slotUnassigned: 0, rawNotAutoConsumed: 0,
+})
+
+function lifecycleInventory(
+  input: WorksetLifecycleInput,
+  trace: WorksetTraceSink | undefined,
+): WorksetInventory {
+  const dropped = emptyWorksetDrops()
   const byKey = new Map<string, WorksetRow>()
   const keyOf = new Map<WorksetRow, string>()
-  /** 🔴 빼는 자리 하나 — 수를 세고, 기록기가 있으면 같은 사유를 적는다(선택에는 영향 없음) */
-  const drop = (r: WorksetRow, key: string | null, d: WorksetDrop, v: SlotReleaseVerdict | null = null): void => {
+  const drop = (r: WorksetRow, key: string | null, d: WorksetDrop): void => {
     dropped[d] += 1
-    input.trace?.eligibility({ row: r, key, drop: d, verdict: v })
+    trace?.eligibility({ row: r, key, drop: d, verdict: null })
   }
   for (const r of input.rows) {
     const key = sourceIdentityOf(r.sourceSite, r.sourceArticleId)
@@ -986,42 +1178,107 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
   for (const [key, r] of byKey) keyOf.set(r, key)
   const K = (r: WorksetRow): string => keyOf.get(r)!
 
-  const eligible: WorksetRow[] = []
+  const candidates: WorksetRow[] = []
   for (const r of byKey.values()) {
     if (humanDecisionFor(input.humanDecided, r.sourceSite, r.sourceArticleId) !== null) { drop(r, K(r), 'humanDecided'); continue }
     if (input.queuePending.has(K(r))) { drop(r, K(r), 'queueSibling'); continue }
-    // 🔴 발행된 형제까지 — 같은 원문으로 두 번째 글을 만들지 않는다
     if (hasSource(input.queuedSources, r.sourceSite, r.sourceArticleId)) { drop(r, K(r), 'alreadyQueued'); continue }
-    // 🔴 적재 실패 후보는 이월이 적재한다 — 다시 만들지 않는다
     if (hasSource(input.carriedOver, r.sourceSite, r.sourceArticleId)) { drop(r, K(r), 'carriedOver'); continue }
     if (input.concluded.has(K(r))) { drop(r, K(r), 'terminal'); continue }
-    /**
-     * 🔴 **판정기 정본 게이트를 그대로 부른다** — 여기서 규칙을 새로 만들지 않는다.
-     *    `access`·`safety` 를 손으로 비교하던 앞판은 판정기와 어긋날 수 있었다.
-     */
     if (hardGate(r.input).some((c) => (HARD_BLOCK as readonly string[]).includes(c))) {
       drop(r, K(r), 'hardBlocked'); continue
     }
-    /**
-     * 🔴 **물어봐도 HOLD 인 것은 묶음에 넣지 않는다.** 판정기가 모델 답을 받고
-     *    나서 보던 사유를 `holdBeforeAsking` 하나로 모았다 — 같은 함수를 부른다.
-     */
     if (holdBeforeAsking(r.input).length > 0) { drop(r, K(r), 'preGated'); continue }
+    candidates.push(r)
+  }
+  return { candidates, dropped, keyOf: K }
+}
+
+/**
+ * 🔴 다음 단계 증명이 쓸 stage-neutral inventory. 현재 release horizon 을 보지 않고,
+ *    lifecycle · hard gate · pre-gate 만 적용한다. trace 는 선택 판정의 단일 기록을 위해 받지 않는다.
+ */
+export function worksetInventory(input: WorksetLifecycleInput): WorksetInventory {
+  return lifecycleInventory(input, undefined)
+}
+
+/** 🔴 회차 종료 후 lifecycle 상태를 다시 반영한 stage-neutral 기회 inventory 를 만든다. */
+export function buildOpportunitySnapshot(input: {
+  runId: string
+  takenAt: Date
+  inputRows: number
+  inventory: WorksetInventory
+}): OpportunitySnapshot {
+  if (!/^\d{8}-\d{6}$/.test(input.runId) || !Number.isFinite(input.takenAt.getTime())) {
+    throw new Error('opportunity inventory run identity is invalid')
+  }
+  if (!nonNegativeInteger(input.inputRows) || input.inventory.candidates.length > input.inputRows) {
+    throw new Error('opportunity inventory counts are invalid')
+  }
+  const autoSeed = input.inventory.candidates.filter(isAutoSupplyConsumable)
+  const evidence: SourceEvidenceRecord[] = []
+  const evidenceHashes = new Set<string>()
+  let evidenceMissing = 0
+  for (const row of autoSeed) {
+    if (row.evidence === null) {
+      evidenceMissing += 1
+      continue
+    }
+    const hash = row.evidence.provenance.articleIdHash
+    if (hash === null || evidenceHashes.has(hash)) {
+      throw new Error('opportunity inventory evidence identity is invalid')
+    }
+    evidenceHashes.add(hash)
+    evidence.push(row.evidence)
+  }
+
+  return {
+    kind: OPPORTUNITY_KIND,
+    version: OPPORTUNITY_VERSION,
+    runId: input.runId,
+    takenAt: input.takenAt.toISOString(),
+    inventory: {
+      basis: OPPORTUNITY_INVENTORY_BASIS,
+      axis: OPPORTUNITY_INVENTORY_AXIS,
+      counts: {
+        inputRows: input.inputRows,
+        lifecyclePassed: input.inventory.candidates.length,
+        autoSeed: autoSeed.length,
+        evidenceMissing,
+        written: evidence.length,
+      },
+    },
+    evidence,
+  }
+}
+
+export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligibility {
+  const inventory = lifecycleInventory(input, input.trace)
+  const dropped = { ...inventory.dropped }
+  const releaseByKey = new Map<string, SlotReleaseVerdict>()
+  const drop = (r: WorksetRow, key: string, d: WorksetDrop, v: SlotReleaseVerdict): void => {
+    dropped[d] += 1
+    input.trace?.eligibility({ row: r, key, drop: d, verdict: v })
+  }
+
+  const eligible: WorksetRow[] = []
+  for (const r of inventory.candidates) {
+    const key = inventory.keyOf(r)
     /**
      * 🔴 **예정 슬롯에서 eligible 인가 — 정본 판정 하나** (2026-09-30). 오래된 원문을 오늘 수집했어도,
      *    반응 증거가 없어도, 원천 상대 표본이 없어도 유료 생성에 들어가지 않는다.
      */
     const v = input.releaseOf(r)
     if (v.verdict !== 'eligible') {
-      drop(r, K(r), v.verdict === 'unknown' ? 'slotUnknown' : 'slotIneligible', v)
+      drop(r, key, v.verdict === 'unknown' ? 'slotUnknown' : 'slotIneligible', v)
       continue
     }
-    releaseByKey.set(K(r), v)
+    releaseByKey.set(key, v)
     eligible.push(r)
-    input.trace?.eligibility({ row: r, key: K(r), drop: null, verdict: v })
+    input.trace?.eligibility({ row: r, key, drop: null, verdict: v })
   }
 
-  return { eligible, releaseByKey, dropped, keyOf: K }
+  return { eligible, releaseByKey, dropped, keyOf: inventory.keyOf }
 }
 
 /**
@@ -1030,10 +1287,10 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
  * 🔴 **JIT 공급 회차(`input.jit`)는 `selectJitWorkset` 하나가 고른다** (2026-10-10 P0-B1).
  *    아래 옛 판의 축 자리 · 재시도 예약석 · 순위 자르기를 JIT 하류에서 **다시 하지 않는다**.
  *
- * 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)도 source rank 하나를 쓴다.
- * 재시도 여부와 대기 시간은 관측값이며 순서를 바꾸지 않는다.
+ * 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)은 source rank 하나를 쓴다. 결론(`terminal`)·소진 지문·채택 초안은
+ * `concluded` 로 이미 빠진다. 🔴 운영 JIT 판은 신규 먼저 · 재선정 몫 10%(`retrySlotsFor`)다 — 아래 `selectJitWorkset`.
  * 🔴 비운영 호환 경로의 seed/raw 생산축 자리는 유지한다 (2026-09-28, `worksetAxisQuota`).
- *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4).
+ *    상한 20 → raw 최대 4 · seed 가 충분하면 seed 16 이상 (상한 5 → 1 · 4).
  *    이것은 출처 사이트·게시판 주제 quota 가 아니다. 운영 JIT 자동 공급은 raw 를 소비하지 않고 seed 만 한 줄로 세운다.
  *
  * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
@@ -1061,7 +1318,7 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
     used[worksetAxisOf(r)] += 1
     return true
   }
-  // 🔴 2026-10-19: 신규·재시도를 한 줄에 세운다. 축 상한 안에서 실제 원문이 최신인 것부터 고른다.
+  // 🔴 비운영 호환 경로: 축 상한 안에서 실제 원문이 최신인 것부터 고른다(결론·소진·채택은 이미 빠졌다).
   const picked: WorksetRow[] = []
   for (const r of [...eligible].sort(byWeight)) {
     if (picked.length >= limit) break
@@ -1096,9 +1353,10 @@ export function selectWorkset(input: SelectWorksetInput): WorksetPlan {
 //   이제 한 함수가 고르고 배정한다:
 //     ① 생성 가능 판정(그대로) → raw 축은 자동 소비자가 없어 뺀다(마스터 결정 · 자료는 그대로 남는다)
 //     ② 부족 슬롯 어디에도 연결되지 않는 원천은 뺀다
-//     ③ 채울 수 있는 최대 슬롯 수 M — 원천마다 서로 다른 슬롯 하나(증대 경로) · 목표 = min(상한, M)
-//     ④ 신규·재시도를 나누지 않고 정본 순위대로, 서로 다른 슬롯 짝을 보존하며 고른다.
-//        짝에 못 든 후보도 같은 순위로 남는 상한을 쓴다.
+//     ③ 채울 수 있는 최대 슬롯 수 M — **선택 가능한 집합**(신규 전부 + 재선정 몫 K개까지)에서 원천마다 서로 다른
+//        슬롯 하나(증대 경로) · 목표 = min(상한, M). 결론·채택(`excluded`)은 M 에 넣지 않는다 (2026-11-10)
+//     ④ 신규 먼저, 재선정은 몫 K 안에서만 — 각 자리 안에서는 정본 순위대로, 서로 다른 슬롯 짝을 보존하며 고른다.
+//        짝에 못 든 후보도 같은 규칙으로 남는 상한을 쓴다 (2026-11-10 retry-authority-v7 · 앞판 2026-10-19 단일 줄 대체).
 //     ⑥ 고른 집합에만 EDF 로 실제 슬롯을 배정한다 — **EDF 는 더 이상 무엇을 살지 정하지 않는다**
 //   🔴 합산 점수 · 가중치 · 품질 구간 · 할당량 없음.
 // ─────────────────────────────────────────────────────────
@@ -1107,6 +1365,11 @@ export type JitSelectionInput = {
   slots: readonly Date[]; now: Date; cap: number
   /** 현재 생성·게이트 계약. 공급 수율·비용 cohort가 다른 품질 판과 섞이지 않게 묶음에 고정한다. */
   qualityContract: SupplyQualityContractMark
+  /**
+   * 🔴 **재선정 운영 모드** — `normal` 은 묶음 상한의 10% 까지, `freshOnly` 는 0(축소 운영).
+   *    기본값이 없다 — 부르는 쪽이 단일 권위(`retryModeFor`)로 정해 넘긴다.
+   */
+  retryMode: RetryMode
 }
 
 /** 🔴 JIT 선택에서 원천이 들어가거나 멈춘 자리 — 원인이 다르면 값도 다르다 */
@@ -1141,14 +1404,31 @@ export type SupplyRankKey = { rank: ReleaseRank; key: string }
 export const WGANG_SOURCE_SITE = 'navercafe:wgang'
 
 /**
- * 🔴 **공급 순위 — 정본 `compareReleaseRank` 그대로**(신선도 → 댓글 백분위 → 조회 백분위 → velocity),
- *    그것이 동률이면 원천 열쇠(코드 포인트 순). 🔴 **출처 우대·주제 우대 없음** (2026-10-19 창업자 결정) —
- *    옛 판은 동률에서 갱년기 → wgang 을 세웠지만, 숫자형 보너스를 운영에 넣지 않는다. 중심 주제는
- *    게시판 라우팅이 다룬다(공급 순위가 아니다).
+ * 🔴 **공급 순위 — 정본 `compareReleaseRank` 에 원천 열쇠를 결정적 열쇠로 넘길 뿐이다**(canon §2.3).
+ *    출처·주제 우대 없음 — 중심 주제는 게시판 라우팅이 다룬다.
  */
 export function compareSupplyRank(a: SupplyRankKey, b: SupplyRankKey): number {
-  return compareReleaseRank({ ...a.rank, tieBreak: '' }, { ...b.rank, tieBreak: '' })
-    || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  return compareReleaseRank({ ...a.rank, tieBreak: a.key }, { ...b.rank, tieBreak: b.key })
+}
+
+/**
+ * 🔴 **묶음 순위를 소비자 순서로** — `rankedKeys`(묶음 파일에 쓴 정본 순위 순서)대로 세우고, 묶음 밖 행은 뒤에
+ *    원래 순서 그대로 둔다(지우지 않는다). 순위가 없으면(`null`) 입력 순서 그대로다.
+ *    판정·생성 러너는 유료 요청 상한과 화자 시도 여력을 앞에서부터 쓰므로 이 순서가 곧 배분이다
+ *    (2026-11-06 반례: 이름순 판정 파일이 영수증 밖 7.95h 원천에 유일한 화자 자리를 줬다).
+ */
+export function orderByWorksetRank<T>(
+  rows: readonly T[], keyOf: (row: T) => string | null, rankedKeys: readonly string[] | null,
+): T[] {
+  if (rankedKeys === null) return [...rows]
+  const pos = new Map(rankedKeys.map((k, i) => [k, i]))
+  const at = (row: T): number => {
+    const k = keyOf(row)
+    return k === null ? Number.MAX_SAFE_INTEGER : pos.get(k) ?? Number.MAX_SAFE_INTEGER
+  }
+  return rows.map((row, i) => ({ row, i, p: at(row) }))
+    .sort((a, b) => a.p - b.p || a.i - b.i)
+    .map((x) => x.row)
 }
 
 /**
@@ -1172,6 +1452,21 @@ export function slotMatcher(valid: readonly (readonly boolean[])[], nSlots: numb
     tryAdd: (i) => augment(i, Array.from({ length: nSlots }, () => false)),
     slotOf: (i) => { const j = owner.indexOf(i); return j < 0 ? null : j },
   }
+}
+
+/**
+ * 🔴 **재선정 상한이 있는 최대 짝** — 신규(`fresh`)는 전부, 재선정(`retry`)은 성공한 증대가 `retryCap` 개가 될 때까지.
+ *    증대는 이미 짝지은 원천을 풀지 않으므로(정점 보존) 신규 최대 뒤에 재선정을 더하는 순서가 제약 아래 최대다.
+ */
+export function maxSlotMatchingWithRetryCap(
+  fresh: readonly (readonly boolean[])[], retry: readonly (readonly boolean[])[], nSlots: number, retryCap: number,
+): number {
+  const m = slotMatcher([...fresh, ...retry], nSlots)
+  let n = 0
+  for (let i = 0; i < fresh.length; i += 1) if (m.tryAdd(i)) n += 1
+  let r = 0
+  for (let i = 0; i < retry.length && r < Math.max(0, retryCap); i += 1) if (m.tryAdd(fresh.length + i)) { n += 1; r += 1 }
+  return n
 }
 
 /** 🔴 채울 수 있는 최대 슬롯 수 — 넣는 순서와 무관하다 */
@@ -1212,26 +1507,42 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
     })
   }
 
-  // 🔴 2026-10-19 창업자/Codex: fresh/retry 분리와 retry tier · wait clock 은 **순위를 뒤집지 않는다** —
-  //    자격·관측 상태일 뿐이다. 하나의 순위(compareSupplyRank = 신선도 1순위)로 모두 세운다 —
-  //    더 신선한 retry 가 더 늙은 fresh 를 이긴다. `retryReserved` 집합은 뒤에서 관측 지표로만 세운다.
-  const byRank = [...pool].sort((a, b) => compareSupplyRank(a.sk, b.sk))
-  // 🔴 2026-10-19 창업자/Codex: retry 예약 계산은 폐기됐다 — 공급 순위 하나가 결정한다.
-  //    `retryReserve`/`retryReserved` 필드는 **선택된 retry 수** 로 통일한다 (관측 지표).
+  /**
+   * 🔴 **신규 먼저 · 재선정은 몫 안에서만** (2026-11-10 retry-authority-v7 · canon §2.3 갱신).
+   *    앞판(2026-10-19)은 fresh/retry 를 한 줄로 세워 더 신선한 retry 가 신규를 앞섰다 — 11-09·11-10 실측 5회차에서
+   *    신규 seed 가 `CAP_REACHED` 로 남은 채 retry 36자리가 팔렸다. 각 자리 안에서는 정본 순위(신선도 1순위) 그대로다.
+   *    재선정 몫은 단일 권위 `retrySlotsFor`(상한의 10% · 상한 10 미만이면 0 · `freshOnly` 면 0)다.
+   *    🔴 결론(`terminal`)·지문 소진 원천은 이미 `concluded` 로 빠졌다 — 여기 오는 retry 는 transient·unknown·판정 미완뿐이다.
+   */
+  const laneOf = (c: Cand): SelectionLane => selectionLaneOf(c.prior)
+  // 🔴 `excluded` 는 이미 `concluded` 로 빠졌다 — 여기 오면 불변식 위반이라 자리에 세우지 않는다(유료 0)
+  const ranked = [...pool].filter((c) => laneOf(c) !== 'excluded').sort((a, b) => compareSupplyRank(a.sk, b.sk))
+  const byRank = [...ranked.filter((c) => laneOf(c) === 'fresh'), ...ranked.filter((c) => laneOf(c) === 'retry')]
+  const retrySlots = retrySlotsFor({ limit: cap, mode: jit.retryMode })
   const idx = new Map(pool.map((c, i) => [c, i]))
   const valid = pool.map((c) => c.valid)
-  const maxFillable = maxSlotMatching(valid, n)
+  /**
+   * 🔴 **선택 가능한 집합의 최대 짝** (2026-11-10) — 신규를 전부 넣고 재선정은 K 개까지만 증대한다.
+   *    증대 경로는 이미 짝지은 원천을 풀지 않으므로 이 순서의 결과가 "재선정 ≤ K" 제약 아래 최대다.
+   *    결론·채택(`excluded`)은 넣지 않는다 — 넣으면 관측의 coverTarget 이 부풀어 고를 수 없는 자리를 목표로 센다.
+   */
+  const maxFillable = maxSlotMatchingWithRetryCap(
+    byRank.filter((c) => laneOf(c) === 'fresh').map((c) => c.valid),
+    byRank.filter((c) => laneOf(c) === 'retry').map((c) => c.valid), n, retrySlots,
+  )
   const coverTarget = Math.min(cap, maxFillable)
 
-  // ④ 신선도 1순위 — 짝 가능한 후보를 먼저 덮고, 짝에 못 든 후보도 상한까지 extra 로 쓴다 (fresh/retry 섞여도 상관없다)
+  // ④ 신규가 먼저 슬롯을 덮고, 재선정은 몫 안에서만 덮는다. 짝에 못 든 후보도 상한까지 extra 로 쓴다(같은 몫 규칙)
   const m = slotMatcher(valid, n)
   const cover: Cand[] = []
   const reserved = new Set<Cand>()
+  const retryRoom = (): boolean => reserved.size < retrySlots
   for (const c of byRank) {
     if (cover.length >= coverTarget) break
+    if (laneOf(c) === 'retry' && !retryRoom()) continue
     if (m.tryAdd(idx.get(c)!)) {
       cover.push(c)
-      if (c.prior !== undefined) reserved.add(c)
+      if (laneOf(c) === 'retry') reserved.add(c)
     }
   }
   const taken = new Set<Cand>(cover)
@@ -1239,8 +1550,9 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
   for (const c of byRank) {
     if (cover.length + extra.length >= cap) break
     if (taken.has(c)) continue
+    if (laneOf(c) === 'retry' && !retryRoom()) continue
     extra.push(c); taken.add(c)
-    if (c.prior !== undefined) reserved.add(c)
+    if (laneOf(c) === 'retry') reserved.add(c)
   }
 
   // ⑥ 배정 — 고른 집합에만 EDF(마감이 이른 것이 이른 슬롯). 덮기 집합은 한 바퀴에 전부 짝지어진다
@@ -1292,10 +1604,11 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
     deferred: Math.max(0, pool.length - picked.length),
     axis: { eligible: eligibleByAxis, quota: { seed: cap, raw: 0 }, picked: { seed: picked.length, raw: 0 } },
     jit: {
-      slots: n, cap, linkable: pool.length, rawExcluded, unlinkable,
+      // 🔴 선택 가능한 집합만 센다 — 결론·채택(`excluded`)은 `concluded` 와 같은 열쇠라 정상 입력에서는 0 이다
+      slots: n, cap, linkable: pool.filter((c) => laneOf(c) !== 'excluded').length, rawExcluded, unlinkable,
       maxFillableSlots: maxFillable, coverTarget,
       coveredSlots: new Set(cover.map((c) => assigned.get(c)!.getTime())).size,
-      // 🔴 두 필드 모두 **선택된 retry 수**다 (관측 지표 · 2026-10-19). retryReserve 는 더 이상 "할당 목표" 가 아니다
+      // 🔴 두 필드 모두 **선택된 재선정 수**다 (관측 지표 · 역사 판독 포맷 그대로). 몫은 `retrySlotsFor` 가 정한다
       retryReserve: reserved.size, retryReserved: reserved.size,
     },
   }
@@ -1310,6 +1623,11 @@ export type WorksetRead =
        *    옛 판(v1 · 사이트 없음)이면 `null` — 개수만 믿을 수 있다. 판정 게이트로 쓰지 않는다
        */
       sourceKeys: ReadonlySet<string> | null
+      /**
+       * 🔴 같은 열쇠를 **파일에 쓴 순서 그대로** — 공급이 정본 순위(`compareSupplyRank`)로 쓴 순서다.
+       *    판정 · 생성은 `orderByWorksetRank` 로 이 순서를 지킨다. 옛 판(v1)이면 `null` — 순위를 지어내지 않는다
+       */
+      rankedKeys: readonly string[] | null
       /** 🔴 묶음의 원천 수 — 관제 · 수율 창이 센다 */
       count: number
       limit: number
@@ -1400,8 +1718,32 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
     return { ok: false, code: 'SHAPE', reason: `takenAt 을 읽을 수 없다 (${String(o.takenAt)})` }
   }
   return {
-    ok: true, sourceKeys: legacy ? null : new Set(ids), count: ids.length, limit, takenAtMs, intents, qualityContract,
+    ok: true, sourceKeys: legacy ? null : new Set(ids), rankedKeys: legacy ? null : [...ids],
+    count: ids.length, limit, takenAtMs, intents, qualityContract,
   }
+}
+
+export type RunWorksetRead =
+  | { kind: 'ok'; intents: ReadonlyMap<string, SupplyIntent> | null; rankedKeys: readonly string[] | null }
+  | { kind: 'qualityMismatch' }
+  | { kind: 'none'; reason: 'MISSING' | 'UNREADABLE' | 'INVALID' }
+
+/**
+ * 🔴 **생성 러너의 회차 묶음 판독 — 순수 함수.** 파일 내용(`raw`, 없으면 null)만 받는다.
+ *    판독 실패는 `none`(사유 포함) — 묶음 없이 종전 경로로 돈다.
+ *    🔴 JIT 묶음의 품질 계약이 지금 코드와 다르면 `qualityMismatch` 다 — "묶음 없음" 과 섞지 않는다.
+ *       호출자가 유료 생성을 시작하지 않고 멈춘다. 옛 판은 같은 try 가 이 중단까지 감쌌다(2026-11-06 교차 검토).
+ */
+export function readRunWorkset(
+  raw: string | null, runId: string, quality: SupplyQualityContractMark,
+): RunWorksetRead {
+  if (raw === null) return { kind: 'none', reason: 'MISSING' }
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return { kind: 'none', reason: 'UNREADABLE' } }
+  const r = readWorkset(parsed, runId)
+  if (!r.ok) return { kind: 'none', reason: 'INVALID' }
+  if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, quality)) return { kind: 'qualityMismatch' }
+  return { kind: 'ok', intents: r.intents, rankedKeys: r.rankedKeys }
 }
 
 export type StageBudget = {
@@ -1440,21 +1782,26 @@ export function judgeStageBudget(limit: number): StageBudget | StageBudgetFail {
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 **같은 사람으로 같은 실패를 되풀이하지 않는다** (2026-09-23)
+// 🔴 **같은 사람으로 같은 실패를 되풀이하지 않는다** (2026-09-23 · 2026-11-10 retry-authority-v7 보정)
 //
 //   앞판은 `retryable` 표시만 했다. 그러면 다음 회차가 **같은 Persona** 로 같은 글을
 //   또 만들고 또 실패한다 — 유료 호출만 쓰고 끝난다.
+//   🔴 회차를 넘는 재시도 **횟수**의 권위는 근거 지문당 상한(`CROSS_RUN_TRANSIENT_RETRY_MAX` · `concludedSourceKeys`)
+//      하나다. 이 절은 다음 시도에서 **누구를 뺄지**만 정하고, 시도 수 상한은 그 상한에서 파생한다(두 상한 0).
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 같은 원천·같은 계약에서 허용하는 최대 시도 수. 넘으면 결론이다 */
-export const REPLAN_ATTEMPT_MAX = 3
+/** 🔴 같은 원천·같은 근거 지문에서 허용하는 최대 시도 수(첫 시도 + 회차를 넘는 한 번) — 단일 상한에서 파생한다 */
+export const REPLAN_ATTEMPT_MAX = CROSS_RUN_TRANSIENT_RETRY_MAX + 1
 
 /**
- * 🔴 **화자를 바꾸면 달라질 수 있는 실패만 화자 탓이다** (2026-09-23).
+ * 🔴 **실패한 그 화자를 다음 시도에서 뺄 원인** (2026-09-23) — speakerBound 4종의 부분집합이다.
  *
  *    예산·응답 없음·파싱 실패는 **누구를 골랐든 똑같이** 났다. 그것으로 사람을
  *    제외하면 멀쩡한 화자가 하나씩 타서, 장애 한 번에 원천이 `EXHAUSTED` 로 굳는다.
- *    시도 수 상한도 같은 이유로 **이 사유들만** 센다.
+ *    🔴 speakerBound 이지만 여기 없는 둘 (`check:retry-authority` 가 고정한다):
+ *       · `speakerSlotNarrowed` — 묶음 안에 맞는 사람이 **없었다**. 탓할 한 사람이 없고, 다음 묶음이 달라야 한다
+ *         (같은 묶음 재구매는 `speakerSetAlreadyFailed` 가 유료 호출 앞에서 막는다)
+ *       · `loadBearingSelfImpossible` — 사람은 그대로, **자리**(1인칭 금지)를 바꾼다(`speakerRemedyOf` = `stance`)
  */
 export const PERSONA_REPLAN_CAUSES = [
   'personaTransformFailed', 'loadBearingMismatch',

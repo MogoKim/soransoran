@@ -26,8 +26,8 @@ import {
   pendingFateOf, cohortFatesOf, terminalYieldOf, paidSourcesFor, costAttributionOf, TIME_INVARIANT_LOSS_REASONS, pipelineRunOfLedger,
   type CostFate,
 } from '../src/lib/ready-fate'
-import { judgeJitDemand, fillUpToOf, ledgerRunIdOf } from '../src/lib/supply-process'
-import { judgeSettle } from '../src/lib/llm-ledger'
+import { judgeJitDemand, fillUpToOf, ledgerRunIdOf, runFileName } from '../src/lib/supply-process'
+import { judgeSettle, tallyOf } from '../src/lib/llm-ledger'
 import {
   concludedSourceKeys, attemptedOutcomes, CONCLUDED_STATES, worksetFileName, opportunitiesFileName,
   WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
@@ -41,6 +41,8 @@ import { sourceKeyOf } from '../src/lib/source-identity'
 import { claimsJitContract, intentLinkIssue, type SupplyIntent } from '../src/lib/supply-intent'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
+import { PRICING_VERSION } from '../src/lib/llm-pricing'
+import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import {
   pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
 } from './lib/stage-preflight-facts.mjs'
@@ -194,7 +196,7 @@ console.log('\n⑥ 같은 원천 중복 유료 생성 0 · retryable 과 termina
     { sourceKey: k2, sourceArticleId: 'retry', atMs: 1, stage: 'draft', state: 'retryable' },
   ]
   const concluded = concludedSourceKeys(rows)
-  check('🔴 terminal 은 결론(다시 고르지 않는다) · retryable 은 결론이 아니다(다음 단일 순위의 후보)',
+  check('🔴 terminal 은 결론(다시 고르지 않는다) · retryable 은 결론이 아니다(근거 지문당 한 번 · 신규 먼저 · 재선정 몫 10% 안의 후보)',
     concluded.has(k1) && !concluded.has(k2) && attemptedOutcomes(rows).has(k2)
     && (CONCLUDED_STATES as readonly string[]).includes('terminal') && !(CONCLUDED_STATES as readonly string[]).includes('retryable'))
   const judge = strip('scripts/micro-seed-auto-judge.mts')
@@ -237,6 +239,18 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     const from = Date.parse('2026-10-02T15:00:00Z')
     const to = Date.parse('2026-10-03T15:00:00Z')
     check('🔴 JIT 묶음 2개 + legacy 1개 → JIT 원천 20 만', worksetSourcesIn(dir, from, to) === 20)
+    w('20261003-071500', 10)
+    writeFileSync(join(dir, runFileName('20261003-071500')), JSON.stringify({
+      runId: '20261003-071500',
+      runTokenShadow: { trigger: 'recovery', launchTrigger: 'recovery' },
+    }))
+    check('🟢 제한 복구 묶음 10개는 다음 시험의 자연 수율 분자·분모에 섞이지 않는다',
+      worksetSourcesIn(dir, from, to) === 20)
+    writeFileSync(join(dir, runFileName('20261003-071500')), '{ 손상')
+    check('🔴 제한 복구 여부를 읽을 회차 기록이 손상되면 자연 수율을 낙관하지 않고 모름(null)',
+      worksetSourcesIn(dir, from, to) === null)
+    rmSync(join(dir, runFileName('20261003-071500')))
+    rmSync(join(dir, worksetFileName('20261003-071500')))
     writeFileSync(join(dir, worksetFileName('20261003-101500')), JSON.stringify({
       kind: WORKSET_KIND, version: WORKSET_VERSION_JIT_LEGACY, contract: SUPPLY_JIT_CONTRACT_LEGACY,
       runId: '20261003-101500', takenAt: '2026-10-03T10:15:00.000Z', limit: 10,
@@ -256,22 +270,115 @@ console.log('\n⑦ 장부 · 묶음 · 기회 스냅샷 손상 → 모름')
     check('🔴 🔴 창 안 묶음 하나 손상 → 원천 수 모름(null) — 손상 파일을 빼고 20 으로 세지 않는다',
       worksetSourcesIn(dir, from, to) === null)
     const snap = (runId: string, body: string): void => writeFileSync(join(dir, opportunitiesFileName(runId)), body)
-    // 🔴 (2026-10-10 P0-B1) 스냅샷은 opportunities-v2(자동 seed 전용)만 증거다
+    const run = (runId: string, observedAt: string, written: number, status: 'written' | 'failed' = 'written'): void =>
+      writeFileSync(join(dir, runFileName(runId)), JSON.stringify({
+        runId, startedAt: observedAt, status: status === 'written' ? 'done' : 'failed', completedAt: observedAt,
+        opportunityInventory: {
+          status, runId, observedAt, written: status === 'written' ? written : null,
+          reason: status === 'written' ? null : 'fixture-failure',
+        },
+      }))
+    const inventory = (runId: string, takenAt: string): string => JSON.stringify({
+      kind: 'supply-opportunities', version: 'opportunities-v3', runId, takenAt,
+      inventory: {
+        basis: 'stage-neutral-lifecycle-v1', axis: 'auto-seed',
+        counts: { inputRows: 0, lifecyclePassed: 0, autoSeed: 0, evidenceMissing: 0, written: 0 },
+      },
+      evidence: [],
+    })
     snap('20261003-031500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v2', runId: '20261003-031500',
       takenAt: '2026-10-03T03:15:00.000Z', slotAt: '2026-10-03T03:00:00.000Z', evidence: [] }))
-    check('🔴 기회 스냅샷 정상(v2) → 읽힌다', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
+    check('🔴 v2 는 현재 release horizon 의존 옛 판 → 모름',
+      latestOpportunities(dir, NOW.getTime()).issue === 'LEGACY_CONTRACT')
     snap('20261003-091500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v1', runId: '20261003-091500',
       takenAt: '2026-10-03T09:15:00.000Z', slotAt: '2026-10-03T09:00:00.000Z', evidence: [] }))
     const legacy = latestOpportunities(dir, NOW.getTime())
-    check('🔴 🔴 가장 최근 스냅샷이 옛 판(v1 · raw 포함)이면 모름(null · LEGACY_CONTRACT) — 더 오래된 v2 로도 내려가지 않는다',
+    check('🔴 🔴 가장 최근 스냅샷이 옛 판(v1)이면 모름 — 더 오래된 파일로 내려가지 않는다',
       legacy.evidence === null && legacy.issue === 'LEGACY_CONTRACT', JSON.stringify(legacy))
-    snap('20261003-111500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v2', runId: '20261003-111500',
-      takenAt: '2026-10-03T11:15:00.000Z', slotAt: '2026-10-03T11:00:00.000Z', evidence: [] }))
-    check('🔴 v1 뒤에 새 회차가 v2 를 쓰면 정상 복구', latestOpportunities(dir, NOW.getTime()).evidence?.length === 0)
+    snap('20261003-111500', inventory('20261003-111500', '2026-10-03T11:15:00.000Z'))
+    run('20261003-111500', '2026-10-03T11:15:00.000Z', 0)
+    const current = latestOpportunities(dir, NOW.getTime())
+    check('🔴 새 회차가 stage-neutral v3 를 쓰면 정상 복구',
+      current.evidence?.length === 0 && current.runId === '20261003-111500' && current.inventory?.basis === 'stage-neutral-lifecycle-v1')
+    snap('20261003-111600', inventory('20261003-111600', '2026-10-03T11:16:00.000Z'))
+    run('20261003-111600', '2026-10-03T11:16:00.000Z', 0, 'failed')
+    check('🔴 최신 live 공급 회차 marker가 failed면 같은 회차 v3도 쓰지 않고 직전 v3로 내려가지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-111700', inventory('20261003-111700', '2026-10-03T11:17:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-111700')), JSON.stringify({
+      runId: '20261003-111700', startedAt: '2026-10-03T11:17:00.000Z', status: 'done',
+    }))
+    check('🔴 최신 live 공급 회차 marker가 없으면 같은 회차 v3도 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-111800', inventory('20261003-111800', '2026-10-03T11:18:00.000Z'))
+    run('20261003-111800', '2026-10-03T11:18:01.000Z', 0)
+    check('🔴 marker observedAt과 v3 takenAt이 다르면 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-111900', inventory('20261003-111900', '2026-10-03T11:19:00.000Z'))
+    run('20261003-111900', '2026-10-03T11:19:00.000Z', 1)
+    check('🔴 marker written과 v3 written이 다르면 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112000', inventory('20261003-112000', '2026-10-03T11:20:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-112000')), JSON.stringify({
+      runId: '20261003-112000', startedAt: '2026-10-03T11:20:00.000Z', status: 'done',
+      opportunityInventory: {
+        status: 'written', runId: '20261003-112000', observedAt: '2026-10-03T11:20:00.000Z', written: 0,
+        reason: 'unexpected',
+      },
+    }))
+    check('🔴 written marker에 reason이 남으면 정상 증거로 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112100', inventory('20261003-112100', '2026-10-03T11:21:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-112100')), JSON.stringify({
+      runId: '20261003-112101', startedAt: '2026-10-03T11:21:00.000Z', status: 'done',
+      opportunityInventory: {
+        status: 'written', runId: '20261003-112100', observedAt: '2026-10-03T11:21:00.000Z', written: 0, reason: null,
+      },
+    }))
+    check('🔴 run 파일명과 본문 runId가 다르면 정상 증거로 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112200', inventory('20261003-112200', '2026-10-03T11:22:00.000Z'))
+    writeFileSync(join(dir, runFileName('20261003-112200')), '{ 손상')
+    check('🔴 최신 run 파일이 손상되면 같은 회차 v3도 쓰지 않는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'STALE')
+    snap('20261003-112300', inventory('20261003-112300', '2026-10-03T11:22:59.000Z'))
+    run('20261003-112300', '2026-10-03T11:22:59.000Z', 0)
+    check('🔴 v3 takenAt이 회차 시작보다 이르면 손상으로 닫는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'CORRUPT')
+    const noInventoryDir = mkdtempSync(join(tmpdir(), 'supply-jit-no-inventory-'))
+    try {
+      writeFileSync(join(noInventoryDir, runFileName('20261003-112400')), JSON.stringify({
+        runId: '20261003-112400', startedAt: '2026-10-03T11:24:00.000Z', status: 'done',
+      }))
+      check('🔴 최신 live 공급 회차만 있고 opportunity 파일이 없으면 STALE로 닫는다',
+        latestOpportunities(noInventoryDir, NOW.getTime()).issue === 'STALE')
+    } finally { rmSync(noInventoryDir, { recursive: true, force: true }) }
+    const badCounts = JSON.parse(inventory('20261003-113000', '2026-10-03T11:30:00.000Z')) as {
+      inventory: { counts: { written: number } }
+    }
+    badCounts.inventory.counts.written = 1
+    snap('20261003-113000', JSON.stringify(badCounts))
+    run('20261003-113000', '2026-10-03T11:30:00.000Z', 1)
+    check('🔴 v3 수량 보존식이 틀리면 전체를 손상으로 닫는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'CORRUPT')
+    snap('20261003-114500', inventory('20261003-114501', '2026-10-03T11:45:00.000Z'))
+    run('20261003-114500', '2026-10-03T11:45:00.000Z', 0)
+    check('🔴 파일명 runId와 본문 runId가 다르면 전체를 손상으로 닫는다',
+      latestOpportunities(dir, NOW.getTime()).issue === 'CORRUPT')
+    snap('20261003-121500', JSON.stringify({ kind: 'supply-opportunities', version: 'opportunities-v99', runId: '20261003-121500',
+      takenAt: '2026-10-03T12:15:00.000Z', evidence: [] }))
+    run('20261003-121500', '2026-10-03T12:15:00.000Z', 0)
+    check('🔴 알지 못하는 미래 판은 손상과 구분해 모름',
+      latestOpportunities(dir, NOW.getTime()).issue === 'UNKNOWN_CONTRACT')
     snap('20261003-131500', '{ 손상')
+    run('20261003-131500', '2026-10-03T13:15:00.000Z', 0)
     const corrupt = latestOpportunities(dir, NOW.getTime())
     check('🔴 🔴 가장 최근 기회 스냅샷 손상 → 모름(null · CORRUPT) — 더 오래된 스냅샷으로 내려가지 않는다',
       corrupt.evidence === null && corrupt.issue === 'CORRUPT')
+    snap('20261004-000000', inventory('20261004-000000', '2026-10-04T00:00:00.000Z'))
+    const futureSnapshot = latestOpportunities(dir, NOW.getTime())
+    check('🔴 최신 기회 스냅샷 시각이 미래면 모름(null · CORRUPT) — 더 오래된 스냅샷으로 내려가지 않는다',
+      futureSnapshot.evidence === null && futureSnapshot.issue === 'CORRUPT')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -292,6 +399,188 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const hs = articleIdHashOf('fx', 'sch')
   const hl = articleIdHashOf('fx', 'lost')
   const fateByKey = new Map<string, CostFate>([[hp, 'published'], [hs, 'scheduled'], [hl, 'lost']])
+  const effectiveEntry = (o: Partial<LedgerEntry> = {}): LedgerEntry => ({
+    ...e(hp, 0.02),
+    runId: `${supplyRunIdOf(new Date('2026-11-05T06:15:02+09:00'))}-j`,
+    startedAt: '2026-11-04T21:15:03.000Z',
+    endedAt: '2026-11-04T21:15:10.000Z',
+    pricingVersion: PRICING_VERSION,
+    reservedUsd: 0.03,
+    budgetDailyUsd: 1.2,
+    budgetCeilingUsd: 1.2,
+    budgetCapUsd: 1.2,
+    budgetSource: 'env.local',
+    runKind: 'scheduled',
+    runSlot: '2026-11-05 06:15',
+    runTokenShadow: {
+      ok: true, code: null, tokenId: 'token-0615', trigger: 'scheduled', launchTrigger: 'scheduled',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-11-05 06:15',
+    },
+    ...o,
+  })
+  const effectiveCohort: ReadonlySet<string> = new Set([supplyRunIdOf(new Date('2026-11-05T06:15:02+09:00'))])
+  const effectiveValid = costAttributionOf({
+    entries: [effectiveEntry()], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 시행일부터 계약·가격판·원천·회차·예약·예산 provenance가 완전하면 preflight 비용 표본이다',
+    effectiveValid?.usdPerSlotValidResult === 0.02 && effectiveValid.trialIneligibleRequests === 0,
+    JSON.stringify(effectiveValid))
+  const recoveryAt = new Date('2026-11-05T07:05:00+09:00')
+  const recoveryPipelineRun = supplyRunIdOf(recoveryAt)
+  const recoveryEntry = effectiveEntry({
+    attemptId: 'recovery-u-1', runId: `${recoveryPipelineRun}-d`,
+    startedAt: recoveryAt.toISOString(), endedAt: new Date(recoveryAt.getTime() + 5_000).toISOString(),
+    status: 'usageUnknown', settledUsd: null, reservedUsd: 0.03,
+    runKind: 'manual', runSlot: null,
+    runTokenShadow: {
+      ok: true, code: null, tokenId: 'recovery-token-1', trigger: 'recovery', launchTrigger: 'recovery',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: budgetWindowShadowOf(recoveryAt),
+    },
+  })
+  const effectiveWithRecovery = costAttributionOf({
+    entries: [effectiveEntry(), recoveryEntry], fateByKey,
+    counts: { published: 1, scheduled: 0 },
+    cohortRuns: new Set([...effectiveCohort, recoveryPipelineRun]),
+  })
+  check('🟢 제한 복구 미상은 자연 정산 표본에서 분리되고 위험 단가에는 포함된다',
+    effectiveWithRecovery?.settledRequests === 1
+    && effectiveWithRecovery.usageUnknownRequests === 0
+    && effectiveWithRecovery.recoveryUsageUnknownRequests === 1
+    && effectiveWithRecovery.trialIneligibleRequests === 0
+    && Math.abs((effectiveWithRecovery.trialRiskUsdPerSlotValidResult ?? 0) - 0.05) < 1e-12,
+    JSON.stringify(effectiveWithRecovery))
+  const recoveryWithoutExactRun = costAttributionOf({
+    entries: [effectiveEntry(), recoveryEntry], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🔴 exact 복구 supply run을 비용 cohort에 넣지 않으면 복구 미상 비용이 trial에서 빠지는 반례를 고정',
+    recoveryWithoutExactRun?.recoveryUsageUnknownRequests === 0
+    && recoveryWithoutExactRun?.openRequests === 0
+    && recoveryWithoutExactRun?.totalUsd === 0.02
+    && recoveryWithoutExactRun?.trialRiskUsdPerSlotValidResult === null,
+    JSON.stringify(recoveryWithoutExactRun))
+  const recoveryOverrun = costAttributionOf({
+    entries: [effectiveEntry(), {
+      ...recoveryEntry, status: 'settled', settledUsd: 0.04, reservedUsd: 0.01,
+    }],
+    fateByKey, counts: { published: 1, scheduled: 0 },
+    cohortRuns: new Set([...effectiveCohort, recoveryPipelineRun]),
+  })
+  check('🔴 exact 복구 supply run의 정산·예약 초과는 recovery 비용과 hard overrun으로 함께 귀속',
+    recoveryOverrun?.recoverySettledRequests === 1 && recoveryOverrun.trialOverrunRequests === 1,
+    JSON.stringify(recoveryOverrun))
+  const malformedRecovery = costAttributionOf({
+    entries: [effectiveEntry(), {
+      ...recoveryEntry,
+      runTokenShadow: { ...recoveryEntry.runTokenShadow!, tokenId: '' },
+    }],
+    fateByKey, counts: { published: 1, scheduled: 0 },
+    cohortRuns: new Set([...effectiveCohort, recoveryPipelineRun]),
+  })
+  check('🔴 손상된 recovery tag는 자연 표본으로 강등되지 않고 preflight 귀속 불명',
+    malformedRecovery?.recoveryUsageUnknownRequests === 0
+    && malformedRecovery?.trialIneligibleRequests === 1,
+    JSON.stringify(malformedRecovery))
+  const legacyHumanResolved = costAttributionOf({
+    entries: [{ ...e(hp, 0.02), resolvedBy: 'human' }], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT,
+  })
+  check('🔴 시행일 전 행이어도 사람 마감은 대상 cohort의 자연 비용 표본이 아니다',
+    legacyHumanResolved?.usdPerSlotValidResult === null
+    && legacyHumanResolved.trialIneligibleRequests === 1
+    && legacyHumanResolved.unlinkedUsd === 0.02,
+    JSON.stringify(legacyHumanResolved))
+  const sidecarEntries: readonly LedgerEntry[] = [
+    effectiveEntry({ stage: 'commentGen', runId: 'manual-comment', settledUsd: 0.001 }),
+    effectiveEntry({ stage: 'commentFollowupGen', runId: 'manual-followup', settledUsd: 0.002 }),
+    effectiveEntry({ stage: 'semanticAudit', runId: 'manual-audit', settledUsd: 0.003 }),
+  ]
+  const withSidecars = costAttributionOf({
+    entries: [effectiveEntry(), ...sidecarEntries], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 댓글·후속 댓글·감사는 whole-day 비용에는 남지만 본문 preflight cohort를 오염시키지 않는다',
+    tallyOf(sidecarEntries).settledUsd === 0.006
+    && withSidecars?.usdPerSlotValidResult === effectiveValid?.usdPerSlotValidResult
+    && withSidecars?.trialIneligibleRequests === 0
+    && withSidecars?.unlinkedUsd === 0,
+    JSON.stringify(withSidecars))
+  for (const [name, row] of [
+    ['가격판 누락', effectiveEntry({ pricingVersion: null })],
+    ['예산 출처 누락', effectiveEntry({ budgetSource: null })],
+    ['옛 계약 혼입', effectiveEntry({ supplyContract: SUPPLY_JIT_CONTRACT_LEGACY })],
+    ['event 실행 token', effectiveEntry({
+      runTokenShadow: {
+        ok: true, code: null, tokenId: 'token-event', trigger: 'event', launchTrigger: 'event',
+        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-11-05 06:15',
+      },
+    })],
+    ['사람이 사후 정산한 행', effectiveEntry({ resolvedBy: 'human' })],
+    ['슬롯 시작 1ms 전 요청', effectiveEntry({ startedAt: '2026-11-04T21:14:59.999Z' })],
+    ['정확히 45분 경계에서 시작한 요청', effectiveEntry({ startedAt: '2026-11-04T22:00:00.000Z' })],
+  ] as const) {
+    const invalid = costAttributionOf({
+      entries: [row], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+    })
+    check(`🔴 시행일부터 ${name}은 preflight에서도 비용 UNKNOWN — 밤 proof와 같은 계약`,
+      invalid?.usdPerSlotValidResult === null && invalid?.trialIneligibleRequests === 1,
+      JSON.stringify(invalid))
+  }
+  const finalValidMillisecond = costAttributionOf({
+    entries: [effectiveEntry({ startedAt: '2026-11-04T21:59:59.999Z' })], fateByKey,
+    counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 06:15 자연 슬롯의 마지막 유효 시각(06:59:59.999 KST)은 preflight 비용 표본이다',
+    finalValidMillisecond?.usdPerSlotValidResult === 0.02
+    && finalValidMillisecond.trialIneligibleRequests === 0,
+    JSON.stringify(finalValidMillisecond))
+  const ineligibleOverrun = costAttributionOf({
+    entries: [effectiveEntry({ pricingVersion: null, settledUsd: 0.04, reservedUsd: 0.01 })],
+    fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🔴 metadata 부적격 행이어도 실제 정산이 예약을 넘으면 hard overrun을 숨기지 않는다',
+    ineligibleOverrun?.trialOverrunRequests === 1 && ineligibleOverrun.trialIneligibleRequests === 1,
+    JSON.stringify(ineligibleOverrun))
+  const otherSlot = '2026-11-05 08:15'
+  const outOfCohortOverrun = costAttributionOf({
+    entries: [effectiveEntry({
+      runId: `${supplyRunIdOf(new Date('2026-11-05T08:15:02+09:00'))}-j`,
+      runSlot: otherSlot,
+      startedAt: '2026-11-04T23:15:03.000Z',
+      endedAt: '2026-11-04T23:15:10.000Z',
+      settledUsd: 0.04,
+      reservedUsd: 0.01,
+      runTokenShadow: {
+        ok: true, code: null, tokenId: 'token-0815', trigger: 'scheduled', launchTrigger: 'scheduled',
+        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: otherSlot,
+      },
+    })],
+    fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: effectiveCohort,
+  })
+  check('🟢 다른 cohort의 예약 초과는 whole-day 브레이크가 맡고 현재 preflight를 거짓 차단하지 않는다',
+    outOfCohortOverrun?.trialOverrunRequests === 0 && outOfCohortOverrun.otherCohortUsd === 0.04,
+    JSON.stringify(outOfCohortOverrun))
+  const overrunPreflight = judgeNextPreflight('d5', {
+    proofKstDate: '2026-11-05', slotValidOpportunities: 5,
+    readyCohort: {
+      sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0,
+      usdPerSlotValidResult: null,
+      trialCost: {
+        settledRequests: 20, usageUnknownRequests: 0,
+        overrunRequests: ineligibleOverrun?.trialOverrunRequests ?? 0,
+        ineligibleRequests: ineligibleOverrun?.trialIneligibleRequests ?? 0,
+        riskUsdPerSlotValidResult: 0.01,
+      },
+    },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
+    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2,
+    auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
+    supplyDailyUsdCap: 1.2, runnerHealth: 'ok',
+  }, RUNNER_GRID)
+  check('🔴 hard overrun이 하나라도 있으면 preflight는 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
+    overrunPreflight.codes.includes('SUPPLY_COST_SHORT')
+      && !overrunPreflight.codes.includes('SUPPLY_COST_UNKNOWN'),
+    JSON.stringify(overrunPreflight.codes))
   const linked = costAttributionOf({
     entries: [e(hp, 0.02), e(hs, 0.02), e(hl, 0.02), e(articleIdHashOf('fx', 'hold'), 0.04)],
     fateByKey, counts: { published: 1, scheduled: 1 }, cohortRuns: COHORT,
@@ -311,8 +600,12 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 🔴 옛 장부 $0.939 만 → legacy $0.939 · 결과당 비용 모름(null)',
     legacyOnly !== null && Math.abs(legacyOnly.legacyUsd - 0.939) < 1e-12 && legacyOnly.usdPerSlotValidResult === null, JSON.stringify(legacyOnly))
   const legacyFacts: PreflightFacts = {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: 5,
-    readyCohort: { sources: 160, published: 5, lost: 0, scheduled: 0, unknown: 9, usdPerSlotValidResult: legacyOnly?.usdPerSlotValidResult ?? null },
+    readyCohort: {
+      sources: 160, published: 5, lost: 0, scheduled: 0, unknown: 9,
+      usdPerSlotValidResult: legacyOnly?.usdPerSlotValidResult ?? null, trialCost: null,
+    },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
@@ -361,7 +654,17 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   check('🔴 🔴 **실제 정산 $0.03 > 추정 예약 $0.01 (overran) — 정산 계약 그대로 · 분자는 실제 $0.03**',
     over.status === 'settled' && over.overran && over.settledUsd === 0.03 && cOver !== null && Math.abs((cOver.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12)
   const unkV = judgeNextPreflight('d5', {
-    slotValidOpportunities: 5, readyCohort: { sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: cUu?.usdPerSlotValidResult ?? null },
+    proofKstDate: '2026-11-05',
+    slotValidOpportunities: 5, readyCohort: {
+      sources: 10, published: 5, lost: 0, scheduled: 0, unknown: 0,
+      usdPerSlotValidResult: cUu?.usdPerSlotValidResult ?? null,
+      trialCost: cUu === null ? null : {
+        settledRequests: cUu.settledRequests, usageUnknownRequests: cUu.usageUnknownRequests,
+        overrunRequests: cUu.trialOverrunRequests,
+        ineligibleRequests: cUu.trialIneligibleRequests,
+        riskUsdPerSlotValidResult: cUu.trialRiskUsdPerSlotValidResult,
+      },
+    },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }, RUNNER_GRID)
@@ -375,10 +678,12 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const trialCostOf = (c: NonNullable<typeof liveCost>) => ({
     settledRequests: c.settledRequests,
     usageUnknownRequests: c.usageUnknownRequests,
-    ineligibleOpenRequests: c.trialIneligibleOpenRequests,
+    overrunRequests: c.trialOverrunRequests,
+    ineligibleRequests: c.trialIneligibleRequests,
     riskUsdPerSlotValidResult: c.trialRiskUsdPerSlotValidResult,
   })
   const trialVerdict = (cost: NonNullable<typeof liveCost>, cap = 0.5) => judgeNextPreflight('d5', {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: 5,
     readyCohort: {
       sources: 10, published: 3, lost: 0, scheduled: 0, unknown: 0,
@@ -391,7 +696,7 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
   const liveTrial = liveCost === null ? null : trialVerdict(liveCost)
   check('🟢 제한 trial — 정산 34 + usageUnknown 1(예약 양수) · 비율 97.1% · 위험액 D5 상한 안 → PASS + 명시 경고',
     liveCost !== null && liveCost.usdPerSlotValidResult === null && liveCost.settledRequests === 34
-    && liveCost.usageUnknownRequests === 1 && liveCost.trialIneligibleOpenRequests === 0
+    && liveCost.usageUnknownRequests === 1 && liveCost.trialIneligibleRequests === 0
     && liveTrial?.verdict === 'PASS' && liveTrial.warnings.includes('SUPPLY_COST_TRIAL_RISK')
     && !liveTrial.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify({ liveCost, liveTrial }))
   const tooSmall = costAttributionOf({
@@ -403,14 +708,14 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     entries: [...liveSettled, liveUnknown, { ...liveUnknown, attemptId: 'u2' }], fateByKey,
     counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
-  check('🔴 usageUnknown 2건은 제한 trial 불가 → SUPPLY_COST_UNKNOWN',
+  check('🔴 정산 34 + usageUnknown 2는 정산 비율 95% 미만 → SUPPLY_COST_UNKNOWN',
     twoUnknown !== null && trialVerdict(twoUnknown).codes.includes('SUPPLY_COST_UNKNOWN'))
   const noReservationTrial = costAttributionOf({
     entries: [...liveSettled, { ...liveUnknown, reservedUsd: null }], fateByKey,
     counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
   check('🔴 양수 예약 없는 usageUnknown은 위험 envelope를 만들지 않는다 → SUPPLY_COST_UNKNOWN',
-    noReservationTrial !== null && noReservationTrial.trialIneligibleOpenRequests === 1
+    noReservationTrial !== null && noReservationTrial.trialIneligibleRequests === 1
     && trialVerdict(noReservationTrial).codes.includes('SUPPLY_COST_UNKNOWN'))
   check('🔴 제한 trial 위험액이 공급 상한을 넘으면 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
     liveCost !== null && trialVerdict(liveCost, 0.1).codes.includes('SUPPLY_COST_SHORT'))
@@ -422,16 +727,24 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
     fateByKey: new Map([...fateByKey, [hu, 'unknown']]), counts: { published: 1, scheduled: 3 }, cohortRuns: COHORT,
   })
   const currentShape = judgeNextPreflight('d5', {
+    proofKstDate: '2026-11-05',
     slotValidOpportunities: 5,
     readyCohort: {
       sources: 42, published: 1, lost: 1, scheduled: 3, unknown: 4,
       usdPerSlotValidResult: currentShapeCost?.usdPerSlotValidResult ?? null,
+      trialCost: currentShapeCost === null ? null : {
+        settledRequests: currentShapeCost.settledRequests,
+        usageUnknownRequests: currentShapeCost.usageUnknownRequests,
+        overrunRequests: currentShapeCost.trialOverrunRequests,
+        ineligibleRequests: currentShapeCost.trialIneligibleRequests,
+        riskUsdPerSlotValidResult: currentShapeCost.trialRiskUsdPerSlotValidResult,
+      },
     },
     latencyP50H: 57.14, latencyP90H: 70.59, contractValidPersonas: 24,
     commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
     supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
   }, RUNNER_GRID)
-  check('🟢 운영 모양 — 전체 $0.220191 ÷ 확인 결과 4 × D5 = $0.27523875, 비용 UNKNOWN·SHORT 아님',
+  check('🟢 운영 모양 표본 5건 — 전부 정산·귀속 완전·예산 안이면 clean 비용 PASS',
     currentShapeCost !== null && Math.abs((currentShapeCost.usdPerSlotValidResult ?? 0) - 0.05504775) < 1e-12
     && !currentShape.codes.includes('SUPPLY_COST_UNKNOWN') && !currentShape.codes.includes('SUPPLY_COST_SHORT'),
     JSON.stringify({ cost: currentShapeCost, verdict: currentShape }))
@@ -500,7 +813,9 @@ console.log('\n⑧-b 🔴 공급 의도 연결 — 큐 의도 = 그 회차 curre
   check('🔴 🔴 cohort 불변식 — 큐 결과 · worksetSources · 현재 계약 비용이 같은 창 묶음 회차 집합 하나에서 나온다',
     /cohortRuns: new Set\(ws\?\.byRun\.keys\(\) \?\? \[\]\)/.test(facts)
     && /const worksetSources = ws\?\.sources \?\? null/.test(facts)
-    && /costAttributionOf\(\{ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort\.cohortRuns \}\)/.test(facts))
+    && /const costCohortRuns = new Set\(cohort\.cohortRuns\)/.test(facts)
+    && /if \(recoveryCostRunId !== null\) costCohortRuns\.add\(recoveryCostRunId\)/.test(facts)
+    && /costAttributionOf\(\{ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns \}\)/.test(facts))
 }
 
 console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
@@ -510,10 +825,10 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /const paid = paidSourcesFor\(\{ deficit: policy\.upTo, yieldHigh: before\?\.sourceYield\?\.high \?\? null, cap: WORKSET_LIMIT \}\)/.test(runner)
     && /judgeStageBudget\(PAID_LIMIT\)/.test(runner)
     // 🔴 (2026-10-10 P0-B1) 배정 · 선택은 `selectWorkset({ jit })` 하나 — 상한은 같은 PAID_LIMIT
-    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract\(\) \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
+    && /jit: \{ slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract\(\), retryMode \},\s*limit: PAID_LIMIT, runId, takenAt: runAt,/.test(runner)
     && !/judgeStageBudget\(WORKSET_LIMIT\)/.test(runner) && !/limit: WORKSET_LIMIT, runId/.test(runner))
   check('🔴 묶음은 수요가 있을 때만 만든다(policy.llm) — 수요 0 이면 판정 · 생성 0',
-    /if \(policy\.llm\) \{\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
+    /if \(policy\.llm\) \{\s*(?:\/\/[^\n]*\n\s*)?const retryMode = retryModeFor\(\{ paidBasis: paid\.basis \}\)\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
     && !/assignSourceSlots|intendedSlotOf/.test(runner))
   check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
     /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)
@@ -524,12 +839,15 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
   {
     const wsrc = strip('src/lib/supply-workset.ts')
     const jitBody = wsrc.slice(wsrc.indexOf('function selectJitWorkset'), wsrc.indexOf('function selectJitWorkset') + 4000)
-    check('🔴 🔴 (2026-10-10 P0-B1) 자동 공급 가능 판정은 정본 하나 — 지금 계약은 seed 만 · JIT 선택과 기회 스냅샷이 같은 함수를 부른다',
+    check('🔴 🔴 JIT 선택은 슬롯 판정, 다음 단계 기회는 stage-neutral inventory 로 분리하되 auto-seed 축은 같다',
       /export const isAutoSupplyConsumable = \(r: WorksetRow\): boolean => worksetAxisOf\(r\) === 'seed'/.test(wsrc)
       && /if \(!isAutoSupplyConsumable\(r\)\) \{ rawExcluded \+= 1;/.test(jitBody) && !/worksetAxisOf\(r\) === 'raw'|RAW_AXIS/.test(jitBody)
-      && /const opp = worksetEligibility\(eligibilityInput\)\.eligible\.filter\(isAutoSupplyConsumable\)\.flatMap/.test(runner)
-      && /version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT\.toISOString\(\)/.test(runner)
-      && /export const OPPORTUNITY_VERSION = 'opportunities-v2'/.test(wsrc))
+      && /const freshPrior = priorState\(opportunityRows, currentContractBase\(RUN_AT\)\)/.test(runner)
+      && /inventory: worksetInventory\(postRunInput\)/.test(runner)
+      && /buildOpportunitySnapshot\(\{/.test(runner)
+      && /export const OPPORTUNITY_VERSION = 'opportunities-v3'/.test(wsrc))
+    check('🔴 회차 후 inventory 관측 시각은 벽시계와 RUN_AT 중 늦은 값 — 회차 시작보다 이를 수 없다',
+      /const observedAt = new Date\(Math\.max\(Date\.now\(\), RUN_AT\.getTime\(\)\)\)/.test(runner))
   }
   check('🔴 러너 수율은 preflight 와 같은 판독(readReadyCohort) · 같은 짝짓기 열쇠(jit.matched)',
     /readReadyCohort\(prisma, \{/.test(runner) && /matched: new Set\(jit\.matched\), horizon: jit\.horizon/.test(runner))

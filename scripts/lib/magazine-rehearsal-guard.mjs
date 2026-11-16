@@ -303,6 +303,39 @@ if (clockRaw) {
   const pi = timersPromises.setInterval
   timersPromises.setTimeout = function scaledPromiseTimeout(ms, ...a) { return ps(scale(ms), ...a) }
   timersPromises.setInterval = function scaledPromiseInterval(ms, ...a) { return pi(scale(ms), ...a) }
+
+  /**
+   * 🔴 **파일 시각도 같은 시계로 본다** (2026-11-02 · #799 뒤 S1 재실행 거짓 FAIL).
+   *    producer 래퍼는 재실행 자식의 handoff 가 이번 회차 것인지 `mtimeMs >= startedAt(Date.now())` 로 가린다.
+   *    `Date` 만 가짜고 stat 은 실제 시각이면 그 비교가 늘 거짓이 된다 — 운영(두 값 모두 실제 시계)에는 없는 실패다.
+   *    stat 이 돌려주는 atime·mtime·ctime·birthtime 을 같은 공식(가짜 기준 + 경과 × 배속)으로 옮긴다. 파일 자체는 건드리지 않는다.
+   */
+  const toFake = (ms) => fakeBase + (ms - realBase) * speed
+  const shift = (s) => {
+    if (!s || typeof s !== 'object') return s
+    const o = Object.create(Object.getPrototypeOf(s))
+    for (const k of Object.keys(s)) o[k] = s[k]
+    for (const k of ['atime', 'mtime', 'ctime', 'birthtime']) {
+      if (typeof s[`${k}Ms`] !== 'number') continue
+      const v = toFake(s[`${k}Ms`])
+      Object.defineProperty(o, `${k}Ms`, { value: v, enumerable: true, writable: true, configurable: true })
+      Object.defineProperty(o, k, { value: new RealDate(v), enumerable: true, writable: true, configurable: true })
+    }
+    return o
+  }
+  for (const name of ['statSync', 'lstatSync', 'fstatSync']) {
+    const real = fs[name]
+    fs[name] = function fakeClockStat(...a) { return shift(real.apply(this, a)) }
+  }
+  for (const name of ['stat', 'lstat', 'fstat']) {
+    const real = fs[name]
+    fs[name] = function fakeClockStatCb(...a) {
+      const cb = a.pop()
+      return real.apply(this, [...a, (err, s) => cb(err, err ? s : shift(s))])
+    }
+    const rp = fs.promises[name === 'fstat' ? null : name]
+    if (rp) fs.promises[name] = async function fakeClockStatP(...a) { return shift(await rp.apply(this, a)) }
+  }
 }
 
 syncBuiltinESMExports()

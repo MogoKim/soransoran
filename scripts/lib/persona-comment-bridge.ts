@@ -98,6 +98,8 @@ export function toRecentMarks(input: CommentInput, recentTexts: readonly string[
     endings,
     openerInitials: [...counts].map(([initial, count]) => ({ initial, count }))
       .sort((a, b) => b.count - a.count || a.initial.localeCompare(b.initial)),
+    // 🔴 자기 발화가 없으면 ⑧ 반복 축이 돌지 않는다 — 막힐 패턴도 없다
+    dominant: { endings: [], hooks: [], grams: [] },
   }
 }
 
@@ -155,7 +157,7 @@ export function toGateInput(args: {
   /** ② 댓글 코퍼스 빈도 조회 */
   frequencyLookup?: CandidateInput['frequencyLookup']
   corpusName?: string
-  /** ⑧ 같은 persona 의 이전 발화 + 같은 배치의 앞선 후보 */
+  /** ⑧ 같은 persona 의 이전 발화 — 운영은 삭제되지 않은 공개 댓글 전체(반복 축은 후보 귀속 판정이라 영구 잠금이 없다) */
   priorTexts?: readonly string[]
   /** ⑧ seed 재사용 횟수 — 전체 단위 */
   seedUseCount?: number

@@ -10,9 +10,14 @@
  *
  *   🔴 발행 시점 재검사는 그대로다 — `scheduled` 는 공개가 아니다. 발행 트랜잭션이 그 시각에 다시 판정한다.
  */
-import type { LedgerEntry } from './llm-ledger'
+import { isSupplyContentCostStage, ledgerDateOf, type LedgerEntry, type LedgerStage } from './llm-ledger'
+import type { RetryClass } from './content-core/generation-failure'
 import { judgeSlotRelease, type ReleaseReason } from './source-slot-release'
 import { SUPPLY_JIT_CONTRACT } from './supply-intent'
+import {
+  isSupplyCostRecoveryTagged, supplyCostRecoveryRequestMetadataEligible,
+  supplyCostRequestMetadataEligible, usesSupplyCostEnvelope,
+} from './supply-cost-envelope'
 
 // ─────────────────────────────────────────────────────────
 // 🔴 대기 행 결말
@@ -131,7 +136,7 @@ export function pipelineRunOfLedger(ledgerRunId: string): string | null {
 }
 
 export type CostAttribution = {
-  /** 🔴 현재 JIT 계약(`supply-jit-v1`) 정산 합계 — 결과당 단가의 분자는 이것 하나다 */
+  /** 🔴 해당 날짜의 현재 JIT 계약 정산 합계 — 결과당 단가의 분자는 이것 하나다 */
   totalUsd: number
   /** 원천 해시가 없는 현재 계약 정산 — 🔴 0 이 아니면 결과당 단가를 내지 않는다 */
   unlinkedUsd: number
@@ -154,8 +159,13 @@ export type CostAttribution = {
   settledRequests: number
   /** 이 cohort 에 남은 usageUnknown 요청 수 — 장부 상태는 그대로 유지한다 */
   usageUnknownRequests: number
-  /** trial 위험 계산에 쓸 수 없는 열린 요청 수(예약 중 · 잘못된 회차/원천 · 양수 예약 없음) */
-  trialIneligibleOpenRequests: number
+  /** 제한 복구는 자연 정산 표본에서 분리하지만 비용 위험·결과당 비용에는 포함한다. */
+  recoverySettledRequests: number
+  recoveryUsageUnknownRequests: number
+  /** 실제 정산액이 예약액을 넘은 현재 계약 요청 수 */
+  trialOverrunRequests: number
+  /** trial 위험 계산에 쓸 수 없는 요청 수(계약·가격판·원천·회차·예약·예산 provenance 불완전) */
+  trialIneligibleRequests: number
   /**
    * 🔴 **제한 trial 위험 단가** — 정산액 + usageUnknown 예약액을 확인된 결과로 나눈 관측 envelope.
    * 실제 비용도 상한도 아니며 정산 단가를 대신하지 않는다. 다음 단계 trial 허용 여부에만 쓴다.
@@ -175,6 +185,12 @@ export type CostAttribution = {
   wasteUsd: number | null
   /** 🔴 READY 가 되지 못한 원천(판정 HOLD · 생성 실패 · 재시도)에 쓴 돈 — 연결이 완전할 때만 */
   noReadyUsd: number | null
+  /**
+   * 🔴 **noReady 를 장부 단계(`LedgerEntry.stage`)로 나눈 값 — 보고 전용** (2026-11-13 · 진단).
+   *    장부가 이미 적은 칸만 쓴다(추정 귀속 0). 원천 종류·막은 gate 는 장부에 없다 — 여기서 만들지 않는다.
+   *    합은 `noReadyUsd` 와 같다. 연결이 완전하지 않으면 `null`. 판정(단가·envelope)은 이 칸을 읽지 않는다.
+   */
+  noReadyByStage: Readonly<Partial<Record<LedgerStage, number>>> | null
 }
 
 /**
@@ -187,6 +203,90 @@ export type CostAttribution = {
  *    장부를 못 읽었으면 `null`. 해시 없는 요청 · 끝나지 않은 요청이 있으면 결과당 단가는 `null` 이다 —
  *    🔴 raw 단가(정산 ÷ 행 수)로 대신하지 않는다.
  */
+// ─────────────────────────────────────────────────────────
+// 🔴 **재선정 비용 귀속 — 원 opportunity · attempt · 원인** (2026-11-10 retry-authority-v7)
+//
+//   같은 통합 장부의 현행 칸만 쓴다 — `sourceKey`(원천 해시 · opportunity) · `runId`(→ 파이프라인 회차 · attempt) ·
+//   `settledUsd`. 원인은 그 회차 artifact 의 원인(`cause`)·재선정 처리(`retryClass`)를 붙인다. 새 schema · migration 0.
+//   🔴 proof · business 비용 계약(`costAttributionOf` · 공용 envelope)은 바꾸지 않는다 — 이것은 관측 view 하나다.
+//   🔴 품질·안전 HOLD 는 낭비로 세지 않는다. **확정 회피 비용**은 "선택 시점에 이미 같은 지문으로 결론(`terminal`)이
+//   난 원천을 재선정 자리에서 다시 산" 시도의 정산액뿐이다 — 지금 정본(`concludedSourceKeys`)이 그 선택을 막는다.
+// ─────────────────────────────────────────────────────────
+
+export type RetryAttempt = {
+  /** 파이프라인 회차 id(`YYYYMMDD-HHMMSS`) — 장부 `runId`(`<회차>-j` · `<회차>-d`)와 묶인다 */
+  runId: string
+  /** 원천 해시 — 장부 `sourceKey` 와 같은 값 */
+  sourceKey: string
+  /** 선택 자리 — 신규(처음 사는 원천) · 재선정 */
+  lane: 'fresh' | 'retry'
+  /** 선택 시점 지난 결과의 처리 — 없으면 `none`, 창 밖이거나 못 읽었으면 `unknown` */
+  priorRetryClass: RetryClass | 'none' | 'unknown'
+  /** 이번 시도의 원인(완주면 `null`) · 처리 */
+  cause: string | null
+  retryClass: RetryClass | null
+  /** 이번 시도가 채택(AUTO_ADOPT)으로 끝났는가 — 채택된 재구매는 낭비가 아니라 v7 이 포기하는 수율이다 */
+  adopted: boolean
+}
+
+export type RetryCostAttribution = {
+  totalUsd: number
+  /** 시도와 짝이 없는 정산 — 0 이 아니면 귀속이 불완전하다 */
+  unlinkedUsd: number
+  /** 정산이 없는 요청 수(예약 · 사용량 미상) — 금액에 넣지 않는다 */
+  openRequests: number
+  byLane: Record<'fresh' | 'retry', number>
+  byCause: Record<string, number>
+  byRetryClass: Record<string, number>
+  /** 🔴 같은 지문 결론(`terminal`)을 재선정 자리에서 다시 사서 **채택 없이** 끝난 시도의 정산 합 — v7 이 막는 낭비 */
+  confirmedAvoidableUsd: number
+  confirmedAvoidableAttempts: number
+  /** 🔴 같은 지문 결론을 다시 사서 **채택된** 시도 — 낭비가 아니다. v7 이 이 채택을 포기한다(수율 위험 · 따로 보고) */
+  reselectedAdoptedUsd: number
+  reselectedAdoptedAttempts: number
+}
+
+export function retryCostAttributionOf(i: {
+  entries: readonly LedgerEntry[] | null
+  attempts: readonly RetryAttempt[]
+}): RetryCostAttribution | null {
+  if (i.entries === null) return null
+  const key = (run: string, src: string): string => `${run}\u0000${src}`
+  const byKey = new Map(i.attempts.map((a) => [key(a.runId, a.sourceKey), a]))
+  const out: RetryCostAttribution = {
+    totalUsd: 0, unlinkedUsd: 0, openRequests: 0, byLane: { fresh: 0, retry: 0 },
+    byCause: {}, byRetryClass: {}, confirmedAvoidableUsd: 0, confirmedAvoidableAttempts: 0,
+    reselectedAdoptedUsd: 0, reselectedAdoptedAttempts: 0,
+  }
+  const avoidable = new Set<string>()
+  const adoptedSet = new Set<string>()
+  for (const e of i.entries) {
+    if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
+    if (e.status !== 'settled' || e.settledUsd === null) { out.openRequests += 1; continue }
+    out.totalUsd += e.settledUsd
+    const run = pipelineRunOfLedger(e.runId)
+    const a = run === null || typeof e.sourceKey !== 'string' ? undefined : byKey.get(key(run, e.sourceKey))
+    if (a === undefined) { out.unlinkedUsd += e.settledUsd; continue }
+    out.byLane[a.lane] += e.settledUsd
+    const c = a.cause ?? 'complete'
+    out.byCause[c] = (out.byCause[c] ?? 0) + e.settledUsd
+    const rc = a.retryClass ?? 'unknown'
+    out.byRetryClass[rc] = (out.byRetryClass[rc] ?? 0) + e.settledUsd
+    if (a.lane === 'retry' && a.priorRetryClass === 'terminal') {
+      if (a.adopted) {
+        out.reselectedAdoptedUsd += e.settledUsd
+        adoptedSet.add(key(a.runId, a.sourceKey))
+      } else {
+        out.confirmedAvoidableUsd += e.settledUsd
+        avoidable.add(key(a.runId, a.sourceKey))
+      }
+    }
+  }
+  out.confirmedAvoidableAttempts = avoidable.size
+  out.reselectedAdoptedAttempts = adoptedSet.size
+  return out
+}
+
 export function costAttributionOf(i: {
   entries: readonly LedgerEntry[] | null
   fateByKey: ReadonlyMap<string, CostFate>
@@ -208,42 +308,117 @@ export function costAttributionOf(i: {
   let otherCohort = 0
   let settledRequests = 0
   let usageUnknownRequests = 0
-  let trialIneligibleOpenRequests = 0
+  let recoverySettledRequests = 0
+  let recoveryUsageUnknownRequests = 0
+  let trialOverrunRequests = 0
+  let trialIneligibleRequests = 0
+  const noReadyStage: Partial<Record<LedgerStage, number>> = {}
   for (const e of i.entries) {
-    if (e.stage === 'countTokens' || e.status === 'blocked') continue
-    const current = e.supplyContract === SUPPLY_JIT_CONTRACT
+    if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
+    const started = new Date(e.startedAt)
+    const startedDate = Number.isFinite(started.getTime()) ? ledgerDateOf(started) : null
+    const strictMetadata = startedDate !== null && usesSupplyCostEnvelope(startedDate)
+    const metadataEligible = !strictMetadata
+      || (startedDate !== null && supplyCostRequestMetadataEligible(e, startedDate))
+    const recoveryTagged = strictMetadata && isSupplyCostRecoveryTagged(e.runTokenShadow)
+    const recoveryEligible = strictMetadata && startedDate !== null
+      && supplyCostRecoveryRequestMetadataEligible(e, startedDate)
+    // 시행일 이후는 날짜 계약 창이 권위다. 현재 상수로 과거 판을 다시 읽지 않는다.
+    const current = strictMetadata
+      ? ((!recoveryTagged && metadataEligible) || recoveryEligible)
+      : e.supplyContract === SUPPLY_JIT_CONTRACT
     const key = typeof e.sourceKey === 'string' && e.sourceKey !== '' ? e.sourceKey : null
+    const run = pipelineRunOfLedger(e.runId)
+    const belongsToCohort = run === null || i.cohortRuns.has(run)
+    const manuallyResolved = e.resolvedBy !== null && e.resolvedBy !== undefined
+    /**
+     * 예약 초과는 후보 귀속·metadata보다 먼저 보되, 이 preflight가 판정하는 cohort에만
+     * 귀속한다. 다른 회차의 전역 초과는 당일 whole-day 비용 브레이크가 맡는다. 둘을
+     * 섞으면 다음 날 파일에 함께 든 무관한 회차 하나가 목표 cohort를 거짓 차단한다.
+     * run을 읽지 못한 행은 이 cohort가 아니라고 증명할 수 없으므로 보수적으로 포함한다.
+     */
+    const overranReservation = strictMetadata
+      && e.status === 'settled'
+      && e.settledUsd !== null
+      && e.reservedUsd !== null
+      && Number.isFinite(e.reservedUsd)
+      && e.reservedUsd > 0
+      && e.settledUsd > e.reservedUsd
+    if (overranReservation && belongsToCohort) trialOverrunRequests += 1
+    // 사람이 제공사 사용량과 대조해 마감한 행은 whole-day 지출에는 남지만 자연 표본은 아니다.
+    // 행 날짜가 시행일 전이어도 대상 cohort에 속하면 지우거나 legacy로 완화하지 않고 UNKNOWN으로 닫는다.
+    if (manuallyResolved && belongsToCohort) {
+      trialIneligibleRequests += 1
+      if (e.status === 'settled' && e.settledUsd !== null) {
+        total += e.settledUsd
+        unlinked += e.settledUsd
+      } else {
+        open += 1
+        if (e.status === 'usageUnknown') {
+          if (recoveryEligible) recoveryUsageUnknownRequests += 1
+          else usageUnknownRequests += 1
+        }
+        if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0) {
+          openReserved += e.reservedUsd
+        }
+      }
+      continue
+    }
     if (e.status !== 'settled' || e.settledUsd === null) {
       // 🔴 미정산도 같은 cohort 회차 것만 이 cohort 를 막는다 — 다른 회차 · legacy 는 보고만
-      const run = current ? pipelineRunOfLedger(e.runId) : null
-      if (!current) { legacyOpen += 1; continue }
+      if (!current) {
+        if (strictMetadata && belongsToCohort) {
+          open += 1
+          trialIneligibleRequests += 1
+          if (e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0) openReserved += e.reservedUsd
+        } else legacyOpen += 1
+        continue
+      }
       if (run !== null && !i.cohortRuns.has(run)) continue
       open += 1
       // 🔴 추정 예약액은 보고만 한다 — 실제 비용도 그 한계도 아니다(정산이 예약을 넘을 수 있다). 분자에 넣지 않는다
       const positiveReservation = e.reservedUsd !== null && Number.isFinite(e.reservedUsd) && e.reservedUsd > 0
       if (positiveReservation && e.reservedUsd !== null) openReserved += e.reservedUsd
-      if (e.status === 'usageUnknown') usageUnknownRequests += 1
-      if (e.status !== 'usageUnknown' || run === null || key === null || !positiveReservation) trialIneligibleOpenRequests += 1
+      if (e.status === 'usageUnknown') {
+        if (recoveryEligible) recoveryUsageUnknownRequests += 1
+        else usageUnknownRequests += 1
+      }
+      if (e.status !== 'usageUnknown' || run === null || key === null || !positiveReservation) trialIneligibleRequests += 1
       continue
     }
-    if (!current) { legacy += e.settledUsd; continue }
-    const run = pipelineRunOfLedger(e.runId)
+    if (!current) {
+      if (strictMetadata && belongsToCohort) {
+        total += e.settledUsd
+        unlinked += e.settledUsd
+        trialIneligibleRequests += 1
+      } else legacy += e.settledUsd
+      continue
+    }
     if (run === null) { unlinked += e.settledUsd; continue }
     if (!i.cohortRuns.has(run)) { otherCohort += e.settledUsd; continue }
-    settledRequests += 1
+    if (recoveryEligible) recoverySettledRequests += 1
+    else settledRequests += 1
     total += e.settledUsd
     if (key === null) { unlinked += e.settledUsd; continue }
-    byFate[i.fateByKey.get(key) ?? 'noReady'] += e.settledUsd
+    if (overranReservation) {
+      unlinked += e.settledUsd
+      continue
+    }
+    const fate = i.fateByKey.get(key) ?? 'noReady'
+    byFate[fate] += e.settledUsd
+    if (fate === 'noReady') noReadyStage[e.stage] = (noReadyStage[e.stage] ?? 0) + e.settledUsd
   }
   const complete = unlinked === 0 && open === 0
   const results = i.counts.published + i.counts.scheduled
-  const trialRisk = unlinked === 0 && open > 0 && trialIneligibleOpenRequests === 0
+  const trialRisk = unlinked === 0 && open > 0 && trialIneligibleRequests === 0
     && total > 0 && results > 0
     ? (total + openReserved) / results
     : null
   return {
     totalUsd: total, unlinkedUsd: unlinked, legacyUsd: legacy, openRequests: open, openReservedUsd: openReserved,
-    legacyOpenRequests: legacyOpen, settledRequests, usageUnknownRequests, trialIneligibleOpenRequests,
+    legacyOpenRequests: legacyOpen, settledRequests, usageUnknownRequests,
+    recoverySettledRequests, recoveryUsageUnknownRequests,
+    trialOverrunRequests, trialIneligibleRequests,
     trialRiskUsdPerSlotValidResult: trialRisk, otherCohortUsd: otherCohort, byFate,
     // 🔴 정산 0 으로 결과가 났다는 것은 지출이 장부에 없다는 뜻이다 — 0 단가를 근거로 쓰지 않는다
     usdPerSlotValidResult: complete && total > 0 && results > 0 ? total / results : null,
@@ -251,5 +426,6 @@ export function costAttributionOf(i: {
       ? total / i.counts.published : null,
     wasteUsd: complete ? byFate.lost : null,
     noReadyUsd: complete ? byFate.noReady : null,
+    noReadyByStage: complete ? noReadyStage : null,
   }
 }

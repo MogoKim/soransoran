@@ -127,7 +127,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0,
-    note: 'launchd -multi 5회/day (07:30·10:30·13:30·16:30·21:30 KST) · 회차당 상세 11건'
+    note: 'launchd -multi 5회/day (00:30·02:30·05:30·13:30·21:30 KST) · 회차당 상세 11건'
       + ' · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
   {
@@ -142,7 +142,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0,
-    note: 'launchd -multi 4회/day (09:30·11:30·15:30·20:30 KST) · 회차당 상세 16건'
+    note: 'launchd -multi 5회/day (01:30·03:30·04:30·11:30·20:30 KST) · 회차당 상세 16건'
       + ' · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
 ]
@@ -191,7 +191,7 @@ export type Phase = 'start' | 'stable'
 export const RUNS_PER_DAY: Readonly<Record<SourceId, Record<Phase, number>>> = {
   '82cook': { start: 5, stable: 5 },
   'navercafe:remonterrace': { start: 5, stable: 5 },
-  'navercafe:wgang': { start: 4, stable: 4 },
+  'navercafe:wgang': { start: 5, stable: 5 },
 }
 
 /**
@@ -282,14 +282,15 @@ export const SOURCE_MINUTE: Readonly<Record<SourceId, number>> = {
 const at = (hour: number, minute: number): Slot => ({ hour, minute })
 
 /**
- * 🔴 **운영 일정 정본 — 전부 KST** (2026-09-11 확정).
+ * 🔴 **운영 일정 정본 — 전부 KST** (2026-10-31 D20 target-date 정렬).
  *
- *    앞선 판은 `24 / 회차` 로 하루에 **고르게** 폈다. 그러면 02:50 · 04:20 처럼
- *    **노트북이 꺼져 있는 새벽**에 슬롯이 놓인다 — 예약은 있는데 회차는 돌지 않는다.
- *    실제로 그 구간의 회차가 통째로 비었다.
+ *    🔴 D20 판정은 07:00 에 그 날짜의 재료를 본다. 2026-10-31에는 수집이 전부 07:30 뒤라
+ *    06:15 공급이 전날 재고만 처리했고, 자연 원천 기회 14/20으로 멈췄다. 따라서 네이버 두
+ *    수집원의 각 3회는 06:15 공급 전에 둔다. 판정 기준·수율을 낮추지 않고 입력 시각을 맞춘다.
  *
- *    🔴 그래서 **사람이 노트북을 켜 두는 시간(07:00~22:30)** 안에 배치한다.
- *       균등하지 않다. 균등함은 목표가 아니었다 — 도는 것이 목표다.
+ *    🔴 새벽 슬롯은 **상시 호스트가 AC 전원 · 로그인 · 덮개 열림 · keep-awake**를 만족할 때만
+ *    운영 능력이다. 배터리·잠자기 상태를 능력으로 세지 않는다. 이 전제가 깨지면 controller는
+ *    그대로 fail-closed 하고 D20을 열지 않는다.
  *
  *    🔴 **분(minute)을 레인마다 다르게 준다.** 같은 분에 겹치면 한 세션이 두 곳을
  *       연속으로 긁는 모양이 되고, 차단은 그 모양을 본다.
@@ -304,12 +305,12 @@ export const SLOTS: Readonly<Record<SourceId, Readonly<Record<Phase, readonly Sl
     stable: [at(7, 0), at(10, 0), at(13, 0), at(16, 0), at(19, 0)],
   },
   'navercafe:remonterrace': {
-    start: [at(7, 30), at(10, 30), at(13, 30), at(16, 30), at(21, 30)],
-    stable: [at(7, 30), at(10, 30), at(13, 30), at(16, 30), at(21, 30)],
+    start: [at(0, 30), at(2, 30), at(5, 30), at(13, 30), at(21, 30)],
+    stable: [at(0, 30), at(2, 30), at(5, 30), at(13, 30), at(21, 30)],
   },
   'navercafe:wgang': {
-    start: [at(9, 30), at(11, 30), at(15, 30), at(20, 30)],
-    stable: [at(9, 30), at(11, 30), at(15, 30), at(20, 30)],
+    start: [at(1, 30), at(3, 30), at(4, 30), at(11, 30), at(20, 30)],
+    stable: [at(1, 30), at(3, 30), at(4, 30), at(11, 30), at(20, 30)],
   },
 }
 

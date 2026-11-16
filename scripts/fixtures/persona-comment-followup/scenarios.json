@@ -137,7 +137,7 @@
       }
     },
     {
-      "name": "Persona 5건이 이미 있다 → STOP",
+      "name": "Persona 10건이 이미 있다 → STOP",
       "nowMin": 600,
       "post": {
         "postReaction": "question"
@@ -185,11 +185,56 @@
           "persona": "pF",
           "reaction": "question",
           "provenance": "followup"
+        },
+        {
+          "id": "c6",
+          "atMin": 360,
+          "parent": "c5",
+          "origin": "PERSONA",
+          "persona": "pG",
+          "reaction": "experience",
+          "provenance": "followup"
+        },
+        {
+          "id": "c7",
+          "atMin": 400,
+          "parent": "c6",
+          "origin": "PERSONA",
+          "persona": "pH",
+          "reaction": "question",
+          "provenance": "followup"
+        },
+        {
+          "id": "c8",
+          "atMin": 440,
+          "parent": "c7",
+          "origin": "PERSONA",
+          "persona": "pI",
+          "reaction": "experience",
+          "provenance": "followup"
+        },
+        {
+          "id": "c9",
+          "atMin": 480,
+          "parent": "c8",
+          "origin": "PERSONA",
+          "persona": "pJ",
+          "reaction": "other",
+          "provenance": "followup"
+        },
+        {
+          "id": "c10",
+          "atMin": 520,
+          "parent": "c3",
+          "origin": "PERSONA",
+          "persona": "pK",
+          "reaction": "other",
+          "provenance": "followup"
         }
       ],
       "expect": {
         "verdict": "STOP",
-        "reasonIncludes": "5건 상한"
+        "reasonIncludes": "10건 상한"
       }
     },
     {
@@ -425,7 +470,7 @@
       }
     },
     {
-      "name": "사슬 길이 3 끝의 질문에는 답하지 않는다(깊이 상한)",
+      "name": "사슬 길이 6 끝의 질문에는 답하지 않는다(다음 답글이 깊이 상한 초과)",
       "nowMin": 600,
       "post": {
         "postReaction": "other"
@@ -454,6 +499,33 @@
           "parent": "c2",
           "origin": "PERSONA",
           "persona": "pD",
+          "reaction": "question",
+          "provenance": "followup"
+        },
+        {
+          "id": "c4",
+          "atMin": 280,
+          "parent": "c3",
+          "origin": "PERSONA",
+          "persona": "pE",
+          "reaction": "experience",
+          "provenance": "followup"
+        },
+        {
+          "id": "c5",
+          "atMin": 360,
+          "parent": "c4",
+          "origin": "PERSONA",
+          "persona": "pF",
+          "reaction": "empathy",
+          "provenance": "followup"
+        },
+        {
+          "id": "c6",
+          "atMin": 440,
+          "parent": "c5",
+          "origin": "PERSONA",
+          "persona": "pG",
           "reaction": "question",
           "provenance": "followup"
         }

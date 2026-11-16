@@ -11,8 +11,8 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 import {
-  KEEP_AWAKE_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL, OPS_LOOP_INSTALL_STEPS,
-  renderKeepAwakePlist, renderRunnerRecoverPlist, renderStageControllerPlist,
+  KEEP_AWAKE_LABEL, OPS_SHADOW_OBSERVER_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL, OPS_LOOP_INSTALL_STEPS,
+  renderKeepAwakePlist, renderOpsShadowObserverPlist, renderRunnerRecoverPlist, renderStageControllerPlist,
 } from './lib/ops-loop-templates'
 
 const out = process.argv.slice(2).find((a) => a.startsWith('--out='))?.slice(6)
@@ -30,6 +30,7 @@ const files: [string, string][] = [
   [`${STAGE_CONTROLLER_LABEL}.plist`, renderStageControllerPlist(input)],
   [`${RUNNER_RECOVER_LABEL}.plist`, renderRunnerRecoverPlist(input)],
   [`${KEEP_AWAKE_LABEL}.plist`, renderKeepAwakePlist({ logDir: input.logDir })],
+  [`${OPS_SHADOW_OBSERVER_LABEL}.plist`, renderOpsShadowObserverPlist(input)],
 ]
 for (const [name, xml] of files) {
   writeFileSync(join(dir, name), xml)

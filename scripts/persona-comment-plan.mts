@@ -95,7 +95,7 @@ console.log(`  ratio     ${ratio.reason}`)
 // ── ② 오늘 발행 수 · kill switch ──
 const kstDayStart = new Date(Math.floor((nowMs + 9 * 3_600_000) / 86_400_000) * 86_400_000 - 9 * 3_600_000)
 const publishedToday = await prisma.comment.count({
-  where: { isDeleted: false, commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
+  where: { commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
 }).catch(() => null)
 const killSwitchOff = await (async (): Promise<boolean | null> => {
   try {

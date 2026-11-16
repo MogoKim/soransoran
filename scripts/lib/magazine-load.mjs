@@ -10,7 +10,9 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runInNewContext } from 'node:vm'
+// 🔴 리터럴 판독의 정의는 magazine-literal.mjs 한 곳(S1 C3) — 기존 import 경로를 위해 같은 이름으로 다시 내보낸다.
+//    그 모듈은 import 시점 부작용이 0 이다. 아래 drafts 주입 차단(exit 2)은 그대로 이 파일 적재 순간에 돈다.
+import { sliceLiteral, evalLiteral } from './magazine-literal.mjs'
 
 /**
  * repo 루트는 **이 파일의 위치**로 정한다. process.cwd() 를 쓰지 않는다.
@@ -71,52 +73,7 @@ if (!draftsResolved.ok) {
 }
 export const DRAFTS_DIR = draftsResolved.dir
 
-/**
- * 객체·배열 리터럴을 문자열에서 통째로 떼어낸다.
- * 문자열 안의 괄호와 주석 안의 괄호를 세지 않는다 — 그래서 정규식이 아니라 스캐너다.
- */
-export function sliceLiteral(source, fromIndex, open, close) {
-  const start = source.indexOf(open, fromIndex)
-  if (start === -1) return null
-
-  let depth = 0
-  let quote = null
-  let i = start
-
-  while (i < source.length) {
-    const ch = source[i]
-    const next = source[i + 1]
-
-    if (quote) {
-      if (ch === '\\') i += 1
-      else if (ch === quote) quote = null
-    } else if (ch === "'" || ch === '"' || ch === '`') {
-      quote = ch
-    } else if (ch === '/' && next === '/') {
-      i = source.indexOf('\n', i)
-      if (i === -1) break
-    } else if (ch === '/' && next === '*') {
-      i = source.indexOf('*/', i + 2) + 1
-      if (i === 0) break
-    } else if (ch === open) {
-      depth += 1
-    } else if (ch === close) {
-      depth -= 1
-      if (depth === 0) return source.slice(start, i + 1)
-    }
-    i += 1
-  }
-  return null
-}
-
-/** 격리된 컨텍스트에서 평가한다. 전역을 주지 않아 파일이 코드를 실행할 수 없다. */
-export function evalLiteral(literal, label) {
-  try {
-    return runInNewContext(`(${literal})`, Object.create(null), { timeout: 1000 })
-  } catch (err) {
-    throw new Error(`${label} 파싱 실패: ${err.message}`)
-  }
-}
+export { sliceLiteral, evalLiteral }
 
 /**
  * articles.ts 전량. 공개·예약(SCHEDULED)·차단(BLOCKED)·초안(DRAFT)을 **가리지 않는다**.

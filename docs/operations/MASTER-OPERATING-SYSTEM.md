@@ -31,7 +31,7 @@
 > | 단계마다 하루 목표 편수를 매일 정확히 채우던 운영 · 슬롯 합 = 목표를 현재 계약처럼 읽히는 슬롯 계약 | §1.1 평상시 `0..Dn` · 증명일 정확 N |
 > | 공개 단계보다 큰 준비 단계의 재고·여력을 미리 만드는 공급 | §3 가까운 수요 지평 |
 > | 고정 시간표만 실행 주인이던 구조 | §3.3 event-assisted · 시간표 fallback |
-> | §9.5-g 글당 Persona 댓글 1~5건 · 하루 500건 부트스트랩 계약 | §5 첫 댓글 증명 + 선택적 대화 · 자동 provenance |
+> | §9.5-g의 역사적 글당 1~5 계약 | §5 첫 댓글 1 + 선택적 대화 최대 9 · 글당 구조 상한 10 · 자동 provenance |
 >
 > 🔴 **여기에 SHA·PR 번호·"미커밋 변경" 같은 순간값을 적지 않는다.**
 > 그런 문구는 merge 되는 순간 낡고, 다음 사람은 낡은 전제에서 시작한다.
@@ -382,7 +382,7 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 | freshness hold 단일 계약 (§8.2) | ✅ | ✅ (d1 경로에서 동작) | hold 발생 사례 없음 |
 | 수집 보호장치 — 예산·backoff·breaker (§8.3) | ✅ 3 source 전부 | 🔴 아직 한 번도 돌지 않음(상태 파일 없음) | 🔴 미검증 |
 | Persona Pool 25장 · cohort 24명 | ✅ 카드·도구 | ✅ cohort 전원 활성화 완료 · 현재 인원은 §6.3 (P09 정본 제외 유지) | ✅ persona별 AuditLog 검증 |
-| Naver 다회 슬롯 템플릿 | ✅ 템플릿 | 🟢 등록됨 (remonterrace 5회 · wgang 4회) | 🟢 |
+| Naver 다회 슬롯 템플릿 | ✅ 템플릿 | D20 target-date 일정 (remonterrace 5회 · wgang 5회) | 배포·reload 후 운영 |
 
 🔴 **이 표에도 변동하는 운영 숫자를 적지 않는다.** 인원·재고·발행량은 §6.3 한 곳에서만 관리한다 —
 여기와 §6.3 두 곳에 적으면 반드시 한쪽이 낡는다(2026-09-09 실제 발생).
@@ -405,11 +405,11 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 | `SORAN_CAPACITY_STAGE` | 🔴 **Variable 없음** → `d1` fallback (저장된 d1 이 아니다 · 2026-09-12 `gh variable list` 0건) |
 | `SORAN_RELEASE_STAGE` | 🔴 **Variable 없음** → `d1` fallback (같음) |
 | 실제 공개 발행 | **1건/day** — d1 의 슬롯은 `09:30 KST` 하나뿐이다 |
-| Naver remonterrace | launchd **5회/day** 07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST — 🟢 등록·loaded |
-| Naver wgang | launchd **4회/day** 09:30 · 11:30 · 15:30 · 20:30 KST — 🟢 등록·loaded |
+| Naver remonterrace | launchd **5회/day** 00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST — D20 target-date 일정 |
+| Naver wgang | launchd **5회/day** 01:30 · 03:30 · 04:30 · 11:30 · 20:30 KST — D20 target-date 일정 |
 | 82cook 목록 | launchd **5회/day** 07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST — 🟢 등록·loaded |
 | 82cook 본문 | launchd **5회/day** 07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST (목록 40분 뒤) — 🟢 등록·loaded |
-| 공급 처리 | launchd **6회/day** 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST — 🟢 등록·loaded |
+| 공급 처리 | launchd **7회/day** 06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST — 🟢 등록·loaded |
 
 | 항목 | 코드 계약 (PR #504 반영 시) |
 |---|---|
@@ -587,8 +587,8 @@ npm run publish:trigger-preflight   # 다르면 exit 1 → local runner 등록�
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
-| 설정된 상세 상한 (configured ceiling) | **204건/day** — 82cook thin 85 · remonterrace 55 · wgang 64 (🔴 raw 목록 job 은 상세를 열지 않는다) |
-| 근거 보정 계획 추정치 | 187건/day — 위 상한 × 실측 성공률. 🔴 **관측된 생산량이 아니다** — 계획용 추정치다 |
+| 설정된 상세 상한 (configured ceiling) | **220건/day** — 82cook thin 85 · remonterrace 55 · wgang 80 (🔴 raw 목록 job 은 상세를 열지 않는다) |
+| 근거 보정 계획 추정치 | 203건/day — 위 상한 × 실측 성공률. 🔴 **관측된 생산량이 아니다** — 계획용 추정치다 |
 | 🔴 수집 능력 (observed) | **0건/day** — 등록 이후 성공 회차 0 (2026-09-10 복구 전) · 복구 후 재측정 대기 |
 
 `capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**
@@ -1019,24 +1019,28 @@ Variables(`SORAN_82COOK_THIN_DETAIL_ENABLED`·`SORAN_SUPPLY_PROCESS_ENABLED`) �
 ⑤ supply-process                         처리
 ```
 
-### 🔴 확정 운영 일정 (2026-09-11 · 전부 KST) — 📜 당시 일정
+### 현재 구현 참고 (2026-10-31 · 비권위) — 일정 정본은 `collect-schedule.ts`와 CURRENT
 
 ```
 82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
 82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
-remonterrace     07:30 10:30 13:30 16:30 21:30        5회
-wgang            09:30 11:30 15:30 20:30              4회
-supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 비운다
+remonterrace     00:30 02:30 05:30 13:30 21:30        5회
+wgang            01:30 03:30 04:30 11:30 20:30        5회
+supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 수집 + 수집 뒤 drain
 ```
 
-🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 `24 / 회차` 로 하루에 고르게 폈고,
+🔴 **2026-10-31부터 07:00 controller 전에 target-date 재료를 만든다.** 새벽 수집은
+00:30~05:30 → 06:15 공급 → 07:00 판정 순서이며, 상시 호스트의 AC 전원·로그인·덮개 열림·
+keep-awake가 필수다. 이 전제가 깨진 슬롯은 능력이 아니고 controller는 fail-closed한다.
+
+📜 앞선 판은 `24 / 회차` 로 하루에 고르게 폈고,
 그래서 02:50 · 04:20 · 01:10 처럼 **기계가 꺼져 있는 시각**에 슬롯이 있었다 —
 예약은 있는데 회차는 돌지 않는다. **돌지 않는 슬롯은 능력이 아니다.**
 균등함은 목표가 아니었다. 도는 것이 목표다.
 
 🔴 **게시판·페이지는 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
-바뀐 것은 **언제 도는가** 하나다. 회차가 늘면서 하루 상한(150) 안에서 remonterrace 의
-회차당 상세만 12 → 11 로 재분배됐다 — 기존 산식(`planCafeRun`)의 자동 결과다.
+레몬테라스는 5회·145/150 요청을 유지하고, 우아한갱년기는 5회·110/150 요청으로 늘렸다.
+상한과 회차당 상세 몫은 기존 `planCafeRun` 산식이 계산한다.
 
 🔴 **82cook 요청량**: 목록 job 4×5 = 20 + 본문 job 18×5 = 90 → **110/day** (상한 400, 여유 290).
    robots.txt 요청도 회차마다 1건씩 센다.
@@ -1503,7 +1507,7 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 
 | 축 | 수 | 뜻 |
 |---|---|---|
-| production 정본 universe | **40명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) — wave6-d20-canary(P34~P43) 코드 준비 포함 · 운영 active 는 wave6 적재·활성화 전까지 30명 |
+| production 정본 universe | **60명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) — 기존 40명과 D30 복구 cohort(P44~P63) 코드 자산을 포함한다. 이 설계 universe는 운영 active 수가 아니다. 운영 DB는 2026-11-14 05:35 관측 기준 contract-valid 40 · active 40이며, 새 20명은 비증명일의 원자적 create·seed·activate와 재검증 뒤에만 운영 용량이 된다 |
 | 측정 기준 universe | **24명** | 아래 bundle · 입력 · shadow 수는 2026-09-10 회차 당시 24명 기준 측정이다 — wave5 6명은 아직 재지 않았다 |
 | **reference bundle 성립** | **18명** | P01~P08 P10~P19 · 한 화자 3~8건 |
 | bundle 미성립 | **6명** | P20 P21 P22 P23 P24 P25 — 화자 부족 |
@@ -1540,6 +1544,9 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 **개인정보 외부 전송 · 중복 발행 · 승인되지 않은 stage · DB 경쟁 · kill switch.**
 
 #### 2026-09-11 당시 단기 계약
+
+> 📜 당시 기록이다. 아래 "한 글의 Persona 댓글 1~5건" 은 **superseded** — 지금 글당 상한은
+> [`2026-09-21-d100-goal-canon.md`](./2026-09-21-d100-goal-canon.md) §5 합계 `1..10` 이고, 그 대체 기록은 같은 문서 §11.2 다.
 
 | 항목 | 값 | 코드 정본 |
 |---|---|---|

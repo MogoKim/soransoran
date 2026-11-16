@@ -40,7 +40,7 @@ import {
   LOCK_STALE_REPORT_MS, LOCK_WAIT_MS, LedgerLockError,
   addOpenReservation, appendLedgerLine, clearOpenReservation, ledgerPathOf, lockPathOf,
   openReservationsPathOf, pidAlive, readLedgerDay, readLedgerRun, readOpenReservations,
-  readSettleHold, settleHoldPathOf, withLedgerLock, writeSettleHold,
+  readSettleHold, readSettleHoldAsOf, settleHoldPathOf, withLedgerLock, writeSettleHold,
 } from './lib/llm-ledger-store.mjs'
 import {
   BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SUPPLY_LEDGER_ISOLATION_MARK, SupplyLlmSession, limitsFromEnv,
@@ -57,6 +57,7 @@ import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, conservativeShareUsd,
 } from '../src/lib/supply-scheduled-reserve'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
+import { clearPriorDraftArtifacts } from './lib/fake-prior-artifacts.mjs'
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
 const stripComments = (src: string): string =>
@@ -501,6 +502,10 @@ console.log('\n⑥-c 정산 기록 실패 — 🔴 예약을 보존하고 그 �
     reservedUsd: 0.01, at: new Date().toISOString(), reason: '시험',
   })
   check('🔴 표식이 있으면 사유를 돌려준다', (readSettleHold(dir) ?? '').includes('정산을 장부에 적지 못한'))
+  check('🔴 과거 증거는 뒤에 생긴 hold로 소급 오염되지 않고, hold 당일·이후에는 계속 막힌다',
+    readSettleHoldAsOf(dir, '2026-09-16') === null
+    && (readSettleHoldAsOf(dir, '2026-09-17') ?? '').includes('R1')
+    && (readSettleHoldAsOf(dir, '2026-09-18') ?? '').includes('R1'))
   check('🔴 사유가 **푸는 방법**을 알려 준다 — 사람이 지워야 풀린다',
     (readSettleHold(dir) ?? '').includes(settleHoldPathOf(dir)))
   writeSettleHold(dir, {
@@ -512,6 +517,12 @@ console.log('\n⑥-c 정산 기록 실패 — 🔴 예약을 보존하고 그 �
   writeFileSync(settleHoldPathOf(dir), '{ 깨진', 'utf-8')
   check('🔴 표식을 읽지 못해도 **보류로 본다** — 모르면 멈춘다',
     (readSettleHold(dir) ?? '').includes('사람이 확인한다'))
+  check('🔴 깨진 표식은 날짜를 비교할 수 없으므로 과거 증거에서도 fail-closed 한다',
+    (readSettleHoldAsOf(dir, '2026-09-16') ?? '').includes('사람이 확인한다'))
+  writeFileSync(settleHoldPathOf(dir), 'null\n', 'utf-8')
+  check('🔴 JSON null 표식도 예외로 새지 않고 읽기 실패 보류로 닫힌다',
+    (readSettleHold(dir) ?? '').includes('사람이 확인한다')
+    && (readSettleHoldAsOf(dir, '2026-09-16') ?? '').includes('사람이 확인한다'))
   rmSync(settleHoldPathOf(dir), { force: true })
   check('🔴 사람이 지우면 풀린다', readSettleHold(dir) === null)
 
@@ -622,11 +633,13 @@ console.log('\n⑥-d 열린 예약 — 🔴 요청 **전에** 남고, 끝을 적
     const w = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
     const addAt = w.indexOf('this.io.addOpen(')
     const sendAt = w.indexOf('const res = await callProvider(')
-    const settleWriteAt = w.indexOf('settledUsd: settled.settledUsd')
-    const clearAt = w.indexOf('this.io.clearOpen(')
+    const terminalAt = w.indexOf('private writeTerminalAndClearOpen(')
+    const terminalWriteAt = w.indexOf('this.write(path, entry)', terminalAt)
+    const clearAt = w.indexOf('this.io.clearOpen(', terminalAt)
+    const clearCount = (w.match(/this\.io\.clearOpen\(/g) ?? []).length
     check('🔴 예약을 남긴 **뒤에** 요청을 보낸다', addAt !== -1 && sendAt !== -1 && addAt < sendAt)
-    check('🔴 끝을 장부에 적은 **뒤에** 예약을 지운다',
-      settleWriteAt !== -1 && clearAt !== -1 && settleWriteAt < clearAt)
+    check('🔴 끝을 장부에 적은 **뒤에** 예약을 지운다 — 모든 종결 출구는 공용 함수 하나다',
+      terminalAt !== -1 && terminalWriteAt > terminalAt && clearAt > terminalWriteAt && clearCount === 1)
     check('🔴 예약을 남기는 것도 잠금 안에서 한다',
       w.lastIndexOf('verdict = this.io.withLock') < addAt && addAt < w.indexOf('} catch (e) {', addAt))
   }
@@ -804,9 +817,17 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     }
     return out
   }
+  /**
+   * 🔴 **사례마다 지난 생성 결과를 비운다** (2026-11-11 retry-authority-v7 · PR #838 CI).
+   *    이 절의 사례는 모두 같은 원천(B1 · B9) · 같은 회차(R1)를 돈다. 앞 사례가 채택한 원천은 v7 에서 결론이라
+   *    뒤 사례가 `CONCLUDED` 로 provider 에 닿지 못하고, 장부 · 예산 판정(NO_BUDGET · NO_COUNT · DAILY_EXHAUSTED ·
+   *    SCHEDULED_RESERVE)이 기록되지 않는다 — 각 사례는 자기 비용 계약을 실제 fake provider 로 따로 재야 한다.
+   *    🔴 이어 보는 것은 **장부**뿐이다(`wipe: false` · ⓙ 재시작). 생성 결과를 이어 보는 사례는 이 절에 없다.
+   */
   const run = (budget: Record<string, string>, opts: { wipe?: boolean } = {}): Run => {
     writeFileSync(logPath, '', 'utf-8')
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    clearPriorDraftArtifacts(dd)
     if (opts.wipe !== false) wipeLedger()
     const r = spawnSync(
       join(process.cwd(), 'node_modules/.bin/tsx'),
@@ -1053,6 +1074,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
     }
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    clearPriorDraftArtifacts(dd)
     const both = [0, 1].map(() => spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), args, {
       cwd: root, encoding: 'utf-8', env,
     }))
@@ -1126,6 +1148,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
      */
     wipeLedger()
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    // 🔴 앞 12:20 정기 회차의 채택이 두 동시 회차를 `CONCLUDED` 로 막지 않게 — 동시성 판정은 실제 provider 도달이 전제다
+    clearPriorDraftArtifacts(dd)
     const spawnOne = (extra: Record<string, string>, runId: string, logFile: string): Promise<{ code: number | null; out: string }> =>
       new Promise((resolve) => {
         let out = ''
@@ -1323,6 +1347,23 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
   const open = readOpenReservations(dir)
   const openId = open.ok ? (open.list[0]?.attemptId ?? '') : ''
   check('🔴 [SF] 열린 예약이 남아 있다 — 사람이 대조할 대상이 보인다', openId !== '')
+  const resolvePath = ledgerPathOf(dir, ledgerDateOf(new Date()))
+  const beforeHumanResolve = readLedgerDay(resolvePath)
+  const unresolvedEntry = beforeHumanResolve.ok
+    ? beforeHumanResolve.entries.find((e) => e.attemptId === openId)
+    : undefined
+  if (unresolvedEntry !== undefined) {
+    appendLedgerLine(resolvePath, {
+      ...unresolvedEntry,
+      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2, budgetSource: 'env.local',
+      sourceKey: 'fixture-source-key', supplyContract: 'supply-jit-v2',
+      runKind: 'scheduled', runSlot: '2026-11-05 06:15',
+      runTokenShadow: {
+        ok: true, code: null, tokenId: 'fixture-token', trigger: 'scheduled', launchTrigger: 'scheduled',
+        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-11-05 06:15',
+      },
+    })
+  }
   const resolve = (args: readonly string[]): { code: number | null; out: string } => {
     const r = spawnSync(
       join(process.cwd(), 'node_modules/.bin/tsx'),
@@ -1344,6 +1385,18 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
     })())
   const done = resolve([`--attempt=${openId}`, '--confirmed-with-provider', '--actual-unknown'])
   check('🔴 [SF] 사람이 제공사와 대조했다고 밝히면 마감된다', done.code === 0)
+  check('🔴 [SF] 사람 마감은 원 요청의 계약·원천·예산·token provenance를 보존한다',
+    (() => {
+      const r = readLedgerDay(resolvePath)
+      if (!r.ok) return false
+      const e = r.entries.find((row) => row.attemptId === openId)
+      return e?.resolvedBy === 'human'
+        && e.budgetDailyUsd === 1.2 && e.budgetCeilingUsd === 1.2 && e.budgetCapUsd === 1.2
+        && e.budgetSource === 'env.local' && e.sourceKey === 'fixture-source-key'
+        && e.supplyContract === 'supply-jit-v2'
+        && e.runKind === 'scheduled' && e.runSlot === '2026-11-05 06:15'
+        && e.runTokenShadow?.tokenId === 'fixture-token'
+    })())
   check('🔴 [SF] 🔴 장부를 지우지 않았다 — 앞 줄이 그대로 있다',
     (() => {
       const raw = readFileSync(ledgerPathOf(dir, ledgerDateOf(new Date())), 'utf-8')

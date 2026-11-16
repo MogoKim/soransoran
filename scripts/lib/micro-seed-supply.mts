@@ -8,7 +8,8 @@
  * 🔴 **왜 이 파일이 따로 있나**
  *    "몇 건을 열어도 되는가" 와 "어떤 write 가 일어나는가" 는 규칙이지 절차가 아니다.
  *    스크립트 안에 두면 DB 를 붙이지 않고는 검증할 수 없다 — micro-seed-quality 와 같은 이유로
- *    DB · 파일 · 네트워크 없는 파일로 떼어 fixture 가 직접 부른다(import 는 의존 없는 순수 이름 모듈 `political-flags` 하나).
+ *    DB · 파일 · 네트워크 없는 파일로 떼어 fixture 가 직접 부른다(import 는 순수 모듈 `political-flags` 와
+ *    원천 순위 정본 `source-slot-release` 둘 — 둘 다 DB · 파일 · 네트워크 없음).
  *
  * 🔴 **두 레인은 상한이 다르다**
  *    Micro Seed 레인은 Sheet 승인 게이트를 통과해야 발행된다. 그 게이트는 사람이 읽는 화면이라
@@ -17,6 +18,7 @@
  *    Raw 적재는 배치로 연다. **같은 importer 지만 여는 문이 다르다.**
  */
 import { isPoliticalFigureBodyFlag, isPoliticalFigureTitleFlag } from '../../src/lib/political-flags'
+import { sortBySourceRank } from '../../src/lib/source-slot-release'
 
 // ─────────────────────────────────────────────────────────
 // sourceSite 계약 (PR-S2-b-1)
@@ -250,22 +252,6 @@ const postedMsOf = (r: AutoFetchInput): number | null => {
   return Number.isFinite(ms) ? ms : null
 }
 
-/**
- * 🔴 **신선도 1순위** (2026-10-19 창업자 결정 · canon §2.3) — 자격 gate 뒤 공급 순위는 실제 게시 시각(최신)이다.
- *
- *    ① 게시 시각 하한이 늦은 것(known 최신) → ② known > unknown → ③ 결정적 열쇠(id localeCompare).
- *    🔴 **숫자 article id 를 source time proxy 로 쓰지 않는다** — 글 번호가 같은 카페에서 올라온 순서라도
- *       그것은 time 이 아니다(2026-10-19 Codex). 모두 unknown 이면 id 로 결정하되 추론으로 쓰지 않는다.
- *    🔴 점수(품질)·주제·출처는 비교에 들어오지 않는다 — 자격 gate 가 다룬다.
- */
-export function compareFreshFirst(a: AutoFetchInput, b: AutoFetchInput): number {
-  const pa = postedMsOf(a)
-  const pb = postedMsOf(b)
-  if (pa !== null && pb !== null && pa !== pb) return pb - pa
-  if (pa !== null && pb === null) return -1
-  if (pa === null && pb !== null) return 1
-  return a.sourceArticleId.localeCompare(b.sourceArticleId)
-}
 
 /**
  * 목록에서 상세를 열 후보를 고른다.
@@ -281,12 +267,13 @@ export function planAutoFetch(
   const picked: string[] = []
   const skipped: AutoFetchPlan['skipped'] = []
 
-  // 🔴 신선도 1순위 (2026-10-19 창업자 결정) — 수집·생성·READY·발행이 같은 순서를 흐른다.
-  //    옛 판: `b.score - a.score || compareFreshFirst(a, b)` 로 반응·댓글 추산이 신선도를 이겨
-  //    72시간 안에 식을 글이 뒤로 밀렸다. 점수는 더 이상 자격 gate 가 아니고 하드 차단이 아니다
-  //    (`AUTO_MIN_SCORE` 는 2026-09-11 삭제됨). 순서는 `compareFreshFirst` 하나다 —
+  // 🔴 순서 = 원천 순위 정본(canon §2.3) — 수집·생성·READY·발행이 같은 비교를 흐른다.
+  //    목록 단계에는 반응 관측이 없으므로 게시 시각 최신 → 결정적 열쇠(글 번호, 코드 포인트)다.
+  //    점수·주제·출처는 순위에 들어오지 않는다. 숫자 글 번호를 게시 시각 대용으로 쓰지 않는다.
   //    상한을 넘긴 후보는 다음 실행에서 열린다.
-  const ordered = [...rows].sort((a, b) => compareFreshFirst(a, b))
+  const ordered = sortBySourceRank(rows, (r) => ({
+    postedLowerBoundMs: postedMsOf(r), commentsPct: null, viewsPct: null, velocity: null, tieBreak: r.sourceArticleId,
+  }))
 
   for (const r of ordered) {
     if (r.alreadyInVault === true) {

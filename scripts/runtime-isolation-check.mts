@@ -9,7 +9,8 @@
  *
  * 🔴 관측을 건너뛰는 것과 통과시키는 것은 다르다 — 건너뛰면 화면에 그렇게 적는다.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync,
   readdirSync,
@@ -26,14 +27,15 @@ import {
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
   judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists, judgeDisabledPlists,
   parseLaunchctlPrint, type JobState,
-  judgeOptionalRuntimeJob, parseLaunchctlPlistPath,
+  judgeOptionalRuntimeJob, parseLaunchctlPlistPath, OPS_LOOP_TEMPLATE_DEFER_LABELS,
 } from '../src/lib/runtime-isolation'
 import {
   judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, parseSuccessRuns, runIdToMs,
 } from '../src/lib/runtime-evidence'
 import {
-  judgeDeploy, judgeDeployLock, judgeLockRelease, runDeploy, type DeployEffects,
+  judgeDeploy, judgeDeployLock, judgeLockRelease, parsePersonaAssetIdentityOutput, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
+import { runtimePersonaAssetIdentityOf } from '../src/lib/persona-reference-digest'
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
 import { programArguments, rollbackDirOf, sameArgs } from './lib/launchd-install.mjs'
 /** 🔴 발행 러너 label 의 정본 — 여기에 문자열을 다시 적지 않는다 */
@@ -41,9 +43,9 @@ import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 /** 🔴 감사 러너 label · 렌더 입력 형식의 정본 */
 import { AUDIT_RUNNER_LABEL } from './lib/auto-ready-audit-template'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
-import { RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
+import { OPS_SHADOW_OBSERVER_LABEL, RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
 /** 🔴 배포기가 잠시 멈출 job 목록의 정본 — 배포기와 **같은 상수** */
-import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
+import { DEPLOY_QUIESCE_JOBS, DEPLOY_QUIESCE_READER_JOBS, DEPLOY_QUIESCE_WRITER_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
 /** 🔴 단일 실행 authority — 활성 호출 그래프 판정(⑦) */
 import {
@@ -70,6 +72,33 @@ const AGENT_DIR = join(homedir(), 'Library', 'LaunchAgents')
  *    그래서 운영 경로는 `--require-runtime` 을 붙여 **관측 없으면 실패**하게 한다.
  */
 const REQUIRE_RUNTIME = process.argv.includes('--require-runtime')
+
+/**
+ * 🔴 **runtime:deploy 전환 전용 유예 스위치** (2026-10-29 · D20 rollout 순서).
+ *
+ *    배포기는 잠시 멈춘 ops-loop 소유 job(runner-recover·stage-controller)을 **옛 설치본 그대로** 되올린다.
+ *    strict 검사는 그 옛 원문 ≠ 새 템플릿으로 막혀, 새 원문을 설치할 ops-loop-install 까지 가지 못했다.
+ *    이 스위치는 그 둘의 **설치본 원문 불일치 하나만** pending 으로 돌린다 — 나머지는 전부 strict 그대로다.
+ *    🔴 `--require-runtime` 없이는 쓸 수 없다(exit 2) — 관측 없는 유예는 통과를 꾸며 낸다.
+ */
+export function judgeIsolationArgs(argv: readonly string[]): {
+  requireRuntime: boolean; deferOpsLoopTemplates: boolean; error: string | null
+} {
+  const requireRuntime = argv.includes('--require-runtime')
+  const deferOpsLoopTemplates = argv.includes('--defer-ops-loop-templates')
+  const error = deferOpsLoopTemplates && !requireRuntime
+    ? '--defer-ops-loop-templates 는 --require-runtime 과 함께만 쓴다 — runtime:deploy 전환 전용'
+    : null
+  return { requireRuntime, deferOpsLoopTemplates, error }
+}
+const ISOLATION_ARGS = judgeIsolationArgs(process.argv.slice(2))
+if (ISOLATION_ARGS.error !== null) {
+  console.error(`🔴 ${ISOLATION_ARGS.error}`)
+  process.exit(2)
+}
+const DEFER_OPS_LOOP_TEMPLATES = ISOLATION_ARGS.deferOpsLoopTemplates
+/** 🔴 유예한 것 — 끝에서 "배포 미완료" 로 따로 보고한다. 통과 수에 섞지 않는다 */
+const opsLoopPending: string[] = []
 
 let pass = 0
 let failN = 0
@@ -582,6 +611,17 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     quiesceDrift?: 'loaded' | 'plist' | 'unknown'
     /** 🔴 `quiesceDrift` 를 걸 job — 기본은 가짜 발행 러너(QJOB) */
     quiesceDriftJob?: string
+    /** 🔴 배포 manifest 에 결속할 실제 Persona 자산 식별자. null/깨진 digest 는 unload 전에 차단한다. */
+    personaAssets?: { referenceDigest: string; supplementDigest: string | null } | null
+    /** 🔴 n번째 조회별 자산. preflight→post-load→rollback 대조 사이 drift 반례를 만든다. */
+    personaAssetReads?: readonly ({ referenceDigest: string; supplementDigest: string | null } | null)[]
+    /**
+     * 🔴 **그 트리의 코드가 읽는 식별자** (2026-11-15 · P0). 실제와 같게 runtime 측정은 지금 checkout 된 SHA 의
+     *    코드가, staged 측정은 target 코드가 잰다. 둘을 다르게 주면 보충 세대 전환(v1→v2)이 된다.
+     *    `personaAssetReads` 가 있으면 runtime 측정은 그 순서를 따른다(drift 반례).
+     */
+    personaAssetsBySha?: { prev: { referenceDigest: string; supplementDigest: string | null } | null
+      next: { referenceDigest: string; supplementDigest: string | null } | null }
     /**
      * 🔴 **감사 러너의 배포 전 모양** (2026-09-28). 기본은 `absent` — 지금 운영이 그렇다.
      *    absent            설치본 없음 · unloaded
@@ -699,6 +739,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     let probes = 0
     /** 🔴 `quiesceDrift: 'unknown'` 이 켜지면 그때부터 관측이 실패한다 */
     let driftUnknown = false
+    let personaAssetReadCount = 0
     /** 🔴 명령이 실제로 상태를 바꿨는가 — 반환값과 독립이다 */
     const applyEffect = (l: string, eff: JobState | 'keep' | undefined, fallback: JobState): void => {
       const e = eff ?? fallback
@@ -710,6 +751,30 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       originMain: () => NEXT,
       isAncestor: () => true,
       dirty: () => false,
+      runtimePersonaAssets: () => {
+        rec(`persona-assets:runtime:${w.sha === NEXT ? 'target' : 'prev'}`)
+        const fallback = f.personaAssets === undefined
+          ? { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+          : f.personaAssets
+        const bySha = f.personaAssetsBySha === undefined
+          ? fallback
+          : (w.sha === NEXT ? f.personaAssetsBySha.next : f.personaAssetsBySha.prev)
+        const configured = f.personaAssetReads
+        const value = configured === undefined || configured.length === 0
+          ? bySha
+          : configured[Math.min(personaAssetReadCount, configured.length - 1)]!
+        personaAssetReadCount += 1
+        return value
+      },
+      // 🔴 staging 트리는 target 코드다 — runtime 트리의 SHA 와 무관하다
+      stagedPersonaAssets: (target) => {
+        rec(`persona-assets:staged:${target === NEXT ? 'target' : 'other'}`)
+        if (target !== NEXT) return null
+        if (f.personaAssetsBySha !== undefined) return f.personaAssetsBySha.next
+        return f.personaAssets === undefined
+          ? { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+          : f.personaAssets
+      },
       // 🔴 실제 배포기와 같게 — 퇴역 job 도 본다 (돌고 있는 옛 job 위로 배포하지 않는다)
       /**
        * 🔴 실제 배포기와 같게 — 퇴역 job 과 **잠시 멈출 job** 도 본다.
@@ -1661,8 +1726,9 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         && !/'com\.soransoran\.original-post-runner'/.test(src)
         && !/'com\.soransoran\.auto-ready-audit'/.test(src)
     })())
-    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행·감사·댓글·복구·단계 controller**',
-      DEPLOY_QUIESCE_JOBS.length === 5 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행·감사·댓글·복구·단계 controller·ops shadow observer**',
+      DEPLOY_QUIESCE_JOBS.length === 6 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL) && !RUNTIME_JOBS.includes(OPS_SHADOW_OBSERVER_LABEL)
       && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL) && DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL)
       && DEPLOY_QUIESCE_JOBS.includes(RUNNER_RECOVER_LABEL)
       && DEPLOY_QUIESCE_JOBS.includes(STAGE_CONTROLLER_LABEL))
@@ -1762,6 +1828,36 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       check('🔴 [QA] 🔴 **preflight 뒤에 시작한 감사 회차도 첫 unload 앞에서 잡는다**',
         !r.ok && r.phase === 'pre-unload-recheck'
         && idx(w, 'unload:') === -1 && idx(w, 'checkout:target') === -1)
+    }
+    // ── 🔴 [QO] 배포 겹침 — ops shadow observer(reader · 권위 0)의 quiesce 주인은 runtime:deploy 다 ──
+    {
+      const OBS = OPS_SHADOW_OBSERVER_LABEL
+      check('🔴 [QO] observer 는 배포 quiesce 의 reader 다 — writer 목록 밖', RQ.includes(OBS)
+        && DEPLOY_QUIESCE_READER_JOBS.includes(OBS) && !DEPLOY_QUIESCE_WRITER_JOBS.includes(OBS))
+      const busy = makeWorld({ running: [OBS] })
+      const rb = await deploy(busy, [], RQ)
+      check('🔴 [QO] observer tick 이 돌고 있으면 배포하지 않는다 — unload · checkout · write 0(반쯤 바뀐 트리를 읽게 하지 않는다)',
+        !rb.ok && rb.phase === 'preflight' && idx(busy, 'unload:') === -1 && idx(busy, 'checkout:target') === -1
+        && idx(busy, 'write-plist:') === -1 && busy.state.get(OBS) === 'loaded')
+      const late = makeWorld({ runningLater: [OBS] })
+      const rl = await deploy(late, [], RQ)
+      check('🔴 [QO] preflight 뒤 첫 unload 앞에 시작한 observer tick 도 잡는다', !rl.ok && rl.phase === 'pre-unload-recheck'
+        && idx(late, 'unload:') === -1 && idx(late, 'checkout:target') === -1)
+      const idle = makeWorld()
+      const ri = await deploy(idle, [], RQ)
+      check('🟢 [QO] idle observer — checkout 전에 내리고 성공 뒤 그대로 되올린다 · 설치본 write 0(배포가 설치 · 교체하지 않는다)',
+        ri.ok && ri.steps.includes(`quiesce-unload:${OBS}`) && idx(idle, `unload:${OBS}`) < idx(idle, 'checkout:target')
+        && idle.state.get(OBS) === 'loaded' && countOf(idle, `write-plist:${OBS}`) === 0)
+      if (!ri.ok) console.log(`      [QO] idle 배포 실패: ${ri.problems.join(' · ')}`)
+      // 🔴 원래 상태 복원 — 설치본은 있는데 unloaded 면 끝까지 unloaded · 미설치면 끝까지 미설치(배포가 설치 · load 하지 않는다)
+      const parked = makeWorld({ initial: { [OBS]: 'unloaded' } })
+      const rp = await deploy(parked, [], RQ)
+      check('🔴 [QO] 원래 unloaded observer → 배포 뒤에도 unloaded · load 0 · write 0', rp.ok && parked.state.get(OBS) === 'unloaded'
+        && idx(parked, `load:${OBS}`) === -1 && countOf(parked, `write-plist:${OBS}`) === 0)
+      const absent = makeWorld({ noInstalledPlist: [OBS], initial: { [OBS]: 'unloaded' } })
+      const ra = await deploy(absent, [], RQ)
+      check('🔴 [QO] 미설치 observer → 배포 뒤에도 미설치 · unloaded · 손댐 0(code-only merge 의 배포가 설치하지 않는다)', ra.ok
+        && absent.state.get(OBS) === 'unloaded' && !absent.plists.has(OBS) && idx(absent, `load:${OBS}`) === -1 && countOf(absent, `write-plist:${OBS}`) === 0)
     }
     {
       const w = makeWorld({ audit: 'loaded', probeUnknown: [AJOB] })
@@ -1926,6 +2022,83 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [QI] 🔴 **설치본이 runtime 템플릿 render 와 다르면 실패** (템플릿이 바뀌었는데 옛 설치본)',
       !j({ expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }).ok)
     check('🔴 [QI] runtime 템플릿을 render 하지 못하면 실패(fail-closed)', !j({ expectedXml: null }).ok)
+
+    // ── 🔴 [D20] ops-loop 원문 유예 — runtime:deploy 전환 전용 · 원문 불일치 **하나만** · 소유 label 셋만 ──
+    const OPS_OWNED = [RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL, OPS_SHADOW_OBSERVER_LABEL] as const
+    const opsJ = (label: string, o: Partial<In> = {}) => {
+      const plist = `/Users/x/Library/LaunchAgents/${label}.plist`
+      return judgeOptionalRuntimeJob(base({ label, expectedPlistPath: plist, loadedPlistPath: plist, ...o }))
+    }
+    // 옛 설치본 그대로 되올린 상태 — 새 템플릿 render 와 원문만 다르다
+    const STALE: Partial<In> = { expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }
+    check('🔴 [D20] 유예 가능 label 은 ops-loop-templates 정본의 runner-recover·stage-controller·ops-shadow-observer 셋뿐이다(문자열 drift 0)',
+      JSON.stringify([...OPS_LOOP_TEMPLATE_DEFER_LABELS].sort()) === JSON.stringify([...OPS_OWNED].sort()))
+    for (const L of OPS_OWNED) {
+      const strict = opsJ(L, STALE)
+      check(`🔴 [D20] ${L}: 유예 플래그 없으면 원문 불일치 → FAIL · pending 0`,
+        !strict.ok && strict.pending.length === 0 && strict.problems.some((p) => p.includes('템플릿 render 와 다르다')))
+      const deferred = opsJ(L, { ...STALE, deferOpsLoopTemplate: true })
+      check(`🟢 [D20] ${L}: 유예 플래그 + 원문 불일치만 → PASS · pending 1건으로 **기록**한다`,
+        deferred.ok && deferred.problems.length === 0 && deferred.pending.length === 1
+        && deferred.pending[0]!.includes('ops-loop-install') && deferred.notes.some((n) => n.includes('ops-loop-install 대기')))
+      const same = opsJ(L, { deferOpsLoopTemplate: true })
+      check(`🟢 [D20] ${L}: 유예 플래그여도 원문이 같으면 pending 0`, same.ok && same.pending.length === 0)
+      // 🔴 유예는 원문 하나뿐 — 나머지 실패는 유예 플래그가 있어도 그대로 FAIL 이다
+      const strictCases: readonly [string, Partial<In>][] = [
+        ['render 실패(null)', { expectedXml: null }],
+        ['unloaded', { state: 'unloaded', loadedPlistPath: null, loaded: parseLaunchctlPrint(null) }],
+        ['관측 unknown', { state: 'unknown' }],
+        ['설치본 없이 loaded', { installedXml: null, installedArgs: [], installedWorkingDirectory: null }],
+        ['load 된 plist 경로', { loadedPlistPath: `${DEVDIR}/docs/operations/launchd/${L}.plist` }],
+        ['loaded 인자', { loaded: parseLaunchctlPrint(auditPrint({ path: `/Users/x/Library/LaunchAgents/${L}.plist`, args: [NPX, 'tsx', `${RTDIR}/scripts/auto-ready-audit.mts`] })) }],
+        ['loaded WD', { loaded: parseLaunchctlPrint(auditPrint({ path: `/Users/x/Library/LaunchAgents/${L}.plist`, wd: `${RTDIR}/scripts` })) }],
+        ['HEAD≠pin', { runtimeHead: NEXT }],
+        ['HEAD 모름', { runtimeHead: null }],
+        ['pin 모름', { pinnedSha: null }],
+        ['추적 안 된 스크립트', { programTrackedAtHead: false }],
+        ['추적 여부 모름', { programTrackedAtHead: null }],
+        ['개발 트리 경로', {
+          installedXml: xmlFor(DEVDIR), installedArgs: argsFor(DEVDIR), installedWorkingDirectory: DEVDIR,
+          loaded: parseLaunchctlPrint(auditPrint({ args: argsFor(DEVDIR), wd: DEVDIR })),
+        }],
+      ]
+      const leaked = strictCases.filter(([, o]) => opsJ(L, { ...STALE, ...o, deferOpsLoopTemplate: true }).ok).map(([n]) => n)
+      check(`🔴 [D20] ${L}: 유예 플래그여도 경로·설치/loaded·인자/WD·HEAD=pin·추적·unknown/unloaded·render 실패는 FAIL (${strictCases.length - leaked.length}/${strictCases.length})`,
+        leaked.length === 0)
+      for (const n of leaked) console.log(`      유예가 새어 나간 사례: ${n}`)
+    }
+    // 🔴 [D20-O] observer 전용 — 선택 설치(`--observer=on`)라 미설치 · unloaded 호스트도 통과한다(보고는 한다).
+    //    이 반례는 observer 하나에만 건다 — runner-recover · stage-controller 의 필수 여부는 이 판정의 몫이 아니고 여기서 낮추지 않는다.
+    {
+      const offObs = opsJ(OPS_SHADOW_OBSERVER_LABEL, { installedXml: null, installedArgs: [], installedWorkingDirectory: null, state: 'unloaded', loadedPlistPath: null, loaded: parseLaunchctlPrint(null), expectedXml: null })
+      check('🟢 [D20-O] observer 미설치 · unloaded → 통과(선택 설치) · 보고한다', offObs.ok && !offObs.installed && offObs.notes.some((n) => n.includes('필수 아님')))
+      const ghost = opsJ(OPS_SHADOW_OBSERVER_LABEL, { installedXml: null, installedArgs: [], installedWorkingDirectory: null, deferOpsLoopTemplate: true })
+      check('🔴 [D20-O] observer 설치본 없이 loaded → 유예 플래그여도 FAIL(선택 설치가 느슨한 통과가 아니다)', !ghost.ok)
+    }
+    for (const L of [AJOB, COMMENT_RUNNER_LABEL, PUBLISH_RUNNER_LABEL]) {
+      const v = opsJ(L, { ...STALE, deferOpsLoopTemplate: true })
+      check(`🔴 [D20] ops-loop 소유가 아닌 ${L} 는 유예 플래그로도 원문 불일치를 미루지 못한다`, !v.ok && v.pending.length === 0)
+    }
+
+    // ── 🔴 [D20] CLI — 유예 플래그는 --require-runtime 과 함께만 ──
+    check('🔴 [D20] --defer-ops-loop-templates 단독은 인자 오류다',
+      judgeIsolationArgs(['--defer-ops-loop-templates']).error !== null)
+    {
+      const both = judgeIsolationArgs(['--require-runtime', '--defer-ops-loop-templates'])
+      const strictOnly = judgeIsolationArgs(['--require-runtime'])
+      check('🟢 [D20] --require-runtime + 유예는 허용 · --require-runtime 단독은 유예 꺼짐',
+        both.error === null && both.requireRuntime && both.deferOpsLoopTemplates
+        && strictOnly.error === null && !strictOnly.deferOpsLoopTemplates && judgeIsolationArgs([]).error === null)
+    }
+    // 🔴 실제 CLI 가 exit 2 로 끝나는가 — 판정 함수만 맞고 배선이 없으면 죽은 게이트다.
+    //    자식은 probe env 를 받아 다시 자식을 띄우지 않는다(가드가 빠져도 재귀하지 않는다)
+    if (process.env.SORAN_ISOLATION_ARGS_PROBE !== '1') {
+      const r = spawnSync(process.execPath, [...process.execArgv, 'scripts/runtime-isolation-check.mts', '--defer-ops-loop-templates'], {
+        encoding: 'utf-8', env: { ...process.env, SORAN_ISOLATION_ARGS_PROBE: '1' }, timeout: 120_000,
+      })
+      check('🔴 [D20] CLI: --defer-ops-loop-templates 단독 실행은 exit 2 · 검사를 시작하지 않는다',
+        r.status === 2 && String(r.stderr).includes('--require-runtime') && !String(r.stdout).includes('① 판정 규칙'))
+    }
   }
 
   // ── 🔴 실제 관측 배선이 이 판정을 부른다 — 부르지 않으면 판정은 죽은 코드다 ──
@@ -1938,6 +2111,33 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       && /label: RUNNER_RECOVER_LABEL/.test(real)
       && /label: STAGE_CONTROLLER_LABEL/.test(real)
       && /check\(`🔴 \$\{opt\.label\}/.test(real))
+    check('🔴 [D20] 실제 관측이 유예 스위치를 판정에 넘기고 pending 을 모아 보고한다',
+      /deferOpsLoopTemplate: DEFER_OPS_LOOP_TEMPLATES,\n\s+\}\)\n\s+opsLoopPending\.push\(\.\.\.v\.pending\)/.test(real)
+      && /for \(const p of v\.pending\) console\.log/.test(real)
+      && /ops-loop 원문 유예\(pending\) \$\{opsLoopPending\.length\}건 — 🔴 \*\*배포 미완료\*\*/.test(real))
+    check('🔴 [D20] 인자 오류(exit 2)는 어떤 검사보다 먼저 끝낸다',
+      src.indexOf('process.exit(2)') > 0 && src.indexOf('process.exit(2)') < src.indexOf("console.log('① 판정 규칙 (행동)')"))
+    const deploy = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
+    check('🔴 [D20] runtime:deploy 마지막 격리 검사는 --require-runtime + --defer-ops-loop-templates 다',
+      /isolationGate: \(\) => act\('npx', \['tsx', 'scripts\/runtime-isolation-check\.mts', '--require-runtime', '--defer-ops-loop-templates'\]\),/.test(deploy))
+    check('🔴 [D20] runtime:deploy 는 성공해도 ops:loop-install 전까지 배포 미완료라고 말한다(✅ 배포 완료 0)',
+      /배포는 아직 미완료/.test(deploy) && /npm run ops:loop-install -- --apply/.test(deploy)
+      && !/✅ 배포 완료 —/.test(deploy))
+    const deployCore = readFileSync('src/lib/runtime-deploy.ts', 'utf-8')
+    check('🔴 [D20] 공용 배포 코어도 완료를 사칭하지 않고 ops-loop strict 대기를 기록한다',
+      /runtime 단계 완료 · ops-loop strict 대기/.test(deployCore)
+      && !/fx\.log\(`배포 완료 —/.test(deployCore))
+    /**
+     * 🔴 유예 플래그를 argv 로 넘기는 운영 호출은 runtime:deploy 하나뿐이어야 한다.
+     *    wave-c · host-migrate · ops-loop-install · production-activation 이 붙이면 strict 판정이 조용히 느슨해진다.
+     */
+    const ALLOWED = new Set(['scripts/runtime-deploy.mts', 'scripts/runtime-isolation-check.mts', 'scripts/ops-loop-check.mts'])
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(join(dir, e.name)) : /\.(mts|mjs|ts|js)$/.test(e.name) ? [join(dir, e.name)] : [])
+    const users = [...walk('scripts'), ...walk('src')]
+      .filter((f) => readFileSync(f, 'utf-8').includes("'--defer-ops-loop-templates'") && !ALLOWED.has(f))
+    check('🔴 [D20] 유예 플래그를 넘기는 운영 호출은 runtime:deploy 하나다 — strict 호출처에 섞이지 않는다', users.length === 0)
+    for (const f of users) console.log(`      유예 플래그를 쓰는 곳: ${f}`)
   }
 
 
@@ -2079,6 +2279,169 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [A] 끝난 뒤 예약 job 이 모두 올라와 있다', allLoaded(w))
     check('🔴 [A] SHA·의존성·manifest·pin 이 새 것이다',
       w.sha === NEXT && w.deps === NEXT && manifestSha(w) === NEXT && pinOf(w) === NEXT)
+    const manifest = JSON.parse(readFileSync(w.manifestFile, 'utf-8')) as {
+      personaAssets?: { referenceDigest?: string; supplementDigest?: string }
+    }
+    check('🔴 [A] manifest 는 코드 SHA뿐 아니라 실제 Persona 기본·보충 자산 digest도 결속한다',
+      manifest.personaAssets?.referenceDigest === 'c'.repeat(64)
+      && manifest.personaAssets?.supplementDigest === 'd'.repeat(64))
+    const noSupplement = makeWorld({ personaAssets: { referenceDigest: 'c'.repeat(64), supplementDigest: null } })
+    const noSupplementResult = await deploy(noSupplement)
+    const noSupplementManifest = JSON.parse(readFileSync(noSupplement.manifestFile, 'utf-8')) as {
+      personaAssets?: { supplementDigest?: string | null }
+    }
+    check('🔴 [A] 보충 자산 두 파일이 모두 없는 정상 미도입 상태는 null로 결속하고 배포를 막지 않는다',
+      noSupplementResult.ok && noSupplementManifest.personaAssets?.supplementDigest === null)
+  }
+
+  // ── [A-2] Persona 자산 식별자를 모르면 job 을 내리기 전에 멈춘다 ──
+  {
+    for (const [label, personaAssets] of [
+      ['없음', null],
+      ['기본 digest 모양 오류', { referenceDigest: 'short', supplementDigest: 'd'.repeat(64) }],
+      ['보충 digest 모양 오류', { referenceDigest: 'c'.repeat(64), supplementDigest: 'short' }],
+    ] as const) {
+      const w = makeWorld({ personaAssets })
+      const r = await deploy(w)
+      check(`🔴 [A-2] Persona 자산 ${label} → preflight 차단 · unload/checkout/manifest 0 · 기존 상태 보존`,
+        !r.ok && r.phase === 'preflight' && r.steps.includes('runtime-persona-assets')
+        && idx(w, 'unload') === -1 && idx(w, 'checkout') === -1 && countOf(w, 'write-manifest') === 0
+        && w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV && allLoaded(w))
+    }
+  }
+
+  // ── [A-2b] preflight 뒤 자산 drift는 성공으로 기록하지 않고 rollback에서도 숨기지 않는다 ──
+  {
+    const before = { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const drifted = { referenceDigest: 'e'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const w = makeWorld({ personaAssetReads: [before, drifted, drifted] })
+    const r = await deploy(w)
+    check('🔴 [A-2b] job 재기동 뒤 Persona 자산 drift는 post-load에서 배포를 실패시킨다',
+      !r.ok && r.phase === 'post-load' && r.steps.includes('persona-assets-verify'))
+    check('🔴 [A-2b] 외부 자산을 원래 값으로 되돌리지 못했으면 완전 rollback이라 하지 않는다',
+      r.rollback?.complete === false
+      && (r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+  }
+
+  // ── [A-2c] rollback 검증 시점에만 생긴 drift도 복구 잔여로 잡는다 ──
+  {
+    const before = { referenceDigest: 'c'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const drifted = { referenceDigest: 'f'.repeat(64), supplementDigest: 'd'.repeat(64) }
+    const w = makeWorld({ gateFail: 'gate1', personaAssetReads: [before, drifted] })
+    const r = await deploy(w)
+    check('🔴 [A-2c] rollback 대조 중 Persona 자산 drift가 생기면 복구 불완전으로 남긴다',
+      !r.ok && r.rollback?.complete === false
+      && (r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+  }
+
+  // ── [A-2d] 🔴 보충 세대 전환(v1→v2): manifest 는 **target 코드**가 잰 식별자다 (2026-11-15 P0 재현) ──
+  //    옛 판은 배포기 프로세스 코드 한 번의 측정을 manifest·재기동 대조·rollback 에 모두 썼다.
+  //    runtime 트리(옛 SHA)에서 시작한 배포는 옛 코드의 v1 식별자를 새 runtime 에 적었다(실측 6d1b8688 vs 실제 b27b0305).
+  {
+    const v1 = { referenceDigest: 'c'.repeat(64), supplementDigest: '1'.repeat(64) }
+    const v2 = { referenceDigest: 'c'.repeat(64), supplementDigest: '2'.repeat(64) }
+    const w = makeWorld({ personaAssetsBySha: { prev: v1, next: v2 } })
+    const r = await deploy(w)
+    const manifest = JSON.parse(readFileSync(w.manifestFile, 'utf-8')) as {
+      personaAssets?: { referenceDigest?: string; supplementDigest?: string | null }
+    }
+    check('🔴 [A-2d] 세대 전환 배포는 성공한다', r.ok)
+    check('🔴 [A-2d] manifest 는 target 코드 식별자(v2)다 — source(v1)를 적지 않는다',
+      manifest.personaAssets?.supplementDigest === v2.supplementDigest
+      && manifest.personaAssets?.referenceDigest === v2.referenceDigest)
+    check('🔴 [A-2d] target 식별자는 staging 트리에서 job 을 내리기 전에 잰다',
+      idx(w, 'persona-assets:staged:target') !== -1 && idx(w, 'persona-assets:staged:target') < idx(w, 'unload'))
+    check('🔴 [A-2d] source 식별자는 checkout 전 runtime 트리(옛 코드)로 잰다',
+      idx(w, 'persona-assets:runtime:prev') !== -1 && idx(w, 'persona-assets:runtime:prev') < idx(w, 'checkout'))
+    check('🔴 [A-2d] 재기동 뒤 대조는 runtime 트리의 target 코드로 잰다',
+      w.order.lastIndexOf('persona-assets:runtime:target') > w.order.lastIndexOf('checkout:target')
+      && w.order.includes('persona-assets:runtime:target'))
+  }
+
+  // ── [A-2e] 🔴 세대 전환 중 실패하면 rollback 은 **source 식별자**로 되돌아간 것을 확인한다 ──
+  {
+    const v1 = { referenceDigest: 'c'.repeat(64), supplementDigest: '1'.repeat(64) }
+    const v2 = { referenceDigest: 'c'.repeat(64), supplementDigest: '2'.repeat(64) }
+    const w = makeWorld({ gateFail: 'gate1', personaAssetsBySha: { prev: v1, next: v2 } })
+    const r = await deploy(w)
+    check('🔴 [A-2e] 게이트 실패 → rollback 이 완전하다(옛 코드가 v1 을 읽는다 = source 와 같다)',
+      !r.ok && r.rollback?.complete === true
+      && !(r.rollback?.residual ?? []).some((x) => x.includes('Persona 말투 자산')))
+    check('🔴 [A-2e] 되돌린 뒤 SHA·pin·manifest 가 이전 값이다',
+      w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV)
+  }
+
+  // ── [A-2f] 🔴 target 코드로 식별자를 못 재면 job 을 내리기 전에 멈춘다 ──
+  {
+    const v1 = { referenceDigest: 'c'.repeat(64), supplementDigest: '1'.repeat(64) }
+    for (const [label, next] of [
+      ['측정 실패', null],
+      ['digest 모양 오류', { referenceDigest: 'c'.repeat(64), supplementDigest: 'short' }],
+    ] as const) {
+      const w = makeWorld({ personaAssetsBySha: { prev: v1, next } })
+      const r = await deploy(w)
+      check(`🔴 [A-2f] staged 식별자 ${label} → preflight 차단 · unload/checkout/manifest 0`,
+        !r.ok && r.phase === 'preflight' && r.steps.includes('staged-persona-assets')
+        && idx(w, 'unload') === -1 && idx(w, 'checkout') === -1 && countOf(w, 'write-manifest') === 0
+        && w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV && allLoaded(w))
+    }
+  }
+
+  // ── [A-2g] 식별자 출력 파서 — 마지막 줄 JSON · 키 두 개 · digest 64 hex 만 받는다 ──
+  {
+    const ok = JSON.stringify({ referenceDigest: 'a'.repeat(64), supplementDigest: 'b'.repeat(64) })
+    const none = JSON.stringify({ referenceDigest: 'a'.repeat(64), supplementDigest: null })
+    check('[A-2g] 앞줄 잡음 뒤 마지막 줄 JSON 을 받는다',
+      parsePersonaAssetIdentityOutput(`warn: x\n${ok}\n`)?.supplementDigest === 'b'.repeat(64))
+    check('[A-2g] 보충 미도입(null) 은 정상 값이다', parsePersonaAssetIdentityOutput(none)?.supplementDigest === null)
+    for (const [label, out] of [
+      ['빈 출력', ''], ['null 출력', null], ['JSON null', 'null'], ['깨진 JSON', '{'],
+      ['짧은 digest', JSON.stringify({ referenceDigest: 'a', supplementDigest: null })],
+      ['키 추가', JSON.stringify({ referenceDigest: 'a'.repeat(64), supplementDigest: null, x: 1 })],
+      ['키 누락', JSON.stringify({ referenceDigest: 'a'.repeat(64) })],
+      ['식별자 뒤 다른 줄', `${ok}\ndone`],
+    ] as const) {
+      check(`🔴 [A-2g] ${label} → null(fail-closed)`, parsePersonaAssetIdentityOutput(out) === null)
+    }
+  }
+
+  // ── [A-3] 자산 식별자는 corpus뿐 아니라 manifest 바이트도 결속한다 ──
+  {
+    const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+    const referenceRaw = JSON.stringify({
+      version: 1, generatedAt: '2026-11-02T00:00:00.000Z',
+      comments: [{ speakerId: 'a'.repeat(12), content: '저도 그랬어요' }],
+    })
+    const contents = ['저도 그랬어요']
+    const manifestOf = (generatedAt: string): string => JSON.stringify({
+      sourceDigest: sha256(referenceRaw).slice(0, 16),
+      sanitizedCorpusDigest: sha256(JSON.stringify(contents)).slice(0, 16),
+      generatedAt,
+    })
+    const first = runtimePersonaAssetIdentityOf({
+      referenceRaw, referenceManifestRaw: manifestOf('2026-11-02T00:00:00.000Z'),
+      supplementRaw: null, supplementManifestRaw: null,
+    })
+    const manifestOnlyChange = runtimePersonaAssetIdentityOf({
+      referenceRaw, referenceManifestRaw: manifestOf('2026-11-02T00:01:00.000Z'),
+      supplementRaw: null, supplementManifestRaw: null,
+    })
+    check('🔴 [A-3] 같은 corpus라도 manifest 바이트가 바뀌면 runtime 자산 식별자가 달라진다',
+      first !== null && manifestOnlyChange !== null
+      && first.referenceDigest !== manifestOnlyChange.referenceDigest)
+    check('🔴 [A-3] 보충 corpus·manifest 중 하나만 있으면 정상 미도입으로 꾸미지 않고 차단한다',
+      runtimePersonaAssetIdentityOf({
+        referenceRaw, referenceManifestRaw: manifestOf('2026-11-02T00:00:00.000Z'),
+        supplementRaw: '{}', supplementManifestRaw: null,
+      }) === null)
+    check('🔴 [A-3] 기본 manifest가 corpus digest를 속이면 차단한다',
+      runtimePersonaAssetIdentityOf({
+        referenceRaw,
+        referenceManifestRaw: JSON.stringify({
+          sourceDigest: '0'.repeat(16), sanitizedCorpusDigest: sha256(JSON.stringify(contents)).slice(0, 16),
+        }),
+        supplementRaw: null, supplementManifestRaw: null,
+      }) === null)
   }
 
   // ── [B] fetch 실패 ──
@@ -2592,6 +2955,8 @@ if (!existsSync(RUNTIME_ROOT)) {
     { label: COMMENT_RUNNER_LABEL, module: 'persona-comment-runner-template.ts', render: 'renderCommentRunnerPlist' },
     { label: RUNNER_RECOVER_LABEL, module: 'ops-loop-templates.ts', render: 'renderRunnerRecoverPlist' },
     { label: STAGE_CONTROLLER_LABEL, module: 'ops-loop-templates.ts', render: 'renderStageControllerPlist' },
+    // 2026-11-11 Phase 2 — ops shadow observer(권위 0 · ops-loop 소유)도 설치됐으면 같은 규칙으로 대조한다
+    { label: OPS_SHADOW_OBSERVER_LABEL, module: 'ops-loop-templates.ts', render: 'renderOpsShadowObserverPlist' },
   ]
   for (const opt of OPTIONAL_RUNNERS) {
     const label = opt.label
@@ -2636,7 +3001,9 @@ if (!existsSync(RUNTIME_ROOT)) {
       installedWorkingDirectory: installedXml === null ? null : valueOf(installedXml, 'WorkingDirectory'),
       state, loadedPlistPath: parseLaunchctlPlistPath(printed), loaded: parseLaunchctlPrint(printed), expectedXml,
       runtimeRoot: RUNTIME_ROOT, devRoots: DEV_ROOTS, runtimeHead: head, pinnedSha: pinned, programTrackedAtHead: tracked,
+      deferOpsLoopTemplate: DEFER_OPS_LOOP_TEMPLATES,
     })
+    opsLoopPending.push(...v.pending)
     // 🔴 관측 실패는 --require-runtime 에서만 실패로 본다 (다른 job 과 같은 규칙)
     if (state === 'unknown' && !REQUIRE_RUNTIME) {
       console.log(`   ⚪ ${label}: launchctl 관측 불가 — --require-runtime 에서만 막는다`)
@@ -2644,6 +3011,7 @@ if (!existsSync(RUNTIME_ROOT)) {
       check(`🔴 ${opt.label} (설치 선택) — 미설치면 통과 · 설치됐으면 경로·인자·원문·loaded·SHA 가 runtime 과 같다`, v.ok)
     }
     for (const p of v.problems) console.log(`      ${p}`)
+    for (const p of v.pending) console.log(`      ${p}`)
     for (const n of v.notes) console.log(`   ${v.installed ? '🟢' : '⚪'} ${n}`)
   }
 
@@ -2722,4 +3090,10 @@ if (!existsSync(RUNTIME_ROOT)) {
 
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
+if (DEFER_OPS_LOOP_TEMPLATES) {
+  console.log(opsLoopPending.length === 0
+    ? '  🟡 ops-loop 원문 유예 0건 — 그래도 strict 확인은 ops:loop-install --apply 가 한다'
+    : `  🟡 ops-loop 원문 유예(pending) ${opsLoopPending.length}건 — 🔴 **배포 미완료**`)
+  console.log('  🔴 npm run ops:loop-install -- --apply 가 새 원문을 설치하고 strict 격리 검사를 통과해야 배포 완료다\n')
+}
 process.exit(failN === 0 ? 0 : 1)

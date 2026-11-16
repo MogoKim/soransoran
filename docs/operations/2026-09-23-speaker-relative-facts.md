@@ -193,6 +193,9 @@ source evidence 로 판단한다.
 - 🔴 **`terminal` 판정 자체** — 자동 변환 가능한 불일치까지 영구 제외한다.
   `artifactRetryable` 이 `semanticCompletion.complete` 면 무조건 `false` 를 낸다.
   이것은 별도 판단이 필요하다 (재시도 자격을 넓히면 같은 원천을 반복해서 돌 위험)
+  > 📜 **2026-11-10 정정 — 이 줄의 심볼은 삭제됐다.** `artifactRetryable` · `RETRYABLE_CAUSES` 는 지웠고, 회차를 넘는
+  > 재선정 처리는 `src/lib/content-core/generation-failure.ts` 의 `retryClassOf` 하나가 정한다(transient · speakerBound ·
+  > terminal · unattempted · 근거 지문당 한 번 · 신규 먼저 · 재선정 몫 10%). 현재 정책은 canon §2.3 · §11 이 정본이다.
 - 🔴 `work`·`region` 은 `hasFact` 가 **카드 값을 그대로 비교**해 항상 참이다
   (프롬프트가 카드 값을 베끼라고 지시한다). 계획 단계 검증이 사실상 없다
 - 🔴 **자동 보정** — 생성 후 남은 원문 값을 Persona 값으로 고치는 단계

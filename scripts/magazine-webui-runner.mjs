@@ -69,7 +69,24 @@ import { writeFetchResults, readFetchResults, fetchResultFor, fetchResultPath, t
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
 import { manuscriptPromptText, plannedMessageFor, deliveryGate, inputRepairGate, persistedDirectIdentity, DIRECT_SPEC_INPUT_REPAIR_FORBIDDEN } from './lib/magazine-delivery-gate.mjs'
 import { packetHashOf } from './lib/magazine-regen.mjs'
-import { DIRECT_SPEC_MODE, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import { DIRECT_SPEC_MODE, directSpecCtaCheck, readDirectSpec, resolveMagazineAutoMode } from './lib/magazine-direct-spec.mjs'
+import { ctaRepairPendingState } from './lib/magazine-draft-cta-repair.mjs'
+
+/**
+ * 🔴 **원고 저장 전 관문** — legacy 는 `validateManuscript` 그대로다.
+ *    DIRECT 는 그 위에 CTA 앞 문장이 brief 템플릿 복사인지 본다(spec/2 · `directSpecCtaCheck`).
+ *    spec 을 읽지 못하면 저장하지 않는다(fail-closed) — 관문은 전송 전에 이미 spec 을 지났다.
+ */
+function manuscriptValidatorFor(gate, { slug, draftsDir }) {
+  if (gate.mode !== DIRECT_SPEC_MODE) return validateManuscript
+  const s = readDirectSpec({ slug, draftsDir })
+  if (!s.ok) return () => ({ ok: false, reasons: [{ code: s.code, why: s.why }] })
+  return (text) => {
+    const v = validateManuscript(text)
+    const c = directSpecCtaCheck({ spec: s.spec, manuscript: text })
+    return c.ok ? v : { ...v, ok: false, reasons: [...(v.reasons ?? []), { code: c.code, why: c.why }] }
+  }
+}
 
 /** 🔴 정본은 `lib/magazine-delivery-gate.mjs` 다 — 기존 호출부·시험을 위해 그대로 내보낸다 */
 export { manuscriptPromptText, plannedMessageFor, deliveryGate }
@@ -420,6 +437,9 @@ export async function recoverSlug(slug, { conversationUrl, checkOnly = false, da
   /** 🔴 시험만 준다 — direct source 재검증의 정본 큐·판 주입점. 운영(--recover CLI)은 deliveryGate 기본값(실제 큐·current.ts) */
   directSourceDeps = null } = {}) {
   const fail = (reason, errorDetail) => ({ slug, status: 'failed', reason, stage: 'recover', sent: false, errorDetail })
+  // 🔴 CTA 수리 transaction 이 남았다 — lease · probe · 대화 열기 · 저장 · 장부 전부 0 (조각은 CTA repair --write 만 끝낸다)
+  const cta = ctaRepairPendingState({ draftsDir, slug })
+  if (cta.pending) return ctaRepairHeld(slug, cta)
   const outPath = join(draftsDir, slug, 'draft.md')
   if (existsSync(outPath)) return fail('recover_draft_exists', 'draft.md 가 이미 있다 — 덮지 않는다')
   const gate = deliveryGate({ slug, draftsDir, quarantinePath, directSourceDeps })
@@ -451,7 +471,7 @@ export async function recoverSlug(slug, { conversationUrl, checkOnly = false, da
       // 🔴 DIRECT_SPEC_V1 은 brief.md 가 없는 것이 정상이다 — 회수(fetchSlug)와 같이 markers 를 비운다 (2026-10-24).
       //    legacy 는 기존대로 brief 의 대조 문장을 요구한다.
       requiredMarkers: gate.mode === DIRECT_SPEC_MODE ? [] : markersOf(readFileSync(join(draftsDir, slug, 'brief.md'), 'utf8')),
-      validate: validateManuscript, checkOnly, ...browserDeps,
+      validate: manuscriptValidatorFor(gate, { slug, draftsDir }), checkOnly, ...browserDeps,
     })
     if (!r.ok) {
       return { slug, status: 'failed', reason: r.reason, stage: r.stage ?? 'recover', sent: false,
@@ -501,8 +521,20 @@ function heldResult(slug, gate, stage) {
  *    둘 다 보내고 같은 draft.md 를 썼다 (실측 send 2 · draft write 2).
  *    전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 (예약·기록 순간에만 짧게 잡는다).
  */
+/**
+ * 🔴 **CTA 수리 transaction 이 남은 slug 의 HOLD** (2026-10-29 Codex P1). 떼어 낸 뒤 급사하면 draft.md 가 없어
+ *    회수 대상처럼 보인다 — lease · probe · Chrome · 전송 · draft · 장부 전부 0. 하류(입력 수리 등)는 held 를 「할 일 없음」으로 읽는다.
+ */
+function ctaRepairHeld(slug, cta) {
+  return { slug, status: 'held', reason: cta.code, stage: 'cta-repair', sent: false, ctaRepair: { fragments: cta.fragments },
+    errorDetail: `${cta.why} (브라우저를 열지 않았고 한 글자도 보내지 않았다)` }
+}
+
 export async function fetchSlug(slug, opts = {}) {
   const quarantinePath = opts.quarantinePath ?? QUARANTINE_PATH
+  // 🔴 수동 단건 호출도 우회하지 못한다 — 패킷 · lease 보다 먼저 본다
+  const cta = ctaRepairPendingState({ draftsDir: opts.draftsDir ?? DRAFTS_DIR, slug })
+  if (cta.pending) return ctaRepairHeld(slug, cta)
   let attemptId = null
   if (opts.regenPacket) {
     // 🔴 패킷이 성하지 않으면 안쪽이 같은 사유로 **아무것도 시작하지 않고** 끝낸다 — lease 도 필요 없다
@@ -746,7 +778,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     // 🔴 판정한 바로 그 글자를 보낸다
     message: gate.message,
     requiredMarkers: markers,
-    validate: validateManuscript,
+    validate: manuscriptValidatorFor(gate, { slug, draftsDir }),
     onBeforeSend: recordBeforeSend,
     ...browserDeps,
   })
@@ -950,7 +982,7 @@ export async function fetchOne(slug, { force = false, regenPacket = null, result
      *    "원고를 받았다" 로 읽을 수 있다. 구조화 결과가 `held` 와 사유를 말한다.
      */
     console.error(`     ⏸ HOLD — ${r.errorDetail}`)
-    console.error(`     지문 ${r.messageFingerprint} · 브라우저 접근 0 · 전송 0건`)
+    console.error(`     지문 ${r.messageFingerprint ?? '-'} · 브라우저 접근 0 · 전송 0건`)
     console.error('')
     return finishOne(r, 1)
   }
@@ -1077,7 +1109,14 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   /** 🔴 관문 차단 — brief 계약·direct spec 누락·미지 mode 모두 probe·Chrome 0. */
   const gateBlocked = new Map()
   const correctionPending = new Map()
+  /** 🔴 CTA 수리 transaction 이 남은 slug — 회수 대상 여부와 무관하게 모든 대상에서 먼저 뺀다 (전송 판정 · probe 0) */
+  const ctaHeld = new Map()
+  for (const t of targets) {
+    const c = ctaRepairPendingState({ draftsDir, slug: t.slug })
+    if (c.pending) ctaHeld.set(t.slug, c)
+  }
   for (const slug of fetchSet) {
+    if (ctaHeld.has(slug)) continue
     // 🔴 계획표도 queueItem 을 함께 본다 — fetchSlug 와 **같은 분기**를 지나게 하기 위해서다.
     //    opt-in 없는 slug 는 `null` 로 지나므로 legacy 바이트가 바뀌지 않는다.
     const g = deliveryGate({ slug, draftsDir, quarantinePath, queueItem: queueItemBySlug.get(slug) ?? null, directSourceDeps })
@@ -1089,6 +1128,8 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다 (장부 지문 일치)`)
 
   const planned = targets.map((t) => {
+    const cta = ctaHeld.get(t.slug)
+    if (cta) return { slug: t.slug, stage: t.stage, action: 'hold:cta_repair', reason: cta.code, why: cta.why, fragments: cta.fragments }
     const held = hold.get(t.slug)
     if (fetchSet.has(t.slug) && held) {
       return { slug: t.slug, stage: t.stage, action: 'hold:delivery_uncertain', why: held.why, prior: held.delivery }
@@ -1111,16 +1152,17 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   })
   for (const p of planned) {
     const mark = p.action === 'fetch' ? '→ 전송'
-      : p.action === 'hold:delivery_uncertain' ? `⏸ HOLD (${p.why})`
+      : p.action === 'hold:delivery_uncertain' || p.action === 'hold:cta_repair' ? `⏸ HOLD (${p.why})`
         : p.action.startsWith('blocked:') ? `⛔ 보내지 않음 (${p.why})`
           : `– 건너뜀 (${p.action.split(':')[1]})`
     console.log(`    ${p.slug.padEnd(34)}${mark}`)
   }
   const toFetch = planned.filter((p) => p.action === 'fetch')
   const heldPlans = planned.filter((p) => p.action === 'hold:delivery_uncertain')
+  const ctaPlans = planned.filter((p) => p.action === 'hold:cta_repair')
   const blockedPlans = planned.filter((p) => p.action.startsWith('blocked:'))
   console.log('')
-  console.log(`  전송 예정 ${toFetch.length}건 · HOLD ${heldPlans.length}건 · 관문 차단 ${blockedPlans.length}건 · 건너뜀 ${planned.length - toFetch.length - heldPlans.length - blockedPlans.length}건`)
+  console.log(`  전송 예정 ${toFetch.length}건 · HOLD ${heldPlans.length + ctaPlans.length}건 · 관문 차단 ${blockedPlans.length}건 · 건너뜀 ${planned.length - toFetch.length - heldPlans.length - ctaPlans.length - blockedPlans.length}건`)
   if (dryRun) {
     console.log('')
     console.log('  🔴 dry-run — 한 글자도 보내지 않았다.')
@@ -1135,6 +1177,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
    */
   const results = [
     ...heldPlans.map((p) => ({ ...p.prior, slug: p.slug, status: 'held' })),
+    ...ctaPlans.map((p) => ctaRepairHeld(p.slug, { code: p.reason, why: p.why, fragments: p.fragments })),
     // 🔴 관문 차단은 구조화된 코드를 그대로 남긴다 — 사람용 문장을 다시 파싱하지 않게
     ...blockedPlans.map((p) => ({ slug: p.slug, status: 'failed', reason: p.reason, stage: 'gate',
       sent: false, messageFingerprint: p.messageFingerprint, ...(p.contractViolations ? { contractViolations: p.contractViolations } : {}),

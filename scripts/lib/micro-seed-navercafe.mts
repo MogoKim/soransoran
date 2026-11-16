@@ -339,6 +339,23 @@ export function judgeSession(input: SessionInput): SessionVerdict {
  */
 export const LOCK_PATH = '/tmp/soransoran-navercafe.lock'
 export const RUN_TIMEOUT_MS = 15 * 60 * 1000
+
+export type CollectorTerminationSignal = 'SIGINT' | 'SIGTERM'
+
+/**
+ * 외부 supervisor가 collector를 끝내도 소유 중인 전역 수집 lock을 먼저 놓는다.
+ * 종료 기록 실패가 lock 해제를 건너뛰지 않도록 두 동작을 finally로 묶는다.
+ */
+export function runCollectorTerminationCleanup(i: {
+  signal: CollectorTerminationSignal
+  finish: () => void
+  release: () => void
+  exit: (code: number) => void
+}): void {
+  try { i.finish() } finally {
+    try { i.release() } finally { i.exit(i.signal === 'SIGTERM' ? 143 : 130) }
+  }
+}
 export const LOCK_MAX_AGE_MS = 30 * 60 * 1000
 
 export type LockVerdict = { ok: true; reason: 'FREE' | 'STALE' } | { ok: false; heldForMs: number; detail: string }

@@ -25,9 +25,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 
 import {
-  PRICING_VERSION,
-} from '../src/lib/llm-pricing'
-import {
   classifyReservations, ledgerDateOf, type LedgerEntry,
 } from '../src/lib/llm-ledger'
 import {
@@ -99,17 +96,12 @@ function main(): void {
   withLedgerLock(DIR, () => {
     const path = ledgerPathOf(DIR, ledgerDateOf(new Date(target.startedAt)))
     /**
-     * 🔴 **원래 예약 줄의 실행 종류 · 슬롯을 옮겨 적는다** (2026-09-29 3차).
-     *    이 줄이 접을 때 예약 줄을 **이긴다** — 표식을 빼고 적으면 그 요청이 어느 정기 슬롯의 것이었는지
-     *    장부에서 사라진다. 그러면 ① "사람이 마감한 슬롯은 정기 실측에서 뺀다" 가 걸리지 않고
-     *    ② 그 금액이 슬롯 지출에서 빠진다. 원래 줄을 못 읽으면 표식 없이 적는다 — 실측 쪽이
-     *    `startedAt` 으로 그 슬롯을 따로 뺀다(`scheduledRunSamples`).
+     * 🔴 접힌 장부에서는 이 줄이 원래 요청 줄을 이긴다. 실행 종류만 옮기면 계약·원천·예산·token
+     * provenance가 사라져 같은 요청이 다른 의미가 된다. 따라서 사람이 확인한 정산값과 종료 정보만
+     * 바꾸고, 요청 전에 기록된 불변 provenance는 모두 그대로 보존한다.
      */
     const day = readLedgerDay(path)
     const original = day.ok ? day.entries.find((e) => e.attemptId === target.attemptId) : undefined
-    const tags = original?.runKind === undefined && original?.runSlot === undefined
-      ? {}
-      : { runKind: original?.runKind ?? null, runSlot: original?.runSlot ?? null }
     /**
      * 🔴 **줄을 하나 더 적는다.** 예약 줄은 그대로 남고, 접을 때 이 줄이 이긴다.
      *    `usageUnknown` 으로 마감하면 그 건은 **여력에서 계속 빠진다** —
@@ -117,20 +109,37 @@ function main(): void {
      */
     const entry: LedgerEntry = {
       runId: target.runId, stage: target.stage, attemptId: target.attemptId,
-      requestNo: -1, provider: 'anthropic', apiModelId: '', model: '',
+      requestNo: original?.requestNo ?? -1,
+      provider: original?.provider ?? 'anthropic',
+      apiModelId: original?.apiModelId ?? '',
+      model: original?.model ?? '',
       status: usd === null ? 'usageUnknown' : 'settled',
       blockCode: null,
-      countedInputTokens: null, maxOutputTokens: 0,
-      reservedUsd: target.reservedUsd,
-      inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null,
-      usageKeys: [],
+      countedInputTokens: original?.countedInputTokens ?? null,
+      maxOutputTokens: original?.maxOutputTokens ?? 0,
+      reservedUsd: original?.reservedUsd ?? target.reservedUsd,
+      inputTokens: original?.inputTokens ?? null,
+      outputTokens: original?.outputTokens ?? null,
+      cacheWriteTokens: original?.cacheWriteTokens ?? null,
+      cacheReadTokens: original?.cacheReadTokens ?? null,
+      usageKeys: original?.usageKeys ?? [],
+      ...(original?.usageNumbers === undefined ? {} : { usageNumbers: original.usageNumbers }),
       settledUsd: usd,
-      pricingVersion: PRICING_VERSION,
-      startedAt: target.startedAt, endedAt: new Date().toISOString(),
+      pricingVersion: original?.pricingVersion ?? null,
+      startedAt: original?.startedAt ?? target.startedAt,
+      endedAt: new Date().toISOString(),
       errorCode: NOTE === '' ? 'HUMAN_RESOLVED' : `HUMAN_RESOLVED:${NOTE.slice(0, 80)}`,
       // 🔴 코드가 스스로 쓰지 않는 값이다. 사람이 마감했다는 표시다
       resolvedBy: 'human',
-      ...tags,
+      ...(original?.runKind === undefined ? {} : { runKind: original.runKind }),
+      ...(original?.runSlot === undefined ? {} : { runSlot: original.runSlot }),
+      ...(original?.budgetDailyUsd === undefined ? {} : { budgetDailyUsd: original.budgetDailyUsd }),
+      ...(original?.budgetCeilingUsd === undefined ? {} : { budgetCeilingUsd: original.budgetCeilingUsd }),
+      ...(original?.budgetCapUsd === undefined ? {} : { budgetCapUsd: original.budgetCapUsd }),
+      ...(original?.budgetSource === undefined ? {} : { budgetSource: original.budgetSource }),
+      ...(original?.sourceKey === undefined ? {} : { sourceKey: original.sourceKey }),
+      ...(original?.supplyContract === undefined ? {} : { supplyContract: original.supplyContract }),
+      ...(original?.runTokenShadow === undefined ? {} : { runTokenShadow: original.runTokenShadow }),
     }
     appendLedgerLine(path, entry)
     clearOpenReservation(DIR, target.attemptId)

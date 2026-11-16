@@ -12,7 +12,8 @@
  *
  * 식 (단계 S = 다음 단계 · 직전 단계 P = 실측 단계)
  * ```
- *   dailyCount(S)         = 하루 목표 글(S) × 글당 추가 상한(FOLLOWUP_EXTRA_PER_POST_MAX = 4)       — P profile 과 같은 규칙
+ *   dailyCount(S)         = 하루 목표 글(S) × 운영 예산 기준(FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST = 4)
+ *                           — 글당 구조 상한(9)과 분리해 최대 10 글 하나가 하루 전체 비용을 잠그지 않게 한다
  *   usdPerAccepted(P)     = P 증명일 추가 댓글 정산 USD 합 / 그날 실제 발행된 추가 댓글 수           — 실패 · 버린 요청 비용 포함
  *   dailyUsd(S)           = dailyCount(S) × usdPerAccepted(P)                                       — 0.0001 USD 올림(표기)
  *   runMax(S)             = max(runMax(P), ⌈dailyCount(S) / 하루 댓글 러너 회차⌉)
@@ -24,7 +25,7 @@
  * ```
  */
 import {
-  FOLLOWUP_EXTRA_PER_POST_MAX, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile, type FollowupProfile,
+  FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile, type FollowupProfile,
 } from './persona-comment-followup'
 
 /** 🔴 한 단계(P) 증명일 하루의 실측 — 정본 판독기 결과만 넣는다 */
@@ -80,7 +81,7 @@ export function deriveFollowupProfile(i: {
 }): FollowupDerive {
   const codes = new Set<FollowupDeriveCode>()
   const counts: Record<string, number> = {}
-  const dailyCount = i.targetDailyPosts * FOLLOWUP_EXTRA_PER_POST_MAX
+  const dailyCount = i.targetDailyPosts * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST
   counts.dailyCount = dailyCount
   const out = (candidate: FollowupCandidate | null): FollowupDerive => {
     const list = [...codes]

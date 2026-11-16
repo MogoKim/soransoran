@@ -21,6 +21,7 @@ const ROOT = path.dirname(HERE)
 const F = {
   lib: path.join(ROOT, 'src', 'lib', 'magazine.ts'),
   graph: path.join(ROOT, 'src', 'lib', 'magazine-graph.ts'),
+  rule: path.join(ROOT, 'src', 'lib', 'magazine-provenance-rule.mjs'),
   check: path.join(HERE, 'magazine-graph-check.mts'),
 }
 const CHECKS = [['graph 검사', path.join(ROOT, 'node_modules', '.bin', 'tsx'), [F.check]]]
@@ -46,6 +47,37 @@ const MUTATIONS = [
     find: '!isPublicMagazineArticle(a, now)).map((a) => a.slug)', replace: '!isPublicMagazineArticle(a)).map((a) => a.slug)' }] },
   { name: '검사의 공개 목록만 다른 시각을 쓴다', edits: [{ file: F.check,
     find: '  const list = getAllMagazineArticles(now)\n', replace: '  const list = getAllMagazineArticles()\n' }] },
+  // ── S3 P1 (2026-11-12 · 11-13 수리) — vNext Article 출처 overlay: 공유 규칙 하나 · canonical 우선 · 중복 · 결속 · 관문 뒤 · rollback 폴백 (검사 ④-P) ──
+  { name: '출처가 canonical 같은 slug(다른 intent)를 이긴다', edits: [{ file: F.rule,
+    find: '    if (intentsOfSlug.has(r.slug)) continue', replace: '    if (intentsOfSlug.get(r.slug)?.has(intentId)) continue' }] },
+  { name: '출처가 canonical 같은 intent(미공개 · 다른 slug)를 무시하고 두 번째 글을 붙인다', edits: [{ file: F.rule,
+    find: '    if (slugsOfIntent.has(intentId)) continue', replace: '    if (false) continue' }] },
+  { name: '출처 overlay 가 현재 graph 에 없는 intent 도 더한다(rollback 무시)', edits: [{ file: F.rule,
+    find: '    if (!intents.has(intentId)) continue', replace: '    if (false) continue' }] },
+  { name: '출처 intent 중복에서 고르지 않는 대신 둘 다 더한다', edits: [{ file: F.rule,
+    find: '    if (claims.get(intentId) > 1) continue', replace: '    if (false) continue' }] },
+  { name: '결속 없음(운영 기본값)을 결속으로 본다 — P1 에서 출처가 켜진다', edits: [{ file: F.rule,
+    find: '  if (!binding) return false\n', replace: '  if (!binding) return true\n' }] },
+  { name: '결속이 graphVersion 을 대조하지 않는다', edits: [{ file: F.rule,
+    find: '  if (release.graphVersion !== binding.graphVersion) return false\n', replace: '' }] },
+  { name: '결속이 bundleHash 를 대조하지 않는다', edits: [{ file: F.rule,
+    find: '  if (release.bundleHash !== binding.bundleHash) return false\n', replace: '' }] },
+  { name: '결속이 policyBoard 를 대조하지 않는다', edits: [{ file: F.rule,
+    find: "  if (!release.policyBoard || release.policyBoard.id !== binding.policyBoard.id || release.policyBoard.hash !== binding.policyBoard.hash) return false\n", replace: '' }] },
+  { name: '결속이 planHash 를 대조하지 않는다', edits: [{ file: F.rule,
+    find: ' && binding.planHashOf[release.intentId] === release.planHash\n', replace: '\n' }] },
+  { name: '결속이 컴파일 plan 없는 intent(intentId 위조)를 받아들인다', edits: [{ file: F.rule,
+    find: "own(binding.planHashOf, release.intentId) && binding.planHashOf[release.intentId] === release.planHash",
+    replace: "(!own(binding.planHashOf, release.intentId) || binding.planHashOf[release.intentId] === release.planHash)" }] },
+  { name: '출처가 있는 글은 kill switch 관문보다 먼저 graph 로 간다', edits: [{ file: F.graph,
+    find: "    if (!runtime.enabled) return fallback(article, 'DISABLED', now)",
+    replace: "    if (!runtime.enabled && !article.release) return fallback(article, 'DISABLED', now)" }] },
+  { name: 'resolver 가 출처 overlay 를 쓰지 않는다(canonical mapping 만)', edits: [{ file: F.graph,
+    find: '  const mappings = effectiveGraphMappings(graph, published, binding)\n', replace: '  const mappings = graph.mappings\n' }] },
+  { name: 'resolver 가 공유 규칙 대신 자기 사본(canonical 우선 없음)을 쓴다', edits: [{ file: F.graph,
+    find: '  const overlay = provenanceOverlay({\n', replace: '  const overlay = rows.map((r) => ({ intent: r.release.intentId, slug: r.slug })) || provenanceOverlay({\n' }] },
+  { name: '운영이 읽지 않는 출처 진단(dropped)을 되살린다', edits: [{ file: F.rule,
+    find: '  return overlay\n}', replace: '  return overlay\n}\nexport const dropped = []' }] },
 ]
 
 const sha = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex')

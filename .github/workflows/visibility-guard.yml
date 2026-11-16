@@ -301,6 +301,9 @@ jobs:
           #    그리고 막는 줄 하나를 지우면 반드시 FAIL 하는지(변이 · 임시 디렉터리만). 새 step 이 아니다(무조건 step 상한 불변)
           npm run check:persona-followup
           npm run check:persona-followup-mutation
+          # 🔴 H1(2026-11-14) — 실패 분류 · 최소 범위 격리 · 같은 회차 재선정 루프(실제 run 함수 · mkdtemp 기억 파일)와 그 변이
+          npm run check:persona-followup-reselect
+          npm run check:persona-followup-reselect-mutation
           npm run check:home-popularity
 
       # typecheck 는 @prisma/client 타입을 필요로 한다.
@@ -665,9 +668,15 @@ jobs:
       # D100 Batch D1 — 🔴 날짜만 보이는 게시 라벨을 00:00 으로 만들지 않는다 · 판정은 하루 구간 전체(fail-closed) ·
       #    수집 상세 선별은 같은 점수 안에서만 최신 우선 · 레몬테라스 2~16p · jjong 10 + humor 1 · 요청량 불변.
       #    수집 행 → thin → adapt → 공급 러너 · 적재기 배선까지 본다. 임시 디렉터리 · 네트워크 0 · DB 0.
-      - name: 날짜 정밀도 · 품질 동률 신선도 (D100 Batch D1)
+      - name: 날짜 정밀도 · 품질 동률 신선도 · D100 reliability replay
         if: needs.scope.outputs.heavy == 'true'
-        run: npm run check:d100-freshness
+        # reliability replay는 DB·network·provider·운영 HOME write 0인 characterization이다.
+        # 여섯 근본 gap 중 하나가 조용히 사라지거나 관측 형태가 바뀌면 후속 구현 전에 실패한다.
+        run: |
+          npm run check:d100-freshness
+          # 원천 순위 정본 하나 · 11-06 판정/생성 순서 반례 재생 · queue sourceHash 결속 (DB·network 0). 새 step 이 아니다
+          npm run check:source-rank
+          npm run check:d100-reliability-replay
       # 운영 체인 end-to-end — 🔴 **실제 러너가 쓴 파일**을 실제 적재 순수 함수에 넣는다.
       #    손으로 만든 봉투는 증거가 아니다. 가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
@@ -904,6 +913,14 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run stage:ladder-check
+          # 🔴 StageDecision v6 — writer v6 · reader v5+v6(전날 v5 · rollback) · legacy v4 뿐 · 예측 경고는 v6 만. 새 step 이 아니다
+          npm run stage:v6-reader-check
+          # 🔴 예측 경고(기회·처리량·READY 필요량)·지연 관측은 막지 않는다 · hard gate 만 막는다 · 결정일 결속 · 복구 도달 불가. 새 step 이 아니다
+          npm run stage:forecast-warning-check
+          # 🔴 하루 = 결정 하나 = 단계 하나 — 같은 날 D20→D30 · 조각 하루 증명 반례. 새 step 이 아니다
+          npm run stage:one-day-check
+          # 🔴 D20+ 제한 복구 — 한 릴리스 rollback 호환 코드. 예측만 있는 날은 preflight PASS 라 도달 불가(stage:forecast-warning-check ⑤)
+          npm run stage:active-recovery-check
           # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
           #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
           npm run stage:evidence-check
@@ -916,7 +933,9 @@ jobs:
       #    🔴 heavy 조건 뒤 — 무조건 step 은 상한(70)에 닿아 있다. 이 검사가 보는 src/lib · scripts 는 ALLOW 밖이라
       #       그 코드를 건드리는 PR 은 언제나 heavy 다. 매일 main 예약 실행도 heavy 다.
       #    공급 선택 관측 trace(P0-B0) — trace 유무로 선택이 바뀌지 않는다 · 단계 사유 · 개인정보 0. 새 step 이 아니다
-      #    JIT 공급 선택(P0-B1) — 최대 슬롯 보존(전수 탐색 대조) · 정본 순위 · raw 0 · 재시도 예약 · 운영 모양 재생
+      #    JIT 공급 선택(P0-B1) — 최대 슬롯 보존(전수 탐색 대조) · 정본 순위 · raw 0 · 신규 먼저 · 재선정 몫 10% · 운영 모양 재생
+      #    재선정 권위 단일화(retry-authority-v7) — 원인 전수 표 · AST ratchet · 지문 · 11-09/10 비식별 재생 · 비용 귀속 · 변이검사
+      #    ops shadow S1/S2(권위 0) — 11-07~11 재생 · 부작용 0 가드 · 속도·요청·지출 상한 · writer fail-closed · 변이검사. 새 step 이 아니다
       - name: D100 생동감 계약 (READY 손실 · JIT 공급 · 정치 축)
         if: needs.scope.outputs.heavy == 'true'
         run: |
@@ -924,6 +943,8 @@ jobs:
           npm run supply:jit-contract-check
           npm run supply:selection-trace-check
           npm run supply:jit-selection-check
+          npm run check:retry-authority
+          npm run ops:shadow-plan-check
           npm run check:political-axis
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
@@ -1068,9 +1089,14 @@ jobs:
           # 🔴 무인 댓글 루프(2026-09-28 · Track B) — 60분 · 글당 1건 · 자기 글 · 실사용자 3건 · 단계·주체·상태 ·
           #    댓글 전용 장부 하루 $0.20(실제 세션 · 가짜 fetch) · 9관문 정본 그대로. DB · 네트워크 0. 새 step 이 아니다
           npm run persona:comment-loop-check
+          # 🔴 Gate ⑧ 후보 귀속(2026-11-07 D20) — 옛 판정 oracle 비교 · 잠긴 5명 · n=4/n=60 · 섞인 단계 · 글 × Persona 시도 기억 ·
+          #    고정 잠금 · 회피 표지 · readiness 관측 + 변이(방어를 지우면 FAIL · 원본 해시 복원). DB · 네트워크 0
+          npm run persona:voice-repeat-check
 
-      - name: Persona 생성 계약
-        run: npm run persona:generate-check
+      - name: Persona 생성 계약 · D30 1회 투입 판정
+        run: |
+          npm run persona:generate-check
+          npm run persona:d30-oneshot-check
 
       - name: Persona 발행·대상 규칙
         run: |

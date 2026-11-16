@@ -31,15 +31,16 @@
  */
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
-import { readWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent } from '../src/lib/supply-workset'
-import { sameSupplyQualityContract } from '../src/lib/supply-intent'
+import {
+  orderByWorksetRank, readRunWorkset, worksetFileName, sourceIdentityOf as intentKeyOf, type SupplyIntent,
+} from '../src/lib/supply-workset'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 // 🔴 기존 템플릿 생성기를 그대로 쓴다. 새 생성 로직을 만들지 않는다
 import {
-  pickDraft, pickV2, summarizeDrafts, violatesDraftProvenance, normalize,
+  pickDraft, pickV2, dominatedBeforeReview, summarizeDrafts, violatesDraftProvenance, normalize,
   hasBannedWord, judgeSourceGate, judgeDraftGate,
   DRAFT_REASON_LABEL, DRAFT_RULE_VERSION, DRAFT_PROVENANCE, BANNED_WORDS,
 } from '../src/lib/micro-seed-auto-draft'
@@ -50,7 +51,7 @@ import {
 import { readQueueSnapshot, planPreDraftExclusion } from '../src/lib/supply-queue-snapshot'
 import {
   MACHINE_AGE_HUMAN_REVIEW_NOTE, AGE_CHECK_MODEL_TRIAL, AGE_CHECK_QUALIFIED_MODEL,
-  type DraftCandidate, type Judgement, type Pick,
+  type DraftCandidate, type Judgement, type Pick, type PreReviewPickInput,
 } from '../src/lib/micro-seed-auto-draft'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import {
@@ -82,7 +83,7 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
  */
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
 import { currentContractBase } from './lib/generation-contract.mjs'
-import { digest16, loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
+import { loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
 import { createAttemptPool, planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
 import {
   readSpeakerLoad, SPEAKER_LOAD_FILE,
@@ -117,7 +118,12 @@ import {
 import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type PersonaInput,
 } from './lib/content-core-run.mjs'
-import { GENERATION_RETRY_MAX } from '../src/lib/content-core/generation-failure'
+import {
+  GENERATION_RETRY_MAX, completionRetryClass, evidenceFingerprintOf, failureFingerprintOf, generationAttemptKeyOf,
+  lastCallOutcomeOf, speakerSetKeyOf,
+} from '../src/lib/content-core/generation-failure'
+import { speakerSetAlreadyFailed } from '../src/lib/supply-workset'
+import type { HeldBy, HeldCode } from '../src/lib/micro-seed-auto-draft'
 import { ledgerAskOf } from './lib/content-core-ledger-ask.mjs'
 import { buildSpeakerPlanSystemPrompt } from './lib/content-core-prompts.mjs'
 import {
@@ -129,7 +135,7 @@ import {
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
-import type { DraftGateSource } from '../src/lib/content-core/draft-life-gates'
+import type { DraftGatePlan, DraftGateSource } from '../src/lib/content-core/draft-life-gates'
 import {
   ARTIFACT_VERSION, violatesArtifact, type HumanReviewArtifact,
 } from '../src/lib/content-core/artifact'
@@ -504,19 +510,26 @@ let COST_KEY: string | null = null
 /** 🔴 지금 원천이 이 회차 current-quality JIT 묶음(`workset-v4`)에 있으면 그 계약 — 장부 줄의 `supplyContract`. 아니면 null(legacy) */
 let COST_CONTRACT: string | null = null
 let RUN_INTENTS: ReadonlyMap<string, SupplyIntent> | null = null
-/** 🔴 같은 회차 묶음의 원천 → 의도 — 회차 id 로 찾는다. 옛 판 · 없음 · 손상이면 null */
-function runIntents(runId: string | null): ReadonlyMap<string, SupplyIntent> | null {
-  if (runId === null) return null
+/** 🔴 같은 회차 묶음의 정본 순위 순서(`rankedKeys`) — 생성 순서가 화자 시도 여력의 배분이다. 모르면 null */
+let RUN_RANKED_KEYS: readonly string[] | null = null
+/**
+ * 🔴 같은 회차 묶음의 원천 → 의도 · 순위 — 회차 id 로 찾는다. 없음 · 판독 실패 · 옛 판이면 둘 다 null.
+ *    🔴 try 는 **파일 읽기만** 감싼다. 품질 계약 불일치 중단은 그 밖에서 한다 — catch 가 안전 중단을 삼키지 않는다.
+ */
+function runWorkset(runId: string | null): {
+  intents: ReadonlyMap<string, SupplyIntent> | null
+  rankedKeys: readonly string[] | null
+} {
+  const none = { intents: null, rankedKeys: null }
+  if (runId === null) return none
   const ws = join(DATA_DIR, worksetFileName(runId))
-  if (!existsSync(ws)) return null
+  let raw: string | null = null
   try {
-    const r = readWorkset(JSON.parse(readFileSync(ws, 'utf-8')), runId)
-    if (!r.ok) return null
-    if (r.intents !== null && !sameSupplyQualityContract(r.qualityContract, currentQualityContract())) {
-      fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 생성을 시작하지 않는다')
-    }
-    return r.intents
-  } catch { return null }
+    raw = existsSync(ws) ? readFileSync(ws, 'utf-8') : null
+  } catch { raw = null }
+  const r = readRunWorkset(raw, runId, currentQualityContract())
+  if (r.kind === 'qualityMismatch') fail('작업 묶음의 품질 계약이 지금 코드와 다르다 — 유료 생성을 시작하지 않는다')
+  return r.kind === 'ok' ? { intents: r.intents, rankedKeys: r.rankedKeys } : none
 }
 
 /**
@@ -737,6 +750,8 @@ const callKind = new Map<string, number>()
 let selfAgeCaught = 0
 /** 🔴 위기 신호로 멈춘 회차 — 전용 줄로 따로 보고한다 */
 let crisisHeld = 0
+/** 🔴 (H2) 검수 앞 지배 판정으로 의미 검수를 사지 않은 원천 — 그 자리의 유료 호출이 0 이다 */
+let preReviewSkipped = 0
 /** 🔴 **부르기 전에** 멈춘 원천 — 위기 소재는 생성 자체를 시작하지 않는다(§4) */
 let sourceCrisisHeld = 0
 export function countCall(kind: string): void {
@@ -859,7 +874,9 @@ async function main(): Promise<void> {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 판정 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
   // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
-  RUN_INTENTS = runIntents(RUN_ID)
+  const runWs = runWorkset(RUN_ID)
+  RUN_INTENTS = runWs.intents
+  RUN_RANKED_KEYS = runWs.rankedKeys
   LEDGER = new SupplyLlmSession({
     runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
   })
@@ -982,7 +999,10 @@ async function main(): Promise<void> {
    *    🔴 미리 나누지 않는다 — 원천을 순서대로 처리하며 매 원천에 `시도 가능 전체 − 이번 회차 선택됨` 을 준다
    *       (`createAttemptPool`). 앞판은 27명을 원천마다 2~3명으로 미리 쪼개 묶음 밖 자격자를 못 봤다(2026-10-14 12:15).
    *    🔴 계약이 없는 파일(옛 계약)은 앞판 그대로 공개 자리 몫 − WIP 로 좁게 돈다.
+   *    🔴 그래서 처리 순서가 곧 화자 배분이다 — 판정 파일 순서(이름순)가 아니라 묶음의 정본 순위로 세운다
+   *       (2026-11-06 반례: 이름순 레몬테라스 7.95h 원천이 유일한 화자 자리를 2.633h 원천보다 먼저 가져갔다).
    */
+  seeds = orderByWorksetRank(seeds, (j) => intentKeyOf(j.sourceSite, j.sourceArticleId), RUN_RANKED_KEYS)
   const attemptOf = speakerLoad.loaded ? speakerLoad.attemptCapacityOf : null
   const attemptPool = attemptOf === null ? null : createAttemptPool({
     attemptCapacity: voice.candidates.map((c) => ({ code: c.code, attemptCapacity: attemptOf(c.code) })),
@@ -1048,22 +1068,31 @@ async function main(): Promise<void> {
     const ik = intentKeyOf(j.sourceSite, j.sourceArticleId)
     COST_CONTRACT = ik === null ? null : RUN_INTENTS?.get(ik)?.contract ?? null
     const meta = metas.get(keyOfJ(j))
-    const holdPick = (o: { personaDeferred?: boolean } = {}): void => {
+    /**
+     * 🔴 **초안이 없을 때 원인 사슬을 함께 남긴다** (2026-11-10 retry-authority-v7) — `noDraft` 한 이름으로 뭉치지 않는다.
+     *    유료 요청 전 차단은 원인 칸이 `null` 이고, 생성 결과는 artifact 의 원인 · 손실 유형 · 재선정 처리 · 지문을 그대로 나른다.
+     */
+    const beforeCall = (code: HeldCode): HeldBy => ({
+      code, cause: null, failureKind: null, failureStage: null, retryClass: null,
+      evidenceFingerprint: null, failureFingerprint: null,
+    })
+    const holdPick = (o: { personaDeferred?: boolean; heldBy?: HeldBy } = {}): void => {
       picks.push(pickDraft({
         judgement: j, drafts: [], seenTitles, seenBodies, sourceUsed: false,
         personaDeferred: o.personaDeferred === true,
+        ...(o.heldBy === undefined ? {} : { heldBy: o.heldBy }),
       }, nowIso))
     }
-    if (meta === undefined) { holdPick(); continue }
+    if (meta === undefined) { holdPick({ heldBy: beforeCall('sourceMetaMissing') }); continue }
     /** 🔴 정본을 못 읽었으면 전 원천을 멈춘다 — provider 호출 0 */
-    if (voice.blockAllCode !== null) { voiceHeld += 1; holdPick(); continue }
+    if (voice.blockAllCode !== null) { voiceHeld += 1; holdPick({ heldBy: beforeCall('voiceBlocked') }); continue }
     /**
      * 🔴 **위기 소재는 만들지 않는다** — 정본 §4 선행 차단 (2026-09-16).
      *    유료 호출보다 앞이다. v2 로 바뀌어도 이 순서는 그대로다.
      */
     if (!judgeSourceGate({ title: meta.title, bodyHead: meta.bodyHead }).generate) {
       sourceCrisisHeld += 1
-      holdPick()
+      holdPick({ heldBy: beforeCall('sourceCrisis') })
       continue
     }
 
@@ -1110,7 +1139,7 @@ async function main(): Promise<void> {
        */
       console.log(`   🟡 ${j.sourceArticleId} — ${replan.code}: ${replan.reason}`
         + `${replan.excluded.length > 0 ? ` (제외 ${replan.excluded.join(' ')})` : ''}`)
-      holdPick()
+      holdPick({ heldBy: beforeCall('replanStopped') })
       continue
     }
     /**
@@ -1118,17 +1147,99 @@ async function main(): Promise<void> {
      *    **바뀌기 전 결과**를 캐시에서 받아 그대로 또 실패한다.
      *    🔴 제외가 없을 때는 칸을 붙이지 않는다 — 평상시 key 를 바꾸지 않기 위해서다.
      */
-    const slotDigest = digest16(slotCodes.join(','))
-    const exclPart = replan.excluded.length === 0
-      ? '' : `|excl=${digest16([...replan.excluded].sort().join(','))}`
+    /**
+     * 🔴 **화자 묶음 열쇠 · 시도 열쇠 — 단일 helper** (2026-11-10 retry-authority-v7). 캐시 key 와 결론 판독(artifact 의
+     *    `speakerSetDigest` · 같은 묶음 재구매 차단)이 같은 함수를 쓴다. 바이트는 앞판 key 와 같다 — 캐시를 무효화하지 않는다.
+     */
+    const speakerSetKey = speakerSetKeyOf({ speakerCodes: slotCodes, excludedCodes: replan.excluded })
+    /**
+     * 🔴 **같은 화자 묶음으로 이미 Persona 부적격을 받았으면 다시 사지 않는다** — 유료 호출 앞이다.
+     *    `speakerBound` 는 원천 재시도가 아니라 화자 탓이다 — 다른 묶음일 때만, 같은 근거 지문당 한 번(상한은 공급 선택이 본다).
+     */
+    if (speakerSetAlreadyFailed(priorOutcomes, keyOfJ(j), speakerSetKey)) {
+      holdPick({ heldBy: beforeCall('speakerSetRepeat') })
+      continue
+    }
     // 🔴 원천 (사이트, id) 를 담는다(P0-B) — 옛 열쇠(사이트 없음)는 자연히 빗나간다(다시 만든다 · 남의 artifact 를 받지 않는다)
-    const v2Key = `v2|${S(j.sourceSite)}|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}${exclPart}`
+    const v2Key = `v2|${S(j.sourceSite)}|${j.sourceArticleId}|${generationAttemptKeyOf({
+      artifactVersion: ARTIFACT_VERSION, contractIdentity: generationIdentity(contract), speakerSetKey,
+    })}`
+
+    /** 🔴 그날 나이 — 한 번만 계산한다 */
+    const personaAgeOf = (c: { code: string; birthDate?: string; ageBand: string } | undefined): number | null => {
+      if (c === undefined) return null
+      const v = materializePersonaAt({
+        card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now: RUN_AT,
+      })
+      return v.ok ? v.at.exactAge : null
+    }
+    /**
+     * 🔴 **정본 안전 필터를 다시 건다** — 모델 말을 믿지 않는다.
+     *    v2 의 deterministic 은 개인정보·금지 낱말·복제·원자적 사실·나이를 보고,
+     *    위기 신호 taxonomy 는 여기 정본(`safetyFilter`·`judgeDraftGate`)이 본다.
+     */
+    const candOf = (d: { title: string; body: string }): DraftCandidate => ({
+      sourceArticleId: j.sourceArticleId, draftNo: 1,
+      title: d.title, body: d.body,
+      safetyVerdict: safetyFilter({ title: d.title, body: d.body }).verdict,
+      originality: measureOriginality(`${d.title}\n${d.body}`, `${meta.title}\n${meta.bodyHead}`),
+      generatedAt: nowIso,
+    })
+    /**
+     * 🔴 **채택 자리 입력은 여기 하나에서 만든다** (2026-11-14 H2) — 검수 앞 지배 판정과 검수 뒤 `pickV2` 가
+     *    **같은 값**을 본다. 두 곳에서 따로 조립하면 한쪽이 낡아, 검수 앞에서 막은 초안을 뒤에선 채택하는 어긋남이 생긴다.
+     *    🔴 `harm` 은 의미 검수가 말한 위해다 — 검수 앞에서는 `false`(초안만으로 아는 위기 신호만 본다).
+     *
+     *    🔴 **1인칭 나이 판정의 입력** (2026-09-23). 정본 카드의 `ageBand` 와 계획의
+     *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
+     *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
+     */
+    const pickInputOf = (
+      cand: DraftCandidate,
+      plan: (DraftGatePlan & { personaCode: string | null; selfBasis: string | null }) | null,
+      harm: boolean,
+    ): PreReviewPickInput => {
+      const planned = plan?.personaCode ?? null
+      const card = planned === null ? undefined : voice.candidates.find((c) => c.code === planned)
+      return {
+        judgement: j, draft: cand, seenTitles, seenBodies,
+        sourceUsed: usedSources.has(keyOfJ(j)),
+        sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
+        crisisStop: judgeDraftGate({
+          drafts: [cand], allLifeConflict: false, qualityHarms: [harm ? ['crisisSignal'] : []],
+        }).reason,
+        ageFact: {
+          ageBand: card?.ageBand ?? null, selfBasis: plan?.selfBasis ?? null,
+          // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
+          personaExactAge: personaAgeOf(card),
+        },
+        /**
+         * 🔴 **초안 게이트** (2026-09-26). 캐시 hit artifact 는 새 deterministic 을 거치지 않았다 —
+         *    채택 자리에서 계획과 정본 카드로 다시 건다. 카드를 못 찾으면 `null` 이다.
+         *    🔴 (quality-v3) 원천·회차 시각 — 새 생성과 **같은 원문 · 같은 함수**다. 캐시 hit 도 여기서 다시 본다.
+         *    회차 시각(`RUN_AT`)으로 판정한다 — 캐시에 적힌 옛 판정 시각이 아니다.
+         */
+        draftGate: {
+          plan, card: card ?? null,
+          context: {
+            at: RUN_AT,
+            source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
+          },
+        },
+      }
+    }
+    /**
+     * 🔴 (H2) 이 시도의 검수 앞 지배 판정 결과 — 훅이 채운다. 객체로 둔다(콜백 대입을 흐름 분석이 놓치지 않게).
+     *    캐시 hit 은 완주 artifact 뿐이라 이 칸이 비어 있다.
+     */
+    const preReview: { pick: Pick | null } = { pick: null }
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
     if (cached?.artifact !== undefined) {
       hit += 1
-      art = cached.artifact
+      // 🔴 같은 key 의 캐시는 같은 화자 묶음이다 — 옛 캐시 객체에 칸이 없으면 지금 열쇠를 싣는다
+      art = { ...cached.artifact, speakerSetDigest: speakerSetKey }
     } else {
       miss += 1
       art = await runContentCore({
@@ -1172,7 +1283,17 @@ async function main(): Promise<void> {
          *    정상 3 + 조건부 확인 1 + 기술 재시도 1 = 5 — 회차 공동 예산을 넘지 않는다.
          */
         retryCap: GENERATION_RETRY_MAX,
+        /**
+         * 🔴 **검수 앞 지배 판정** (2026-11-14 H2) — 검수를 `adopt` 로 가정해도 채택 자리가 막는 초안이면
+         *    의미 검수(A + 조건부 확인 B)를 사지 않는다. 판정은 채택 자리와 **같은 입력 · 같은 함수**(`pickV2`)다.
+         */
+        preReviewTerminal: (d, plan) => {
+          preReview.pick = dominatedBeforeReview(pickInputOf(candOf(d), plan, false), nowIso)
+          return preReview.pick === null ? null : preReview.pick.reason
+        },
       })
+      // 🔴 이 시도의 화자 묶음 열쇠 — 결론 판독이 캐시와 같은 값을 본다
+      art = { ...art, speakerSetDigest: speakerSetKey }
       // 🔴 완주한 회차만 캐시에 남긴다 — 막힌 결과를 재사용하면 다음 회차도 막힌다
       if (art.review.semanticCompletion.complete) {
         cache.set(v2Key, { artifact: art, status: 'ok', attemptCount: art.cost.totalCalls })
@@ -1201,77 +1322,41 @@ async function main(): Promise<void> {
 
     if (art.draft === null) {
       v2Held += 1
-      holdPick()
+      const sc = art.review.semanticCompletion
+      const lastCall = lastCallOutcomeOf(art.cost)
+      const evidenceFingerprint = evidenceFingerprintOf({ artifactVersion: ARTIFACT_VERSION, contractIdentity: generationIdentity(contract) })
+      holdPick({
+        heldBy: {
+          code: sc.complete ? 'generationHeld' : 'generationIncomplete',
+          cause: sc.cause, failureKind: art.failure?.kind ?? null, failureStage: art.failure?.stage ?? null,
+          retryClass: completionRetryClass(sc, lastCall),
+          evidenceFingerprint,
+          failureFingerprint: failureFingerprintOf({ evidenceFingerprint, speakerSetKey, cause: sc.cause, lastCall }),
+        },
+      })
       continue
     }
-    /**
-     * 🔴 **정본 안전 필터를 다시 건다** — 모델 말을 믿지 않는다.
-     *    v2 의 deterministic 은 개인정보·금지 낱말·복제·원자적 사실·나이를 보고,
-     *    위기 신호 taxonomy 는 여기 정본(`safetyFilter`·`judgeDraftGate`)이 본다.
-     */
-    const cand: DraftCandidate = {
-      sourceArticleId: j.sourceArticleId, draftNo: 1,
-      title: art.draft.title, body: art.draft.body,
-      safetyVerdict: safetyFilter({ title: art.draft.title, body: art.draft.body }).verdict,
-      originality: measureOriginality(`${art.draft.title}\n${art.draft.body}`,
-        `${meta.title}\n${meta.bodyHead}`),
-      generatedAt: nowIso,
-    }
-    const crisis = judgeDraftGate({
-      drafts: [cand], allLifeConflict: false,
-      qualityHarms: [art.review.semantic?.issues.includes('harm') === true ? ['crisisSignal'] : []],
-    }).reason
-    if (crisis !== null) {
+    const cand = candOf(art.draft)
+    const pickInput = pickInputOf(cand, art.plan ?? null, art.review.semantic?.issues.includes('harm') === true)
+    if (pickInput.crisisStop !== null) {
       crisisHeld += 1
-      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${crisis})`)
+      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${pickInput.crisisStop})`)
     }
     /**
      * 🔴 **기계 판정을 그대로 채택으로 옮기지 않는다.** v2 가 `adopt` 여도
      *    제목 복제 · 중복 · 안전 · 위기 검사는 기존 정본이 다시 본다.
+     *
+     * 🔴 (H2) 검수 앞 지배 판정으로 멈춘 시도는 **그때 낸 pick** 을 그대로 쓴다 — 같은 입력의 `pickV2` 결과이고,
+     *    지금 `pickV2` 를 다시 부르면 `hold` → `semanticHold` 로 뭉개져 정본 사유 이름이 사라진다.
      */
-    /**
-     * 🔴 **1인칭 나이 판정의 입력** (2026-09-23). 정본 카드의 `ageBand` 와 계획의
-     *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
-     *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
-     */
-    /** 🔴 그날 나이 — 한 번만 계산한다 */
-    const personaAgeOf = (c: { code: string; birthDate?: string; ageBand: string } | undefined): number | null => {
-      if (c === undefined) return null
-      const v = materializePersonaAt({
-        card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now: RUN_AT,
-      })
-      return v.ok ? v.at.exactAge : null
+    if (preReview.pick !== null && art.review.semantic !== null) {
+      fail(`검수 앞 지배 판정 불변식 위반 (${j.sourceArticleId}) — 막았다면서 의미 검수 결과가 있다`)
     }
-    const planned = art.plan?.personaCode ?? null
-    const card = planned === null ? undefined
-      : voice.candidates.find((c) => c.code === planned)
-    const p = pickV2({
-      judgement: j, draft: cand, seenTitles, seenBodies,
-      sourceUsed: usedSources.has(keyOfJ(j)),
+    if (preReview.pick !== null) preReviewSkipped += 1
+    const p = preReview.pick ?? pickV2({
+      ...pickInput,
       machineOutcome: art.review.machineOutcome,
       machineReason: art.review.machineReason,
-      sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
-      crisisStop: crisis,
-      ageFact: {
-        ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null,
-        // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
-        personaExactAge: personaAgeOf(card),
-      },
-      /**
-       * 🔴 **초안 게이트** (2026-09-26). 캐시 hit artifact 는 새 deterministic 을 거치지 않았다 —
-       *    채택 자리에서 계획과 정본 카드로 다시 건다. 카드를 못 찾으면 `null` 이다.
-       */
-      draftGate: {
-        plan: art.plan ?? null, card: card ?? null,
-        /**
-         * 🔴 (quality-v3) 원천·회차 시각 — 새 생성과 **같은 원문 · 같은 함수**다. 캐시 hit 도 여기서 다시 본다.
-         *    회차 시각(`RUN_AT`)으로 판정한다 — 캐시에 적힌 옛 판정 시각이 아니다.
-         */
-        context: {
-          at: RUN_AT,
-          source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
-        },
-      },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {
@@ -1316,6 +1401,7 @@ async function main(): Promise<void> {
   if (LEDGER !== null) console.log(`   ${LEDGER.describe().split('\n').join('\n   ')}`)
   console.log(`   🔴 위기 소재로 **부르기 전에** 멈춘 원천 ${sourceCrisisHeld}건 — AI 를 부르지 않았다 (정본 §4)`)
   console.log(`      위기 신호로 멈춘 회차 ${crisisHeld}건 — 사람이 본다`)
+  console.log(`   🟢 검수 앞 지배 판정으로 의미 검수를 사지 않은 원천 ${preReviewSkipped}건 — 채택 자리가 검수 결과와 무관하게 막았다`)
   console.log(`      자기 나이 모순(결정론) ${selfAgeCaught}건`)
   if (replanExhausted > 0) {
     console.log(`   🟡 적격 화자를 다 써서 더 시도하지 않은 원천 ${replanExhausted}건 — AI 를 부르지 않았다`)
@@ -1357,6 +1443,17 @@ async function main(): Promise<void> {
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)
+  }
+  /** 🔴 초안이 나오지 않은 원인 — `noDraft` 한 줄 뒤의 실제 원인 코드와 재선정 처리(단일 권위의 값) */
+  const heldTally = new Map<string, number>()
+  for (const pp of picks) {
+    if (pp.heldBy === undefined) continue
+    const k = `${pp.heldBy.code}:${pp.heldBy.cause ?? '-'}:${pp.heldBy.retryClass ?? '-'}`
+    heldTally.set(k, (heldTally.get(k) ?? 0) + 1)
+  }
+  if (heldTally.size > 0) {
+    console.log('   ④-b 초안 없음의 원인 (자리:원인:재선정)')
+    for (const [k, n] of [...heldTally].sort((a, b) => b[1] - a[1])) console.log(`   ${String(n).padStart(3)}건  ${k}`)
   }
   console.log(`\n⑤ 원천당 1개 — 채택 ${adopted.length}건 · 고유 원천 ${usedSources.size}건`
     + `${adopted.length === usedSources.size ? ' ✅' : ' 🔴'}`)

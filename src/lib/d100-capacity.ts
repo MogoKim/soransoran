@@ -98,7 +98,7 @@ export type D100Plan = {
  *    `scale-profile.RUNTIME_PROFILES` 하나**가 정본이다 (2026-09-29 generic scheduler 배선).
  *    · d1·d3·d5·d10 — `PROFILES` 그대로(launchd 발행 러너 — 2026-09-30 GitHub 예약 제거)
  *    · d20·d30·d50 — 파생 슬롯(로컬 heartbeat 10분 격자). 🔴 감당한다는 뜻이지 열렸다는 뜻이 아니다 —
- *      승인 천장(`SORAN_CAPACITY_STAGE`)이 막고, 시험은 D20+ preflight 가 막는다
+ *      시험은 D20+ preflight 의 hard gate(슬롯 물리 발행 용량 · Persona · 비용 · runner 등)가 막는다(별도 승인 천장 없음)
  *    · d100 — 러너 프로필이 없다. 지금 러너 용량·댓글 예산으로는 열 수 없다(열 수 있는 천장 d50) → `supported: false`
  */
 export type SchedulerSupport = {

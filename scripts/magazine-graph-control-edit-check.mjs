@@ -105,6 +105,23 @@ check('malformed CONTROL · enabledClusters 비배열·누락·중복은 구조�
   assert.equal(codeOf(() => h.addCluster('export const CONTROL = { enabled: true }', 'money-work')), 'CLUSTERS_NOT_ARRAY')
   assert.equal(codeOf(() => h.addCluster("export const CONTROL = { enabledClusters: ['a'], enabledClusters: ['b'] }", 'money-work')), 'CLUSTERS_AMBIGUOUS')
 })
+check('CONTROL 은 데이터로만 읽는다 — 호출 · getter · spread · 계산 key · 중복 key 는 실행 · 덮어쓰기 없이 구조화 오류 (S2 P1-1)', () => {
+  const base = "export const CONTROL = { enabledClusters: ['sleep'], enabled: true, killSwitch: { tripped: true } }"
+  assert.deepEqual(h.readControl(base).killSwitch, { tripped: true }, '대조군')
+  for (const [label, text] of [
+    ['호출 값', "export const CONTROL = { enabledClusters: ['sleep'], enabled: Boolean(1) }"],
+    ['getter', "export const CONTROL = { enabledClusters: ['sleep'], get enabled() { return true } }"],
+    ['spread', "export const CONTROL = { enabledClusters: ['sleep'], ...{ enabled: true } }"],
+    ['계산 key', "export const CONTROL = { enabledClusters: ['sleep'], ['enabled']: true }"],
+    ['enabled 두 번', "export const CONTROL = { enabledClusters: ['sleep'], enabled: false, enabled: true }"],
+    ['enabledClusters 밖 key 두 번(kill switch — 뒤가 열림)', "export const CONTROL = { enabledClusters: ['sleep'], killSwitch: { tripped: true }, killSwitch: { tripped: false } }"],
+    ['중첩 key 두 번', "export const CONTROL = { enabledClusters: ['sleep'], killSwitch: { tripped: true, tripped: false } }"],
+  ]) {
+    assert.equal(codeOf(() => h.readControl(text)), 'CONTROL_PARSE_FAILED', `${label}: readControl`)
+    assert.equal(codeOf(() => h.addCluster(text, 'money-work')), 'CONTROL_PARSE_FAILED', `${label}: addCluster`)
+  }
+  assert.equal(codeOf(() => h.readControl("export const CONTROL = { enabledClusters: ['a'], enabledClusters: ['b'] }")), 'CLUSTERS_AMBIGUOUS', '최상위 enabledClusters 두 번')
+})
 check('사후조건: 편집 뒤 cluster 가 기대값이 아니면 POSTCONDITION_FAILED', () => {
   assert.equal(codeOf(() => h.verifyClusterEdit(real, real, [...real.enabledClusters, ADD])), 'POSTCONDITION_FAILED')
   assert.equal(codeOf(() => h.verifyClusterEdit(real, real, real.enabledClusters)), null)

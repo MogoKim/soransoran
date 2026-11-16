@@ -30,7 +30,8 @@ const snapDrop = (n) => ({ name: `신원 입력 snapshot.${n} 제거`, find: SNA
   replace: SNAP_LINE.replace('SNAPSHOT_FILES.map(', `SNAPSHOT_FILES.filter((n) => n !== '${n}').map(`), expect: `snapshot.${n} 만 바뀜` })
 
 const MUTATIONS = [
-  // ── 신원 입력 15개 ──
+  // ── 신원 입력 16개 (S3 P1 수리 — 출처 규칙 추가) ──
+  keyDrop('product.graphProvenanceRule', "['product.graphProvenanceRule', sha256(texts.graphProvenanceRule)]"),
   keyDrop('product.articles', "['product.articles', sha256(texts.articles)]"),
   keyDrop('product.topicQueue', "['product.topicQueue', sha256(texts.topicQueue)]"),
   keyDrop('product.draftsSlugSet', "['product.draftsSlugSet', sha256(texts.draftSlugs.join('\\n'))]"),

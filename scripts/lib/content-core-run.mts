@@ -245,8 +245,9 @@ export type RunInput = {
   callCap: number
   /**
    * 🔴 **원천 하나가 쓸 수 있는 재시도 수** (2026-10-12 Batch B) — `callCap` 과 **따로** 센다.
-   *    일시적 기술 실패(timeout · 잘림 · 네트워크 · 429 · 5xx)에만 쓴다. 안전·품질·Persona 자격은
-   *    재시도 대상이 아니다. 없으면 0 — 재시도하지 않는다. 운영 러너는 `GENERATION_RETRY_MAX` 를 준다.
+   *    **같은 회차 · 같은 요청**의 일시적 기술 실패(timeout · 잘림 · 네트워크 · 429 · 5xx)에만 쓴다. 안전·품질·Persona 자격을
+   *    같은 요청으로 다시 묻지 않는다(회차를 넘는 재선정 — transient · speakerBound 의 근거 지문당 한 번 — 은
+   *    `generation-failure` 의 `retryClassOf` 가 정한다). 없으면 0 — 재시도하지 않는다. 운영 러너는 `GENERATION_RETRY_MAX` 를 준다.
    *    🔴 재시도도 같은 `ask` 를 지난다 — 회차 예산·장부 예약·잠금을 우회하지 않는다.
    */
   retryCap?: number
@@ -258,7 +259,25 @@ export type RunInput = {
    *    같은 계획을 되풀이하지 않게 한다. 🔴 유료 호출을 늘리지 않는다 — 입력만 늘린다.
    */
   priorFailures?: readonly PriorPlanFailure[]
+  /**
+   * 🔴 **의미 검수 앞 지배 판정** (2026-11-14 H2 공급 비용) — 결정적 검사를 통과한 초안에 대해, 의미 검수를
+   *    `adopt` 로 가정해도 채택 자리가 막는지 묻는다. 막으면 **그 사유(정본 어휘)** 를, 채택 가능성이 남았으면 `null` 을 준다.
+   *
+   *    🔴 non-null 이면 의미 검수(A + 조건부 확인 B)를 **부르지 않는다** — 결론을 바꾸지 못하는 지출이다.
+   *       결과는 `notRun('deterministicFailed')` · `hold` 다: 완주가 아니므로 캐시하지 않고, 재선정은 `terminal` 이다.
+   *       완주한 검수 뒤 막힌 초안은 `candidate` 로 기록될 수 있어 상태 표지는 다르지만, 둘 다 결론 집합이라
+   *       같은 원천을 유료로 다시 사지 않는다는 결과는 같다.
+   *    🔴 없으면 앞판과 같다(다른 호출부의 동작이 바뀌지 않는다). 운영 러너는 `dominatedBeforeReview` 로 준다.
+   *    🔴 artifact 판·프롬프트·캐시 열쇠를 바꾸지 않는다 — 옛 결론이 재구매 대상이 되지 않는다.
+   */
+  preReviewTerminal?: (
+    draft: { title: string; body: string },
+    plan: SpeakerPlan,
+  ) => string | null
 }
+
+/** 🔴 지배 판정으로 의미 검수를 부르지 않았다는 기록 — 사람이 읽는 문구다. 분기는 `semanticCompletion.cause` 로 한다 */
+export const PRE_REVIEW_DOMINATED_LABEL = '의미 검수를 adopt 로 가정해도 채택 자리가 막는다 — 검수를 부르지 않았다'
 
 /**
  * 🔴 **유료 단계 셋은 전부 같은 기준으로 완주를 본다** (2026-09-19 보정).
@@ -553,10 +572,10 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   /**
    * 🔴 **좁힌 묶음 탓인지 전체에서도 없는지 가른다** (2026-09-22).
    *
-   *    `speakerUnqualified` 는 **결론**이라 그 원천이 영구 제외된다.
-   *    후보를 나눈 뒤에는 "이번 묶음에 맞는 사람이 없었다" 가 그 값으로 적히는데,
-   *    그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
-   *    🔴 좁혀져 있었으면 `speakerSlotNarrowed`(다시 본다)로 적는다.
+   *    `speakerUnqualified` 는 **결론**이라 그 원천이 영구 제외된다(전체 후보에서도 자격이 없다).
+   *    후보를 나눈 뒤에는 "이번 묶음에 맞는 사람이 없었다" 가 그 값으로 적히는데, 그것은 그 묶음 탓이다.
+   *    🔴 좁혀져 있었으면 `speakerSlotNarrowed` 로 적는다 — 처리는 단일 권위의 `speakerBound`(2026-11-10):
+   *       **다른 화자 묶음**으로만 근거 지문당 한 번 더(같은 묶음 재구매는 러너가 유료 호출 앞에서 막는다).
    */
   const narrowed = input.personas.length < input.personaPoolSize
   const noSpeakerCause = narrowed ? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const
@@ -810,6 +829,15 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const stop = notRun('deterministicFailed')
     const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: stop })
     return blank(plan, dropped, voice, draft, det, null, stop, j.outcome, j.reason)
+  }
+  /**
+   * 🔴 **④-b 검수 앞 지배 판정** (2026-11-14 H2) — 채택 자리가 의미 검수 결과와 무관하게 막는 초안이면
+   *    유료 검수 앞에서 멈춘다. 판정은 부르는 쪽(`preReviewTerminal`)의 정본 함수다 — 여기서 새로 만들지 않는다.
+   */
+  const dominated = input.preReviewTerminal?.(draft, plan) ?? null
+  if (dominated !== null) {
+    return blank(plan, dropped, voice, draft, det, null, notRun('deterministicFailed'), 'hold',
+      `${PRE_REVIEW_DOMINATED_LABEL} (${dominated})`)
   }
 
   // ── ⑤ 의미 검수 — 차단 finding이 있을 때만 같은 요청으로 1회 확인 ──

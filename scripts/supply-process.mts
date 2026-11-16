@@ -52,6 +52,7 @@ import {
 } from './lib/supply-lease.mjs'
 import { LEASE_INNER_ENV, type LeaseProof } from './lib/runner-lease.mjs'
 import { supplyRunIdOf, shadowTagOf } from '../src/lib/supply-run-token'
+import { createProcessRunRecord, writeProcessRunRecord } from './lib/process-run-record.mjs'
 /**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17) — 판정 규칙은 여기서 만들지 않는다.
  *    정본은 `micro-seed-supply-autofill.hasPendingSibling` · `baseArticleId` 이고,
@@ -62,9 +63,9 @@ import { buildQueueSnapshot, pendingSourceKeysOf, queueSnapshotFileName } from '
 import {
   attemptedOutcomes, concludedSourceKeys, humanDecisionIndexOf, judgeStageBudget, queuedSourceKeysOf, resolveWorksetLimit,
   sourceIdentityOf, sourceKeyOf, type HumanDecisionIndex,
-  selectWorkset, worksetAxisOf, worksetEligibility, worksetFileName,
-  WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetRow,
-  OPPORTUNITY_KIND, OPPORTUNITY_VERSION, opportunitiesFileName, preGenerationRelease, isAutoSupplyConsumable,
+  buildOpportunitySnapshot, selectWorkset, worksetAxisOf, worksetFileName, worksetInventory,
+  WORKSET_DROP_LABEL, type PriorOutcome, type SourceKeySet, type WorksetLifecycleInput, type WorksetRow,
+  opportunitiesFileName, preGenerationRelease,
 } from '../src/lib/supply-workset'
 /** 🔴 공급 선택 관측(P0-B0) — 선택이 끝난 뒤 기록만 읽는다. 선택 · 유료 단계 · DB 에 영향 0 */
 import {
@@ -93,7 +94,7 @@ import {
   CARRY_REJECT_LABEL, buildFillRecord, describeSkips, resolveFillArgs, runFillWithRetry,
   type CarryRejectCode,
 } from '../src/lib/supply-fill-retry'
-import { planCarryOver } from './lib/fill-carry-over.mjs'
+import { planCarryOver, planPostRunCarryOver } from './lib/fill-carry-over.mjs'
 
 /**
  * 🔴 **이 회차의 시각 하나** (2026-09-23 마스터 지적). 여기서 만들고,
@@ -116,6 +117,7 @@ import {
 import { loadVoice } from './lib/voice-runtime.mjs'
 import { kstDateString } from '../src/lib/release-canary'
 import { paidSourcesFor } from '../src/lib/ready-fate'
+import { retryModeFor } from '../src/lib/content-core/generation-failure'
 import { readReadyCohort, recentDates } from './lib/stage-preflight-facts.mjs'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
 import { nextSlotAnchor } from '../src/lib/scale-profile'
@@ -131,12 +133,22 @@ import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
 import { readStock } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
+import {
+  ACTIVE_RECOVERY_DATE_ENV, ACTIVE_RECOVERY_DEADLINE_ENV, ACTIVE_RECOVERY_DEFICIT_ENV,
+  ACTIVE_RECOVERY_NONCE_ENV, ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST,
+  ACTIVE_RECOVERY_START_MINUTE_KST, kstMinuteOf, recoveryJitDemand,
+} from '../src/lib/stage-active-recovery'
+import {
+  claimStageRecoverySupplyStart, stageRecoveryClaimFromArgv, validateStageRecoveryClaim,
+  validateStageRecoveryRuntimeEnv, writeStageRecoverySupplyReceipt,
+  type StageRecoveryClaim, type StageRecoveryIntent,
+} from './lib/stage-recovery-intent.mjs'
 
 /** 🔴 정본은 lib 하나다 — 여기서 문자열을 다시 쓰지 않는다 */
 const DATA_DIR = DATA_DIR_NAME
 const argv = process.argv.slice(2)
 /**
- * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 정본 값(10)이다 —
+ * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 공급 스케줄 정본 값이다 —
  *    올리면 유료 요청도 그만큼 는다(judge N · draft 3N · 전체 4N).
  * 🔴 천장(`WORKSET_MAX_LIMIT`)을 넘기면 `-1` 이고 `judgeStageBudget` 이 실행 전에 멈춘다 — 무제한 호출 없음.
  */
@@ -651,6 +663,31 @@ async function main(proof: LeaseProof | null): Promise<number> {
   // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
   const now = RUN_AT
   const runId = runIdOf(now)
+  const recoveryClaim = stageRecoveryClaimFromArgv(argv)
+  let recoveryIntent: StageRecoveryIntent | null = null
+  if (recoveryClaim !== null) {
+    const wallNow = new Date()
+    if (!LIVE || proof === null || !killOpen) {
+      throw new Error('stage recovery는 live·커널 lease·공급 스위치가 모두 열린 실행만 허용한다')
+    }
+    recoveryIntent = validateStageRecoveryRuntimeEnv(process.env, wallNow)
+    if (recoveryIntent === null) throw new Error('stage recovery runtime env가 없다')
+    if (kstDateString(wallNow) !== recoveryClaim.kstDate
+      || kstMinuteOf(wallNow) < ACTIVE_RECOVERY_START_MINUTE_KST
+      || kstMinuteOf(wallNow) >= ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST) {
+      throw new Error('stage recovery 날짜 또는 유료 시작 창이 끝났다')
+    }
+    if (WORKSET_LIMIT !== recoveryIntent.worksetLimit) {
+      throw new Error(`stage recovery 작업 묶음이 intent와 다르다: ${WORKSET_LIMIT}/${recoveryIntent.worksetLimit}`)
+    }
+    // provider 자식이 각 요청 직전 같은 nonce·intent 상태·절대 마감을 다시 확인한다.
+    process.env[ACTIVE_RECOVERY_DATE_ENV] = recoveryClaim.kstDate
+    process.env[ACTIVE_RECOVERY_NONCE_ENV] = recoveryClaim.nonce
+    process.env[ACTIVE_RECOVERY_DEFICIT_ENV] = String(recoveryClaim.deficit)
+    if ((process.env[ACTIVE_RECOVERY_DEADLINE_ENV] ?? '').trim() === '') {
+      throw new Error('stage recovery 절대 마감 env가 없다')
+    }
+  }
 
   console.log(`\n══ 공급 처리(drain) — ${LIVE ? '🔴 live' : 'dry-run (네트워크 0 · LLM 0 · DB write 0)'} ══\n`)
   console.log(`  runId ${runId}`)
@@ -748,7 +785,10 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const jitIn = SIM !== null
     ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile }).length, readyFilled: SIM }
     : before?.jit ?? null
-  const policy = judgeJitDemand(jitIn)
+  const basePolicy = judgeJitDemand(jitIn)
+  const policy = recoveryIntent === null
+    ? basePolicy
+    : recoveryJitDemand(basePolicy, recoveryIntent.deficit, jitIn !== null)
   /**
    * 🔴 **유료 원천 수 = 부족분에서만** (2026-10-04 P0-2). 앞판은 수요가 1 이어도 고정 묶음 상한(`WORKSET_LIMIT`)만큼
    *    판정 · 생성을 돌렸다(적재만 수요로 묶였다). 이제 `ceil(부족 ÷ 결말 수율 상한)` · 수율을 모르면
@@ -851,21 +891,20 @@ async function main(proof: LeaseProof | null): Promise<number> {
 
   // ── ⑤ 실행 — 🔴 잠금은 ①에서 이미 잡았다. 여기서 다시 만들지 않는다 ──
   const runPath = join(DATA_DIR, runFileName(runId))
-  const record: ProcessRun = {
-    runId,
-    runtimeSha: ((): string | undefined => {
+  const runtimeSha = ((): string | undefined => {
       try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim() } catch { return undefined }
-    })(),
+    })()
+  const record: ProcessRun = createProcessRunRecord({
+    runId,
+    ...(runtimeSha === undefined ? {} : { runtimeSha }),
     startedAt: now.toISOString(),
-    status: 'running', completedAt: null,
     jit: {
       slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, upTo: policy.upTo, reason: policy.reason,
       paidSources: policy.llm ? paid.sources : 0, paidBasis: paid.basis, sourceYieldHigh: before?.sourceYield?.high ?? null,
     },
-    sources: [], stages: [],
     ...(tokenShadow === null ? {} : { runTokenShadow: shadowTagOf(tokenShadow) }),
-  }
-  const save = (): void => { writeAtomic(runPath, `${JSON.stringify(record, null, 2)}\n`) }
+  })
+  const save = (): void => { writeProcessRunRecord(runPath, record) }
   save()
 
   const tally = {
@@ -1016,19 +1055,29 @@ async function main(proof: LeaseProof | null): Promise<number> {
    */
   let queuedSources: SourceKeySet | null = null
   let snapOk = false
-  try {
+  const readQueueSourceState = async () => {
     const qrows = await prisma.originalPostApprovalQueue.findMany({
       select: { createdPostId: true, rawContent: { select: { sourceArticleId: true, sourceSite: true } } },
     })
-    // 🔴 글 쪽 원천 칸 — 큐를 거치지 않은 옛 글도 같은 원천이면 막는다. 제목·본문은 읽지 않는다
     const posts = await prisma.post.findMany({
       where: { sourceArticleId: { not: null } },
       select: { sourceSite: true, sourceArticleId: true },
     })
-    queuedSources = queuedSourceKeysOf([
-      ...qrows.map((r) => ({ sourceSite: r.rawContent?.sourceSite ?? '', sourceArticleId: r.rawContent?.sourceArticleId ?? '' })),
-      ...posts,
-    ])
+    return {
+      qrows,
+      queuePending: pendingSourceKeysOf(qrows.map((r) => ({
+        sourceArticleId: r.rawContent?.sourceArticleId ?? '', sourceSite: r.rawContent?.sourceSite ?? '', createdPostId: r.createdPostId,
+      }))),
+      queuedSources: queuedSourceKeysOf([
+        ...qrows.map((r) => ({ sourceSite: r.rawContent?.sourceSite ?? '', sourceArticleId: r.rawContent?.sourceArticleId ?? '' })),
+        ...posts,
+      ]),
+    }
+  }
+  try {
+    const state = await readQueueSourceState()
+    const { qrows } = state
+    queuedSources = state.queuedSources
     const snap = buildQueueSnapshot({
       runId, takenAt: new Date(),
       rows: qrows.map((r) => ({
@@ -1039,9 +1088,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
     })
     // 🔴 이 파일은 **묶음을 고르는 데만** 쓴다 — 생성 직전에 다시 뜬다
     writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
-    queuePending = pendingSourceKeysOf(qrows.map((r) => ({
-      sourceArticleId: r.rawContent?.sourceArticleId ?? '', sourceSite: r.rawContent?.sourceSite ?? '', createdPostId: r.createdPostId,
-    })))
+    queuePending = state.queuePending
     snapOk = true
     console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSources.length}건 미발행 원천`
       + ` · 큐·글에 이미 있는 원천 ${queuedSources.bySiteId.size}건 (발행 포함 — 다시 만들지 않는다)`)
@@ -1060,6 +1107,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
   const nextSlotAt = nextSlotAnchor(scale.releaseProfile, {
     now: RUN_AT, publishedToday: before?.jit?.publishedToday ?? 0,
   })
+  let opportunityRows: WorksetRow[] | null = null
   if (snapOk && queuedSources !== null) {
     let listIndex: ListObservationIndex | null = null
     try { listIndex = readListObservations(DATA_DIR, RUN_AT) } catch (e) {
@@ -1070,6 +1118,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
+    opportunityRows = rows
     /**
      * 🔴 **부족 슬롯** (2026-10-04 P0-2 보정) — 다가오는 슬롯 중 자동 READY 가 정본 짝짓기로 덮지 못한 슬롯.
      *    원천은 **그 슬롯들 각각의 시각에** 생성 전 판정을 받는다 — 한 슬롯(`nextSlotAt`)으로 모두 판정하지 않는다.
@@ -1087,28 +1136,19 @@ async function main(proof: LeaseProof | null): Promise<number> {
     const runAt = RUN_AT
     const prior = priorState(rows, currentContractBase(runAt))
     /**
-     * 🔴 **생성 가능 판정 입력 — 하나다** (2026-10-01 Lane B). 기회 스냅샷과 묶음 선택이 같은 값 · 같은 함수
-     *    (`worksetEligibility`)를 쓴다. 앞판 스냅샷은 슬롯 판정만 거쳐 끝난 · 큐 · 이월 · 사람 판정 원천까지 셌다.
+     * 🔴 실제 JIT 선택은 이 lifecycle에 현재 release horizon을 더한다.
+     *    다음 단계 기회 inventory는 회차 종료 후 실제 큐 · 후보 · 결론 상태를 다시 읽어
+     *    stage-neutral로 새로 만든다. 서로 다른 시간 지평을 섞지 않는다.
      */
-    const eligibilityInput = {
+    const lifecycleInput = {
       rows, humanDecided: humanDecided(), queuePending, queuedSources,
       // 🔴 이월로 적재될 후보의 원천 — 다시 만들지 않는다(#587 이 적재한다)
       carriedOver: queuedSourceKeysOf(carry.picked.flatMap((x) => x.sources)),
       concluded: prior.concluded,
-      releaseOf,
     }
-    /**
-     * 🔴 **원천 기회 스냅샷** — 지금 실제로 생성 가능한(상한 전) 원천의 증거 기록(원문 없음). 다음 단계 preflight 가 읽는다.
-     *    쓰기는 live 회차에서만(dry-run 파일 write 0).
-     */
-    if (canWrite) {
-      // 🔴 opportunities-v2 = 자동 seed 전용 — JIT 선택과 같은 정본(`isAutoSupplyConsumable`) 하나로 거른다
-      const opp = worksetEligibility(eligibilityInput).eligible.filter(isAutoSupplyConsumable).flatMap((r) => (r.evidence === null ? [] : [r.evidence]))
-      writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify({
-        kind: OPPORTUNITY_KIND, version: OPPORTUNITY_VERSION, runId, takenAt: RUN_AT.toISOString(),
-        slotAt: nextSlotAt.toISOString(), evidence: opp,
-      }, null, 2)}\n`)
-      console.log(`   🟢 원천 기회 스냅샷 ${opp.length}건 (예정 슬롯 ${nextSlotAt.toISOString()})`)
+    const eligibilityInput = {
+      ...lifecycleInput,
+      releaseOf,
     }
     // 🔴 선택 관측 기록기(P0-B0) — 선택 함수에 넘겨 단계 결과를 적기만 한다
     const recorder = createSelectionRecorder()
@@ -1117,9 +1157,11 @@ async function main(proof: LeaseProof | null): Promise<number> {
      * 🔴 **JIT 선택 하나** (2026-10-19) — raw 제외 → 부족 슬롯 연결 → 신선도 우선 단일 순위 →
      *    고른 집합에만 EDF 배정. 고른 원천은 **배정 슬롯**에서 다시 판정해 묶음에 나이를 적는다.
      */
+    // 🔴 재선정 몫 · 축소 운영은 단일 권위가 정한다 — 수율을 모르는 회복 canary 는 신규만(`freshOnly`) (2026-11-10)
+    const retryMode = retryModeFor({ paidBasis: paid.basis })
     const plan = selectWorkset({
       ...eligibilityInput, attempted: prior.attempted,
-      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract() },
+      jit: { slots: unfilledSlots, now: RUN_AT, cap: PAID_LIMIT, qualityContract: currentQualityContract(), retryMode },
       limit: PAID_LIMIT, runId, takenAt: runAt,
       trace: recorder.sink,
     })
@@ -1250,6 +1292,49 @@ async function main(proof: LeaseProof | null): Promise<number> {
   // 🔴 적재가 실패한 회차도 마감은 한다 — 앞 회차가 남긴 미도장 행이 있을 수 있다(도장은 멱등 · CAS)
   record.autoReady = (await finalizeIfLeased()) ?? undefined
   record.status = closeRunStatus(record.stages, record.autoReady)
+  /**
+   * 🔴 원천 기회는 **회차 결과가 확정된 뒤** 한 번만 적는다. 선택만 됐지만 예산·일시 실패로
+   *    처리되지 않은 원천은 남기고, 실제 큐 저장 · 생성 후보 · 최종 결론은 뺀다.
+   *    현재 JIT release horizon 은 적용하지 않는다 — 다음 단계 preflight 가 자기 슬롯에서 다시 판정한다.
+   */
+  if (opportunityRows !== null && canWrite) {
+    // 실제 종료 시각을 쓰되, 재생·지연 회차에서도 관측이 정본 회차 시각보다 앞설 수는 없다.
+    const observedAt = new Date(Math.max(Date.now(), RUN_AT.getTime()))
+    try {
+      const state = await readQueueSourceState()
+      const freshPrior = priorState(opportunityRows, currentContractBase(RUN_AT))
+      // 🔴 예전 candidate 전체가 아니라, 이 시점에 다음 회차가 실제 이월할 파일만 뺀다.
+      const postRunCarry = planPostRunCarryOver({ dataDir: DATA_DIR, nowMs: observedAt.getTime() })
+      const postRunInput: WorksetLifecycleInput = {
+        rows: opportunityRows,
+        humanDecided: humanDecided(),
+        queuePending: state.queuePending,
+        queuedSources: state.queuedSources,
+        carriedOver: queuedSourceKeysOf([
+          ...postRunCarry.picked.flatMap((x) => x.sources),
+        ]),
+        concluded: freshPrior.concluded,
+      }
+      const snapshot = buildOpportunitySnapshot({
+        runId, takenAt: observedAt, inputRows: opportunityRows.length,
+        inventory: worksetInventory(postRunInput),
+      })
+      writeAtomic(join(DATA_DIR, opportunitiesFileName(runId)), `${JSON.stringify(snapshot, null, 2)}\n`)
+      const c = snapshot.inventory.counts
+      record.opportunityInventory = {
+        status: 'written', runId, observedAt: snapshot.takenAt, written: c.written, reason: null,
+      }
+      console.log(`   🟢 stage-neutral 원천 기회 ${c.written}건`
+        + ` (회차 후 lifecycle ${c.lifecyclePassed} · auto-seed ${c.autoSeed} · 증거 없음 ${c.evidenceMissing})`)
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e)
+      record.status = 'failed'
+      record.opportunityInventory = {
+        status: 'failed', runId, observedAt: observedAt.toISOString(), written: null, reason,
+      }
+      console.error(`   🔴 원천 기회 inventory 실패 — ${reason}`)
+    }
+  }
   record.completedAt = nowIso()
   save()
 
@@ -1322,9 +1407,25 @@ const isDirectRun = process.argv[1] !== undefined
  *    · holder · 회차 자식은 바깥이 읽은 env 를 물려받았다 — 다시 판정하지 않고 lease 로 간다
  */
 async function entry(): Promise<number> {
+  const recoveryClaim: StageRecoveryClaim | null = stageRecoveryClaimFromArgv(argv)
+  if (recoveryClaim !== null) validateStageRecoveryClaim(recoveryClaim)
   const viaLease = (): Promise<number> => supplyEntry({
     scriptPath: fileURLToPath(import.meta.url), argv, env: process.env,
-    body: (proof) => main(proof), log: (l) => console.log(l),
+    body: async (proof) => {
+      if (recoveryClaim !== null) {
+        validateStageRecoveryRuntimeEnv(process.env, new Date())
+        claimStageRecoverySupplyStart({ claim: recoveryClaim, supplyRunId: runIdOf(RUN_AT), now: new Date() })
+      }
+      const code = await main(proof)
+      if (code === 0 && recoveryClaim !== null) {
+        writeStageRecoverySupplyReceipt({
+          claim: recoveryClaim, supplyRunId: runIdOf(RUN_AT), now: new Date(),
+        })
+      }
+      return code
+    },
+    log: (l) => console.log(l),
+    ...(recoveryClaim === null ? {} : { trigger: 'recovery' as const }),
   })
   if (process.env[SUPPLY_PASS_ENV] !== undefined || process.env[LEASE_INNER_ENV] !== undefined) return viaLease()
   await loadEnvLocal()

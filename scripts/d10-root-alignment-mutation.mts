@@ -66,8 +66,8 @@ const MUTATIONS: Mutation[] = [
   // ── B · 글쓴이 답글 ──
   M('글쓴이 답글 자리 없음(옛 동작)', FU, FU_CHECK,
     "  return { kind: 'author', personaId: author }\n}", "  return { kind: 'other' }\n}"),
-  M('글쓴이 답글 한 번 제한 제거', FU, FU_CHECK,
-    "  if (f.comments.some((c) => c.commentOrigin === 'PERSONA' && c.personaId === author)) return { kind: 'other' }\n", ''),
+  M('글쓴이 답글 3회 상한 제거', FU, FU_CHECK,
+    "  if (authorTurns >= PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) return { kind: 'other' }", "  if (false) return { kind: 'other' }"),
   M('실회원 댓글도 글쓴이 답글 자리', FU, FU_CHECK,
     "if (parent === undefined || parent.commentOrigin !== 'PERSONA') return { kind: 'other' }", "if (parent === undefined) return { kind: 'other' }"),
   M('고르기가 글쓴이 자리를 무시(무작위 Persona)', FU, FU_CHECK,
@@ -91,10 +91,12 @@ const MUTATIONS: Mutation[] = [
   M('run 이 첫 댓글 역할을 읽지 않음', RUN, FU_CHECK,
     "role: c.commentOrigin === 'PERSONA' ? followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)) : null", 'role: null'),
   // ── B · 대화 감사 ──
-  M('대화 감사 — 글쓴이 최상위 추가 허용', EV, EV_CHECK, 'own.some((c) => c.topLevel) || ', ''),
-  M('대화 감사 — 글쓴이 답글 여러 번 허용', EV, EV_CHECK, ' || own.length > 1)', ')'),
+  M('대화 감사 — 글쓴이 최상위 추가 허용', EV, EV_CHECK, 'own.some((c) => c.parentId === null) || ', ''),
+  M('대화 감사 — 글쓴이 답글 여러 번 허용', EV, EV_CHECK,
+    ' || own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX)', ')'),
   M('대화 감사 — 글쓴이 답글 한 번도 결함(옛 동작)', EV, EV_CHECK,
-    "if (own.some((c) => c.topLevel) || own.length > 1) codes.add('FOLLOWUP_SELF')", "if (own.length > 0) codes.add('FOLLOWUP_SELF')"),
+    "if (own.some((c) => c.parentId === null) || own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) codes.add('FOLLOWUP_SELF')",
+    "if (own.length > 0) codes.add('FOLLOWUP_SELF')"),
 ]
 
 const FAIL_LINE = /❌|🔴 FAIL/

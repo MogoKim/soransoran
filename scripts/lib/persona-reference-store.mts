@@ -42,6 +42,7 @@ import {
   assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot,
 } from './persona-reference-supplement-store.mjs'
 import { supplementFallbackPartition } from '../../src/lib/persona-reference-supplement'
+import type { SupplementGeneration } from '../../src/lib/persona-reference-supplement'
 
 /**
  * 🔴 **이 참고 댓글은 남의 경험을 담고 있는가** (2026-09-10, 창업자 판정 B).
@@ -461,6 +462,8 @@ export function planAppendOnlyBundles(input: {
   extraRows: readonly LocalComment[]
   productionCodes: readonly string[]
   newCodes: readonly string[]
+  /** 이미 동결·배정된 묶음. 같은 근거 화자를 다음 세대에 다시 주지 않는다. */
+  occupiedBundles?: readonly VoiceReferenceBundle[]
   target?: number
 }): {
   byCode: Map<string, VoiceReferenceBundle>
@@ -486,8 +489,11 @@ export function planAppendOnlyBundles(input: {
 
   // ── ③ 보충 — 정본과 같은 글자를 가진 화자는 통째로 뺀다 ──
   const canonTexts = new Set(input.canonRows.map((r) => r.text))
+  const occupiedTexts = new Set((input.occupiedBundles ?? []).flatMap((bundle) => bundle.comments.map((comment) => comment.text)))
   const canonSpeakers = new Set(input.canonRows.map((r) => r.speakerId))
-  const tainted = new Set(input.extraRows.filter((r) => canonTexts.has(r.text) || canonSpeakers.has(r.speakerId)).map((r) => r.speakerId))
+  const tainted = new Set(input.extraRows
+    .filter((r) => canonTexts.has(r.text) || occupiedTexts.has(r.text) || canonSpeakers.has(r.speakerId))
+    .map((r) => r.speakerId))
   const extra = input.extraRows.filter((r) => !tainted.has(r.speakerId))
   const extraSupply = speakerSupply(extra)
   const extraAssignable = planBundles({
@@ -527,6 +533,13 @@ export function planAppendOnlyBundles(input: {
 export function stableAssignment(input: {
   repoRoot: string
   target?: number
+  /**
+   * Expansion provenance only. Runtime callers omit this and read the active
+   * generation. A cohort verifier passes the previous generation so it can
+   * prove that the new append-only snapshot did not rewrite an old Persona's
+   * frozen voice bundle.
+   */
+  supplementGeneration?: SupplementGeneration
 }): {
   byCode: Map<string, VoiceReferenceBundle>
   assets: ReferenceAssetReport[]
@@ -563,6 +576,7 @@ export function stableAssignment(input: {
   const supplement = canon.ok && canon.sourceDigest !== null
     ? readSupplementSnapshot({
       baseSourceDigest: canon.sourceDigest,
+      generation: input.supplementGeneration,
       baseAssignmentDigestFor: (codes) => {
         // Manifest identity is independent of a caller's display/sample cap.
         const base = planBundles({ rows, personaCodes: codes })

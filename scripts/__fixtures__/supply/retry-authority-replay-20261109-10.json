@@ -1,0 +1,6133 @@
+{
+ "kind": "retry-authority-replay",
+ "version": 1,
+ "note": "11-09·11-10 KST 자연 공급 12회차 비식별 재생. 원천은 회차를 가로지르는 불투명 라벨(S###)뿐이다 — 원문·제목·원문 id·해시·닉네임·post id 없음. 비용은 artifact 의 정산액(장부와 같은 값)이다.",
+ "source": "보조 Mac runtime a5507b76 회차 기록(read-only 추출 2026-11-10)",
+ "runs": [
+  {
+   "runId": "20261108-211506",
+   "kstSlot": "11-09 06:15",
+   "cap": 10,
+   "slots": 2,
+   "candidates": [
+    {
+     "s": "S001",
+     "retry": false,
+     "raw": false,
+     "ageH": 7,
+     "selected": true
+    },
+    {
+     "s": "S002",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S003",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    },
+    {
+     "s": "S004",
+     "retry": false,
+     "raw": false,
+     "ageH": 7,
+     "selected": true
+    },
+    {
+     "s": "S005",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S006",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S007",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S008",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S009",
+     "retry": true,
+     "raw": false,
+     "ageH": 68,
+     "selected": false
+    },
+    {
+     "s": "S010",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S011",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": false
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S013",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S014",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S015",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S016",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": false,
+     "raw": false,
+     "ageH": 7,
+     "selected": true
+    },
+    {
+     "s": "S018",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S019",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S020",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S021",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S023",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 6,
+     "selected": false
+    },
+    {
+     "s": "S025",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S026",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    },
+    {
+     "s": "S027",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S028",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S029",
+     "retry": false,
+     "raw": true,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S030",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": false
+    },
+    {
+     "s": "S031",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S032",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S034",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S035",
+     "retry": false,
+     "raw": true,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S036",
+     "retry": true,
+     "raw": false,
+     "ageH": 56,
+     "selected": false
+    },
+    {
+     "s": "S037",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": false
+    },
+    {
+     "s": "S038",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S039",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S040",
+     "retry": false,
+     "raw": true,
+     "ageH": 54,
+     "selected": false
+    },
+    {
+     "s": "S041",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S042",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S043",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S044",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S047",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S048",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S049",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    },
+    {
+     "s": "S050",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S052",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S052",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021745
+    },
+    {
+     "s": "S032",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.009725
+    },
+    {
+     "s": "S049",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005281
+    },
+    {
+     "s": "S026",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005675
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001657
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001515
+    }
+   ],
+   "picks": [
+    {
+     "s": "S052",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S032",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S049",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S026",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S001",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    },
+    {
+     "s": "S004",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    },
+    {
+     "s": "S002",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    }
+   ]
+  },
+  {
+   "runId": "20261108-231505",
+   "kstSlot": "11-09 08:15",
+   "cap": 20,
+   "slots": 17,
+   "candidates": [
+    {
+     "s": "S001",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S002",
+     "retry": true,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S004",
+     "retry": true,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S005",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S006",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S007",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S008",
+     "retry": true,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S009",
+     "retry": true,
+     "raw": false,
+     "ageH": 70,
+     "selected": false
+    },
+    {
+     "s": "S010",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S011",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 10,
+     "selected": false
+    },
+    {
+     "s": "S013",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S014",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S015",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S016",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S018",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S019",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S020",
+     "retry": false,
+     "raw": false,
+     "ageH": 10,
+     "selected": true
+    },
+    {
+     "s": "S021",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 11,
+     "selected": false
+    },
+    {
+     "s": "S023",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 7,
+     "selected": false
+    },
+    {
+     "s": "S025",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S027",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S028",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S029",
+     "retry": false,
+     "raw": true,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S030",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S034",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": true
+    },
+    {
+     "s": "S035",
+     "retry": false,
+     "raw": true,
+     "ageH": 59,
+     "selected": false
+    },
+    {
+     "s": "S036",
+     "retry": true,
+     "raw": false,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S037",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S038",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": true
+    },
+    {
+     "s": "S039",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S040",
+     "retry": false,
+     "raw": true,
+     "ageH": 55,
+     "selected": false
+    },
+    {
+     "s": "S041",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": true
+    },
+    {
+     "s": "S042",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S043",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S044",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S045",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 11,
+     "selected": false
+    },
+    {
+     "s": "S047",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": true
+    },
+    {
+     "s": "S048",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S050",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S051",
+     "retry": false,
+     "raw": false,
+     "ageH": 35,
+     "selected": false
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.00171
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001841
+    },
+    {
+     "s": "S001",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001545
+    },
+    {
+     "s": "S004",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010401
+    },
+    {
+     "s": "S002",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011807
+    },
+    {
+     "s": "S008",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020014
+    },
+    {
+     "s": "S011",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006974
+    },
+    {
+     "s": "S030",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010539
+    },
+    {
+     "s": "S037",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.016591
+    },
+    {
+     "s": "S020",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.019093
+    },
+    {
+     "s": "S050",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.016965
+    },
+    {
+     "s": "S013",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "personaTransformFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005817
+    },
+    {
+     "s": "S018",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011589
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001531
+    },
+    {
+     "s": "S044",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007206
+    },
+    {
+     "s": "S034",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.01028
+    },
+    {
+     "s": "S041",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020504
+    },
+    {
+     "s": "S047",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.018133
+    },
+    {
+     "s": "S038",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006995
+    }
+   ],
+   "picks": [
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S001",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S004",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S002",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S008",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S011",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S030",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S037",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S020",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S050",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S013",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S018",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S044",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S034",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S041",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S047",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S038",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    }
+   ]
+  },
+  {
+   "runId": "20261109-031505",
+   "kstSlot": "11-09 12:15",
+   "cap": 20,
+   "slots": 12,
+   "candidates": [
+    {
+     "s": "S001",
+     "retry": true,
+     "raw": false,
+     "ageH": 10,
+     "selected": true
+    },
+    {
+     "s": "S053",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S054",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S005",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S006",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 12,
+     "selected": true
+    },
+    {
+     "s": "S009",
+     "retry": true,
+     "raw": false,
+     "ageH": 71,
+     "selected": false
+    },
+    {
+     "s": "S010",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 12,
+     "selected": false
+    },
+    {
+     "s": "S013",
+     "retry": true,
+     "raw": false,
+     "ageH": 12,
+     "selected": true
+    },
+    {
+     "s": "S014",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S055",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S056",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S057",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S015",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S016",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 10,
+     "selected": true
+    },
+    {
+     "s": "S058",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S019",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S059",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S060",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S021",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 12,
+     "selected": false
+    },
+    {
+     "s": "S023",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S025",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S027",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S061",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S028",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S029",
+     "retry": false,
+     "raw": true,
+     "ageH": 64,
+     "selected": false
+    },
+    {
+     "s": "S062",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S063",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S035",
+     "retry": false,
+     "raw": true,
+     "ageH": 60,
+     "selected": false
+    },
+    {
+     "s": "S036",
+     "retry": true,
+     "raw": false,
+     "ageH": 59,
+     "selected": false
+    },
+    {
+     "s": "S064",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S039",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S040",
+     "retry": false,
+     "raw": true,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S042",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S043",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 12,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S057",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.013107
+    },
+    {
+     "s": "S054",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.008059
+    },
+    {
+     "s": "S056",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.012476
+    },
+    {
+     "s": "S062",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001739
+    },
+    {
+     "s": "S061",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.012404
+    },
+    {
+     "s": "S063",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020632
+    },
+    {
+     "s": "S055",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.002003
+    },
+    {
+     "s": "S059",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.017245
+    },
+    {
+     "s": "S058",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020993
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002095
+    },
+    {
+     "s": "S053",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.022301
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001714
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001578
+    },
+    {
+     "s": "S001",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.02209
+    },
+    {
+     "s": "S013",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001771
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001573
+    },
+    {
+     "s": "S025",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.027475
+    },
+    {
+     "s": "S005",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.016813
+    }
+   ],
+   "picks": [
+    {
+     "s": "S057",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S054",
+     "decision": "AUTO_HOLD",
+     "reason": "unwarrantedSelfClaim"
+    },
+    {
+     "s": "S056",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S062",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S061",
+     "decision": "AUTO_HOLD",
+     "reason": "copiedFromSource"
+    },
+    {
+     "s": "S063",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S055",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S059",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S058",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S053",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S001",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S013",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S025",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S005",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    }
+   ]
+  },
+  {
+   "runId": "20261109-051505",
+   "kstSlot": "11-09 14:15",
+   "cap": 20,
+   "slots": 11,
+   "candidates": [
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S065",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S006",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": true
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 14,
+     "selected": true
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 14,
+     "selected": false
+    },
+    {
+     "s": "S013",
+     "retry": true,
+     "raw": false,
+     "ageH": 14,
+     "selected": true
+    },
+    {
+     "s": "S014",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S055",
+     "retry": true,
+     "raw": false,
+     "ageH": 3,
+     "selected": true
+    },
+    {
+     "s": "S066",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S067",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S015",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S016",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": true
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 12,
+     "selected": true
+    },
+    {
+     "s": "S068",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S019",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 3,
+     "selected": true
+    },
+    {
+     "s": "S021",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 14,
+     "selected": false
+    },
+    {
+     "s": "S023",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 11,
+     "selected": false
+    },
+    {
+     "s": "S027",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S061",
+     "retry": true,
+     "raw": false,
+     "ageH": 3,
+     "selected": true
+    },
+    {
+     "s": "S028",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": true
+    },
+    {
+     "s": "S069",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S029",
+     "retry": false,
+     "raw": true,
+     "ageH": 66,
+     "selected": false
+    },
+    {
+     "s": "S062",
+     "retry": true,
+     "raw": false,
+     "ageH": 3,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S035",
+     "retry": false,
+     "raw": true,
+     "ageH": 62,
+     "selected": false
+    },
+    {
+     "s": "S036",
+     "retry": true,
+     "raw": false,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S039",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": true
+    },
+    {
+     "s": "S040",
+     "retry": false,
+     "raw": true,
+     "ageH": 59,
+     "selected": false
+    },
+    {
+     "s": "S042",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": true
+    },
+    {
+     "s": "S043",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 1,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 14,
+     "selected": false
+    },
+    {
+     "s": "S071",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S051",
+     "retry": false,
+     "raw": false,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S072",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S069",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.008395
+    },
+    {
+     "s": "S065",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.022489
+    },
+    {
+     "s": "S072",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005946
+    },
+    {
+     "s": "S068",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.01
+    },
+    {
+     "s": "S071",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011655
+    },
+    {
+     "s": "S066",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.00209
+    },
+    {
+     "s": "S062",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001964
+    },
+    {
+     "s": "S061",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011914
+    },
+    {
+     "s": "S055",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011007
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002109
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.00186
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001571
+    },
+    {
+     "s": "S013",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001737
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.00158
+    },
+    {
+     "s": "S039",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001928
+    },
+    {
+     "s": "S028",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010769
+    },
+    {
+     "s": "S016",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007172
+    },
+    {
+     "s": "S042",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006086
+    },
+    {
+     "s": "S006",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.015387
+    }
+   ],
+   "picks": [
+    {
+     "s": "S069",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S065",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S072",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S068",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S071",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S066",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S062",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S061",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S055",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S013",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S039",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S028",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S016",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S042",
+     "decision": "AUTO_HOLD",
+     "reason": "personaNoGo"
+    },
+    {
+     "s": "S006",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    }
+   ]
+  },
+  {
+   "runId": "20261109-081506",
+   "kstSlot": "11-09 17:15",
+   "cap": 20,
+   "slots": 5,
+   "candidates": [
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 15,
+     "selected": true
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 18,
+     "selected": true
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 18,
+     "selected": false
+    },
+    {
+     "s": "S013",
+     "retry": true,
+     "raw": false,
+     "ageH": 18,
+     "selected": true
+    },
+    {
+     "s": "S014",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S066",
+     "retry": true,
+     "raw": false,
+     "ageH": 5,
+     "selected": true
+    },
+    {
+     "s": "S015",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 16,
+     "selected": true
+    },
+    {
+     "s": "S019",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 7,
+     "selected": true
+    },
+    {
+     "s": "S021",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 18,
+     "selected": false
+    },
+    {
+     "s": "S023",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 15,
+     "selected": false
+    },
+    {
+     "s": "S027",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S029",
+     "retry": false,
+     "raw": true,
+     "ageH": 70,
+     "selected": false
+    },
+    {
+     "s": "S062",
+     "retry": true,
+     "raw": false,
+     "ageH": 7,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S035",
+     "retry": false,
+     "raw": true,
+     "ageH": 66,
+     "selected": false
+    },
+    {
+     "s": "S036",
+     "retry": true,
+     "raw": false,
+     "ageH": 65,
+     "selected": true
+    },
+    {
+     "s": "S039",
+     "retry": true,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S040",
+     "retry": false,
+     "raw": true,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S043",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S045",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 5,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 18,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": false,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S066",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020684
+    },
+    {
+     "s": "S062",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001757
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002154
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001778
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001706
+    },
+    {
+     "s": "S013",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021086
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001571
+    },
+    {
+     "s": "S039",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007049
+    },
+    {
+     "s": "S014",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.017677
+    },
+    {
+     "s": "S023",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.018833
+    },
+    {
+     "s": "S027",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.019821
+    },
+    {
+     "s": "S019",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007082
+    },
+    {
+     "s": "S031",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001969
+    },
+    {
+     "s": "S043",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001838
+    },
+    {
+     "s": "S015",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.016694
+    },
+    {
+     "s": "S051",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001658
+    },
+    {
+     "s": "S045",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001556
+    },
+    {
+     "s": "S036",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001772
+    }
+   ],
+   "picks": [
+    {
+     "s": "S066",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S062",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S013",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S039",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S014",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S023",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S027",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S019",
+     "decision": "AUTO_HOLD",
+     "reason": "childLifeStageConflict"
+    },
+    {
+     "s": "S031",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S043",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S015",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S051",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S045",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S036",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    }
+   ]
+  },
+  {
+   "runId": "20261109-121505",
+   "kstSlot": "11-09 21:15",
+   "cap": 15,
+   "slots": 3,
+   "candidates": [
+    {
+     "s": "S073",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S074",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 18,
+     "selected": true
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 21,
+     "selected": true
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 21,
+     "selected": false
+    },
+    {
+     "s": "S075",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S076",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 19,
+     "selected": true
+    },
+    {
+     "s": "S077",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 10,
+     "selected": true
+    },
+    {
+     "s": "S078",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 21,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 18,
+     "selected": false
+    },
+    {
+     "s": "S079",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S062",
+     "retry": true,
+     "raw": false,
+     "ageH": 10,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S035",
+     "retry": false,
+     "raw": true,
+     "ageH": 69,
+     "selected": false
+    },
+    {
+     "s": "S036",
+     "retry": true,
+     "raw": false,
+     "ageH": 68,
+     "selected": false
+    },
+    {
+     "s": "S080",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S040",
+     "retry": false,
+     "raw": true,
+     "ageH": 66,
+     "selected": false
+    },
+    {
+     "s": "S081",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 8,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 21,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": false
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S076",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006615
+    },
+    {
+     "s": "S079",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.009426
+    },
+    {
+     "s": "S078",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020045
+    },
+    {
+     "s": "S081",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.015387
+    },
+    {
+     "s": "S073",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.019358
+    },
+    {
+     "s": "S074",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021311
+    },
+    {
+     "s": "S062",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006738
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002033
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001729
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001601
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001564
+    },
+    {
+     "s": "S031",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001586
+    }
+   ],
+   "picks": [
+    {
+     "s": "S076",
+     "decision": "AUTO_HOLD",
+     "reason": "staleTimeClaim"
+    },
+    {
+     "s": "S079",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S078",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S081",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S073",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S074",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S062",
+     "decision": "AUTO_HOLD",
+     "reason": "childLifeStageConflict"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S031",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    }
+   ]
+  },
+  {
+   "runId": "20261109-211506",
+   "kstSlot": "11-10 06:15",
+   "cap": 13,
+   "slots": 2,
+   "candidates": [
+    {
+     "s": "S082",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S083",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S084",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 30,
+     "selected": false
+    },
+    {
+     "s": "S085",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S086",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S087",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S088",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S089",
+     "retry": false,
+     "raw": true,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S090",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S091",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S092",
+     "retry": false,
+     "raw": false,
+     "ageH": 12,
+     "selected": false
+    },
+    {
+     "s": "S093",
+     "retry": false,
+     "raw": true,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S094",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S095",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S096",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S097",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S098",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S099",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    },
+    {
+     "s": "S100",
+     "retry": false,
+     "raw": false,
+     "ageH": 6,
+     "selected": true
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 31,
+     "selected": false
+    },
+    {
+     "s": "S101",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S102",
+     "retry": false,
+     "raw": true,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S103",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S104",
+     "retry": false,
+     "raw": true,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S105",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 22,
+     "selected": false
+    },
+    {
+     "s": "S106",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S107",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S108",
+     "retry": false,
+     "raw": true,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S109",
+     "retry": false,
+     "raw": false,
+     "ageH": 12,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S110",
+     "retry": false,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 30,
+     "selected": false
+    },
+    {
+     "s": "S111",
+     "retry": false,
+     "raw": true,
+     "ageH": 5,
+     "selected": false
+    },
+    {
+     "s": "S112",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S113",
+     "retry": false,
+     "raw": false,
+     "ageH": 5,
+     "selected": true
+    },
+    {
+     "s": "S114",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 58,
+     "selected": false
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 58,
+     "selected": false
+    },
+    {
+     "s": "S115",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S116",
+     "retry": false,
+     "raw": true,
+     "ageH": 6,
+     "selected": false
+    },
+    {
+     "s": "S117",
+     "retry": false,
+     "raw": false,
+     "ageH": 12,
+     "selected": false
+    },
+    {
+     "s": "S118",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S119",
+     "retry": false,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 58,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 58,
+     "selected": false
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 20,
+     "selected": false
+    },
+    {
+     "s": "S120",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S121",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 58,
+     "selected": false
+    },
+    {
+     "s": "S122",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S123",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    },
+    {
+     "s": "S124",
+     "retry": false,
+     "raw": false,
+     "ageH": 34,
+     "selected": false
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S113",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001547
+    },
+    {
+     "s": "S099",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.018661
+    },
+    {
+     "s": "S094",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020835
+    },
+    {
+     "s": "S110",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.016011
+    }
+   ],
+   "picks": [
+    {
+     "s": "S113",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S099",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S094",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S110",
+     "decision": "AUTO_HOLD",
+     "reason": "lifeStageTenseConflict"
+    },
+    {
+     "s": "S091",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    },
+    {
+     "s": "S083",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    },
+    {
+     "s": "S103",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    },
+    {
+     "s": "S106",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    },
+    {
+     "s": "S097",
+     "decision": "AUTO_HOLD",
+     "reason": "personaCapacityDeferred"
+    }
+   ]
+  },
+  {
+   "runId": "20261109-231505",
+   "kstSlot": "11-10 08:15",
+   "cap": 20,
+   "slots": 19,
+   "candidates": [
+    {
+     "s": "S082",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S083",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S084",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 30,
+     "selected": true
+    },
+    {
+     "s": "S085",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S086",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S089",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 32,
+     "selected": false
+    },
+    {
+     "s": "S090",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S091",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S092",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S093",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S095",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S096",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S097",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S098",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 30,
+     "selected": true
+    },
+    {
+     "s": "S101",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S102",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S103",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S104",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S105",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 22,
+     "selected": true
+    },
+    {
+     "s": "S106",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S107",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S108",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S109",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 29,
+     "selected": false
+    },
+    {
+     "s": "S111",
+     "retry": false,
+     "raw": true,
+     "ageH": 5,
+     "selected": false
+    },
+    {
+     "s": "S112",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S113",
+     "retry": true,
+     "raw": false,
+     "ageH": 4,
+     "selected": true
+    },
+    {
+     "s": "S114",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S115",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S116",
+     "retry": false,
+     "raw": true,
+     "ageH": 5,
+     "selected": false
+    },
+    {
+     "s": "S117",
+     "retry": false,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S118",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S119",
+     "retry": true,
+     "raw": false,
+     "ageH": 9,
+     "selected": true
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 19,
+     "selected": false
+    },
+    {
+     "s": "S120",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S121",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 57,
+     "selected": false
+    },
+    {
+     "s": "S122",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S123",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S124",
+     "retry": false,
+     "raw": false,
+     "ageH": 33,
+     "selected": false
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S113",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001587
+    },
+    {
+     "s": "S091",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007443
+    },
+    {
+     "s": "S083",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020732
+    },
+    {
+     "s": "S103",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.019992
+    },
+    {
+     "s": "S106",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.01644
+    },
+    {
+     "s": "S097",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005954
+    },
+    {
+     "s": "S119",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006991
+    },
+    {
+     "s": "S109",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021626
+    },
+    {
+     "s": "S092",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.018755
+    },
+    {
+     "s": "S117",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.013134
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002044
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001871
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001593
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001733
+    },
+    {
+     "s": "S090",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.022956
+    },
+    {
+     "s": "S114",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.002325
+    },
+    {
+     "s": "S105",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021145
+    },
+    {
+     "s": "S082",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005956
+    },
+    {
+     "s": "S095",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010376
+    },
+    {
+     "s": "S096",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021442
+    }
+   ],
+   "picks": [
+    {
+     "s": "S113",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S091",
+     "decision": "AUTO_HOLD",
+     "reason": "unwarrantedSelfClaim"
+    },
+    {
+     "s": "S083",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S103",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S106",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S097",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S119",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S109",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S092",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S117",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S090",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S114",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S105",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S082",
+     "decision": "AUTO_HOLD",
+     "reason": "childLifeStageConflict"
+    },
+    {
+     "s": "S095",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S096",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    }
+   ]
+  },
+  {
+   "runId": "20261110-031502",
+   "kstSlot": "11-10 12:15",
+   "cap": 20,
+   "slots": 17,
+   "candidates": [
+    {
+     "s": "S125",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S126",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S084",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 33,
+     "selected": true
+    },
+    {
+     "s": "S085",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S086",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 36,
+     "selected": true
+    },
+    {
+     "s": "S089",
+     "retry": false,
+     "raw": true,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 36,
+     "selected": false
+    },
+    {
+     "s": "S093",
+     "retry": false,
+     "raw": true,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S127",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S098",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 34,
+     "selected": true
+    },
+    {
+     "s": "S101",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S102",
+     "retry": false,
+     "raw": true,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S128",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S129",
+     "retry": false,
+     "raw": true,
+     "ageH": 1,
+     "selected": false
+    },
+    {
+     "s": "S104",
+     "retry": false,
+     "raw": true,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 25,
+     "selected": true
+    },
+    {
+     "s": "S130",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S131",
+     "retry": false,
+     "raw": true,
+     "ageH": 1,
+     "selected": false
+    },
+    {
+     "s": "S132",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S133",
+     "retry": false,
+     "raw": true,
+     "ageH": 1,
+     "selected": false
+    },
+    {
+     "s": "S107",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S108",
+     "retry": false,
+     "raw": true,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 36,
+     "selected": false
+    },
+    {
+     "s": "S134",
+     "retry": false,
+     "raw": true,
+     "ageH": 1,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 33,
+     "selected": false
+    },
+    {
+     "s": "S111",
+     "retry": false,
+     "raw": true,
+     "ageH": 8,
+     "selected": false
+    },
+    {
+     "s": "S112",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S113",
+     "retry": true,
+     "raw": false,
+     "ageH": 8,
+     "selected": true
+    },
+    {
+     "s": "S114",
+     "retry": true,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S135",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S136",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S115",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S116",
+     "retry": false,
+     "raw": true,
+     "ageH": 9,
+     "selected": false
+    },
+    {
+     "s": "S118",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 23,
+     "selected": false
+    },
+    {
+     "s": "S120",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 36,
+     "selected": false
+    },
+    {
+     "s": "S121",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 61,
+     "selected": false
+    },
+    {
+     "s": "S122",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    },
+    {
+     "s": "S123",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": false
+    },
+    {
+     "s": "S137",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S124",
+     "retry": false,
+     "raw": false,
+     "ageH": 37,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S132",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.012943
+    },
+    {
+     "s": "S127",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.005616
+    },
+    {
+     "s": "S126",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010252
+    },
+    {
+     "s": "S125",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.012062
+    },
+    {
+     "s": "S128",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.018419
+    },
+    {
+     "s": "S136",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011264
+    },
+    {
+     "s": "S130",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.00556
+    },
+    {
+     "s": "S137",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.01115
+    },
+    {
+     "s": "S135",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007253
+    },
+    {
+     "s": "S113",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001557
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002168
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001819
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001608
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001605
+    },
+    {
+     "s": "S114",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.002088
+    },
+    {
+     "s": "S115",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020976
+    },
+    {
+     "s": "S122",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.017427
+    },
+    {
+     "s": "S085",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.018722
+    },
+    {
+     "s": "S124",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006426
+    }
+   ],
+   "picks": [
+    {
+     "s": "S132",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S127",
+     "decision": "AUTO_HOLD",
+     "reason": "unsupportedHealthClaim"
+    },
+    {
+     "s": "S126",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S125",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S128",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S136",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S130",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S137",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S135",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S113",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S114",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S115",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S122",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S085",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S124",
+     "decision": "AUTO_HOLD",
+     "reason": "childLifeStageConflict"
+    }
+   ]
+  },
+  {
+   "runId": "20261110-051505",
+   "kstSlot": "11-10 14:15",
+   "cap": 20,
+   "slots": 12,
+   "candidates": [
+    {
+     "s": "S084",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 36,
+     "selected": true
+    },
+    {
+     "s": "S086",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S089",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S093",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S098",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 36,
+     "selected": true
+    },
+    {
+     "s": "S101",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S102",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S129",
+     "retry": false,
+     "raw": true,
+     "ageH": 4,
+     "selected": false
+    },
+    {
+     "s": "S104",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 28,
+     "selected": true
+    },
+    {
+     "s": "S131",
+     "retry": false,
+     "raw": true,
+     "ageH": 4,
+     "selected": false
+    },
+    {
+     "s": "S133",
+     "retry": false,
+     "raw": true,
+     "ageH": 4,
+     "selected": false
+    },
+    {
+     "s": "S107",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S108",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S134",
+     "retry": false,
+     "raw": true,
+     "ageH": 4,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 35,
+     "selected": false
+    },
+    {
+     "s": "S111",
+     "retry": false,
+     "raw": true,
+     "ageH": 11,
+     "selected": false
+    },
+    {
+     "s": "S112",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S113",
+     "retry": true,
+     "raw": false,
+     "ageH": 11,
+     "selected": true
+    },
+    {
+     "s": "S114",
+     "retry": true,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S138",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S139",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S116",
+     "retry": false,
+     "raw": true,
+     "ageH": 11,
+     "selected": false
+    },
+    {
+     "s": "S140",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S118",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 26,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 39,
+     "selected": false
+    },
+    {
+     "s": "S141",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S121",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S142",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 63,
+     "selected": false
+    },
+    {
+     "s": "S123",
+     "retry": false,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S141",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.021284
+    },
+    {
+     "s": "S139",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011372
+    },
+    {
+     "s": "S138",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.0095
+    },
+    {
+     "s": "S142",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011664
+    },
+    {
+     "s": "S113",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001591
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002054
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001823
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001664
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001575
+    },
+    {
+     "s": "S114",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.002017
+    },
+    {
+     "s": "S084",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007556
+    },
+    {
+     "s": "S118",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020947
+    },
+    {
+     "s": "S121",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.013669
+    },
+    {
+     "s": "S086",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001812
+    },
+    {
+     "s": "S112",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.02084
+    },
+    {
+     "s": "S123",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001523
+    },
+    {
+     "s": "S107",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001537
+    }
+   ],
+   "picks": [
+    {
+     "s": "S141",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S139",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S138",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S142",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S113",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S114",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S084",
+     "decision": "AUTO_HOLD",
+     "reason": "unsupportedHealthClaim"
+    },
+    {
+     "s": "S118",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S121",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S086",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S112",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S123",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S107",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    }
+   ]
+  },
+  {
+   "runId": "20261110-081506",
+   "kstSlot": "11-10 17:15",
+   "cap": 20,
+   "slots": 9,
+   "candidates": [
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 38,
+     "selected": true
+    },
+    {
+     "s": "S086",
+     "retry": true,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 41,
+     "selected": true
+    },
+    {
+     "s": "S089",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 41,
+     "selected": false
+    },
+    {
+     "s": "S093",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 39,
+     "selected": true
+    },
+    {
+     "s": "S102",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S129",
+     "retry": false,
+     "raw": true,
+     "ageH": 6,
+     "selected": false
+    },
+    {
+     "s": "S104",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 30,
+     "selected": true
+    },
+    {
+     "s": "S131",
+     "retry": false,
+     "raw": true,
+     "ageH": 6,
+     "selected": false
+    },
+    {
+     "s": "S133",
+     "retry": false,
+     "raw": true,
+     "ageH": 6,
+     "selected": false
+    },
+    {
+     "s": "S107",
+     "retry": true,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S108",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 41,
+     "selected": false
+    },
+    {
+     "s": "S134",
+     "retry": false,
+     "raw": true,
+     "ageH": 6,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 38,
+     "selected": false
+    },
+    {
+     "s": "S111",
+     "retry": false,
+     "raw": true,
+     "ageH": 13,
+     "selected": false
+    },
+    {
+     "s": "S113",
+     "retry": true,
+     "raw": false,
+     "ageH": 13,
+     "selected": true
+    },
+    {
+     "s": "S114",
+     "retry": true,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 66,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 66,
+     "selected": false
+    },
+    {
+     "s": "S116",
+     "retry": false,
+     "raw": true,
+     "ageH": 14,
+     "selected": false
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 66,
+     "selected": true
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 66,
+     "selected": true
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 28,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 41,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 66,
+     "selected": true
+    },
+    {
+     "s": "S123",
+     "retry": true,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S113",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001643
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002057
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001811
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001702
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001624
+    },
+    {
+     "s": "S114",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.002242
+    },
+    {
+     "s": "S086",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001545
+    },
+    {
+     "s": "S123",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001571
+    },
+    {
+     "s": "S107",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.00154
+    },
+    {
+     "s": "S031",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001593
+    },
+    {
+     "s": "S043",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.002152
+    },
+    {
+     "s": "S051",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001586
+    },
+    {
+     "s": "S045",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001577
+    }
+   ],
+   "picks": [
+    {
+     "s": "S113",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S114",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S086",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S123",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S107",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S031",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S043",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S051",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S045",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    }
+   ]
+  },
+  {
+   "runId": "20261110-121506",
+   "kstSlot": "11-10 21:15",
+   "cap": 20,
+   "slots": 4,
+   "candidates": [
+    {
+     "s": "S143",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S144",
+     "retry": false,
+     "raw": false,
+     "ageH": 1,
+     "selected": true
+    },
+    {
+     "s": "S003",
+     "retry": true,
+     "raw": false,
+     "ageH": 42,
+     "selected": true
+    },
+    {
+     "s": "S145",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S146",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S086",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": true
+    },
+    {
+     "s": "S007",
+     "retry": true,
+     "raw": false,
+     "ageH": 45,
+     "selected": true
+    },
+    {
+     "s": "S089",
+     "retry": false,
+     "raw": true,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S147",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S012",
+     "retry": false,
+     "raw": true,
+     "ageH": 45,
+     "selected": false
+    },
+    {
+     "s": "S093",
+     "retry": false,
+     "raw": true,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S017",
+     "retry": true,
+     "raw": false,
+     "ageH": 43,
+     "selected": true
+    },
+    {
+     "s": "S102",
+     "retry": false,
+     "raw": true,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S129",
+     "retry": false,
+     "raw": true,
+     "ageH": 10,
+     "selected": false
+    },
+    {
+     "s": "S104",
+     "retry": false,
+     "raw": true,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S060",
+     "retry": true,
+     "raw": false,
+     "ageH": 34,
+     "selected": true
+    },
+    {
+     "s": "S131",
+     "retry": false,
+     "raw": true,
+     "ageH": 10,
+     "selected": false
+    },
+    {
+     "s": "S133",
+     "retry": false,
+     "raw": true,
+     "ageH": 10,
+     "selected": false
+    },
+    {
+     "s": "S107",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": true
+    },
+    {
+     "s": "S108",
+     "retry": false,
+     "raw": true,
+     "ageH": 46,
+     "selected": false
+    },
+    {
+     "s": "S022",
+     "retry": false,
+     "raw": true,
+     "ageH": 45,
+     "selected": false
+    },
+    {
+     "s": "S134",
+     "retry": false,
+     "raw": true,
+     "ageH": 10,
+     "selected": false
+    },
+    {
+     "s": "S024",
+     "retry": false,
+     "raw": true,
+     "ageH": 42,
+     "selected": false
+    },
+    {
+     "s": "S111",
+     "retry": false,
+     "raw": true,
+     "ageH": 17,
+     "selected": false
+    },
+    {
+     "s": "S113",
+     "retry": true,
+     "raw": false,
+     "ageH": 17,
+     "selected": true
+    },
+    {
+     "s": "S114",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": true
+    },
+    {
+     "s": "S031",
+     "retry": true,
+     "raw": false,
+     "ageH": 70,
+     "selected": true
+    },
+    {
+     "s": "S033",
+     "retry": false,
+     "raw": true,
+     "ageH": 70,
+     "selected": false
+    },
+    {
+     "s": "S116",
+     "retry": false,
+     "raw": true,
+     "ageH": 18,
+     "selected": false
+    },
+    {
+     "s": "S148",
+     "retry": false,
+     "raw": true,
+     "ageH": 1,
+     "selected": false
+    },
+    {
+     "s": "S149",
+     "retry": false,
+     "raw": false,
+     "ageH": 2,
+     "selected": true
+    },
+    {
+     "s": "S043",
+     "retry": true,
+     "raw": false,
+     "ageH": 70,
+     "selected": true
+    },
+    {
+     "s": "S045",
+     "retry": true,
+     "raw": false,
+     "ageH": 70,
+     "selected": true
+    },
+    {
+     "s": "S150",
+     "retry": false,
+     "raw": false,
+     "ageH": 3,
+     "selected": true
+    },
+    {
+     "s": "S070",
+     "retry": false,
+     "raw": true,
+     "ageH": 32,
+     "selected": false
+    },
+    {
+     "s": "S046",
+     "retry": false,
+     "raw": true,
+     "ageH": 45,
+     "selected": false
+    },
+    {
+     "s": "S051",
+     "retry": true,
+     "raw": false,
+     "ageH": 70,
+     "selected": true
+    },
+    {
+     "s": "S123",
+     "retry": true,
+     "raw": false,
+     "ageH": 46,
+     "selected": true
+    }
+   ],
+   "attempts": [
+    {
+     "s": "S144",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010529
+    },
+    {
+     "s": "S147",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.016492
+    },
+    {
+     "s": "S146",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.007902
+    },
+    {
+     "s": "S149",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.011389
+    },
+    {
+     "s": "S143",
+     "outcome": "adopt",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.010284
+    },
+    {
+     "s": "S150",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006625
+    },
+    {
+     "s": "S113",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001591
+    },
+    {
+     "s": "S060",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.002185
+    },
+    {
+     "s": "S003",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "parseFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.001744
+    },
+    {
+     "s": "S017",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001619
+    },
+    {
+     "s": "S007",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001631
+    },
+    {
+     "s": "S114",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "deterministicFailed",
+     "lastCall": "ok",
+     "settledUsd": 0.006002
+    },
+    {
+     "s": "S086",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001575
+    },
+    {
+     "s": "S123",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001579
+    },
+    {
+     "s": "S107",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.00157
+    },
+    {
+     "s": "S031",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001604
+    },
+    {
+     "s": "S043",
+     "outcome": "hold",
+     "complete": true,
+     "cause": null,
+     "lastCall": "ok",
+     "settledUsd": 0.020255
+    },
+    {
+     "s": "S051",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001583
+    },
+    {
+     "s": "S045",
+     "outcome": "hold",
+     "complete": false,
+     "cause": "speakerSlotNarrowed",
+     "lastCall": "ok",
+     "settledUsd": 0.001742
+    }
+   ],
+   "picks": [
+    {
+     "s": "S144",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S147",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S146",
+     "decision": "AUTO_HOLD",
+     "reason": "truncatedSourceCompletion"
+    },
+    {
+     "s": "S149",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S143",
+     "decision": "AUTO_ADOPT",
+     "reason": "ok"
+    },
+    {
+     "s": "S150",
+     "decision": "AUTO_HOLD",
+     "reason": "unwarrantedSelfClaim"
+    },
+    {
+     "s": "S113",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S060",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S003",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S017",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S007",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S114",
+     "decision": "AUTO_HOLD",
+     "reason": "lifeStageTenseConflict"
+    },
+    {
+     "s": "S086",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S123",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S107",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S031",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S043",
+     "decision": "AUTO_HOLD",
+     "reason": "semanticHold"
+    },
+    {
+     "s": "S051",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    },
+    {
+     "s": "S045",
+     "decision": "AUTO_HOLD",
+     "reason": "noDraft"
+    }
+   ]
+  }
+ ]
+}

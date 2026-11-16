@@ -17,6 +17,7 @@
  *       수집 `collect-runs/*.jsonl`
  *    `(never exited)` · 읽지 못함 · 기록 없음 → `null`. `false`(확인했고 정상)로 채우지 않는다.
  */
+import { parseRunTokenShadowTag } from './supply-run-token'
 
 export type LaunchdRunInfo = {
   /** `launchctl print` 를 읽었는가 */
@@ -67,15 +68,41 @@ export function failingFromLaunchd(info: LaunchdRunInfo): boolean | null {
 }
 
 /**
- * 🔴 **공급 회차 기록**(`ProcessRun.status`)으로 본 마지막 회차 실패 여부.
+ * 공급 회차 기록의 원본 token tag로 본 recovery 신원.
+ *  · `valid-recovery`            — 엄격 파싱에 성공했고 trigger 또는 launchTrigger가 recovery다
+ *  · `recovery-like-malformed`   — 엄격 파싱은 실패했는데 원본 칸 어딘가가 recovery를 주장한다
+ *  · `other`                     — 그 밖 전부(자연 회차 · 옛 회차 · 파서의 `ok:false` tag).
+ *    `ok:false` tag는 파서가 trigger를 비우므로 recovery 신원을 증명하지 못한다 — 자연 실패 판정에 남긴다.
+ */
+export type RecoveryRunClass = 'valid-recovery' | 'recovery-like-malformed' | 'other'
+
+export function recoveryRunClassOf(rawTag: unknown): RecoveryRunClass {
+  const parsed = parseRunTokenShadowTag(rawTag)
+  if (parsed !== null) {
+    return parsed.ok && (parsed.trigger === 'recovery' || parsed.launchTrigger === 'recovery') ? 'valid-recovery' : 'other'
+  }
+  if (rawTag === null || typeof rawTag !== 'object' || Array.isArray(rawTag)) return 'other'
+  const raw = rawTag as { trigger?: unknown; launchTrigger?: unknown; absorbedTrigger?: unknown }
+  return raw.trigger === 'recovery' || raw.launchTrigger === 'recovery' || raw.absorbedTrigger === 'recovery'
+    ? 'recovery-like-malformed' : 'other'
+}
+
+/**
+ * 🔴 **자연 공급 회차 기록**(`ProcessRun.status`)으로 본 마지막 회차 실패 여부.
  *    `running` 은 아직 끝나지 않은 회차다 — 끝난 회차만 본다. 기록이 없으면 `null`.
+ *    🔴 단계 제한 복구(`valid-recovery`) 회차는 자연 공급 건강이 아니다 — 빼고 본다. 복구 결과는
+ *       READY 가산 0 · exact 비용으로만 반영되고, 이미 인증된 공개 단계를 낮추지 않는다.
+ *    🔴 recovery를 주장하지만 손상된 tag(`recovery-like-malformed`)가 마지막 회차면 성패를 모른다(`null`).
+ *       빼지도(fail-open) 실패로 세지도(근거 없는 감속) 않는다. `recoveryClass`가 없는 기록은 `other`다.
  */
 export function failingFromProcessRuns(
-  runs: readonly { startedAt: string; status: string }[],
+  runs: readonly { startedAt: string; status: string; recoveryClass?: RecoveryRunClass }[],
 ): boolean | null {
-  const done = runs.filter((r) => r.status === 'done' || r.status === 'failed')
+  const done = runs.filter((r) => (r.status === 'done' || r.status === 'failed')
+    && (r.recoveryClass ?? 'other') !== 'valid-recovery')
   if (done.length === 0) return null
   const last = done.reduce((a, b) => (a.startedAt >= b.startedAt ? a : b))
+  if (last.recoveryClass === 'recovery-like-malformed') return null
   return last.status === 'failed'
 }
 

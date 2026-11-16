@@ -31,9 +31,10 @@ import type { PrismaClient } from '@prisma/client'
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
 import type { PreflightFacts, ReadyCohortFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
 import {
-  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, terminalYieldOf,
+  READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, pipelineRunOfLedger, terminalYieldOf,
   type CostAttribution, type CostFate, type FateCounts, type PendingFate,
 } from '../../src/lib/ready-fate'
+import { costEpochDiagnosticOf, noReadyBreakdownOf } from '../../src/lib/supply-cost-diagnostics'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import { kstDateString } from '../../src/lib/release-canary'
 import {
@@ -41,14 +42,20 @@ import {
 } from '../../src/lib/persona-comment-auto-lane'
 import { AUTO_DECIDER, AUTO_READY_ENV, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
-import { SUPPLY_DAILY_USD_APPROVED } from '../../src/lib/supply-schedule-contract'
+import {
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS,
+  supplyRunSlotMinuteOf,
+} from '../../src/lib/supply-schedule-contract'
+import { isNaturalScheduledRunTag, parseRunTokenShadowTag } from '../../src/lib/supply-run-token'
+import { isSupplyCostRecoveryTagged } from '../../src/lib/supply-cost-envelope'
 import {
   judgeSlotRelease, matchOpportunitiesToSlots, publishEventAtOf, readSourceEvidence, releaseStampStatusOf,
   type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
 import {
-  OPPORTUNITY_FILE_RE, OPPORTUNITY_VERSION_LEGACY, WORKSET_FILE_RE, readOpportunitySnapshot, readSupplyIntent, readWorkset,
-  type SupplyIntent,
+  OPPORTUNITY_FILE_RE, OPPORTUNITY_VERSION, OPPORTUNITY_VERSIONS_LEGACY, WORKSET_FILE_RE,
+  readOpportunitySnapshot, readSupplyIntent, readWorkset,
+  type OpportunitySnapshot, type SupplyIntent,
 } from '../../src/lib/supply-workset'
 import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
 import { currentQualityContract } from '../../src/lib/quality-contract'
@@ -60,6 +67,7 @@ import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
 import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
 import { commentLoopLedgerDir } from './persona-comment-loop.mjs'
 import { readyOpportunitiesOf, type LoadedStock } from './publishable-stock.mjs'
+import { readStageRecoverySourceHashes } from './stage-recovery-source-receipt.mjs'
 
 /** 🔴 정본 러너 사실 — 템플릿 상수 그대로. 여기서 숫자를 다시 적지 않는다 */
 export const RUNNER_GRID: RunnerGrid = {
@@ -107,6 +115,143 @@ export const cappedBy = (env: number | null, canon: number | null): number | nul
  */
 export const UNIT_COST_DAYS = 3
 
+type RecoveryReadyRow = {
+  id: string
+  createdAt?: Date
+  gateResults?: unknown
+}
+
+/**
+ * 정확한 복구 intent가 만든 slot-valid READY만 센다.
+ * 날짜 전체 READY 증분이나 같은 시각의 자연 공급을 복구 성과로 섞지 않고,
+ * 같은 원천이 중복 적재돼도 원천 하나로만 센다.
+ */
+export function slotValidRecoveryReadyStockOf(i: {
+  rows: readonly RecoveryReadyRow[]
+  matchedReady: ReadonlySet<string>
+  sourceHashes: ReadonlySet<string>
+  supplyRunId: string
+  createdAt: Date
+}): number {
+  const recoveryReadyHashes = new Set<string>()
+  for (const row of i.rows) {
+    if (row.createdAt === undefined
+      || !i.matchedReady.has(row.id)
+      || row.createdAt.getTime() < i.createdAt.getTime()) continue
+    const ev = readSourceEvidence(row.gateResults)
+    const sourceHash = ev.ok ? ev.record.provenance.articleIdHash : null
+    const intent = readSupplyIntent(row.gateResults)
+    if (sourceHash !== null && i.sourceHashes.has(sourceHash)
+      && intent !== null && intent.runId === i.supplyRunId && intent.sourceHash === sourceHash) {
+      recoveryReadyHashes.add(sourceHash)
+    }
+  }
+  return recoveryReadyHashes.size
+}
+
+/**
+ * 🔴 **오늘 제한 복구 입력 — 신원·비용·성과를 한 값으로 받는다.**
+ *  · `unknown` — intent·시작 claim·영수증이 손상됐거나 신원을 확정하지 못했다 → trial 비용 모름(SUPPLY_COST_UNKNOWN) · 성과 0
+ *  · `known`   — `claimRunId`: 오늘 공급 본체 시작 claim의 회차 id(없으면 `null`)
+ *                `includeCost`: final 슬롯만 `true`. 중간 슬롯은 진행 중 미정산 요청이 trial 비용을 모름으로 만들어
+ *                               자기 복구를 중대 결함으로 취소하지 않도록 넣지 않는다
+ *                `lineage`: final 슬롯 · intent done · 완주/원천 영수증이 claim 회차와 맞을 때만
+ */
+export type StagePreflightRecoveryInput =
+  | { kind: 'unknown'; reason: string }
+  | {
+      kind: 'known'
+      claimRunId: string | null
+      includeCost: boolean
+      lineage?: { sourceHashes: ReadonlySet<string>; createdAt: Date }
+    }
+
+export const NO_RECOVERY_CLAIM: StagePreflightRecoveryInput = { kind: 'known', claimRunId: null, includeCost: false }
+
+export type RecoveryIdentity = {
+  /** 신원을 확정하지 못한 이유 — 있으면 trial 비용은 모름이고 성과는 0이다 */
+  issue: string | null
+  claimRunId: string | null
+  /** final 슬롯에서 비용 cohort에 넣을 회차 — 성공·실패 무관하게 시작 claim의 회차다 */
+  costRunId: string | null
+  /** 오늘 장부에서 recovery로 표시된 요청의 회차 집합 */
+  ledgerRuns: string[]
+  lineage: { sourceHashes: ReadonlySet<string>; supplyRunId: string; createdAt: Date } | null
+}
+
+/**
+ * 오늘 장부의 recovery 요청은 오늘 시작 claim 회차 **하나에만** 귀속돼야 한다: 장부 회차 집합 ⊆ {claim 회차}.
+ * claim이 있는데 장부가 비어 있는 것은 정상이다(provider 호출 전 종료). claim이 없는데 recovery 요청이 있거나,
+ * claim 밖 회차·회차를 읽지 못하는 요청이 있으면 신원 불명이다. 손상된 recovery 표식도 recovery로 센다.
+ */
+export function recoveryIdentityOf(
+  input: StagePreflightRecoveryInput,
+  entries: readonly LedgerEntry[] | null,
+  /** 🔴 이 preflight 의 결정일(`recoveryIdentityDateOf`) — 판정 시각 `now` 가 아니다. 모르면 신원 불명(fail-closed) */
+  kstDate: string | null,
+): RecoveryIdentity {
+  if (input.kind === 'unknown') {
+    return { issue: input.reason, claimRunId: null, costRunId: null, ledgerRuns: [], lineage: null }
+  }
+  if (kstDate === null) {
+    return { issue: 'preflight 결정일을 확정하지 못했다(증명 슬롯 날짜가 하나가 아니다)', claimRunId: null, costRunId: null, ledgerRuns: [], lineage: null }
+  }
+  const runs = new Set<string>()
+  let issue: string | null = input.lineage !== undefined && input.claimRunId === null
+    ? '완주 lineage가 있는데 공급 시작 claim이 없다' : null
+  for (const e of entries ?? []) {
+    if (!isSupplyCostRecoveryTagged(e.runTokenShadow)) continue
+    const started = new Date(e.startedAt)
+    if (!Number.isFinite(started.getTime())) { issue ??= 'recovery 요청의 시작 시각이 손상됐다'; continue }
+    if (kstDateString(started) !== kstDate) continue
+    const run = pipelineRunOfLedger(e.runId)
+    if (run === null) { issue ??= `recovery 요청의 회차를 읽지 못했다: ${e.runId}`; continue }
+    runs.add(run)
+  }
+  const outside = [...runs].filter((run) => run !== input.claimRunId)
+  if (outside.length > 0) {
+    issue ??= input.claimRunId === null
+      ? `공급 시작 claim 없이 recovery 요청 회차가 있다: ${outside.join(',')}`
+      : `claim 회차 ${input.claimRunId} 밖의 recovery 요청 회차: ${outside.join(',')}`
+  }
+  const ok = issue === null
+  return {
+    issue,
+    claimRunId: input.claimRunId,
+    costRunId: ok && input.includeCost ? input.claimRunId : null,
+    ledgerRuns: [...runs].sort(),
+    lineage: ok && input.lineage !== undefined && input.claimRunId !== null
+      ? { ...input.lineage, supplyRunId: input.claimRunId } : null,
+  }
+}
+
+/**
+ * 🔴 **preflight 결정일 — 증명 슬롯의 단일 KST 날짜** (2026-11-06). 비었거나 · 시각이 아닌 값이 섞였거나 · 날짜가
+ *    둘 이상이면 `null`(모름)이다. `now` 로 대신하지 않는다 — 다음 날 리허설(`now` = 오늘)이 오늘 아침 복구 회차를
+ *    "claim 없는 내일 복구" 로 잘못 읽어 SUPPLY_COST_UNKNOWN 을 지어냈다(11-07 리허설 반례).
+ */
+export function recoveryIdentityDateOf(proofSlots: readonly Date[]): string | null {
+  if (proofSlots.length === 0 || proofSlots.some((d) => !Number.isFinite(d.getTime()))) return null
+  const dates = new Set(proofSlots.map((d) => kstDateString(d)))
+  return dates.size === 1 ? [...dates][0]! : null
+}
+
+/**
+ * 🔴 **readiness 출력용 비용 요약 — 기존 귀속 값에서 고른 칸뿐이다.** 판정에 쓰지 않는다(관측).
+ *    문구 메모만으로는 남은 차단이 정직한 미정산인지 귀속 결함인지 가를 수 없어 수를 그대로 싣는다.
+ */
+export function preflightCostSummaryOf(c: CostAttribution | null): {
+  settledRequests: number; usageUnknownRequests: number; recoveryUsageUnknownRequests: number
+  trialIneligibleRequests: number; openRequests: number; openReservedUsd: number
+} | null {
+  if (c === null) return null
+  return {
+    settledRequests: c.settledRequests, usageUnknownRequests: c.usageUnknownRequests,
+    recoveryUsageUnknownRequests: c.recoveryUsageUnknownRequests, trialIneligibleRequests: c.trialIneligibleRequests,
+    openRequests: c.openRequests, openReservedUsd: c.openReservedUsd,
+  }
+}
+
 /** 🔴 증거일부터 거슬러 `n` 일(오래된 날 먼저) */
 export function recentDates(evidenceDate: string, n: number = UNIT_COST_DAYS): string[] {
   const t = Date.parse(`${evidenceDate}T00:00:00Z`)
@@ -126,6 +271,27 @@ export function pooledEntries(days: readonly (readonly LedgerEntry[] | null)[]):
 const readDay = (dir: string, date: string): LedgerEntry[] | null => {
   const r = readLedgerDay(ledgerPathOf(dir, date))
   return r.ok ? r.entries : null
+}
+
+/**
+ * 🔴 **비용 진단 묶음 — 보고 전용** (2026-11-13). 판정 입력(`facts`)에 넣지 않는다.
+ *    진단이 던져도 preflight·controller 를 멈추지 않는다 — 그 사실만 적는다.
+ */
+export function costDiagnosticsOf(
+  entries: readonly LedgerEntry[] | null,
+  fateByKey: ReadonlyMap<string, CostFate>,
+  cohortRuns: ReadonlySet<string>,
+  authoritative: CostAttribution | null,
+): Record<string, unknown> {
+  try {
+    return {
+      kind: 'diagnostic-only',
+      noReady: noReadyBreakdownOf(authoritative),
+      epoch: costEpochDiagnosticOf({ entries, fateByKey, cohortRuns }),
+    }
+  } catch (e) {
+    return { kind: 'diagnostic-only', error: (e as Error).name }
+  }
 }
 
 const kstRange = (date: string): { gte: Date; lt: Date } => {
@@ -184,6 +350,259 @@ const runMsOf = (runId: string): number | null => {
   return Number.isFinite(ms) ? ms : null
 }
 
+const KST_OFFSET_MS = 9 * 3_600_000
+const kstWallClock = (ms: number): { date: string; minute: number } | null => {
+  if (!Number.isFinite(ms)) return null
+  const iso = new Date(ms + KST_OFFSET_MS).toISOString()
+  return { date: iso.slice(0, 10), minute: Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16)) }
+}
+
+/** 공급 회차 id 의 KST 날짜와 proof 슬롯 — 창 밖 시작이면 슬롯 `null` */
+const proofSlotOfRunId = (runId: string): { date: string; minute: number | null } | null => {
+  const ms = runMsOf(runId)
+  const wall = ms === null ? null : kstWallClock(ms)
+  return wall === null ? null
+    : { date: wall.date, minute: supplyRunSlotMinuteOf(wall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS) }
+}
+
+type NaturalRunSnapshot = {
+  date: string; slot: number; startedAtMs: number; startMinute: number; evidence: readonly unknown[]; takenAt: string
+}
+
+/**
+ * 🔴 **자연 예약 공급 회차 하나의 기회 snapshot — 기준선과 미래 표본이 같은 무결성 규칙을 쓴다** (2026-11-02 M2).
+ *    · provenance 가 온전한 수동·사건·복구 회차 → `'not-natural'`(표본이 아니다 · 손상도 아니다)
+ *    · 회차가 **끝났어야** 한다 — `done` 또는 `failed`. 🔴 `failed` 는 회차의 다른 단계가 실패했다는 뜻이다.
+ *      snapshot · marker(`written` · runId · 관측 시각 · 건수 · reason 없음)가 온전하면 그 시각 inventory 로 쓴다.
+ *      `running`·모르는 상태는 모름이다
+ *    · runId(파일 이름) · `startedAt` · `completedAt`(시작 뒤 · `atMs` 이전) · `runtimeSha` · proof 슬롯 창이 맞아야 한다
+ *    · snapshot 관측은 회차 시작 ~ `atMs` 사이
+ *    하나라도 어긋나면 `null`(모름).
+ */
+function naturalRunSnapshotOf(dataDir: string, runId: string, atMs: number): NaturalRunSnapshot | 'not-natural' | null {
+  try {
+    const run = JSON.parse(readFileSync(join(dataDir, `supply-process-${runId}.run.json`), 'utf-8')) as Record<string, unknown>
+    const shadow = parseRunTokenShadowTag(run.runTokenShadow)
+    if (shadow === null) return null
+    if (!isNaturalScheduledRunTag(shadow)) return 'not-natural'
+    const file = proofSlotOfRunId(runId)
+    const startedAtMs = typeof run.startedAt === 'string' ? Date.parse(run.startedAt) : Number.NaN
+    const completedAtMs = typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : Number.NaN
+    const runWall = Number.isFinite(startedAtMs) ? kstWallClock(startedAtMs) : null
+    const runSlot = runWall === null ? null
+      : supplyRunSlotMinuteOf(runWall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
+    if (run.runId !== runId || (run.status !== 'done' && run.status !== 'failed')
+      || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs || completedAtMs > atMs
+      || typeof run.runtimeSha !== 'string' || run.runtimeSha.trim() === ''
+      || file === null || file.minute === null || runWall === null || runWall.date !== file.date || runSlot !== file.minute) return null
+    const snapshot = readOpportunitySnapshot(JSON.parse(readFileSync(join(dataDir, `supply-opportunities-${runId}.json`), 'utf-8')))
+    if (snapshot === null || snapshot.runId !== runId) return null
+    const takenAtMs = Date.parse(snapshot.takenAt)
+    if (!Number.isFinite(takenAtMs) || takenAtMs < startedAtMs || takenAtMs > atMs) return null
+    const marker = run.opportunityInventory
+    if (marker === null || typeof marker !== 'object' || Array.isArray(marker)) return null
+    const m = marker as Record<string, unknown>
+    if (m.status !== 'written' || m.runId !== runId || m.observedAt !== snapshot.takenAt
+      || m.written !== snapshot.inventory.counts.written || m.reason !== null) return null
+    return {
+      date: file.date, slot: file.minute, startedAtMs, startMinute: runWall.minute,
+      evidence: snapshot.evidence, takenAt: snapshot.takenAt,
+    }
+  } catch { return null }
+}
+
+/**
+ * 🔴 **표본일 `date` 의 기준선 inventory — 판정 벽시계 `nowMinute` 직전에 창이 끝난 자연 proof 슬롯 하나** (2026-11-02).
+ *    07:00 판정이면 06:15 슬롯(06:15 + 45분 = 07:00)이다. 그 슬롯의 자연 예약 회차가 남긴 snapshot 만 쓴다
+ *    (`naturalRunSnapshotOf` — 미래 표본과 같은 무결성 규칙). 겹친 자연 회차가 여럿이면 마지막 회차다.
+ *    🔴 그 슬롯에 자연 회차가 없거나(사건·수동·복구뿐 포함) 하나라도 손상·미완료면 `null`(모름) —
+ *       전날 밤 회차 · 더 이른 슬롯 · 비자연 회차로 내려가지 않는다. 창이 끝난 슬롯이 없는 시각도 `null` 이다.
+ */
+function baselineEvidenceOf(dataDir: string, date: string, nowMinute: number): readonly unknown[] | null {
+  const windowMinutes = SUPPLY_RUN_WINDOW_MS / 60_000
+  const slot = SUPPLY_PROOF_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute)
+    .filter((minute) => minute + windowMinutes <= nowMinute).sort((a, b) => a - b).at(-1)
+  if (slot === undefined) return null
+  const atMs = Date.parse(`${date}T00:00:00+09:00`) + nowMinute * 60_000
+  const natural: NaturalRunSnapshot[] = []
+  for (const name of readdirSync(dataDir)) {
+    const runId = /^supply-process-(\d{8}-\d{6})\.run\.json$/.exec(name)?.[1]
+    const at = runId === undefined ? null : proofSlotOfRunId(runId)
+    if (runId === undefined || at === null || at.date !== date || at.minute !== slot) continue
+    const read = naturalRunSnapshotOf(dataDir, runId, atMs)
+    if (read === null) return null
+    if (read !== 'not-natural') natural.push(read)
+  }
+  return natural.sort((a, b) => a.startedAtMs - b.startedAtMs).at(-1)?.evidence ?? null
+}
+
+/**
+ * 🔴 **당일 남은 정기 공급의 추가 기회 — 재고 수준이 아니라 새로 들어온 원천으로 센다.**
+ *    설정상 `회차×20`·선행 재고 할당을 쓰지 않는다. 직전 3개 완결 KST 일자마다:
+ *    ① 기준선 = 그날 `now` 벽시계 직전에 창이 끝난 자연 proof 슬롯(07:00 이면 06:15)의 inventory(`baselineEvidenceOf`)
+ *       — 전날 밤·사건·수동·복구 회차로 대신하지 않는다
+ *    ② 오늘 남은 proof 공급 슬롯과 **동일한 슬롯 창**의 자연 예약 회차가 기준선 뒤에 처음 관측한 고유 원천
+ *       (`articleIdHash`)만 순유입이다. 같은 원천을 두 회차가 보면 먼저 본 회차 하나로 센다. 해시가 없으면 세지 않는다
+ *    ③ 순유입 원천은 그 회차 시작 + 45분 뒤 발행 슬롯에서만, 그날 같은 벽시계 슬롯에서 `judgeSlotRelease` 가
+ *       eligible 일 때만 쓸 수 있다(원천↔슬롯 유효성 · 도착 시각 보존)
+ *    ④ 하루 추가분 = `futureAdditionalOf` — 합집합 겹침 상한과 순유입 자기 수율 상한 중 작은 값
+ *    날짜별 추가 기회의 최솟값을 쓴다. 다른 날 원천을 오늘 원천과 대조하지 않는다.
+ *    지연된 첫 예약 pass는 정본 45분 창으로 같은 슬롯에 붙인다. provenance가 완전한 예약 follow-up도 자연 표본이다.
+ *    사건·복구·수동·기원 불명 follow-up은 표본이 아니다 — 세지 않을 뿐 용량을 만들지 않는다.
+ *    🔴 자연 표본이 **없음이 증명된** 슬롯(창 안에 기회 파일이 없고, 회차 기록도 없거나 snapshot 을 주장하지 않는다)은
+ *       그 슬롯 순유입 0 이다. 순유입은 더하기만 하므로 0 은 보수적이다 — 다음 회차가 같은 원천을 더 늦게 볼 뿐이다.
+ *    🔴 파일·run marker·provenance 하나라도 어긋나거나, 어느 표본일이든 기준선이 없으면 모름(`null`)이다.
+ *    🔴 기준선·표본은 `naturalRunSnapshotOf` 한 규칙이다 — `failed` 회차도 snapshot·marker 가 온전하면 쓰고,
+ *       `running`·모르는 상태·marker/snapshot 손상은 모름이다.
+ */
+export function measuredFutureSourceOpportunities(input: {
+  dataDir: string
+  kstDate: string
+  now: Date
+  proofSlots: readonly Date[]
+  /** 오늘 READY 기회 — 먼저 짝짓는다 */
+  ready: readonly SlotOpportunity[]
+  /** 오늘 현재 원천 기회 — 순유입과 같은 남은 슬롯을 다툰다 */
+  current: readonly SlotOpportunity[]
+  readyPerSourceLow: number | null
+  sampleDays?: number
+  /** 격리 시험용. 운영에서는 현재 계정의 stage recovery 디렉터리를 읽는다. */
+  recoveryHome?: string
+}): number | null {
+  const y = input.readyPerSourceLow
+  const sampleDays = input.sampleDays ?? UNIT_COST_DAYS
+  if (!Number.isFinite(input.now.getTime()) || y === null || !Number.isFinite(y) || y < 0 || y > 1
+    || !Number.isInteger(sampleDays) || sampleDays <= 0 || !existsSync(input.dataDir)) return null
+  const calendarStart = Date.parse(`${input.kstDate}T00:00:00Z`)
+  if (!Number.isFinite(calendarStart)) return null
+  const nowWall = kstWallClock(input.now.getTime())
+  if (nowWall === null || nowWall.date !== input.kstDate) return null
+  const nowMinute = nowWall.minute
+  const futureSupplyMinutes = SUPPLY_PROOF_RUN_SLOTS_KST
+    .map((slot) => slot.hour * 60 + slot.minute)
+    .filter((minute) => minute > nowMinute)
+  if (futureSupplyMinutes.length === 0) return 0
+  const publishMinutes = input.proofSlots.map((slot) => kstWallClock(slot.getTime()))
+    .filter((wall): wall is { date: string; minute: number } => wall !== null && wall.date === input.kstDate)
+    .map((wall) => wall.minute)
+  if (publishMinutes.length !== input.proofSlots.length) return null
+  const sampleDates = Array.from({ length: sampleDays }, (_, index) =>
+    new Date(calendarStart - (sampleDays - index) * 86_400_000).toISOString().slice(0, 10))
+  const sampleDateSet = new Set(sampleDates)
+
+  /** 표본일의 남은 공급 슬롯 창 안 회차면 그 날짜·슬롯, 아니면 null */
+  const sampleSlotOf = (runId: string): { date: string; minute: number } | null => {
+    const runMs = runMsOf(runId)
+    const wall = runMs === null ? null : kstWallClock(runMs)
+    const minute = wall === null ? null
+      : supplyRunSlotMinuteOf(wall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
+    return wall === null || minute === null || !sampleDateSet.has(wall.date) || !futureSupplyMinutes.includes(minute)
+      ? null : { date: wall.date, minute }
+  }
+  type Sample = { date: string; minute: number; startedAtMs: number; availableAt: number; evidence: readonly unknown[]; takenAt: Date }
+  const samples: Sample[] = []
+  const files = readdirSync(input.dataDir)
+  const snapshotRuns = new Set<string>()
+  for (const name of files) {
+    const match = OPPORTUNITY_FILE_RE.exec(name)
+    if (match === null) continue
+    const runId = match[1]!
+    snapshotRuns.add(runId)
+    if (sampleSlotOf(runId) === null) continue
+    // 🔴 기준선과 같은 무결성 규칙 — 끝난(done·failed) 자연 회차의 온전한 snapshot 만. 손상·미완료는 모름
+    const read = naturalRunSnapshotOf(input.dataDir, runId, input.now.getTime())
+    if (read === null) return null
+    // 수동·사건·복구 회차는 기회량을 부풀리지 않는다. 그 슬롯에 자연 표본이 따로 없으면 그 슬롯 순유입은 0이다.
+    if (read === 'not-natural') continue
+    samples.push({
+      date: read.date, minute: read.slot, startedAtMs: read.startedAtMs,
+      availableAt: read.startMinute + SUPPLY_RUN_WINDOW_MS / 60_000,
+      evidence: read.evidence, takenAt: new Date(read.takenAt),
+    })
+  }
+  // 🔴 누락 증명 — 기회 파일 없는 창 안 회차 기록은 읽혀야 하고, 자연 회차라면 끝났어야(done·failed · 완료 시각이
+  //    시작 뒤 · 판정 이전) 하며 snapshot 을 썼다고 주장하지 않아야 한다. 못 읽거나 기원 불명이거나 `running`·모르는
+  //    상태·완료 시각 손상이거나 `written` 을 주장하는데 파일이 없으면 누락이 아니라 모름이다.
+  for (const name of files) {
+    const match = /^supply-process-(\d{8}-\d{6})\.run\.json$/.exec(name)
+    if (match === null || snapshotRuns.has(match[1]!) || sampleSlotOf(match[1]!) === null) continue
+    try {
+      const run = JSON.parse(readFileSync(join(input.dataDir, name), 'utf-8')) as Record<string, unknown>
+      const shadow = parseRunTokenShadowTag(run.runTokenShadow)
+      if (run.runId !== match[1] || shadow === null) return null
+      if (!isNaturalScheduledRunTag(shadow)) continue
+      const startedAtMs = typeof run.startedAt === 'string' ? Date.parse(run.startedAt) : Number.NaN
+      const completedAtMs = typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : Number.NaN
+      if ((run.status !== 'done' && run.status !== 'failed') || !Number.isFinite(startedAtMs)
+        || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs || completedAtMs > input.now.getTime()) return null
+      const marker = run.opportunityInventory
+      if (marker !== null && typeof marker === 'object' && (marker as Record<string, unknown>).status === 'written') return null
+    } catch { return null }
+  }
+
+  const minuteOf = (slot: Date): number => kstWallClock(slot.getTime())?.minute ?? -1
+  const slotOn = (date: string, minute: number): Date => new Date(
+    `${date}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00+09:00`)
+  let additional: number | null = null
+  for (const date of sampleDates) {
+    const daySamples = samples.filter((sample) => sample.date === date).sort((a, b) => a.startedAtMs - b.startedAtMs)
+    const baseline = baselineEvidenceOf(input.dataDir, date, nowMinute)
+    if (baseline === null) return null
+    const recoverySourceHashes = readStageRecoverySourceHashes(date, input.recoveryHome)
+    if (recoverySourceHashes === null) return null
+    const seen = new Set<string>()
+    for (const ev of baseline) {
+      const read = readSourceEvidence({ sourceEvidence: ev })
+      if (read.ok && read.record.provenance.articleIdHash !== null) seen.add(read.record.provenance.articleIdHash)
+    }
+    // 복구 회차에서 처음 본 원천은 이후 자연 회차에 다시 보여도 자연 순유입이 아니다.
+    for (const hash of recoverySourceHashes) seen.add(hash)
+    const inflow: SlotOpportunity[] = []
+    for (const sample of daySamples) {
+      for (const ev of sample.evidence) {
+        const read = readSourceEvidence({ sourceEvidence: ev })
+        const hash = read.ok ? read.record.provenance.articleIdHash : null
+        if (hash === null || seen.has(hash)) continue
+        seen.add(hash)
+        const historical = sourceOpportunitiesOf([ev], new Set<string>(), sample.takenAt)[0]
+        if (historical === undefined) continue
+        inflow.push({
+          key: `future:${date}:${hash}`,
+          validAt: (slotAt) => {
+            const minute = minuteOf(slotAt)
+            return minute >= sample.availableAt && historical.validAt(slotOn(date, minute))
+          },
+        })
+      }
+    }
+    additional = Math.min(additional ?? Number.POSITIVE_INFINITY, futureAdditionalOf({
+      slots: input.proofSlots, ready: input.ready, current: input.current, inflow, readyPerSource: y,
+    }))
+  }
+  return additional
+}
+
+/**
+ * 🔴 **하루 순유입의 추가 기회** — 순수. 두 상한 중 작은 값이다.
+ *    ① 겹침 상한: READY → (현재 원천 ∪ 순유입) 합집합 짝짓기 − 현재만의 짝짓기. 셋이 같은 늦은 슬롯을 다투면 겹친 몫은 0이다
+ *    ② 자기 수율 상한: READY 뒤 열린 슬롯에서 유효한 **순유입만**의 기대 기회(`floor(유효 순유입 × y)` · 짝짓기 최대 이하)
+ *    🔴 수율은 원천 묶음마다 따로 곱한다. 합집합에 한 번 곱하면 현재 원천(이른 슬롯 300건)의 남는 수율이
+ *       순유입이 덮는 늦은 슬롯으로 옮겨 가 순유입이 사실상 수율 1 로 세진다 — 반례 3+17 슬롯 · y=0.1 에서 20/20 거짓 PASS.
+ */
+export function futureAdditionalOf(input: {
+  slots: readonly Date[]
+  ready: readonly SlotOpportunity[]
+  current: readonly SlotOpportunity[]
+  inflow: readonly SlotOpportunity[]
+  readyPerSource: number
+}): number {
+  const at = (sources: readonly SlotOpportunity[]) => slotValidOpportunitiesOf({
+    slots: input.slots, ready: input.ready, sources, readyPerSource: input.readyPerSource,
+  })
+  const overlapCap = Math.max(0, at([...input.current, ...input.inflow]).total - at(input.current).total)
+  return Math.min(overlapCap, at(input.inflow).sourceExpected)
+}
+
 
 /**
  * 🔴 **창 안 current-quality JIT 계약 묶음(`workset-v4`)의 원천 수 — 하나라도 못 읽으면 `null`(모름)**.
@@ -216,6 +635,15 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
     const at = runMsOf(m[1]!)
     if (at === null || at < fromMs || at >= toMs) continue
     try {
+      // 제한 복구는 당일 부족을 메우는 실행이지 다음 시험의 자연 수율 표본이 아니다.
+      // 회차 기록이 있는 현재 실행은 recovery 표식을 먼저 보고 분자·분모에서 함께 뺀다.
+      // 옛 fixture처럼 회차 기록이 없는 묶음은 기존 호환을 위해 그대로 판독한다.
+      const runPath = join(dataDir, `supply-process-${m[1]!}.run.json`)
+      if (existsSync(runPath)) {
+        const run = JSON.parse(readFileSync(runPath, 'utf-8')) as Record<string, unknown>
+        if (run.runId !== m[1]!) return null
+        if (isSupplyCostRecoveryTagged(run.runTokenShadow)) continue
+      }
       // 🔴 정본 판독기(`readWorkset`)가 센다 — 두 번째 파서를 두지 않는다
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
       if (!r.ok) return null
@@ -230,31 +658,82 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
 
 
 /**
- * 🔴 **가장 최근 공급 기회 스냅샷** — 초안이 아직 없는 slot-valid 원천(생성 전 판정 eligible)의 증거 기록.
+ * 🔴 **가장 최근 공급 기회 inventory** — 회차 종료 후에도 소비되지 않은 stage-neutral 원천의 증거 기록.
  *    없으면 빈 목록(기회 0 — 모름이 아니다: 공급이 아직 안 돌았으면 READY 로만 센다). 손상이면 `evidence: null`(모름).
  */
 export function latestOpportunities(dataDir: string, nowMs: number): {
-  evidence: unknown[] | null; takenAt: string | null
-  /** 🔴 기회를 모르는 이유 — 옛 판(v1 · 자동 seed 전용이 아님)인지 손상인지 */
-  issue?: 'LEGACY_CONTRACT' | 'CORRUPT'
+  evidence: unknown[] | null
+  takenAt: string | null
+  runId: string | null
+  inventory: OpportunitySnapshot['inventory'] | null
+  issue?: 'LEGACY_CONTRACT' | 'UNKNOWN_CONTRACT' | 'CORRUPT' | 'STALE'
 } {
-  if (!existsSync(dataDir)) return { evidence: [], takenAt: null }
+  if (!existsSync(dataDir)) return { evidence: [], takenAt: null, runId: null, inventory: null }
+  /**
+   * 🔴 최신 live 공급 회차가 v3 inventory를 남겼는지 묶는다.
+   *    최신 회차가 파일을 못 남겼는데 직전 회차 inventory로 내려가면 기회를 부풀릴 수 있다.
+   *    회차 기록이 하나도 없는 순수 검사 fixture에서는 파일 자체 계약만 검증한다.
+   */
+  const runFiles = readdirSync(dataDir)
+    .flatMap((name) => {
+      const m = /^supply-process-(\d{8}-\d{6})\.run\.json$/.exec(name)
+      const at = m === null ? null : runMsOf(m[1]!)
+      return m === null || at === null || at > nowMs ? [] : [{ name, runId: m[1]! }]
+    })
+    .sort((a, b) => b.runId.localeCompare(a.runId))
+  const latestRun = runFiles[0] ?? null
   const files = readdirSync(dataDir).filter((f) => OPPORTUNITY_FILE_RE.test(f)).sort()
   for (const f of files.reverse()) {
     let snap: ReturnType<typeof readOpportunitySnapshot>
-    let legacy = false
+    let issue: 'LEGACY_CONTRACT' | 'UNKNOWN_CONTRACT' | 'CORRUPT' = 'CORRUPT'
+    const match = OPPORTUNITY_FILE_RE.exec(f)
+    if (match === null) continue
+    const fileRunId = match[1]!
+    const fileAt = runMsOf(fileRunId)
+    // 🔴 최신 파일의 시계가 미래이거나 해석 불가면 손상이다. 건너뛰고 옛 정상판으로 내려가지 않는다.
+    if (fileAt === null || fileAt > nowMs) {
+      return { evidence: null, takenAt: null, runId: fileRunId, inventory: null, issue: 'CORRUPT' }
+    }
+    if (latestRun !== null && latestRun.runId !== fileRunId) {
+      return { evidence: null, takenAt: null, runId: latestRun.runId, inventory: null, issue: 'STALE' }
+    }
     try {
       const raw = JSON.parse(readFileSync(join(dataDir, f), 'utf-8')) as { version?: unknown }
-      legacy = raw?.version === OPPORTUNITY_VERSION_LEGACY
+      if ((OPPORTUNITY_VERSIONS_LEGACY as readonly unknown[]).includes(raw?.version)) issue = 'LEGACY_CONTRACT'
+      else if (typeof raw?.version === 'string' && raw.version !== OPPORTUNITY_VERSION) issue = 'UNKNOWN_CONTRACT'
       snap = readOpportunitySnapshot(raw)
     } catch { snap = null }
-    // 🔴 가장 최근 스냅샷이 손상 · 옛 판이면 모른다 — 더 오래된 스냅샷으로 조용히 내려가지 않는다(2026-10-04 P0-2)
-    //    v1 은 raw 까지 적었다 — 자동 seed 전용(v2)이 아니면 D10 증거로 받지 않는다(2026-10-10 P0-B1)
-    if (snap === null) return { evidence: null, takenAt: null, issue: legacy ? 'LEGACY_CONTRACT' : 'CORRUPT' }
-    if (Date.parse(snap.takenAt) > nowMs) continue
-    return { evidence: snap.evidence, takenAt: snap.takenAt }
+    if (snap === null) return { evidence: null, takenAt: null, runId: null, inventory: null, issue }
+    if (fileRunId !== snap.runId) {
+      return { evidence: null, takenAt: null, runId: null, inventory: null, issue: 'CORRUPT' }
+    }
+    const takenAtMs = Date.parse(snap.takenAt)
+    // 관측은 회차 시작보다 이를 수 없고, 판정 시각보다 늦을 수도 없다.
+    if (!Number.isFinite(takenAtMs) || takenAtMs < fileAt || takenAtMs > nowMs) {
+      return { evidence: null, takenAt: snap.takenAt, runId: snap.runId, inventory: null, issue: 'CORRUPT' }
+    }
+    if (latestRun !== null) {
+      try {
+        const run = JSON.parse(readFileSync(join(dataDir, latestRun.name), 'utf-8')) as Record<string, unknown>
+        const marker = run.opportunityInventory
+        if (run.runId !== fileRunId || marker === null || typeof marker !== 'object' || Array.isArray(marker)) {
+          return { evidence: null, takenAt: null, runId: latestRun.runId, inventory: null, issue: 'STALE' }
+        }
+        const m = marker as Record<string, unknown>
+        if (m.status !== 'written' || m.runId !== fileRunId || m.observedAt !== snap.takenAt
+          || m.written !== snap.inventory.counts.written || m.reason !== null) {
+          return { evidence: null, takenAt: null, runId: latestRun.runId, inventory: null, issue: 'STALE' }
+        }
+      } catch {
+        return { evidence: null, takenAt: null, runId: latestRun.runId, inventory: null, issue: 'STALE' }
+      }
+    }
+    return { evidence: snap.evidence, takenAt: snap.takenAt, runId: snap.runId, inventory: snap.inventory }
   }
-  return { evidence: [], takenAt: null }
+  if (latestRun !== null) {
+    return { evidence: null, takenAt: null, runId: latestRun.runId, inventory: null, issue: 'STALE' }
+  }
+  return { evidence: [], takenAt: null, runId: null, inventory: null }
 }
 
 /**
@@ -528,13 +1007,22 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   dataDir: string
   now: Date
   runnerHealth: Health | null
+  /** 오늘 제한 복구의 신원·비용·성과 입력(`StagePreflightRecoveryInput`). 주지 않으면 오늘 claim이 없는 것으로 본다. */
+  recovery?: StagePreflightRecoveryInput
   /**
    * 🔴 **Persona 레인 주입 자리** — 계약 유효 Persona 수. 주지 않으면 `null`(모름 → UNKNOWN).
    *    🔴 활성 행 수를 넣지 않는다.
    */
   contractValidPersonas?: () => Promise<number | null>
+  /**
+   * 🔴 **Persona 용량 두 칸을 한 판독으로** (2026-11-13) — 있으면 `contractValidPersonas` 보다 먼저 쓴다.
+   *    `stageActive` 는 4상태 정본의 stage-active 수다(active 행 수 아님). D30 이상 preflight 가 본다.
+   */
+  personaCapacity?: () => Promise<{ contractValid: number | null; stageActive: number | null }>
 }): Promise<{ facts: PreflightFacts; notes: string[]; detail: Record<string, unknown> }> {
   const notes: string[] = []
+  /** 🔴 결정일 — 한 번만 계산해 recovery 신원 판정과 `facts.proofKstDate` 에 같이 쓴다(`now` 가 아니다) */
+  const decisionDate = recoveryIdentityDateOf(i.proofSlots)
   const win = preflightWindowsOf(i.evidenceDate, i.now)
   const dates = win.proof.dates
   const pooled = (dir: string): LedgerEntry[] | null => pooledEntries(dates.map((d) => readDay(dir, d)))
@@ -555,9 +1043,15 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   // 기회 — READY + 원천 스냅샷(결말 수율로 할인 · 구간이면 두 끝을 합친다)
   const snap = latestOpportunities(i.dataDir, i.now.getTime())
   if (snap.evidence === null) {
-    notes.push(snap.issue === 'LEGACY_CONTRACT'
-      ? '가장 최근 원천 기회 스냅샷이 옛 판(opportunities-v1 · raw 포함)이다 — 자동 seed 전용(v2)이 아니라 증명일 기회를 모른다 · 다음 공급 회차가 v2 를 쓰면 복구된다'
-      : '가장 최근 원천 기회 스냅샷이 손상됐다 — 증명일 기회를 모른다')
+    if (snap.issue === 'LEGACY_CONTRACT') {
+      notes.push('가장 최근 원천 기회가 옛 판(v1/v2)이다 — stage-neutral inventory(v3)가 아니라 증명일 기회를 모른다')
+    } else if (snap.issue === 'UNKNOWN_CONTRACT') {
+      notes.push('가장 최근 원천 기회가 알지 못하는 판이다 — 증명일 기회를 모른다')
+    } else if (snap.issue === 'STALE') {
+      notes.push('가장 최근 공급 회차와 원천 기회 inventory가 묶이지 않는다 — 직전 회차 기회로 내려가지 않고 모른다')
+    } else {
+      notes.push('가장 최근 원천 기회 inventory가 손상됐다 — 증명일 기회를 모른다')
+    }
   }
   const queuedHashes = new Set(i.loaded.allRows.map((r) => {
     const ev = readSourceEvidence(r.gateResults)
@@ -570,6 +1064,14 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const oppHigh = oppAt(yieldBounds?.high ?? null)
   const slotValidOpportunities = snap.evidence === null ? null
     : combineOpportunityBounds(opp.total, oppHigh.total, i.proofSlots.length)
+  // 🔴 현재 원천 판독이 깨졌으면 순유입을 얹을 기준이 없다 — 모름
+  const futureSupplyCapacity = snap.evidence === null ? null : measuredFutureSourceOpportunities({
+    dataDir: i.dataDir, kstDate: kstDateString(i.now), now: i.now, proofSlots: i.proofSlots,
+    ready: readyOpps, current: sourceOpps, readyPerSourceLow: yieldBounds?.low ?? null,
+  })
+  if (futureSupplyCapacity === null) {
+    notes.push('남은 당일 공급 기회를 모른다 — 하한 수율 · 3일 기준선 · 남은 공급 슬롯 자연 표본 중 하나가 없거나 깨졌다. 현재 기회가 목표 미만이면 OPPORTUNITY_UNKNOWN 예측 경고로 남는다(시험은 막지 않는다 · 보충 가능으로 지어내지 않는다)')
+  }
 
   // 지연 — 지금 계약 도장으로 나간 글 · 원천 게시 → 공개
   let latencyP50H: number | null = null
@@ -583,7 +1085,16 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
 
   // Persona — 주입 자리(제공자 없으면 모름)
   let contractValidPersonas: number | null = null
-  if (i.contractValidPersonas === undefined) notes.push('계약 유효 Persona 수 제공자가 없다(Persona 레인) — 모름')
+  let stageActivePersonas: number | null = null
+  if (i.personaCapacity !== undefined) {
+    try {
+      const cap = await i.personaCapacity()
+      contractValidPersonas = cap.contractValid
+      stageActivePersonas = cap.stageActive
+    } catch (e) {
+      notes.push(`Persona 용량을 읽지 못했다 — ${(e as Error).name}`)
+    }
+  } else if (i.contractValidPersonas === undefined) notes.push('계약 유효 Persona 수 제공자가 없다(Persona 레인) — 모름')
   else {
     try { contractValidPersonas = await i.contractValidPersonas() } catch (e) {
       notes.push(`계약 유효 Persona 수를 읽지 못했다 — ${(e as Error).name}`)
@@ -606,8 +1117,22 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (supplyEntries === null) notes.push('공급 장부가 손상됐다 — 공급 비용을 모른다')
   const fateByKey = new Map<string, CostFate>()
   for (const r of rows ?? []) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
+  // 복구 신원 — 오늘 장부의 recovery 회차는 오늘 시작 claim 하나에만 귀속돼야 한다(모든 슬롯).
+  // final 슬롯만 그 회차 비용을 trial envelope에 넣는다. READY 수율의 자연 cohort는 바꾸지 않는다.
+  const recovery = recoveryIdentityOf(i.recovery ?? NO_RECOVERY_CLAIM, supplyEntries, decisionDate)
+  if (recovery.issue !== null) notes.push(`제한 복구 비용 신원을 확정하지 못했다 — ${recovery.issue} (SUPPLY_COST_UNKNOWN)`)
+  const recoveryCostRunId = recovery.costRunId
+  const costCohortRuns = new Set(cohort.cohortRuns)
+  if (recoveryCostRunId !== null) costCohortRuns.add(recoveryCostRunId)
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
-    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: cohort.cohortRuns })
+    : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns })
+  const slotValidRecoveryReadyStock = recovery.lineage === null ? null : slotValidRecoveryReadyStockOf({
+    rows: i.loaded.allRows,
+    matchedReady,
+    sourceHashes: recovery.lineage.sourceHashes,
+    supplyRunId: recovery.lineage.supplyRunId,
+    createdAt: recovery.lineage.createdAt,
+  })
   if (costAttribution !== null && costAttribution.usdPerSlotValidResult === null) {
     notes.push(`slot-valid 결과당 비용을 모른다 — legacy 정산 $${costAttribution.legacyUsd.toFixed(4)}`
       + ` · 원천 미연결 $${costAttribution.unlinkedUsd.toFixed(4)} · 미정산 ${costAttribution.openRequests}건`
@@ -617,19 +1142,28 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     : {
         sources: worksetSources, ...fates,
         usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null,
-        trialCost: costAttribution === null ? null : {
+        // 🔴 복구 비용 신원을 모르면 trial 비용도 모른다 — 기존 SUPPLY_COST_UNKNOWN 경로로 승급하지 않는다
+        trialCost: costAttribution === null || recovery.issue !== null ? null : {
           settledRequests: costAttribution.settledRequests,
           usageUnknownRequests: costAttribution.usageUnknownRequests,
-          ineligibleOpenRequests: costAttribution.trialIneligibleOpenRequests,
+          recoverySettledRequests: costAttribution.recoverySettledRequests,
+          recoveryUsageUnknownRequests: costAttribution.recoveryUsageUnknownRequests,
+          overrunRequests: costAttribution.trialOverrunRequests,
+          ineligibleRequests: costAttribution.trialIneligibleRequests,
           riskUsdPerSlotValidResult: costAttribution.trialRiskUsdPerSlotValidResult,
         },
       }
 
   const facts: PreflightFacts = {
+    proofKstDate: decisionDate,
     slotValidOpportunities,
+    slotValidReadyStock: opp.readyFilled,
+    slotValidRecoveryReadyStock,
+    futureSupplyCapacity,
     readyCohort,
     latencyP50H, latencyP90H,
     contractValidPersonas,
+    stageActivePersonas,
     commentUsdPerRequest,
     commentDailyUsdCap: commentLoopLimitsFromEnv(i.env).limits.dailyUsd,
     auditUsdPerCall,
@@ -640,12 +1174,24 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   return {
     facts, notes,
     detail: {
-      readyFilled: opp.readyFilled, sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
+      readyFilled: opp.readyFilled, slotValidRecoveryReadyStock,
+      sourceFilled: opp.sourceFilled, sourceOpportunities: sourceOpps.length,
       sourceValid: opp.sourceValid, sourceExpected: opp.sourceExpected, sourceExpectedHigh: oppHigh.sourceExpected,
-      opportunitySnapshotAt: snap.takenAt, readyCount, legacyExcluded: cohort.legacyExcluded,
+      futureSupplyCapacity,
+      opportunitySnapshotAt: snap.takenAt, opportunitySnapshotRunId: snap.runId,
+      opportunityInventory: snap.inventory, readyCount, legacyExcluded: cohort.legacyExcluded,
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
+      /**
+       * 🔴 진단 전용(2026-11-13) — 판정은 위 `costAttribution`(rolling 72h 권위 cohort)만 쓴다.
+       *    noReady 장부 단계 분해 · PR 838 병합 시각 뒤 회차만의 단가. 원천 종류·막은 gate 는 장부에 없어 `unknown`.
+       */
+      costDiagnostics: costDiagnosticsOf(supplyEntries, fateByKey, cohort.cohortRuns, costAttribution),
+      recoveryIdentity: {
+        claimRunId: recovery.claimRunId, costRunId: recoveryCostRunId,
+        ledgerRecoveryRuns: recovery.ledgerRuns, issue: recovery.issue,
+      },
       // 🔴 두 시계를 그대로 보고한다 — 증명(전날 KST 달력일 3일) · 용량(`now` 에서 거슬러 72h)
       proofWindow: { from: win.proof.from.toISOString(), to: win.proof.to.toISOString() },
       // 🔴 댓글 · 감사 단가를 모은 날 — 증명 달력일이다(오늘이 끼면 전날 증명이 오염된 것)

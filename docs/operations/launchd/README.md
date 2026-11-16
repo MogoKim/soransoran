@@ -173,8 +173,8 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 |---|---|---|---|
 | 82cook 목록 | `com.soransoran.raw-collect-82cook` | **07:00 · 10:00 · 13:00 · 16:00 · 19:00** (5회) | `micro-seed-collect-82cook.mts --list --pages=3 --live` |
 | 82cook 본문 (공급 레인) | `com.soransoran.supply-collect-82cook-thin` | **07:40 · 10:40 · 13:40 · 16:40 · 19:40** (5회 · 목록 40분 뒤) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
-| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **07:30 · 10:30 · 13:30 · 16:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
-| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **09:30 · 11:30 · 15:30 · 20:30** (4회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
+| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **00:30 · 02:30 · 05:30 · 13:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
+| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **01:30 · 03:30 · 04:30 · 11:30 · 20:30** (5회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
 
 🔴 **82cook 은 두 job 이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
 목록 job = robots 1 + 목록 3 = **4/회차** × 5 = 20
@@ -203,14 +203,14 @@ npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
 ```
 82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
 82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
-remonterrace     07:30 10:30 13:30 16:30 21:30        5회
-wgang            09:30 11:30 15:30 20:30              4회
-supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 07:00 전 복구 + 수집 뒤 drain
+remonterrace     00:30 02:30 05:30 13:30 21:30        5회
+wgang            01:30 03:30 04:30 11:30 20:30        5회
+supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 수집 처리 + 수집 뒤 drain
 ```
 
-🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 하루에 고르게 폈고,
-그래서 02:50 · 04:20 · 01:10 처럼 **기계가 꺼져 있는 시각**에 슬롯이 있었다 —
-예약은 있는데 회차는 돌지 않는다. **돌지 않는 슬롯은 능력이 아니다.**
+🔴 **D20 target date의 재료는 00:30~05:30 수집 → 06:15 공급 → 07:00 controller 순서로 만든다.**
+새벽 슬롯은 상시 호스트가 **AC 전원 · 로그인 · 덮개 열림 · keep-awake**를 모두 만족할 때만 능력이다.
+배터리·잠자기·로그아웃 상태를 능력으로 세지 않으며, 전제가 깨지면 controller가 fail-closed한다.
 
 🔴 **게시판·페이지 설정은 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
 바뀐 것은 **언제 도는가** 하나다.
@@ -226,7 +226,25 @@ supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 07:00 전
 
 현재 loaded 공급 job은 네이버 수집 2개와 `supply-process` 1개다. 82cook 2개는 아래 준비 목록에는 있지만
 loaded가 아니며 current capacity에 합치지 않는다. D100 전체 allowlist는 발행·댓글·감사·controller·recovery·
-keep-awake를 포함한 9개이고 `ALWAYS-ON-HOST.md`가 싣는다.
+keep-awake를 포함한 9개와 선택 설치 ops shadow observer 1개(설치본이 있을 때만 이전)이고 `ALWAYS-ON-HOST.md`가 싣는다.
+
+> 🔴 **ops shadow observer(`com.soransoran.ops-shadow-observer`) · 권위 0 · 2026-11-11 Phase 2 코드만(미설치)** —
+> 정적 템플릿이 아니다. `scripts/lib/ops-loop-templates.ts` 의 `renderOpsShadowObserverPlist` 가 동적으로 render 하고
+> ops-loop 설치기가 설치 · snapshot · rollback 을 맡는다. 🔴 **`npm run ops:loop-install -- --apply --observer=on` 으로만 설치**한다 —
+> 플래그가 없으면 지금 상태를 유지한다(설치돼 있으면 새 원문으로 교체 · 없으면 없는 채로). 제거는 `--observer=off`.
+> 60초 `StartInterval` 하나뿐이다(WatchPaths · 공급 hook · 공급 plist 명령 연쇄 0). `RUNTIME_JOBS` 밖이다.
+> 배포 quiesce 의 **reader**(`DEPLOY_QUIESCE_READER_JOBS`)다 — runtime:deploy 가 실행 중이면 멈추고 idle 이면 내렸다 원래 상태로
+> 되올린다. writer 가 아니므로 production activation 의 writer 판정(`D100_WRITER_JOBS`)에는 없다. `runtime-deploy.lock` 이 있으면
+> tick 을 바로 끝낸다. `--now`(주입 시각)는 격리 시험 계약(격리 DB · 임시 HOME)에서만 받는다.
+> 끝난 자연 공급 회차(정본 `naturalScheduledRunEvidenceAt`)마다 감사 장부(`ops-shadow/<KST>.jsonl`)에 한 줄을 적을 뿐이고,
+> 관측 시각은 실제 tick 이고 `completedAt` 은 출처로만 남는다. 완료 뒤 5분 안(causal)만 지금 상태를 보고, 그 뒤(backfill)는
+> 결정 · 장부 · DB 를 읽지 않는 marker 한 줄이다. tick 전체는 감사 장부 디렉터리의 `.observer.lock` 단일 실행 잠금 안에서 돈다
+> (손 실행과 launchd tick 이 겹쳐도 진행 중인 causal 을 뒤 tick 의 backfill 이 앞지르지 못한다 · 기다리지 않고 다음 tick 에 넘긴다).
+> 주인이 죽은 잠금은 정리 claim(`.observer-cleanup.lock`) 하나를 쥔 쪽만 원문 재검증 뒤 지우고 그 tick 은 잡지 않는다.
+> 정리 claim 의 주인이 죽어 남으면 자동으로 지우지 않는다 — observer 가 exit 1(`cleanupStranded`)로 알리고 사람이 확인해 지운다.
+> `status: done` 은 완료 관측일 뿐 공급 exit 0 이 아니다(`integrity: unknown`). causal 인데 그날 결정이 없으면 기록 0 으로 다음 tick 이
+> 다시 보고, 완료 뒤 5분이 지나면 결정을 읽지 않는 backfill marker 한 줄로 끝난다.
+> 실패는 이 job 의 exit · log 에만 남는다 — 공급 lease · provider · DB · stage · 장부 쓰기 · job kick 0.
 
 ```
 ① com.soransoran.navercafe-collect-remonterrace-multi   수집
@@ -272,10 +290,11 @@ JOB=com.soransoran.supply-process
 ```
 
 실행 시각은 **06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST** 7회다.
-🔴 06:15는 전날 밤 최신 수집분을 07:00 controller 전에 복구한다. 나머지는 **수집 슬롯 뒤에 붙인다** —
-07:00/07:30/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
+🔴 06:15는 00:30~05:30 target-date 네이버 수집분을 07:00 controller 전에 처리한다.
+나머지는 **수집 슬롯 뒤에 붙인다** — 07:00/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
 입력이 생긴 뒤에 비워야 대기 시간이 줄고, 그만큼 APPROVED 순증이 빨라진다.
-🔴 22:15 가 마지막이다 — 노트북이 22:30 쯤 꺼지므로 그 앞에 한 번 더 비운다.
+🔴 22:15가 마지막 처리 회차다. 상시 호스트는 이후에도 AC 전원·로그인·덮개 열림·keep-awake를
+유지해 다음 날 00:30~05:30 target-date 수집을 이어 간다.
 
 🔴 **미처리 입력이 없으면 정상 no-op 이다** — 네트워크 0 · LLM 0 · DB write 0.
 조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.
@@ -339,8 +358,8 @@ job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.
 `-multi` job 이 정본이다. 시(hour)를 어긋나게 두어 두 카페가 같은 시각에 돌지 않는다.
 
 ```
-remonterrace  07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST (5회)
-wgang         09:30 · 11:30 · 15:30 · 20:30 KST (4회)
+remonterrace  00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST (5회)
+wgang         01:30 · 03:30 · 04:30 · 11:30 · 20:30 KST (5회)
 ```
 
 🔴 **카페는 이 둘이 전부**이며, 같은 시각에 돌지 않는 것을 fixture 가 검사한다.

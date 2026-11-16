@@ -130,7 +130,7 @@
 
 1. **문제 정의 먼저**: 문제 정의 → 원인 분석 → 해결 계획 → 검증 방법
 2. **가정 금지**: 함수 동작을 추측하지 말고 Read 로 직접 읽는다
-3. **검증 없이 "완료" 금지**: typecheck·build 통과 확인 필수
+3. **검증 없이 "완료" 금지**: `PLANNED → DESIGNED → CODE_PASS → MERGED → DEPLOYED → OPERATING_PASS`는 서로 다른 상태다. `npm run check:delivery-evidence`는 주어진 증거 모양의 계약만 검증하며 Git·CI·host를 자동 수집하지 않는다. 따라서 같은 change SHA의 exact-head 검사·main 포함·runtime pin·자연 운영창 `StageDecision`을 live 명령으로 별도 대조하고, 확인한 상태까지만 보고한다. typecheck·build 통과는 `CODE_PASS`일 뿐 배포나 운영 성공이 아니다
 4. **수동 블로킹 작업 먼저 요청**: DB · Secrets · 외부 콘솔 · `.env.local`
 5. **완료 보고**: ① 뭘 했는지 ② 어디에 기록했는지 ③ 앞으로 뭐가 달라지는지
 6. **커밋은 파일명 명시.** `git add .` 금지

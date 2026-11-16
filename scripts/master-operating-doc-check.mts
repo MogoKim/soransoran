@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { APPROVED_DECISION } from '../src/lib/persona-canon-decision'
 import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 import {
-  BOOTSTRAP_DAILY_MAX, countManagedPosts, judgeBootstrapBudget,
+  BOOTSTRAP_DAILY_MAX, BOOTSTRAP_SLOTS_PER_POST, countManagedPosts, judgeBootstrapBudget,
 } from '../src/lib/persona-comment-bootstrap-budget'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import {
@@ -229,9 +229,11 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   for (const p of ['source-to-slot 판정', '발행 직전 재판정', '판정 함수 하나', 'JIT 공급', '증명일 준비도',
     '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
-    'Dn 최대 용량', '가까운 수요 지평', 'event-assisted 실행', '원천 순위 하나', '날짜 정밀도 보존',
-    'Persona 결정 분리', '자동 댓글 provenance', '댓글 1~5 · 실제 답글', '실제 열람·노출 조회수',
-    '자동 품질 생명주기', 'bounded creativity']) {
+    'Dn 최대 용량', '가까운 수요 지평', '댓글 event-assisted·공급 자연 예약', '원천 순위 하나', '날짜 정밀도 보존',
+    'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수',
+    '자동 품질 생명주기', 'bounded creativity',
+    // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
+    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -244,18 +246,67 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('현재 Dn의 자연 운영 PASS로 승계한다')
     && d100Goal.includes('`N-1`은 FAIL, `N`은 PASS, `N+1`은 상한 위반이다')
     && d100Goal.includes('실패 뒤 재시험은 증명일로만 하고')])
-  out.push(['canon §3.4 가 usageUnknown 을 정산하지 않고 제한 시험 위험 envelope 만 허용한다',
+  out.push(['canon §3.4 가 preflight·proof 공용 bounded envelope와 proof 슬롯 경계를 고정한다',
     d100Goal.includes('정산 요청 20건 이상')
-    && d100Goal.includes('`usageUnknown` 1건 이하')
     && d100Goal.includes('정산 비율 95% 이상')
-    && d100Goal.includes('위험 envelope')
-    && d100Goal.includes('그 시험일 자체의 운영 PASS에는 미상 비용 0이 필요하다')])
+    && d100Goal.includes('절대 미상 건수 상한을 따로 두지 않는다')
+    && d100Goal.includes('`supply-cost-envelope-v2`')
+    && d100Goal.includes('`06:15·08:15·12:15·14:15·17:15`')
+    && d100Goal.includes('`21:15·22:15`는 다음날 준비 회차')
+    && d100Goal.includes('`runId`와 `runSlot`이 같은 자연 예약 슬롯')
+    && d100Goal.includes('producer가 `SCHEDULED_WINDOW_CLOSED`로 차단')
+    && d100Goal.includes('처음부터 수동·event·복구인 요청은')
+    && d100Goal.includes('자연 예약 실행 token까지 증명')
+    && d100Goal.includes('사람이 제공사 사용량과 대조해')
+    && d100Goal.includes('표본에서 지우지 않고 `ineligible`로 세어 `UNKNOWN`으로 닫는다')
+    && d100Goal.includes('승인 예산 천장·신뢰 출처·proof 예산')
+    && d100Goal.includes('`budgetDailyUsd`·`budgetCeilingUsd`·`budgetCapUsd`')
+    && d100Goal.includes('`min(daily, ceiling)`')
+    && d100Goal.includes('유효한 기록 중 가장 큰 cap')
+    && d100Goal.includes('proof·preflight 표본의 provenance 책임')
+    && d100Goal.includes('2026-11-05 KST부터만')
+    && d100Goal.includes('그 이전 증거는 당시의 하루 전체 `usageUnknown=0`')])
   out.push(['canon §3 이 생성 수요를 가장 가까운 실제 공개 기회로 정한다',
     d100Goal.includes('가장 가까운 실제 공개 기회')
     && d100Goal.includes('Persona 여력도 같은')])
-  out.push(['canon §3.3 이 event-assisted · 시간표 fallback · 공통 lease · exactly-once 금지를 적는다',
-    ['수집 완료가 공급을 깨운다', '공개 commit 이 첫 댓글을 깨운다', 'fallback', '실행 lease/token',
-      'coalescing', 'exactly-once 시스템을 새로 만들지 않는다'].every((t) => d100Goal.includes(t))])
+  out.push(['canon §3.3 이 공급 자연 예약 · 댓글 event-assisted · 공통 lease · exactly-once 금지를 적는다',
+    ['일반 공급 owner는 하루 7회 고정 schedule 하나다', '공개 commit 이 첫 댓글을 깨운다', '정기 댓글 회차가 fallback',
+      '실행 lease/token', '예외 공급 경로는 없다',
+      'exactly-once 시스템을 새로 만들지 않는다']
+      .every((t) => d100Goal.includes(t))])
+  /**
+   * 🔴 2026-11-06 창업자 결정 — 아침 공급·READY 예측은 경고이고, 평상일과 증명일은 같은 실행 경로다.
+   *    대체한 제한 복구는 §11 📜 표와 §11.1 📜 전환기 호환에만 남는다. 현재 정책 본문(📜 밖)에 다시 나오면 실패한다.
+   */
+  const goalLive = activeTextOf(d100Goal)
+  out.push(['canon 이 공급·READY 예측을 경고·계획 입력으로, hard gate 를 승인된 목록으로 정한다',
+    ['공급·READY 예측은 경고·계획 입력이다', '단계 시험을 FAIL로 막지 않는다',
+      'hard gate는 대상 단계의 runtime scheduler/profile 지원·남은 슬롯의 물리 발행 용량·Persona·비용·',
+      'hard gate는 대상 단계의 runtime scheduler/profile 지원 ·',
+      '남은 운영 시간의 발행 슬롯이 목표 `N`편을 물리적으로 담는 발행 용량',
+      '이 문서는 별도의 단계 승인 천장을 두지 않는다',
+      '평상일과 증명일은 같은 실행 경로를 쓴다', '실제 원천·READY 공급이 모자라 `N`에 못 미친 날은 결함이']
+      .every((t) => goalLive.includes(t))])
+  /**
+   * 🔴 2026-11-06 교차 검토 — `StageDecision.capacity` 는 controller 가 계산한 다음 증명 준비 단계다.
+   *    단계 hard gate 를 "승인 상한(capacity)" 로 부르면 존재하지 않는 승인 천장을 지어낸다. (비용 예산 천장은 별개다)
+   */
+  out.push(['🔴 canon 현재 정책 본문이 단계 hard gate 를 "승인 상한" 으로 부르지 않는다',
+    !goalLive.includes('승인 상한') && !goalLive.includes('승인 상한(capacity)')])
+  out.push(['🔴 canon 현재 정책 본문에 대체된 제한 복구·07:55/07:58 복구 사슬이 다시 나오지 않는다',
+    !['stage-active-recovery-v2', '제한 복구', '07:58 fallback', '07:00·07:20·07:40·07:55·07:58',
+      'controller-owned']
+      .some((t) => goalLive.includes(t))])
+  out.push(['canon 이 대체된 복구의 회계 경계를 📜 전환기 호환 절에만 격리한다',
+    d100Goal.includes('### 11.1 📜 전환기 호환 — 대체됐지만 코드에 남은 경로 (정책 아님)')
+    && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('`stage-active-recovery-v2`')
+    && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('해당 코드를 지우는 변경에서 이 절의 항목도 함께 지운다')])
+  out.push(['canon §2.3 이 sourceAge 를 원문 게시 시각 기준 한 줄 정렬로 정의하고 나이 bucket·quota 를 금지한다',
+    goalLive.includes('**`sourceAge` = 예정 공개 시각 − 원문 게시 시각**')
+    && goalLive.includes('적격 후보 **전부**를 `sourceAge` 오름차순 한 줄로 세운다')
+    && goalLive.includes('runtime bucket·quota·예약석을 만들지 않는다')
+    && goalLive.includes('72시간이 지난 원문은 자격 밖이다(hard exclusion)')
+    && goalLive.includes('24h 는 관측·조사 목표이지 자격 문턱이 아니다')])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
     d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
     && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')
@@ -274,19 +325,32 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §4.1 이 유료 생성 전 코드의 Persona 확정을 적는다',
     d100Goal.includes('유료 초안 생성 전에 코드가')
     && d100Goal.includes('생성기가 Persona 후보를 임의로 다시 고르지 않는다')])
-  out.push(['canon §4.2 가 실제 고객 작명 분포를 참고하되 닉네임 복사 없이 확장 Persona 를 만든다',
+  // §4.2 구간만 잘라 줄바꿈을 접어 비교한다. #641 이 원작가 정체를 제거했으므로 "수집 작성자 대조 gate"는 증명 불가능하다.
+  // 복사 금지는 구조 증명(source author 후보 입력 0)으로, 충돌은 라이브 회원·기존 Persona·cohort 내 대조로 잠근다.
+  const canon42 = (d100Goal.split(/^### 4\.2 /m)[1] ?? '').split(/^#{2,3} /m)[0].replace(/\s+/g, ' ')
+  out.push(['canon §4.2 가 집계 분포만 쓰고 닉네임 복사·작성자 입력 없이 구조 증명과 라이브 충돌 대조로 확장 Persona 를 만든다',
     d100Goal.includes('실제 고객 작명 분포를 닮되 복사하지 않는다')
-    && d100Goal.includes('길이·리듬·평범한 작명 습관의')
-    && d100Goal.includes('문자열을 후보로 복사·변형·노출하지 않는다')
-    && d100Goal.includes('최종 배정 직전에는 현재 회원·기존 Persona·같은 신규 cohort·수집 작성자 대조를 다시 실행한다')])
+    && canon42.includes('길이·리듬·평범한 작명 습관의 집계 분포')
+    && canon42.includes('문자열을 후보로 복사·변형·노출하지 않는다')
+    && canon42.includes('후보 생성 입력으로도 쓰지 않는다')
+    && canon42.includes('source author 는 후보 생성·배정에 들어갈 수 없다')
+    && canon42.includes('npm run persona:source-author-check')
+    && canon42.includes('npm run persona:gate6b-check')
+    && canon42.includes('"크롤 작성자 충돌 0"이라 부르지 않는다')
+    && canon42.includes('현재 회원, 비활성·폐기로 남은 정체성까지 포함한 모든 기존 Persona, 같은 신규 cohort 안의 exact 충돌과')
+    && canon42.includes('near 충돌을 모두 거절한다')
+    && canon42.includes('DB create 전에 한 번, create 트랜잭션·활성화 순서 안에서 다시 판정한다')
+    && !canon42.includes('수집 작성자 대조')])
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
-  out.push(['canon §5 가 첫 댓글 1 + 선택적 추가 댓글·답글 0~4와 실제 스레드 행을 고정한다',
-    d100Goal.includes('합계 `1..5`건')
-    && d100Goal.includes('선택적 추가 댓글·답글 0~4건')
+  out.push(['canon §5 가 첫 댓글 1 + 선택적 추가 댓글·답글 0~9와 실제 스레드 행을 고정한다',
+    d100Goal.includes('합계 `1..10`건')
+    && d100Goal.includes('선택적 추가 댓글·답글 0~9건')
     && d100Goal.includes('부모 댓글을 가리키는 실제 스레드 행')
-    && d100Goal.includes('모든 글을 5건으로')])
+    && d100Goal.includes('모든 글을 10건으로')
+    && d100Goal.includes('답글로 최대 3회')
+    && d100Goal.includes('일반 Persona는 같은 글에서 한 번만')])
   out.push(['canon §5 가 제한 canary의 실회원 댓글 자동 답글을 금지한다',
     d100Goal.includes('실회원 댓글에는 자동으로 답하지 않는다')])
   out.push(['North Star와 canon이 실제 상세 열람·목록 노출만 고객 조회수로 허용한다',
@@ -452,17 +516,34 @@ check('D100 목표가 정치 선동과 연예·방송·셀럽을 분리한다',
 check('D100 목표가 첫 댓글 증명과 선택적 실제 대화량을 구분한다',
   d100Goal.includes('첫 댓글 1건은 증명용 하한')
   && d100Goal.includes('글마다 대화량을 똑같이 맞추지 않는다')
-  && d100Goal.includes('합계 `1..5`건'))
+  && d100Goal.includes('합계 `1..10`건'))
 check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
   d100Goal.includes('홈·베스트는 실회원 반응을 우선한다')
   && d100Goal.includes('Persona 댓글 수를 실회원 인기처럼 합산해 홈 순위를 올리지 않는다'))
 check('D100 목표가 M0~M7을 날짜가 아니라 완료 증거로 정의한다',
   d100Goal.includes('마일스톤 — 날짜가 아니라 증거로 이동한다')
   && Array.from({ length: 8 }, (_, i) => `| M${i} |`).every((t) => d100Goal.includes(t)))
-check('D100 목표가 단계 PASS 직후 다음 자동 canary를 연다',
-  d100Goal.includes('같은 날 남은 유효 슬롯')
-  && d100Goal.includes('다음 KST 운영일의 첫 유효 슬롯')
+/**
+ * 🔴 2026-11-06 정정 — 하루는 create-only StageDecision 하나 · 공개 단계 하나 · 정확 N 증명 최대 한 번이다.
+ *    PASS 확정 뒤 다음 단계는 다음 KST 운영일 첫 슬롯 전 결정으로만 연다. "같은 날 남은 슬롯" 시작은 현재 정책 본문에서 금지.
+ */
+check('D100 목표가 PASS 확정 뒤 다음 KST 운영일에 다음 자동 시험을 연다 (임의 대기 없음)',
+  d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정으로 다음 단계를 시험한다')
+  && d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정이다')
+  && d100Goal.includes('KST 하루에는 create-only `StageDecision` 하나, 공개 단계 하나,')
+  && d100Goal.includes('임의의 달력 대기를 넣지 않는다')
   && d100Goal.includes('사람이 env나 stage를 바꾸지 않는다'))
+check('🔴 D100 목표 현재 정책 본문이 같은 날 다음 단계 시작을 말하지 않는다',
+  !activeTextOf(d100Goal).includes('같은 날 남은 유효 슬롯으로')
+  && !activeTextOf(d100Goal).includes('같은 날 남은 슬롯 또는'))
+/** 🔴 시간 근거는 슬롯이다 — 60분 첫 댓글은 마감이지 가장 이른 확인 시각이 아니다(즉시 달릴 수 있다) */
+check('🔴 D100 목표가 같은 날 불가의 시간 근거를 슬롯으로 적고 첫 댓글 마감을 확인 시각으로 쓰지 않는다',
+  activeTextOf(d100Goal).includes('정확 `N`번째 글은 그 단계의 마지막 슬롯에서야 생기므로')
+  && activeTextOf(d100Goal).includes('그 마지막 슬롯보다 늦은 예약 슬롯이 없다')
+  && !activeTextOf(d100Goal).includes('첫 댓글 확인 22:10'))
+check('🔴 D100 목표가 마지막 예약의 공급 lease busy·unknown 을 무결성 안전 HOLD 로 적는다(예측 경고가 아니다)',
+  activeTextOf(d100Goal).includes('마지막 controller 예약까지 공급 lease가 busy·unknown이면 무결성 안전 HOLD다')
+  && !activeTextOf(d100Goal).includes('공급 상태를 모르면 그 사실은 예측 경고'))
 /**
  * 🔴 2026-09-30: 첫 canary 2일치 · 지속 14일치 **완성 글 재고** 검사를 뒤집었다.
  *    옛 판은 그 문구를 **강제**했다 — 검사가 폐기된 정책의 편에 서 있었다.
@@ -483,8 +564,9 @@ check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
   current.includes('## 5. 다음 critical path') && /^\| D\d+-FIX \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
-  current.includes('첫 댓글 1 + 선택적 0~4')
-  && current.includes('실제 `parentId` 답글')
+  current.includes('첫 댓글 1 + 선택적 0~9')
+  && current.includes('총 구조 상한 10')
+  && current.includes('글쓴이 답글 최대 3회')
   && current.includes('automatic provenance'))
 /**
  * 🔴 2026-10-11 P0-0: 옛 판은 "10월 8일 자동 5/5 · PR #677 · 공급 11/12" 같은 **그날의 문자열**을 요구했다.
@@ -1232,8 +1314,10 @@ check('🔴 현재 단기 실행은 CURRENT-MILESTONE만 권한을 가진다',
 check('🔴 Persona·봇 활동을 North Star 에 넣지 않는다고 적는다',
   master.includes('Persona·봇 활동과 게시량은 North Star 에 넣지 않는다'))
 check('🔴 2026-09-11 당시 단기 계약 표가 보존돼 있다', master.includes('#### 2026-09-11 당시 단기 계약'))
-check('🔴 글당 상한을 코드와 같은 수로 적는다',
-  master.includes(`| 한 글의 Persona 댓글 | **1~${PERSONA_COMMENTS_PER_POST_MAX}건** |`))
+check('🔴 2026-09-11 역사 표는 당시 글당 1~5 계약을 그대로 보존한다',
+  master.includes('| 한 글의 Persona 댓글 | **1~5건** |'))
+check('🔴 현재 글당 구조 상한은 canon과 코드가 같은 수다',
+  d100Goal.includes(`합계 \`1..${PERSONA_COMMENTS_PER_POST_MAX}\`건`))
 check('🔴 일 절대 상한을 코드와 같은 수로 적는다',
   master.includes(`| Persona 댓글 하루 상한 | **${BOOTSTRAP_DAILY_MAX}건** |`))
 check('🔴 첫 댓글 목표를 코드와 같은 수로 적는다',
@@ -1268,12 +1352,12 @@ check('🔴 폐기 표에 "되살리지 않는다" 를 적는다',
 /** 🔴 표의 네 줄을 실제 함수로 계산해 맞춘다 */
 for (const posts of [1, 10, 100, 200]) {
   const budget = judgeBootstrapBudget({
-    openSlots: posts * PERSONA_COMMENTS_PER_POST_MAX, publishedToday: 0, killSwitchOff: true,
+    openSlots: posts * BOOTSTRAP_SLOTS_PER_POST, publishedToday: 0, killSwitchOff: true,
   })
   const row = new RegExp(`\\| ${posts}편 \\| (\\d+) \\| \\*\\*(\\d+)건\\*\\*`).exec(master)
   check(`🔴 문서의 "글 ${posts}편 → 자리 N · 상한 M" 이 실제 계산과 같다`,
     row !== null
-    && Number(row[1]) === posts * PERSONA_COMMENTS_PER_POST_MAX
+    && Number(row[1]) === posts * BOOTSTRAP_SLOTS_PER_POST
     && Number(row[2]) === budget.remaining)
 }
 /**
@@ -1412,7 +1496,7 @@ check('🔴 North Star 문장을 지침에 복제하지 않았다',
  *    AGENTS.md 는 "정상 상태 봇 글·댓글 0건 · 봇으로 채우지 않는다" 라고 적고,
  *    CLAUDE.md 는 "봇 글·댓글로 채우기" 를 금지 목록에 두고 있었다.
  *    그런데 CURRENT-MILESTONE 의 승인된 단기 목표는 **관리형 공개 글 100/day 와
- *    글당 Persona 댓글 1~5건**이다. 두 문서가 정반대를 말하면, 먼저 읽은 쪽이 이긴다 —
+ *    글당 Persona 댓글 구조 상한 10**이다. 두 문서가 정반대를 말하면, 먼저 읽은 쪽이 이긴다 —
  *    에이전트마다 다른 답을 내고, 그 차이를 아무도 못 본다.
  *
  * 🔴 막아야 할 것은 **없는 활동을 있는 것처럼 보이는 지표**이지 글과 댓글 자체가 아니다.
@@ -1428,7 +1512,7 @@ for (const f of ['AGENTS.md', 'CLAUDE.md']) {
   check(`🟢 ${f} 가 실제 회원 원문 보호는 유지한다`, g.includes('실제 회원 원문'))
   // 🔴 목표 수치는 CURRENT-MILESTONE 한 곳에만 — 복제하면 한쪽이 낡는다
   check(`🔴 ${f} 가 목표 수치를 복제하지 않는다`,
-    !/100\s*(건)?\/day/.test(g) && !g.includes('1~5건'))
+    !/100\s*(건)?\/day/.test(g) && !g.includes('1~5건') && !g.includes('최대 10건'))
 }
 check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
   d100Goal.includes('정책 목표는 이 문서가 정본')

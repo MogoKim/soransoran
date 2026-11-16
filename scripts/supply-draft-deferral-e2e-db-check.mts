@@ -13,11 +13,11 @@
  *      → provider 호출 0(장부 0줄) · picks 3건 전부 `personaCapacityDeferred` · `noDraft` 0 · artifact 0.
  *   ⑤ 부모 러너 `main --live` 를 **실제로** 돌린다 (2026-10-10 P0-B1 JIT 선택) — seed 6 · raw 4(댓글이 더 많다) ·
  *      격리 DB 큐에 형제 1건 → 러너가 적은 묶음이 seed 5(형제 뺀 전부) · raw 0(자동 소비자 없음 · 4건 제외 사유 기록)
- *      이고 판정이 그 묶음만 봤는지 · 기회 스냅샷(opportunities-v2)이 자동 seed 5건만 적어 preflight 가 raw 를 증명일 기회로
+ *      이고 판정이 그 묶음만 봤는지 · 회차 후 기회 스냅샷(opportunities-v3)이 남은 자동 seed만 적어 preflight 가 raw 를 증명일 기회로
  *      세지 않는지 대조한다.
  *   ⑥ 부모 러너를 **두 회차** 돌린다 (2026-09-28 공급 가속 P0) — 발행된 형제 · 거절된 형제 · 옛 글의 원천은
  *      묶음에 들지 않고, 1회차가 적재한 원천은 2회차에 다시 뽑히지 않으며(중복 Queue 0 · Post 불변),
- *      장부의 judge ≤ 10 · draft ≤ 40 을 센다.
+ *      장부의 judge ≤ 20 · draft ≤ 80 을 센다.
  *
  *   🔴 임시 디렉터리에서 돈다: cwd(`.microseed-data`)와 HOME(장부 · 말투 자산)이 모두 mkdtemp 안이다.
  *      저장소 · 운영 장부 · 운영 말투 자산을 건드리지 않는다. 말투 자산은 **합성**이다(실제 댓글 0).
@@ -427,22 +427,30 @@ async function worksetAxisRunner(
     traced?.ok === true && traced.version === 'v2' && JSON.stringify(rawReasoned) === JSON.stringify(rawHashes)
     && traced.trace.summary.rawExcluded === 4 && traced.trace.summary.mismatches === 0 && traced.trace.summary.selected === 3,
     traced === null ? 'trace 없음' : traced.ok ? `제외 ${rawReasoned.length}` : traced.problems.join(','))
-  // 🔴 (P0-B1 정합) 기회 스냅샷 = 자동 seed 전용(opportunities-v2) — preflight 의 실제 함수로 세어도 raw 는 증명일 기회가 아니다
+  // 🔴 기회 inventory = 자동 seed 전용 · 회차 뒤 실제 큐/후보/결론 제외 — raw 와 처리 완료 원천을 세지 않는다
   const { latestOpportunities, sourceOpportunitiesOf } = await import('./lib/stage-preflight-facts.mjs')
   const { OPPORTUNITY_VERSION } = await import('../src/lib/supply-workset')
   const oppFile = readdirSync(D2).find((f) => /^supply-opportunities-.*\.json$/.test(f))
   const opp = oppFile === undefined ? null
-    : JSON.parse(readFileSync(join(D2, oppFile), 'utf-8')) as { version: string; takenAt: string; evidence: { provenance: { articleIdHash: string | null } }[] }
+    : JSON.parse(readFileSync(join(D2, oppFile), 'utf-8')) as {
+      version: string; takenAt: string
+      inventory: { counts: { autoSeed: number; written: number } }
+      evidence: { provenance: { articleIdHash: string | null } }[]
+    }
   const seedHashes = ['wsxs2', 'wsxs3', 'wsxs4', 'wsxs5', 'wsxs6'].map((id) => articleIdHashOf('navercafe:wgang', id)).sort()
+  const pickedHashes = (ws?.sources ?? []).map((s) => articleIdHashOf(s.sourceSite, s.sourceArticleId)).sort()
   const oppHashes = (opp?.evidence ?? []).map((e) => e.provenance.articleIdHash ?? '').sort()
-  check('🔴 🔴 **기회 스냅샷 = opportunities-v2 · 자동 seed 5건 정확히(형제 wsxs1 제외) · raw 4건 미포함**',
-    opp !== null && opp.version === OPPORTUNITY_VERSION && JSON.stringify(oppHashes) === JSON.stringify(seedHashes)
+  check('🔴 🔴 **기회 inventory = v3 · 선택됐어도 초안이 만들어지지 않은 seed 3은 남는다 · auto-seed 5 · raw 4 미포함**',
+    opp !== null && opp.version === OPPORTUNITY_VERSION
+    && opp.inventory.counts.autoSeed === 5 && opp.inventory.counts.written === 5
+    && JSON.stringify(oppHashes) === JSON.stringify(seedHashes)
     && !oppHashes.some((h) => rawHashes.includes(h)), opp === null ? '스냅샷 없음' : `${opp.version} · ${oppHashes.length}건`)
   const latest = opp === null ? null : latestOpportunities(D2, Date.parse(opp.takenAt) + 1000)
   const sourceOpps = latest?.evidence == null ? [] : sourceOpportunitiesOf(latest.evidence, new Set(), new Date(opp!.takenAt))
   const oppKeys = sourceOpps.map((o) => o.key.replace(/^src:/, '')).sort()
-  check('🔴 🔴 **preflight 가 raw 를 증명일 기회로 세지 않는다** — 정본 판독(latestOpportunities → sourceOpportunitiesOf) 기회 = seed 5 · raw 0',
-    latest?.evidence != null && JSON.stringify(oppKeys) === JSON.stringify(seedHashes) && !oppKeys.some((h) => rawHashes.includes(h)),
+  check('🔴 🔴 **preflight 가 raw는 세지 않고, workset에 골랐어도 초안을 못 만든 원천은 다시 쓸 기회로 센다**',
+    latest?.evidence != null && JSON.stringify(oppKeys) === JSON.stringify(seedHashes)
+    && !oppKeys.some((h) => rawHashes.includes(h)) && pickedHashes.every((h) => oppKeys.includes(h)),
     `기회 ${oppKeys.length}`)
   check('🔴 러너 로그가 JIT 선택 사실과 raw 제외 사유를 적는다',
     /연결 가능 seed 5 · raw 제외 4 · 선택된 재시도 0/.test(out) && /원문 그대로\(raw\) 축 — 자동 소비자가 없다[^\n]* 4/.test(out),
@@ -458,7 +466,7 @@ async function worksetAxisRunner(
 }
 
 /**
- * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 10/40** (2026-09-28 공급 가속 P0).
+ * ⑥ 🔴 🔴 **같은 원문으로 두 번째 글을 만들지 않는다 · 요청 상한 20/80** (2026-09-28 공급 가속 P0 · 2026-10-28 D20 전환).
  *
  *    부모 러너 `main --live` 를 **두 회차** 돌린다 — 격리 DB · 가짜 provider · 임시 cwd.
  *    · 1회차 전: 큐에 **발행된** 형제(PUBLISHED + Post) · 거절된 형제 · 옛 글(Post 의 원천 칸)이 있다
@@ -466,7 +474,7 @@ async function worksetAxisRunner(
  *      → 다른 카페의 같은 글 번호는 다른 원천이다 — 막지 않는다
  *    · 1회차가 적재한 원천은 2회차 묶음에 들지 않는다 — 큐 행이 생겼기 때문이다
  *    · 원천마다 큐 행 ≤ 1 · Post 는 러너가 늘리지 않는다
- *    · 장부 — judge ≤ 10 · draft ≤ 40 (단계 env 상한)
+ *    · 장부 — judge ≤ 20 · draft ≤ 80 (단계 env 상한)
  */
 async function duplicateSourceRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>,
@@ -542,7 +550,7 @@ async function duplicateSourceRunner(
         // 🔴 결정이 넣은 모양(표식 포함) — 표식 없는 손 env 는 d1 이다(Lane A)
         ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
         SORAN_LLM_DAILY_BUDGET_USD: '1000', SORAN_LLM_RESERVE_HEADROOM: '1.5',
-        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 10 · 40 으로 덮는다
+        // 🔴 운영과 같은 env 상한(20) — 러너가 단계마다 20 · 80 으로 덮는다
         SORAN_LLM_RUN_REQUEST_CAP: '20',
         FAKE_PROVIDER_JUDGE_DECISION: 'AUTO_SEED',
         NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
@@ -566,7 +574,9 @@ async function duplicateSourceRunner(
   check('🔴 🔴 **러너 로그가 그 셋을 제외 사유로 센다 — 미발행 형제 1 · 이미 큐·글에 있는 원천 2**',
     /같은 원문의 미발행 형제가 큐에 있다 1 · 같은 원문으로 이미 큐 행이나 글이 있다 \(발행된 것 포함 — 두 번째 글을 만들지 않는다\) 2/.test(r1.out),
     (/제외 .*/.exec(r1.out) ?? [''])[0])
-  check('🔴 다른 카페의 같은 번호 모양(dupx)은 막지 않는다 · 묶음은 10건', ids1.includes('dupx') && ids1.length === 10, ids1.join(','))
+  const eligibleIds = ['dupx', ...Array.from({ length: 12 }, (_, i) => `dupf${String(i + 1).padStart(2, '0')}`)]
+  check('🔴 다른 카페의 같은 번호 모양(dupx)은 막지 않는다 · 가용 고유 원천 13건을 모두 고른다(상한 20)',
+    same(ids1, eligibleIds), ids1.join(','))
 
   // ── 장부 — 단계 상한 ──
   const ledgerDir = join(H, 'Library', 'Application Support', 'soransoran', 'llm-ledger')
@@ -579,11 +589,11 @@ async function duplicateSourceRunner(
     return [...last.values()].filter((r) => r.stage !== 'countTokens' && r.status === 'settled').length
   }
   const rid1 = r1.ws?.runId ?? ''
-  check('🔴 🔴 **장부 — judge ≤ 10 · draft ≤ 40 · 둘 다 실제로 불렸다**',
-    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 10 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 40,
+  check('🔴 🔴 **장부 — judge ≤ 20 · draft ≤ 80 · 둘 다 실제로 불렸다**',
+    paid(`${rid1}-j`) > 0 && paid(`${rid1}-j`) <= 20 && paid(`${rid1}-d`) > 0 && paid(`${rid1}-d`) <= 80,
     `judge ${paid(`${rid1}-j`)} · draft ${paid(`${rid1}-d`)}`)
-  check('🔴 🔴 **러너가 단계 env 상한 10 · 40 을 실었다** (자식 로그)',
-    /회차 요청 상한 10/.test(r1.out) && /회차 요청 상한 40/.test(r1.out))
+  check('🔴 🔴 **러너가 단계 env 상한 20 · 80 을 실었다** (자식 로그)',
+    /회차 요청 상한 20/.test(r1.out) && /회차 요청 상한 80/.test(r1.out))
   // 🔴 (2026-10-12 Batch C1) 실제 판정 · 초안 자식이 fd 9 를 물려받아 러너와 같은 커널 lease · 실행 token 을 증명했다 — 장부 shadow 칸
   const shadowOf = (r: Record<string, unknown>): { ok?: boolean; code?: string | null } | undefined => r.runTokenShadow as never
   const shadowRows = ledger().filter((r) => String(r.runId).startsWith(rid1) && r.stage !== 'countTokens')

@@ -752,7 +752,7 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   // ③ 슬롯 시점 나이 — 시간 단위 · floor 없음. 🔴 구간이면 양 끝을 다 본다(fail-closed)
   const ageAtSlotH = Math.max(0, i.slotAt.getTime() - oldest.getTime()) / HOUR_MS
   const youngestAgeH = Math.max(0, i.slotAt.getTime() - youngest.getTime()) / HOUR_MS
-  rank.ageAtSlotH = Math.round(ageAtSlotH * 1000) / 1000
+  rank.ageAtSlotH = sourceAgeHoursAt(oldest.getTime(), i.slotAt.getTime())
   if (!(youngestAgeH < SOURCE_AGE_LIMIT_HOURS)) return out('ineligible', 'SOURCE_TOO_OLD_AT_SLOT')
   if (!(ageAtSlotH < SOURCE_AGE_LIMIT_HOURS)) return out('unknown', 'POSTED_WITHIN_DAY_AT_SLOT')
 
@@ -805,20 +805,71 @@ const asc = (a: number | null, b: number | null): number =>
   (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : a - b)
 
 /**
- * 🔴 **사전식 비교 — 가중치 없음. 신선도가 1순위다** (2026-10-19 창업자 결정).
- *    슬롯 나이 ↑ → 댓글 백분위 ↓ → 조회 백분위 ↓ → velocity ↓(없으면 뒤) → tieBreak.
- *    품질·안전은 자격 gate에서 끝났고, 그 뒤에는 오래된 고반응 글이 최신 글을 앞설 수 없다.
- *    반응은 실질적으로 같은 게시 시각에서만 선다 — 모르는 성분은 언제나 뒤다.
- *
- *    옛 순서(2026-09-30~2026-10-18): 댓글 백분위 ↓ → 조회 백분위 ↓ → 슬롯 나이 ↑. 반응이 신선도를 이겨
- *    오래된 고반응 글이 72시간 안의 새 글을 앞섰다 — 10-18 d10 재시험에서 재현.
+ * 🔴 **`sourceAge`(시간)** — 기준 시각 − 원문 게시 시각의 이른 끝(`postedLowerBoundOf`). 수집 시각이 아니다.
+ *    0.001h 반올림 · 음수 없음. 판정 rank 와 순위 정렬이 이 함수 하나로 잰다(canon §2.3).
+ */
+export function sourceAgeHoursAt(postedLowerBoundMs: number, atMs: number): number {
+  return Math.round((Math.max(0, atMs - postedLowerBoundMs) / HOUR_MS) * 1000) / 1000
+}
+
+/**
+ * 🔴 **원천 순위의 유일한 정본 비교 — 사전식 · 가중치 없음** (canon §2.3 · 2026-10-19 · 2026-11-06).
+ *    `sourceAge` ↑ → 댓글 백분위 ↓ → 조회 백분위 ↓ → velocity ↓ → 결정적 열쇠(코드 포인트). 모르는 성분은 언제나 뒤다.
+ *    자격 gate 를 지난 뒤에는 오래된 고반응 글이 최신 글을 앞서지 않는다 — 반응은 실질적으로 같은 나이에서만 선다.
+ *    🔴 열쇠는 `localeCompare` 가 아니다 — 실행 locale 이 순서를 바꾸면 결정적이지 않다.
  */
 export function compareReleaseRank(a: ReleaseRank, b: ReleaseRank): number {
   return asc(a.ageAtSlotH, b.ageAtSlotH)
     || desc(a.commentsPct, b.commentsPct)
     || desc(a.viewsPct, b.viewsPct)
     || desc(a.velocity, b.velocity)
-    || a.tieBreak.localeCompare(b.tieBreak)
+    || (a.tieBreak < b.tieBreak ? -1 : a.tieBreak > b.tieBreak ? 1 : 0)
+}
+
+/** 🔴 판정 슬롯이 없는 자리(수집 목록 · 발행 후보 줄)의 순위 입력 — 정본 비교에 들어갈 성분 그대로 */
+export type SourceRankSignal = {
+  /** 원문 게시 시각의 이른 끝(ms). 모르면 null — 언제나 뒤다 */
+  postedLowerBoundMs: number | null
+  commentsPct: number | null
+  viewsPct: number | null
+  velocity: number | null
+  tieBreak: string
+}
+
+/**
+ * 🔴 큐 행 `gateResults` 의 순위 입력 — 판정과 **같은 판독기**(`readSourceEvidence` · `postedLowerBoundOf`)로 읽는다.
+ *    못 읽으면 전부 모름이다. 느슨한 파싱으로 known 을 만들지 않는다.
+ */
+export function sourceRankSignalOf(gateResults: unknown, tieBreak: string): SourceRankSignal {
+  const read = readSourceEvidence(gateResults)
+  if (!read.ok) return { postedLowerBoundMs: null, commentsPct: null, viewsPct: null, velocity: null, tieBreak }
+  const ev = read.record
+  const lb = postedLowerBoundOf(ev)
+  return {
+    postedLowerBoundMs: lb === null ? null : lb.getTime(),
+    commentsPct: ev.sourceStats?.commentsPct ?? null,
+    viewsPct: ev.sourceStats?.viewsPct ?? null,
+    velocity: velocityOf(ev.observations),
+    tieBreak,
+  }
+}
+
+/**
+ * 🔴 **정본 정렬** — 모든 행의 `sourceAge` 를 **같은 기준 시각**(알려진 게시 이른 끝 중 가장 늦은 시각)에서 재고
+ *    `compareReleaseRank` 로 세운다. 같은 기준이라 나이 오름차순 = 게시 시각 최신순이다. 입력을 바꾸지 않는다.
+ */
+export function sortBySourceRank<T>(rows: readonly T[], signalOf: (row: T) => SourceRankSignal): T[] {
+  const signals = rows.map((row) => ({ row, s: signalOf(row) }))
+  const known = signals.map((x) => x.s.postedLowerBoundMs).filter((ms): ms is number => ms !== null)
+  const refMs = known.length === 0 ? 0 : Math.max(...known)
+  const ranked = signals.map(({ row, s }) => ({
+    row,
+    rank: {
+      ageAtSlotH: s.postedLowerBoundMs === null ? null : sourceAgeHoursAt(s.postedLowerBoundMs, refMs),
+      commentsPct: s.commentsPct, viewsPct: s.viewsPct, velocity: s.velocity, tieBreak: s.tieBreak,
+    } satisfies ReleaseRank,
+  }))
+  return ranked.sort((a, b) => compareReleaseRank(a.rank, b.rank)).map((x) => x.row)
 }
 
 // ─────────────────────────────────────────────────────────

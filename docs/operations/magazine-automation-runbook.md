@@ -1,6 +1,6 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 갱신 2026-10-16 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09)
+작성 2026-09-15 · 갱신 2026-11-09 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09) · `com.soransoran.magazine-graph-watch`
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
 
@@ -10,9 +10,9 @@
 
 | | 자동 | 사람·CI |
 |---|---|---|
-| graph readiness·ArticlePlan 승인 | ❌ | M-GRAPH·G8가 실행 queue 앞에서 완료 |
-| `SPEC_READY` 다음 계획 선택 | ✅ producer | 계획 내용을 재해석하지 않음 |
-| 원고 회수 (ChatGPT 웹 UI) + 관문 | ✅ producer | |
+| graph readiness·ContentPlan | vNext: ✅ compiler 가 ContentPlanInputBundle 에서 결정적으로 컴파일(§0.0B.1) · 공급 loop 는 병렬(charter §18-B.5) | DIRECT 현행 코드: G8 편입 · ArticlePlan prepare/approve/materialize 가 queue 앞에서 완료(§0.0A) |
+| 다음 계획 선택 | ✅ producer — DIRECT 현행: `SPEC_READY` 참조 · vNext: 출판 최소를 충족한 ContentPlan(charter §18-B.2) | 계획 내용을 재해석하지 않음 |
+| 원고 생성 + 관문 | ✅ producer — legacy: ChatGPT 웹 UI · vNext: ManuscriptProvider API(§0.0B.2) | |
 | 변환 · QA · hero · batch-qa | ✅ auto-register | |
 | `articles.ts` 등록 (**PR 브랜치 위에서**) | ✅ auto-register | |
 | **PR 생성** (`[merge 금지]`) | ✅ auto-register | |
@@ -25,46 +25,378 @@
 사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
 **모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
 
-### 0.0A plan-first 제작 계약 전환 (2026-10-16 창업자 결정)
+### 0.0A 현행 legacy·DIRECT 실행 설명 (vNext 구현 전까지)
 
-현재 Production은 Claude가 `brief.md`·`review.ts`를 만드는 `LEGACY_BRIEF_V1`이다. 목표 경로는
-M-GRAPH가 미리 준비한 `GRAPH_READY` 계획을 G8이 편입하고, 승인된 ArticlePlan을 버전 고정
-`ArticleSpec`으로 컴파일해 M-AUTO가 실행만 하는 `DIRECT_SPEC_V1`이다. 전환 완료 전의 자연 회차
-설명은 현재 legacy 경로를 뜻한다.
+정책은 charter §18-B, vNext 실행 계약은 §0.0B 다. 이 절은 **지금 main 코드가 실제로 하는 일**과 운영자가 따라야 할 절차만 적는다.
+
+- 🔴 **legacy 는 2026-11-09 부터 기능 동결이다**(창업자 결정 · §0.0B.7). 안전 긴급 수정 외에는 기능·정책을 보정하지 않는다.
+  동결은 코드 변경 금지이지 운영 정지가 아니다 — vNext 가 실제 쓰기를 시작할 때 rollout switch 가 legacy writer 를 배타 정지한다.
+- 자연 회차의 운영 경로는 `LEGACY_BRIEF_V1` 이다. `DIRECT_SPEC_V1` 코드 경로도 main 에 있다.
 
 ```text
 LEGACY_BRIEF_V1  frozen legacy queue -> Claude brief -> ChatGPT manuscript -> draft.md -> QA...
 DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -> draft.md -> QA...
 ```
 
-- M-GRAPH는 생산 최소선인 공개 direct 2개 이상 + discovery 1개를 갖춘 계획만 `GRAPH_READY`로 낸다.
-  제품 표시는 direct 최대 3개 + discovery 1개다. 숫자를 위해 관계를 만들지 않는다.
-- M-AUTO는 `SPEC_READY` 참조 중 다음 하나를 결정적으로 고르며 주제·관계·계획을 다시 판단하지 않는다.
-- queue는 최종 목표에서 `planId`·`planHash`·`executeAt`만 참조한다.
-- 일일 Claude brief와 review 생성은 direct 경로에서 제거한다.
-- `draft.md`, QA, 재생성 예산, HOLD, dirty-tree, 원자 교체, exact-head, 배포·watch 관문은 유지한다.
-- DIRECT와 LEGACY는 runner 입구와 후보 집합을 분리한다. 한 run에서 두 mode를 섞지 않는다.
-- DIRECT 실패 행을 legacy로 자동 강등하지 않는다. 정확한 HOLD를 남기고 같은 spec 신원으로 재개한다.
-- rollback은 행별 mode 변경이 아니라 실행 lane 전체를 명시적으로 legacy runner로 전환한다.
-- 서로 다른 DIRECT 계획 2건과 rollback 증거 전에는 legacy를 격리 보존한다. 증거 뒤에는 daily brief/review,
-  direct 대상 input-repair, mixed selected/reusable, 행별 mode 분기와 그 전용 검사를 활성 경로에서 제거한다.
-- 일정과 완료 게이트는 `magazine/MAGAZINE-CURRENT-MILESTONE.md`를 따른다.
-- **ArticlePlan (2026-10-22 · PR C)** — G8은 연구 admission(receipt · slug manifest · ledger)만 기록하고 큐를 쓰지 않는다.
-  큐 행은 사람이 승인한 source/2 entry에서만 만든다. 세 단계를 섞지 않는다.
-  - `magazine-direct-spec-source-authoring.mjs prepare` — 읽기 전용. 큐 행 없이 admission과 현재 제품 graph를 대조해
-    DRAFT 후보를 낸다. 관계는 receipt edge로 고정한다.
-  - `approve` — 사람 승인자만 받는다. 승인 직전에 admission·graph를 다시 대조하고, plan을 topic-queue union으로 검증한 뒤
-    `drafts/magazine/article-spec-source/<graphVersion>.json`에 entry 하나를 더한다.
-  - `materialize` — 승인 entry 하나로 큐 writer lock 안에서 `max(day)+1` 행을 넣고, 같은 parser로 다시 읽어 대조한다.
-  - 소비 쪽 fail-closed: G8 해시(`g8ManifestHash` · `articlePlanHash`) 중 하나라도 있는 행은 둘 다 있고 `DIRECT_SPEC_V1`이어야 한다
-    (`G8_ROW_NOT_DIRECT`). plan 복제 필드를 손으로 고치면 `SOURCE_QUEUE_DRIFT`다.
-  - 승인 잠금(`article-spec-source/<graphVersion>.json.lock`)이 있어 `LOCK_BUSY`이면 자동으로 지우거나 재시도하지 않는다.
-    잠금의 pid와 실행 중 프로세스를 확인한 뒤 사람만 stale 잠금을 정리한다.
+- 한 run 에서 두 mode 를 섞지 않는다. DIRECT 실패 행을 legacy 로 자동 강등하지 않고, HOLD 를 남겨 같은 신원으로 재개한다.
+- `draft.md` · QA · 재생성 예산 · HOLD · dirty-tree · 원자 교체 · exact-head · 배포·watch 관문은 두 경로에 공통이다.
+- **DIRECT 경로의 ArticlePlan 명령 (현행 코드)** — G8 은 연구 admission(receipt · slug manifest · ledger)만 기록하고 큐를 쓰지 않는다.
+  - `magazine-direct-spec-source-authoring.mjs prepare` — 읽기 전용. 큐 행 없이 admission 과 현재 제품 graph 를 대조해
+    DRAFT 후보를 낸다. 관계는 receipt edge 로 고정한다.
+  - `approve` — 현행 코드는 기계가 아닌 `--approver` 를 요구한다(`MACHINE_APPROVER`). 승인 직전에 admission·graph 를 다시 대조하고,
+    plan 을 topic-queue union 으로 검증한 뒤 `drafts/magazine/article-spec-source/<graphVersion>.json` 에 entry 하나를 더한다.
+  - `materialize` — entry 하나로 큐 writer lock 안에서 `max(day)+1` 행을 넣고, 같은 parser 로 다시 읽어 대조한다.
+  - 소비 쪽 fail-closed: G8 해시(`g8ManifestHash` · `articlePlanHash`) 중 하나라도 있는 행은 둘 다 있고 `DIRECT_SPEC_V1` 이어야 한다
+    (`G8_ROW_NOT_DIRECT`). plan 복제 필드를 손으로 고치면 `SOURCE_QUEUE_DRIFT` 다.
+  - 승인 잠금(`article-spec-source/<graphVersion>.json.lock`)이 있어 `LOCK_BUSY` 이면 자동으로 지우거나 재시도하지 않는다.
+    잠금의 pid 와 실행 중 프로세스를 확인한 뒤 사람만 stale 잠금을 정리한다.
   - `.release-*` 파일이 보이면 자동으로 지우지 않는다 — 해제 경쟁의 사고 잔존물로 보고 주인을 확인한다.
-  - materialize가 `QUEUE_WRITE_CONFLICT`이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
-    producer를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
+  - materialize 가 `QUEUE_WRITE_CONFLICT` 이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
+    producer 를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer 의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
+
+### 0.0B 🔴 Magazine vNext 실행 계약 (2026-11-03 설계 동결 · 2026-11-09 S0 재동결 · 구현 전)
+
+권위 객체·관계·ContentPlan·공급 정책은 charter §18-B, 현재 상태와 단계 순서는 milestone 이 정본이다. 이 절은 **실행**만 정한다.
+🔴 아직 구현 전이다. 아래는 구현이 지켜야 할 계약이며, 지금 운영은 동결된 legacy 경로다(§0.0A).
+
+#### 0.0B.1 입력 · ProviderPlan · Job
+
+**입력 흐름**
+
+```text
+연구 current + exact snapshot ─export(엄격 투영 · content-addressed)→ ContentPlanInputBundle
+      제품 저장소 추적 대상 · bundleHash(내용 신원) + recordHash(출처 봉인: graph 판·current 해시 · export 시점 control 전체 해시 포함)
+Bundle + 정책 판 ─compiler(정적 · 결정적)→ ContentPlan(planHash · 날짜·slug 없음 · `<graphVersion>:<intentId>`)
+ContentPlan + 현재 control·articles·legacy queue 신원·시각·진행 중 신원 ─admission(동적)→ 후보 | HOLD(사유 코드) · planHash 불변
+admitted ContentPlan ─허용 필드 투영 + PII scan→ ProviderPlan(additionalProperties:false) → ManuscriptProvider
+```
+
+- 🔴 **runtime 은 mutable 비-git 연구 폴더를 직접 읽지 않는다.** 이유: 그 폴더는 바뀌고 이력이 없어, 같은 planHash 를 나중에 다시 만들 수 없다.
+- Bundle 은 graph 판과 같은 승격 변경으로만 들어온다. 현재 배포판 `g-20261102-427d4d` 의 최초 Bundle 만 S2 bootstrap 변경으로 1회 추가할 수 있고,
+  그 조건(Bundle 미존재 · 제품 graph/control/tree hash 와 연구 current 후보 신원 정확 일치 · graph 바이트 변경 0 · 어긋나면 쓰기 0)의 정본은 charter §18-B.5 다.
+  Bundle 판독 불가·두 해시(`BUNDLE_HASH_MISMATCH` · `RECORD_HASH_MISMATCH`) 불일치이면 compiler 는 그 graphVersion 의 plan 을 하나도 만들지 않는다.
+  bootstrap 실행 API 에는 판을 바꾸는 손잡이가 없고(허용 판은 상수 하나), 출력 경로 구성 요소가 symlink 면 쓰지 않는다(제품 루트 밖 쓰기 0).
+  쓰기는 crash-safe no-clobber 다 — 최종 파일은 없거나 바이트가 같고 fsync 된 완전한 파일이다(짧은 쓰기 반복 · 되읽기 대조 · link 의 EEXIST 만
+  `BUNDLE_ALREADY_EXISTS` · 그 밖의 link 오류는 `BUNDLE_WRITE_FAILED` · 새 폴더 부모와 대상 폴더 fsync · link 뒤 경로 바꿔치기는 `OUTPUT_PATH_RACE`).
+  앞 실행이 남긴 임시 파일이 있으면 지우지 않고 `STALE_TEMP_PRESENT` 로 멈춘다.
+  🔴 경로는 **검증된 폴더 inode 에 고정**한 뒤 쓴다(2026-11-11 S2 P1-7) — Node 에 openat · linkat 이 없어 제품 루트부터 구성 요소마다
+  lstat → chdir → dev·ino 대조로 cwd 를 고정하고, tmp open · link · 정리를 상대 이름으로만 한다. 경로가 중간에 symlink 로 바뀌어도
+  제품 루트 밖 바이트 · 이름은 생기지 않는다(`OUTPUT_PATH_RACE`). 한계: 고정한 폴더 자체를 옮기면(rename) 그 폴더를 따라간다 — openat 과 같고, 사후 확인이 지운다.
+  🔴 **입력 CAS** — 컴파일에 쓴 권위 입력(제품 current · control · graph 판 · 연구 current 링크 대상 · 트리 · manifest · control.json · snapshot · 증거)을
+  link 바로 앞에서 같은 함수로 다시 읽어 키 단위로 대조한다. 바뀌었으면 `INPUT_DRIFT` · 출력 0. Bundle 바이트에 들어가지 않는 articles · queue 는 보지 않는다.
+  🔴 증거 파일은 ENOENT 만 "없음"이다. 그 밖의 읽기 오류(EACCES · EIO …)는 `EVIDENCE_READ_FAILED` 로 전체를 멈춘다. 모든 파일 시스템 오류는
+  `{ ok:false, code, why, errno }` JSON · exit 1 이다(`FILESYSTEM_ERROR` 포함 · stack trace 0).
+- 🔴 **두 해시 (2026-11-10 S2 P1).** ContentPlan · planHash 는 `bundleHash`(schemaVersion · graphVersion · intents · relations · mappings)만 싣는다.
+  export 시점 control 토글 · current 주석 · manifest `generatedAt` 같은 출처 변화는 `recordHash` 만 바꾸고 planHash 를 바꾸지 않는다.
+- 🔴 **control 은 컴파일 입력이 아니다 (2026-11-10).** Bundle 의 control 전체 해시는 export 시점 출처 기록이다. 현재 control 은 admission 이 엄격
+  판독(`parseGraphControl` · 토큰 단위 실제 선언 · **데이터 전용** — JS 실행 0 · getter · 호출 · spread · 중복 key 는 판독 불가)해 graphVersion 불일치(`GRAPH_VERSION_MISMATCH`) · kill switch · graph 꺼짐 · 꺼진 cluster · 근거 있는 direct 관계의
+  켜진 표면 없음이면 fail-closed 로 HOLD 한다. 정당한 control 토글은 Bundle 을 무효로 만들지 않고 planHash 를 바꾸지 않는다.
+- 🔴 **정적 / 동적 분리.** ContentPlan · planHash 의 입력은 엄격 판독한 Bundle 과 버전이 붙은 정책 판뿐이다(정책 판 · 원문 경계 규칙의 내용은
+  id 별 기대 해시로 고정한다 — 내용을 바꾸면 legacy 공유 상수 변경이어도 id 를 올린다). 현재 control · articles · legacy queue ·
+  판정 시각 · 진행 중 신원 · same-release(이미 공개된 대상에서 출발하는 층 · 순환/고립 HOLD · 후보 탈락 뒤 고정점 재판정)는 admission 이다.
+  same-release 후보끼리도 정확 신원(intentId · canonical mapping slug · 정규화 제목)을 공유하면 그 묶음에서 planId 가 가장 작은 후보 하나만 남고
+  나머지는 `DUPLICATE_SAME_RELEASE` 다(입력 순서와 무관). articles 의 공개 시각은 오프셋이 있는 엄격 시각만 받는다 — 달력에 없는 날(2/30 · 평년 2/29) ·
+  24:00 · 범위 밖 오프셋은 `ARTICLES_UNREADABLE`(앞판 `Date.parse` 는 2/30 을 3/2 로 넘겼다). Bundle · 입력의 희소 배열(빈 칸)은 해시 전에 거부한다.
+  S3 release 는 release·merge 직전에 같은 admission 을 다시 돈다.
+- 🔴 **legacy queue 임시 신원 adapter.** vNext 는 queue 를 plan·콘텐츠 입력으로 쓰지 않고 **절대 쓰지 않는다.** legacy 가 남아 있는 동안 admission 이
+  `drafts/magazine/topic-queue.ts` 에서 신원 투영(intentId · slug · 정규화 제목 · cluster)만 읽어 중복을 본다. 파일·앵커를 못 읽으면 fail-closed
+  (`QUEUE_IDENTITY_UNREADABLE`) — 같은 slug 두 행 · 한 행의 같은 필드 두 번 · articles 의 같은 slug 두 번 · 공개/예약 행의 해석 불가·오프셋 없는
+  공개 시각도 같다(원시 중복을 마지막 값으로 덮지 않는다). 같은 cluster 라는 이유만으로 막지 않는다. 초안·HOLD·격리 바이트는 읽지도 승계하지도 않는다(§0.0B.7).
+- 🔴 **slug 는 S3 에서 묶는다.** S2 는 slug 를 만들지 않고 legacy queue · source materialization 을 쓰지 않는다. admission 은
+  `SLUG_BINDING_REQUIRED` 를 드러내고, S3 의 vNext release 신원 경계가 stable slug 를 묶는다. S2 는 현재 queue 기반 G8 workflow 를 부르지 않는다.
+- 초기 commissioning 은 **STANDARD 만** 컴파일한다. CONTROLLED(MEDICAL · FINANCIAL · SENSITIVE)는 validator 전까지 `CONTROLLED_VALIDATOR_ABSENT` 로 HOLD.
+  3+1 은 plan 의 품질·표시 metadata 일 뿐 하드 게이트가 아니다. 하드 관계 최소는 근거 있는 direct 관계 1개다.
+
+**ProviderPlan — provider 에 보내는 유일한 입력**
+
+| 허용 (이 목록뿐) | 금지 |
+|---|---|
+| `primaryQuery` · `audienceSituation` · `answerScope` · inclusions · exclusions · `validationProfile` · forbidden claims · CTA·community destination · **이미 공개된** 관련 글의 title·slug · 승인된 공식 출처 URL | 회원 데이터 · 커뮤니티 원문·제목 · raw evidence·SERP snippet · 로컬 경로 · token·tracking 파라미터가 붙은 URL · 목록에 없는 모든 필드 |
+
+- schema 는 `additionalProperties: false` 다. 허용 목록으로 새 객체를 만들고(1차 방어) exact-key 를 확인한다.
+- 🔴 **호출자 값을 믿지 않는다 (2026-11-11 S2 P1).** ProviderPlan 은 호출자가 준 plan · admission 결과(관련 글 title · slug)를 받지 않는다.
+  같은 admission 입력으로 봉인된 Bundle 에서 다시 컴파일 · admission 해 도출하고, job 이 묶인 planHash 와 다르면(내용 · 정책 판이 바뀐 낡은 plan)
+  `PLAN_STALE` 로 돌려주고 ProviderPlan 은 만들지 않는다(산출 0). 정책 판 · 원문 경계 규칙은 id 별 기대 해시 신원표가 runtime 에서 강제한다(`POLICY_IDENTITY_DRIFT`).
+- 🔴 내부 주석 표식(`🔴` 등)·원문 근거 경로·로컬 경로·token·query/fragment 가 붙은 URL 이 하나라도 있으면 **조용히 지우지 않고** ProviderPlan 을 만들지 않는다.
+  Bundle · ContentPlan 의 원문 문자열은 그대로 보존한다 — 고칠 곳은 연구 정본이다.
+- 🔴 **커뮤니티 원문·제목은 구조로 막는다 (2026-11-10 S2 P1).** Bundle 조립 때 intent 의 provider 행 문장을 연구가 관측한 제3자 글
+  (canonical 증거의 검색 결과 제목 · snippet · `communityTitle` — 우리 사이트 결과 제외)과 결정적으로 대조해 intent 마다 `textProvenance`
+  (`CLEAR` · `THIRD_PARTY_TEXT` · `UNVERIFIED`)만 싣는다. `CLEAR` 가 아니면 ProviderPlan 0 이다. 문구 목록이 아니고, 원문은 Bundle 에 싣지 않는다.
+  한계: 연구 증거 corpus 밖에서 손으로 옮긴 원문은 이 판정이 보지 못한다 — 2차 스캔과 연구 정본 수정이 맡는다.
+- 전송 직전 PII scan(전화 — 괄호 지역번호 · 국가번호 포함 · 이메일 · 주민등록번호 · 계좌 — 공백 · NBSP · 대시 구분과 이어 쓴 10~14자리 포함 · 저장소 상대 경로 · 일반 credential 꼴 등)을 **반드시** 돈다.
+  걸리면 그 Job 만 HOLD 한다(2차 방어).
+- 이유: provider 쪽 보존(§0.0B.2 `store:true`)을 허용하는 근거가 "회원 데이터가 없다" 하나뿐이므로, 그 전제를 구조로 강제한다.
+
+**Job — 글 하나의 실행 기록**
+
+- 위치: runtime 밖 `~/Library/Application Support/soransoran/magazine-jobs/<planHash>/job.json` (Git 밖). 글 하나당 하나.
+- 담는 것(파생할 수 없는 사실만): `planHash` · `providerPlanHash` · `contractHash` · 요청 키 · response ID · `nextPollAt` · 원고·이미지·응답 해시 ·
+  usage·실제 또는 계산 가능한 비용 · 검증 결과 · 부분 수리·전체 재생성 횟수 · DELETE 확인(시각·결과) · release PR 번호 · 실패 원인 · 상한 있는 `attempts[]`.
+- 담지 않는 것: READY · EXPIRED · RELEASE_READY 같은 파생 상태. 매번 계산한다.
+- 쓰기: temp + rename 원자 덮어쓰기. replay·compaction 장부를 만들지 않는다.
+- 상태는 기록한 사실에서 계산한다.
+
+```text
+PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) → REMOTE_DELETED(확인 기록)
+        → VALID | NEEDS_REPAIR → VALID → HERO_READY → IN_RELEASE(pr) → RELEASED
+전송 여부·ID 수신이 불명 → SUBMISSION_UNKNOWN → 확인 → SUBMITTED | 회수 불능 확정
+어디서든 → HOLD(reason)   ※ 그 Job 만
+```
+
+- 🔴 불변조건: **planHash 당 진행 중 요청 ≤1 · 최종 채택 원고 1개 · 비용 상한 안.** 이유: vNext 에서 실제 위험은 공개 중복과 비용 폭주다.
+  legacy 의 "같은 메시지 지문 재전송 0" 은 브라우저 한 대화에 요청이 쌓이는 것을 막던 규칙이라 그대로 옮기지 않는다.
+  legacy 격리 장부(`scripts/lib/magazine-quarantine.mjs`)는 legacy 삭제 단계까지 그대로 둔다.
+
+#### 0.0B.2 Provider 계약
+
+- **ManuscriptProvider · ImageProvider · EvidenceProvider 를 코드 계약으로 분리한다.** 같은 OpenAI API 를 쓸 수 있지만 실패·비용·재시도는 독립이다.
+- provider 는 graph · queue · `publishAt` · PR · Git · 다른 후보를 모른다. ProviderPlan(§0.0B.1)만 받는다.
+- 🔴 **브라우저 ChatGPT 는 자동 fallback 이 아니라 수동 비상수단이다.** 어떤 실패도 브라우저로 자동 강등하지 않는다.
+- ManuscriptProvider 는 구조화 원고와 `heroScene` 을 낸다. ImageProvider 는 **원고가 검증을 통과한 뒤** 그 `heroScene` 으로 hero **한 장**을 만든다.
+  이유: 이미지를 원고 뒤에 한 번만 만들어야 원고 수리·재생성이 이미지를 다시 부르지 않고, 이미지 실패가 원고를 다시 부르지 않는다.
+
+**ManuscriptProvider — Responses API · background · `store: true` (2026-11-09 창업자 결정)**
+
+`store: true` 는 회원 데이터가 없는 ProviderPlan(§0.0B.1)에만 쓴다. 이유: OpenAI 공식 문서상 background 응답은 `store` 없이
+약 10분 뒤 삭제되므로, 프로세스가 재시작되거나 Mac 이 잠든 뒤에도 같은 response ID 로 이어 보려면 보존이 필요하다.
+
+1. 생성 요청 직전에 요청 키를 배타 생성한다(`openSync wx`) — 같은 planHash 의 두 번째 요청을 막는다.
+2. 응답으로 받은 **response ID 를 즉시 Job 에 원자적으로 기록**한다.
+3. **bounded polling** — worker 는 정해진 점유 시간 안에서만 조회하고, 끝나지 않았으면 `nextPollAt` 을 Job 에 쓰고 종료한다.
+   다음 회차나 재시작이 같은 response ID 로 이어 본다. 점유 상한은 실행 자원 보호용이며 생성 실패 판정이 아니다.
+4. terminal 응답 → 원고·usage·응답을 **로컬에 원자 저장 → 해시 검증 → `DELETE /responses/{id}` → 삭제 확인(시각·결과)을 Job 에 기록**.
+5. DELETE 실패는 진행을 막지 않는다. sweeper 가 다음 회차에 같은 ID 로 다시 시도하고, 404 는 삭제 완료로 본다.
+6. 🔴 DELETE 는 우리 쪽 보존을 끝내는 요청이다. **provider 서버 기록이 즉시 완전히 사라진다고 약속하지 않는다**(provider 의 별도 보존 정책이 있다).
+7. 🔴 **`SUBMISSION_UNKNOWN`** — 요청이 전송됐는지 · response ID 를 받았는지가 불명확하면 **즉시 재전송하지 않는다**.
+   요청 키·응답 기록으로 상한 있는 확인(reconciliation)을 한 뒤, 회수할 수 없다고 확정될 때만 8번으로 간다.
+   ID 를 받지 못한 원격 응답이 남았을 수 있다는 사실은 Job 에 기록한다(그 ID 는 몰라서 지울 수 없다).
+8. 회수 불능이 확정되면(조회 404 · 만료 · 확인 실패) **비용 상한 안에서 재생성 최대 1회**. 최종 채택 결과는 하나다. 그 뒤에도 실패하면 그 Job HOLD.
+9. 🔴 부분 수리에 `previous_response_id` 를 쓰지 않는다. 필요한 맥락은 매번 명시적으로 보낸다 — 원격 응답을 지운 뒤에도 수리가 되어야 한다.
+10. AUTH·계통 장애가 아니면 다른 Job 은 계속 처리한다.
+11. background + strict structured output(Structured Outputs) 조합은 **S5 canary 에서 실제로 검증**한다. 실패하면 **`DESIGN_CONTRACT_CONFLICT` 로 중단**하고
+    브라우저로 강등하지 않는다.
+
+**ZDR / `store:false` 후퇴 모드** — 응답의 `store` 실효값이 false 이면(ZDR 프로젝트 등) 자동으로 이 모드다.
+
+- 회수창은 약 10분이다. worker 는 terminal 까지 붙어 조회하고, 창을 넘기거나 프로세스가 죽으면 회수 불능으로 확정해 8번을 적용한다.
+- DELETE 는 생략할 수 있고, Job 에 모드를 기록한다. 브라우저 자동 강등은 없다.
+
+- Batch 는 pilot 에서 쓰지 않는다.
+
+**모델 — cheapest viable first (2026-11-09 창업자 결정)**
+
+- 원고: `gpt-6-luna` 와 `gpt-6.1-terra` 를 **같은 STANDARD ContentPlan** 으로 블라인드 비교한다(하드 게이트 통과 · 구조화 출력 성공 · 창업자 블라인드 품질 · 비용).
+  Luna 가 하드 게이트와 창업자 품질을 통과하면 Luna 를 기본으로 쓴다.
+- 🔴 QA 1회 실패만으로 비싼 모델로 올리지 않는다. 이유: 실패 대부분은 수리 대상이고(§0.0B.3), 모델 상향은 편당 상한을 먼저 깬다.
+- 이미지 baseline `gpt-image-2.5-flare`(필요 시 `gpt-image-2.5-sunburst` 비교). 모델명·단가는 S5 직전 공식 가격 페이지로 다시 대조한다.
+- **API 키**: S5 직전에만 창업자가 **별도 project · 최소 권한**으로 만든다(Responses 생성·조회·삭제 · 이미지 생성). 키는 저장소·로그·Job 에 쓰지 않는다.
+  DELETE 권한과 `store` 실효값은 S5 canary 의 확인 항목이다.
+
+**EvidenceProvider (M-GRAPH 공급 loop 의 외부 수집기 — 정책은 charter §18-B.5 · 첫 글 뒤·병렬)**
+
+- 입력 `{ intentId, graphVersion, slot: DIRECT | DISCOVERY, query, locale, engine }` · 출력은 정규화 가능한 검색 hit 목록.
+- 멱등 키 = `sha256(engine | query | locale | YYYY-MM)` — 같은 달 같은 질의는 저장된 결과를 쓰고 호출 0.
+- 예산: 현재 SerpAPI 구독 범위 안 · 유료 추가 0(증거 예산은 승인된 적 없다) · 기본 상한 하루 20회 · 월 200회.
+- 실패 범위는 질의 1개. 429·5xx·네트워크는 같은 키로 백오프 2회 → 그 질의만 다음 회차. 상한 도달은 그날 loop 중단(실패 아님).
+- 키는 출력·저장하지 않는다.
+
+**예산 (2026-11-03 창업자 결정 · 2026-11-09 재확인)**
+
+| 항목 | 상한 | 넘으면 |
+|---|---|---|
+| S5 canary 총액(모델 비교 포함) | **$5** | canary 중단 |
+| 편당 provider hard cap | **$1** | 그 후보만 HOLD |
+| pilot 월 hard cap | **$30** | 새 provider 호출 0 · 검증된 후보의 release 는 계속 · 알림 1회 · 다음 달 재개 |
+| 월 $100 확대 | **미승인** | — |
+
+- A commissioning(S6)은 canary 뒤에 편당 $1 · 월 $30 상한 안에서 집행한다. S5 의 $5 와 합산하는 별도 상한이 아니다.
+
+비용은 Job 에 호출마다 기록하고 합계는 계산한다. 코드 상한이 1차 방어다.
+
+#### 0.0B.3 검증 · 부분 수리 · 전체 재생성
+
+검증은 결정론적 코드다(기존 `magazine-qa.mjs` · `magazine-batch-qa.mjs` · `lib/magazine-forbidden.mjs` · profile QA).
+
+| 위반 | 처리 |
+|---|---|
+| 고정 문장 누락(진료 안내 · 위기 상담 안내 · CTA) | 정본 문장을 **결정적으로 삽입** → 재검증 |
+| description · FAQ · CTA · 단순 표현 | **그 필드·문장만** 수리 → 같은 검증기로 재판정 |
+| 금지 패턴 일치 | **일치 문장 하나만** 재작성 → 같은 검증기로 재판정. 동사·문맥 예외 목록을 늘리지 않는다 |
+| 의료·법률·세금·금융 사실 오류 · 검색 의도 불일치 · 구조 붕괴 | 문장 수리로 덮지 않는다 → **전체 재생성** |
+| 그 뒤에도 실패 | **그 후보만 HOLD** |
+
+- 기본 상한: 부분 수리 최대 2곳 · 전체 재생성 최대 1회 · 이후 그 후보 HOLD. 모든 수리·재생성은 편당 비용 상한 안에서만 한다.
+- 🔴 CONTROLLED 후보(charter §18-B.6)는 주장↔출처 validator 가 구현·검증되기 전 **출판 0** 이다. 구현 뒤에는 release 직전에 사실 확인 항목의
+  기준일을 다시 대조한다. 초기 commissioning 은 STANDARD 만 쓴다.
+- hero: 16:9 원본 비율 유지(잘라 맞추고 늘리지 않는다) · 크기·형식 · 기존 hero 와의 지각 해시 중복을 자동으로 본다.
+  실패하면 이미지만 1장 다시 만들고(원고 재생성 0), 그래도 실패하면 그 후보 HOLD.
+- **같은 hero 한 장을 상세 hero · 홈/목록 썸네일 · 본문 중간 브랜드 띠배너에 재사용한다**(charter §12). 띠배너용 이미지를 따로 만들지 않는다.
+
+#### 0.0B.4 release writer · merge gate · 날짜 마지막 배정
+
+🔴 **현행 queue · `scripts/magazine-register.mjs` · legacy merge gate 를 vNext 에 억지로 재사용하지 않는다.** 이유: 셋 다 queue 행을 정본으로 요구한다 —
+등록은 queue 에 없는 slug 를 거부하고, legacy merge gate 는 queue 에 없는 slug 를 `NOT_IN_QUEUE` 로 막으며 파일 이름을 legacy 산출물로 고정한다.
+
+**release writer**
+
+- **하나다.** `articles.ts` 와 날짜를 쓰는 유일한 주체이며 생성 worker 와 분리한다.
+- 쓰기는 queue 에 의존하지 않는 journal + CAS 트랜잭션이다 — 읽은 `articles.ts` 바이트의 해시를 확인하고 쓰며, 다르면 그 release 를 다시 조립한다.
+- 입력은 VALID·HERO_READY 이고 아직 release 되지 않은 Candidate 중 `targetCandidates` 개 이하다. 묶기 위해 원고를 더 만들지 않는다.
+- 🔴 **출판 최소 고정점 재판정**: Candidate 를 하나 뺄 때마다(검증·조립·CI 실패) 남은 Candidate 의 출판 최소(charter §18-B.2)를 다시 판정하고
+  변화가 없을 때까지 반복한다. 빠진 Candidate 는 검증됨(VALID) 상태로 되돌린다.
+- same-release: 대상 `publishAt` ≤ 원문 `publishAt` · 관계는 DAG · 위상 순서로 날짜 배정 · 이미 공개된 글에 닿지 않는 고립 순환·묶음은 release 하지 않는다(charter §18-B.4).
+- `publishAt` 은 **release 직전에** 배정한다 — main 과 열린 release PR 의 날짜를 읽어 내일부터 빈 날(10:30 KST).
+- 날짜를 놓치면 그 PR 을 닫고 다시 조립한다. ContentPlan·원고·해시는 바뀌지 않는다.
+- branch 는 `feat/magazine-release-*`, PR 은 하나다. 한 편과 여러 편이 같은 코드다.
+
+**vNext merge gate**
+
+- SHA 고정 · CI · 중복 slug(PR 안 · main) · 예약일 형태와 중복 · 과거 날짜 금지 — legacy 와 같은 위험을 같은 방식으로 막는다.
+- 변경 파일 모양은 그 release 의 slug 집합에 대한 `articles.ts` 항목 · hero · 그 글의 ContentPlan 파일만이다(정확한 파일 이름은 S3 에서 고정).
+- 🔴 **main 의 ContentPlanInputBundle · 정책 판으로 ContentPlan 을 재컴파일한 planHash 가 PR 의 planHash 와 같아야 하고, 같은 admission 을
+  merge 직전에 다시 통과해야 한다.** 이유: PR 이 자기 위험 등급이나 관계를 바꿔 통과하는 것을 queue 없이 막는 방법이다(legacy `QUEUE_GRADE_CHANGED` 가 하던 일).
+  control 은 planHash 입력이 아니라 admission 입력이다(§0.0B.1).
+- stable slug 는 이 단계(S3)의 vNext release 신원 경계가 묶는다 — admission 의 `SLUG_BINDING_REQUIRED` 를 여기서 해소한다.
+- release CI 가 실패하면 그 release 만 닫고 Candidate 를 검증됨으로 되돌린다.
+- 🔴 **열린 release PR 은 다음 release 만 기다리게 한다. 생성은 막지 않는다.** (§0.1 의 전역 HOLD 는 legacy 경로의 현행 동작이다.)
+- `--admin` 을 쓰지 않는다.
+
+#### 0.0B.5 rollout switch — lifecycle
+
+**위치** (runtime·저장소 밖 — merge 가 곧 활성화가 되지 않게 한다. runtime 은 00:10 에 main 을 ff-only 로 따라붙는다)
+
+```text
+~/Library/Application Support/soransoran/magazine-rollout.json
+```
+
+**schema**
+
+```json
+{
+  "schemaVersion": "magazine-rollout/1",
+  "path": "legacy | vnext",
+  "release": "draft | auto",
+  "targetCandidates": 1,
+  "changedBy": "...",
+  "changedAt": "...",
+  "previous": {
+    "path": "legacy | vnext",
+    "release": "draft | auto",
+    "targetCandidates": 1
+  }
+}
+```
+
+**전환 중 계약**
+
+| 항목 | 계약 |
+|---|---|
+| 없음 · 손상 · schema 불일치 | `legacy` 로 본다. 이때 vNext 쓰기 0 · 상태가 바뀔 때 알림 1회 |
+| 쓰기 | 단일 owner CLI 만 원자적으로 쓴다(schema 검증 · temp + rename · `changedBy` · `changedAt` · `previous` 기록) |
+| 읽기 | `magazine-producer-run.mjs` 와 `magazine-auto-register-run.mjs` 가 회차 시작 때 **각각 한 번** 읽는다 — 잠금·sync·자식·알림보다 앞이다 |
+| 🔴 legacy writer 배타 정지 | `path: vnext` 이면 두 진입점은 legacy 단계를 하나도 시작하지 않는다. vNext 의 실제 쓰기는 이 상태에서만 시작한다 — 한 회차에 두 writer 가 없다 |
+| launchd | plist 변경 0 |
+| A commissioning | `path: vnext` · `release: draft` · `targetCandidates: 1` |
+| 다른 cluster 2~3편 · 자연 무인 회차 | `path: vnext` · `release: auto` |
+| 이 문서 작업 | 실제 운영 rollout 파일 생성·활성화 **0** |
+
+**A · 첫 무인 글 · 다른 cluster 검증 이후**
+
+- vNext 를 고정하고, legacy 삭제와 **같은 변경에서** switch 분기와 `release: draft` 분기를 코드에서 제거한다.
+- 제거 이후의 이상 상태는 legacy fallback 이 아니라 **생성 HOLD** 다. release 와 이미 공개된 Article 은 영향 없다.
+
+#### 0.0B.6 A commissioning · 다른 cluster 2~3편 · 자연 무인 회차
+
+🔴 **A 는 수동 경로가 아니라 같은 자동 경로의 commissioning 이다.** 자동화를 줄이지 않고, 전체 자동 경로를 `vnext / draft / 1` 로 돌린 뒤
+마지막 병합만 창업자가 정한다.
+
+**A (1회)**
+
+1. compiler 가 출판 최소(charter §18-B.2)를 충족한 **STANDARD** ContentPlan 하나를 고른다. 공급 loop 산출을 기다리지 않는다.
+2. 실제 provider 로 원고와 hero 를 만들고, 실제 검증·수리를 돈다.
+3. release writer 가 **Draft release PR** 을 만든다 — **auto-merge 0**.
+4. 창업자가 로컬 dev 렌더에서 상세·홈·목록·hero·띠배너를 확인한다. 미래 `publishAt` 글을 보려고 **dev 전용 시계 주입**을 쓴다 —
+   `NODE_ENV=development` 에서만 읽고 production build 는 무시한다. 제품 route 추가 0. 이유: 공개 판정이 현재 시각 기준이라 예약 글은 그 밖에서 보이지 않는다.
+5. 창업자 **예/아니오 1칸**.
+6. 예 → **수동 병합**. 아니오 → 병합하지 않고 닫은 뒤 원고가 아니라 **시스템을 고치고** 같은 ContentPlan 으로 재생성.
+
+- 사람이 원고나 이미지를 직접 고치면 A 는 FAIL 이다.
+- A 전용 승인 필드 · 승인자 필드 · 영구 대기 상태를 만들지 않는다. 판정은 PR 병합 여부 그 자체다.
+- 🔴 **A 는 M-AUTO `OPERATING_PASS` 가 아니다.**
+
+**다른 cluster 2~3편 · 자연 무인 회차 B**
+
+- A 다음은 `vnext / auto` 로 A 와 **다른 cluster** 를 포함한 STANDARD 2~3편을 사람 입력 없이 release·배포·공개한다(production-shaped 검증).
+- 그 뒤 launchd 자연 회차의 신규 글 B 가 release·배포·공개를 끝내야 M-AUTO 판정 근거가 된다.
+- release 선택은 직전과 다른 cluster 를 우선한다.
+- 완성 원고 여러 편을 미리 만드는 정책은 없다. 구조는 N 개 후보를 처리하되 `targetCandidates` 는 근거로 올린다
+  (직전 release 들의 검증 첫 통과 · 전체 재생성 0 · 이미지 재시도 · 중복 0 · 잔존물 0 · watch 실패 0 · 비용 상한).
+  올리는 것은 사람의 설정 변경이고, 기준이 하나라도 깨지면 기계가 1로 내린다.
+
+#### 0.0B.7 legacy 동결 · 삭제 · rollback
+
+**동결 (2026-11-09 창업자 결정)**
+
+- legacy(`LEGACY_BRIEF_V1` · `DIRECT_SPEC_V1` · queue · register · 웹 UI 회수 · 격리 장부)는 **안전 긴급 수정 외에 기능·정책을 보정하지 않는다.**
+  이유: 삭제할 코드를 다듬는 시간이 vNext 를 늦춘다.
+- 🔴 기존 HOLD · 격리 · 초안 **바이트를 vNext 로 직접 승계하지 않는다.** 같은 intent 가 필요하면 현행 Bundle·정책으로 새 ContentPlan 을 컴파일해 새로 생성한다.
+- vNext admission 의 중복 검사는 `articles.ts`(공개·예약 · canonical mapping · 정규화 제목)와 **legacy queue 신원 투영**(intentId · slug ·
+  정규화 제목 · cluster)까지 본다. 이유: 동결 기간에도 legacy 는 돌며 같은 주제를 낼 수 있다. queue 는 읽기 전용 중복 오라클일 뿐이다 —
+  콘텐츠 바이트 승계 0 · 쓰기 0 · 파일/앵커를 못 읽으면 fail-closed. 삭제 단계에서 adapter 도 함께 끈다(§0.0B.1).
+- vNext 가 실제 쓰기를 시작할 때 legacy writer 는 rollout switch 로 배타 정지된다(§0.0B.5). 그 전까지 legacy 는 지금처럼 돈다.
+
+**삭제** — 다음 **네 조건이 모두** 충족되면 **단일 삭제 단계**에서 legacy 활성 경로 · switch 분기 · `release: draft` 분기 · 전용 검사를 함께 지운다.
+날짜 시한은 두지 않는다.
+
+1. 운영 진입점에서 옛 모듈 도달 0 (import 그래프로 기계 확인)
+2. vNext 신규 글의 무인 release·배포·공개 완료(자연 회차 B)
+3. 다른 cluster 의 production-shaped 검증 완료
+4. fixture · mutation · rollback 참조 0
+
+- 옛 graph 판 파일은 위 네 조건과 함께 연구·제품 각 계층의 current·previous·rollback 소비처를 확인한 뒤에만 지운다.
+- legacy queue 행과 초안은 승계하지 않으므로 삭제 단계에서 queue 파일과 함께 정리한다.
+- rollback 단위: rollout switch `legacy`(분기 제거 전) → release PR revert → 글 1편 `status: 'BLOCKED'` → graph kill(graph watch) →
+  계층별 previous(charter §18-B.3 — 신규 공급은 current 가 다시 맞을 때까지 HOLD). 분기 제거 뒤에는 Git revert.
+
+#### 0.0B.8 구현 · 검사 게이트
+
+- 단계 순서와 진행 위치는 milestone 이 정본이다.
+- **완성 exact head 의 공통 PASS**: rollout switch 가 없거나 손상됐거나 `legacy` 일 때 legacy 회차 산출(run.json · handoff · PR 모양) 바이트 불변 ·
+  `legacy` 에서 vNext 진입점 쓰기 0 · ContentPlan 해시에 날짜·provider·경로 0 · `typecheck` · `typecheck:ops` · `lint` · `build` · `check:tokens` ·
+  `magazine:auto-check` · `check:m3a` · `check:magazine-graph` · `check:research-current` · `magazine:rehearsal`.
+- 🔴 **S2 변이 하네스의 소유 (2026-11-12 S2 P1-10).** `check:magazine-plan-input-mutation` · `check:magazine-content-plan-mutation` 은
+  `magazine:auto-check`(CI `visibility-guard.yml`) 체인 **끝**에서 돈다(실측 ≈ 76초 · ≈ 22초). 빠른 검사(`check:magazine-plan-input` ·
+  `check:magazine-content-plan`)는 변이를 부르지 않는다. 체인에서 빠지면 경계 검사 R9 가 FAIL 한다(변이 VB79 · VB80 이 그 검출을 증명).
+  이유: 체인 밖이면 겨냥 문자열이 바뀌어 변이 지점이 0곳이 되어도 아무도 모른다(2026-11-11 실측).
+- **production-shaped rehearsal** (fake provider · 격리 저장소 · 녹화 evidence): 서로 다른 cluster 를 포함한 STANDARD 계획 여러 개에 다음을 주입한다 —
+  이미지 실패 · 금지 패턴(면책 문장) · 메타 칸 · 의료 안내 누락 · 사실 오류 · 비용 상한 · 급사 후 재개(`nextPollAt`) · `SUBMISSION_UNKNOWN` ·
+  회수 불능(404) · DELETE 실패 · ProviderPlan 의 금지 필드·PII · Bundle 해시 불일치 · 같은 slug 동시 실행 · same-release 순환·고립 묶음 ·
+  Candidate 탈락 뒤 고정점 · PR 의 planHash 변조 · release CI 실패 · 날짜 놓침 · switch 손상 · Draft release · production build 에서 dev 시계 주입 시도.
+- rehearsal PASS: 실패 Job 만 격리 · 나머지는 PR 하나에 서로 다른 날짜 · 이미지 실패 시 원고 재생성 0 · 같은 요청 키 재호출 0 ·
+  `SUBMISSION_UNKNOWN` 즉시 재전송 0 · 최종 채택 원고 1개 · DELETE 재시도 후 확인 기록 · 금지 필드·PII 전송 0 · 변조 PR 병합 0 ·
+  날짜를 놓쳐도 ContentPlan 해시 불변 · exact-head · 중복 0 · 잔존물 0 · Chrome/CDP 0 · 사람 입력 0 · vNext 진입점의 legacy 모듈 도달 0 ·
+  Draft release 의 병합 0 · production 에서 시계 주입 무시.
+- 공급 loop(보강·부족·상한)의 rehearsal 은 S9 에서 한다. 첫 글 경로의 gate 가 아니다.
+
+#### 0.0B.9 실패 범위와 알림
+
+| 실패 | 범위 | 동작 | 알림 |
+|---|---|---|---|
+| 원고·이미지·검증·수리 실패 · 재생성 1회 뒤에도 회수 불능 | 그 Job | HOLD · 다른 Job 계속 | 상태가 바뀔 때 1회 |
+| `SUBMISSION_UNKNOWN` | 그 Job | 즉시 재전송 0 · 상한 있는 확인 뒤 회수 불능이면 재생성 1회 | 상태가 바뀔 때 1회 |
+| ProviderPlan 금지 필드 · PII 탐지 | 그 Job | HOLD · 전송 0 | 1회 |
+| DELETE 실패 | 그 Job | 진행 계속 · sweeper 재시도 · 404 는 완료 | 반복 실패일 때만 1회 |
+| Bundle 판독 불가 · 해시 불일치 | 그 graphVersion | 그 판의 컴파일 0 | 1회 |
+| 현재 control 판 불일치 · kill switch · graph 꺼짐 · queue 신원 판독 불가 | 그 graphVersion | admission 전체 HOLD · 컴파일·planHash 불변 | 상태가 바뀔 때 1회 |
+| 출판 최소 미충족 | 그 intent | 컴파일하지 않음 · 공급 loop 보강 대상 | 없음(정상 상태) |
+| EvidenceProvider 상한 · 429 | 그날 공급 loop | 중단 · 다음 회차 | 1회 |
+| AUTH · 월 비용 상한 | 생성 전체 | 새 호출 0 · 검증된 후보 release 계속 | 1회 |
+| release CI 실패 | 그 release | 후보를 검증됨으로 되돌림 | 1회 |
+| 정상 대기(열린 release PR · 목표 도달) | — | 아무것도 안 함 | 없음 |
 
 ### 0.0 자동 병합이 확인하는 것
+
+> 이 절과 §0.1 은 **legacy 자동 등록 PR** 의 현행 계약이다(동결). vNext release PR 의 merge gate 는 §0.0B.4 다.
 
 | 확인 | 막는 것 |
 |---|---|
@@ -72,14 +404,16 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
 | **SHA 고정** | 검증 뒤 커밋이 붙으면 `SHA_DRIFTED` |
 | 변경 파일 **모양** | `articles.ts` · `topic-queue.ts` · `drafts/{slug}/*` · `hero.webp` 밖이면 막는다 (소스·워크플로 변경 불가) |
 | CI · check-runs | 하나라도 실패·진행 중이면 막는다 |
-| **위험 등급** | `topic-queue` 정본 · LOW/MEDIUM · `autoEligible=true` 만 |
+| **큐 등급 변경** | PR 이 큐 행의 `riskLevel`·`autoEligible` 을 바꾸면 `QUEUE_GRADE_CHANGED`. 등급 자체로 병합을 가르지 않는다(M3-A · `lib/magazine-merge-gate.mjs:62,286`) |
 | 중복 slug | PR 안 · main 양쪽 |
 | 예약일 | 10:30 KST 형태 · `publishedAt` 일치 · 중복 없음 |
 | **과거 날짜** | `PUBLISH_AT_PAST` — merge 즉시 공개되는 것을 막는다 |
 
 🔴 `--admin` 을 쓰지 않는다. 보호 규칙과 CI 를 우회하는 손잡이는 이 경로에 없다.
 
-### 0.1 미해결 자동 PR 은 **한 번에 하나**
+### 0.1 미해결 자동 PR 은 **한 번에 하나** (legacy·현행)
+
+> vNext 는 열린 release PR 이 다음 release 만 기다리게 하고 생성은 막지 않는다(§0.0B.4). 이 절은 지금 운영 중인 경로의 동작이다.
 
 🔴 **이전 PR 이 처리되기 전에는 다음 생산 회차가 HOLD 한다.**
 무인 운영에서는 **같은 회차의 자동 병합이 그것을 푼다** — 01:00 등록 직후 merge 까지 간다.
@@ -236,13 +570,14 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 
 ## 4.5 무인 운영 — 하루의 흐름
 
-아래 `brief(claude)`는 **현재 배포된 legacy runner**다. DIRECT 전환 뒤 producer 입구는
-`SPEC_READY 참조 → ArticleSpec 검증 → 원고 회수`로 바뀐다. 두 runner는 같은 회차에 실행하지 않으며,
-`draft.md` 이후의 QA·재생성·hero·register·merge·deploy·watch만 공유한다.
+아래는 **지금 배포된 코드의 하루**다. `LEGACY` 는 운영 중인 경로이고, `DIRECT` 는 main 에 있는 현행 코드 경로다(운영 회차 0).
+vNext(§0.0B)는 구현 전이며, 구현 뒤에는 rollout switch 가 `vnext` 일 때만 producer 입구가
+`ContentPlan → Job → ManuscriptProvider·ImageProvider → 검증·부분 수리` 로, 날짜 배정이 release writer(§0.0B.4)로 바뀐다.
+한 회차에서 두 경로를 섞지 않는다.
 
 ```
 00:10 KST  producer        LEGACY: 동결 queue → brief(claude) → 원고 회수 → 관문 → 알림
-                           DIRECT: SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
+                           DIRECT(현행 코드): SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
                            끝나면 _runs/{date}/producer-handoff.json 을 남긴다
 01:00 KST  auto-register   ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
                            ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register
@@ -318,10 +653,9 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 🔴 **producer 가 실패해도 등록은 진행한다.** 이미 준비된 후보로 돈다 — 공급이 목적이다.
 🔴 **막힌 후보는 격리된다.** 2회 연속 QA 에 막히면 7일간 비켜 주고 **다음 후보가 진행**한다.
    원고를 고치면(파일이 바뀌면) 냉각을 기다리지 않고 즉시 다시 후보가 된다.
-   🔴 자동화가 원고를 고쳐 주지 않는다 — 비켜 줄 뿐이다.
-🔴 **API 를 새로 붙이지 않는다.** brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI.
-   생성 경로의 제한(로그인 만료·Cloudflare·한도)은 **숨기지 않고 그대로 실패로 낸다.**
-   우회하지 않는다.
+   legacy runner 는 원고를 고치지 않고 비켜 준다(현행 동작). vNext 의 수리는 §0.0B.3 이다.
+🔴 legacy runner 의 생성 경로(현행 동작): brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI. vNext 의 생성 경로는 §0.0B.2 이다.
+🔴 생성 경로의 제한(로그인 만료·Cloudflare·한도·provider 장애)은 **숨기지 않고 그대로 실패로 낸다.** 우회하지 않는다.
 
 ## 5. 감시
 
@@ -477,5 +811,5 @@ npm run magazine:launchd-check    # 설치기 판정 · 템플릿 렌더 (tsx)
 - `drafts/magazine/after-holiday-body-ache/draft.md` 에는 ChatGPT 인용 마커가 **아직 남아 있다.**
   `dea1c7a` (#299) 가 `articles.ts` 본문만 고쳤다. 관문은 이것을 정상적으로 막는다 —
   회귀 테스트가 "여전히 막힌다" 를 시험한다. 원본 정리는 별건이다.
-- `imageMode: OPTIONAL` 은 여전히 기본 스킵이다. 자동 hero 생성 범위를 넓히지 않았다.
-- HIGH · `autoEligible=false` 는 gate 와 `register.mjs` 의 `AUTO_RISK` 두 겹으로 막힌다.
+- 자동 레인은 `imageMode` 와 무관하게 hero 를 요구한다(`scripts/magazine-auto-register.mjs:1253` `--require-hero` · `scripts/magazine-batch-qa.mjs:274`). hero 유지는 charter §12.
+- 등록·병합은 위험 등급으로 막지 않는다 — `AUTO_RISK`·`MERGE_RISK` 는 M3-A 에서 제거됐다(`scripts/magazine-register.mjs:49` · `scripts/lib/magazine-merge-gate.mjs:62`). 위험은 검증 강도로 다룬다(charter §3-B).

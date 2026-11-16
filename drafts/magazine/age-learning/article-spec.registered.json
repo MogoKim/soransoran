@@ -1,0 +1,11 @@
+{
+  "schema": "direct-spec-register/1",
+  "schemaVersion": "magazine-article-spec/2",
+  "mode": "DIRECT_SPEC_V1",
+  "specHash": "sha256:0295ffbf41a4dfc7d76578b56a7bb84a536af6fb94164ff97ca7b33c2bb501cd",
+  "slug": "age-learning",
+  "graphNodeId": "I-T6-05",
+  "intentId": "I-T6-05",
+  "publishAt": "2026-11-02T10:30:00+09:00",
+  "registeredAt": "2026-11-01T01:00:14+09:00"
+}

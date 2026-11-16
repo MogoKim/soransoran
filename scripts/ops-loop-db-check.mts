@@ -24,6 +24,8 @@ import { PrismaClient } from '@prisma/client'
 import { kstDateString } from '../src/lib/release-canary'
 import { previousKstDate, validateStoredDecision } from '../src/lib/stage-decision-contract'
 import { createStageDecision, rowToValidatorInput } from '../src/lib/stage-decision-repo'
+import { fakeLockfEnv } from './lib/fake-lockf.mjs'
+import { SUPPLY_LOCK_FILE, supplyLockDir } from './lib/supply-lease.mjs'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -51,6 +53,16 @@ const HOME = mkdtempSync(join(tmpdir(), 'ops-loop-home-'))
 const APP = join(HOME, 'Library', 'Application Support', 'soransoran')
 mkdirSync(APP, { recursive: true })
 mkdirSync(join(HOME, 'Library', 'LaunchAgents'), { recursive: true })
+const SUPPLY_LOCK_DIR = supplyLockDir(HOME)
+mkdirSync(SUPPLY_LOCK_DIR, { recursive: true })
+writeFileSync(join(SUPPLY_LOCK_DIR, SUPPLY_LOCK_FILE), '')
+const LEASE_TEST_ENV = {
+  ...fakeLockfEnv(HOME),
+  NODE_OPTIONS: [
+    process.env.NODE_OPTIONS,
+    `--import=${join(process.cwd(), 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
+  ].filter((v): v is string => v !== undefined && v !== '').join(' '),
+}
 const writeEnv = (flag: 'on' | 'off'): void => writeFileSync(join(APP, 'env.local'), [
   'SORAN_RELEASE_STAGE=d1', 'SORAN_CAPACITY_STAGE=d10', `STAGE_CONTROLLER_ENABLED=${flag}`,
   'SORAN_LLM_DAILY_BUDGET_USD=0.5', 'SORAN_LLM_RUN_REQUEST_CAP=20', 'SORAN_LLM_RESERVE_HEADROOM=1.2',
@@ -59,7 +71,7 @@ const writeEnv = (flag: 'on' | 'off'): void => writeFileSync(join(APP, 'env.loca
 
 const run = (script: string, args: readonly string[], env: Record<string, string> = {}): { code: number | null; out: string; err: string } => {
   const r = spawnSync(process.execPath, [...process.execArgv, script, ...args], {
-    encoding: 'utf-8', env: { ...process.env, HOME, ...env }, timeout: 300_000,
+    encoding: 'utf-8', env: { ...process.env, HOME, ...LEASE_TEST_ENV, ...env }, timeout: 300_000,
   })
   return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '' }
 }
@@ -129,7 +141,8 @@ try {
   writeEnv('on')
   const DEAD = 'postgresql://nobody@127.0.0.1:1/soran_test'
   const dead = run('scripts/stage-controller.mts', ['--apply'], { DATABASE_URL: DEAD, DIRECT_URL: DEAD })
-  check('🔴 controller 는 아무것도 쓰지 않고 exit 1', dead.code === 1, `${dead.code} ${dead.err.slice(-300)}`)
+  check('🔴 controller 는 lease 지연이 아니라 DB 접속 실패로 아무것도 쓰지 않고 exit 1',
+    dead.code === 1 && !/SUPPLY_LEASE_/.test(dead.out + dead.err), `${dead.code} ${(dead.out + dead.err).slice(-300)}`)
   const deadConsume = run('scripts/stage-consume-exec.mts', ['--by=publish', '--print'], { DATABASE_URL: DEAD, DIRECT_URL: DEAD })
   check('🔴 consumer 는 가장 안전한 d1 로 간다', deadConsume.code === 0 && deadConsume.out.includes('SORAN_RELEASE_STAGE=d1'), deadConsume.out)
 } finally {

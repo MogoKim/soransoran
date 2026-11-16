@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   checkNameCollision, summarizeForAdmin,
-  normalizeN1, normalizeN2, normalizeN3, editDistance,
+  normalizeN1, normalizeN2, normalizeN3, editDistance, nameConfusion,
   NAME_COLLISION_THRESHOLDS,
   type NameCollisionSets,
 } from './lib/persona-gate-name-collision.mjs'
@@ -121,7 +121,7 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
 
 // ── ⑨ regenerate — B5 운영자 / AI 느낌 ──────────────────
 {
-  const cases = ['소란지기', '운영도우미', 'sunny', '들꽃7']
+  const cases = ['소란지기', '운영도우미', 'chatgpt', 'sunbot', 'ai2', '봇이름']
   const offenders: string[] = []
   for (const c of cases) {
     const v = checkNameCollision(c, baseSets)
@@ -130,6 +130,53 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   }
   if (offenders.length) bad('regenerate — 운영자/AI 느낌', 'case', `🔴 ${offenders.join(' / ')}`)
   else ok('regenerate — 운영자/AI 느낌', 'case', `${cases.length}종 전부 regenerate`)
+}
+
+// ── ⑨-b 영문·숫자 자체는 B5 가 아니다 · 평범한 단어는 AI 오탐이 아니다 ──────
+{
+  // 🔴 blanket 영문/숫자 접미 B5 를 되살리면 아래가 regenerate 로 바뀐다
+  const cases = ['sunny', '들꽃7', 'pebble7', 'rain', 'mailbox', 'a2z', '커피한잔3', 'Teacup03']
+  const offenders = cases.filter((c) => checkNameCollision(c, {}).status !== 'pass')
+  if (offenders.length) bad('영문·숫자 B5 오탐 없음', 'guard', `🔴 pass 여야 한다: ${offenders.join(' / ')}`)
+  else ok('영문·숫자 B5 오탐 없음', 'guard', `${cases.length}종 전부 pass (rain · mailbox 포함)`)
+}
+
+// ── ⑨-c 완전 일치 접기 — 대소문자 · 전각 · 제로폭으로 우회하지 못한다 ──────
+{
+  const probes: Array<[string, string]> = [
+    ['Teacup03', 'teacup03'],
+    ['ｔｅａｃｕｐ０３', 'teacup03'],
+    ['tea\u200Bcup03', 'teacup03'],
+    ['커피\u200B한잔3', '커피한잔3'],
+  ]
+  const offenders = probes.filter(([cand, member]) => checkNameCollision(cand, { memberNames: [member] }).status !== 'reject')
+  // 규칙(B5)도 접은 꼴로 본다 — 전각 `ａｉ` 가 AI 토큰을 우회하지 못한다
+  const ruleBypass = checkNameCollision('ａｉ', {}).status !== 'regenerate'
+  // 허용 문자가 하나도 없는 두 이름이 접으면 둘 다 빈 문자열이 되어 서로 일치로 잡히면 안 된다
+  const emptyFold = checkNameCollision('😀', { memberNames: ['★'] }).hits.some((h) => h.kind === 'B1_MEMBER')
+  if (emptyFold) bad('대소문자·전각·제로폭 접기', 'case', '🔴 접으면 빈 문자열인 두 이름이 서로 충돌로 잡혔다')
+  else if (ruleBypass) bad('대소문자·전각·제로폭 접기', 'case', '🔴 전각 AI 토큰이 B5 를 우회한다')
+  else if (offenders.length) bad('대소문자·전각·제로폭 접기', 'case', `🔴 reject 가 아니다: ${offenders.length}건`)
+  else ok('대소문자·전각·제로폭 접기', 'case', `${probes.length}종 전부 B1 reject`)
+}
+
+// ── ⑨-d 영문 유사도는 덜 공격적이다 · 자모 거리는 한글끼리만 ───────────────
+{
+  const distinct = checkNameCollision('teacup', { personaNames: ['teapot'] }).status
+  const close = checkNameCollision('pebble', { personaNames: ['pebbly'] }).status
+  const hangulJamo = nameConfusion('물봉선', '물방석').confusable
+  const latinOneOff = nameConfusion('abcde', 'abcdz').confusable // 거리 1 ≤ ⌊5/3⌋ → 혼동
+  const latinThreeOff = nameConfusion('abcdef', 'abxyzf').confusable // 거리 3 > ⌊6/3⌋ → 혼동 아님
+  const problems: string[] = []
+  if (distinct !== 'pass') problems.push(`평범하게 다른 영단어 쌍이 ${distinct}`)
+  if (close !== 'reject') problems.push(`한 글자 차이 영단어 쌍이 ${close}`)
+  if (!hangulJamo) problems.push('한글 자모 거리 혼동(물봉선·물방석)이 사라졌다')
+  // 🔴 자모 거리는 한글끼리만 — 영문 두 글자 차이(⌊5/3⌋=1 초과)는 자모 거리 ≤2 규칙으로 혼동이 되면 안 된다
+  if (nameConfusion('abcde', 'abxye').confusable) problems.push('영문 쌍에 자모 거리 규칙이 적용된다')
+  if (!latinOneOff) problems.push('영문 한 글자 차이가 혼동이 아니다')
+  if (latinThreeOff) problems.push('영문 세 글자 차이(⌊6/3⌋=2 초과)가 혼동이다 — 기준이 한글 절반 기준으로 돌아갔다')
+  if (problems.length) bad('영문 유사도 · 자모 한글 한정', 'guard', `🔴 ${problems.join(' / ')}`)
+  else ok('영문 유사도 · 자모 한글 한정', 'guard', 'teacup↔teapot pass · pebble↔pebbly reject · 물봉선↔물방석 혼동 유지')
 }
 
 // ── ⑩ regenerate — B6 식별 정보 노출 ────────────────────

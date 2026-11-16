@@ -154,9 +154,18 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
     poolCard.noGoExpressions.map(noGoExpressionKey), 'noGoExpressions')
   same(Array.isArray(card.forbiddenReactionRoles) ? card.forbiddenReactionRoles : [], poolCard.forbiddenReactionRoles, 'forbiddenReactionRoles')
   // 🔴 매칭에 쓰이는 축은 정본과 **같아야 한다** — 다르면 시뮬레이션한 사람과 만들 사람이 다르다
+  if (card.ageBand !== poolCard.ageBand) problems.push(`ageBand 가 정본과 다르다 (정본 ${poolCard.ageBand})`)
+  if (card.region !== poolCard.region) problems.push(`region 이 정본과 다르다 (정본 ${poolCard.region})`)
   if (idv.maritalStatus !== poolCard.maritalStatus) problems.push(`maritalStatus 가 정본과 다르다 (정본 ${poolCard.maritalStatus})`)
+  if (idv.spouseRelationship !== (poolCard.spouseRelationship ?? '해당없음')) {
+    problems.push(`spouseRelationship 가 정본과 다르다 (정본 ${poolCard.spouseRelationship ?? '해당없음'})`)
+  }
   if (idv.childrenCount !== poolCard.childrenCount) problems.push(`childrenCount 가 정본과 다르다 (정본 ${poolCard.childrenCount})`)
   if (bandSet(bands) !== bandSet(poolCard.childrenAgeBands)) problems.push('childrenAgeBands 가 정본과 다르다')
+  if (idv.workStatus !== poolCard.workStatus) problems.push(`workStatus 가 정본과 다르다 (정본 ${poolCard.workStatus})`)
+  if (idv.economicStatus !== poolCard.economicStatus) problems.push(`economicStatus 가 정본과 다르다 (정본 ${poolCard.economicStatus})`)
+  if (idv.housing !== poolCard.housing) problems.push(`housing 가 정본과 다르다 (정본 ${poolCard.housing})`)
+  same(Array.isArray(idv.personality) ? idv.personality : [], poolCard.personality, 'identity.personality')
   if (idv.parentCare !== poolCard.parentCare) problems.push(`parentCare 가 정본과 다르다 (정본 ${poolCard.parentCare})`)
   if (idv.menopauseStatus !== poolCard.menopauseStatus) problems.push(`menopauseStatus 가 정본과 다르다 (정본 ${poolCard.menopauseStatus})`)
   // 🔴 **길이도 정본과 같아야 한다.** 정본이 미상인데 seed 에 값이 있으면,

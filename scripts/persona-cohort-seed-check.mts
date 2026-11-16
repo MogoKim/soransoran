@@ -13,6 +13,7 @@ import { COHORTS, EXCLUDED_CODES } from '../src/lib/persona-cohort'
 import { lifeStageOf, type Cadence, type PersonaCreative } from '../src/lib/persona-autogen'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import { changesOf, type RemediationRow } from '../src/lib/persona-contract-remediation'
+import { verifySeedCard } from '../src/lib/persona-card-verify'
 import {
   buildCohortSeeds, judgeCohortVoice, judgeCreativeAgainstCards, judgeExistingOutput, readApprovedCreative,
   seedPrivacyProblems, serializeSeeds, sha256Hex,
@@ -85,6 +86,9 @@ console.log('① 정상 — wave5 6명')
     ? (buildCohortSeeds({ codes: CODES, cards, creatives, voice: VOICE, cadence: CADENCE }) as { value: Record<string, Record<string, unknown>> }).value : {}) === text)
   check('variations = 승인 creative 그대로 · cap = 운영 cadence', CODES.every((c) => JSON.stringify(seeds[c]?.voiceVariations) === JSON.stringify(creatives[c]!.variations)
     && seeds[c]?.dailyCap === 3 && seeds[c]?.weeklyCap === 12 && seeds[c]?.silenceRate === 0.3))
+  const altered = { ...seeds[CODES[0]!]!, ageBand: '30대' }
+  check('🔴 seed 생활사 한 칸 변조(ageBand)를 정본 대조가 잡는다',
+    verifySeedCard(CODES[0]!, altered, card(CODES[0]!)).some((p) => p.startsWith('ageBand 가 정본과 다르다')))
   check('🔴 privacy — 말투 묶음 원문 · 화자 · URL · 이메일 0', seedPrivacyProblems(text, { texts: [...VOICE.values()].flatMap((v) => v.comments.map((x) => x.text)), speakerIds: ['speaker-abcdef'] }).length === 0)
   check('🔴 seed 에 원문 묶음 칸이 없다(comments · speakerId · lengths 키 0)', !/"comments"|"speakerId"|"lengths"|"anchorCount"/.test(text))
 }
@@ -130,6 +134,25 @@ console.log('④ 🔴 말투 묶음 누락 · 기존 배정 drift · cadence 없
   check('🔴 반례 10a — 대상 묶음 누락 → VOICE_BUNDLE_MISSING', has(judgeCohortVoice({ cohortCodes: CODES, existingCodes: ['P01'], base: new Map([['P01', a]]), full: noVoice }), 'VOICE_BUNDLE_MISSING'))
   check('🔴 반례 10b — 기존 production 묶음이 바뀜 → VOICE_ASSIGNMENT_DRIFT',
     has(judgeCohortVoice({ cohortCodes: CODES, existingCodes: ['P01'], base: new Map([['P01', b]]), full }), 'VOICE_ASSIGNMENT_DRIFT'))
+
+  // 🔴 2026-11-14 회귀: D30 전 40명은 canonical 32묶음 + 동결 supplement 8묶음이다.
+  // canonical-only로 다시 나누면 supplement 8명이 ∅가 되어 정상 스냅샷을 막았고,
+  // 현재 스냅샷을 양쪽에 쓰면 진짜 변조를 놓친다.
+  const priorCodes = Array.from({ length: 40 }, (_, index) => `P${String(index + 1).padStart(2, '0')}`)
+  const canonical32 = new Map(priorCodes.slice(0, 32).map((code, index) => [code, bundleOf(code, index)]))
+  const supplement8 = new Map(priorCodes.slice(32).map((code, index) => [code, bundleOf(code, index + 32)]))
+  const frozen40 = new Map([...canonical32, ...supplement8])
+  const nextCodes = Array.from({ length: 6 }, (_, index) => `P${String(index + 41).padStart(2, '0')}`)
+  const nextVoice = new Map(nextCodes.map((code, index) => [code, bundleOf(code, index + 40)]))
+  const expanded = new Map([...frozen40, ...nextVoice])
+  check('🔴 회귀 10c — canonical 32 + 동결 supplement 8이면 기존 40명 drift 0',
+    judgeCohortVoice({ cohortCodes: nextCodes, existingCodes: priorCodes, base: frozen40, full: expanded }).length === 0)
+  const mutated = new Map(expanded)
+  const frozen = mutated.get('P40')!
+  mutated.set('P40', { ...frozen, comments: frozen.comments.map((comment, index) =>
+    index === 0 ? { text: `${comment.text}!` } : comment) })
+  check('🔴 회귀 10d — 동결 supplement 한 바이트 변조를 drift로 잡는다',
+    has(judgeCohortVoice({ cohortCodes: nextCodes, existingCodes: priorCodes, base: frozen40, full: mutated }), 'VOICE_ASSIGNMENT_DRIFT'))
   const nc = buildCohortSeeds({ codes: CODES, cards, creatives: GOOD, voice: VOICE, cadence: null })
   check('🔴 반례 11 — cadence 없음 → CADENCE_UNMEASURED', !nc.ok && has(nc.problems, 'CADENCE_UNMEASURED'))
   const badCap = buildCohortSeeds({ codes: CODES, cards, creatives: GOOD, voice: VOICE, cadence: { ...CADENCE, dailyCap: 11 } })
@@ -184,6 +207,29 @@ console.log('⑦ CLI 연결')
   check('🔴 CLI 가 기존 파일 권한을 판정에 넘기고 bad-mode · fix-mode 를 처리한다',
     /judgeExistingOutput\(existsSync\(path\) \? \{ text: readFileSync\(path, 'utf-8'\), mode: modeOf\(path\) \} : null, text, WRITE\)/.test(cli)
     && /\[OUTPUT_PERMISSION\]/.test(cli) && /chmodSync\(path, SEED_FILE_MODE\)/.test(cli))
+  const runner = readFileSync('scripts/persona-cohort-run.mts', 'utf-8')
+  check('🔴 DB seed 적용 직전 승인 fixture·Pool·말투 자산·active cadence 로 seed 바이트를 재조립한다',
+    runner.includes('const expected = buildCohortSeeds({')
+    && runner.includes('const expectedRaw = serializeSeeds(M.codes, expectedSeeds)')
+    && runner.includes('SEED_PROVENANCE_MISMATCH'))
+  const usesFrozenV1Baseline = (source: string): boolean =>
+    /const before = stableAssignment\(\{ repoRoot: process\.cwd\(\), supplementGeneration: 1 \}\)/.test(source)
+    && /const bundle = before\.byCode\.get\(code\)/.test(source)
+    && /judgeCohortVoice\(\{ cohortCodes: [A-Za-z.]+, existingCodes: existing, base, full: sa\.byCode \}\)/.test(source)
+    && !/planBundles\(\{ rows: sa\.rows, personaCodes: existing \}\)/.test(source)
+  check('🔴 seed dry-run과 DB 적용 직전 검사가 모두 동결 supplement v1을 기존 40명 기준선으로 쓴다',
+    usesFrozenV1Baseline(cli) && usesFrozenV1Baseline(runner))
+  const selfComparisonMutation = cli.replace(
+    'stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })',
+    'stableAssignment({ repoRoot: process.cwd() })',
+  )
+  const lookupMutation = cli.replace(
+    'const bundle = before.byCode.get(code)',
+    'const bundle = sa.byCode.get(code)',
+  )
+  check('🔴 배선 변이 — 현재 v2를 자기 자신과 비교하면 하네스가 잡는다',
+    selfComparisonMutation !== cli && !usesFrozenV1Baseline(selfComparisonMutation)
+    && lookupMutation !== cli && !usesFrozenV1Baseline(lookupMutation))
 }
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

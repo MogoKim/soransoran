@@ -5,7 +5,7 @@
 import type { MagazineGraphControl } from './types'
 
 export const CONTROL: MagazineGraphControl = {
-  graphVersion: 'g-20261021-081d9a',
+  graphVersion: 'g-20261102-427d4d',
   enabled: true,
   enabledClusters: ['sleep', 'family', 'money-work'],
   surfaces: {"CTA_END":true,"FOOTER_NEXT":true,"FOOTER_SIBLING":true,"FOOTER_BRIDGE":true,"SERIES_NAV":false,"BODY_INLINE_OR_TOP":false,"BODY_CALLOUT":false},
@@ -17,7 +17,7 @@ export const CONTROL: MagazineGraphControl = {
    *      ② 연구 저장소에서 옛 버전을 다시 export 하고 배포
    *    스키마 경계(edge/2 → edge/3 처럼)에서는 ① 만 즉시 가능하다.
    */
-  previousGraphVersion: 'g-20261017-e8ebd9',
+  previousGraphVersion: 'g-20261021-081d9a',
 } as const
 
 /**

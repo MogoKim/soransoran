@@ -4,6 +4,7 @@
  *
  *   npm run d20:readiness                              # 지금 수치로 D20 preflight(오늘 증명일 슬롯 기준)
  *   npm run d20:readiness -- --date=YYYY-MM-DD         # 그 날짜를 증명일로 보고 판정
+ *   npm run d20:readiness:next-day                     # 다음 자연 증명일을 명시해 전날 밤 리허설
  *   npm run d20:readiness -- --d10-date=YYYY-MM-DD     # + D10 증명일 실측으로 D20 추가 댓글 profile 후보 산출
  *   npm run d20:readiness -- ... --profile-out=<path>  # 후보(승인 전) JSON 을 그 경로에 쓴다 — 유일한 write
  *   npm run d20:readiness -- --json
@@ -36,8 +37,11 @@ import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { observeJob, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
-import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
-import { readContractValidPersonas } from './lib/persona-reserve-facts.mjs'
+import { readPreflightFacts, preflightCostSummaryOf, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
+import type { CostAttribution } from '../src/lib/ready-fate'
+import { readCommentCapablePersonas } from './lib/persona-reserve-facts.mjs'
+import { EVENT_WAKE_ENV, judgeEventWakeInstall } from './lib/runner-wake.mjs'
+import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { commentLoopLedgerDir } from './lib/persona-comment-loop.mjs'
 import { ledgerPathOf, readLedgerDay } from './lib/llm-ledger-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -48,7 +52,16 @@ const fail = (m: string): never => { console.error(`🔴 ${m}`); process.exit(1)
 if (argv.some((a) => a === '--apply' || a === '--write' || a === '--execute')) fail('이 도구는 읽기만 한다 — 적용 명령이 없다')
 const JSON_OUT = argv.includes('--json')
 const NOW = new Date()
-const DATE = arg('date') ?? kstDateString(NOW)
+const EXPLICIT_DATE = arg('date')
+const NEXT_DAY = argv.includes('--next-day')
+if (NEXT_DAY && EXPLICIT_DATE !== null) fail('--next-day 와 --date 는 함께 쓰지 않는다')
+const nextCalendarDate = (date: string): string => {
+  const d = new Date(`${date}T00:00:00.000Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+const TODAY = kstDateString(NOW)
+const DATE = EXPLICIT_DATE ?? (NEXT_DAY ? nextCalendarDate(TODAY) : TODAY)
 const D10_DATE = arg('d10-date')
 const PROFILE_OUT = arg('profile-out')
 if (!isCalendarDate(DATE)) fail(`달력에 없는 날짜 — ${DATE}`)
@@ -82,8 +95,21 @@ const prisma = new PrismaClient()
 const out: Record<string, unknown> = { date: DATE, target: TARGET }
 try {
   // ── ① Persona ──
-  const personas = await readContractValidPersonas(prisma, { now: NOW, repoRoot: process.cwd() })
-  out.persona = { contractValid: personas, canaryFloor: PERSONA_CANARY_FLOOR[TARGET], sustainedTarget: PERSONA_SUSTAINED_TARGET[TARGET] }
+  const cap = await readCommentCapablePersonas(prisma, { now: NOW, repoRoot: process.cwd() })
+  // 🔴 controller preflight 입력은 그대로 계약 유효 수다(같은 판독기 · 같은 값). 첫 댓글 가능 수는 관측으로 따로 싣는다
+  const personas = cap.contractValid
+  out.persona = {
+    contractValid: personas, commentCapable: cap.commentCapable, staticLocked: cap.staticLocked,
+    canaryFloor: PERSONA_CANARY_FLOOR[TARGET], sustainedTarget: PERSONA_SUSTAINED_TARGET[TARGET],
+    // 🔴 막는 코드가 아니다 — 첫 댓글을 쓸 수 있는 사람이 하한보다 적으면 증명일 첫 댓글이 비는 원인이 된다
+    commentCapableShort: cap.commentCapable === null ? null : cap.commentCapable < PERSONA_CANARY_FLOOR[TARGET],
+  }
+
+  // ── ①-b 사건 깨움 설치 — 정본 env 의 같은 키 · 댓글 러너 등록 ──
+  const wakeEnv = readEnvKeys([EVENT_WAKE_ENV])
+  out.eventWake = judgeEventWakeInstall({
+    envReadable: wakeEnv.ok, env: wakeEnv.values, commentRunnerLoaded: observeJob(COMMENT_RUNNER_LABEL).state === 'loaded',
+  })
 
   // ── ② D20 preflight — controller 와 같은 조립 ──
   const evidenceDate = previousKstDate(DATE) ?? fail('전날을 계산하지 못했다')
@@ -98,7 +124,12 @@ try {
     contractValidPersonas: async () => personas,
   })
   const pf = judgeNextPreflight(TARGET, r.facts, RUNNER_GRID)
-  out.preflight = { verdict: pf.verdict, codes: pf.codes, counts: pf.counts, notes: r.notes }
+  // 🔴 막지 않는 경고도 그대로 싣는다 — 경고로 내린 축이 증거에서 사라지지 않게(관측 · 판정 아님)
+  out.preflight = {
+    verdict: pf.verdict, codes: pf.codes, forecastWarnings: pf.forecastWarnings, warnings: pf.warnings,
+    counts: pf.counts, costSummary: preflightCostSummaryOf((r.detail.costAttribution ?? null) as CostAttribution | null),
+    notes: r.notes,
+  }
 
   // ── ③ 추가 댓글 — 지금 설치된 profile · D20 후보 ──
   const env = readEnvKeys([FOLLOWUP_PROFILE_ENV])
@@ -162,6 +193,11 @@ if (JSON_OUT) {
   const c = p.counts
   console.log(`\n══ D20 준비도 — read-only · 증명일 ${DATE} · DB write 0 ══`)
   console.log(`\n① Persona  계약 유효 ${String(per.contractValid)} · canary 하한 ${per.canaryFloor} · 지속 목표 ${per.sustainedTarget}`)
+  const pc = out.persona as { commentCapable: number | null; staticLocked: { code: string; codes: string[] }[]; commentCapableShort: boolean | null }
+  console.log(`   첫 댓글 가능 ${String(pc.commentCapable)}${pc.commentCapableShort === true ? ' 🔴 하한 미달' : ''}`
+    + (pc.staticLocked.length === 0 ? ' · 고정 잠금 0' : ` · 고정 잠금 ${pc.staticLocked.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')}`))
+  const ew = out.eventWake as { state: string; note: string }
+  console.log(`   사건 깨움 ${ew.state === 'ON' ? '🟢' : '🔴'} ${ew.state} — ${ew.note}`)
   console.log(`\n② D20 preflight ${p.verdict}${p.codes.length > 0 ? ` [${p.codes.join(',')}]` : ''}`)
   console.log(`   목표 ${c.target}/일 · 발행 용량 ${String(c.publishCapacity)} · slot-valid 기회 ${String(c.opportunities ?? '모름')}`)
   console.log(`   READY 필요 ${String(c.readyNeededMin ?? '모름')}~${String(c.readyNeededMax ?? '모름')} · 공급 용량 ${String(c.readyCapacity ?? '모름')}`

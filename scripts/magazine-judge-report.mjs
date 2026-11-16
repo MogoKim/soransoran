@@ -30,7 +30,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join, basename, dirname, isAbsolute } from 'node:path'
 import { loadArticles, loadQueue, sliceLiteral, evalLiteral, DRAFTS_DIR, ROOT } from './lib/magazine-load.mjs'
-import { runQa } from './magazine-qa.mjs'
+import { runQa } from './lib/magazine-qa-core.mjs'
 import { collectUnknowns, decide, autoRegisterable, VERDICT } from './lib/magazine-judge.mjs'
 import {
   checkFirstPerson, checkTitleForm, checkCareAdvice,

@@ -21,7 +21,7 @@ import { PrismaClient } from '@prisma/client'
 import {
   STAGE_LABEL, buildStageFacts, firstBrokenStage,
   rateOf, showRate, describeBacklog, describeLaneReady,
-  worksetEvidenceOf, worksetRunIdOf, tallySemanticCompletion, stageTimesOf, laneReadyOf,
+  worksetEvidenceOf, worksetRunIdOf, tallySemanticCompletion, tallyRetryClasses, stageTimesOf, laneReadyOf,
   type PipelineStage, type StageEvidence, type LaneReadySplit, type SemanticTally, type LaneRow,
 } from '../src/lib/d100-supply-funnel'
 import { scanArtifacts, readJsonArtifacts } from './lib/d100-artifact-scan.mjs'
@@ -335,6 +335,12 @@ const semTotal: SemanticTally = talliesOk.reduce<SemanticTally>((acc, x) => ({
   incomplete: acc.incomplete + x.t!.incomplete, unknown: acc.unknown + x.t!.unknown,
 }), { total: 0, complete: 0, incomplete: 0, unknown: 0 })
 const semBroken = tallies.length - talliesOk.length
+/** 🔴 재선정 처리 — 단일 권위의 값(`tallyRetryClasses`). 결론은 같은 지문으로 다시 사지 않는다 */
+const retryTotal = artifactFiles.map((f) => tallyRetryClasses(f.json)).filter((x) => x !== null)
+  .reduce((acc, x) => ({
+    transient: acc.transient + x.transient, speakerBound: acc.speakerBound + x.speakerBound, terminal: acc.terminal + x.terminal,
+    unattempted: acc.unattempted + x.unattempted, unknown: acc.unknown + x.unknown,
+  }), { transient: 0, speakerBound: 0, terminal: 0, unattempted: 0, unknown: 0 })
 const semLastMs = talliesOk.length === 0 ? null
   : Math.max(...talliesOk.map((x) => x.file.mtimeMs))
 
@@ -397,7 +403,9 @@ const evidence: StageEvidence[] = [
       ? `🔴 artifacts 를 읽지 못했다 (깨진 파일 ${semBroken}개)`
       : `semanticCompletion.complete=true 인 건수`
         + ` (전체 ${semTotal.total} · 미완 ${semTotal.incomplete} · 모름 ${semTotal.unknown}`
-        + `${semBroken > 0 ? ` · 🔴 깨짐 ${semBroken}개` : ''})`,
+        + `${semBroken > 0 ? ` · 🔴 깨짐 ${semBroken}개` : ''})`
+        + ` · 재선정 처리 transient ${retryTotal.transient} · 화자 묶음 ${retryTotal.speakerBound} · 결론 ${retryTotal.terminal}`
+        + ` · 미시도 ${retryTotal.unattempted} · 모름 ${retryTotal.unknown}`,
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {

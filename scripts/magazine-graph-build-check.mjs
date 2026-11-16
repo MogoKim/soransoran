@@ -84,6 +84,8 @@ function baseWorld() {
 const RESOLVER = `export const IMPLEMENTED_SURFACES = [\n  'CTA_END',\n  'FOOTER_NEXT',\n  'FOOTER_SIBLING',\n  'FOOTER_BRIDGE',\n] as const
 export const FOOTER_SURFACES = ['FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE'] as const
 export const MAGAZINE_RELATION_TYPES = [\n  'PREREQUISITE',\n  'NEXT_QUESTION',\n  'SIBLING',\n  'SERIES',\n  'BRIDGE',\n  'ACTION',\n  'COMMUNITY',\n] as const\n`
+/** 합성 출처 overlay 규칙(S3 P1 수리) — 제품 신원 파일이다. 바이트가 바뀌면 readiness 제품 해시가 바뀌어야 한다 */
+const PROVENANCE_RULE = 'export const NO_RELEASE_BINDING = null\nexport function provenanceOverlay() { return [] }\n'
 const controlText = ({ enabled = true, clusters = ['fam', 'rel'], bridge = true, tripped = false } = {}) => `export const CONTROL: MagazineGraphControl = {
   graphVersion: 'g-00000000-000000',
   enabled: ${enabled},
@@ -110,7 +112,7 @@ const inputTextsOf = (w) => ({
 const EFF = '2026-10-15T13:00:00+09:00'
 const GEN = '2026-10-15T04:43:55.080Z'
 const build = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, generatedAt = GEN, articles = ARTICLES } = {}) =>
-  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles },
+  lib.buildAll({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control, articles },
     admissionTexts: admission, effectiveAt, generatedAt })
 const row = (b, id) => b.readiness.rows.find((r) => r.intentId === id)
 
@@ -161,7 +163,7 @@ test('반례2b — 시각 형식이 모호하면 거부(벽시계로 대신하�
 test('반례2c — 입력 파일이 없으면 다른 위치로 대신 읽지 않고 INPUT_MISSING', () => {
   const t = inputTextsOf(baseWorld()); delete t['assets-queue.jsonl']
   let code = null
-  try { lib.buildAll({ inputTexts: t, productTexts: { resolver: RESOLVER, control: controlText(), articles: ARTICLES }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
+  try { lib.buildAll({ inputTexts: t, productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control: controlText(), articles: ARTICLES }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN }) } catch (e) { code = e.code }
   eq(code, 'INPUT_MISSING', '누락 입력')
 })
 
@@ -176,7 +178,7 @@ const treeHash = (root) => {
 const input1 = join(TMP, 'in1'), input2 = join(TMP, 'deep/other/in2'), product = join(TMP, 'product'), adm = join(TMP, 'adm')
 writeTree(input1, inputTextsOf(baseWorld()))
 writeTree(input2, inputTextsOf(baseWorld()))
-writeTree(product, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': ARTICLES,
+writeTree(product, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/lib/magazine-provenance-rule.mjs': PROVENANCE_RULE, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': ARTICLES,
   'src/content/magazine/graph/current.ts': "export { GRAPH, EXPORT_HASH } from './g-00000000-000000'\n",
   '.git/HEAD': 'ref: refs/heads/main\n', 'scripts/tool.mjs': '// x\n', 'docs/note.md': '# n\n' })
 writeTree(adm, { 'contract/m3-slug-manifest.json': ADMISSION.slugManifest, 'contract/m3-state.jsonl': '' })
@@ -249,7 +251,7 @@ test('반례6c — 생산 최소(2+1)와 표시 목표(3+1)를 섞지 않는다:
   w.published.push({ slug: 'p3b', assetState: 'LIVE' })
   w.graph.push(edge('E-0014', 'I-X', 'I-Q', 'PREREQUISITE', 'FOOTER_SIBLING'))
   const arts = ARTICLES.replace('"w": {', '"p3b": {"title":"t","cluster":"fam","publishedAt":"2026-10-07","status":"SCHEDULED","publishAt":"2026-10-07T10:30:00+09:00"},\n  "w": {')
-  const b = lib.buildAll({ inputTexts: inputTextsOf(w), productTexts: { resolver: RESOLVER, control: controlText(), articles: arts }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN })
+  const b = lib.buildAll({ inputTexts: inputTextsOf(w), productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control: controlText(), articles: arts }, admissionTexts: ADMISSION, effectiveAt: EFF, generatedAt: GEN })
   const x = row(b, 'I-X')
   eq([x.direct.count, x.display.direct.length, x.status], [4, 3, 'GRAPH_READY'], 'X')
   eq(lib.READINESS_POLICY, { productionMinimum: { direct: 2, discovery: 1 }, displayTarget: { directMax: 3, discovery: 1 } }, '정책 숫자')
@@ -652,7 +654,7 @@ test('반례19i — build 는 drift 면 INPUT_PRODUCT_LIFECYCLE_DRIFT 로 멈추
   const r1 = rejectWhy(() => build({ world: w, articles })), r2 = rejectWhy(() => build({ world: w, articles }))
   ok(r1?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT' && r1.why.includes('qpub'), JSON.stringify(r1)); eq(r2, r1, '반복 동일')
   const inDrift = join(TMP, 'in-drift'); writeTree(inDrift, inputTextsOf(w))
-  const prodDrift = join(TMP, 'product-drift'); writeTree(prodDrift, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': articles })
+  const prodDrift = join(TMP, 'product-drift'); writeTree(prodDrift, { 'src/lib/magazine-graph.ts': RESOLVER, 'src/lib/magazine-provenance-rule.mjs': PROVENANCE_RULE, 'src/content/magazine/graph/control.ts': controlText(), 'src/content/magazine/articles.ts': articles })
   const before = [treeHash(inDrift), treeHash(prodDrift)]
   const out = join(TMP, 'out-drift')
   let code = null, json = null
@@ -840,7 +842,7 @@ const canonicalJson = (v) => Array.isArray(v) ? `[${v.map(canonicalJson).join(',
   : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
     : JSON.stringify(v)
 const compute = ({ world = baseWorld(), control = controlText(), admission = ADMISSION, effectiveAt = EFF, articles = ARTICLES, extra = {} } = {}) =>
-  lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, control, articles }, admissionTexts: admission, effectiveAt, ...extra })
+  lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(world), productTexts: { resolver: RESOLVER, provenanceRule: PROVENANCE_RULE, control, articles }, admissionTexts: admission, effectiveAt, ...extra })
 test('반례24a — buildAll 의 readiness · 해시 · graph 신원은 computeGraphAndReadiness 와 같다', () => {
   const b = build(), c = compute()
   eq(canonicalJson(b.readiness), canonicalJson(c.readiness), 'readiness 객체')
@@ -894,15 +896,29 @@ test('반례24e — computeGraphAndReadiness 는 generatedAt · 벽시계를 읽
 })
 test('반례24f — readiness.inputs 는 graph 신원 · 제품 3파일 · admission · effectiveAt 를 정확히 싣는다', () => {
   const c = compute()
-  const products = { resolver: RESOLVER, control: controlText(), articles: ARTICLES }
+  const products = { resolver: RESOLVER, control: controlText(), articles: ARTICLES, provenanceRule: PROVENANCE_RULE }
   eq(c.readiness.inputs, {
     graphVersion: c.graphVersion, graphCombined: c.contentHash.combined, graphSemanticHash: c.graphSemanticHash,
-    productHashes: { resolver: sha(products.resolver), control: sha(products.control), articles: sha(products.articles) },
+    productHashes: { resolver: sha(products.resolver), control: sha(products.control), articles: sha(products.articles), provenanceRule: sha(products.provenanceRule) },
     admissionHashes: { 'contract/m3-slug-manifest.json': sha(ADMISSION.slugManifest), 'contract/m3-state.jsonl': sha(ADMISSION.ledger) },
     effectiveAt: EFF,
   }, 'inputs')
   ok(!('semanticHash' in c.readiness), 'graph semanticHash 를 readiness 최상위에 다시 둔다')
   eq(compute({ admission: null }).readiness.inputs.admissionHashes, 'UNREAD', 'admission 미판독')
+})
+test('반례24h — 출처 규칙 바이트만 바뀌어도 제품 신원(readiness productHashes · readinessHash)이 바뀐다 · 규칙이 없으면 멈춘다 (S3 P1 수리)', () => {
+  ok(lib.PRODUCT_FILES.provenanceRule === 'src/lib/magazine-provenance-rule.mjs', '출처 규칙이 제품 신원 파일 목록에 없다')
+  const at = (rule) => lib.computeGraphAndReadiness({ inputTexts: inputTextsOf(baseWorld()),
+    productTexts: { resolver: RESOLVER, provenanceRule: rule, control: controlText(), articles: ARTICLES }, admissionTexts: ADMISSION, effectiveAt: EFF })
+  const a = at(PROVENANCE_RULE), b = at(`${PROVENANCE_RULE}// canonical 우선 제거\n`)
+  ok(a.readiness.inputs.productHashes.provenanceRule !== b.readiness.inputs.productHashes.provenanceRule, '규칙만 바뀐 제품의 productHashes 가 같다')
+  ok(a.readinessHash !== b.readinessHash && a.readinessFileSha256 !== b.readinessFileSha256, '규칙만 바뀐 제품의 readiness 신원이 같다 — 후보가 표류를 못 본다')
+  eq([a.graphVersion, a.graphSemanticHash], [b.graphVersion, b.graphSemanticHash], '규칙은 graph 내용이 아니다 — graph 신원은 그대로')
+  for (const bad of [undefined, null]) {
+    let code = null
+    try { lib.parseProductTexts({ resolver: RESOLVER, control: controlText(), articles: ARTICLES, provenanceRule: bad }) } catch (e) { code = e.code }
+    eq(code, 'PRODUCT_TEXT_MISSING', `규칙 텍스트 ${bad} 를 빈 문자열 해시로 넘겼다`)
+  }
 })
 test('반례24g — buildAll 은 계산을 computeGraphAndReadiness 한 번에 맡긴다 · 그 함수 본문은 시각 · 파일을 읽지 않는다', () => {
   const src = readFileSync(LIB, 'utf8')
@@ -1085,12 +1101,30 @@ if (oldInput && newInput && realProduct) {
   results.push('  ⏭  실제 입력 재현성 — --old-input · --new-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 
-// ── 실제 최종 입력 (2026-10-21) — money-work 활성 graph 의 입력 계약 ──
+// ── 실제 최종 입력 — snapshot 별 판별 계약 ──
 //    🔴 snapshot 이름 · effectiveAt 을 고정한다. 다른 snapshot 이나 다른 시각으로 돌리면 통과가 아니라 실패다
-const FINAL_NAME = '2026-10-21-money-work-retirement-next-e0335'
-const FINAL_PARENT = '2026-10-21-national-pension-live-money-work-relations'
-const FINAL_EFF = '2026-10-21T11:00:00+09:00', FINAL_GEN = '2026-10-21T02:00:00.000Z'
+//    🔴 (2026-11-02) 앞판은 e0335 하나만 알았다 — 새 snapshot 을 넣으면 시험 0 이 실패할 뿐 새 판의 계약은 아무도 보지 않았다.
+//       이제 snapshot 이름이 계약을 고른다. 계약이 없는 snapshot 은 시험 0 에서 FAIL 이다 (SKIP 이 아니다).
+export const FINAL_CONTRACTS = Object.freeze({
+  '2026-10-21-money-work-retirement-next-e0335': { kind: 'e0335', parent: '2026-10-21-national-pension-live-money-work-relations', eff: '2026-10-21T11:00:00+09:00', gen: '2026-10-21T02:00:00.000Z' },
+  '2026-11-02-money-work-age-learning-live': { kind: '427d4d', parent: '2026-11-01-money-work-resume-i-t6-03', eff: '2026-11-02T11:00:00+09:00', gen: '2026-11-02T02:00:00.000Z',
+    graphVersion: 'g-20261102-427d4d', semanticHash: '4aacc9d7b38c25cd', exportHash: 'cb57795ed0dd8ec4', bundleSha256: '26988e25fd06671563ff855418add012d6614083021b54b77a7db95d9d5c10bf' },
+})
+export const finalContractOf = (name, contracts = FINAL_CONTRACTS) => (Object.hasOwn(contracts, name) ? contracts[name] : null)
+test('최종 입력 계약 자기 시험 — 모르는 snapshot 은 계약 없음(null) · 아는 snapshot 은 계약', () => {
+  eq(finalContractOf('2099-01-01-unknown'), null, '모르는 snapshot')
+  eq(finalContractOf('2026-11-02-money-work-age-learning-live')?.graphVersion, 'g-20261102-427d4d', '427d4d 계약')
+})
+const FINAL_NAME = finalInput ? finalInput.replace(/\/+$/, '').split('/').pop() : null
+const FINAL = FINAL_NAME ? finalContractOf(FINAL_NAME) : null
+const FINAL_PARENT = FINAL?.parent
+const FINAL_EFF = FINAL?.eff, FINAL_GEN = FINAL?.gen
 if (finalInput && realProduct) {
+  test('최종 입력 0 — --final-input 은 판별 계약이 있는 snapshot 이다 (없으면 SKIP 이 아니라 FAIL)', () => {
+    ok(FINAL !== null, `계약 없는 snapshot: ${FINAL_NAME}`)
+  })
+}
+if (finalInput && realProduct && FINAL?.kind === 'e0335') {
   const at = (snap) => join(reconciledRoot, snap)
   const product = lib.parseProductTexts(productAt(realProduct))
   const articles = product.articles
@@ -1098,9 +1132,6 @@ if (finalInput && realProduct) {
   const admissionTexts = Object.fromEntries(Object.entries(lib.ADMISSION_FILES).map(([k, rel]) => [k, readText(join(dirname(reconciledRoot), rel))]))
   const buildFinal = (dir, productTexts = productAt(realProduct)) => lib.buildAll({ inputTexts: inputsAt(dir), productTexts, admissionTexts, effectiveAt: FINAL_EFF, generatedAt: FINAL_GEN })
   const drift = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(at(snap))), articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
-  test('최종 입력 0 — --final-input 은 정확히 최종 snapshot 이다', () => {
-    eq(finalInput.replace(/\/+$/, '').split('/').pop(), FINAL_NAME, 'snapshot 이름')
-  })
   test('최종 입력 1 — 같은 effectiveAt · generatedAt 2회 CLI build 가 목록 · 바이트까지 동일', () => {
     const a = join(TMP, 'final-a'), b = join(TMP, 'final-b')
     eq([runRealCli(finalInput, a, FINAL_EFF, FINAL_GEN), runRealCli(finalInput, b, FINAL_EFF, FINAL_GEN)], [0, 0], 'CLI 종료 코드')
@@ -1141,7 +1172,7 @@ if (finalInput && realProduct) {
     const C = Object.fromEntries(inputs.canonical.map((r) => [r.intentId, r.magazineCluster ?? null]))
     eq(sem.filter((e) => ((C[e.fromIntentId] ?? null) !== (C[e.toIntentId] ?? null)) !== (e.fromCluster !== e.toCluster)).length, 74, '옛 판정과 다른 edge')
   })
-  test('최종 입력 5 — money-work 를 켠 control 에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099 · G8_NOT_ADMITTED 유지', () => {
+  test('최종 입력 5 — money-work 를 켠 control 에서 GRAPH_READY 는 I-T6-05 하나 · direct E-0188 · E-0329 · discovery E-0100 · reverse E-0099 · G8 편입 상태는 실제 장부대로', () => {
     const pt = productAt(realProduct)
     const mwControl = ensureCluster(pt.control, 'money-work').text
     ok(readControl(mwControl).enabledClusters.includes('money-work'), 'money-work 사본 준비 실패')
@@ -1151,12 +1182,60 @@ if (finalInput && realProduct) {
     eq(x.direct.targets.map((t) => `${t.edgeId}→${t.toIntentId}/${t.slug}`), ['E-0188→I-T6-04/certificate-in-50s', 'E-0329→I-T6-01/rehire-where-to-start'], 'direct')
     eq(x.discovery.targets.map((t) => t.edgeId), ['E-0100'], 'discovery')
     ok(x.reverse.sources.some((s) => s.edgeId === 'E-0099'), `reverse ${JSON.stringify(x.reverse.sources)}`)
-    eq([x.admission.state, x.admission.blockers], ['NOT_ADMITTED', ['G8_NOT_ADMITTED']], 'G8')
+    // 🔴 시점 사실을 고정하지 않는다 (2026-11-02) — I-T6-05 는 2026-10-22 사람 승인 apply 로 편입됐다. 실제 장부대로 판정한다
+    const admitted = admissionTexts.ledger.split('\n').some((l) => l.includes('"event":"ADMITTED"') && l.includes('"intentId":"I-T6-05"'))
+    eq([x.admission.state, x.admission.blockers], admitted ? ['ADMITTED', []] : ['NOT_ADMITTED', ['G8_NOT_ADMITTED']], 'G8')
     eq(b.layers.mappings.filter((m) => m.slug === 'starting-work-at-this-age').length, 0, 'starting-work-at-this-age graph 매핑 0')
     eq(b.layers.participation.map((p) => `${p.slug}:${p.state}:${p.evidenceHash}`),
       ['starting-work-at-this-age:EDITORIAL_NON_SEARCH:0a4dfd8b35d1b8ebc17fcdac3e3cc1b537a7cb919f638ecc7262612104181872'], 'participation')
   })
-} else {
+}
+// ── 427d4d 계약 (2026-11-02) — age-learning 공개 반영 · I-T6-03 GRAPH_READY ──
+if (finalInput && realProduct && FINAL?.kind === '427d4d') {
+  const at = (snap) => join(reconciledRoot, snap)
+  const product = lib.parseProductTexts(productAt(realProduct))
+  const admissionTexts = Object.fromEntries(Object.entries(lib.ADMISSION_FILES).map(([k, rel]) => [k, readText(join(dirname(reconciledRoot), rel))]))
+  const buildAt = (dir, eff = FINAL_EFF) => lib.buildAll({ inputTexts: inputsAt(dir), productTexts: productAt(realProduct), admissionTexts, effectiveAt: eff, generatedAt: FINAL_GEN })
+  const drift = (snap, eff) => lib.productLifecycleDrift({ inputs: lib.parseInputTexts(inputsAt(at(snap))), articles: product.articles, effectiveMs: Date.parse(eff) }).map((d) => d.slug)
+  test('최종 입력 427d4d-1 — 2회 CLI build 바이트 동일 · 판 · semantic · export · bundle sha256 = 계약', () => {
+    const a = join(TMP, 'final427-a'), b = join(TMP, 'final427-b')
+    eq([runRealCli(finalInput, a, FINAL_EFF, FINAL_GEN), runRealCli(finalInput, b, FINAL_EFF, FINAL_GEN)], [0, 0], 'CLI 종료 코드')
+    eq(treeHash(a), treeHash(b), '트리 해시')
+    const built = buildAt(finalInput)
+    eq([built.graphVersion, built.manifest.semanticHash, built.manifest.exportHash, createHash('sha256').update(built.files[`bundle/${built.graphVersion}.ts`]).digest('hex')],
+      [FINAL.graphVersion, FINAL.semanticHash, FINAL.exportHash, FINAL.bundleSha256], '판·해시')
+  })
+  test('최종 입력 427d4d-2 — lifecycle 경계: 10:29:59 drift=age-learning · 10:30:00 drift 0 · 10:00 build 거부', () => {
+    eq(drift(FINAL_NAME, '2026-11-02T10:29:59+09:00'), ['age-learning'], '10:29:59')
+    eq(drift(FINAL_NAME, '2026-11-02T10:30:00+09:00'), [], '10:30:00')
+    const r = rejectWhy(() => buildAt(finalInput, '2026-11-02T10:00:00+09:00'))
+    ok(r?.code === 'INPUT_PRODUCT_LIFECYCLE_DRIFT', JSON.stringify(r).slice(0, 200))
+  })
+  test('최종 입력 427d4d-3 — parent 대비: 새 mapping 은 I-T6-05→age-learning 하나 · edge 신원 집합 · 의미 변화 0', () => {
+    const layersAt = (dir) => lib.buildGraphLayers({ inputs: lib.parseInputTexts(inputsAt(dir)), implementedSurfaces: product.implemented })
+    const o = layersAt(at(FINAL_PARENT)), n = layersAt(finalInput)
+    const key = (m) => `${m.intentId}|${m.slug}`
+    const om = new Set(o.mappings.map(key))
+    eq(n.mappings.filter((m) => !om.has(key(m))).map(key), ['I-T6-05|age-learning'], '새 mapping')
+    eq(o.mappings.filter((m) => !n.mappings.some((x) => key(x) === key(m))).map(key), [], '사라진 mapping')
+    eq(n.edges.map((e) => e.edgeId).sort(), o.edges.map((e) => e.edgeId).sort(), 'edge 신원')
+    const sem = (e) => JSON.stringify([e.fromIntentId, e.toIntentId, e.relationType, e.placement, e.recommendationSlot, e.readerReason, e.anchorLabel, e.reciprocalGroupId, e.generatedBy])
+    const oById = new Map(o.edges.map((e) => [e.edgeId, e]))
+    eq(n.edges.filter((e) => sem(e) !== sem(oById.get(e.edgeId))).map((e) => e.edgeId), [], '의미 바뀐 edge')
+  })
+  test('최종 입력 427d4d-4 — GRAPH_READY 는 I-T6-03 하나 · direct E-0338 · E-0339 · discovery E-0340 · reverse E-0093 · 편입 상태는 실제 장부대로', () => {
+    const b = buildAt(finalInput)
+    eq(b.readiness.rows.filter((r) => r.graphReady).map((r) => r.intentId), ['I-T6-03'], 'GRAPH_READY')
+    const x = b.readiness.rows.find((r) => r.intentId === 'I-T6-03')
+    eq(x.direct.targets.map((t) => `${t.edgeId}→${t.slug}`), ['E-0338→certificate-in-50s', 'E-0339→back-to-work-homemaker'], 'direct')
+    eq(x.discovery.targets.map((t) => `${t.edgeId}→${t.slug}`), ['E-0340→age-learning'], 'discovery')
+    eq(x.reverse.sources.map((s) => s.edgeId), ['E-0093'], 'reverse')
+    // 🔴 시점 사실을 고정하지 않는다 — 실제 장부에 I-T6-03 편입이 있으면 ADMITTED 여야 하고, 없으면 NOT_ADMITTED
+    const admitted = admissionTexts.ledger.split('\n').some((l) => l.includes('"event":"ADMITTED"') && l.includes('"intentId":"I-T6-03"'))
+    eq(x.admission.state, admitted ? 'ADMITTED' : 'NOT_ADMITTED', 'admission')
+  })
+}
+if (!(finalInput && realProduct)) {
   results.push('  ⏭  실제 최종 입력 — --final-input · --real-product 미지정 (통과로 세지 않는다)')
 }
 

@@ -38,6 +38,10 @@ import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as e
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { RUN_AT_ENV } from './lib/run-clock.mjs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { EVENT_WAKE_ENV } from './lib/runner-wake.mjs'
 /**
  * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
@@ -87,15 +91,23 @@ const gate = (voiceCode: string | null, evidence: { at: Date; id: string } | nul
   },
 })
 
+/**
+ * 🔴 **러너 자식 HOME 은 이 검사 전용 임시 디렉터리다** (2026-11-07). 실제 HOME 을 넘기지 않는다.
+ *    발행 뒤 댓글 러너 깨움(C2)은 이 Mac 의 진짜 launchd job 을 kickstart 하고, 그 켜짐은 **정본 env**
+ *    (`$HOME/Library/Application Support/soransoran/env.local`) 한 곳에서만 읽힌다(프로세스 env 로는 끄거나 켜지 못한다).
+ *    그래서 임시 HOME 아래 정본 env 에 `SORAN_EVENT_WAKE=off` 를 0600 으로 고정한다 — 실제 운영 env · launchd 에 닿을 길이 없다.
+ */
+const CHILD_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'soran-auto-ready-runner-home-')))
+const CHILD_CANON_ENV = join(CHILD_HOME, 'Library', 'Application Support', 'soransoran', 'env.local')
+mkdirSync(join(CHILD_HOME, 'Library', 'Application Support', 'soransoran'), { recursive: true, mode: 0o700 })
+writeFileSync(CHILD_CANON_ENV, `${EVENT_WAKE_ENV}=off\n`, { mode: 0o600 })
+chmodSync(CHILD_CANON_ENV, 0o600)
 /** 🔴 러너 자식 프로세스 — 격리 DB 주소와 스위치만 담은 새 env. 부모 env 를 상속하지 않는다 */
 const runnerEnv = (at: Date): Record<string, string> => ({
-  PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '',
+  PATH: process.env.PATH ?? '', HOME: CHILD_HOME,
   DATABASE_URL: URL, DIRECT_URL: URL, SORAN_AUTO_READY_ENABLED: 'on',
   // 🔴 주입 시각 + --apply 는 러너가 격리 DB 표식을 다시 확인한다 — 표식을 같이 넘긴다
   SORAN_ISOLATED_DB: 'yes-throwaway', [RUN_AT_ENV]: at.toISOString(),
-  // 🔴 (2026-10-14) 발행 뒤 댓글 러너 깨움(C2)은 이 Mac 의 진짜 launchd job 을 kickstart 한다 — 시험에서는 늘 끈다.
-  //    미설정도 off 지만 기본값에 기대지 않는다
-  [EVENT_WAKE_ENV]: 'off',
 })
 function runRunner(at: Date = AT): { code: number; out: string } {
   const env = runnerEnv(at)
@@ -211,6 +223,16 @@ async function main(): Promise<void> {
     const second = await autoRow(goodPersona, '오늘 시장에서 호박을 샀어요. 다들 어떻게 지내세요?', newer)
     const before1 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: first.id } })
 
+    // 🔴 불변식 — 자식 HOME 은 실제 HOME 이 아닌 임시 디렉터리 · 그 아래 정본 env 는 off 하나 · 0600 · 자식 env 에 깨움 키 없음
+    {
+      const env = runnerEnv(AT)
+      const real = realpathSync(homedir())
+      check('🔴 🔴 러너 자식 HOME 은 이 검사 전용 임시 디렉터리다(실제 HOME 아님)',
+        env.HOME === CHILD_HOME && CHILD_HOME !== real && !CHILD_HOME.startsWith(`${real}/Library`) && CHILD_HOME.startsWith(realpathSync(tmpdir())), CHILD_HOME)
+      check('🔴 🔴 임시 HOME 의 정본 env 는 SORAN_EVENT_WAKE=off 하나 · 0600 · 자식 env 에는 깨움 키가 없다(프로세스 env 로 제어하지 않는다)',
+        readFileSync(CHILD_CANON_ENV, 'utf-8') === `${EVENT_WAKE_ENV}=off\n` && (statSync(CHILD_CANON_ENV).mode & 0o777) === 0o600
+        && !(EVENT_WAKE_ENV in env))
+    }
     const r1 = runRunner()
     const r2 = runRunner()
     const tail = (o: string) => o.split('\n').filter((l) => /🔴 중단|발행하지 않는다|✅ Post|AUTO_ASSIGN|유예|예외|🎯/.test(l)).slice(0, 6).join(' ⏎ ')

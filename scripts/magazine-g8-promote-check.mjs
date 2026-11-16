@@ -3,10 +3,10 @@
  * G8 편입기 검사 — 임시 fixture 에서만 쓴다. 운영 파일·연구 정본에는 쓰지 않는다.
  *
  * 무엇을 보나 (g8-promotion/2 — G8 은 GRAPH_READY intent 의 영구 신원 admission 도구다)
- *   Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 큐 행·콘텐츠 계획 필드 0 · 입력 15개 · 결정적 · 쓰기 0 · 연구 current 미사용
+ *   Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 큐 행·콘텐츠 계획 필드 0 · 입력 16개 · 결정적 · 쓰기 0 · 연구 current 미사용
  *   Ⓑ snapshot ↔ 제품 bundle — payload · contentHash · EXPORT_HASH · graphVersion · semanticHash · current · control 전부 대조
  *   Ⓒ receipt 불변식 — 파일명 · manifest 해시 · receiptHash · 사람 승인 · confirm hash
- *   Ⓓ 신원 입력 15개 — 하나씩 바뀌면 journal 전에 STALE_INPUT · 쓰기 0
+ *   Ⓓ 신원 입력 16개 — 하나씩 바뀌면 journal 전에 STALE_INPUT · 쓰기 0
  *   Ⓔ staged preflight — 한 admission 이라도 실패하면 세 파일 쓰기 0
  *   Ⓕ apply — 세 파일만 · 제품·큐 바이트 불변 · ALREADY_APPLIED · 반쪽 상태는 INCONSISTENT
  *   Ⓖ 급사 7지점 — 잠금 유지 · 명시 stale lock 경로만 · commit-forward 로 ADMITTED · ledger 단조 증가
@@ -137,6 +137,8 @@ const SNAPSHOT_TEXTS = {
   'assets-published.jsonl': jsonl(['p1', 'p2', 'p3', 'd'].map((slug) => ({ slug, assetState: 'LIVE' }))),
   'assets-queue.jsonl': '',
 }
+/** 합성 출처 overlay 규칙(S3 P1 수리) — G8 신원 입력이다. 바이트만 바뀌어도 STALE_INPUT 이어야 한다 */
+const PROVENANCE_RULE = 'export const NO_RELEASE_BINDING = null\nexport function provenanceOverlay() { return [] }\n'
 const RESOLVER = `export const IMPLEMENTED_SURFACES = [\n  'CTA_END',\n  'FOOTER_NEXT',\n  'FOOTER_SIBLING',\n  'FOOTER_BRIDGE',\n] as const
 export const FOOTER_SURFACES = ['FOOTER_NEXT', 'FOOTER_SIBLING', 'FOOTER_BRIDGE'] as const
 export const MAGAZINE_RELATION_TYPES = [\n  'PREREQUISITE',\n  'NEXT_QUESTION',\n  'SIBLING',\n  'SERIES',\n  'BRIDGE',\n  'ACTION',\n  'COMMUNITY',\n] as const\n`
@@ -155,7 +157,7 @@ export function collectTakenSlugs() { throw new Error('G8 이 collectTakenSlugs 
 const LEGACY_LINE = JSON.stringify({ schemaVersion: 'm3ledger/2', event: 'ADMITTED', intentId: 'I-LEG', slug: 'legacy-slug', title: '예전 편입 주제', cluster: 'fam',
   directRelations: [], discoveryRelation: null, internalLinks: [], at: '2026-09-24T09:00:00+09:00' })
 const LEGACY_LIST = [{ intentId: 'I-LEG', slug: 'legacy-slug', lineSha256: lib.sha256(LEGACY_LINE) }]
-const BUILT = builder.buildAll({ inputTexts: SNAPSHOT_TEXTS, productTexts: { resolver: RESOLVER, control: controlText('g-00000000-000000'), articles: ARTICLES_TEXT },
+const BUILT = builder.buildAll({ inputTexts: SNAPSHOT_TEXTS, productTexts: { resolver: RESOLVER, control: controlText('g-00000000-000000'), articles: ARTICLES_TEXT, provenanceRule: PROVENANCE_RULE },
   admissionTexts: null, effectiveAt: GEFF, generatedAt: '2026-10-15T04:00:00.000Z' })
 const GV = BUILT.graphVersion
 
@@ -181,6 +183,7 @@ function makeG8({ legacy = false, pipelineSrc = null } = {}) {
   write(repo, `src/content/magazine/graph/${GV}.ts`, BUILT.files[`bundle/${GV}.ts`])
   write(repo, lib.PRODUCT_FILES.graphControl, controlText(GV))
   write(repo, lib.PRODUCT_FILES.graphResolver, RESOLVER)
+  write(repo, lib.PRODUCT_FILES.graphProvenanceRule, PROVENANCE_RULE)
   fs.mkdirSync(path.join(repo, 'drafts/magazine/draft-only'), { recursive: true })
   for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) { fs.mkdirSync(path.join(research, 'contract'), { recursive: true }); fs.copyFileSync(path.join(PIPELINE_FIXTURE, f), path.join(research, 'contract', f)) }
   if (pipelineSrc) {
@@ -222,7 +225,7 @@ console.log('Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 콘텐츠 계�
   expect('schema g8-promotion/2 · 같은 입력 → 같은 hash', [m.schema, m.hash === m2.hash, m.hash === lib.hashManifest(m)], ['g8-promotion/2', true, true])
   expect('hash = hash 를 뺀 canonical JSON sha256', m.hash, lib.sha256(lib.canonicalJson(Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'hash')))))
   expect('후보 = GRAPH_READY 두 개 (I-X1 · I-X2) · INCOMPLETE · BLOCKED 0', m.admissions.map((a) => a.intentId), ['I-X1', 'I-X2'])
-  const ready = builder.computeGraphAndReadiness({ inputTexts: SNAPSHOT_TEXTS, productTexts: { resolver: RESOLVER, control: controlText(GV), articles: ARTICLES_TEXT },
+  const ready = builder.computeGraphAndReadiness({ inputTexts: SNAPSHOT_TEXTS, productTexts: { resolver: RESOLVER, control: controlText(GV), articles: ARTICLES_TEXT, provenanceRule: PROVENANCE_RULE },
     admissionTexts: { slugManifest: fs.readFileSync(filesOfG8(f).slug, 'utf8'), ledger: null }, effectiveAt: GEFF }).readiness.rows
   expect('builder 판정 — Y GRAPH_INCOMPLETE · Z BLOCKED', ready.filter((r) => ['I-Y', 'I-Z'].includes(r.intentId)).map((r) => r.status), ['GRAPH_INCOMPLETE', 'BLOCKED'])
   const x1 = m.admissions[0]
@@ -231,8 +234,8 @@ console.log('Ⓐ dry-run — 후보는 builder GRAPH_READY 뿐 · 콘텐츠 계�
   expect('큐 행 · 콘텐츠 계획 필드 0', ['queueRows', 'fallbackRows', 'selection', 'classification'].filter((k) => k in m)
     .concat(JSON.stringify(m.admissions).match(/contentType|searchIntent|riskLevel|ctaBoard|validationProfile/g) ?? []), [])
   expect('manifest 필드 (graphEffectiveAt 없음)', Object.keys(m).sort(), ['admissions', 'at', 'graph', 'hash', 'identityInputHashes', 'readiness', 'refused', 'schema', 'snapshot'])
-  expect('신원 입력 정확히 15개', Object.keys(m.identityInputHashes), ['product.articles', 'product.topicQueue', 'product.draftsSlugSet', 'product.graphCurrent',
-    'product.graphBundle', 'product.graphControl', 'product.graphResolver', 'research.slugManifest', 'research.ledger', 'research.slugModule',
+  expect('신원 입력 정확히 16개', Object.keys(m.identityInputHashes), ['product.articles', 'product.topicQueue', 'product.draftsSlugSet', 'product.graphCurrent',
+    'product.graphBundle', 'product.graphControl', 'product.graphResolver', 'product.graphProvenanceRule', 'research.slugManifest', 'research.ledger', 'research.slugModule',
     ...lib.SNAPSHOT_FILES.map((n) => `snapshot.${n}`)])
   expect('graph · readiness 블록', [m.graph.graphVersion, m.graph.contentHash.combined, m.readiness.inputs.graphVersion, typeof m.readiness.readinessFileSha256, m.snapshot.name],
     [GV, BUILT.manifest.contentHash.combined, GV, 'string', 'fx-snapshot'])
@@ -356,8 +359,8 @@ const APPLIED = await (async () => { const f = makeG8({ legacy: true }); const m
   expect('receipt 를 놓는 순간 이미 있으면 EEXIST 로 멈추고 기존 바이트 보존', [threw, fs.readFileSync(lib.receiptPathOf(f.research, m.hash), 'utf8')], ['EEXIST', foreign])
 }
 
-// ── Ⓓ 신원 입력 15개 ─────────────────────────────────────────
-console.log('Ⓓ 신원 입력 15개 — 하나씩 바뀌면 journal 전에 STALE_INPUT · 쓰기 0')
+// ── Ⓓ 신원 입력 16개 ─────────────────────────────────────────
+console.log('Ⓓ 신원 입력 16개 — 하나씩 바뀌면 journal 전에 STALE_INPUT · 쓰기 0')
 {
   const append = (file, extra = '\n// 시험 변경\n') => fs.appendFileSync(file, extra)
   const cases = [
@@ -368,12 +371,14 @@ console.log('Ⓓ 신원 입력 15개 — 하나씩 바뀌면 journal 전에 STAL
     ['product.graphBundle', (f) => append(path.join(f.repo, `src/content/magazine/graph/${GV}.ts`))],
     ['product.graphControl', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.graphControl))],
     ['product.graphResolver', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.graphResolver))],
+    // S3 P1 수리 — 출처 규칙만 바뀐 바이트 표류도 journal 전에 막는다
+    ['product.graphProvenanceRule', (f) => append(path.join(f.repo, lib.PRODUCT_FILES.graphProvenanceRule))],
     ['research.slugManifest', (f) => fs.writeFileSync(filesOfG8(f).slug, JSON.stringify(JSON.parse(fs.readFileSync(filesOfG8(f).slug, 'utf8'))))],
     ['research.ledger', (f) => fs.writeFileSync(filesOfG8(f).ledger, '')],
     ['research.slugModule', (f) => append(path.join(f.research, lib.RESEARCH_FILES.slugModule))],
     ...lib.SNAPSHOT_FILES.map((n) => [`snapshot.${n}`, (f) => append(path.join(f.snapshot, n), '\n')]),
   ]
-  expect('반례가 15개 키 전부를 덮는다', cases.length, 15)
+  expect('반례가 16개 키 전부를 덮는다', cases.length, 16)
   for (const [key, mutate] of cases) {
     const f = makeG8()
     const m = await build(f)
@@ -1135,8 +1140,33 @@ const runRegister = (m) => { const r = spawnSync('node', regCli(m), { encoding: 
 
 
 // ── ⑪ 실제 연구 정본 (읽기만) ────────────────────────────────
-const REAL_RESEARCH = path.resolve(REPO, '..', 'soransoran-mgraph-research')
-const REAL_SNAPSHOT = path.join(REAL_RESEARCH, 'reconciled', '2026-10-21-money-work-retirement-next-e0335')
+//    🔴 판별 계약 (2026-11-02) — 제품 current 가 가리키는 판마다 실제 snapshot · 시각 · 기대값을 고정한다.
+//       앞판은 081d9a 하나만 알았다 — promote 뒤에는 이 시험이 **조용히 SKIP** 됐다. 이제 표에 없는 판 · 없는 snapshot 은 FAIL 이다.
+const REAL_RESEARCH = process.env.MGRAPH_REAL_RESEARCH ? path.resolve(process.env.MGRAPH_REAL_RESEARCH) : path.resolve(REPO, '..', 'soransoran-mgraph-research')
+export const REAL_GRAPH_CONTRACTS = Object.freeze({
+  'g-20261021-081d9a': { snapshot: '2026-10-21-money-work-retirement-next-e0335', at: '2026-10-22T00:30:00+09:00', intentId: 'I-T6-05', slug: 'age-learning',
+    admission: [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]] },
+  // manifestHash 재고정(2026-11-12 S3 P1) — 앞값 b5dc90be…. S3 가 src/lib/magazine-graph.ts(출처 overlay)를 바꿔 resolver 신원 해시만 달라졌다.
+  //   후보 · 관계 · 거절 · readiness 판정은 같다(파생 readinessHash 만 바뀜). resolver 신원 결박은 그대로다.
+  // 재고정(2026-11-13 S3 P1 수리) — 앞값 550049136a05…. 다른 필드는 resolver 해시 · 새 신원 입력 product.graphProvenanceRule
+  //   (identity · readiness inputs 양쪽) · 파생 readinessHash/readinessFileSha256 뿐이다. admissions · refused · graph · snapshot 은 같다.
+  'g-20261102-427d4d': { snapshot: '2026-11-02-money-work-age-learning-live', at: '2026-11-02T11:00:00+09:00', intentId: 'I-T6-03', slug: 'resume-age',
+    manifestHash: 'a60e0c367edcb73a43e35bfccab63937681b3d7fd90d9bf1e424e1a079ce3c3e', admission: [['I-T6-03', ['E-0338', 'E-0339'], 'E-0340', ['E-0093']]] },
+})
+/** 판 → 계약. 없으면 null (부른 쪽이 FAIL 로 센다 — SKIP 이 아니다) */
+export function realGraphContract(pointer, contracts = REAL_GRAPH_CONTRACTS) {
+  return Object.hasOwn(contracts, pointer) ? contracts[pointer] : null
+}
+/** 실제 snapshot 시험을 돌릴 수 있는가 — 계약 · snapshot 둘 다 있어야 한다. 아니면 부른 쪽이 FAIL 로 센다 */
+export function realSnapshotGate({ pointer, researchDir }) {
+  const c = realGraphContract(pointer)
+  const snap = c ? path.join(researchDir, 'reconciled', c.snapshot) : null
+  return { contract: c, snapshot: snap, ok: Boolean(c) && fs.existsSync(snap) }
+}
+expect('⑪ 판별 계약 자기 시험 — 모르는 판은 계약 없음(null)', realGraphContract('g-20990101-000000'), null)
+expect('⑪ 판별 gate 자기 시험 — 모르는 판 · snapshot 없는 연구는 실행 불가(FAIL 로 센다)',
+  [realSnapshotGate({ pointer: 'g-20990101-000000', researchDir: REAL_RESEARCH }).ok, realSnapshotGate({ pointer: 'g-20261102-427d4d', researchDir: path.join(REPO, 'no-such-research') }).ok], [false, false])
+expect('⑪ 판별 계약 자기 시험 — 알려진 판은 snapshot 을 준다', realGraphContract('g-20261102-427d4d')?.snapshot, '2026-11-02-money-work-age-learning-live')
 if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
   console.log('⑪ 실제 연구 정본 (읽기만)')
   for (const f of ['m3-pipeline.mjs', 'm3-product.mjs']) {
@@ -1145,22 +1175,26 @@ if (fs.existsSync(path.join(REAL_RESEARCH, lib.ADMISSION_FILES.ledger))) {
   const v = lib.verifyAdmissionState({ researchDir: REAL_RESEARCH, repoDir: REPO })
   expect('실제 장부 — receipt 또는 KNOWN_LEGACY 로만 설명된다 (UNKNOWN 0 · 문제 0)', [v.classes.UNKNOWN, v.problems], [0, []])
   const pointer = /from '\.\/(g-[a-z0-9-]+)'/.exec(fs.readFileSync(path.join(REPO, lib.PRODUCT_FILES.graphCurrent), 'utf8'))?.[1]
-  if (fs.existsSync(REAL_SNAPSHOT) && pointer === 'g-20261021-081d9a') {
+  const gate = realSnapshotGate({ pointer, researchDir: REAL_RESEARCH })
+  const c = gate.contract
+  const realSnapshot = gate.snapshot
+  expect(`실제 snapshot dry-run — 제품 current ${pointer} 의 판별 계약과 snapshot 이 있다 (없으면 SKIP 이 아니라 FAIL)`, gate.ok, true)
+  if (gate.ok) {
     const pre = snapshot(path.join(REAL_RESEARCH, 'contract'))
-    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: REAL_SNAPSHOT, at: '2026-10-22T00:30:00+09:00' })
-    expect('실제 dry-run — readiness 시각 = --at(다음 날 00:30) · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], ['2026-10-22T00:30:00+09:00', 'g-20261021-081d9a'])
-    // 🔴 시점 사실을 고정하지 않는다 — 실제 receipt 가 I-T6-05 를 이미 편입했는지 읽고, 두 상태 각각 정확한 값을 본다
-    //    (2026-10-22 사람 승인 apply 뒤 「후보 I-T6-05 하나」는 낡은 사실이 됐다 — 이제 재편입 거부가 지켜야 할 불변식이다)
-    const admittedNow = lib.readReceipts(REAL_RESEARCH).some(({ text }) => JSON.parse(text).manifest?.admissions?.some((a) => a.intentId === 'I-T6-05' && a.slug === 'age-learning'))
+    const m = await lib.buildManifest({ repoDir: REPO, researchDir: REAL_RESEARCH, snapshotDir: realSnapshot, at: c.at })
+    expect('실제 dry-run — readiness 시각 = 계약 시각 · 판 이름 = 제품 current', [m.readiness.inputs.effectiveAt, m.readiness.inputs.graphVersion], [c.at, pointer])
+    // 🔴 시점 사실을 고정하지 않는다 — 실제 receipt 가 계약 intent 를 이미 편입했는지 읽고, 두 상태 각각 정확한 값을 본다
+    const admittedNow = lib.readReceipts(REAL_RESEARCH).some(({ text }) => JSON.parse(text).manifest?.admissions?.some((a) => a.intentId === c.intentId && a.slug === c.slug))
     if (!admittedNow) {
-      expect('실제 snapshot dry-run(편입 전) — 후보 I-T6-05 하나 · E-0188 · E-0329 + E-0100 · reverse E-0099',
-        m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), [['I-T6-05', ['E-0188', 'E-0329'], 'E-0100', ['E-0099']]])
+      expect(`실제 snapshot dry-run(편입 전) — 후보 ${c.intentId} 하나 · 계약 direct · discovery · reverse`,
+        m.admissions.map((a) => [a.intentId, a.direct.map((x) => x.edgeId), a.discovery?.edgeId, a.reverse]), c.admission)
+      if (c.manifestHash) expect('실제 snapshot dry-run(편입 전) — manifest hash = 계약', m.hash, c.manifestHash)
     } else {
-      expect('실제 snapshot dry-run(편입 뒤) — 후보 0 · I-T6-05 는 ALREADY_ADMITTED 로 거부 (재편입 없음)',
-        [m.admissions.length, m.refused.filter((r) => r.intentId === 'I-T6-05').map((r) => [r.slug, r.why.includes('ALREADY_ADMITTED')])], [0, [['age-learning', true]]])
+      expect(`실제 snapshot dry-run(편입 뒤) — 후보 0 · ${c.intentId} 는 ALREADY_ADMITTED 로 거부 (재편입 없음)`,
+        [m.admissions.length, m.refused.filter((r) => r.intentId === c.intentId).map((r) => [r.slug, r.why.includes('ALREADY_ADMITTED')])], [0, [[c.slug, true]]])
     }
     expect('실제 dry-run — 연구 contract 쓰기 0', JSON.stringify(snapshot(path.join(REAL_RESEARCH, 'contract'))) === JSON.stringify(pre), true)
-  } else console.log('  SKIP 실제 snapshot dry-run — 제품 graph 가 g-20261021-081d9a 가 아니거나 snapshot 이 없다 (통과로 세지 않는다)')
+  }
 } else {
   console.log('⑪ 실제 연구 정본 — SKIP (연구 디렉터리가 없다 · fixture Ⓐ~Ⓘ 가 같은 반례를 본다)')
 }

@@ -13,6 +13,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 /** 🔴 fixture 전용 합성 말투 자산 — 운영 자산을 읽지도 복사하지도 않는다 */
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { clearPriorDraftArtifacts } from './lib/fake-prior-artifacts.mjs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -329,7 +330,13 @@ check('🔴 🔴 **700 버퍼 · STOCK_BANDS 를 실행 경로(공급 러너 · 
 })())
 check('🔴 🔴 **공급 러너가 수요를 정본 JIT 함수로 만든다(관제와 같은 함수)**', (() => {
   const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-  return /jit = \{ \.\.\.jitCoverageOf\(view, opts\.now\)/.test(runner) && /const policy = judgeJitDemand\(jitIn\)/.test(runner)
+  const code = runner.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  return /jit = \{ \.\.\.jitCoverageOf\(view, opts\.now\)/.test(code)
+    && /const basePolicy = judgeJitDemand\(jitIn\)/.test(code)
+    && (code.match(/judgeJitDemand\(/g) ?? []).length === 1
+    && /const policy = recoveryIntent === null\s*\? basePolicy\s*: recoveryJitDemand\(basePolicy, recoveryIntent\.deficit, jitIn !== null\)/.test(code)
+    && (code.match(/recoveryJitDemand\(/g) ?? []).length === 1
+    && /recoveryIntent = validateStageRecoveryRuntimeEnv\(process\.env, wallNow\)/.test(code)
 })())
 check('🔴 재고는 회차를 막지 않는다 — judgeProcessRun 이 재고를 인자로 받지 않는다', (() => {
   const src = readFileSync('src/lib/supply-process.ts', 'utf-8')
@@ -396,13 +403,28 @@ check('🔴 잠금 상태를 못 읽으면 통과시키지 않는다(fail-closed
   check('🔴 live 진입은 커널 lease(supplyEntry) 하나 — 쓸 수 있는 실행만 lease 를 지나고 관측 실행은 probe 만 한다',
     (code.match(/supplyEntry\(/g) ?? []).length === 1
     && /return mayWriteRunState\(\{ live: LIVE, killOpen \}\) \? viaLease\(\) : main\(null\)/.test(code)
-    && /body: \(proof\) => main\(proof\)/.test(code) && /probeSupplyLease\(process\.env\)/.test(code))
+    && /body: async \(proof\) => \{\s*if \(recoveryClaim !== null\) \{\s*validateStageRecoveryRuntimeEnv\(process\.env, new Date\(\)\)\s*claimStageRecoverySupplyStart\(\{ claim: recoveryClaim, supplyRunId: runIdOf\(RUN_AT\), now: new Date\(\) \}\)\s*\}\s*const code = await main\(proof\)\s*if \(code === 0 && recoveryClaim !== null\) \{\s*writeStageRecoverySupplyReceipt\(\{\s*claim: recoveryClaim, supplyRunId: runIdOf\(RUN_AT\), now: new Date\(\),\s*\}\)\s*\}\s*return code\s*\}/.test(code)
+    && (code.match(/main\(proof\)/g) ?? []).length === 1
+    && (code.match(/claimStageRecoverySupplyStart\(/g) ?? []).length === 1
+    && (code.match(/writeStageRecoverySupplyReceipt\(/g) ?? []).length === 1
+    && /\.\.\.\(recoveryClaim === null \? \{\} : \{ trigger: 'recovery' as const \}\)/.test(code)
+    && /if \(recoveryClaim !== null\) \{\s*const wallNow = new Date\(\)\s*if \(!LIVE \|\| proof === null \|\| !killOpen\) \{\s*throw new Error/.test(code)
+    && code.indexOf('proof === null || !killOpen') < code.indexOf('new PrismaClient()')
+    && /probeSupplyLease\(process\.env\)/.test(code))
   check('🔴 쓸 수 있는 실행인데 lease 증명이 없으면 LOCKED 로 막는다(fail-closed)',
     /\} else if \(proof === null\) \{\s*\n\s*lockView = 'unreadable'/.test(code))
   check('🔴 DB 클라이언트는 본체(main) 안에서만 — 진입부 · 모듈 최상위에 PrismaClient 생성 0',
     (code.match(/new PrismaClient\(\)/g) ?? []).length === 1
     && code.indexOf('new PrismaClient()') > code.indexOf('async function main(proof: LeaseProof | null)')
     && code.indexOf('new PrismaClient()') < code.indexOf('async function entry()'))
+  check('🔴 ProcessRun은 커널 lease 안에서 읽은 실행 기원을 정본 shadow tag로 저장한다',
+    /const tokenShadow = proof === null \? null : runTokenShadowFromEnv\(process\.env, new Date\(\)\)/.test(code)
+    && /runTokenShadow: shadowTagOf\(tokenShadow\)/.test(code))
+  check('🔴 실제 ProcessRun writer는 관통검사와 같은 builder·원자 writer를 사용한다',
+    /import \{ createProcessRunRecord, writeProcessRunRecord \} from '\.\/lib\/process-run-record\.mjs'/.test(code)
+    && /const record: ProcessRun = createProcessRunRecord\(\{/.test(code)
+    && /const save = \(\): void => \{ writeProcessRunRecord\(runPath, record\) \}/.test(code)
+    && !/writeAtomic\(runPath, record\)/.test(code))
   check('🔴 자식 단계는 npx 를 거치지 않고 같은 Node · loader 로 — fd 9 는 lease 증명이 있을 때만(stageSpawnOf)',
     /const how = stageSpawnOf\(script, args, STAGE_LEASE\)/.test(code) && !/spawn\('npx'/.test(code))
   check('🔴 main 안에 process.exit 이 없다 — 예외도 진입부 finally 를 지난다', (() => {
@@ -1002,12 +1024,18 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({ runId: 'R1', takenAt: new Date(), rows })), 'utf-8')
   }
   /** 🔴 가짜 provider 를 끼우고 실제 스크립트를 돌린다 — 호출 수를 정확히 센다 */
-  const runWithFake = (args: readonly string[]): {
+  const runWithFake = (args: readonly string[], opts: { keepPriorArtifacts?: boolean } = {}): {
     code: number | null; out: string; calls: number; countCalls: number
   } => {
     writeFileSync(logPath, '', 'utf-8')
     // 🔴 캐시는 매번 비운다 — 캐시 hit 이 호출 수를 가려서는 안 된다
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    /**
+     * 🔴 **지난 사례의 생성 결과도 매번 비운다** (2026-11-11 retry-authority-v7 · PR #838 CI) — `clearPriorDraftArtifacts`.
+     *    격리하지 않으면 "형제 차단이 호출을 줄였나" 라는 이 블록의 질문이 앞 사례의 채택(v7 채택 재생성 0)에 가려지고
+     *    결과가 사례 순서에 따라 갈린다. 채택 재생성 0 자체는 아래 ⓪-b 가 지우지 않은 채 따로 본다.
+     */
+    if (opts.keepPriorArtifacts !== true) clearPriorDraftArtifacts(dd)
     /**
      * 🔴 `npx` 가 아니라 **로컬 tsx 를 직접** 부른다 — HOME 을 바꾸면 npx 가
      *    캐시를 못 찾아 네트워크로 나갈 수 있다. 이 검사는 네트워크 0 이어야 한다.
@@ -1096,6 +1124,12 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     /AUTO_ADOPT [1-9]/.test(control.out))
   check('🔴 [FP] 🔴 자산 부재로 멈추지 않았다 — 이 검사가 개인 Mac 자산에 기대지 않는다',
     !/쓸 Persona 가 없어/.test(control.out))
+
+  // ⓪-b 🔴 지난 결과를 그대로 두면 — 채택 · 결론 원천은 유료로 다시 만들지 않는다(실제 process · v7 채택 재생성 0)
+  const again = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'],
+    { keepPriorArtifacts: true })
+  check('🔴 [FP] 🔴 통제 사례의 채택 · 결론 원천을 다시 돌리면 둘 다 CONCLUDED · provider 호출 **정확히 0회**',
+    again.code === 0 && again.calls === 0 && (again.out.match(/ — CONCLUDED: /g) ?? []).length === 2)
 
   // ⓐ 대상 안 미발행 형제 둘 → 호출 0
   writeSnap([

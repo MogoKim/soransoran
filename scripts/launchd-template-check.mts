@@ -41,6 +41,7 @@ import {
   COMMENT_RUNNER_ARGS, COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SCRIPT, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES,
   renderCommentRunnerPlist,
 } from './lib/persona-comment-runner-template'
+import { stageControllerSlots } from './lib/ops-loop-templates'
 
 const DIR = 'docs/operations/launchd'
 
@@ -260,12 +261,15 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
   /**
    * 🔴 **네이버 요청량은 `planCafeRun` 정본과 같아야 한다** (2026-09-14).
    *    옛 `SOURCE_FACTS`(1페이지·10건)로 계산하면 remonterrace 60 · wgang 48 이 나왔다 —
-   *    실제는 135 · 84 다. 값을 여기 다시 적지 않고 **정본과 대조**한다.
+   *    실제 요청은 목록·상세뿐 아니라 회차별 회원 확인까지 포함한다. 값을 여기 다시 적지 않고
+   *    **정본과 대조**한다.
    */
   for (const cafeId of ['remonterrace', 'wgang'] as const) {
     const cp = planCafeRun({ cafeId })
     check(`🔴 ${cafeId} 요청량이 planCafeRun 정본과 같다 (${cp.requestsPerDay}/day)`,
       requestsPerRunOf(cp.source) * cp.runsPerDay === cp.requestsPerDay)
+    check(`🔴 ${cafeId} 회원 확인까지 합친 요청이 하루 상한 안이다`,
+      cp.requestsPerDay + cp.memberCheckPerDay <= cp.limitPerDay)
     check(`🔴 ${cafeId} 상세 상한이 정본과 같다 (${cp.detailPerRun * cp.runsPerDay}/day)`,
       detailPerDayOf(factsOf(cp.source), 'start') === cp.detailPerRun * cp.runsPerDay)
   }
@@ -274,11 +278,11 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
     return requestsPerRunOf('navercafe:remonterrace') === rm.listPerRun + rm.detailPerRun
       && requestsPerRunOf('82cook') === ROBOTS_REQUESTS_PER_RUN + 3 + 0
   })())
-  /** 🔴 configured detail ceiling — 82cook 85 + remonterrace 55 + wgang 64 */
-  check('🔴 설정된 상세 상한은 204/day 다', configuredDetailCeilingPerDay('start') === 204)
+  /** 🔴 configured detail ceiling — 82cook 85 + remonterrace 55 + wgang 80 */
+  check('🔴 설정된 상세 상한은 220/day 다', configuredDetailCeilingPerDay('start') === 220)
   check('🔴 근거 보정 추정치는 상한과 다른 이름이다 — 관측 생산량이 아니다', (() => {
     const src = readFileSync('src/lib/collect-schedule.ts', 'utf-8')
-    return evidenceAdjustedDetailPerDay('start') === 187
+    return evidenceAdjustedDetailPerDay('start') === 203
       && /evidence-adjusted planning estimate/.test(src)
       && !/export function effectiveDetailPerDay/.test(src)
   })())
@@ -321,15 +325,15 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
 }
 
 /**
- * 🔴 **확정 운영 일정** (2026-09-11) — 노트북을 켜 두는 07:00~22:30 안에 둔다.
- *    돌지 않는 슬롯은 능력이 아니다. 새벽 슬롯을 두면 예약만 있고 회차는 없다.
+ * 🔴 **확정 운영 일정** (2026-10-31) — D20 target date의 재료가 06:15 공급 전에 들어온다.
+ *    새벽 슬롯은 AC 전원 · 로그인 · 덮개 열림 · keep-awake가 유지되는 상시 호스트 전용이다.
  */
 {
   const want: Record<string, string> = {
     'com.soransoran.raw-collect-82cook.plist.template': '07:00 10:00 13:00 16:00 19:00',
     'com.soransoran.supply-collect-82cook-thin.plist.template': '07:40 10:40 13:40 16:40 19:40',
-    'com.soransoran.navercafe-collect-remonterrace-multi.plist.template': '07:30 10:30 13:30 16:30 21:30',
-    'com.soransoran.navercafe-collect-wgang-multi.plist.template': '09:30 11:30 15:30 20:30',
+    'com.soransoran.navercafe-collect-remonterrace-multi.plist.template': '00:30 02:30 05:30 13:30 21:30',
+    'com.soransoran.navercafe-collect-wgang-multi.plist.template': '01:30 03:30 04:30 11:30 20:30',
     'com.soransoran.supply-process.plist.template': '06:15 08:15 12:15 14:15 17:15 21:15 22:15',
   }
   const fmt = (a: readonly { hour: number; minute: number }[]): string =>
@@ -344,13 +348,44 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
     check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 중복 시각이 없다`,
       new Set(arr).size === arr.length)
   }
-  /** 🔴 노트북이 꺼져 있는 시간에 슬롯을 두지 않는다 */
-  for (const [f] of Object.entries(want)) {
-    const hs = calendarSlots(readFileSync(join(DIR, f), 'utf-8')).map((s2) => s2.hour)
-    const earliest = f === 'com.soransoran.supply-process.plist.template' ? 6 : 7
-    check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 전부 ${earliest.toString().padStart(2, '0')}~22시 안이다`,
-      hs.every((h) => h >= earliest && h <= 22))
+  const firstController = Math.min(...stageControllerSlots().map((s2) => s2.hour * 60 + s2.minute))
+  const supply0615 = SUPPLY_PROCESS_SLOTS.some((s2) => s2.hour === 6 && s2.minute === 15)
+  const preflightRuns = (['navercafe:remonterrace', 'navercafe:wgang'] as const)
+    .flatMap((id) => planSlots(id, 'start').map((s2) => ({ id, minute: s2.hour * 60 + s2.minute })))
+    .filter((x) => x.minute < 6 * 60 + 15)
+  /** 🔴 운영값과 반례가 같은 판정 함수를 지난다 — fixture 전용 복제품을 따로 두지 않는다. */
+  const orderProblems = (
+    runs: readonly { id: 'navercafe:remonterrace' | 'navercafe:wgang'; minute: number }[],
+    hasSupply0615 = supply0615,
+    controllerMinute = firstController,
+  ): string[] => {
+    const before = runs.filter((x) => x.minute < 6 * 60 + 15)
+    const details = before.reduce((n, x) => n + factsOf(x.id).detailPerRun, 0)
+    const problems: string[] = []
+    if (!hasSupply0615 || 6 * 60 + 15 >= controllerMinute) problems.push('ORDER_INVALID')
+    if (before.length < 6) problems.push('PRE_SUPPLY_RUN_SHORT')
+    if (details < 81) problems.push('PRE_SUPPLY_DETAIL_SHORT')
+    if (before.length === 0 || 6 * 60 + 15 - Math.max(...before.map((x) => x.minute)) < 45) problems.push('SUPPLY_BUFFER_SHORT')
+    if (new Set(runs.map((x) => x.minute)).size !== runs.length) problems.push('SOURCE_OVERLAP')
+    return problems
   }
+  const currentOrderProblems = orderProblems(preflightRuns)
+  check('🔴 D20 target-date 순서 — 네이버 수집 6회 → 06:15 공급 → 07:00 controller',
+    currentOrderProblems.length === 0)
+  check('🔴 07:00 전 네이버 상세 이론 상한은 81건이다 — 실제 신규 수집량은 자연 회차에서 따로 잰다',
+    preflightRuns.reduce((n, x) => n + factsOf(x.id).detailPerRun, 0) === 81)
+  check('🔴 마지막 네이버 수집과 06:15 공급 사이 buffer가 45분 이상이다',
+    !currentOrderProblems.includes('SUPPLY_BUFFER_SHORT'))
+  check('🔴 반례: 06:15 공급이 없으면 순서 결함을 검출한다',
+    orderProblems(preflightRuns, false).includes('ORDER_INVALID'))
+  check('🔴 반례: 사전 회차 하나를 지우면 부족을 검출한다',
+    orderProblems(preflightRuns.slice(1)).includes('PRE_SUPPLY_RUN_SHORT'))
+  check('🔴 반례: 05:30을 05:45로 밀면 공급 buffer 부족을 검출한다',
+    orderProblems(preflightRuns.map((x) => x.minute === 5 * 60 + 30 ? { ...x, minute: 5 * 60 + 45 } : x))
+      .includes('SUPPLY_BUFFER_SHORT'))
+  check('🔴 반례: 두 source 시각이 겹치면 검출한다',
+    orderProblems(preflightRuns.map((x, i) => i === 1 ? { ...x, minute: preflightRuns[0]!.minute } : x))
+      .includes('SOURCE_OVERLAP'))
 }
 /**
  * 🔴 **수집 job 과 처리 job 이 서로를 부르지 않는다** (2026-09-11).
@@ -468,7 +503,7 @@ check('🔴 remonterrace 와 wgang 의 실행 시각이 겹치지 않는다', ((
   const a = slots('remonterrace')
   const b = slots('wgang')
   const key = (x: { hour: number; minute: number }): string => `${x.hour}:${x.minute}`
-  // 🔴 회차 수는 카페마다 다르다(remonterrace 5 · wgang 4) — 겹침만 본다
+  // 🔴 두 카페 모두 5회다. 같은 전역 lock을 공유하므로 슬롯 겹침도 막는다
   return a.length > 0 && b.length > 0
     && a.every((x) => !b.some((y) => key(x) === key(y)))
 })())

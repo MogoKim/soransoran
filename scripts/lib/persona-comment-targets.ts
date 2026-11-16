@@ -34,6 +34,8 @@ import { judgeSourceContext } from '../../src/lib/persona-comment-source-context
 import { dedupKeyOf } from '../../src/lib/persona-comment-queue'
 import { judgeRealMember } from '../../src/lib/real-member-gate'
 import { judgeGateInputs } from '../../src/lib/persona-comment-gate-report'
+import { postPersonaKeyOf } from '../../src/lib/persona-comment-attempt-policy'
+import { judgeStaticVoiceCapability } from '../../src/lib/persona-voice-repeat'
 import type { PostAuthorFacts } from '../../src/lib/persona-comment-release'
 import { describeGateInput, toGateInput } from './persona-comment-bridge'
 import type { PipelineTarget } from './persona-comment-pipeline'
@@ -63,6 +65,11 @@ export type SourcePost = {
   visibility: NonNullable<PostAuthorFacts['visibility']>
   /** 🔴 `personaCode` 는 "누가 달았나" 다 — 같은 사람이 두 번 달지 않게 하는 근거다 */
   comments: readonly { origin: string; content: string; personaCode: string | null }[]
+  /**
+   * 🔴 삭제 이력을 포함해 이 글에서 한 번이라도 말한 Persona 코드다.
+   * 삭제는 화면의 빈자리는 돌려주지만 같은 Persona의 발화 자격은 돌려주지 않는다.
+   */
+  personaCodesEverOnPost: readonly string[]
 }
 
 export type SourcePersona = BuildPersona & {
@@ -178,6 +185,8 @@ export type MaterializedTarget = {
   gate: GateContext
   /** voice 근거로 쓰는 이 persona 의 실제 발화 */
   recentTexts: readonly string[]
+  /** 🔴 글이 공개된 시각 — 첫 댓글 시도 기억의 TTL 기준이다. 모르면 null */
+  postPublishedAtMs: number | null
   /**
    * 🔴 **필드를 다 넘겼는가.** 유료 호출을 막는 것은 **이것**이다 —
    *    못 읽은 입력으로 부르면 돈을 쓰고도 잴 수 없다.
@@ -229,7 +238,16 @@ export type MaterializeResult = {
     personasSeedComplete: number
     planned: number
     built: number
+    /** 🔴 `attemptedCombos` 로 제외된 조합 수 — 0 이 아니면 "이미 보낸 것 때문에 줄었다" 를 말할 수 있다 */
+    attemptExcluded: number
+    /** 🔴 ⑧ 로 막혀 그 글에서 뺀 글 × Persona 수(역할 무관) — `attemptExcluded` 에도 들어간다 */
+    voiceAttemptExcluded: number
   }
+  /**
+   * 🔴 **후보와 무관하게 ⑧ 이 막는 Persona** — 유료 호출 전에 planner 가 뺐다(`VOICE_STATIC_LOCKED`).
+   *    지금 축은 seed 공유 하나다. 반복 이력만으로는 빼지 않는다(후보 귀속 판정이라 영구 잠금이 없다).
+   */
+  voiceStaticLocked: readonly { code: string; codes: readonly string[] }[]
 }
 
 /** identity JSON 의 생활사 축 — 🔴 없으면 `undefined`. 0 으로 보정하지 않는다 */
@@ -270,6 +288,18 @@ export async function materializeTargets(args: {
   /** 본문 요약 길이 — 🔴 원문 전문은 나가지 않는다 */
   digestChars?: number
   commentDigestChars?: number
+  /**
+   * 🔴 **이미 provider 로 보낸 정확한 조합**(`dedupKeyOf`) — 첫 댓글 lane 만 넘긴다. 생략하면 옛 동작 그대로다.
+   *    planner 의 `feasible` 단계에서 제외한다 — 고른 뒤에 지우면 그 글의 호출 기회를 잃는다.
+   *    🔴 ⑧ 밖의 실패(①~⑦ · ⑨)는 조합 범위다 — 같은 Persona 의 다른 역할은 다른 조합이라 남는다.
+   *       ⑧ 이 막은 실패는 아래 `voiceFailedPostPersonas` 가 그 글에서 그 Persona 의 모든 역할을 뺀다.
+   */
+  attemptedCombos?: ReadonlySet<string>
+  /**
+   * 🔴 **이 60분 window 안에 ⑧ 로 막힌 글 × Persona**(`postPersonaKeyOf`) — 첫 댓글 lane 만 넘긴다.
+   *    ⑧ 의 원인은 역할이 아니라 말투라, 그 글에서는 그 Persona 의 다른 역할도 뺀다. 다른 글은 그대로다.
+   */
+  voiceFailedPostPersonas?: ReadonlySet<string>
 }): Promise<MaterializeResult> {
   const digestChars = args.digestChars ?? 600
   const commentDigestChars = args.commentDigestChars ?? 60
@@ -332,9 +362,7 @@ export async function materializeTargets(args: {
     authorPersonaCode: p.authorPersonaCode,
     memberComments: p.comments.filter((c) => c.origin === 'MEMBER' || c.origin === 'GUEST').length,
     personaComments: p.comments.filter((c) => c.origin === 'PERSONA').length,
-    personaCodesOnPost: p.comments
-      .map((c) => c.personaCode)
-      .filter((code): code is string => code !== null),
+    personaCodesOnPost: p.personaCodesEverOnPost,
     openQueuePersonaCodes: openQueueByPost.get(p.id) ?? [],
     publishedAtMs: p.publishAtMs,
     // 🔴 가입인사는 대화를 여는 자리가 아니다
@@ -365,6 +393,24 @@ export async function materializeTargets(args: {
 
   const postById = new Map(posts.map((p) => [p.id, p]))
   const personaByCode = new Map(personas.map((p) => [p.code, p]))
+
+  /**
+   * 🔴 **seed 공유 수는 planner 전에 한 번 읽는다** (2026-11-07). 고정 배정의 Persona 단위 값이라 후보와 무관하다 —
+   *    공유 2 이상이면 어떤 후보도 ⑧ 을 통과하지 못하므로(review 도 적재를 막는다) 고르는 순간에 뺀다.
+   *    못 셌으면(`null`) 뺀다 — 아래 본 루프의 gap(유료 호출 차단)과 같은 fail-closed 다.
+   */
+  const seedShareByCode = new Map<string, number | null>()
+  for (const pe of personas) seedShareByCode.set(pe.code, await args.source.seedUseCount(pe.code))
+  // 🔴 못 셌으면 그 사람만 빼는 것으로 끝내지 않는다 — 회차 전체의 유료 호출을 막는다(부분 호출 없음 · 옛 계약 그대로)
+  for (const pe of personas) {
+    if (pe.status === 'active' && seedShareByCode.get(pe.code) === null) gaps.push(`seedUseCount (${pe.code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
+  }
+  const staticVerdictOf = (code: string): ReturnType<typeof judgeStaticVoiceCapability> =>
+    judgeStaticVoiceCapability({ seedShare: seedShareByCode.get(code) ?? null })
+  const voiceStaticLocked = personas
+    .filter((pe) => pe.status === 'active')
+    .map((pe) => ({ code: pe.code, codes: staticVerdictOf(pe.code).codes }))
+    .filter((x) => x.codes.length > 0)
 
   /**
    * 🔴 **입력 생성은 한 함수다** (2026-09-15).
@@ -413,6 +459,10 @@ export async function materializeTargets(args: {
     memory: { has: false, note: '' },
   })
 
+  /** 🔴 이번 계획에서 `attemptedCombos` 때문에 빠진 조합 — 자격은 있었으나 이미 보낸 것만 센다 */
+  const attemptExcluded = new Set<string>()
+  /** 🔴 ⑧ 로 막혀 그 글에서 뺀 글 × Persona */
+  const voiceAttemptExcluded = new Set<string>()
   const plan = planCommentDistribution({
     posts: plannerPosts,
     personas: plannerPersonas,
@@ -432,6 +482,24 @@ export async function materializeTargets(args: {
       const pe = personaByCode.get(combo.personaCode)
       // 🔴 모르면 "만들 수 있다" 고 하지 않는다 — 본 루프가 어차피 걸러낸다
       if (pr === undefined || pe === undefined) return []
+      // 🔴 이미 보낸 조합은 입력을 만들기 전에 뺀다 — planner 가 같은 글의 다음 조합으로 이어 간다
+      const comboKey = dedupKeyOf(combo.postId, combo.personaCode, combo.reactionRole)
+      // 🔴 후보와 무관하게 ⑧ 이 막는 Persona — 입력을 만들기 전 · 돈을 쓰기 전에 뺀다
+      const fixed = staticVerdictOf(combo.personaCode)
+      if (!fixed.capable) {
+        return [{ code: 'VOICE_STATIC_LOCKED', message: `${combo.personaCode} 는 후보와 무관하게 ⑧ 이 막는다 [${fixed.codes.join(',')}]` }]
+      }
+      // 🔴 이 글에서 ⑧ 로 막힌 Persona 는 역할만 바꿔 다시 보내지 않는다
+      const ppKey = postPersonaKeyOf(combo)
+      if (args.voiceFailedPostPersonas?.has(ppKey) === true) {
+        voiceAttemptExcluded.add(ppKey)
+        attemptExcluded.add(comboKey)
+        return [{ code: 'PERSONA_VOICE_ATTEMPTED', message: `${combo.personaCode} 는 이 글의 60분 window 안에서 이미 ⑧ 로 막혔다 — 다른 역할로 다시 보내지 않는다` }]
+      }
+      if (args.attemptedCombos?.has(comboKey) === true) {
+        attemptExcluded.add(comboKey)
+        return [{ code: 'COMBO_ALREADY_ATTEMPTED', message: `${combo.personaCode}/${combo.reactionRole} 는 이 글의 60분 window 안에서 이미 보냈다` }]
+      }
       const probe = buildFor(pr, pe, combo.reactionRole)
       return probe.ok ? [] : probe.blocks.map((b) => ({ code: b.code as never, message: b.message }))
     },
@@ -452,7 +520,8 @@ export async function materializeTargets(args: {
       continue
     }
 
-    const seedUseCount = await args.source.seedUseCount(pe.code)
+    // 🔴 planner 전에 읽은 값을 그대로 쓴다 — 고를 때와 판정할 때 seed 공유 수가 같다
+    const seedUseCount = seedShareByCode.get(pe.code) ?? null
     /**
      * 🔴 **출처 문맥을 실제로 판정한다.** 고정 false 를 적어 넣지 않는다 —
      *    그 값은 관측이 아니라 주장이었고, ⑨ 가 올릴 근거를 영영 못 받았다.
@@ -502,7 +571,7 @@ export async function materializeTargets(args: {
           hasOpenQueue: openDedupKeys.has(dedupKeyOf(pr.id, pe.code, item.reactionRole)),
           personaCommentsOnPost: pr.comments.filter((c) => c.origin === 'PERSONA').length,
           // 🔴 수가 아니라 "이 사람이 이미 달았나" — 적재 계약이 따로 묻는 축이다
-          personaAlreadyOnPost: pr.comments.some((c) => c.personaCode === pe.code),
+          personaAlreadyOnPost: pr.personaCodesEverOnPost.some((code) => code === pe.code),
           postStatus: pr.visibility.status,
           personaActive: pe.status === 'active',
           personaRealMember: judgeRealMember({
@@ -513,12 +582,12 @@ export async function materializeTargets(args: {
       },
       gate,
       recentTexts,
+      postPublishedAtMs: pr.publishAtMs,
       fieldsComplete: readiness.fieldsComplete,
       gateReady: readiness.ok,
       gateMissing: readiness.missing,
       willNotRun: readiness.willNotRun,
     })
-    if (seedUseCount === null) gaps.push(`seedUseCount (${pe.code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
     if (ctx.operational === null) {
       // 🔴 판정 불가는 통과가 아니다 — 부르기 전에 막는다
       distributionBlockers.push(`sourceIsCafeOperational (${pr.id.slice(0, 8)} — ${ctx.reason})`)
@@ -546,6 +615,9 @@ export async function materializeTargets(args: {
       personasSeedComplete: plannerPersonas.filter((p) => p.seedComplete).length,
       planned: plan.items.length,
       built: targets.length,
+      attemptExcluded: attemptExcluded.size,
+      voiceAttemptExcluded: voiceAttemptExcluded.size,
     },
+    voiceStaticLocked,
   }
 }
