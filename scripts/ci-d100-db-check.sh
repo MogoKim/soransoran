@@ -69,6 +69,8 @@ npm run auto-ready:defect-resolution-db-check
 npm run check:comment-thread-db
 # 운영 직접 작성 · 작성자 대댓글 — 원글 작성자 고정 · 원자성 · 중복 · 집계 불변을 실제 트랜잭션으로 잰다(2026-10-21)
 npm run operator:compose-db-check
+# 답 기다리는 글 — 실회원 글 조회 조건 · 실제 운영 댓글 저장과의 연결 · 7일·200편 경계(2026-11-16)
+npm run member-response:db-check
 npm run persona:comment-loop-db-check
 npm run persona:followup-db-check
 npm run persona:autogen-db-check

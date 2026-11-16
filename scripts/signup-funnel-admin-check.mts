@@ -202,8 +202,13 @@ const showAt = (rev: string, p: string) => execFileSync('git', ['show', `${rev}:
 const navNow = read(P.nav)
 const navBase = showAt(GM_BASE, P.nav)
 const opsItems = (s: string) => [...code(s).matchAll(/\{ href: '([^']+)', label: '([^']+)' \}/g)].map((m) => `${m[1]}=${m[2]}`)
-check('운영 항목 7개 · 주소 · 이름 그대로(새 상위 메뉴 0)', opsItems(navNow).length === 7
-  && JSON.stringify(opsItems(navNow)) === JSON.stringify(opsItems(navBase)), opsItems(navNow).join(', '))
+// 🔴 과거 SHA 와의 바이트 동일 대신 지키려던 계약(목록 고정)을 리터럴로 직접 쓴다 — 정당한 확장은 이 목록을 고친다.
+//    2026-11-16 창업자 결정 ④: 「답 기다리는 글」 추가로 7 → 8.
+const OPS_EXPECTED = [
+  '/admin=운영 홈', '/admin/reports=신고', '/admin/responses=답 기다리는 글', '/admin/content=게시글',
+  '/admin/members=회원', '/admin/home=홈 노출', '/admin/banners=배너 관리', '/admin/compose=직접 작성',
+]
+check('운영 항목 8개 · 주소 · 이름 고정(새 상위 메뉴 0)', JSON.stringify(opsItems(navNow)) === JSON.stringify(OPS_EXPECTED), opsItems(navNow).join(', '))
 const fromIsCurrent = (s: string) => code(s).slice(code(s).indexOf('export function isCurrent'))
 check('현재 위치 판정(isCurrent) 그대로', fromIsCurrent(navNow).length > 0 && fromIsCurrent(navNow) === fromIsCurrent(navBase))
 const sidebar = read('src/components/admin/AdminNav.tsx')
@@ -276,7 +281,10 @@ check('낡은 정본 버전 번호 참조(v2.1 · v2.3 형태) 0', allText.every
 for (const p of COMPOSITION_FILES) {
   const now2 = read(p)
   const before = execFileSync('git', ['show', `${BEFORE_FIX}:${p}`], { encoding: 'utf8' })
-  check(`${p}: §11 참조 · 주석 밖 코드 diff 0`, now2.includes('회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11') && code(now2) === code(before))
+  // 🔴 예외는 한 줄 — customer-composition-check 의 운영 메뉴 개수 단언(7 → 8, 2026-11-16 답 기다리는 글).
+  //    메뉴 확장은 고객 구성 동작이 아니다. 그 줄만 양쪽에서 빼고 나머지는 그대로 바이트 대조한다.
+  const withoutNavCount = (s: string) => code(s).split('\n').filter((l) => !l.includes("check('운영 메뉴는")).join('\n')
+  check(`${p}: §11 참조 · 주석 밖 코드 diff 0`, now2.includes('회원가입 전환 영역 정본(docs/operations/MEMBER-CONVERSION-CANON.md) §11') && withoutNavCount(now2) === withoutNavCount(before))
 }
 
 console.log(`\n결과: ${pass} 통과 · ${fail} 실패`)
