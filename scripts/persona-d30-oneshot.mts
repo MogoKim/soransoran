@@ -210,7 +210,8 @@ async function main(): Promise<number> {
   let facts = await gather(expectedOld40)
   let verdict = judgeOneShot(facts)
   const waitEnd = oneShotWindowOf(facts.kstMinute)?.endMinute ?? -1
-  while (!verdict.go && verdict.code === 'JOB_RUNNING' && kstNow().minute < waitEnd) {
+  // 🔴 창 판정(`oneShotWindowOf`)과 같은 포함 경계(<=) — 창의 마지막 분(06:05 · 07:19)까지 다시 본다
+  while (!verdict.go && verdict.code === 'JOB_RUNNING' && kstNow().minute <= waitEnd) {
     log('wait-running-jobs', { running: facts.runningJobs })
     await new Promise((r) => setTimeout(r, 30_000))
     facts = await gather(expectedOld40)

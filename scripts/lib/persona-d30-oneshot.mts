@@ -144,10 +144,11 @@ export function judgeOneShot(f: OneShotFacts): OneShotVerdict {
   if (win.mode === 'pre-decision') {
     if (f.stage !== null) return no('STAGE_ALREADY_DECIDED', '그날 결정이 이미 있다 — 결정 전 창에서는 투입하지 않는다(07:05 창이 그 결정으로 판정한다)')
     const prev = previousKstDateOf(f.targetDate)
+    if (prev === null) return no('PREV_DATE_INVALID', `전날을 계산하지 못했다 — --date ${f.targetDate}`)
     if (f.previousStage === undefined) return no('PREV_STAGE_UNKNOWN', '전날 StageDecision 을 읽지 못했다(UNKNOWN · fail-closed)')
     if (f.previousStage === null) return no('PREV_STAGE_MISSING', '전날 StageDecision 행이 없다 — 이어 갈 controller 권위가 없다')
     s = f.previousStage
-    authorityDate = prev ?? ''
+    authorityDate = prev
   } else {
     if (f.stage === null) return no('STAGE_MISSING', '그날 StageDecision 행이 없다 — controller 확정 전에는 하지 않는다')
     s = f.stage

@@ -81,6 +81,7 @@ expectPre('06:59 (두 창 사이)', { kstMinute: 6 * 60 + 59 }, 'OUTSIDE_WINDOW'
 expectPre('그날 행이 이미 있다(PREPARE 여도)', { stage: base().stage }, 'STAGE_ALREADY_DECIDED')
 expectPre('그날 행이 이미 있다(TRIAL)', { stage: { ...base().stage!, state: 'TRIAL' } }, 'STAGE_ALREADY_DECIDED')
 expectPre('그날 행 판독 실패', { stage: undefined }, 'STAGE_UNKNOWN')
+expectPre('--date 가 실재하지 않는 날(2026-02-30)', { targetDate: '2026-02-30', kstDate: '2026-02-30' }, 'PREV_DATE_INVALID')
 expectPre('전날 행 판독 실패', { previousStage: undefined }, 'PREV_STAGE_UNKNOWN')
 expectPre('전날 행 없음', { previousStage: null }, 'PREV_STAGE_MISSING')
 expectPre('전날이 아니라 이틀 전 행', { previousStage: { ...base().previousStage!, kstDate: '2026-11-13' } }, 'STAGE_STALE')
