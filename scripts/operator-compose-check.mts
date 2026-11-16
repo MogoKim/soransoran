@@ -542,7 +542,10 @@ console.log('\n══════ ⑪ 작성자 대댓글 — 원글 작성자�
     /readWriter\(tx, input\.operatorWriterId\)/.test(src('src/lib/operator-compose-tx.ts')) && !/parentId/.test(src('src/lib/operator-compose-tx.ts')), true)
   const form = src('src/components/admin/OperatorComposeForm.tsx')
   expect('🔴 화면 — 대댓글 모드에는 writerId 입력이 없다', /\{mode !== 'reply' \? <input type="hidden" name="writerId"/.test(form), true)
-  expect('화면 — 대댓글 모드에는 작성자 선택창이 없다(고정 표시)', /\{mode !== 'reply' \? \(\s*<label className="flex flex-col gap-1">\s*<span[^>]*>누구 이름으로 쓸까요/.test(form) && /이 작성자 이름으로 대댓글이 등록됩니다\./.test(form), true)
+  expect('화면 — 대댓글 모드에는 작성자 선택창이 없다(고정 표시)', /\{mode !== 'reply' \? \(\s*<OperatorWriterPicker\b/.test(form) && /이 작성자 이름으로 대댓글이 등록됩니다\./.test(form), true)
+  const picker = src('src/components/admin/OperatorWriterPicker.tsx')
+  expect('🔴 고르는 화면 — "누구 이름으로 쓸까요" · writerId 입력은 폼에만(피커는 값을 고르기만) · 이 글에 씀은 표시만',
+    [/누구 이름으로 쓸까요/.test(picker), /name="writerId"/.test(picker), /이 글에 씀/.test(picker), /disabled/.test(picker)], [true, false, true, false])
 
   // 🔴 Persona 대상 지정 — 회원 댓글 = MEMBER · GUEST 이고 personaId · operatorWriterId 가 없는 것
   const counts = targetCommentCounts([

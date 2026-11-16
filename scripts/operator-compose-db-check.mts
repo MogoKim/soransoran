@@ -48,7 +48,7 @@ import { createOperatorReplyTx, OPERATOR_REPLY_MAX_ATTEMPTS, OPERATOR_REPLY_MESS
 import { countRealReactions, syncBestEligibility } from '../src/lib/best-ranking-db'
 import { HOME_GUEST_COMMENT_WHERE, HOME_MEMBER_COMMENT_WHERE } from '../src/lib/popularity-db'
 import { MEMBER_COMMENT_WHERE } from '../src/lib/queries/customer-composition'
-import { OPERATOR_NAME_WRITER_WHERE } from '../src/lib/queries/operator-compose'
+import { OPERATOR_NAME_WRITER_WHERE, getComposeTargetPosts, getRecentWriterIds } from '../src/lib/queries/operator-compose'
 import { TARGET_COMMENT_SELECT, targetCommentCounts } from '../src/lib/persona-target-tx'
 import { authorKindOf } from '../src/lib/comment-thread'
 import { loadPostThreads } from '../src/lib/queries/comment-threads'
@@ -240,6 +240,16 @@ async function main(): Promise<void> {
     actorUserId: admin.id, requestKey: 'key-pv-as-operator',
   })).kind, 'blocked')
   await prisma.operatorWriter.delete({ where: { id: pvRow.id } })
+
+  // 고르는 화면 — 이 글에 쓴 이름 · 최근 쓴 이름(2026-11-16 · 운영자 이름 90)
+  const composeTargets = await getComposeTargetPosts()
+  expect('고르는 화면 — 회원 글의 "이 글에 쓴 이름" 에 방금 댓글 단 운영 이름이 있다',
+    composeTargets.find((t) => t.id === memberPost.id)?.usedWriterIds.includes(writer.id), true)
+  const otherWriterUser = await prisma.user.create({ data: { nickname: '아직안씀' }, select: { id: true } })
+  const otherWriterRow = await prisma.operatorWriter.create({ data: { code: 'OP99', userId: otherWriterUser.id }, select: { id: true } })
+  expect('고르는 화면 — 최근 쓴 이름은 작성 기록이 있는 이름만 · 최근 순',
+    await getRecentWriterIds([otherWriterRow.id, writer.id]), [writer.id])
+  await prisma.operatorWriter.delete({ where: { id: otherWriterRow.id } })
 
   console.log('\n══════ ⑥ 작성자 위조 · 자격')
   expect('🔴 없는 작성자로는 못 쓴다', (await createOperatorPostTx(prisma, {

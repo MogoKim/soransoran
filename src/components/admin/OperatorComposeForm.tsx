@@ -18,6 +18,7 @@ import { getBoardByType } from '@/lib/board-registry'
 import { OPERATOR_BOARDS } from '@/lib/operator-writer'
 import type { ComposeTargetPost, ReplyTargetPost, WriterOption } from '@/lib/queries/operator-compose'
 import CommentBadges from '@/components/features/CommentBadges'
+import OperatorWriterPicker from '@/components/admin/OperatorWriterPicker'
 import { AdminNotice, adminBadgeClass } from '@/components/admin/AdminUi'
 
 /**
@@ -72,6 +73,7 @@ export default function OperatorComposeForm({
   writers,
   targets,
   replyTargets,
+  recentIds = [],
   initialMode,
   initialPostId,
 }: {
@@ -79,6 +81,8 @@ export default function OperatorComposeForm({
   targets: ComposeTargetPost[]
   /** 작성자 대댓글을 달 운영 직접 작성 글 — 🔴 작성자는 여기 보이는 값이고 고르는 값이 아니다 */
   replyTargets: ReplyTargetPost[]
+  /** 최근에 쓴 운영자 이름 id — 고르는 화면 맨 위(서버가 OperatorWriteLog 로 구한다) */
+  recentIds?: string[]
   /** 처음 열 모드 — 「답 기다리는 글 → 답 쓰기」 는 댓글 모드로 연다 */
   initialMode?: 'post' | 'comment'
   /** 처음 고를 댓글 대상 글 — 목록(targets)에 있을 때만 쓴다. 🔴 미리 선택일 뿐 자격은 저장 트랜잭션이 본다 */
@@ -267,21 +271,13 @@ export default function OperatorComposeForm({
 
       {/* ── 누구 이름으로 ── 🔴 대댓글은 고르지 않는다(아래 「이 글의 작성자」 고정 표시) */}
       {mode !== 'reply' ? (
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">누구 이름으로 쓸까요</span>
-        <select
+        <OperatorWriterPicker
+          writers={writers}
+          recentIds={recentIds}
+          usedWriterIds={mode === 'comment' ? (target?.usedWriterIds ?? []) : []}
           value={writerId}
-          onChange={(e) => setWriterId(e.target.value)}
-          className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
-        >
-          {writers.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name} ({w.code})
-            </option>
-          ))}
-        </select>
-        {writer?.note ? <span className="text-xs text-content-muted">{writer.note}</span> : null}
-      </label>
+          onChange={setWriterId}
+        />
       ) : null}
 
       {mode === 'reply' ? (
