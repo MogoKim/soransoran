@@ -13,19 +13,30 @@ export const HOME_POPULAR_COUNT = 20
 /** 데스크톱 홈 게시판별 열 하나의 최대 수. 갱년기톡 · 자유게시판 각각이다. */
 export const HOME_POPULAR_PER_BOARD = 10
 
-/** 섞은 한 줄에서 갱년기톡에 보장하는 최소 자리. 후보가 모자라면 있는 만큼만 채운다. 게시판별 열에는 쓰지 않는다. */
+/**
+ * 섞은 한 줄의 **최종 목록**에서 갱년기톡에 보장하는 최소 자리.
+ *
+ * 🔴 고정(PIN)·숨김(HIDE)을 얹은 **뒤** 남은 자리에서 센다. 고정 갱년기톡도 이 수에 포함한다(7 + 고정이 아니다).
+ * 🔴 숨김이 이긴다. 점수로 못 든 갱년기톡을 끼워 넣을 때는 최근 글만 쓴다(HOME_POPULAR_MENOPAUSE_FRESH_HOURS).
+ *    노출 가능한 글이 모자라면 있는 만큼만 채운다. 게시판별 열(데스크톱)에는 쓰지 않는다.
+ * 🔴 홈 화면의 표시 편성이다 — 발행 편수·게시판 분류·점수에 끼우는 quota 가 아니다(brand spec §14-3).
+ */
 export const HOME_POPULAR_MIN_MENOPAUSE = 7
 
-/** 게시판 하나에서 점수 계산에 넣을 후보를 몇 건까지 가져올지. 모바일·데스크톱이 이 한 벌을 나눠 쓴다. */
-export const HOME_POPULAR_CANDIDATES_PER_BOARD = 60
+/**
+ * 점수로 못 든 갱년기톡을 최소 자리에 **끼워 넣을 때** 쓰는 나이 상한(시간) — 작성 시각(createdAt) 경과 기준 · 경계 포함.
+ *
+ * 🔴 끼워 넣는 글에만 쓴다. 점수로 자연히 상위에 든 오래된 글과 고정 글은 빼지 않고 최소 7 에 센다 —
+ *    점수가 이미 나이로 깎는다(popularity.ts popularityScore). 한 달 된 글로 첫 화면을 채우지 않기 위한 상한이다.
+ *    정본 문장: brand spec §14-3.
+ */
+export const HOME_POPULAR_MENOPAUSE_FRESH_HOURS = 14 * 24
 
 /**
- * 홈 노출 예외를 얹기 전, 자동 후보를 몇 배로 넉넉히 뽑을지.
- *
- * 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
- *    PIN 이 자동 상위와 겹쳐도 마찬가지다. 여유를 두고 뽑아 잘라 낸다.
+ * 게시판 하나에서 점수 계산에 넣을 후보를 몇 건까지 가져올지(최신순). 모바일·데스크톱이 이 한 벌을 나눠 쓴다.
+ * 🔴 이 수가 사실상 "노출 가능" 의 정의 일부다 — 바꾸면 갱년기톡 최소의 의미가 바뀐다.
  */
-export const HOME_OVERRIDE_HEADROOM = 2
+export const HOME_POPULAR_CANDIDATES_PER_BOARD = 60
 
 /** 홈에 싣는 매거진 글 수. 더 실으면 가입 카드가 화면 밖으로 밀린다. */
 export const HOME_MAGAZINE_COUNT = 3

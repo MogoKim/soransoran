@@ -292,6 +292,7 @@ jobs:
       #       작성자 구분·답글 대상 문구. 새 step 이 아니다(무조건 step 상한 불변). DB 쪽은 격리 Postgres 사슬에서 돈다.
       #    🔴 홈 인기 점수 순수 검사(check:home-popularity)도 같은 step 이다 — 홈 신호가 사람 수(글쓴이 제외)·
       #       비회원 상한 3 이고 Persona·운영 댓글이 순위를 올리지 못하며 화면 댓글 수는 그대로인지. DB 쪽(check:home-popularity-db)은 격리 Postgres 가 필요해 CI 밖이다.
+      #       갱년기톡 최소 7 은 최종 20 에서(끼워 넣는 글은 최근 14일) — 사례와 변이(check:home-popularity-mutation)도 같은 step.
       - name: 베스트·댓글 정책 가드
         if: needs.scope.outputs.heavy == 'true'
         run: |
@@ -305,6 +306,9 @@ jobs:
           npm run check:persona-followup-reselect
           npm run check:persona-followup-reselect-mutation
           npm run check:home-popularity
+          # 🔴 홈 노출 예외 규칙(PIN·HIDE·fill 재검증)과 갱년기톡 최종 최소 배분의 변이(임시 디렉터리만) — 새 step 아님
+          npm run check:home-exposure
+          npm run check:home-popularity-mutation
 
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
