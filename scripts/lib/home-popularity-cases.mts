@@ -97,6 +97,10 @@ const staleMeno = (n: number, prefix = 'old') => range(n).map((i) => post(`${pre
 /** 신선하지만 점수가 낮은 갱년기톡 n편 — 100~ 시간 전, 실반응 0 */
 const freshLowMeno = (n: number, prefix = 'fm') => range(n).map((i) => post(`${prefix}${String(i).padStart(2, '0')}`, 100 + i, 0, 'MENOPAUSE'))
 
+/**
+ * 사례 번호는 설계서(01-FINAL §6-1) 와 같다. T-P10(매거진 격리) · T-P14(하나의 now · 만료 경계)는 편성 함수
+ * composeHomePopularViews 수준이라 여기(주입받는 순수 함수)에 없고 check:home-popularity ⑥ 이 실제 편성으로 본다.
+ */
 export function runQuotaCases(mod: QuotaModule): string[] {
   const failures: string[] = []
   const check = (label: string, ok: boolean) => {
@@ -240,6 +244,13 @@ export function runQuotaCases(mod: QuotaModule): string[] {
     check('T-P16 HIDE·후보 밖·PIN·중복 거름 · 자리 수만큼', JSON.stringify(ids(seat.posts)) === JSON.stringify([pinned.id, free[2].id, free[3].id, free[4].id, free[5].id]))
     check('T-P16 slots·rest', seat.slots === 4 && !ids(seat.rest).includes(hidden.id) && !ids(seat.rest).includes(pinned.id))
   }
+  // T-P17 — 진단은 같은 글을 두 번 세지 않는다(고정 글이 자동 후보에도 들어온 입력)
+  {
+    const m1 = post('dup-m1', 3, 0, 'MENOPAUSE')
+    const m2 = post('dup-m2', 4, 0, 'MENOPAUSE')
+    const q = mod.diagnoseMenopauseQuota({ posts: [m1, m2], pinned: [m1], rest: [m1, m2, m2], slots: 19 }, { minimum: CASE_MIN, freshHours: CASE_FRESH_HOURS, now: NOW })
+    check('T-P17 노출 가능 = 고유 글 수(2)', q.eligible === 2 && q.pinned === 1 && q.freshEligible === 1)
+  }
   // T-P15 — 무작위 1000회 불변식 (seed 고정)
   {
     let seed = 20261116
@@ -295,7 +306,7 @@ export function loaderProblems(src: string): string[] {
   if (loader === '') problems.push('로더를 찾지 못했다')
   if (count('...DISCOVERY_ELIGIBLE_WHERE') < 2) problems.push('discovery 조건 2곳 미만')
   if (count('AND: [EXCLUDE_GREETING]') < 2) problems.push('가입인사 제외 2곳 미만')
-  if (count("{ id: 'desc' }") < 1) problems.push('후보 정렬에 id 2차 키 없음')
+  if (!/\{\s*id:\s*['"]desc['"]\s*\}/.test(loader)) problems.push('후보 정렬에 id 2차 키 없음')
   if (/HEADROOM/.test(code)) problems.push('HEADROOM 이 남아 있다')
   return problems
 }

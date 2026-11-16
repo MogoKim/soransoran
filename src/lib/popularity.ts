@@ -192,8 +192,9 @@ export function diagnoseMenopauseQuota<T extends ScorablePost>(
   const isM = (p: ScorablePost) => p.boardType === GUARANTEED_BOARD
   const shownIds = new Set(posts.map((p) => p.id))
   const pinnedIds = new Set(pinned.map((p) => p.id))
-  const pinnedM = pinned.filter(isM).length
-  const restM = [...new Map(rest.filter(isM).map((p) => [p.id, p])).values()]
+  // 🔴 같은 글은 한 번만 센다 — 고정 글이 자동 후보에도 들어와 있거나 같은 글이 두 번 와도 숫자가 부풀지 않게
+  const pinnedM = new Set(pinned.filter(isM).map((p) => p.id)).size
+  const restM = [...new Map(rest.filter((p) => isM(p) && !pinnedIds.has(p.id)).map((p) => [p.id, p])).values()]
   const fresh = (p: ScorablePost) => isWithinFreshWindow(p, freshHours, now)
 
   const shown = posts.filter(isM).length
