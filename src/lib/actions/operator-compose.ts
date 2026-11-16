@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 
 import { auth } from '@/lib/auth'
 import { requireAdmin } from '@/lib/admin'
+import { createPersonaVoiceCommentTx } from '@/lib/operator-persona-voice-tx'
 import { prisma } from '@/lib/prisma'
 import { getBoardByType } from '@/lib/board-registry'
 import { communityPostHref } from '@/lib/admin-format'
@@ -84,7 +85,7 @@ export type ComposeActionState = {
    *    서버가 어느 쪽이었는지 말해 주고, 화면은 지금 모드와 같을 때만 보여 준다.
    *    화면이 짐작하지 않는다 — 짐작하면 보내고 나서 모드를 바꾼 경우에 틀린다.
    */
-  kind?: 'post' | 'comment' | 'reply'
+  kind?: 'post' | 'comment' | 'reply' | 'persona-voice'
   /** 입력을 잃지 않도록 화면이 되돌려 받는 값 */
   kept?: { writerId: string; boardType: string; title: string; content: string }
 }
@@ -135,7 +136,7 @@ function toState(
   kept?: ComposeActionState['kept'],
   requestKey?: string,
   /** 🔴 어느 쪽 요청이었나 — 화면이 지금 모드와 대조한다 */
-  kind?: 'post' | 'comment' | 'reply',
+  kind?: 'post' | 'comment' | 'reply' | 'persona-voice',
 ): ComposeActionState {
   const tag = kind ? { kind } : {}
   if (res.kind === 'created') {
@@ -189,6 +190,7 @@ export async function createOperatorContent(
   if (mode === 'post') return createOperatorPost(prev, formData)
   if (mode === 'comment') return createOperatorComment(prev, formData)
   if (mode === 'reply') return createOperatorReply(prev, formData)
+  if (mode === 'persona-voice') return createPersonaVoiceComment(prev, formData)
   // 🔴 모르면 쓰지 않는다. 짐작해서 한쪽으로 보내면 엉뚱한 곳에 글이 올라간다
   return { error: '무엇을 쓸지 고르지 못했습니다. 새로고침 후 다시 시도해 주세요.' }
 }
@@ -282,6 +284,53 @@ export async function createOperatorComment(
     requestKey,
   })
   return toState(res, kept, requestKey, 'comment')
+}
+
+// ─────────────────────────────────────────────────────────
+// ②-a Persona 목소리 댓글 (2026-11-16 창업자 결정 ②)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Persona 의 이름으로 댓글을 단다 — 정책 정본은 src/lib/operator-persona-voice.ts.
+ *
+ * 🔴 FormData 에서 읽는 것은 personaId · postId · content · requestKey 넷뿐이다.
+ *    writerId · authorId · commentOrigin 이 따라와도 읽지 않는다 — 작성자 행(PV)과 저장 모양은 트랜잭션이 정한다.
+ * 🔴 길이 · 금칙어는 운영자 댓글 · 회원 댓글과 같은 정본(comment-policy · checkContent)이다.
+ * 🔴 판정 시각(now)을 여기서 한 번 정해 넘긴다 — 시간 창과 25시간 경계가 같은 시각을 본다.
+ */
+export async function createPersonaVoiceComment(
+  _prev: ComposeActionState,
+  formData: FormData,
+): Promise<ComposeActionState> {
+  const actor = await requireActor()
+  if (actor === null) return DENIED
+
+  const personaId = String(formData.get('personaId') ?? '').trim()
+  const postId = String(formData.get('postId') ?? '').trim()
+  const content = String(formData.get('content') ?? '').trim()
+  const requestKey = String(formData.get('requestKey') ?? '').trim()
+
+  const kept = { writerId: personaId, boardType: '', title: '', content }
+  const fail = (error: string): ComposeActionState => ({ error, kept, kind: 'persona-voice' })
+
+  if (personaId === '') return fail('어느 Persona 로 쓸지 골라 주세요.')
+  if (postId === '') return fail('댓글을 달 글을 골라 주세요.')
+  if (requestKey === '') return fail('다시 시도해 주세요.')
+  if (content.length < MIN_COMMENT_LENGTH) return fail(COMMENT_TOO_SHORT)
+  if (content.length > MAX_COMMENT_LENGTH) return fail(COMMENT_TOO_LONG)
+
+  const guard = checkContent(content, { audience: 'user' })
+  if (!guard.ok) return fail(guard.reason)
+
+  const res = await createPersonaVoiceCommentTx(prisma, {
+    personaId,
+    postId,
+    content,
+    actorUserId: actor.actorUserId,
+    requestKey,
+    now: new Date(),
+  })
+  return toState(res, kept, requestKey, 'persona-voice')
 }
 
 // ─────────────────────────────────────────────────────────

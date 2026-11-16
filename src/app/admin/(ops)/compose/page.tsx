@@ -11,6 +11,9 @@ import {
 } from '@/components/admin/AdminUi'
 import OperatorComposeForm from '@/components/admin/OperatorComposeForm'
 import OperatorComposedItemControls from '@/components/admin/OperatorComposedItemControls'
+import PersonaVoiceComposeForm from '@/components/admin/PersonaVoiceComposeForm'
+import { getPersonaVoiceSpeakers, getPersonaVoiceTargets } from '@/lib/queries/operator-persona-voice'
+import { PERSONA_VOICE_CODE_PREFIX } from '@/lib/operator-writer'
 import {
   getComposedItems,
   getComposeTargetPost,
@@ -44,7 +47,7 @@ export const dynamic = 'force-dynamic'
 export default async function AdminComposePage({
   searchParams,
 }: {
-  searchParams: Promise<{ postId?: string; from?: string }>
+  searchParams: Promise<{ postId?: string; from?: string; mode?: string }>
 }) {
   const { ok } = await requireAdmin()
   if (!ok) {
@@ -53,13 +56,18 @@ export default async function AdminComposePage({
     )
   }
 
-  const { postId: wantedPostId, from } = await searchParams
+  const { postId: wantedPostId, from, mode } = await searchParams
   const fromResponses = from === 'responses'
-  const [writers, recentTargets, replyTargets, items] = await Promise.all([
+  // 🔴 리터럴 비교만 — 「Persona 목소리로 답 쓰기」 로 왔으면 그 칸에 글을 미리 고른다
+  const voiceMode = mode === 'persona-voice'
+  const now = new Date()
+  const [writers, recentTargets, replyTargets, items, speakers, voiceTargets] = await Promise.all([
     getOperatorWriters(),
     getComposeTargetPosts(),
     getReplyTargetPosts(),
     getComposedItems(),
+    getPersonaVoiceSpeakers(),
+    getPersonaVoiceTargets({ now, ...(voiceMode && wantedPostId ? { includePostId: wantedPostId } : {}) }),
   ])
   // 최근 목록 밖의 글이면 그 한 편만 따로 싣고 맨 앞에 둔다
   const wanted = wantedPostId
@@ -72,7 +80,7 @@ export default async function AdminComposePage({
       <AdminPageHeader
         group="노출·작성"
         title="직접 작성"
-        description="운영용 이름을 골라 직접 글과 댓글을 씁니다. 자동 페르소나와는 별개입니다."
+        description="운영용 이름이나 Persona 목소리로 직접 씁니다. 자동 운영과는 별개입니다."
         {...(fromResponses ? { backHref: '/admin/responses', backLabel: '← 답 기다리는 글' } : {})}
       />
 
@@ -92,9 +100,24 @@ export default async function AdminComposePage({
           writers={writers}
           targets={targets}
           replyTargets={replyTargets}
-          {...(wanted ? { initialMode: 'comment' as const, initialPostId: wanted.id } : {})}
+          {...(wanted && !voiceMode ? { initialMode: 'comment' as const, initialPostId: wanted.id } : {})}
         />
       </AdminSection>
+
+      {/* 🔴 Persona 목소리 — 정책 정본 src/lib/operator-persona-voice.ts. 저장 모양은 운영자 댓글과 같다(D100 무관) */}
+      <section id="persona-voice">
+        <AdminSection
+          title="Persona 목소리"
+          description="Persona 의 이름으로 댓글을 씁니다. 회원에게는 그 Persona 닉네임으로 보입니다."
+          className="mt-10"
+        >
+          <PersonaVoiceComposeForm
+            speakers={speakers}
+            targets={voiceTargets}
+            {...(voiceMode && wantedPostId ? { initialPostId: wantedPostId } : {})}
+          />
+        </AdminSection>
+      </section>
 
       <AdminSection
         title="작성 내역"
@@ -120,6 +143,7 @@ export default async function AdminComposePage({
                       {item.writerName}
                     </span>
                     <AdminBadge>{item.writerCode}</AdminBadge>
+                    {item.writerCode.startsWith(PERSONA_VOICE_CODE_PREFIX) ? <AdminBadge tone="info">Persona 목소리</AdminBadge> : null}
                     {item.hidden ? <AdminBadge tone="danger">내림</AdminBadge> : null}
                     <span className="ml-auto text-xs text-content-muted">
                       {formatKst(item.createdAt)}

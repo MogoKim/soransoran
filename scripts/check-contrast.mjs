@@ -279,6 +279,8 @@ export const COMPACT_ALLOWED = [
   // 운영자 직접 작성 — 좁은 운영 표와 같은 밀도다 (2026-09-17)
   'src/components/admin/OperatorComposeForm.tsx',
   'src/components/admin/OperatorComposedItemControls.tsx',
+  // 같은 직접 작성 화면의 Persona 목소리 칸 — 운영 콘솔 버튼은 먹색 글씨(흰 글씨 금지 · CLAUDE.md) (2026-11-16)
+  'src/components/admin/PersonaVoiceComposeForm.tsx',
 ]
 
 /**

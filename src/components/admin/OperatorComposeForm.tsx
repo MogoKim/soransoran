@@ -186,7 +186,7 @@ export default function OperatorComposeForm({
         <p className="m-0 text-sm text-content-primary">아직 운영용 작성자가 없습니다.</p>
         <p className="mt-1 text-sm text-content-muted">
           쓸 닉네임을 정하고 <code>OperatorWriter</code> 에 등록한 뒤에 이 화면을 씁니다.
-          🔴 자동 페르소나(P01~)는 여기에 오지 않습니다.
+          Persona 목소리는 아래 「Persona 목소리」 칸에서 씁니다.
         </p>
       </div>
     )
