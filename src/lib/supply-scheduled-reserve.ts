@@ -61,11 +61,12 @@
  */
 
 import {
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_FIRST_DAILY_USD, SUPPLY_PROOF_RUN_SLOTS_KST,
+  SUPPLY_PROOF_FIRST_DAILY_USD, SUPPLY_PROOF_RUN_SLOTS_KST,
   SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN, estimateSupplySpend,
   supplyProofRunSlots,
 } from './supply-schedule-contract'
 import type { LedgerEntry, SpendProtect } from './llm-ledger'
+import { supplyApprovedDailyUsdOf } from './supply-cost-envelope'
 
 export type { SpendProtect }
 
@@ -581,7 +582,10 @@ export function supplySpendProtectAt(input: {
     : scheduledShareFrom(input.historyEntries === undefined || input.historyEntries === null
       ? null
       : scheduledRunSamples({ entries: input.historyEntries, now: input.now, windowMs, slots }))
-  const contract = input.ceilingUsd === undefined ? SUPPLY_DAILY_USD_APPROVED : input.ceilingUsd
+  // 🔴 천장은 요청 시각의 KST 날짜 계약이 정한다(장부 기록 · preflight 와 같은 정본 `supplyApprovedDailyUsdOf`)
+  const contract = input.ceilingUsd === undefined
+    ? supplyApprovedDailyUsdOf(new Date(input.now.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10))
+    : input.ceilingUsd
   // 🔴 손 실행은 천장 미승인을 0 으로 읽는다. 정기 회차는 천장이 없으면 env 예산만 본다(앞판 그대로)
   const ceiling: number | null = k.kind === 'manual' ? (contract ?? 0) : contract
   const daily = input.dailyUsd ?? null

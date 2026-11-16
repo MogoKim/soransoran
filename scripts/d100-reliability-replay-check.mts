@@ -45,8 +45,9 @@ import {
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import {
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN,
+  SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN,
 } from '../src/lib/supply-schedule-contract'
+import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
 import {
   judgeEvidenceForTarget, judgeStageEvidence, trialPlanOf, trialPlanThrough,
   type EvidencePost, type EvidenceSideSignals, type StageEvidenceFacts,
@@ -145,7 +146,7 @@ const preflightFacts = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): Prefl
     stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
     commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
     auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-    supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
+    supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'), runnerHealth: 'ok', ...o,
   }
 }
 
