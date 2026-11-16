@@ -5,6 +5,7 @@ import { formatKst } from '@/lib/admin-format'
 import {
   AdminBadge,
   AdminEmptyState,
+  AdminNotice,
   AdminPageHeader,
   AdminSection,
 } from '@/components/admin/AdminUi'
@@ -12,6 +13,7 @@ import OperatorComposeForm from '@/components/admin/OperatorComposeForm'
 import OperatorComposedItemControls from '@/components/admin/OperatorComposedItemControls'
 import {
   getComposedItems,
+  getComposeTargetPost,
   getComposeTargetPosts,
   getOperatorWriters,
   getReplyTargetPosts,
@@ -28,6 +30,9 @@ import {
  * 🔴 **권한을 다시 확인한다.** layout 이 이미 보지만 layout 은 렌더 경로일 뿐이다.
  *
  * 🔴 **대시보드를 만들지 않는다.** 수치·그래프·집계를 여기 두지 않는다.
+ *
+ * 🔴 `?postId=` 는 댓글 대상 **미리 선택**일 뿐이다(답 기다리는 글 → 답 쓰기). 자격은 저장 트랜잭션이 판정한다.
+ *    `?from=responses` 일 때만 돌아가기 링크를 단다 — 임의 주소를 받지 않는다(리터럴 비교).
  */
 export const metadata: Metadata = {
   title: '직접 작성',
@@ -36,7 +41,11 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic'
 
-export default async function AdminComposePage() {
+export default async function AdminComposePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ postId?: string; from?: string }>
+}) {
   const { ok } = await requireAdmin()
   if (!ok) {
     return (
@@ -44,12 +53,19 @@ export default async function AdminComposePage() {
     )
   }
 
-  const [writers, targets, replyTargets, items] = await Promise.all([
+  const { postId: wantedPostId, from } = await searchParams
+  const fromResponses = from === 'responses'
+  const [writers, recentTargets, replyTargets, items] = await Promise.all([
     getOperatorWriters(),
     getComposeTargetPosts(),
     getReplyTargetPosts(),
     getComposedItems(),
   ])
+  // 최근 목록 밖의 글이면 그 한 편만 따로 싣고 맨 앞에 둔다
+  const wanted = wantedPostId
+    ? (recentTargets.find((t) => t.id === wantedPostId) ?? (await getComposeTargetPost(wantedPostId)))
+    : null
+  const targets = wanted && !recentTargets.some((t) => t.id === wanted.id) ? [wanted, ...recentTargets] : recentTargets
 
   return (
     <>
@@ -57,13 +73,27 @@ export default async function AdminComposePage() {
         group="노출·작성"
         title="직접 작성"
         description="운영용 이름을 골라 직접 글과 댓글을 씁니다. 자동 페르소나와는 별개입니다."
+        {...(fromResponses ? { backHref: '/admin/responses', backLabel: '← 답 기다리는 글' } : {})}
       />
+
+      {wantedPostId && !wanted ? (
+        <div className="mb-4">
+          <AdminNotice tone="warning" title="그 글에는 댓글을 달 수 없습니다">
+            내려갔거나 게시판 글이 아닙니다. 답 기다리는 글 목록을 다시 열어 주세요.
+          </AdminNotice>
+        </div>
+      ) : null}
 
       <AdminSection
         title="새로 쓰기"
         description="AI 가 만들지 않습니다. 여기서 쓴 것이 그대로 올라갑니다."
       >
-        <OperatorComposeForm writers={writers} targets={targets} replyTargets={replyTargets} />
+        <OperatorComposeForm
+          writers={writers}
+          targets={targets}
+          replyTargets={replyTargets}
+          {...(wanted ? { initialMode: 'comment' as const, initialPostId: wanted.id } : {})}
+        />
       </AdminSection>
 
       <AdminSection

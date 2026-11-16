@@ -72,13 +72,19 @@ export default function OperatorComposeForm({
   writers,
   targets,
   replyTargets,
+  initialMode,
+  initialPostId,
 }: {
   writers: WriterOption[]
   targets: ComposeTargetPost[]
   /** 작성자 대댓글을 달 운영 직접 작성 글 — 🔴 작성자는 여기 보이는 값이고 고르는 값이 아니다 */
   replyTargets: ReplyTargetPost[]
+  /** 처음 열 모드 — 「답 기다리는 글 → 답 쓰기」 는 댓글 모드로 연다 */
+  initialMode?: 'post' | 'comment'
+  /** 처음 고를 댓글 대상 글 — 목록(targets)에 있을 때만 쓴다. 🔴 미리 선택일 뿐 자격은 저장 트랜잭션이 본다 */
+  initialPostId?: string
 }) {
-  const [mode, setMode] = useState<Mode>('post')
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'post')
   const [writerId, setWriterId] = useState(writers[0]?.id ?? '')
   const [boardType, setBoardType] = useState('MENOPAUSE')
   const [title, setTitle] = useState('')
@@ -101,7 +107,9 @@ export default function OperatorComposeForm({
   /** 등록에 성공하면 바꿔 에디터를 빈 상태로 다시 세운다. 🔴 에디터는 처음 값만 받는다 */
   const [editorKey, setEditorKey] = useState(0)
   const [commentBody, setCommentBody] = useState('')
-  const [postId, setPostId] = useState(targets[0]?.id ?? '')
+  const [postId, setPostId] = useState(
+    initialPostId && targets.some((t) => t.id === initialPostId) ? initialPostId : (targets[0]?.id ?? ''),
+  )
   /** 작성자 대댓글 — 원글 · 답할 댓글 · 본문. 🔴 작성자 state 는 없다(원글에서 정해진다) */
   const [replyPostId, setReplyPostId] = useState(replyTargets[0]?.id ?? '')
   const [parentId, setParentId] = useState('')
@@ -314,21 +322,34 @@ export default function OperatorComposeForm({
           </label>
         </>
       ) : (
-        <label className="flex flex-col gap-1">
-          <span className="text-sm font-bold text-content-primary">어느 글에 달까요</span>
-          <select
-            value={postId}
-            onChange={(e) => setPostId(e.target.value)}
-            className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
-          >
-            {targets.length === 0 ? <option value="">댓글을 달 글이 없습니다</option> : null}
-            {targets.map((t) => (
-              <option key={t.id} value={t.id}>
-                [{t.boardLabel}] {t.title} · 댓글 {t.commentCount}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-bold text-content-primary">어느 글에 달까요</span>
+            <select
+              value={postId}
+              onChange={(e) => setPostId(e.target.value)}
+              className="min-h-[52px] rounded-md border border-interactive bg-surface-card px-3 text-content-primary lg:min-h-[44px]"
+            >
+              {targets.length === 0 ? <option value="">댓글을 달 글이 없습니다</option> : null}
+              {targets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  [{t.boardLabel}] {t.title} · 댓글 {t.commentCount}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* 답을 쓰려면 원문을 읽어야 한다 — 고객 화면 주소는 대상 목록에 이미 있다(새 조회 0) · label 밖에 둔다 */}
+          {target?.href ? (
+            <a
+              href={target.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[52px] items-center self-start text-sm font-semibold text-link lg:min-h-[44px]"
+            >
+              이 글 보기 ↗
+            </a>
+          ) : null}
+        </div>
       )}
 
       {mode === 'post' ? (
