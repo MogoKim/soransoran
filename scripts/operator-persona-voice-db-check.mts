@@ -780,6 +780,25 @@ async function main(): Promise<void> {
   check('S6-B 같은 requestKey 재전송 → duplicate', s6r2.kind === 'duplicate', `kind=${s6r2.kind}`)
 
   // ══════════════════════════════════════════════════════════════════════
+  // S8 — Persona User 에 다른 코드의 작성자 행(손으로 만든 OP)이 이미 있으면 막고, 원인을 말한다 · write 0
+  // ══════════════════════════════════════════════════════════════════════
+  console.log('\n── S8: 어긋난 작성자 행')
+  {
+    const p6User = await prisma.user.create({ data: { nickname: '어긋난행' }, select: { id: true } })
+    const p6 = await prisma.persona.create({ data: { code: 'P06', userId: p6User.id, status: 'active' }, select: { id: true } })
+    await prisma.operatorWriter.create({ data: { code: 'OP77', userId: p6User.id } })
+    const commentsBefore = await prisma.comment.count()
+    const r = await createPersonaVoiceCommentTx(prisma, {
+      personaId: p6.id, postId: postG.id, content: '어긋난 행으로 시도',
+      actorUserId: adminUser.id, requestKey: 's8-mismatch', now: T0_26H,
+    })
+    check('S8-A 다른 코드의 작성자 행 → blocked · 원인(지금 행 OP77 · 기대 PV06)을 말한다',
+      r.kind === 'blocked' && r.message.includes('OP77') && r.message.includes('PV06'), `kind=${r.kind} ${r.kind === 'blocked' ? r.message : ''}`)
+    check('S8-B 댓글 write 0 · PV06 행 생성 0',
+      (await prisma.comment.count()) === commentsBefore && (await prisma.operatorWriter.count({ where: { code: 'PV06' } })) === 0)
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
   // S7 — 운영자 이름 목록에 PV 행 없음
   // ══════════════════════════════════════════════════════════════════════
   console.log('\n── S7: 운영자 이름 목록 PV 제외')
