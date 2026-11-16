@@ -109,7 +109,7 @@ export function isDawnKst(d: Date): boolean {
 export type MemberResponseSummary = {
   total: number
   answered: number
-  /** 목표 시간(3시간) 안에 첫 답을 받은 글 */
+  /** 목표 시간(3시간) 안에 첫 답을 받은 글 — 🔴 정확히 3시간째 답은 '안' 이 아니다(기한 넘김 경계 `≥ 3시간` 과 같은 기준) */
   answeredWithinTarget: number
   byResponder: Record<ResponderKind, number>
   waiting: number
