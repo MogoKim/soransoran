@@ -145,7 +145,8 @@ async function main(): Promise<void> {
   for (let i = 0; i < MEMBER_RESPONSE_LIST_MAX; i += 1) await postBy(c, H + i)
   expect(`${MEMBER_RESPONSE_LIST_MAX}편 → 잘림 없음`, (await board()).truncated, false)
   await postBy(c, H + MEMBER_RESPONSE_LIST_MAX)
-  expect(`${MEMBER_RESPONSE_LIST_MAX + 1}편 → 잘림 표시`, [(await board()).truncated, (await board()).summary.total], [true, MEMBER_RESPONSE_LIST_MAX])
+  const over = await board()
+  expect(`${MEMBER_RESPONSE_LIST_MAX + 1}편 → 잘림 표시`, [over.truncated, over.summary.total], [true, MEMBER_RESPONSE_LIST_MAX])
 
   await wipe()
   console.log(`\n결과: PASS ${pass} · FAIL ${fail}`)
