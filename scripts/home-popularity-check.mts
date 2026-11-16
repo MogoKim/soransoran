@@ -147,7 +147,7 @@ console.log('\n⑥ 홈 인기 편성 — mobile 은 최종 목록에서 갱년�
     [HOME_POPULAR_COUNT, HOME_POPULAR_PER_BOARD, HOME_POPULAR_MIN_MENOPAUSE, HOME_POPULAR_MENOPAUSE_FRESH_HOURS, HOME_POPULAR_CANDIDATES_PER_BOARD], [20, 10, 7, 336, 60])
   expect('사례 묶음 상수 = 정본 상수(사례가 다른 규칙을 시험하지 않는다)', [CASE_TAKE, CASE_MIN, CASE_FRESH_HOURS], [HOME_POPULAR_COUNT, HOME_POPULAR_MIN_MENOPAUSE, HOME_POPULAR_MENOPAUSE_FRESH_HOURS])
   const mod: QuotaModule = { ...popularity, ...exposureRules } as unknown as QuotaModule
-  expect('배분 사례 T-P1~T-P16 (scripts/lib/home-popularity-cases.mts)', runQuotaCases(mod), [])
+  expect('배분 사례 T-P1~T-P17 (scripts/lib/home-popularity-cases.mts)', runQuotaCases(mod), [])
 
   // 편성 수준 — 실제 composeHomePopularViews 로 같은 결론이 나는가
   const strongFree = Array.from({ length: 15 }, (_, i) => vpost(`sf${i}`, 1 + i * 0.1, 5, 'FREE'))
