@@ -95,6 +95,19 @@ const MUTATIONS: Mutation[] = [
     from: "const NOTE_AGE_RE = /^(40대 (중반|후반)|50대 (초반|중반|후반)|60대 (초반|중반))/",
     to:   "const NOTE_AGE_RE = /^(40대|50대 (초반|중반|후반)|60대 (초반|중반))/",
   },
+  // M10·M11: P7 — 로그인 계정(Account)이나 Persona 가 붙은 OP 행은 멈춘다(실회원·자동 레인 혼입)
+  {
+    id: 'M10',
+    name: 'P7 Account > 0 → stop 분기 끔',
+    from: "    if (dbRow.accountCount > 0) {",
+    to:   "    if (false) {",
+  },
+  {
+    id: 'M11',
+    name: 'P7 Persona 연결 → stop 분기 끔',
+    from: "    if (dbRow.hasPersona) {",
+    to:   "    if (false) {",
+  },
 ]
 
 const check = join(here, 'operator-writer-roster-check.mts')

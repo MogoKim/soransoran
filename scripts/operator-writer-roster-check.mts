@@ -455,7 +455,7 @@ expect('운영: 완비 → apply-production', decideMode(OK_PROD, PROD_URL).kind
 expect('운영: target 없음 → refuse', decideMode(['--apply', '--production', `--expect=${PLAN_HEX}`, '--reason=x'], PROD_URL).kind, 'refuse')
 expect('운영: target 39자리 → refuse', decideMode(['--apply', '--production', `--target=${'a'.repeat(39)}`, `--expect=${PLAN_HEX}`, '--reason=x'], PROD_URL).kind, 'refuse')
 expect('운영: 셸이 격리여도 --production 이면 통과(가드가 나중에 판정)', decideMode(OK_PROD, ISO_URL).kind, 'apply-production')
-expect('격리 URL 판정', [isIsolatedUrl(ISO_URL), isIsolatedUrl(PROD_URL), isIsolatedUrl('postgresql://a@127.0.0.1:5432/postgres')], [true, false, false])
+expect('격리 URL 판정', [isIsolatedUrl(ISO_URL), isIsolatedUrl(PROD_URL), isIsolatedUrl('postgresql://a@127.0.0.1:5432/postgres'), isIsolatedUrl('postgres://a@127.0.0.1:5432/soran_test'), isIsolatedUrl('postgres://a@db.example.com:5432/soran_test')], [true, false, false, true, false])
 expect('오타 인자 → refuse', decideMode(['--aply'], PROD_URL).kind, 'refuse')
 
 // ─────────────────────────────────────────────────────────

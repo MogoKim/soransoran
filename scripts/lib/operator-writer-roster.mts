@@ -691,7 +691,7 @@ export function decideProductionTime(now: Date): { ok: true } | { ok: false; rea
 // ─────────────────────────────────────────────────────────
 
 export function isIsolatedUrl(url: string): boolean {
-  return /^postgresql:\/\/[^@/]*@(127\.0\.0\.1|localhost):\d+\/soran_test(\?|$)/.test(url)
+  return /^postgres(ql)?:\/\/[^@/]*@(127\.0\.0\.1|localhost):\d+\/soran_test(\?|$)/.test(url)
 }
 
 export function isLocalUrl(url: string): boolean {
