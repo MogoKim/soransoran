@@ -116,7 +116,10 @@ export async function createPersonaVoiceCommentTx(
         where: { userId: persona.userId },
         select: { id: true, code: true, status: true },
       })
-      if (writer === null || writer.code !== speaker.pvCode) throw new Refused(PERSONA_VOICE_MESSAGE.writerMismatch)
+      // 🔴 그 Persona User 에 다른 코드의 작성자 행이 이미 있으면(손으로 만든 OP 행 등) 쓰지 않는다 — 원인을 문장에 담는다
+      if (writer === null || writer.code !== speaker.pvCode) {
+        throw new Refused(`${PERSONA_VOICE_MESSAGE.writerMismatch} (지금 행 ${writer?.code ?? '없음'} · 기대 ${speaker.pvCode})`)
+      }
       const writerVerdict = judgeOperatorWriter(
         {
           status: writer.status,
