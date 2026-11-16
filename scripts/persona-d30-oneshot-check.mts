@@ -4,7 +4,8 @@
  */
 import {
   APPROVED_SUPPLEMENT_PLAN_DIGEST, COHORT_CODES, EXPECTED_RUNTIME_ASSET_IDENTITY, ONESHOT_LABEL,
-  judgeOneShot, judgeOutcome, remediationEligible, renderOneShotPlist, supplementApprovalDigestOf, type OneShotFacts,
+  judgeOneShot, judgeOutcome, oneShotWindowOf, previousKstDateOf, remediationEligible, renderOneShotPlist,
+  supplementApprovalDigestOf, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
 import { planSupplementSnapshot } from './lib/persona-reference-supplement-plan.mjs'
 import { readFileSync } from 'node:fs'
@@ -20,6 +21,7 @@ const OLD40 = Array.from({ length: 40 }, (_, i) => `P${String(i + 1).padStart(2,
 const base = (): OneShotFacts => ({
   targetDate: '2026-11-15', kstDate: '2026-11-15', kstMinute: 7 * 60 + 5,
   stage: { kstDate: '2026-11-15', state: 'PREPARE', release: 'd20', capacity: 'd30', decidedBy: 'controller' },
+  previousStage: { kstDate: '2026-11-14', state: 'PREPARE', release: 'd20', capacity: 'd30', decidedBy: 'controller' },
   originMain: SHA, head: SHA, pin: SHA, manifestSha: SHA,
   manifestIdentity: { ...EXPECTED_RUNTIME_ASSET_IDENTITY }, deployLock: false, runningJobs: [], unknownJobs: [],
   approvalDigest: APPROVED_SUPPLEMENT_PLAN_DIGEST, runtimeIdentity: { ...EXPECTED_RUNTIME_ASSET_IDENTITY },
@@ -57,6 +59,53 @@ expect('release d10', { stage: { ...base().stage!, release: 'd10' } }, 'STAGE_RE
 expect('release d30(이미 개방)', { stage: { ...base().stage!, release: 'd30' } }, 'STAGE_RELEASE')
 expect('capacity d20', { stage: { ...base().stage!, capacity: 'd20' } }, 'STAGE_CAPACITY')
 expect('사람이 쓴 행', { stage: { ...base().stage!, decidedBy: 'founder' } }, 'STAGE_NOT_CONTROLLER')
+
+console.log('\n③-b 🔴 결정 전 창(03:45~06:05) — 권위는 전날 controller 행 · 그날 행은 없어야 한다')
+const pre = (patch: Partial<OneShotFacts> = {}): OneShotFacts => ({ ...base(), kstMinute: 3 * 60 + 45, stage: null, ...patch })
+const preV = (patch: Partial<OneShotFacts> = {}) => judgeOneShot(pre(patch))
+const expectPre = (label: string, patch: Partial<OneShotFacts>, code: string): void => {
+  const v = preV(patch)
+  check(`결정 전 · ${label} → ${code} · write 0`, !v.go && v.code === code, `got ${v.code}`)
+}
+{
+  const g = preV()
+  check('결정 전 03:45 · 그날 행 없음 · 전날 PREPARE·d20·d30 → GO (mode pre-decision)', g.go && g.mode === 'pre-decision', `got ${g.code}`)
+  const g2 = preV({ kstMinute: 6 * 60 + 5 })
+  check('결정 전 창 끝 06:05 → GO', g2.go && g2.mode === 'pre-decision', `got ${g2.code}`)
+  const post = judgeOneShot(base())
+  check('결정 뒤 07:05 → GO (mode post-decision)', post.go && post.mode === 'post-decision')
+}
+expectPre('03:44 이른 실행', { kstMinute: 3 * 60 + 44 }, 'OUTSIDE_WINDOW')
+expectPre('06:06 늦은 실행', { kstMinute: 6 * 60 + 6 }, 'OUTSIDE_WINDOW')
+expectPre('06:59 (두 창 사이)', { kstMinute: 6 * 60 + 59 }, 'OUTSIDE_WINDOW')
+expectPre('그날 행이 이미 있다(PREPARE 여도)', { stage: base().stage }, 'STAGE_ALREADY_DECIDED')
+expectPre('그날 행이 이미 있다(TRIAL)', { stage: { ...base().stage!, state: 'TRIAL' } }, 'STAGE_ALREADY_DECIDED')
+expectPre('그날 행 판독 실패', { stage: undefined }, 'STAGE_UNKNOWN')
+expectPre('전날 행 판독 실패', { previousStage: undefined }, 'PREV_STAGE_UNKNOWN')
+expectPre('전날 행 없음', { previousStage: null }, 'PREV_STAGE_MISSING')
+expectPre('전날이 아니라 이틀 전 행', { previousStage: { ...base().previousStage!, kstDate: '2026-11-13' } }, 'STAGE_STALE')
+expectPre('전날 행이 그날 날짜', { previousStage: { ...base().previousStage!, kstDate: '2026-11-15' } }, 'STAGE_STALE')
+expectPre('전날 사람이 쓴 행', { previousStage: { ...base().previousStage!, decidedBy: 'founder' } }, 'STAGE_NOT_CONTROLLER')
+expectPre('전날 TRIAL(전날이 증명일)', { previousStage: { ...base().previousStage!, state: 'TRIAL' } }, 'PROOF_DAY')
+expectPre('전날 REPROVE', { previousStage: { ...base().previousStage!, state: 'REPROVE' } }, 'PROOF_DAY')
+expectPre('전날 HOLD', { previousStage: { ...base().previousStage!, state: 'HOLD' } }, 'STAGE_NOT_PREPARE')
+expectPre('전날 release d10', { previousStage: { ...base().previousStage!, release: 'd10' } }, 'STAGE_RELEASE')
+expectPre('전날 capacity d20', { previousStage: { ...base().previousStage!, capacity: 'd20' } }, 'STAGE_CAPACITY')
+expectPre('결정 전이라도 runtime 다름', { originMain: 'b'.repeat(40) }, 'RUNTIME_MISMATCH')
+expectPre('결정 전이라도 job 실행 중', { runningJobs: ['com.soransoran.navercafe-collect-wgang-multi'] }, 'JOB_RUNNING')
+expectPre('결정 전이라도 용량 39/39', { capacity: { contractValid: 39, stageActive: 39 } }, 'CAPACITY_BASELINE')
+check('결정 전이라도 39/39 + 다른 게이트 통과면 P15 교정 1회 허용',
+  remediationEligible(preV({ capacity: { contractValid: 39, stageActive: 39 } }), { capacity: { contractValid: 39, stageActive: 39 } }))
+check('결정 뒤 창은 전날 행을 보지 않는다(전날 HOLD 여도 그날 PREPARE 면 GO)',
+  judgeOneShot({ ...base(), previousStage: { ...base().previousStage!, state: 'HOLD' } }).go)
+check('결정 뒤 창은 전날 행 판독 실패와 무관하다', judgeOneShot({ ...base(), previousStage: undefined }).go)
+check('창 판정: 03:45 pre · 06:05 pre · 07:05 post · 07:19 post · 03:44/06:06/07:04/07:20 null',
+  oneShotWindowOf(225)?.mode === 'pre-decision' && oneShotWindowOf(365)?.mode === 'pre-decision'
+  && oneShotWindowOf(425)?.mode === 'post-decision' && oneShotWindowOf(439)?.mode === 'post-decision'
+  && [224, 366, 424, 440].every((m) => oneShotWindowOf(m) === null))
+check('전날 계산: 11-17→11-16 · 12-01→11-30 · 01-01→전년 12-31 · 모양 오류 null',
+  previousKstDateOf('2026-11-17') === '2026-11-16' && previousKstDateOf('2026-12-01') === '2026-11-30'
+  && previousKstDateOf('2027-01-01') === '2026-12-31' && previousKstDateOf('2026-02-30') === null && previousKstDateOf('x') === null)
 
 console.log('\n④ runtime · lock · job')
 expect('origin/main 다름', { originMain: 'b'.repeat(40) }, 'RUNTIME_MISMATCH')
@@ -143,12 +192,15 @@ check('시각·사유는 승인 digest 에 들어가지 않는다', plan2.planDi
   && supplementApprovalDigestOf(plan2.asset, plan2.manifest) === plan.planDigest)
 check('saltId 가 바뀌면 승인 digest 도 바뀐다', supplementApprovalDigestOf(plan.asset, { ...plan.manifest, saltId: 'other' }) !== plan.planDigest)
 
-console.log('\n⑨ plist — 고정 날짜 · 07:05 · runtime 트리 · RunAtLoad false')
+console.log('\n⑨ plist — 고정 날짜 · 03:45 · 07:05 · runtime 트리 · RunAtLoad false')
 const xml = renderOneShotPlist({ npx: '/n/bin/npx', nodebin: '/n/bin', runtimeRoot: '/U/rt', logdir: '/U/logs', date: '2026-11-15' })
 check('Label', xml.includes(`<string>${ONESHOT_LABEL}</string>`))
 check('인자에 --apply · --date 고정', xml.includes('<string>--apply</string>') && xml.includes('<string>--date=2026-11-15</string>'))
 check('runtime 트리의 실행기', xml.includes('<string>/U/rt/scripts/persona-d30-oneshot.mts</string>') && xml.includes('<key>WorkingDirectory</key><string>/U/rt</string>'))
-check('07:05 하루 1번 · RunAtLoad false', xml.includes('<key>Hour</key><integer>7</integer><key>Minute</key><integer>5</integer>') && xml.includes('<key>RunAtLoad</key><false/>'))
+check('시작 시각 정확히 두 개 03:45 · 07:05 · RunAtLoad false',
+  xml.includes('<dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>45</integer></dict>')
+  && xml.includes('<dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>5</integer></dict>')
+  && (xml.match(/<key>Hour<\/key>/g) ?? []).length === 2 && xml.includes('<key>RunAtLoad</key><false/>'))
 let threw = false
 try { renderOneShotPlist({ npx: 'n', nodebin: 'n', runtimeRoot: 'r', logdir: 'l', date: 'tomorrow' }) } catch { threw = true }
 check('날짜 모양 오류는 렌더하지 않는다', threw)
