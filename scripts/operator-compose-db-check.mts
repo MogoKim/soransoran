@@ -48,6 +48,7 @@ import { createOperatorReplyTx, OPERATOR_REPLY_MAX_ATTEMPTS, OPERATOR_REPLY_MESS
 import { countRealReactions, syncBestEligibility } from '../src/lib/best-ranking-db'
 import { HOME_GUEST_COMMENT_WHERE, HOME_MEMBER_COMMENT_WHERE } from '../src/lib/popularity-db'
 import { MEMBER_COMMENT_WHERE } from '../src/lib/queries/customer-composition'
+import { OPERATOR_NAME_WRITER_WHERE } from '../src/lib/queries/operator-compose'
 import { TARGET_COMMENT_SELECT, targetCommentCounts } from '../src/lib/persona-target-tx'
 import { authorKindOf } from '../src/lib/comment-thread'
 import { loadPostThreads } from '../src/lib/queries/comment-threads'
@@ -229,6 +230,16 @@ async function main(): Promise<void> {
     operatorWriterId: writer.id, postId: memberPost.id, content: '차단을 푼 뒤 다는 답',
     actorUserId: admin.id, requestKey: 'key-after-unblock',
   })).kind, 'created')
+
+  // 🔴 운영자 이름 목록은 OP 행만 — Persona 목소리(PV) 행은 같은 표에 있어도 이름 칸에 섞이지 않는다(2026-11-16)
+  const pvRow = await prisma.operatorWriter.create({ data: { code: 'PV01', userId: personaUser.id }, select: { id: true } })
+  const nameRows = await prisma.operatorWriter.findMany({ where: OPERATOR_NAME_WRITER_WHERE, select: { code: true } })
+  expect('🔴 운영자 이름 목록 조건에 PV 행이 없다 · OP 행은 있다', [nameRows.some((r) => r.code === 'PV01'), nameRows.some((r) => r.code === 'OP01')], [false, true])
+  expect('🔴 운영자 이름 칸 저장은 PV 행(Persona 계정)을 막는다', (await createOperatorCommentTx(prisma, {
+    operatorWriterId: pvRow.id, postId: memberPost.id, content: 'PV 행으로 운영자 이름 댓글 시도',
+    actorUserId: admin.id, requestKey: 'key-pv-as-operator',
+  })).kind, 'blocked')
+  await prisma.operatorWriter.delete({ where: { id: pvRow.id } })
 
   console.log('\n══════ ⑥ 작성자 위조 · 자격')
   expect('🔴 없는 작성자로는 못 쓴다', (await createOperatorPostTx(prisma, {
