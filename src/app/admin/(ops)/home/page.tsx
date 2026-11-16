@@ -7,7 +7,7 @@ import { popularityScore, type MenopauseShortReason } from '@/lib/popularity'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import { boardLabel, formatKst } from '@/lib/admin-format'
 import { HOME_MAGAZINE_COUNT, HOME_POPULAR_PER_BOARD } from '@/lib/home-exposure'
-import { comparePinRows, isOverrideActive } from '@/lib/home-exposure-rules'
+import { orderPinOverrides, isOverrideActive } from '@/lib/home-exposure-rules'
 import { DISCOVERY_ELIGIBLE_WHERE } from '@/lib/post-visibility'
 import AdminHomeOverrideForm from '@/components/admin/AdminHomeOverrideForm'
 import AdminHomeOverrideControls from '@/components/admin/AdminHomeOverrideControls'
@@ -29,7 +29,7 @@ import {
  * 🔴 홈과 같은 편성 함수를 **비로그인 손님 관점**으로 부른다(getGuestHomePopularViews).
  *    따로 조회하면 화면과 다른 목록을 보게 되어 이 화면이 거짓말이 된다. 운영자 본인의 차단 목록을 걸면
  *    운영자가 차단한 회원의 글이 여기서만 빠진다 — 그래서 차단 없이 본다.
- * 🔴 고정 번호는 홈과 같은 비교 함수(comparePinRows)로 매긴다 — 같은 결정을 두 곳에서 내리지 않는다.
+ * 🔴 고정 번호는 홈과 같은 비교 함수(orderPinOverrides)로 매긴다 — 같은 결정을 두 곳에서 내리지 않는다.
  *
  * 🔴 데스크톱 게시판별 편성(desktop)은 읽기 전용 미리보기다. 고정·숨김 조작은 모바일 결과 표 한 벌에만 둔다 —
  *    같은 글에 폼이 두 벌이면 어느 쪽에서 건 예외인지 운영자가 헷갈린다. 예외는 어차피 세 결과 모두에 걸린다.
@@ -123,7 +123,7 @@ export default async function AdminHomeExposurePage({
   // 만료된 행은 지우지 않고 화면에서만 뺀다 — 이력은 남는다
   const live = overrides.filter((o) => isOverrideActive(o, now))
   // 🔴 홈의 PIN 순서와 같은 함수 — DB 정렬은 보조일 뿐 번호의 근거가 아니다
-  const pinned = live.filter((o) => o.action === 'PIN').sort(comparePinRows)
+  const pinned = live.filter((o) => o.action === 'PIN').sort(orderPinOverrides)
   const hiddenRows = live.filter((o) => o.action === 'HIDE')
   const soonExpiring = live.filter((o) => {
     const m = minutesLeft(o.expiresAt, now)

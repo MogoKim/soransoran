@@ -276,13 +276,13 @@ console.log('\n⑦ 편성 배선 — 한 now · 한 벌 후보 · 손님 관점 
   const preview = admin.slice(admin.indexOf('데스크톱 게시판별 미리보기'), admin.indexOf('홈에 없는 글 찾기'))
   expect('어드민이 화면 now 로 손님 관점 ViewModel 을 부른다(운영자 본인 차단 목록 0)',
     [/getGuestHomePopularViews\(now\)/.test(admin), /getHomePopularViews\(/.test(admin), /getBlockedUserIds/.test(admin)], [true, false, false])
-  expect('어드민 고정 번호 = 홈과 같은 comparePinRows', /\.sort\(comparePinRows\)/.test(admin), true)
+  expect('어드민 고정 번호 = 홈과 같은 orderPinOverrides', /\.sort\(orderPinOverrides\)/.test(admin), true)
   expect('어드민이 갱년기톡 진단(mobileQuota)을 보여 준다', /views\.mobileQuota/.test(admin) && /allocationDefect/.test(admin), true)
   expect('데스크톱 미리보기 안에 조작 폼·action·form 0', /AdminHomeOverrideForm|AdminHomeOverrideControls|<form|action=/.test(preview), false)
   expect('조작 폼은 기존 두 자리(홈 표 · 찾기 결과)만', (admin.match(/<AdminHomeOverrideForm\b/g) ?? []).length, 2)
   expect('미리보기가 MENOPAUSE · FREE 열을 모두 그린다', /\['MENOPAUSE',\s*'FREE'\]/.test(admin) && /views\.desktop\[boardType\]/.test(admin), true)
 
-  const homeOnly = /getHomePopularViews|getGuestHomePopularViews|composeHomePopularViews|loadHomePopularInputs|applyHomeExposure|fillMenopauseMinimum|diagnoseMenopauseQuota|comparePinRows|pickBoardPopular|home-exposure|home-popular-views|['/]popularity['"]/
+  const homeOnly = /getHomePopularViews|getGuestHomePopularViews|composeHomePopularViews|loadHomePopularInputs|applyHomeExposure|fillMenopauseMinimum|diagnoseMenopauseQuota|orderPinOverrides|pickBoardPopular|home-exposure|home-popular-views|['/]popularity['"]/
   expect('/best (page · queries/best · best-ranking) 는 홈 편성 경로를 모른다',
     ['src/app/best/page.tsx', 'src/lib/queries/best.ts', 'src/lib/best-ranking.ts', 'src/lib/best-ranking-db.ts'].filter((f) => homeOnly.test(code(f))), [])
 }

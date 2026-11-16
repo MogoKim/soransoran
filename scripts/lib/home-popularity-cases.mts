@@ -49,7 +49,7 @@ export type QuotaModule = {
     now?: Date
     fill?: (rest: readonly Post[], ctx: { slots: number; pinned: readonly Post[] }) => readonly Post[]
   }) => Seat
-  comparePinRows: (a: Pick<Override, 'position' | 'createdAt' | 'id'>, b: Pick<Override, 'position' | 'createdAt' | 'id'>) => number
+  orderPinOverrides: (a: Pick<Override, 'position' | 'createdAt' | 'id'>, b: Pick<Override, 'position' | 'createdAt' | 'id'>) => number
 }
 
 /** 사례 상수 — 정본 상수(home-exposure.ts)와 같은 값이어야 한다. check:home-popularity 가 둘을 대조한다 */
@@ -224,8 +224,8 @@ export function runQuotaCases(mod: QuotaModule): string[] {
     check('T-P13 행 순서 무관', JSON.stringify(ids(one.seat.posts)) === JSON.stringify(ids(two.seat.posts)))
     check('T-P13 먼저 고정한 글이 앞', ids(one.seat.posts)[0] === 'pa')
     const tie = pin('x', 1, { id: 'row-z', createdAt: ra.createdAt })
-    check('T-P13 시각까지 같으면 행 id 오름차순', mod.comparePinRows(ra, tie) < 0 && mod.comparePinRows(tie, ra) > 0)
-    check('T-P13 position 없는 행은 맨 뒤', mod.comparePinRows(pin('y', null), pin('z', 99)) > 0)
+    check('T-P13 시각까지 같으면 행 id 오름차순', mod.orderPinOverrides(ra, tie) < 0 && mod.orderPinOverrides(tie, ra) > 0)
+    check('T-P13 position 없는 행은 맨 뒤', mod.orderPinOverrides(pin('y', null), pin('z', 99)) > 0)
   }
   // T-P16 — fill 이 엉뚱한 글을 돌려줘도 규칙 함수가 거른다
   {

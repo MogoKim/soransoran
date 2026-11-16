@@ -70,7 +70,7 @@ export type OverrideRow = {
  * 🔴 DB 행 순서를 따르지 않는다. 고정 생성의 position 은 트랜잭션 밖 `max + 1` 이라
  *    (actions/admin-home-exposure.ts nextPinPosition) 같은 값이 둘 생길 수 있다 — 그때도 요청마다 순서가 같아야 한다.
  */
-export function comparePinRows(
+export function orderPinOverrides(
   a: Pick<OverrideRow, 'position' | 'createdAt' | 'id'>,
   b: Pick<OverrideRow, 'position' | 'createdAt' | 'id'>,
 ): number {
@@ -98,7 +98,7 @@ export type HomeExposureResult<T> = {
  *
  * 순서
  *   ① 활성 HIDE 를 뺀다
- *   ② 활성 PIN 을 comparePinRows 순서로 앞에 세운다 — take 에서 멈춘다
+ *   ② 활성 PIN 을 orderPinOverrides 순서로 앞에 세운다 — take 에서 멈춘다
  *   ③ 남은 자동 자리(take − PIN 수)를 fill 로 채운다 — 기본은 자동 순서 앞에서부터
  *
  * 🔴 PIN 글은 `pinnedPosts` 로 따로 받는다.
@@ -153,7 +153,7 @@ export function applyHomeExposure<T extends { id: string }>({
   for (const p of pinnedPosts) byId.set(p.id, p)
   for (const c of candidates) byId.set(c.id, c)
 
-  const pins = active.filter((o) => o.action === 'PIN' && !hidden.has(o.postId)).sort(comparePinRows)
+  const pins = active.filter((o) => o.action === 'PIN' && !hidden.has(o.postId)).sort(orderPinOverrides)
 
   const pinned: T[] = []
   const seen = new Set<string>()

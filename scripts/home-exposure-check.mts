@@ -17,7 +17,7 @@
  *   ⑤ HIDE 가 여러 건이어도 자리가 줄지 않는다 — 규칙 함수가 남은 자리를 자동 후보(rest)로 채운다
  *   ⑥ 만료된 예외는 무시된다
  *   ⑦ 오늘 자정 KST 가 UTC 로 맞게 저장된다
- *   ⑧ PIN 순서는 comparePinRows 하나 — 같은 position 도 행 순서와 무관하게 같은 결과
+ *   ⑧ PIN 순서는 orderPinOverrides 하나 — 같은 position 도 행 순서와 무관하게 같은 결과
  *   ⑨ fill 이 무엇을 돌려줘도 HIDE·PIN·중복·후보 밖·초과 글은 거른다
  *
  * 사용법: npm run check:home-exposure
@@ -25,7 +25,7 @@
  */
 import {
   applyHomeExposure,
-  comparePinRows,
+  orderPinOverrides,
   isOverrideActive,
   resolveExpiresAt,
   type OverrideRow,
@@ -239,15 +239,15 @@ expect('PIN 이 take 보다 많으면 take 에서 멈춘다(자동 자리 0)',
   (({ posts, slots }) => [ids(posts), slots])(applyHomeExposure({ candidates: [post('a')], pinnedPosts: [post('x'), post('y'), post('z')], overrides: [pin('x', 0), pin('y', 1), pin('z', 2)], take: 2, now: NOW })),
   [['x', 'y'], 0])
 
-console.log('\n══════ PIN 순서 — comparePinRows 하나')
+console.log('\n══════ PIN 순서 — orderPinOverrides 하나')
 {
   const early = pin('p', 1, { id: 'row-b', createdAt: new Date('2026-09-01T01:00:00.000Z') })
   const late = pin('q', 1, { id: 'row-a', createdAt: new Date('2026-09-01T02:00:00.000Z') })
   const run = (o: OverrideRow[]) => ids(apply({ candidates: [post('p'), post('q'), post('r')], overrides: o, take: 3, now: NOW }))
   expect('같은 position — 행 순서를 뒤집어도 같은 출력', [run([early, late]), run([late, early])], [['p', 'q', 'r'], ['p', 'q', 'r']])
-  expect('같은 position — 먼저 고정한 글이 앞(행 id 와 무관)', comparePinRows(early, late) < 0, true)
+  expect('같은 position — 먼저 고정한 글이 앞(행 id 와 무관)', orderPinOverrides(early, late) < 0, true)
   const twin = pin('s', 1, { id: 'row-c', createdAt: early.createdAt })
-  expect('시각까지 같으면 행 id 오름차순', [comparePinRows(early, twin) < 0, comparePinRows(twin, early) > 0], [true, true])
+  expect('시각까지 같으면 행 id 오름차순', [orderPinOverrides(early, twin) < 0, orderPinOverrides(twin, early) > 0], [true, true])
 }
 
 console.log('\n══════ fill — 결과를 믿지 않는다')

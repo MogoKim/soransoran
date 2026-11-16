@@ -158,7 +158,7 @@ async function main(): Promise<void> {
     .map((o) => o.position as number)
   const samePositionGroups = [...new Set(positions)].filter((p) => positions.filter((x) => x === p).length > 1).length
   console.log(`\n  가입인사인데 indexPromotionBlocked=false 인 글: ${greetingLeaks}${greetingLeaks ? ' 🔴 (홈은 글 종류로도 빼지만 별도 결함으로 보고)' : ''}`)
-  console.log(`  같은 position 을 가진 활성 PIN 묶음: ${samePositionGroups} (순서는 comparePinRows 로 결정적)`)
+  console.log(`  같은 position 을 가진 활성 PIN 묶음: ${samePositionGroups} (순서는 orderPinOverrides 로 결정적)`)
 
   const cross = views.desktop.MENOPAUSE.filter((c) => views.desktop.FREE.some((f) => f.id === c.id)).length
   console.log(`\n  데스크톱 갱년기톡 ${views.desktop.MENOPAUSE.length} · 자유게시판 ${views.desktop.FREE.length} · 교집합 ${cross}`)

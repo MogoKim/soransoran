@@ -82,7 +82,7 @@ const BEST = {
   isolatedFiles: ['src/app/best/page.tsx', 'src/lib/queries/best.ts'],
   // 🔴 모듈 경로(home-popular-views)도 막는다 — `import { x as y } from` 별칭이면 함수 이름이 코드에 남지 않는다.
   mustNotMatch:
-    /getHomePopularViews\b|getGuestHomePopularViews\b|composeHomePopularViews\b|loadHomePopularInputs\b|applyHomeExposure\w*\b|HomeExposureOverride\b|homeExposureOverride\b|fillMenopauseMinimum\b|diagnoseMenopauseQuota\b|comparePinRows\b|pickBoardPopular\b|home-popular-views\b/,
+    /getHomePopularViews\b|getGuestHomePopularViews\b|composeHomePopularViews\b|loadHomePopularInputs\b|applyHomeExposure\w*\b|HomeExposureOverride\b|homeExposureOverride\b|fillMenopauseMinimum\b|diagnoseMenopauseQuota\b|orderPinOverrides\b|pickBoardPopular\b|home-popular-views\b/,
 }
 
 /**
