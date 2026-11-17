@@ -93,6 +93,11 @@ export type CandidateInput = {
   text: string
   /** ① 대조용 source 텍스트 (원문 본문 · 원댓글) */
   sourceTexts: readonly string[]
+  /**
+   * ② 고유 표현 대조 대상 — 주지 않으면 `sourceTexts` 전체다.
+   * 글쓴이가 자기 글에 답할 때는 자기 글(제목 · 본문)을 뺀 것이 온다: 자기 글의 낱말을 다시 쓰는 것은 베끼기가 아니다.
+   */
+  uniqueExpressionSources?: readonly string[]
   /** ⑥-A 대조용 — 회원 표시명 · 크롤 author 원문 (있으면) */
   knownNames?: readonly string[]
   /** 페르소나가 맡지 않는 역할 — forbiddenReactionRoles */
@@ -322,8 +327,10 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   } else if (!hasSource) {
     gates.push({ gate: '②', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
   } else {
+    // 🔴 따로 받은 대조 대상이 비어 있으면 전체로 돌아간다 — 대조 없이 통과시키지 않는다
+    const narrowed = (input.uniqueExpressionSources ?? []).filter((t) => t.trim() !== '')
     const two = checkUniqueExpression(
-      text, input.sourceTexts, input.frequencyLookup, input.corpusName ?? 'comment',
+      text, narrowed.length > 0 ? narrowed : input.sourceTexts, input.frequencyLookup, input.corpusName ?? 'comment',
     )
     gates.push({ gate: '②', outcome: two.status, detail: two.detail })
     if (two.status !== 'pass') tags.push('SEED_TOO_CLOSE')

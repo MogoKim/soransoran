@@ -167,10 +167,22 @@ export function toGateInput(args: {
   sourceIsCafeOperational?: boolean
 }): CandidateInput {
   const p = args.input.persona
+  const post = args.input.post
+  /**
+   * 🔴 **글쓴이가 자기 글에 답하는 자리** — 그 글은 남의 글이 아니라 이 사람이 한 말이다.
+   *    · ② 고유 표현: 자기 글(제목 · 본문)은 대조에서 뺀다. 윗댓글 · 답글 대상은 그대로 대조한다
+   *    · ⑦ 자기 경험 근거: 자기 글에 쓴 사실은 다시 말할 수 있다
+   *    ① 유출 대조(`sourceTexts`)는 줄이지 않는다 — 자기 글이라도 문장을 통째로 옮기면 걸린다.
+   */
+  const ownPost = post.authorReply === true
+  const baseGrounding = groundingTextOf({ identity: p.identity, memory: args.input.memory })
   return {
     personaCode: args.input.personaCode,
     text: args.text,
     sourceTexts: args.sourceTexts,
+    ...(ownPost
+      ? { uniqueExpressionSources: [...post.existingCommentDigests, ...(post.replyToDigest === undefined ? [] : [post.replyToDigest])] }
+      : {}),
     ...(args.knownNames === undefined ? {} : { knownNames: args.knownNames }),
     // 🔴 CommentInput 이 들고 있는 것은 자동으로 잇는다 — 호출부가 잊을 자리를 없앤다
     forbiddenRoles: p.forbiddenReactionRoles,
@@ -179,7 +191,7 @@ export function toGateInput(args: {
      * 🔴 **생성 계획과 후보 검증이 같은 grounding 을 본다** (2026-09-10, P0-1).
      *    호출부가 따로 넘기지 않아도 이어지게 한다 — 잊을 자리를 없앤다.
      */
-    personaGrounding: groundingTextOf({ identity: p.identity, memory: args.input.memory }),
+    personaGrounding: ownPost ? [baseGrounding, post.title, post.bodyDigest].filter((t) => t.trim() !== '').join(' ') : baseGrounding,
     noGoTopics: p.noGoTopics,
     noGoExpressions: p.noGoExpressions,
     ...(args.frequencyLookup === undefined

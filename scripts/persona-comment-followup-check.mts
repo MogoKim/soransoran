@@ -31,7 +31,7 @@ import {
   personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
 } from '../src/lib/stage-evidence'
 import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
-import { toPromptPost } from './lib/persona-comment-bridge'
+import { toGateInput, toPromptPost } from './lib/persona-comment-bridge'
 import { sourceTextsOf } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
 import { decisionStageEnv } from '../src/lib/scale-runtime'
@@ -826,6 +826,22 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const authorPrompt = toPromptPost({ ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput).content
   check('⑪ 글쓴이 답글 입력에만 "당신이 쓴 글" 줄이 붙는다',
     authorPrompt.includes('[이 글은 당신이 쓴 글입니다') && !toPromptPost(promptInput).content.includes('당신이 쓴 글'))
+  // 🔴 글쓴이 답글의 관문 입력 — 자기 글은 ② 대조에서 빠지고 ⑦ 근거가 된다. 남의 글에 다는 댓글은 그대로다
+  const authorInput = { ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput
+  const gateSrc = [authorInput.post.title, authorInput.post.bodyDigest, ...authorInput.post.existingCommentDigests]
+  const authorGate = toGateInput({ input: authorInput, text: '새벽 세 시만 되면 눈이 떠져서 그냥 일어나 있어요', sourceTexts: gateSrc })
+  const otherGate = toGateInput({ input: promptInput, text: '저도 그래요', sourceTexts: gateSrc })
+  check('⑪ 🔴 글쓴이 답글 — ② 대조 대상에서 자기 글(제목·본문)이 빠지고 윗댓글은 남는다',
+    authorGate.uniqueExpressionSources !== undefined
+      && authorInput.post.existingCommentDigests.every((d) => authorGate.uniqueExpressionSources!.includes(d))
+      && !authorGate.uniqueExpressionSources.includes(authorInput.post.title)
+      && !authorGate.uniqueExpressionSources.includes(authorInput.post.bodyDigest),
+    JSON.stringify(authorGate.uniqueExpressionSources))
+  check('⑪ 🔴 글쓴이 답글 — ① 유출 대조(sourceTexts)는 줄지 않는다', authorGate.sourceTexts.length === gateSrc.length)
+  check('⑪ 🔴 글쓴이 답글 — 자기 글이 자기 말의 근거에 실린다',
+    (authorGate.personaGrounding ?? '').includes(authorInput.post.bodyDigest) && (authorGate.personaGrounding ?? '').includes(authorInput.post.title))
+  check('⑪ 🔴 남의 글에 다는 댓글 — ② 대조 대상을 줄이지 않고, 그 글을 자기 근거로 삼지 않는다',
+    otherGate.uniqueExpressionSources === undefined && !(otherGate.personaGrounding ?? '').includes(promptInput.post.bodyDigest))
 
   // 2 · 실회원 댓글에는 글쓴이도 자동으로 답하지 않는다
   const withMember = fxFacts([
