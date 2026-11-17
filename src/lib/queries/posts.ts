@@ -10,7 +10,6 @@ import {
 import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { BOARD_PAGE_SIZE, isPageOutOfRange, type BoardSort } from '@/lib/list-query'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
-import { HOME_POPULAR_COUNT } from '@/lib/home-exposure'
 import { composeHomePopularViews, loadHomePopularInputs } from '@/lib/home-popular-views'
 import type { BoardType } from '@prisma/client'
 
@@ -181,9 +180,9 @@ export async function getRecentDiscoveryPosts(take = 6) {
 }
 
 /**
- * 홈 인기 ViewModel — 홈(/) 과 어드민 홈 노출이 같은 결과를 읽는다.
+ * 홈 인기 ViewModel — 보는 사람(세션)의 차단 목록을 적용한다.
  *
- * 쓰는 곳: src/app/admin/(ops)/home/page.tsx · getHomePopularPosts(→ src/app/page.tsx)
+ * 쓰는 곳: src/app/page.tsx (mobile)
  */
 export async function getHomePopularViews(now: Date = new Date()) {
   const blockedIds = await getBlockedUserIds()
@@ -192,13 +191,15 @@ export async function getHomePopularViews(now: Date = new Date()) {
 }
 
 /**
- * 홈 "지금 뜨는 이야기"(모바일 한 줄) — getHomePopularViews 의 mobile 그대로다.
+ * 홈 인기 ViewModel — **비로그인 손님** 관점(차단 목록 없음). 어드민 홈 노출 미리보기 전용.
  *
- * 🔴 따로 계산하지 않는다. 홈 화면이 데스크톱 편성으로 넘어가면 이 함수는 지운다.
- *    인자는 개수 정본(HOME_POPULAR_COUNT)만 받는다 — 다른 수를 넘기면 어드민과 홈이 어긋난다.
+ * 🔴 어드민이 getHomePopularViews 를 부르면 운영자 **본인의** 차단 목록이 걸려, 운영자가 차단한 회원의 글이
+ *    미리보기에서만 빠진다 — 고객 홈과 다른 목록을 보고 판단하게 된다. 같은 편성 함수를 차단 없이 부른다.
+ * 쓰는 곳: src/app/admin/(ops)/home/page.tsx
  */
-export async function getHomePopularPosts(take: typeof HOME_POPULAR_COUNT) {
-  return (await getHomePopularViews()).mobile.slice(0, take)
+export async function getGuestHomePopularViews(now: Date = new Date()) {
+  const inputs = await loadHomePopularInputs(prisma, [], now)
+  return composeHomePopularViews(inputs, now)
 }
 
 export async function getPostDetail(postId: string) {

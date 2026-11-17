@@ -2,12 +2,12 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
-import { getHomePopularViews } from '@/lib/queries/posts'
-import { popularityScore } from '@/lib/popularity'
+import { getGuestHomePopularViews } from '@/lib/queries/posts'
+import { popularityScore, type MenopauseShortReason } from '@/lib/popularity'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import { boardLabel, formatKst } from '@/lib/admin-format'
 import { HOME_MAGAZINE_COUNT, HOME_POPULAR_PER_BOARD } from '@/lib/home-exposure'
-import { isOverrideActive } from '@/lib/home-exposure-rules'
+import { orderPinOverrides, isOverrideActive } from '@/lib/home-exposure-rules'
 import { DISCOVERY_ELIGIBLE_WHERE } from '@/lib/post-visibility'
 import AdminHomeOverrideForm from '@/components/admin/AdminHomeOverrideForm'
 import AdminHomeOverrideControls from '@/components/admin/AdminHomeOverrideControls'
@@ -26,8 +26,10 @@ import {
  * 🔴 자동 인기 점수를 대체하지 않는다. 예외는 그 위의 한 겹이다.
  *    점수는 popularity.ts 가 그대로 매기고, 여기서는 빼거나(HIDE) 앞에 세울(PIN) 뿐이다.
  *
- * 🔴 홈과 같은 함수를 쓴다 (getHomePopularViews — 홈의 getHomePopularPosts 는 그 mobile 이다).
- *    따로 조회하면 화면과 다른 목록을 보게 되어 이 화면이 거짓말이 된다.
+ * 🔴 홈과 같은 편성 함수를 **비로그인 손님 관점**으로 부른다(getGuestHomePopularViews).
+ *    따로 조회하면 화면과 다른 목록을 보게 되어 이 화면이 거짓말이 된다. 운영자 본인의 차단 목록을 걸면
+ *    운영자가 차단한 회원의 글이 여기서만 빠진다 — 그래서 차단 없이 본다.
+ * 🔴 고정 번호는 홈과 같은 비교 함수(orderPinOverrides)로 매긴다 — 같은 결정을 두 곳에서 내리지 않는다.
  *
  * 🔴 데스크톱 게시판별 편성(desktop)은 읽기 전용 미리보기다. 고정·숨김 조작은 모바일 결과 표 한 벌에만 둔다 —
  *    같은 글에 폼이 두 벌이면 어느 쪽에서 건 예외인지 운영자가 헷갈린다. 예외는 어차피 세 결과 모두에 걸린다.
@@ -56,6 +58,26 @@ const SOON_MINUTES = 30
 const PIN_COLS = 'lg:grid-cols-[5.5rem_minmax(0,1fr)_11rem_auto]'
 const HOME_COLS = 'lg:grid-cols-[2rem_minmax(0,1fr)_minmax(0,15rem)_auto]'
 
+/** 갱년기톡 최소 부족 원인 — 배지 문구와 설명. 색만으로 말하지 않는다 */
+const MENOPAUSE_SHORT_LABEL: Record<
+  MenopauseShortReason,
+  { label: string; detail: (q: { freshEligible: number; freshHours: number; eligible: number; slots: number }) => string }
+> = {
+  'fresh-short': {
+    label: '신선한 갱년기톡 부족',
+    detail: (q) =>
+      `최근 ${q.freshHours / 24}일 안 갱년기톡이 ${q.freshEligible}편뿐입니다. 그보다 오래된 글은 보장에 쓰지 않습니다(점수로 올라온 글은 그대로 둡니다).`,
+  },
+  'eligible-short': {
+    label: '노출 가능한 갱년기톡 부족',
+    detail: (q) => `숨김을 뺀 홈 자격 갱년기톡이 ${q.eligible}편입니다.`,
+  },
+  'slots-short': {
+    label: '고정 글이 자리 차지',
+    detail: (q) => `고정 뒤 남은 자동 자리가 ${q.slots}칸입니다.`,
+  },
+}
+
 function minutesLeft(expiresAt: Date | null, now: Date): number | null {
   if (!expiresAt) return null
   return Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 60000))
@@ -82,7 +104,7 @@ export default async function AdminHomeExposurePage({
 
   const [views, overrides] = await Promise.all([
     // 🔴 화면의 now 를 넘긴다 — 아래 점수 표시와 만료 판정이 편성과 같은 시각을 본다
-    getHomePopularViews(now),
+    getGuestHomePopularViews(now),
     prisma.homeExposureOverride.findMany({
       where: { surface: 'HOME_POPULAR', isActive: true },
       select: {
@@ -94,13 +116,14 @@ export default async function AdminHomeExposurePage({
         createdAt: true,
         post: { select: { id: true, title: true, boardType: true } },
       },
-      orderBy: [{ action: 'asc' }, { position: 'asc' }],
+      orderBy: [{ action: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     }),
   ])
 
   // 만료된 행은 지우지 않고 화면에서만 뺀다 — 이력은 남는다
   const live = overrides.filter((o) => isOverrideActive(o, now))
-  const pinned = live.filter((o) => o.action === 'PIN')
+  // 🔴 홈의 PIN 순서와 같은 함수 — DB 정렬은 보조일 뿐 번호의 근거가 아니다
+  const pinned = live.filter((o) => o.action === 'PIN').sort(orderPinOverrides)
   const hiddenRows = live.filter((o) => o.action === 'HIDE')
   const soonExpiring = live.filter((o) => {
     const m = minutesLeft(o.expiresAt, now)
@@ -108,6 +131,7 @@ export default async function AdminHomeExposurePage({
   }).length
 
   const posts = views.mobile
+  const quota = views.mobileQuota
   const desktopColumns = (['MENOPAUSE', 'FREE'] as const).map((boardType) => ({
     boardType,
     posts: views.desktop[boardType],
@@ -219,9 +243,30 @@ export default async function AdminHomeExposurePage({
       {/* ── 2) 지금 홈에 뜬 글 ──────────────────────────── */}
       <AdminSection
         title={`지금 홈에 뜬 글 ${posts.length}건`}
-        description="고정·숨김이 반영된 실제 결과입니다. 점수 = (실반응 + 1) / (경과시간h + 4)^0.8"
+        description="고정·숨김이 반영된 실제 결과입니다(비로그인 손님 기준 — 회원이 차단한 글은 그 회원에게만 빠집니다). 점수 = (실반응 + 1) / (경과시간h + 4)^0.8"
         className="mt-10"
       >
+        {/* 🔴 갱년기톡 최소가 모자라면 숨기지 않는다 — 원인을 보고 운영자가 판단한다. 채우는 버튼은 두지 않는다. */}
+        <div className="mt-2 flex flex-col gap-2">
+          <p className="m-0 text-sm text-content-secondary">
+            갱년기톡 {quota.shown}/{quota.minimum} · 고정 {quota.pinned} · 최근 {quota.freshHours / 24}일 후보 {quota.freshEligible}편 ·
+            노출 가능 {quota.eligible}편
+          </p>
+          {quota.deficit > 0
+            ? quota.reasons.map((r) => (
+                <p key={r} className="m-0 flex flex-wrap items-center gap-2 text-sm text-content-secondary">
+                  <AdminBadge tone="warning">{MENOPAUSE_SHORT_LABEL[r].label}</AdminBadge>
+                  <span>{MENOPAUSE_SHORT_LABEL[r].detail(quota)}</span>
+                </p>
+              ))
+            : null}
+          {quota.allocationDefect ? (
+            <p className="m-0 flex flex-wrap items-center gap-2 text-sm text-content-secondary">
+              <AdminBadge tone="danger">배분 결함</AdminBadge>
+              <span>갱년기톡 최소 규칙이 지켜지지 않았습니다. 개발 확인이 필요합니다.</span>
+            </p>
+          ) : null}
+        </div>
         {posts.length === 0 ? (
           <div className="mt-2">
             <AdminEmptyState>홈에 뜬 글이 없습니다.</AdminEmptyState>

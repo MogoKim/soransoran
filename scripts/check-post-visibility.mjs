@@ -56,12 +56,12 @@ const HOME = {
   file: 'src/app/page.tsx',
   // 홈이 써야 하는 것 — discovery 게이트를 지나는 쿼리.
   //
-  // getHomePopularPosts 는 홈 인기 편성(composeHomePopularViews)의 모바일 결과를 돌려주는
-  // 홈 전용 진입점이라 이름에 Discovery 가 없다.
+  // getHomePopularViews 는 홈 인기 편성(composeHomePopularViews)의 결과를 돌려주는
+  // 홈 전용 진입점이라 이름에 Discovery 가 없다. 홈은 그 mobile 을 쓴다.
   // 게이트를 우회하는 것이 아니다 — 아래 REQUIRED 가 posts.ts 에서
   // DISCOVERY_ELIGIBLE_WHERE 유지를 따로 강제하고, 1-d 가 그 예외를
   // home-popular-views.ts 의 composeHomePopularViews 안에서만 얹게 묶는다.
-  mustMatch: /getHomePopularPosts\b|Discovery|DISCOVERY_ELIGIBLE_WHERE/,
+  mustMatch: /getHomePopularViews\b|Discovery|DISCOVERY_ELIGIBLE_WHERE/,
   // 홈이 쓰면 안 되는 것 — 커뮤니티 노출용 쿼리
   mustNotMatch: /getRecentPosts\b|getPostsByBoard\b|COMMUNITY_VISIBLE_WHERE/,
 }
@@ -82,7 +82,7 @@ const BEST = {
   isolatedFiles: ['src/app/best/page.tsx', 'src/lib/queries/best.ts'],
   // 🔴 모듈 경로(home-popular-views)도 막는다 — `import { x as y } from` 별칭이면 함수 이름이 코드에 남지 않는다.
   mustNotMatch:
-    /getHomePopularPosts\b|getHomePopularViews\b|composeHomePopularViews\b|loadHomePopularInputs\b|applyHomeExposure\b|HomeExposureOverride\b|homeExposureOverride\b|pickHomePopular\b|pickBoardPopular\b|pickPopularByScore\b|home-popular-views\b/,
+    /getHomePopularViews\b|getGuestHomePopularViews\b|composeHomePopularViews\b|loadHomePopularInputs\b|applyHomeExposure\w*\b|HomeExposureOverride\b|homeExposureOverride\b|fillMenopauseMinimum\b|diagnoseMenopauseQuota\b|orderPinOverrides\b|pickBoardPopular\b|home-popular-views\b/,
 }
 
 /**
@@ -303,7 +303,8 @@ if (!existsSync(join(ROOT, GATE))) {
           '홈 노출 예외의 단일 적용 지점이 사라졌다.',
       )
     } else {
-      const calls = indicesOf(bare, `${symbol}(`)
+      // 🔴 이름 경계로 센다 — 접미사가 붙은 변형(applyHomeExposureX( 등)도 같은 예외 적용으로 본다
+      const calls = [...bare.matchAll(new RegExp(`\\b${symbol}\\w*\\(`, 'g'))].map((m) => m.index)
       const inside = calls.filter((i) => i > start && i < end)
       // 🔴 호출이 0개여도 "밖 호출 0" 은 참이다 — 안쪽 호출 ≥ 1 을 함께 요구해야 죽은 가드가 아니다.
       if (inside.length === 0) {
@@ -342,6 +343,16 @@ if (!existsSync(join(ROOT, GATE))) {
       errors.push(
         `${callerFile} 의 ${HOME_EXPOSURE.loaderFn} 가 DISCOVERY_ELIGIBLE_WHERE 를 ${gates}곳에서만 쓴다(자동 후보·PIN 2곳). ` +
           'Micro Seed·비공개 글이 홈 인기로 샌다 (§7-C).',
+      )
+    }
+    // 🔴 가입인사는 글 종류로도 뺀다 — indexPromotionBlocked 한 겹에만 기대지 않는다(자동 후보·PIN 2곳)
+    const greetingGates = loader.count === 1
+      ? indicesOf(bare.slice(loader.start, loader.end), 'AND: [EXCLUDE_GREETING]').length
+      : 0
+    if (greetingGates < 2) {
+      errors.push(
+        `${callerFile} 의 ${HOME_EXPOSURE.loaderFn} 가 AND: [EXCLUDE_GREETING] 를 ${greetingGates}곳에서만 쓴다(자동 후보·PIN 2곳). ` +
+          '가입인사가 홈 인기로 샐 수 있다.',
       )
     }
   }

@@ -38,7 +38,7 @@ export function generateMetadata({ searchParams }: { searchParams: BestSearchPar
  * 입성 기준은 src/lib/best-ranking.ts, 읽기는 src/lib/queries/best.ts 다.
  * 🔴 모든 쪽이 같은 목록이다 — 순위 숫자도 "현재/지난" 구분도 없다. 입성 순서이지 인기 순위가 아니다.
  * 🔴 홈 "지금 뜨는 이야기" 와는 공개 자격(DISCOVERY_ELIGIBLE_WHERE · 차단 필터)만 공유한다.
- *    점수·후보·개수·정렬·기록은 따로 둔다 — 홈은 홈의 함수(getHomePopularPosts)가 있고,
+ *    점수·후보·개수·정렬·기록은 따로 둔다 — 홈은 홈의 함수(getHomePopularViews)가 있고,
  *    홈 운영 큐레이션(PIN·HIDE)은 여기로 따라오지 않는다.
  * 🔴 이 화면은 읽기만 한다. 기록은 공감·댓글·노출 변경이 일어나는 쓰기 경로가 남긴다
  *    (best-ranking-db.ts syncBestEligibility).

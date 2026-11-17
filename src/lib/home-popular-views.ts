@@ -6,19 +6,26 @@
  *    그래야 검사·replay 가 Next 타입을 끌어오지 않고 화면과 같은 함수를 그대로 부른다.
  * 🔴 홈 노출 예외(applyHomeExposure)를 부르는 곳은 이 파일의 composeHomePopularViews 하나다.
  *
- * 쓰는 곳: src/lib/queries/posts.ts getHomePopularViews · scripts/home-popularity-*
+ * 쓰는 곳: src/lib/queries/posts.ts getHomePopularViews · getGuestHomePopularViews · scripts/home-popularity-*
  */
 import type { BoardType, Prisma } from '@prisma/client'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import { DISCOVERY_ELIGIBLE_WHERE } from '@/lib/post-visibility'
-import { pickBoardPopular, pickHomePopular, type ScorablePost } from '@/lib/popularity'
+import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
+import {
+  diagnoseMenopauseQuota,
+  fillMenopauseMinimum,
+  pickBoardPopular,
+  type MenopauseQuota,
+  type ScorablePost,
+} from '@/lib/popularity'
 import { withRealReactions } from '@/lib/popularity-db'
 import { POST_LIST_ITEM_SELECT } from '@/lib/queries/post-list-item-select'
 import { applyHomeExposure, isOverrideActive, type OverrideRow } from '@/lib/home-exposure-rules'
 import {
-  HOME_OVERRIDE_HEADROOM,
   HOME_POPULAR_CANDIDATES_PER_BOARD,
   HOME_POPULAR_COUNT,
+  HOME_POPULAR_MENOPAUSE_FRESH_HOURS,
   HOME_POPULAR_MIN_MENOPAUSE,
   HOME_POPULAR_PER_BOARD,
 } from '@/lib/home-exposure'
@@ -62,10 +69,13 @@ export async function loadHomePopularInputs(db: Prisma.TransactionClient, blocke
       where: {
         boardType,
         ...DISCOVERY_ELIGIBLE_WHERE,
+        // 🔴 가입인사는 홈의 별도 구역에 나온다 — indexPromotionBlocked 한 겹에만 기대지 않고 글 종류로도 뺀다
+        AND: [EXCLUDE_GREETING],
         ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
       },
       select: POST_LIST_ITEM_SELECT,
-      orderBy: { createdAt: 'desc' },
+      // 🔴 같은 시각 글이 60번째 경계에 걸리면 요청마다 후보가 바뀐다 — id 를 2차 키로 둔다
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: HOME_POPULAR_CANDIDATES_PER_BOARD,
     })
 
@@ -77,7 +87,7 @@ export async function loadHomePopularInputs(db: Prisma.TransactionClient, blocke
     //    expiresAt 비교는 규칙 함수가 한 곳에서 한다 — 두 곳이면 언젠가 어긋난다.
     db.homeExposureOverride.findMany({
       where: { surface: 'HOME_POPULAR', isActive: true },
-      select: { postId: true, action: true, position: true, isActive: true, expiresAt: true },
+      select: { id: true, createdAt: true, postId: true, action: true, position: true, isActive: true, expiresAt: true },
     }),
   ])
 
@@ -88,8 +98,8 @@ export async function loadHomePopularInputs(db: Prisma.TransactionClient, blocke
    *
    * 🔴 그러나 노출 안전 규칙은 이기지 않는다.
    *    자동 후보와 **똑같은 where** 를 쓴다 — 게시판(MENOPAUSE·FREE) ·
-   *    DISCOVERY_ELIGIBLE_WHERE(PUBLISHED · isMicroSeed=false ·
-   *    indexPromotionBlocked=false) · 차단 회원 제외.
+   *    DISCOVERY_ELIGIBLE_WHERE(PUBLISHED · Micro Seed 아님 ·
+   *    indexPromotionBlocked=false) · 가입인사 제외 · 차단 회원 제외.
    *    조건을 못 지난 글은 여기서 조회되지 않아 홈에 나가지 않는다.
    *
    * 🔴 HIDE 와 겹친 PIN 은 규칙 함수가 뺀다. 여기서는 거르지 않는다 —
@@ -106,6 +116,7 @@ export async function loadHomePopularInputs(db: Prisma.TransactionClient, blocke
           id: { in: activePinIds },
           boardType: { in: COMMUNITY_BOARD_TYPES },
           ...DISCOVERY_ELIGIBLE_WHERE,
+          AND: [EXCLUDE_GREETING],
           ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
         },
         select: POST_LIST_ITEM_SELECT,
@@ -115,53 +126,74 @@ export async function loadHomePopularInputs(db: Prisma.TransactionClient, blocke
   return { menopause, free, pinnedPosts, overrides }
 }
 
+/** 홈 인기 편성 결과 — 모바일 한 줄 · 그 진단 · 데스크톱 게시판별 열 */
+export type HomePopularViews<T> = {
+  mobile: T[]
+  /** 모바일 갱년기톡 최소 진단 — 어드민 홈 노출이 보여 준다 */
+  mobileQuota: MenopauseQuota
+  desktop: { MENOPAUSE: T[]; FREE: T[] }
+}
+
 /**
  * 홈 인기 편성 — 순수 점수 위에 홈 노출 예외를 한 겹 얹어 모바일·데스크톱 결과를 함께 만든다.
  *
- *   mobile   두 게시판을 섞은 한 줄 · 갱년기톡 최소 보장 · HOME_POPULAR_COUNT
- *   desktop  게시판별 열 · 최소 보장 없음 · 각 HOME_POPULAR_PER_BOARD
+ *   mobile   두 게시판을 섞은 한 줄 · 갱년기톡 최소를 **최종 목록**에서 보장 · HOME_POPULAR_COUNT
+ *   desktop  게시판별 열 · 최소 없음(열 구조가 갱년기톡 자리를 따로 준다) · 각 HOME_POPULAR_PER_BOARD
  *
  * 🔴 applyHomeExposure 를 부르는 곳은 여기 하나다.
  *    예전에 순수 점수 함수 안에 두었더니 그 함수를 함께 쓰던 /best 까지
  *    홈 고정·숨김을 따라갔다. 홈 큐레이션은 홈(/) 과 /admin/home 의 것이다.
  *
- * 🔴 `now` 하나를 점수·만료 판정 전부에 넘긴다. 결과마다 시각이 다르면 같은 HIDE 가
+ * 🔴 우선순위: 노출 안전(조회 단계) > HIDE > PIN > 갱년기톡 최소(끼워 넣는 글은 최근 14일) > 점수.
+ * 🔴 자동 후보를 미리 자르지 않는다 — 전부 넘기고 규칙 함수가 남은 자리 수를 알고 fill 로 고른다.
+ * 🔴 `now` 하나를 점수·만료·신선도 판정 전부에 넘긴다. 결과마다 시각이 다르면 같은 HIDE 가
  *    한쪽에서만 풀리고, 같은 글이 열과 한 줄에서 다른 순서를 받는다.
- * 🔴 HIDE 는 세 결과 모두에 걸린다. PIN 은 글이 속한 게시판 열 맨 위에만, 열 안에서 position 순서로 선다.
+ * 🔴 HIDE 는 세 결과 모두에 걸린다. PIN 은 글이 속한 게시판 열 맨 위에만, 열 안에서 같은 PIN 순서로 선다.
+ * 🔴 커뮤니티 게시판(MENOPAUSE·FREE) 밖 글은 받아도 버린다 — 매거진이 커뮤니티 목록에 섞이지 않는다.
  * 후보가 모자라면 있는 만큼만 — 최신 글·비적격 글로 채우지 않는다.
  */
 export function composeHomePopularViews<T extends ScorablePost>(
   { menopause, free, pinnedPosts, overrides }: HomePopularInputs<T>,
   now: Date,
-) {
-  const mobile = applyHomeExposure({
-    // 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
-    //    여유(HEADROOM)를 두고 뽑아 applyHomeExposure 가 잘라 낸다.
-    candidates: pickHomePopular({
-      menopause,
-      free,
-      take: HOME_POPULAR_COUNT * HOME_OVERRIDE_HEADROOM,
-      minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
-      now,
-    }),
-    pinnedPosts,
+): HomePopularViews<T> {
+  const community = (p: T) => p.boardType === 'MENOPAUSE' || p.boardType === 'FREE'
+  const pinnedCommunity = pinnedPosts.filter(community)
+
+  const mobileSeat = applyHomeExposure({
+    candidates: [...menopause, ...free].filter(community),
+    pinnedPosts: pinnedCommunity,
     overrides,
     take: HOME_POPULAR_COUNT,
+    now,
+    fill: (rest, { slots, pinned }) =>
+      fillMenopauseMinimum(rest, {
+        slots,
+        pinned,
+        minimum: HOME_POPULAR_MIN_MENOPAUSE,
+        freshHours: HOME_POPULAR_MENOPAUSE_FRESH_HOURS,
+        now,
+      }),
+  })
+  const mobileQuota = diagnoseMenopauseQuota(mobileSeat, {
+    minimum: HOME_POPULAR_MIN_MENOPAUSE,
+    freshHours: HOME_POPULAR_MENOPAUSE_FRESH_HOURS,
     now,
   })
 
   const column = (boardType: BoardType, posts: readonly T[]) =>
     applyHomeExposure({
-      candidates: pickBoardPopular({ posts, boardType, take: HOME_POPULAR_PER_BOARD * HOME_OVERRIDE_HEADROOM, now }),
+      candidates: posts.filter((p) => p.boardType === boardType),
       // 다른 게시판의 고정 글은 이 열에서 찾지 못하게 한다 — 규칙 함수가 찾지 못한 PIN 은 건너뛴다.
-      pinnedPosts: pinnedPosts.filter((p) => p.boardType === boardType),
+      pinnedPosts: pinnedCommunity.filter((p) => p.boardType === boardType),
       overrides,
       take: HOME_POPULAR_PER_BOARD,
       now,
-    })
+      fill: (rest, { slots }) => pickBoardPopular({ posts: rest, boardType, take: slots, now }),
+    }).posts
 
   return {
-    mobile,
+    mobile: mobileSeat.posts,
+    mobileQuota,
     desktop: { MENOPAUSE: column('MENOPAUSE', menopause), FREE: column('FREE', free) },
   }
 }
