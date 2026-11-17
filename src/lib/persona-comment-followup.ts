@@ -266,12 +266,15 @@ const HOOK_ORDER: readonly ReactionType[] = ['question', 'rebuttal', 'experience
 /**
  * 🔴 대상 반응에 어울리는 역할 — `COMMENT_REACTION_ROLES` 의 부분집합만 쓴다(생성기가 거부하지 않게).
  *    반박(`rebuttal`) 역할은 만들지 않는다 — 가벼운 반론에는 경험이나 한마디로 받는다.
+ *    앞에서부터 입력이 서는 첫 역할을 쓴다. 어느 목록이든 **되묻기(`question`)가 마지막 자리**에 있다 —
+ *    첫 댓글이 한마디·공감(같은 기능)을 이미 썼고 경험은 근거가 없어 못 쓰는 글에서, 남는 역할이 0개가 되어
+ *    그 글의 둘째 댓글 자리가 영영 열리지 않는 것을 막는다. 답글 자리에서는 한마디가 먼저 서므로 달라지지 않는다.
  */
 const ROLES_FOR: Readonly<Record<string, readonly ReactionType[]>> = {
-  question: ['experience', 'other'],
-  rebuttal: ['experience', 'other'],
+  question: ['experience', 'other', 'question'],
+  rebuttal: ['experience', 'other', 'question'],
   experience: ['empathy', 'question', 'other'],
-  empathy: ['other', 'experience'],
+  empathy: ['other', 'experience', 'question'],
 }
 
 export function rolesFor(hook: ReactionType): readonly ReactionType[] {
