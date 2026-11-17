@@ -44,7 +44,7 @@ import { SupplyLlmSession, missingBudgetEnvNames } from './lib/supply-llm-call.m
 import { type ProviderModel } from './lib/voice-m3-provider.mjs'
 import {
   COMMENT_LOOP_LOCK_FILE, commentLoopLedgerDir, commentLoopLockDir,
-  runCommentLoop, generationGateOf, type CommentGenerate, type SweepResult,
+  autoLaneWaitMs, runCommentLoop, generationGateOf, type CommentGenerate, type SweepResult,
 } from './lib/persona-comment-loop.mjs'
 
 const LIVE = process.argv.includes('--live')
@@ -76,6 +76,7 @@ async function main(): Promise<number> {
         // 🔴 진단 — 이 회차를 연 깨움(정기 · 발행 뒤 사건 · 겹친 깨움). 잠금 · 장부 · 상한은 이 값으로 갈리지 않는다
         console.log(`  깨움 ${ctx.trigger}${ctx.absorbed === null ? '' : ` (거둔 표식 ${ctx.absorbed}${ctx.absorbedAt === null ? '' : ` · ${ctx.absorbedAt}`})`}`)
         prisma ??= new PrismaClient()
+        await waitForReadingPosts(prisma)
         return runPass(prisma, new Date(), pass, proof, ctx)
       },
     })
@@ -84,6 +85,25 @@ async function main(): Promise<number> {
     return 1
   } finally {
     if (prisma !== null) await (prisma as PrismaClient).$disconnect().catch(() => undefined)
+  }
+}
+
+/**
+ * 🔴 **방금 올라온 글이 아직 읽는 중이면 그 글이 열릴 때까지 기다린다** (`--live` 만 · 최대 9분).
+ *    발행 직후 깨움은 그대로 받되, 댓글은 사람이 글을 읽고 쓸 만한 시간이 지난 뒤에 만든다.
+ *    기다린 뒤 회차 시각을 새로 읽는다. 대기 계산이 실패해도 회차는 그대로 돈다 — 그 글은 다음 정기 회차가 받는다.
+ */
+async function waitForReadingPosts(prisma: PrismaClient): Promise<void> {
+  if (!LIVE) return
+  try {
+    const now = new Date()
+    const source = makeDbTargetSource({ prisma, windowStart: new Date(now.getTime() - 7 * 86_400_000) })
+    const waitMs = await autoLaneWaitMs(source, now.getTime())
+    if (waitMs <= 0) return
+    console.log(`  첫 댓글 대기 — 방금 올라온 글을 읽는 시간 ${Math.ceil(waitMs / 1000)}초`)
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs))
+  } catch (e) {
+    console.log(`  🟡 첫 댓글 대기 계산 실패(${e instanceof Error ? e.name : 'unknown'}) — 기다리지 않고 돈다`)
   }
 }
 

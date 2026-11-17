@@ -42,7 +42,7 @@ import { publishCandidateTx, type PublishTxResult } from '../../src/lib/persona-
 import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 import {
   AUTO_LANE_DECIDED_BY, AUTO_LANE_EXPIRE_REASON, AUTO_LANE_STAGE,
-  firstPerPost, isAutoLaneCandidatePost,
+  firstCommentWaitMs, firstPerPost, isAutoLaneCandidatePost, type AutoLanePostFacts,
 } from '../../src/lib/persona-comment-auto-lane'
 import {
   gateInputOf, materializeTargets, type GateContext, type TargetSource,
@@ -116,30 +116,46 @@ export const COMMENT_LOOP_PREVIEW = 5
  *    판정은 정본 함수(`isAutoLaneCandidatePost` · `judgePostAuthor`)가 한다 — 여기서 다시 적지 않는다.
  *    🔴 이것은 **돈을 아끼는 필터**다. 막는 권한은 발행 트랜잭션에 그대로 있다.
  */
+type SourcePostOf = Awaited<ReturnType<TargetSource['posts']>>[number]
+/** 이 글의 첫 댓글 레인 사실 — 대상 고르기와 기다리기가 같은 값을 본다 */
+const autoLaneFactsOf = (p: SourcePostOf, openPostIds: ReadonlySet<string>): AutoLanePostFacts => ({
+  id: p.id, publishedAtMs: p.publishAtMs,
+  personaComments: p.comments.filter((c) => c.origin === 'PERSONA' || c.personaCode !== null).length,
+  hasOpenQueue: openPostIds.has(p.id),
+})
+/** 외부 모델로 보낼 수 있는 관리형 글인가 — 정본 판정(`judgePostAuthor`) 그대로 */
+const externalSendAllowedOf = (p: SourcePostOf): boolean => judgePostAuthor({
+  authorPersonaCode: p.authorPersonaCode,
+  authorOperatorWriterId: p.authorOperatorWriterId,
+  source: p.source,
+  authorRealMember: p.author === null ? null : {
+    accountCount: p.author.accountCount, providerId: p.author.providerId,
+  },
+  authorIsAdmin: p.author?.isAdmin ?? null,
+  visibility: p.visibility,
+}).externalSendAllowed
+const openPostIdsOf = (openKeys: readonly string[]): ReadonlySet<string> =>
+  new Set(openKeys.map((k) => k.split(':')[1] ?? '').filter((x) => x !== ''))
+
 export function autoLaneTargetSource(base: TargetSource, nowMs: number): TargetSource {
   return {
     ...base,
     posts: async () => {
       const [posts, openKeys] = await Promise.all([base.posts(), base.openDedupKeys()])
-      const openPostIds = new Set(openKeys.map((k) => k.split(':')[1] ?? '').filter((x) => x !== ''))
-      return posts.filter((p) => {
-        const personaComments = p.comments.filter((c) => c.origin === 'PERSONA' || c.personaCode !== null).length
-        if (!isAutoLaneCandidatePost({
-          id: p.id, publishedAtMs: p.publishAtMs, personaComments, hasOpenQueue: openPostIds.has(p.id),
-        }, nowMs)) return false
-        return judgePostAuthor({
-          authorPersonaCode: p.authorPersonaCode,
-          authorOperatorWriterId: p.authorOperatorWriterId,
-          source: p.source,
-          authorRealMember: p.author === null ? null : {
-            accountCount: p.author.accountCount, providerId: p.author.providerId,
-          },
-          authorIsAdmin: p.author?.isAdmin ?? null,
-          visibility: p.visibility,
-        }).externalSendAllowed
-      })
+      const openPostIds = openPostIdsOf(openKeys)
+      return posts.filter((p) => isAutoLaneCandidatePost(autoLaneFactsOf(p, openPostIds), nowMs) && externalSendAllowedOf(p))
     },
   }
+}
+
+/**
+ * 🔴 **첫 댓글을 달 글이 아직 읽는 중이면 열릴 때까지 남은 시간(ms)** — 없으면 0.
+ *    대상 고르기(`autoLaneTargetSource`)와 같은 글 · 같은 사실 · 같은 판정을 본다. 읽기만 한다.
+ */
+export async function autoLaneWaitMs(base: TargetSource, nowMs: number): Promise<number> {
+  const [posts, openKeys] = await Promise.all([base.posts(), base.openDedupKeys()])
+  const openPostIds = openPostIdsOf(openKeys)
+  return firstCommentWaitMs(posts.filter(externalSendAllowedOf).map((p) => autoLaneFactsOf(p, openPostIds)), nowMs)
 }
 
 // ─────────────────────────────────────────────────────────
