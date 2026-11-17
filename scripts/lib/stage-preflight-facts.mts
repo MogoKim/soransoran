@@ -16,7 +16,7 @@
  *   · Persona       🔴 **계약 유효 수는 Persona 레인이 제공한다** — 이 파일은 주입 인터페이스(`contractValidPersonas`)만 둔다.
  *                   읽기 실패면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
  *   · 단가          최근 3일(증거일 포함) 장부 정산 평균 — 댓글 1건 · 감사 1건 · 자동 READY 1건당 공급 (PR3 KEEP)
- *   · 상한          공급은 env 값을 승인 천장($1.20)으로 누른 것 · 댓글 · 감사는 각 레인 정본 env 판독기 값 그대로
+ *   · 상한          공급은 env 값을 그 증명일의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 것 · 댓글 · 감사는 각 레인 정본 env 판독기 값 그대로
  *                  (`commentLoopLimitsFromEnv` · `auditLimitsFromEnv` — 댓글 기본 $0.20/천장 $0.50을 여기서 다시 누르지 않는다)
  *   · 러너 건강      controller 가 이미 관측한 오류 신호(`errorSignalOf`)
  *
@@ -43,11 +43,11 @@ import {
 import { AUTO_DECIDER, AUTO_READY_ENV, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
 import {
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS,
+  SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS,
   supplyRunSlotMinuteOf,
 } from '../../src/lib/supply-schedule-contract'
 import { isNaturalScheduledRunTag, parseRunTokenShadowTag } from '../../src/lib/supply-run-token'
-import { isSupplyCostRecoveryTagged } from '../../src/lib/supply-cost-envelope'
+import { isSupplyCostRecoveryTagged, supplyApprovedDailyUsdOf } from '../../src/lib/supply-cost-envelope'
 import {
   judgeSlotRelease, matchOpportunitiesToSlots, publishEventAtOf, readSourceEvidence, releaseStampStatusOf,
   type SlotOpportunity,
@@ -1168,7 +1168,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     commentDailyUsdCap: commentLoopLimitsFromEnv(i.env).limits.dailyUsd,
     auditUsdPerCall,
     auditDailyUsdCap: auditLimitsFromEnv(i.env).dailyUsd,
-    supplyDailyUsdCap: cappedBy(limitsFromEnv(i.env).dailyUsd, SUPPLY_DAILY_USD_APPROVED),
+    // 🔴 그 증명일의 날짜 계약 천장으로 누른다 — 공급 러너가 그날 실제로 쓸 수 있는 값과 같아야 한다
+    supplyDailyUsdCap: cappedBy(limitsFromEnv(i.env).dailyUsd, decisionDate === null ? null : supplyApprovedDailyUsdOf(decisionDate)),
     runnerHealth: i.runnerHealth,
   }
   return {

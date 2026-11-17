@@ -14,11 +14,12 @@ import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import {
   SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_PROOF_RUN_SLOTS_KST,
   SUPPLY_BUDGET_ENV_NAMES,
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
+  SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
   SUPPLY_WORKSET_PER_RUN, SUPPLY_RESERVE_HEADROOM, SUPPLY_ENV_FILE_REL, SUPPLY_ENABLE_ENV,
   SUPPLY_JUDGE_REQUESTS_PER_RUN, SUPPLY_DRAFT_REQUESTS_PER_RUN, estimateSupplySpend,
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
+import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
 import {
   WORKSET_DEFAULT_LIMIT, WORKSET_MAX_LIMIT, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   judgeStageBudget, resolveWorksetLimit,
@@ -240,8 +241,9 @@ console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 
   check('🔴 🔴 **정본 env 가 없는 기계에는 설치본도 없다 — 예산 없이 도는 기계를 막는다**',
     operatorMachine || installed === null)
 
-  /** 🔴 승인 전 — 승인값이 없으면 **켜져 있어서는 안 된다**(fail-closed) */
-  if (SUPPLY_DAILY_USD_APPROVED === null) {
+  /** 🔴 승인 전 — 승인값이 없으면 **켜져 있어서는 안 된다**(fail-closed). 승인값은 오늘 KST 날짜 계약이다 */
+  const approvedToday = supplyApprovedDailyUsdOf(new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10))
+  if (approvedToday === null) {
     check('🔴 🔴 **하루 상한이 미승인이면 공급이 켜져 있지 않다**',
       installed === null && !enabled && declared.length === 0,
       '🔴 미승인인데 예산·스위치·설치본 중 무엇이 있다')
@@ -250,14 +252,14 @@ console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 
      * 🔴 승인 후 — 값이 있으면 승인값 이하여야 하고, 없으면 아직 안 넣은 것이다.
      *    **둘 다 PASS 다.** 켜는 순간 깨지는 검사를 다시 만들지 않는다.
      */
-    check('🔴 승인값은 0 보다 크다', SUPPLY_DAILY_USD_APPROVED > 0)
+    check('🔴 승인값은 0 보다 크다', approvedToday > 0)
     if (declared.length === SUPPLY_BUDGET_ENV_NAMES.length) {
       const daily = Number(envOf('SORAN_LLM_DAILY_BUDGET_USD'))
       const cap = Number(envOf('SORAN_LLM_RUN_REQUEST_CAP'))
       const head = Number(envOf('SORAN_LLM_RESERVE_HEADROOM'))
       check('🔴 🔴 **하루 예산이 승인값 이하다**',
-        Number.isFinite(daily) && daily <= SUPPLY_DAILY_USD_APPROVED,
-        `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED}`)
+        Number.isFinite(daily) && daily <= approvedToday,
+        `${daily} / 승인 ${approvedToday}`)
       /**
        * 🔴 **env 상한은 손으로 부른 단독 실행의 상한이다** (2026-09-28). 공급 러너의 자식은 이 값을 보지 않는다 —
        *    단계 env(judge 20 · draft 80)가 덮는다(아래 ③-b 가 실제 계획으로 본다). 그래서 **정본 합 이하의 양의 정수**면 된다.
@@ -468,10 +470,11 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 20 · judge 20 ·
   console.log(`     실측 단가 추정 — 묶음 5: 회차 $${e5.expectedPerRun.toFixed(4)} · 하루 $${e5.expectedPerDay.toFixed(4)}`
     + `  |  묶음 20: 회차 $${eCurrent.expectedPerRun.toFixed(4)} · 하루 $${eCurrent.expectedPerDay.toFixed(4)}`
     + ` · 상한 전부 사용 시 회차 $${eCurrent.capPerRun.toFixed(4)} · 하루 $${eCurrent.capPerDay.toFixed(4)}`)
-  check('🔴 🔴 **D20 준비 계약 천장은 $1.20 — 운영 env 는 그 이하여야 한다**',
-    SUPPLY_DAILY_USD_APPROVED === 1.20)
-  check('🔴 🔴 **묶음 20의 실측 기대 하루 지출이 공급 천장 안이다**',
-    SUPPLY_DAILY_USD_APPROVED !== null && eCurrent.expectedPerDay <= SUPPLY_DAILY_USD_APPROVED
+  check('🔴 🔴 **공급 승인 천장은 날짜 계약이다 — 11-16 까지 $1.20 · 11-17 부터 $1.80 · 운영 env 는 그 이하여야 한다**',
+    supplyApprovedDailyUsdOf('2026-11-16') === 1.20 && supplyApprovedDailyUsdOf('2026-11-17') === 1.80)
+  const lowestApproved = supplyApprovedDailyUsdOf('2026-11-05')
+  check('🔴 🔴 **묶음 20의 실측 기대 하루 지출이 가장 낮은 공급 천장($1.20) 안이다**',
+    lowestApproved !== null && eCurrent.expectedPerDay <= lowestApproved
     && Math.abs(eCurrent.expectedPerRun - 4 * e5.expectedPerRun) < 1e-9, `$${eCurrent.expectedPerDay.toFixed(4)}`)
   {
     /**
