@@ -93,14 +93,14 @@ export const SUPPLY_REQUESTS_PER_RUN = 100
  *      → 당시 꽉 찬 회차 기준 하루 약 5.6회분. 운영 장부는 늦은 회차 몫을 먼저 보호하고,
  *        그때는 장부가 마지막 회차를 **막는다**(fail-closed). 그것이 의도한 동작이다.
  *
- *    이 문단은 초기 예산의 추적 근거다. 현재 계약 천장은 아래 $1.20이며,
+ *    이 문단은 초기 예산의 추적 근거다. 현재 계약 천장은 날짜별 비용 계약이 정하며(11-17 부터 $1.80),
  *    실제 운영은 env 예산과 계약 천장 중 낮은 값으로 막힌다.
  *
  *    🔴 추가 댓글 생성도 같은 공급 장부와 하루 천장을 공유한다. 적용 예산을 판독하지 못하면
  *       유료 요청을 보내지 않고 `NO_BUDGET`으로 닫는다.
  */
 /**
- * 🔴 **계약 천장 $1.20/day** (2026-10-16 D20 준비). 위 $0.30 근거와 D10까지 쓰던
+ * 🔴 **계약 천장 $1.20/day** (2026-10-16 D20 준비 · 역사 — 2026-11-17 부터 $1.80, 정본은 날짜별 비용 계약). 위 $0.30 근거와 D10까지 쓰던
  *    $0.50 운영값은 그대로 남긴다 — 천장은 "여기까지 올릴 수 있다" 이지 "이만큼 쓴다" 가 아니다.
  *
  *    🔴 이 변경은 운영 env(`SORAN_LLM_DAILY_BUDGET_USD`)를 쓰지 않는다. D5·D10은 현재 env 값으로
@@ -108,8 +108,8 @@ export const SUPPLY_REQUESTS_PER_RUN = 100
  *       사람이 env를 올려야만 열린다. 최근 D5 실측 $0.0487/result를 단순 적용하면 D20은 $0.974/day라
  *       옛 $0.50 천장으로는 구조적으로 불가능했고, $1.20은 그 값에 약 23% 여유를 둔 승인 천장이다.
  */
-export const SUPPLY_DAILY_USD_PROPOSED = 1.20
-export const SUPPLY_DAILY_USD_APPROVED: number | null = 1.20
+// 🔴 (2026-11-16) 승인 천장 상수 `SUPPLY_DAILY_USD_APPROVED`·`SUPPLY_DAILY_USD_PROPOSED` 를 지웠다. 천장은 날짜별 비용 계약
+//    (`supply-cost-envelope.ts` 의 `supplyApprovedDailyUsdOf`) 하나가 정한다 — 11-05~11-16 $1.20 · 11-17~ $1.80.
 
 /**
  * 당일 증명 슬롯을 늦은 재고 슬롯보다 먼저 보호하는 운영 profile의 최소 하루 예산.
@@ -206,9 +206,7 @@ export function describeSupplySchedule(): string {
     `회차 ${SUPPLY_RUNS_PER_DAY}회/day — ${slots} KST`,
     `회차당 원천 ${SUPPLY_WORKSET_PER_RUN} · 요청 ${SUPPLY_REQUESTS_PER_RUN}`
       + ` (judge ${SUPPLY_JUDGE_REQUESTS_PER_RUN} · draft ${SUPPLY_DRAFT_REQUESTS_PER_RUN})`,
-    SUPPLY_DAILY_USD_APPROVED === null
-      ? `🔴 하루 비용 상한 **미승인** — 제안값 $${SUPPLY_DAILY_USD_PROPOSED.toFixed(2)}`
-      : `하루 비용 계약 천장 $${SUPPLY_DAILY_USD_APPROVED.toFixed(2)} — 🔴 장부는 별도 운영 env 값으로 막는다(이 천장 이하)`,
+    '하루 비용 계약 천장은 날짜별 비용 계약(supply-cost-envelope)이 정한다 — 🔴 장부는 별도 운영 env 값으로 막는다(이 천장 이하)',
     `예산 env ${SUPPLY_BUDGET_ENV_NAMES.join(' · ')} — 🔴 정본 env 파일(~/${SUPPLY_ENV_FILE_REL}) 한 곳에 둔다`,
     `여유 배수 ${SUPPLY_RESERVE_HEADROOM} (입력 추정치에만 곱한다 · 출력은 확정 한도)`,
     `🔴 스위치 ${SUPPLY_ENABLE_ENV} 가 true 여야 --live 가 산다`,
