@@ -869,7 +869,13 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const allUsed = fxFacts([
     { id: 'c0', atMin: 5, origin: 'PERSONA', persona: 'pZ', reaction: 'other', provenance: 'none', role: 'experience' },
     { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: 'other' },
+    { id: 'c2', atMin: 15, origin: 'PERSONA', persona: 'pC', reaction: 'other', provenance: 'none', role: 'question' },
   ], 'question')
+  const genericUsed = fxFacts([{ id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'other', provenance: 'auto', role: 'other' }], 'question')
+  check('⑪ 🔴 첫 댓글이 한마디여도 질문 글의 둘째 자리는 열려 있다 — 경험 다음에 되묻기가 남는다',
+    JSON.stringify(M.postHookRolesOf(genericUsed, 'question')) === JSON.stringify(['experience', 'question']))
+  check('⑪ 🔴 답글 자리의 역할 순서는 한마디가 되묻기보다 먼저다 — 답글이 되묻기로 바뀌지 않는다',
+    ['question', 'rebuttal', 'empathy'].every((h) => { const r = M.rolesFor(h as never); return r.indexOf('other') >= 0 && r.indexOf('other') < r.indexOf('question') }))
   check('⑪ 🔴 최상위 Persona 댓글이 쓴 기능을 빼면 남는 역할이 없다 → 글 hook 닫힘 STOP',
     M.postHookRolesOf(allUsed, 'question').length === 0 && M.judgeFollowupPost(allUsed, at).verdict === 'STOP')
 
