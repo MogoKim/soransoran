@@ -8,16 +8,20 @@
  * 격리 Postgres 는 scripts/operator-compose-db-check.mts 머리 주석의 절차 그대로다
  * (DB 이름 soran_test · `npx prisma migrate deploy` 로 올린 뒤 실행).
  *
- * 홈이 부르는 것과 같은 함수를 부른다 — withRealReactions · pickHomePopular ·
- * POST_LIST_ITEM_SELECT · DISCOVERY_ELIGIBLE_WHERE. getHomePopularPosts 자체는 auth() 를 불러
- * 세션 없이 돌릴 수 없어, 그 안의 조회 모양(게시판별 최신 후보 → 실반응 수 → 점수)을 그대로 따른다.
+ * 홈이 부르는 것과 같은 함수를 부른다 — withRealReactions · fillMenopauseMinimum ·
+ * POST_LIST_ITEM_SELECT · DISCOVERY_ELIGIBLE_WHERE. getHomePopularViews 자체는 auth() 를 불러
+ * 세션 없이 돌릴 수 없어, 그 안의 두 단계(loadHomePopularInputs → composeHomePopularViews)를
+ * 차단 목록과 now 를 넘겨 그대로 부른다(④). 손님 관점(어드민)은 차단 목록 [] 로 같은 두 단계다.
  */
 import { PrismaClient, type BoardType, type Prisma } from '@prisma/client'
 
 import { withRealReactions } from '../src/lib/popularity-db'
-import { pickHomePopular } from '../src/lib/popularity'
+import { fillMenopauseMinimum, popularityScore } from '../src/lib/popularity'
 import { DISCOVERY_ELIGIBLE_WHERE } from '../src/lib/post-visibility'
 import { POST_LIST_ITEM_SELECT } from '../src/lib/queries/post-list-item-select'
+import { composeHomePopularViews, loadHomePopularInputs } from '../src/lib/home-popular-views'
+import { GREETING_CATEGORY } from '../src/lib/greeting-policy'
+import { HOME_POPULAR_MENOPAUSE_FRESH_HOURS, HOME_POPULAR_MIN_MENOPAUSE } from '../src/lib/home-exposure'
 
 const URL = process.env.DATABASE_URL ?? ''
 if (!/127\.0\.0\.1:\d+\/soran_test/.test(URL)) {
@@ -163,25 +167,134 @@ async function main(): Promise<void> {
   await comment(meno, { commentOrigin: 'GUEST', guestNickname: '손님' })
 
   const [menoRows, freeRows] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
-  const picked = pickHomePopular({
-    menopause: await withRealReactions(prisma, menoRows),
-    free: await withRealReactions(prisma, freeRows),
-    take: 4,
-    minMenopause: 0,
-    now: NOW,
-  })
+  const picked = fillMenopauseMinimum(
+    [...(await withRealReactions(prisma, menoRows)), ...(await withRealReactions(prisma, freeRows))],
+    { slots: 4, pinned: [], minimum: 0, freshHours: HOME_POPULAR_MENOPAUSE_FRESH_HOURS, now: NOW },
+  )
   // meno 2/5^0.8=0.552 · realOnly 2/5.5^0.8=0.509 · quiet 1/4.5^0.8=0.300 · personaOnly 1/5^0.8=0.276
   expect('순서 = 실반응 순 · Persona 10 글은 꼴찌', picked.map((p) => p.id), [meno, realOnly, quiet, personaOnly])
   expect('화면 댓글 수는 그대로 실린다', picked.map((p) => p._count.comments), [6, 1, 0, 10])
   // 대조 — 옛 축(화면 숫자)이면 personaOnly 가 1위였다. 이 검사가 두 축을 가른다.
-  const legacy = pickHomePopular({
-    menopause: menoRows.map((p) => ({ ...p, realReactions: p._count.comments })),
-    free: freeRows.map((p) => ({ ...p, realReactions: p._count.comments })),
-    take: 4,
-    minMenopause: 0,
-    now: NOW,
-  })
-  expect('대조 — 화면 숫자로 매기면 Persona 10 글이 1위', legacy[0]?.id, personaOnly)
+  const byScreenCount = [...menoRows, ...freeRows]
+    .map((p) => ({ ...p, realReactions: p._count.comments }))
+    .sort((a, b) => popularityScore(b, NOW) - popularityScore(a, NOW))
+  expect('대조 — 화면 숫자로 매기면 Persona 10 글이 1위', byScreenCount[0]?.id, personaOnly)
+
+  console.log('\n④ 홈 편성 — 실제 Postgres 에서 최종 mobile 갱년기톡 최소 7 · desktop 10|10 · 조회 수 그대로')
+  await reset()
+  const writer = await member('글쓴이3')
+  const blockedWriter = await member('차단된글쓴이') // 보는 사람이 차단한 작성자 — blockedIds 로 넘긴다
+  const fans = await Promise.all(['팬1', '팬2', '팬3', '팬4'].map((n) => member(n)))
+  const pu4 = await prisma.user.create({ data: { nickname: '페르소나4' }, select: { id: true } })
+  const pz4 = await prisma.persona.create({ data: { code: 'P97', userId: pu4.id }, select: { id: true } })
+  const make = (ageH: number, boardType: BoardType, data: Partial<Prisma.PostUncheckedCreateInput> = {}) =>
+    prisma.post
+      .create({ data: { boardType, title: `t${seq++}`, content: 'c', authorId: writer, createdAt: new Date(NOW.getTime() - ageH * H), ...data }, select: { id: true } })
+      .then((p) => p.id)
+  const realComments = async (postId: string, n: number) => {
+    for (let i = 0; i < n; i += 1) await comment(postId, { authorId: fans[i % fans.length] })
+  }
+  // 갱년기톡 14 · 자유게시판 62(최신 60 만 후보) — 실반응을 섞어 점수가 나이순과 다르게 한다
+  const menoIds: string[] = []
+  for (let i = 0; i < 14; i += 1) menoIds.push(await make(1 + i * 3, 'MENOPAUSE'))
+  const freeIds: string[] = []
+  for (let i = 0; i < 61; i += 1) freeIds.push(await make(0.5 + i * 2, 'FREE'))
+  const oldestFree = await make(900, 'FREE') //  후보 60 밖 — PIN 으로만 뜬다
+  for (const [id, n] of [[menoIds[5], 4], [menoIds[9], 3], [freeIds[7], 4], [freeIds[20], 2], [freeIds[33], 3]] as const) await realComments(id, n)
+  // Persona 댓글 30 — 점수를 움직이지 않는다
+  for (let i = 0; i < 30; i += 1) await comment(freeIds[50], { authorId: pu4.id, source: 'SYSTEM', commentOrigin: 'PERSONA', personaId: pz4.id })
+  // 비적격 — 실반응이 가장 많아 새면 1위로 뜬다
+  const micro = await make(0.2, 'MENOPAUSE', { isMicroSeed: true })
+  const hiddenPost = await make(0.2, 'FREE', { status: 'HIDDEN' })
+  const promoBlocked = await make(0.2, 'FREE', { indexPromotionBlocked: true })
+  const byBlocked = await make(0.2, 'MENOPAUSE', { authorId: blockedWriter })
+  for (const id of [micro, hiddenPost, promoBlocked, byBlocked]) await realComments(id, 4)
+
+  // 🔴 가입인사 — 손으로 고친 행처럼 indexPromotionBlocked=false 로 넣는다. 글 종류(category)로 빠져야 한다(T-D3)
+  const greeting = await make(0.1, 'FREE', { category: GREETING_CATEGORY, indexPromotionBlocked: false })
+  await realComments(greeting, 4)
+  const ov = (postId: string, action: 'PIN' | 'HIDE', position: number | null = null, expiresAt: Date | null = null, createdAt?: Date) =>
+    prisma.homeExposureOverride.create({ data: { surface: 'HOME_POPULAR', postId, action, position, expiresAt, ...(createdAt ? { createdAt } : {}) } })
+  await ov(oldestFree, 'PIN', 0) //                         후보 밖 자유게시판 고정
+  await ov(menoIds[10], 'PIN', 1) //                           갱년기톡 고정
+  await ov(freeIds[30], 'PIN', 2) //                           자유게시판 고정
+  await ov(menoIds[0], 'HIDE') //                              갱년기톡 숨김
+  await ov(freeIds[0], 'HIDE') //                              자유게시판 숨김
+  await ov(freeIds[2], 'PIN', 3)
+  await ov(freeIds[2], 'HIDE') //                              PIN + HIDE → 빠진다
+  await ov(freeIds[40], 'PIN', 0, new Date(NOW.getTime() - H)) // 만료된 PIN → 효과 0
+  await ov(freeIds[1], 'HIDE', null, new Date(NOW.getTime() - H)) // 만료된 HIDE → 다시 보인다
+  for (const id of [micro, hiddenPost, promoBlocked, byBlocked, greeting]) await ov(id, 'PIN', 0) // 비적격 PIN
+  const blockedIds = [blockedWriter]
+
+  const counted = () => {
+    const log: string[] = []
+    const db = prisma.$extends({
+      query: { $allOperations({ model, operation, args, query }) { log.push(`${model}.${operation}`); return query(args) } },
+    }) as unknown as Prisma.TransactionClient
+    return { db, log }
+  }
+  const histogram = (log: string[]) => Object.fromEntries([...new Set(log)].sort().map((k) => [k, log.filter((x) => x === k).length]))
+
+  const next = counted()
+  const views = composeHomePopularViews(await loadHomePopularInputs(next.db, blockedIds, NOW), NOW)
+
+  const idsOf = (l: { id: string }[]) => l.map((p) => p.id)
+  expect('mobile 20', views.mobile.length, 20)
+  expect('  └ 후보 조회 모양 = post.findMany 6(후보 2 · 실반응 글쓴이 2 · PIN 1 · PIN 글쓴이 1) · comment.groupBy 6 · override 1 (T-D6 — 쿼리 증가 0)', histogram(next.log),
+    { 'Comment.groupBy': 6, 'HomeExposureOverride.findMany': 1, 'Post.findMany': 6 })
+
+  const M = views.desktop.MENOPAUSE
+  const F = views.desktop.FREE
+  const boardOf = new Map((await prisma.post.findMany({ select: { id: true, boardType: true } })).map((p) => [p.id, p.boardType]))
+  expect(`desktop 갱년기톡 ${M.length} · 자유게시판 ${F.length} (각 ≤ 10)`, [M.length, F.length], [10, 10])
+  expect('갱년기톡 열은 갱년기톡 글만 · 자유게시판 열은 자유게시판 글만', [M.every((p) => boardOf.get(p.id) === 'MENOPAUSE'), F.every((p) => boardOf.get(p.id) === 'FREE')], [true, true])
+  expect('두 열 교집합 0', M.filter((p) => F.some((q) => q.id === p.id)).length, 0)
+  expect('PIN — 자기 열 맨 위 · position 순(자유게시판: 후보 밖 0 → 2)', [idsOf(F).slice(0, 2), idsOf(M)[0]], [[oldestFree, freeIds[30]], menoIds[10]])
+  expect('PIN — mobile 은 전 게시판 position 순(0 · 1 · 2)', idsOf(views.mobile).slice(0, 3), [oldestFree, menoIds[10], freeIds[30]])
+  const all3 = [...idsOf(views.mobile), ...idsOf(M), ...idsOf(F)]
+  expect('HIDE(menoIds[0] · freeIds[0]) · PIN+HIDE(freeIds[2]) — 세 결과 어디에도 없다', all3.filter((id) => [menoIds[0], freeIds[0], freeIds[2]].includes(id)), [])
+  expect('만료된 HIDE(freeIds[1]) 는 풀린다 · 만료된 PIN(freeIds[40]) 은 맨 위에 서지 않는다', [all3.includes(freeIds[1]), idsOf(F).indexOf(freeIds[40]) === 0], [true, false])
+  expect('비적격 PIN(Micro Seed · 비공개 · indexPromotionBlocked · 차단 작성자) 통과 0', all3.filter((id) => [micro, hiddenPost, promoBlocked, byBlocked].includes(id)), [])
+  expect('Persona 댓글 30 글(freeIds[50])은 점수로 열 상위에 오르지 않는다', idsOf(F).includes(freeIds[50]), false)
+  // T-D1 — 최근 갱년기톡이 충분하면 최종 mobile 에 7 이상 · 부족 0
+  const menoShown = views.mobile.filter((p) => boardOf.get(p.id) === 'MENOPAUSE').length
+  expect(`T-D1 최종 mobile 갱년기톡 ${menoShown} ≥ 최소 ${HOME_POPULAR_MIN_MENOPAUSE} · 부족 0 · 결함 0`,
+    [menoShown >= HOME_POPULAR_MIN_MENOPAUSE, views.mobileQuota.deficit, views.mobileQuota.allocationDefect], [true, 0, false])
+  // 🔴 갱년기톡 최소 7 은 desktop 에 없다 — 갱년기톡 열이 mobile 의 갱년기톡 수에 묶이지 않는다
+  expect('desktop 갱년기톡 열은 자기 상위 10', M.length, 10)
+  // T-D3 — 가입인사는 indexPromotionBlocked=false 여도(PIN 이어도) 어디에도 없다
+  expect('T-D3 가입인사(category) — mobile·열·PIN 경로 0편', all3.includes(greeting), false)
+  // T-D4 — 손님 관점(차단 목록 [])에는 보는 사람이 차단한 작성자 글이 있다 · 차단 목록 경로에는 없다
+  const guest = composeHomePopularViews(await loadHomePopularInputs(prisma, [], NOW), NOW)
+  const guestAll = [...idsOf(guest.mobile), ...idsOf(guest.desktop.MENOPAUSE), ...idsOf(guest.desktop.FREE)]
+  expect('T-D4 손님 관점에는 차단된 작성자 글이 뜬다 · 차단 경로에는 없다', [guestAll.includes(byBlocked), all3.includes(byBlocked)], [true, false])
+
+  // 부족분 — 갱년기톡 적격 글을 3 으로 줄이면 열은 3, 채움 0
+  await prisma.post.updateMany({ where: { id: { in: menoIds.slice(3) } }, data: { status: 'HIDDEN' } })
+  await prisma.homeExposureOverride.deleteMany({ where: { postId: { in: menoIds } } })
+  const few = composeHomePopularViews(await loadHomePopularInputs(prisma, blockedIds, NOW), NOW)
+  expect('갱년기톡 적격 3 → 열 3 · 최신·비적격·다른 게시판 채움 0', idsOf(few.desktop.MENOPAUSE).sort(), menoIds.slice(0, 3).sort())
+
+  // T-D5 — 같은 position PIN 두 행: 먼저 고정한 글이 앞(행 순서 무관)
+  await reset()
+  const w5 = await member('글쓴이5')
+  const later5 = await prisma.post.create({ data: { boardType: 'FREE', title: 'late', content: 'c', authorId: w5, createdAt: new Date(NOW.getTime() - 2 * H) }, select: { id: true } })
+  const early5 = await prisma.post.create({ data: { boardType: 'FREE', title: 'early', content: 'c', authorId: w5, createdAt: new Date(NOW.getTime() - 3 * H) }, select: { id: true } })
+  await ov(later5.id, 'PIN', 1, null, new Date(NOW.getTime() - 1 * H))
+  await ov(early5.id, 'PIN', 1, null, new Date(NOW.getTime() - 5 * H))
+  const v5 = composeHomePopularViews(await loadHomePopularInputs(prisma, [], NOW), NOW)
+  expect('T-D5 같은 position — 먼저 고정한 글이 1위', idsOf(v5.mobile).slice(0, 2), [early5.id, later5.id])
+
+  // T-D2 — 같은 createdAt 61편: 60 경계가 두 번 호출에서 같다(id 2차 키)
+  await reset()
+  const w2 = await member('글쓴이2')
+  const same = new Date(NOW.getTime() - 4 * H)
+  for (let i = 0; i < 61; i += 1) await prisma.post.create({ data: { boardType: 'FREE', title: `s${i}`, content: 'c', authorId: w2, createdAt: same } })
+  const first = await loadHomePopularInputs(prisma, [], NOW)
+  const second = await loadHomePopularInputs(prisma, [], NOW)
+  const all61 = (await prisma.post.findMany({ select: { id: true } })).map((p) => p.id).sort().reverse()
+  expect('T-D2 후보 60 경계 — 두 번 호출 같음 · id 내림차순 앞 60', [idsOf([...first.free]), idsOf([...second.free]).join() === idsOf([...first.free]).join()], [all61.slice(0, 60), true])
 
   await reset()
   console.log(`\n결과: PASS ${pass} · FAIL ${fail}`)
