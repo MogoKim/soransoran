@@ -32,6 +32,22 @@ export type LifeFixture = GateFixture & {
 const POOL_DOC = join(process.cwd(), 'docs/operations/2026-08-30-persona-pool-design.md')
 const POOL = parsePoolDoc(readFileSync(POOL_DOC, 'utf-8')).cards
 /** 🔴 정본 카드 — 없으면 멈춘다(지어내지 않는다) */
+/**
+ * 🔴 **수집 상한(300자)에 닿은 원문을 만든다** — 받은 본문을 끝에 두고 앞을 서로 다른 문장으로 채운다.
+ *    잘림은 상한에서만 일어난다. 상한에 닿지 않은 짧은 본문으로 "잘린 원문"을 흉내 내면 실제보다 강한 fixture 가 된다.
+ */
+const CAP_FILLER = [
+  '어제는 종일 비가 와서 빨래를 하나도 못 널었어요', '장 본 것도 냉장고에 다 못 넣고 식탁에 그대로 뒀고요',
+  '택배 상자는 현관에 사흘째 쌓여 있는데 뜯을 틈이 없네요', '그 와중에 보일러 점검 온다는 연락까지 받았어요',
+  '저녁은 대충 남은 반찬으로 때우고 일찍 누웠답니다', '이번 주는 약속이 겹쳐서 주말에도 쉬지를 못했어요',
+  '동네 마트 세일이라 들렀다가 생각보다 많이 사 버렸고요', '그 덕에 가계부 쓰다가 한숨이 절로 나왔습니다',
+]
+export function cutAtCap(body: string): string {
+  let lead = ''
+  for (let i = 0; lead.length + body.length + 2 < 300; i++) lead += `${CAP_FILLER[i % CAP_FILLER.length]} ${i}\n`
+  return `${lead}\n${body}`.slice(-300)
+}
+
 export const realCard = (code: string): PoolCard => {
   const c = POOL.find((x) => x.code === code)
   if (c === undefined) throw new Error(`정본 카드 ${code} 가 없다`)
@@ -278,8 +294,8 @@ const UNKNOWN_TIME = { postedAt: null, capturedAt: null } as const
 
 const SRC_DOG = {
   title: '우리 개의 한밤 만찬 고발합니다',
-  body: '베란다 열어 둔 채로 잠들었더니 녀석이 쓰레기봉투를 뒤져 매운 양념뼈를 죄다 씹어 놨어요\n\n'
-    + '안방 러그 위에까지 뼈다귀가 굴러다니고\n\n남편이 새벽 산책 다녀와 사료를 주니까\n\n야',
+  body: cutAtCap('베란다 열어 둔 채로 잠들었더니 녀석이 쓰레기봉투를 뒤져 매운 양념뼈를 죄다 씹어 놨어요\n\n'
+    + '안방 러그 위에까지 뼈다귀가 굴러다니고\n\n남편이 새벽 산책 다녀와 사료를 주니까\n\n야'),
 }
 const SRC_SCARF = {
   title: '뜨개 완성작 평가 부탁해요',
@@ -328,7 +344,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     },
     plan: planOf({
       personaCode: 'P04', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
-      speakerWarrants: [{ fact: 'spouse', requiredValue: '있음', evidenceRef: 'head', evidenceText: '남편이 새벽 산책 다녀와' }],
+      speakerWarrants: [{ fact: 'spouse', requiredValue: '있음', evidenceRef: 'tail', evidenceText: '남편이 새벽 산책 다녀와' }],
     }),
     card: realCard('P04'), ...hold(['truncatedSourceCompletion']),
   },
@@ -736,7 +752,7 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
   { card: 'P10', title: '목도리', body: '술을 검정으로 달지 아이보리로 달지 고민이에요.', source: { imageCount: 3 }, want: 'pass' },
   // 8 잘린 원문 — 없는 결말
   { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
-    source: { title: '강아지 사고', body: '강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야' },
+    source: { title: '강아지 사고', body: cutAtCap('강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야') },
     want: 'hold:truncatedSourceCompletion' },
   // 🔴 원문이 끝맺었으면 같은 초안도 통과
   { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
@@ -744,15 +760,27 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
     want: 'pass' },
   // 🔴 잘린 끝을 초안이 버렸다
   { card: 'P04', title: '강아지', body: '강아지가 밤새 갈비를 뜯어 놨어요. 다들 이런 적 있으세요?',
-    source: { title: '강아지 사고', body: '강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야' },
+    source: { title: '강아지 사고', body: cutAtCap('강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야') },
     want: 'pass' },
+  // 🔴 상한에 닿지 않은 원문은 잘린 것이 아니다 — 같은 초안 · 같은 끝 조각이어도 통과
+  { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
+    source: { title: '강아지 사고', body: '강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야' }, want: 'pass' },
+  { card: 'P19', title: '치통', body: '치과를 세 군데나 돌았는데 원인을 모르겠다니 답답하기만 합니다.',
+    source: { title: '치통', body: '치과 3군데를 갔는데 이상이 없다고 하네요\n치통도 갱년기증상일까요T' }, want: 'pass' },
+  { card: 'P12', title: '씰', body: '처음부터 언제 다시 다 모으나 싶어서 기운이 쑥 빠집니다.',
+    source: { title: '씰', body: '두개만 더 모으면 20개인데 암만 찾아도 없어요😭😭😭\n힝, 언제 다시 모아요~~' }, want: 'pass' },
+  // 🔴 상한에 닿았어도 끝맺는 말 뒤에 표정(자모·물결·이모지)만 붙었으면 끝난 글이다
+  { card: 'P19', title: '휴일', body: '다들 편안한 휴일 보내시면 좋겠네요. 저는 집에서 푹 쉬려고요.',
+    source: { title: '휴일', body: cutAtCap('오늘은 아무 데도 안 나가고 집에만 있을 생각이에요\n즐겁고 행복한 휴일 보내세요~😄😊') }, want: 'pass' },
+  { card: 'P19', title: '통증', body: '왜 이렇게까지 아픈 건지 도무지 이해할 수가 없습니다.',
+    source: { title: '통증', body: cutAtCap('이게 무슨 날벼락인지 모르겠어요\n너무 아파요ㅠㅠ') }, want: 'pass' },
   // 🔴 끝맺은 문장 뒤 한 글자 조각(cohort #3) · 수집 반복(cohort #22) · 기사 화면 글자
   { card: 'P10', title: '양갱', body: '엄마도 당 때문에 아주 가끔 드시는데 말이죠.',
-    source: { title: '양갱', body: '양갱은 엄마가 좋아하시는 간식이죠\n그것도 요즘은 당 때문에 아주 가끔 드십니다.\n우' }, want: 'pass' },
+    source: { title: '양갱', body: cutAtCap('양갱은 엄마가 좋아하시는 간식이죠\n그것도 요즘은 당 때문에 아주 가끔 드십니다.\n우') }, want: 'pass' },
   { card: 'P19', title: '명절', body: '모처럼 다 같이 갈비도 구워 먹고 김밥도 싸 먹었어요.',
-    source: { title: '명절', body: '그래도 모처럼 모이니 갈비도 구워 먹고 김밥도 해서 먹으니 좋네요\n그래도 모처럼 모이니\n갈비도 구워 먹고' }, want: 'pass' },
+    source: { title: '명절', body: cutAtCap('그래도 모처럼 모이니 갈비도 구워 먹고 김밥도 해서 먹으니 좋네요\n그래도 모처럼 모이니\n갈비도 구워 먹고') }, want: 'pass' },
   { card: 'P01', title: '기사', body: '가수 부녀 인터뷰 기사 보셨나요? 마음이 안 좋더라고요.',
-    source: { title: '기사', body: '[단독] 가수 부녀 인터뷰 마음 안좋더라 입력 2026.09.21. 오후 3:33 기사원문 공감 텍스트 음성 변환 서비스 글자 크기 변경 공유하기' }, want: 'pass' },
+    source: { title: '기사', body: cutAtCap('[단독] 가수 부녀 인터뷰 마음 안좋더라 입력 2026.09.21. 오후 3:33 기사원문 공감 텍스트 음성 변환 서비스 글자 크기 변경 공유하기') }, want: 'pass' },
   // 9 구체 생활 사실 없는 가족 유사 공감 — 자리와 무관하게 허용
   { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: { selfBasis: 'noLifeFactNeeded', warrants: [] }, want: 'pass' },
   { card: 'P08', title: '재산', body: '우리 집만 그런 게 아니었구나 싶네요.', plan: Q, want: 'pass' },

@@ -37,6 +37,7 @@ import {
   type QueueStatus,
 } from '../src/lib/original-post-match-store'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { kstDaysBetween } from '../src/lib/persona-cap'
 import {
   parseIdArgs, filterByIds, missingIds, checkLimitAgainstIds, describeIdTargeting,
 } from '../src/lib/original-post-id-target'
@@ -97,7 +98,7 @@ for (const r of personaRows) {
     noGoExpressions: r.noGoExpressions,
     voiceLength: typeof vc.length === 'string' ? vc.length : null,
     postsThisWeek,
-    daysSinceLastPost: last?.matchedAt == null ? null : Math.floor((Date.now() - last.matchedAt.getTime()) / 864e5),
+    daysSinceLastPost: last?.matchedAt == null ? null : kstDaysBetween(last.matchedAt, new Date()),
   })
 }
 console.log(`  페르소나 ${personas.length}명 (active ${personas.filter((p) => p.status === 'active').length})`)

@@ -164,10 +164,17 @@ check('🟢 7일 하고 1ms 더 지나면 풀린다', (() => {
   const p = h('P1', '2026-09-01T00:00:00.000Z')
   return personaAvailableAt(p, at)
 })())
-check('🔴 최소 간격 5일 경계 — 4일 23시간은 아직 안 된다', (() => {
-  const at = utc('2026-09-08T00:00:00.000Z')
-  const p = h('P1', '2026-09-03T01:00:00.000Z')
-  return !personaAvailableAt(p, at)
+// 🔴 최소 간격은 경과 시간이 아니라 **KST 날짜가 바뀐 횟수**다 — 발행 게이트(`personaForMatchOf`)와 같은 `kstDaysBetween`
+const D30_CAPS = { postsPerWeek: 5, minDaysBetween: 1 }
+check('🔴 어제 21:30(KST)에 쓴 사람은 오늘 08:00(KST)에 쓸 수 있다 — 24시간을 채우지 않아도 날이 바뀌었다',
+  personaAvailableAt(h('P1', '2026-11-16T12:30:00.000Z'), utc('2026-11-16T23:00:00.000Z'), D30_CAPS))
+check('🔴 같은 KST 날에는 두 번째 글을 쓰지 못한다 — 08:00 에 쓰고 21:00',
+  !personaAvailableAt(h('P1', '2026-11-16T23:00:00.000Z'), utc('2026-11-17T12:00:00.000Z'), D30_CAPS))
+check('🔴 최소 간격 5일 — KST 날짜로 4일째 밤은 아직 안 되고 5일째 아침은 된다', (() => {
+  const caps = { postsPerWeek: 5, minDaysBetween: 5 }
+  const p = h('P1', '2026-09-03T14:00:00.000Z')                                   // KST 09-03 23:00
+  return !personaAvailableAt(p, utc('2026-09-07T14:00:00.000Z'), caps)             // KST 09-07 23:00 — 4일
+    && personaAvailableAt(p, utc('2026-09-07T23:00:00.000Z'), caps)                // KST 09-08 08:00 — 5일
 })())
 // 🔴 5일이 지나도 **주간 cap 이 먼저 막는다** — 두 조건 중 더 조이는 쪽이 이긴다.
 //    최소 간격만 따로 보려면 그 글이 rolling 7일 밖에 있어야 한다.

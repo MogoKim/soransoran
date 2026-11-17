@@ -18,6 +18,7 @@ import {
   type BatchCaps, type ChildAgeBand, type PersonaForMatch,
 } from './original-post-persona-match'
 import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
+import { kstDaysBetween } from './persona-cap'
 
 export const PERSONA_FOR_MATCH_SELECT = {
   id: true, code: true, status: true, userId: true, identity: true, voiceCore: true, noGoTopics: true, noGoExpressions: true,
@@ -61,8 +62,7 @@ export async function personaForMatchOf(
     noGoExpressions: r.noGoExpressions,
     voiceLength: typeof vc.length === 'string' ? vc.length : null,
     postsThisWeek,
-    daysSinceLastPost: last?.matchedAt == null ? null
-      : Math.floor((now.getTime() - last.matchedAt.getTime()) / 864e5),
+    daysSinceLastPost: last?.matchedAt == null ? null : kstDaysBetween(last.matchedAt, now),
   }
 }
 

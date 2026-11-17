@@ -20,6 +20,7 @@ import {
   type PersonaForMatch, type ChildAgeBand, type BlockCode, type BatchDraft, type PostRequirements,
 } from '../src/lib/original-post-persona-match'
 import { judgeRealMember } from '../src/lib/real-member-gate'
+import { hasMenopauseExperience, MENOPAUSE_STATUSES } from '../src/lib/persona-life-facts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const RULES = join(HERE, '..', 'src', 'lib', 'original-post-persona-match.ts')
@@ -257,6 +258,7 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
     './real-member-gate', './scale-profile', './scale-runtime', './original-post-voice-match',
     // 🔴 (quality-v5) No-Go 판정 하나 — 순수 함수(DB · 파일 · 네트워크 0)
     './persona-no-go',
+    './persona-life-facts',
     // 🔴 (2026-10-13) 코드 순서 하나 — 순수 함수(DB · 파일 · 네트워크 0). 동점 정렬을 숫자순으로
     './persona-code',
   ] as const
@@ -1311,6 +1313,26 @@ export function hasDirectAccountCompare(src: string): boolean {
 
   if (offenders.length) bad('🔴 소재 언급 ≠ 1인칭 생활사', offenders.join(' / '))
   else ok('🔴 소재 언급 ≠ 1인칭 생활사', '거짓 안전망 주장 0 · 임자 판정 14건 · 부사구 5건 · 나이대 국소 6건 · 사람 목록 0 · 남 8건 조건 0 · 내 것 표지 우선 2건 · 임자 혼재 5건 · 나 5건 조건 성립 · 일반 논의 4건 조건 0 · 자기 경험 4건 조건 성립 · 문장 단위 · 나이대 소유 구분 · 부모 존재≠돌봄 · identity 평평 읽기 3곳 · 새 금지목록 0')
+}
+
+// ── 갱년기 경험 판정은 한 곳이다 — 화자 자격 · 초안 게이트 · 발행 배정이 같은 함수를 쓴다 ──
+{
+  const offenders: string[] = []
+  const table: [string | null | undefined, boolean][] = [['전', false], ['진행중', true], ['후', true], ['', false], [null, false], [undefined, false], ['진행', false], ['모름', false]]
+  for (const [v, want] of table) if (hasMenopauseExperience(v) !== want) offenders.push(`${String(v)} → ${String(!want)}`)
+  if (!MENOPAUSE_STATUSES.every((v) => v === '전' ? !hasMenopauseExperience(v) : hasMenopauseExperience(v))) offenders.push('카드 어휘와 판정이 어긋난다')
+  const ROOT = join(HERE, '..')
+  for (const [f, needle] of [
+    ['src/lib/content-core/speaker.ts', 'hasMenopauseExperience(v)'],
+    ['src/lib/content-core/draft-life-gates.ts', 'hasMenopauseExperience(card.menopauseStatus)'],
+    ['src/lib/original-post-persona-match.ts', '!hasMenopauseExperience(p.menopauseStatus)'],
+  ] as const) {
+    const src = readFileSync(join(ROOT, f), 'utf-8')
+    if (!src.includes(needle)) offenders.push(`${f} 가 정본 판정을 쓰지 않는다`)
+    if (/MENOPAUSE_YES|\['진행중', '후'\]/.test(src)) offenders.push(`${f} 에 따로 만든 목록이 남아 있다`)
+  }
+  if (offenders.length) bad('🔴 갱년기 경험 판정 — 한 곳', offenders.join(' / '))
+  else ok('🔴 갱년기 경험 판정 — 한 곳', '진행중·후만 참 · 빈 값·모르는 값 거짓 · 세 소비처가 같은 함수')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)

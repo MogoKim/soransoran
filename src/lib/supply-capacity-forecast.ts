@@ -13,6 +13,7 @@
 import { MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, type BatchCaps } from './original-post-persona-match'
 // 🔴 다음 슬롯 계산은 **정본 하나**다 — 여기서 시각을 다시 계산하지 않는다
 import { nextSlotAnchor, type ScaleProfile } from './scale-profile'
+import { kstDaysBetween } from './persona-cap'
 
 const DAY_MS = 86_400_000
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
@@ -62,7 +63,7 @@ export type PersonaHistory = {
  *
  * · 주간 상한: `matchedAt >= at - 7일` 인 건수 < `POST_CAP_PER_WEEK`
  *   🔴 rolling 7일이다. 달력 주가 아니다. 경계는 **포함**(`>=`)이며 러너 쿼리와 같다
- * · 최소 간격: 마지막 배정에서 `MIN_DAYS_BETWEEN_POSTS` 일 경과
+ * · 최소 간격: 마지막 배정에서 KST 날짜가 `MIN_DAYS_BETWEEN_POSTS` 번 바뀜(`kstDaysBetween` — 발행 게이트와 같은 함수)
  */
 export function personaAvailableAt(h: PersonaHistory, at: Date, caps: BatchCaps = {}): boolean {
   // 🔴 상한은 **주입값이 먼저**다. 넘기지 않으면 가장 안전한 상수로 떨어진다
@@ -74,7 +75,7 @@ export function personaAvailableAt(h: PersonaHistory, at: Date, caps: BatchCaps 
   const last = h.matchedAts.length === 0 ? null
     : h.matchedAts.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
   if (last === null) return true
-  return at.getTime() - last.getTime() >= minGap * DAY_MS
+  return kstDaysBetween(last, at) >= minGap
 }
 
 /** 그 시점에 쓸 수 있는 persona 코드들 */

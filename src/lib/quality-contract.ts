@@ -224,8 +224,15 @@ import {
  * 무결성·결속·장부·예산·usageUnknown·재시도 가능 실패·확정 결함의 전역 정지는 그대로다.
  * 🔴 의미 감사 판이 바뀌었으므로 v18 의 semanticCleared 는 승계되지 않는다 — 기존 의미 재감사 경로를 그대로 탄다.
  * 🔴 v18 이하 행은 고치거나 지우거나 v19 로 옮기지 않는다.
+ *
+ * `quality-v27` (2026-11-18) = **잘린 원문 게이트가 실제로 잘린 원문만 본다.**
+ * `truncatedSourceCompletion` 은 원문이 수집 상한(300자)에 닿았을 때만 묻고, 끝맺는 말 뒤의 표정(자모 · 물결 · 이모지)은
+ * 걷고 판정한다(`draft-gates-v13` · `evidence-v3`). 11-10~11-17 이 게이트에 걸린 89건 중 50건이 상한에 닿지 않은,
+ * 글쓴이가 끝낸 글이었다. 상한에서 잘린 원문 뒤에 결말을 이어 쓴 초안은 계속 막는다.
+ * 갱년기 경험 판정(화자 자격 · 초안 게이트 · 발행 배정)은 `persona-life-facts` 한 곳으로 모았다 — 카드 값 `진행중` 이
+ * 화자 자격에서만 경험으로 읽히지 않던 어긋남을 없앤다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v26'
+export const QUALITY_CONTRACT_VERSION = 'quality-v27'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

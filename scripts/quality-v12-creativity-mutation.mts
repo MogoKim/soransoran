@@ -20,6 +20,7 @@ import { V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION } from '../src/lib/co
 import { buildVoiceEvidence } from '../src/lib/content-core/voice-evidence'
 import { buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt } from './lib/content-core-prompts.mjs'
 import { P13 } from './lib/draft-gate-fixtures.mjs'
+import { cutAtCap } from './lib/life-gate-fixtures.mjs'
 
 // ─── 공유 픽스처 ───────────────────────────────────────────
 const NOW = new Date('2026-10-18T09:00:00+09:00')
@@ -183,7 +184,7 @@ console.log(`\n── BLOCK: ${CREATIVITY_BLOCK_CLASS.SOURCE_DISTORTION} / trunc
 {
   const ctxTrunc: DraftGateContext = {
     at: NOW,
-    source: { title: '남편이 아침에', body: '남편이 아침을 주니까 / 야', site: 'navercafe:test', postedAt: NOW, capturedAt: NOW, imageCount: null },
+    source: { title: '남편이 아침에', body: cutAtCap('남편이 아침을 주니까 / 야'), site: 'navercafe:test', postedAt: NOW, capturedAt: NOW, imageCount: null },
   }
   const i1: DraftGateInput = {
     title: '남편 이야기',

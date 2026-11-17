@@ -27,7 +27,7 @@
  *    막을 이유는 아닌 경우에만 남는 비차단 관찰이다.
  * 🔴 순수 함수다. DB · 네트워크 · 파일 IO 없음.
  */
-import { readMediaDependency, CLOSING_RE } from './evidence'
+import { readMediaDependency, closesSentence, isCutAtCollection } from './evidence'
 /** 🔴 KST 하루 경계의 정본 — 발행 일일 상한과 같은 함수다 */
 import { kstDayStart } from '../persona-cap'
 import { bandFits, readFamilyOwnership, readFamilySpecifics, type AgeShape } from './family-specifics'
@@ -35,6 +35,7 @@ import { RELATION_NAMES } from './source-facts'
 /** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
 import { OTHER_MARKERS } from '../persona-self-age'
 import type { PoolCard } from '../persona-pool-card'
+import { hasMenopauseExperience } from '../persona-life-facts'
 import { noGoHits } from '../persona-no-go'
 import { DRAFT_LIFE_ADVISORY_CODES } from '../semantic-summary-codes'
 import {
@@ -115,8 +116,12 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    ③ **물음표 · 묻는 어미가 1인칭 소유를 지우지 못한다** — 자기 가족 증거가 글에 있거나 `아이가 2살인데` 처럼 한 아이를 서술하면
  *       묻는 문장이어도 자기 일이다. 증거도 서술도 없는 일반·제3자 물음(`2살 아이 보험 어떻게 하세요?`)은 그대로 통과한다.
  *    카드의 자녀 나이대에 맞는 어린 아이(영유아 카드의 `2살 아이`)는 막지 않는다. 앞에 남이 선 말(`친구 아이가 2살`)도 막지 않는다.
+ *
+ * `draft-gates-v13` (quality-v27) — **잘린 원문 판정을 사실에 맞춘다.** 원문이 수집 상한에 닿았을 때만 "잘렸다"를 묻고
+ *    (`isCutAtCollection`), 끝맺는 말 뒤에 붙은 표정(자모 · 물결 · 이모지)은 걷고 본다(`closesSentence`).
+ *    갱년기 경험 판정은 `persona-life-facts` 하나를 쓴다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v12'
+export const DRAFT_GATE_VERSION = 'draft-gates-v13'
 
 /**
  * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
@@ -733,7 +738,7 @@ const protectedByPlan = (plan: DraftGatePlan | null, token: string): boolean => 
 
 function judgeHealth(title: string, frames: readonly ClauseFrame[], plan: DraftGatePlan | null, card: DraftGateCard): LifeHit[] {
   const out: LifeHit[] = []
-  const menoOk = ['진행중', '후'].includes((card.menopauseStatus ?? '').trim())
+  const menoOk = hasMenopauseExperience(card.menopauseStatus)
   const titleHasOtherHealthSubject = HEALTH_TOPIC_RE.test(title)
     && (PERSON_WORDS.some((marker) => title.includes(marker))
       || FAMILY_HEALTH_TITLE_SUBJECT_MARKERS.some((marker) => title.includes(marker)))
@@ -1303,11 +1308,13 @@ const stemOf = (w: string): string => w.replace(PARTICLE_TAIL_RE, '').slice(0, 2
 const squash = (s: string): string => s.replace(/\s+/g, '')
 
 /**
- * 🔴 **원문 끝이 끝맺지 못했다** — 끝 줄이 정본 `CLOSING_RE` 를 지나지 못한다. 한두 글자 조각(`야`)은
- *    앞 줄에 붙여 본다. 🔴 **수집 반복**(본문 일부가 두 번 캡처돼 두 번째가 중간에 끊김)은 잘림이 아니다 —
- *    끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다(운영 cohort #6 · #10 · #22).
+ * 🔴 **원문이 수집 상한에서 잘려 끝을 맺지 못했다** — 상한에 닿았고(`isCutAtCollection`) 끝 줄이
+ *    끝맺는 말로 끝나지 않는다(`closesSentence`). 상한에 닿지 않은 글은 글쓴이가 거기서 끝낸 것이다.
+ *    한두 글자 조각(`야`)은 앞 줄에 붙여 본다. **수집 반복**(본문 일부가 두 번 캡처돼 두 번째가 중간에
+ *    끊김)은 잘림이 아니다 — 끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다.
  */
 function openTailOf(sourceBody: string): string | null {
+  if (!isCutAtCollection(sourceBody)) return null
   const lines = sourceBody.split(/\n+/).map((x) => x.trim()).filter((x) => /[가-힣]/.test(x))
   if (lines.length === 0) return null
   let tail = lines[lines.length - 1]!
@@ -1317,10 +1324,10 @@ function openTailOf(sourceBody: string): string | null {
      * 🔴 앞 줄이 이미 끝맺었으면 **문장 경계에서** 잘린 것이다 — 조각(`우`)에는 이어 받을 내용이 없다
      *    (cohort #3 `…아주 가끔 드십니다. 우`). 앞 줄이 끝맺지 못했을 때만 붙여 본다(#2 `…주니까 / 야`).
      */
-    if (CLOSING_RE.test(prev.split(/(?<=[.!?？。])\s+/).pop() ?? prev)) return null
+    if (closesSentence(prev.split(/(?<=[.!?？。])\s+/).pop() ?? prev)) return null
     tail = `${prev} ${tail}`
   }
-  if (CLOSING_RE.test(tail)) return null
+  if (closesSentence(tail)) return null
   const all = squash(sourceBody)
   const t = squash(tail)
   if (all.indexOf(t) < all.lastIndexOf(t)) return null
