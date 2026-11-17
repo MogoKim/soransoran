@@ -38,9 +38,10 @@ import {
 import { reserveOf } from '../src/lib/llm-pricing'
 import { SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-process'
 import {
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_FIRST_DAILY_USD, SUPPLY_PROOF_RUN_SLOTS_KST,
+  SUPPLY_PROOF_FIRST_DAILY_USD, SUPPLY_PROOF_RUN_SLOTS_KST,
   SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_WORKSET_PER_RUN, estimateSupplySpend,
 } from '../src/lib/supply-schedule-contract'
+import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
 import {
   LAUNCHD_LABEL_ENV, SCHEDULED_COST_LOOKBACK_DAYS, SCHEDULED_COST_MIN_SAMPLES, SCHEDULED_RUN_WINDOW_MS,
   SUPPLY_PROCESS_LAUNCHD_LABEL,
@@ -84,11 +85,25 @@ check('보수 기본값 = 회차 상한(estimateSupplySpend(묶음).capPerRun) �
   CAPRUN === estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerRun
   && FLOOR === estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).expectedPerRun && FLOOR > 0 && CAPRUN > FLOOR,
   `cap=${CAPRUN} floor=${FLOOR}`)
-check('🔴 D20 승인 천장은 실측 기대 7회분을 덮고, 최악 단가는 장부가 fail-closed로 자른다',
-  SUPPLY_DAILY_USD_APPROVED !== null
-  && SUPPLY_RUNS_PER_DAY * FLOOR <= SUPPLY_DAILY_USD_APPROVED
-  && SUPPLY_RUNS_PER_DAY * CAPRUN > SUPPLY_DAILY_USD_APPROVED,
-  `expected=${SUPPLY_RUNS_PER_DAY}×${FLOOR.toFixed(4)} cap=${SUPPLY_RUNS_PER_DAY}×${CAPRUN.toFixed(4)} vs ${SUPPLY_DAILY_USD_APPROVED}`)
+const D20_CEILING = supplyApprovedDailyUsdOf('2026-11-05')
+check('🔴 D20 승인 천장($1.20)은 실측 기대 7회분을 덮고, 최악 단가는 장부가 fail-closed로 자른다',
+  D20_CEILING !== null
+  && SUPPLY_RUNS_PER_DAY * FLOOR <= D20_CEILING
+  && SUPPLY_RUNS_PER_DAY * CAPRUN > D20_CEILING,
+  `expected=${SUPPLY_RUNS_PER_DAY}×${FLOOR.toFixed(4)} cap=${SUPPLY_RUNS_PER_DAY}×${CAPRUN.toFixed(4)} vs ${D20_CEILING}`)
+{
+  // 🔴 2026-11-16 — 공급 러너 천장은 요청 시각 KST 날짜의 계약이다. 결정기만 $1.80 이고 공급이 $1.20 이면 증명일에 돈이 모자란다
+  const at1116 = supplySpendProtectAt({ env: {}, now: kst('2026-11-16T22:20:00'), shareUsd: 0.05, dailyUsd: 1.8 })
+  const at1117 = supplySpendProtectAt({ env: {}, now: kst('2026-11-17T06:20:00'), shareUsd: 0.05, dailyUsd: 1.8 })
+  const atMidnight = supplySpendProtectAt({ env: {}, now: kst('2026-11-17T00:00:30'), shareUsd: 0.05, dailyUsd: 1.8 })
+  check('🔴 공급 천장 — 11-16 22:20 $1.20 · 11-17 06:20 $1.80 · KST 자정 직후 $1.80 (UTC 날짜를 쓰지 않는다)',
+    at1116.protect.ceilingUsd === 1.2 && at1117.protect.ceilingUsd === 1.8 && atMidnight.protect.ceilingUsd === 1.8,
+    `${at1116.protect.ceilingUsd} · ${at1117.protect.ceilingUsd} · ${atMidnight.protect.ceilingUsd}`)
+  check('🔴 정본 함수 — 시행일 전(09-28) $1.20 · 11-05 $1.20 · 11-16 $1.20 · 11-17 $1.80 · 모양 오류 null',
+    supplyApprovedDailyUsdOf('2026-09-28') === 1.2 && supplyApprovedDailyUsdOf('2026-11-05') === 1.2
+    && supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
+    && supplyApprovedDailyUsdOf('2026-11-17T00:00') === null && supplyApprovedDailyUsdOf('x') === null)
+}
 check('실측 기간·최소 표본이 이름 붙은 상수다', SCHEDULED_COST_LOOKBACK_DAYS === 7 && SCHEDULED_COST_MIN_SAMPLES === 3)
 check('슬롯 창 = 공급 회차 정상 수명(SUPPLY_RUN_WINDOW_MS · 45분) — 잠금 시효가 아니다(잠금은 커널 lease)',
   SCHEDULED_RUN_WINDOW_MS === SUPPLY_RUN_WINDOW_MS && SUPPLY_RUN_WINDOW_MS === 45 * 60_000)
@@ -216,7 +231,7 @@ function P(reserved: number, ceiling: number | null = 0.5): SpendProtect {
   const S5 = 0.05
   const mm = supplySpendProtectAt({ env: {}, now: kst('2026-09-28T11:13:00'), shareUsd: S5, dailyUsd: 0.5 })
   check('손 실행 11:13 — 남은 5개 슬롯 + 안 돈 06:15·08:15 이월 = 7몫 · 천장 = 계약 천장',
-    Math.abs(mm.protect.reservedForOthersUsd - 7 * S5) < 1e-12 && mm.protect.ceilingUsd === SUPPLY_DAILY_USD_APPROVED,
+    Math.abs(mm.protect.reservedForOthersUsd - 7 * S5) < 1e-12 && mm.protect.ceilingUsd === supplyApprovedDailyUsdOf('2026-09-28'),
     `${mm.protect.reservedForOthersUsd}`)
   const sc = supplySpendProtectAt({ env: LABEL, now: kst('2026-09-28T12:20:00'), shareUsd: S5, dailyUsd: 0.5 })
   check('🔴 정기 회차 12:20 — 보호 없음이 아니라 **뒤 4개 슬롯** 몫을 남긴다(자기 슬롯은 뺀다 · 이월 포함 7몫/5)',
@@ -1565,8 +1580,8 @@ const putRows = (dir: string, date: string, rows: LedgerEntry[]): void => {
     check('🔴 [상한 재현] 오늘 $1.1978 사용 · 손 실행이 env 를 $5 로 덮어도 막힌다 — min(env, 천장 $1.20) · 유료 0',
       !res.r.ok && (res.r.errorCode ?? '').endsWith('SCHEDULED_RESERVE') && res.paid === 0, res.r.errorCode ?? '')
     check('🔴 [기록] 막힌 예약 줄에 적용 한도가 남는다 — env $5 · 천장 $1.20 · 적용 $1.20 · 출처 process-override',
-      res.row !== undefined && res.row.budgetDailyUsd === 5 && res.row.budgetCeilingUsd === SUPPLY_DAILY_USD_APPROVED
-      && res.row.budgetCapUsd === SUPPLY_DAILY_USD_APPROVED && res.row.budgetSource === 'process-override', JSON.stringify(res.row))
+      res.row !== undefined && res.row.budgetDailyUsd === 5 && res.row.budgetCeilingUsd === supplyApprovedDailyUsdOf('2026-09-28')
+      && res.row.budgetCapUsd === supplyApprovedDailyUsdOf('2026-09-28') && res.row.budgetSource === 'process-override', JSON.stringify(res.row))
     check('🔴 [경고] 프로세스가 .env.local 예산을 덮으면 세션이 한 번 경고한다(키 이름 · 두 값)',
       warned.length === 1 && warned[0]!.includes(BUDGET_ENV.dailyUsd) && warned[0]!.includes('0.50') && warned[0]!.includes('프로세스 5'), warned.join('|'))
     check('[기록] 사람이 읽는 줄에도 적용 한도·출처가 적힌다', /적용 한도/.test(res.text) && /process-override/.test(res.text), res.text)
@@ -1581,10 +1596,10 @@ const putRows = (dir: string, date: string, rows: LedgerEntry[]): void => {
       return { n, t, settledRow }
     })
     check('🔴 [상한 재현] 빈 장부에서 env $5 로 덮고 계속 불러도 합계(정산+열린 예약) ≤ $1.20',
-      okRun.n > 0 && okRun.t !== null && okRun.t.settledUsd + okRun.t.openReservedUsd <= (SUPPLY_DAILY_USD_APPROVED ?? 0) + 1e-12,
+      okRun.n > 0 && okRun.t !== null && okRun.t.settledUsd + okRun.t.openReservedUsd <= (supplyApprovedDailyUsdOf('2026-09-28') ?? 0) + 1e-12,
       `n=${okRun.n} settled=${okRun.t?.settledUsd} open=${okRun.t?.openReservedUsd}`)
     check('[기록] 정산 줄(접은 뒤 이기는 줄)에도 같은 한도가 남는다',
-      okRun.settledRow?.budgetCapUsd === SUPPLY_DAILY_USD_APPROVED && okRun.settledRow?.budgetSource === 'process-override')
+      okRun.settledRow?.budgetCapUsd === supplyApprovedDailyUsdOf('2026-09-28') && okRun.settledRow?.budgetSource === 'process-override')
   } finally {
     console.warn = realWarn
     if (prevDaily === undefined) delete process.env[BUDGET_ENV.dailyUsd]; else process.env[BUDGET_ENV.dailyUsd] = prevDaily

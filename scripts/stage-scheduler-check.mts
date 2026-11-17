@@ -46,7 +46,7 @@ import {
   SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN,
   supplyProofBudgetUsd, supplyProofRunSlots, supplyRunSlotMinuteOf,
 } from '../src/lib/supply-schedule-contract'
-import { SUPPLY_DAILY_USD_APPROVED } from '../src/lib/supply-schedule-contract'
+import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
 import {
   judgeStageEvidence, judgeEvidenceForTarget, trialPlanOf, carriedTrialPlanFor, PROOF_STATES,
   type EvidencePost, type EvidenceSideSignals, type StageEvidenceFacts, type StageEvidenceVerdict,
@@ -503,7 +503,7 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
   stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
   auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-  supplyDailyUsdCap: SUPPLY_DAILY_USD_APPROVED, runnerHealth: 'ok', ...o,
+  supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'), runnerHealth: 'ok', ...o,
 })
 const D20_TRANSITION = judgeNextPreflight('d20', factsFor('d20', {
     readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
@@ -533,8 +533,27 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
   && !COST_EDGE_PASS.forecastWarnings.includes('THROUGHPUT_SHORT')
   && !COST_EDGE_PASS.codes.includes('SUPPLY_COST_SHORT')
   && COST_EDGE_FAIL.codes.includes('SUPPLY_COST_SHORT'))
-check('비용 상한 정본 — 공급 승인 천장 $1.20 · 댓글 기본 $0.20 / 승인 천장 $0.50',
-  SUPPLY_DAILY_USD_APPROVED === 1.2
+{
+  // 🔴 2026-11-16 창업자 결정 — 11-17 부터 공급 승인 천장 $1.80. env 를 $1.80 으로 올려도 천장이 날짜 계약이므로
+  //    11-16 증명일에는 $1.20 으로 눌린다(소급 0). 11-17 D30(30편)은 실측 $0.052/result → $1.56 으로 PASS 해야 한다.
+  const capOf = (date: string): number => Math.min(1.80, supplyApprovedDailyUsdOf(date) ?? 0)
+  const d30 = (date: string, usd: number) => judgeNextPreflight('d30', factsFor('d30', {
+    proofKstDate: date, supplyDailyUsdCap: capOf(date), readyCohort: cohortFor('d30', { usdPerSlotValidResult: usd }),
+  }), GRID)
+  const open1117 = d30('2026-11-17', 0.052)
+  const shut1116 = d30('2026-11-16', 0.052)
+  const edgePass = d30('2026-11-17', 0.06)
+  const edgeFail = d30('2026-11-17', 0.060001)
+  check('🔴 11-17 D30 — env $1.80 · 날짜 천장 $1.80 · 결과당 $0.052 × 30 = $1.56 → SUPPLY_COST_SHORT 없음 · 증명 예산 $1.80',
+    !open1117.codes.includes('SUPPLY_COST_SHORT') && open1117.counts.supplyProofBudgetUsd === 1.8
+    && Math.abs((open1117.counts.supplyDailyUsdNeeded ?? 0) - 1.56) < 1e-9, JSON.stringify(open1117.codes))
+  check('🔴 11-16 은 env 가 $1.80 이어도 날짜 천장 $1.20 으로 눌려 SUPPLY_COST_SHORT (소급 0)',
+    shut1116.codes.includes('SUPPLY_COST_SHORT') && shut1116.counts.supplyProofBudgetUsd === 1.2, JSON.stringify(shut1116.counts))
+  check('🔴 11-17 경계 — $0.060 × 30 = $1.80 PASS · $0.060001 FAIL',
+    !edgePass.codes.includes('SUPPLY_COST_SHORT') && edgeFail.codes.includes('SUPPLY_COST_SHORT'))
+}
+check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 승인 천장 $0.50',
+  supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
   && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
 check('🔴 저예산 7회 profile은 앞 5회 몫만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
   supplyProofBudgetUsd(1.19) === 1.19 * 5 / 7

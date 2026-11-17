@@ -49,6 +49,18 @@ const SUPPLY_COST_CONTRACT_WINDOWS: readonly SupplyCostContractWindow[] = [
     proofBudgetNumerator: 5,
     proofBudgetDenominator: 7,
   },
+  {
+    // 🔴 2026-11-16 창업자 결정 — D30 증명(30편)은 결과당 실측 $0.052 에서 하루 $1.56 이 든다. 승인 천장을 $1.80 으로 올린다.
+    //    11-17 부터만 적용한다(11-16 이전 증거·장부는 위 행 그대로 읽는다). proof-first 문턱은 $1.20 그대로다.
+    fromKstDate: '2026-11-17',
+    supplyContract: 'supply-jit-v2',
+    pricingVersion: 'supply-2026-09-19',
+    approvedDailyUsd: 1.80,
+    trustedBudgetSources: ['env.local', 'process', 'process-override'] as const,
+    proofFullBudgetAtUsd: 1.20,
+    proofBudgetNumerator: 5,
+    proofBudgetDenominator: 7,
+  },
 ] as const
 
 const strictKstDate = (value: string): boolean => {
@@ -113,6 +125,22 @@ export function supplyCostContractOf(kstDate: string): {
     proofBudgetDenominator: match.proofBudgetDenominator,
   }
 }
+
+/**
+ * 🔴 그날의 공급 하루 승인 천장(USD) — **유일한 정본**. 공급 러너의 예산 배분 · 장부 기록 · 단계 preflight 가 모두 이 값을 쓴다.
+ *    (2026-11-16) 날짜 없는 상수 `SUPPLY_DAILY_USD_APPROVED` 를 지웠다 — 그 상수와 이 표가 따로 있으면 천장을 올린 날
+ *    한쪽만 바뀌어 "결정은 열렸는데 공급은 옛 천장" 이 된다. 시행일 이전은 당시 천장 $1.20 · 모양이 틀린 날짜는 null.
+ */
+export function supplyApprovedDailyUsdOf(kstDate: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(kstDate)) return null
+  // 계약 시행일(11-05) 이전 날짜는 표 밖이다 — 그때의 승인 천장(2026-10-16 D20 준비 $1.20)을 그대로 준다.
+  // 옛 상수가 모든 날짜에 주던 값과 같아서, 11-16 이전 날짜의 동작은 이 변경으로 바뀌지 않는다.
+  if (kstDate < SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE) return PRE_ENVELOPE_APPROVED_DAILY_USD
+  return supplyCostContractOf(kstDate)?.approvedDailyUsd ?? null
+}
+
+/** 비용 계약 시행일 이전의 승인 천장(2026-10-16 D20 준비) — 역사 값. 바꾸지 않는다 */
+const PRE_ENVELOPE_APPROVED_DAILY_USD = 1.20
 
 /** 과거 proof 예산을 현재 스케줄 상수로 다시 계산하지 않고 날짜 계약에 고정한다. */
 export function supplyCostProofBudgetUsd(kstDate: string, capUsd: number): number | null {
