@@ -52,6 +52,10 @@ export function isOverrideActive(
 }
 
 export type OverrideRow = {
+  /** 같은 position 의 PIN 순서를 정하는 마지막 키 */
+  id: string
+  /** 같은 position 이면 먼저 고정한 글이 앞이다 */
+  createdAt: Date
   postId: string
   action: 'PIN' | 'HIDE'
   position: number | null
@@ -60,13 +64,42 @@ export type OverrideRow = {
 }
 
 /**
+ * PIN 순서 — position 오름차순(없으면 맨 뒤) → 고정한 시각 오름차순 → 행 id 오름차순.
+ *
+ * 🔴 홈과 어드민 "지금 걸린 예외" 번호가 이 함수 하나를 쓴다 — 같은 결정을 두 곳에서 내리지 않는다.
+ * 🔴 DB 행 순서를 따르지 않는다. 고정 생성의 position 은 트랜잭션 밖 `max + 1` 이라
+ *    (actions/admin-home-exposure.ts nextPinPosition) 같은 값이 둘 생길 수 있다 — 그때도 요청마다 순서가 같아야 한다.
+ */
+export function orderPinOverrides(
+  a: Pick<OverrideRow, 'position' | 'createdAt' | 'id'>,
+  b: Pick<OverrideRow, 'position' | 'createdAt' | 'id'>,
+): number {
+  return (
+    (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER) ||
+    a.createdAt.getTime() - b.createdAt.getTime() ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  )
+}
+
+/** 예외를 얹은 결과 — 최종 목록과, 진단이 읽을 중간값 */
+export type HomeExposureResult<T> = {
+  /** 최종 목록 = 고정 글 + 자동 글 */
+  posts: T[]
+  /** 맨 앞에 선 고정 글 (최대 take) */
+  pinned: T[]
+  /** 숨김·고정을 뺀 자동 후보 — fill 이 받은 그대로 */
+  rest: T[]
+  /** 고정 뒤 남은 자동 자리 수 */
+  slots: number
+}
+
+/**
  * 자동 후보에 예외를 얹는다.
  *
  * 순서
  *   ① 활성 HIDE 를 뺀다
- *   ② 활성 PIN 을 position 오름차순으로 앞에 세운다
- *   ③ 나머지를 자동 순서대로 채운다
- *   ④ take 만큼 자른다
+ *   ② 활성 PIN 을 orderPinOverrides 순서로 앞에 세운다 — take 에서 멈춘다
+ *   ③ 남은 자동 자리(take − PIN 수)를 fill 로 채운다 — 기본은 자동 순서 앞에서부터
  *
  * 🔴 PIN 글은 `pinnedPosts` 로 따로 받는다.
  *    자동 후보(candidates) 안에서만 찾으면, 점수가 낮아 후보에 못 든 글은
@@ -74,16 +107,20 @@ export type OverrideRow = {
  *    PIN 은 자동 점수를 이겨야 한다.
  *
  * 🔴 그러나 노출 안전 규칙은 이기지 않는다.
- *    pinnedPosts 는 호출부가 discovery 조건(PUBLISHED · isMicroSeed=false ·
- *    permanentNoindex=false · indexPromotionBlocked=false · 차단 회원 제외 ·
- *    MENOPAUSE/FREE)으로 조회해 넘긴 것만 들어온다. 조건을 못 지나면 애초에
- *    목록에 없고, 여기서도 나가지 않는다.
+ *    pinnedPosts 는 호출부가 discovery 조건(DISCOVERY_ELIGIBLE_WHERE — PUBLISHED · Micro Seed 아님 ·
+ *    indexPromotionBlocked=false · 가입인사 제외 · 차단 회원 제외 · MENOPAUSE/FREE)으로 조회해 넘긴 것만 들어온다.
+ *    조건을 못 지나면 애초에 목록에 없고, 여기서도 나가지 않는다.
  *
  * 🔴 PIN 이 HIDE 를 이기지 않는다. 같은 글에 둘 다 걸리면 빠진다 —
  *    내리라는 지시와 올리라는 지시가 부딪히면 안 보이는 쪽이 안전하다.
  *
- * 🔴 HIDE 때문에 자리가 줄지 않는다.
- *    자동 후보를 넉넉히 받아 뒤 후보로 채운다(호출부가 여유를 두고 조회한다).
+ * 🔴 HIDE 때문에 자리가 줄지 않는다 — 호출부는 자동 후보를 **자르지 않고 전부** 넘긴다.
+ *    미리 take 의 몇 배로 잘라 두면 HIDE 가 많을 때 적격 글이 남았는데도 목록이 짧아진다.
+ *
+ * 🔴 fill — **최종 자동 자리 수를 아는 곳은 여기뿐이다.** 게시판 최소 같은 배분은 중간 후보가 아니라
+ *    이 자리에서 걸어야 최종 목록에서 성립한다. 그래서 자리 수와 PIN 글을 넘겨준다.
+ *    fill 이 무엇을 돌려주든 불변식은 여기서 다시 지킨다 — 자동 후보 밖 · HIDE · PIN · 중복 글은 거르고
+ *    자리 수만큼만 싣는다. 배분이 틀려도 숨긴 글이 되살아나거나 PIN 자리가 밀리지 않는다.
  */
 export function applyHomeExposure<T extends { id: string }>({
   candidates,
@@ -91,6 +128,7 @@ export function applyHomeExposure<T extends { id: string }>({
   overrides,
   take,
   now = new Date(),
+  fill = (rest, { slots }) => rest.slice(0, slots),
 }: {
   candidates: readonly T[]
   /**
@@ -101,9 +139,11 @@ export function applyHomeExposure<T extends { id: string }>({
   overrides: readonly OverrideRow[]
   take: number
   now?: Date
-}): T[] {
+  /** 남은 자동 자리를 채운다. rest 는 HIDE·PIN 을 뺀 자동 후보, slots 는 남은 자리 수다 */
+  fill?: (rest: readonly T[], ctx: { slots: number; pinned: readonly T[] }) => readonly T[]
+}): HomeExposureResult<T> {
   const limit = Math.max(0, Math.trunc(take))
-  if (limit === 0) return []
+  if (limit === 0) return { posts: [], pinned: [], rest: [], slots: 0 }
 
   const active = overrides.filter((o) => isOverrideActive(o, now))
   const hidden = new Set(active.filter((o) => o.action === 'HIDE').map((o) => o.postId))
@@ -113,17 +153,12 @@ export function applyHomeExposure<T extends { id: string }>({
   for (const p of pinnedPosts) byId.set(p.id, p)
   for (const c of candidates) byId.set(c.id, c)
 
-  const pins = active
-    .filter((o) => o.action === 'PIN' && !hidden.has(o.postId))
-    // position 이 없으면 뒤로 보낸다. 같은 값이면 들어온 순서를 지킨다.
-    .sort(
-      (a, b) =>
-        (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER),
-    )
+  const pins = active.filter((o) => o.action === 'PIN' && !hidden.has(o.postId)).sort(orderPinOverrides)
 
   const pinned: T[] = []
   const seen = new Set<string>()
   for (const pin of pins) {
+    if (pinned.length === limit) break
     if (seen.has(pin.postId)) continue
     const post = byId.get(pin.postId)
     // 🔴 discovery 조건을 못 지난 글은 어느 목록에도 없다 — 그래서 나가지 않는다
@@ -132,7 +167,19 @@ export function applyHomeExposure<T extends { id: string }>({
     pinned.push(post)
   }
 
+  const slots = limit - pinned.length
   const rest = candidates.filter((c) => !hidden.has(c.id) && !seen.has(c.id))
 
-  return [...pinned, ...rest].slice(0, limit)
+  // 🔴 fill 의 결과를 믿지 않는다 — 자동 후보 안 · HIDE/PIN 아님 · 한 번씩 · 자리 수만큼
+  const allowed = new Set(rest.map((c) => c.id))
+  const auto: T[] = []
+  if (slots > 0) {
+    for (const post of fill(rest, { slots, pinned })) {
+      if (auto.length === slots) break
+      if (!allowed.has(post.id) || seen.has(post.id)) continue
+      seen.add(post.id)
+      auto.push(post)
+    }
+  }
+  return { posts: [...pinned, ...auto], pinned, rest, slots }
 }

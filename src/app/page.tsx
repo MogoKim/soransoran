@@ -12,9 +12,9 @@ import NewcomerGreetings from '@/components/features/greeting/newcomer-greetings
 import MenuIcon from '@/components/icons/MenuIcon'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug, type BoardMeta } from '@/lib/board-registry'
-import { getHomePopularPosts } from '@/lib/queries/posts'
+import { getHomePopularViews } from '@/lib/queries/posts'
 import { getRecentGreetings, shouldShowFirstGreeting } from '@/lib/queries/greeting'
-import { HOME_MAGAZINE_COUNT, HOME_POPULAR_COUNT } from '@/lib/home-exposure'
+import { HOME_MAGAZINE_COUNT } from '@/lib/home-exposure'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import type { MagazineArticle } from '@/content/magazine/types'
 
@@ -112,7 +112,7 @@ function SectionHeading({
  *    섹션은 머리글과 여백이 가르고, 줄 사이는 선 하나가 가른다.
  */
 export default async function HomePage() {
-  const posts = await getHomePopularPosts(HOME_POPULAR_COUNT)
+  const { mobile: posts } = await getHomePopularViews()
   // 카드는 비로그인에게만 나간다. JWT 전략이라 auth() 는 쿠키 디코드뿐이다.
   const session = await auth()
   // 막 온 사람에게만 첫 인사를 권한다. 판정은 queries/greeting 이 한다.

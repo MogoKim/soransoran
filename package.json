@@ -31,6 +31,7 @@
     "check:home-exposure": "tsx scripts/home-exposure-check.mts",
     "check:home-popularity": "tsx scripts/home-popularity-check.mts",
     "check:home-popularity-db": "tsx scripts/home-popularity-db-check.mts",
+    "check:home-popularity-mutation": "tsx scripts/home-popularity-mutation.mts",
     "replay:home-popularity": "tsx scripts/home-popularity-replay.mts",
     "check:workflow-budget": "tsx --tsconfig tsconfig.ops.json scripts/workflow-budget-check.mts",
     "check:hero-banner": "tsx --tsconfig tsconfig.ops.json scripts/hero-banner-check.mts",
