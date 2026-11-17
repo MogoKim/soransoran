@@ -47,8 +47,10 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'lease 생략 — 회차 자식이 lease 재증명 실패를 무시한다',
     edits: [{ file: F.lease,
-      find: "    if (!v.ok) { o.log(`🔴 LEASE_NOT_PROVEN(회차 자식) — ${v.reason} · provider 0 · DB 0`); return 1 }\n    return o.body(v.proof)",
-      replace: "    return o.body(v.ok ? v.proof : { lockPath: '', followUpDir: '', lockf: '', fd: 9 })" }],
+      // 🔴 겨냥은 방어 줄 **하나**다(2026-11-17). 다음 줄까지 묶어 두면 그 사이에 코드가 끼는 순간 문장 0회 = 무효가 된다
+      //    (recovery token 게이트가 끼어들어 이 변이가 한동안 아무것도 증명하지 못했다).
+      find: "    if (!v.ok) { o.log(`🔴 LEASE_NOT_PROVEN(회차 자식) — ${v.reason} · provider 0 · DB 0`); return 1 }\n",
+      replace: "    if (!v.ok) return o.body({ lockPath: '', followUpDir: '', lockf: '', fd: 9 })\n" }],
     checks: ['lease'],
   },
   {
