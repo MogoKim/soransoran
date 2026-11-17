@@ -281,7 +281,7 @@ export type PreflightFacts = {
   auditUsdPerCall: number | null
   /** 감사 레인 하루 상한(USD) — 감사 레인 env 판독기(`auditLimitsFromEnv`) 값 */
   auditDailyUsdCap: number | null
-  /** 공급 하루 상한(USD) — 정본 승인 최대 $1.20 */
+  /** 공급 하루 상한(USD) — env 값을 그 증명일의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 값 */
   supplyDailyUsdCap: number | null
   /** 🔴 발행 · 공급 러너 최근 회차(`errorSignalOf`) — 모르면 null */
   runnerHealth: Health | null
@@ -425,7 +425,7 @@ export function readyCapacityOf(
  *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간 · 고정 할증 없음) · Persona canary 하한 `PERSONA_CANARY_FLOOR`
  *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 당일 증명 회차(`SUPPLY_PROOF_RUNS_PER_DAY`)
  *        (21:15·22:15는 당일 마지막 발행 기회 전에 끝나지 않아 같은 날 처리량 증명에서는 제외)
- *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 승인 천장 $1.20 으로 누른다)
+ *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 그 날짜 계약의 승인 천장으로 누른다)
  *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
  */
 export function judgeNextPreflight(

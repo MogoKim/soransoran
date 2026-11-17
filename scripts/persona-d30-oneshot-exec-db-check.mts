@@ -20,6 +20,11 @@ const OLD = Array.from({ length: 40 }, (_, i) => `P${String(i + 1).padStart(2, '
 const BEFORE = { workStatus: '옛값', housing: 'h' }
 const AFTER = { ...BEFORE, workStatus: '정본값' }
 const SHA = 'a'.repeat(40)
+const TODAY_ROW = { kstDate: '2026-11-16', state: 'PREPARE', release: 'd20', capacity: 'd30', decidedBy: 'controller' }
+const PREV_ROW = { ...TODAY_ROW, kstDate: '2026-11-15' }
+/** 🔴 실행 창 — post 07:05(그날 행 PREPARE) · pre 03:45(그날 행 없음 · 전날 행이 권위). 시나리오마다 정한다 */
+let WINDOW: { kstMinute: number; stage: OneShotFacts['stage']; previousStage: OneShotFacts['previousStage'] } =
+  { kstMinute: 425, stage: TODAY_ROW, previousStage: PREV_ROW }
 
 async function world(opt: { p15Fixed?: boolean; p16Paused?: boolean } = {}): Promise<RemediationPins> {
   const codes = [...OLD, ...COHORT_CODES]
@@ -54,8 +59,7 @@ function effects(pins: RemediationPins, failAt: Partial<Record<Step | 'remediate
       const active = (await db.persona.findMany({ where: { status: 'active' }, select: { code: true } })).map((r) => r.code)
       const cohortExisting = (await db.persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true } })).map((r) => r.code)
       return {
-        targetDate: '2026-11-16', kstDate: '2026-11-16', kstMinute: 425,
-        stage: { kstDate: '2026-11-16', state: 'PREPARE', release: 'd20', capacity: 'd30', decidedBy: 'controller' },
+        targetDate: '2026-11-16', kstDate: '2026-11-16', ...WINDOW,
         originMain: SHA, head: SHA, pin: SHA, manifestSha: SHA, manifestIdentity: { ...EXPECTED_RUNTIME_ASSET_IDENTITY },
         deployLock: false, runningJobs: [], unknownJobs: [], approvalDigest: APPROVED_SUPPLEMENT_PLAN_DIGEST,
         runtimeIdentity: { ...EXPECTED_RUNTIME_ASSET_IDENTITY }, old40VoiceSame: true,
@@ -148,6 +152,34 @@ console.log('\n⑦ 켠 뒤 결과 판독 실패 → 새 cohort 만 pause · 기�
   const st = await cohortStates()
   check('PAUSED_NEW_COHORT · 표식 paused', r.result === 'PAUSED_NEW_COHORT' && run.markers.at(-1) === 'paused', r.result)
   check('새 20 paused · 기존 40 active(P15 정본 포함) · 기존 39 지문 diff 0', st.every((s) => s === 'paused') && (await db.persona.count({ where: { code: { in: OLD }, status: 'active' } })) === 40 && (await p15Digest()) === pins.afterIdentityDigest && (await old40Fp()) === fp)
+}
+
+console.log('\n⑧ 🔴 결정 전 창(03:45) — 그날 행 없음 · 전날 controller PREPARE → 39/39 교정 → 60 PASS (11-17 실제 경로)')
+{
+  WINDOW = { kstMinute: 225, stage: null, previousStage: PREV_ROW }
+  const pins = await world(); const fp = await old40Fp(); const run = effects(pins)
+  const r = await executeOneShot(run.fx)
+  check('결정 전 · PASS · exit 0', r.result === 'PASS' && r.exit === 0, r.result)
+  check('결정 전 · P15 정본 · 새 20 active · active 60 · 기존 39 지문 diff 0',
+    (await p15Digest()) === pins.afterIdentityDigest && (await cohortStates()).every((s) => s === 'active')
+    && (await db.persona.count({ where: { status: 'active' } })) === 60 && (await old40Fp()) === fp)
+  check('결정 전 · 표식 started→started→done', JSON.stringify(run.markers) === JSON.stringify(['started', 'started', 'done']), run.markers.join(','))
+}
+console.log('\n⑨ 결정 전 창인데 그날 행이 이미 있다 → 교정·투입 0')
+{
+  WINDOW = { kstMinute: 225, stage: TODAY_ROW, previousStage: PREV_ROW }
+  const pins = await world(); const run = effects(pins)
+  const r = await executeOneShot(run.fx)
+  check('NO_GO · 교정 0 · create 0 · 표식 0 · cohort 행 0 · P15 그대로',
+    r.exit === 3 && r.why === 'STAGE_ALREADY_DECIDED' && run.order.length === 0 && run.markers.length === 0
+    && (await cohortStates()).length === 0 && (await p15Digest()) === pins.beforeIdentityDigest, `${r.result} ${r.why ?? ''}`)
+}
+console.log('\n⑩ 결정 전 창인데 전날이 증명일(TRIAL) → 교정·투입 0')
+{
+  WINDOW = { kstMinute: 225, stage: null, previousStage: { ...PREV_ROW, state: 'TRIAL' } }
+  const pins = await world(); const run = effects(pins)
+  const r = await executeOneShot(run.fx)
+  check('NO_GO(PROOF_DAY) · 쓰기 0', r.exit === 3 && r.why === 'PROOF_DAY' && run.order.length === 0 && (await cohortStates()).length === 0, `${r.result} ${r.why ?? ''}`)
 }
 
 const all = [...OLD, ...COHORT_CODES]
