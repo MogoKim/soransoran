@@ -19,6 +19,7 @@ import {
   getComposeTargetPost,
   getComposeTargetPosts,
   getOperatorWriters,
+  getRecentWriterIds,
   getReplyTargetPosts,
 } from '@/lib/queries/operator-compose'
 
@@ -69,6 +70,8 @@ export default async function AdminComposePage({
     getPersonaVoiceSpeakers(),
     getPersonaVoiceTargets({ now, ...(voiceMode && wantedPostId ? { includePostId: wantedPostId } : {}) }),
   ])
+  // 최근 쓴 운영자 이름 — 고르는 화면 맨 위(작성자 id 가 필요해 목록 조회 뒤에 부른다)
+  const recentIds = await getRecentWriterIds(writers.map((w) => w.id))
   // 최근 목록 밖의 글이면 그 한 편만 따로 싣고 맨 앞에 둔다
   const wanted = wantedPostId
     ? (recentTargets.find((t) => t.id === wantedPostId) ?? (await getComposeTargetPost(wantedPostId)))
@@ -100,6 +103,7 @@ export default async function AdminComposePage({
           writers={writers}
           targets={targets}
           replyTargets={replyTargets}
+          recentIds={recentIds}
           {...(wanted && !voiceMode ? { initialMode: 'comment' as const, initialPostId: wanted.id } : {})}
         />
       </AdminSection>

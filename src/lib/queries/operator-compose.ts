@@ -39,6 +39,23 @@ export const OPERATOR_NAME_WRITER_WHERE = {
   code: { startsWith: OPERATOR_NAME_CODE_PREFIX },
 } satisfies Prisma.OperatorWriterWhereInput
 
+/**
+ * 최근에 쓴 운영자 이름 — 고르는 화면 맨 위에 둔다(90명을 스크롤로 찾지 않게).
+ * 🔴 작성(create) 기록만 센다 · 운영자 이름(OP) active 행 안에서만 · 최근 쓴 순.
+ *    작성자별 마지막 시각을 groupBy 로 구한다(결과 개수가 명확하다). 인덱스 OperatorWriteLog(operatorWriterId, createdAt).
+ */
+export async function getRecentWriterIds(activeIds: string[], limit = 5): Promise<string[]> {
+  if (activeIds.length === 0) return []
+  const rows = await prisma.operatorWriteLog.groupBy({
+    by: ['operatorWriterId'],
+    where: { action: 'create', operatorWriterId: { in: activeIds } },
+    _max: { createdAt: true },
+    orderBy: { _max: { createdAt: 'desc' } },
+    take: limit,
+  })
+  return rows.map((r) => r.operatorWriterId)
+}
+
 export async function getOperatorWriters(): Promise<WriterOption[]> {
   const rows = await prisma.operatorWriter.findMany({
     where: OPERATOR_NAME_WRITER_WHERE,
@@ -67,6 +84,11 @@ export type ComposeTargetPost = {
   commentCount: number
   createdAt: Date
   href: string | null
+  /**
+   * 이 글에 이미 쓴 운영 작성자 — 글을 쓴 작성자 + 살아 있는 운영 댓글 작성자(운영자 이름 · Persona 목소리 모두).
+   * 🔴 고르는 화면이 "이 글에 씀" 을 표시만 한다(막지 않는다) — 같은 글에서 한 이름이 두 사람인 척하는 실수를 줄인다.
+   */
+  usedWriterIds: string[]
 }
 
 /** 댓글을 달 수 있는 글 — 목록과 단건이 같은 조건을 쓴다(두 곳에 적지 않는다) */
@@ -78,6 +100,8 @@ const TARGET_SELECT = {
   boardType: true,
   createdAt: true,
   author: { select: { nickname: true, name: true } },
+  operatorWriterId: true,
+  comments: { where: { isDeleted: false, operatorWriterId: { not: null } }, select: { operatorWriterId: true } },
   // 🔴 지운 댓글은 세지 않는다 — 고객 목록(queries/posts.ts)과 같은 숫자여야 한다
   _count: { select: { comments: { where: { isDeleted: false } } } },
 } as const satisfies Prisma.PostSelect
@@ -94,6 +118,9 @@ function toTarget(p: TargetRow): ComposeTargetPost {
     commentCount: p._count.comments,
     createdAt: p.createdAt,
     href: communityPostHref(p.id, p.boardType),
+    usedWriterIds: [
+      ...new Set([p.operatorWriterId, ...p.comments.map((c) => c.operatorWriterId)].filter((id): id is string => id !== null)),
+    ],
   }
 }
 
