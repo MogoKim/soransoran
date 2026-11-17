@@ -56,11 +56,11 @@ const HOME = {
   file: 'src/app/page.tsx',
   // 홈이 써야 하는 것 — discovery 게이트를 지나는 쿼리.
   //
-  // getHomePopularPosts 는 홈 인기 점수 목록(pickPopularByScore) 위에
-  // 홈 노출 예외를 한 겹 얹는 홈 전용 진입점이라 이름에 Discovery 가 없다.
+  // getHomePopularPosts 는 홈 인기 편성(composeHomePopularViews)의 모바일 결과를 돌려주는
+  // 홈 전용 진입점이라 이름에 Discovery 가 없다.
   // 게이트를 우회하는 것이 아니다 — 아래 REQUIRED 가 posts.ts 에서
   // DISCOVERY_ELIGIBLE_WHERE 유지를 따로 강제하고, 1-d 가 그 예외를
-  // getHomePopularPosts 안에서만 얹게 묶는다.
+  // home-popular-views.ts 의 composeHomePopularViews 안에서만 얹게 묶는다.
   mustMatch: /getHomePopularPosts\b|Discovery|DISCOVERY_ELIGIBLE_WHERE/,
   // 홈이 쓰면 안 되는 것 — 커뮤니티 노출용 쿼리
   mustNotMatch: /getRecentPosts\b|getPostsByBoard\b|COMMUNITY_VISIBLE_WHERE/,
@@ -78,8 +78,11 @@ const HOME = {
 const BEST = {
   file: 'src/app/best/page.tsx',
   mustMatch: /loadBestPage\b/,
+  // 🔴 페이지만 보면 queries/best.ts 를 거친 간접 우회를 놓친다 — 읽기 함수 파일도 같이 본다.
+  isolatedFiles: ['src/app/best/page.tsx', 'src/lib/queries/best.ts'],
+  // 🔴 모듈 경로(home-popular-views)도 막는다 — `import { x as y } from` 별칭이면 함수 이름이 코드에 남지 않는다.
   mustNotMatch:
-    /getHomePopularPosts\b|applyHomeExposure\b|HomeExposureOverride\b|homeExposureOverride\b|pickHomePopular\b|pickPopularByScore\b/,
+    /getHomePopularPosts\b|getHomePopularViews\b|composeHomePopularViews\b|loadHomePopularInputs\b|applyHomeExposure\b|HomeExposureOverride\b|homeExposureOverride\b|pickHomePopular\b|pickBoardPopular\b|pickPopularByScore\b|home-popular-views\b/,
 }
 
 /**
@@ -91,8 +94,52 @@ const BEST = {
 const HOME_EXPOSURE = {
   symbol: 'applyHomeExposure',
   rulesFile: 'src/lib/home-exposure-rules.ts',
-  callerFile: 'src/lib/queries/posts.ts',
-  callerFn: 'getHomePopularPosts',
+  callerFile: 'src/lib/home-popular-views.ts',
+  // 모바일 한 줄 · 데스크톱 게시판별 열을 한 함수가 함께 만든다 — 호출은 여러 번이어도 자리는 하나다.
+  callerFn: 'composeHomePopularViews',
+  // 홈 후보 조회. 자동 후보와 PIN 글이 같은 discovery where 를 지나야 한다.
+  loaderFn: 'loadHomePopularInputs',
+}
+
+/**
+ * 홈 편성 모듈이 끌어오면 안 되는 것.
+ * 🔴 검사·replay 가 이 모듈을 직접 import 한다. auth·next-auth·Next 가 들어오면 Next 전역 타입이
+ *    ops 타입검사 전체로 번져 상관없는 스크립트가 깨지고, prisma 싱글톤이 들어오면 검사가 조회 수를 셀 수 없다.
+ *    @prisma/client 는 `import type` 만 — 값 import 는 클라이언트를 새로 만들 길을 연다.
+ */
+const HOME_POPULAR_MODULE_BANNED = [
+  { test: (spec) => /(^|\/)lib\/auth$|^\.{1,2}\/(\.\.\/)*auth$/.test(spec), why: 'auth(세션)' },
+  { test: (spec) => /^next-auth(\/|$)/.test(spec), why: 'next-auth' },
+  { test: (spec) => /^next(\/|$)/.test(spec), why: 'Next.js' },
+  { test: (spec) => /(^|\/)lib\/prisma$|^\.{1,2}\/(\.\.\/)*prisma$/.test(spec), why: 'prisma 싱글톤' },
+]
+
+/**
+ * 최상위 함수 선언의 본문 범위를 찾는다 — sync·async · 이름 뒤 TS 제네릭(`<T extends X>`)을 받는다.
+ * 줄 머리의 선언만 센다 — 주석은 미리 지우고, 문장 중간의 같은 글자는 선언이 아니다.
+ * 끝은 들여쓰기 없는 단독 `}` 줄이다. 인자 구조 분해의 `}: {` 는 끝이 아니다.
+ * 선언이 없거나 둘 이상이면 null 범위와 개수를 돌려준다.
+ */
+function topLevelFunctionRange(code, name) {
+  const decl = new RegExp(`^export (?:async )?function ${name}(?:<[^(]*>)?\\(`, 'gm')
+  const starts = [...code.matchAll(decl)].map((m) => m.index)
+  if (starts.length !== 1) return { count: starts.length, start: -1, end: -1 }
+  const tail = /\n\}[ \t]*(?:\n|$)/.exec(code.slice(starts[0]))
+  return { count: 1, start: starts[0], end: tail ? starts[0] + tail.index + 2 : code.length }
+}
+
+/**
+ * 문자열 내용을 비운다 — 선언·호출을 셀 때 '…applyHomeExposure(…' 같은 글자를 코드로 오인하지 않게.
+ * 모듈 경로를 봐야 하는 검사(import 경계 · /best 모듈 경로)에는 쓰지 않는다.
+ */
+function stripStrings(code) {
+  return code.replace(/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g, "''")
+}
+
+function indicesOf(code, needle) {
+  const out = []
+  for (let i = code.indexOf(needle); i >= 0; i = code.indexOf(needle, i + 1)) out.push(i)
+  return out
 }
 
 /** 게이트 밖에서 이 토큰을 직접 쓰면 판정이 갈라진다. */
@@ -216,10 +263,14 @@ if (!existsSync(join(ROOT, GATE))) {
           '베스트는 입성 기록을 최초 입성 최신순으로 보여주는 목록이다.',
       )
     }
-    const leak = code.match(BEST.mustNotMatch)
+  }
+  for (const file of BEST.isolatedFiles) {
+    const path = join(ROOT, file)
+    if (!existsSync(path)) continue
+    const leak = stripComments(readFileSync(path, 'utf-8')).match(BEST.mustNotMatch)
     if (leak) {
       errors.push(
-        `${BEST.file} 가 홈 큐레이션용 ${leak[0]} 를 쓴다. ` +
+        `${file} 가 홈 큐레이션용 ${leak[0]} 를 쓴다. ` +
           '홈 고정·숨김이 베스트 순서까지 바꾼다.',
       )
     }
@@ -233,7 +284,7 @@ if (!existsSync(join(ROOT, GATE))) {
   for (const abs of walk(join(ROOT, 'src'))) {
     const rel = relative(ROOT, abs)
     if (rel === rulesFile || rel === callerFile) continue
-    if (stripComments(readFileSync(abs, 'utf-8')).includes(symbol)) {
+    if (stripStrings(stripComments(readFileSync(abs, 'utf-8'))).includes(symbol)) {
       errors.push(
         `${rel} 가 ${symbol} 를 쓴다. ` +
           `홈 노출 예외는 ${callerFile} 의 ${callerFn} 만 얹는다.`,
@@ -244,23 +295,54 @@ if (!existsSync(join(ROOT, GATE))) {
   const abs = join(ROOT, callerFile)
   if (existsSync(abs)) {
     const code = stripComments(readFileSync(abs, 'utf-8'))
-    const start = code.indexOf(`export async function ${callerFn}(`)
-    if (start < 0) {
+    const bare = stripStrings(code)
+    const { count, start, end } = topLevelFunctionRange(bare, callerFn)
+    if (count !== 1) {
       errors.push(
-        `${callerFile} 에 ${callerFn} 가 없다. ` +
+        `${callerFile} 에 ${callerFn} 선언이 ${count}개다(1개여야 한다). ` +
           '홈 노출 예외의 단일 적용 지점이 사라졌다.',
       )
     } else {
-      // 최상위 닫는 중괄호 = 함수 끝. 안쪽 블록은 들여쓰기돼 걸리지 않는다.
-      const end = code.indexOf('\n}', start)
-      for (let i = code.indexOf(`${symbol}(`); i >= 0; i = code.indexOf(`${symbol}(`, i + 1)) {
-        if (i < start || (end >= 0 && i > end)) {
-          errors.push(
-            `${callerFile} 가 ${callerFn} 밖에서 ${symbol} 를 부른다. ` +
-              '/best 같은 순수 목록이 홈 예외를 따라간다.',
-          )
-        }
+      const calls = indicesOf(bare, `${symbol}(`)
+      const inside = calls.filter((i) => i > start && i < end)
+      // 🔴 호출이 0개여도 "밖 호출 0" 은 참이다 — 안쪽 호출 ≥ 1 을 함께 요구해야 죽은 가드가 아니다.
+      if (inside.length === 0) {
+        errors.push(
+          `${callerFile} 의 ${callerFn} 안에 ${symbol} 호출이 없다. ` +
+            '홈 고정·숨김이 어느 결과에도 걸리지 않는다.',
+        )
       }
+      for (let n = calls.length - inside.length; n > 0; n -= 1) {
+        errors.push(
+          `${callerFile} 가 ${callerFn} 밖에서 ${symbol} 를 부른다. ` +
+            '/best 같은 순수 목록이 홈 예외를 따라간다.',
+        )
+      }
+    }
+
+    // 모듈 경계 — import · export from · import() · require() 의 경로를 모두 본다
+    const specs = [...code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g)].map((m) => m[1])
+    for (const spec of specs) {
+      const hit = HOME_POPULAR_MODULE_BANNED.find((b) => b.test(spec))
+      if (hit) errors.push(`${callerFile} 가 ${hit.why} 를 import 한다('${spec}'). 편성 모듈은 DB 를 인자로 받고 세션·Next 를 모른다.`)
+    }
+    // import 문을 하나씩 뗀다 — 세미콜론이 없는 코드라 한 정규식으로 훑으면 앞 import 부터 다음 줄까지 이어 붙는다
+    for (const m of code.matchAll(/^\s*import\s+(type\s+)?[\s\S]*?\bfrom\s*['"]([^'"]+)['"]/gm)) {
+      if (m[2] === '@prisma/client' && !m[1]) {
+        errors.push(`${callerFile} 가 @prisma/client 를 값으로 import 한다. 타입(import type)만 허용된다.`)
+      }
+    }
+
+    // 홈 후보 조회 — 자동 후보와 PIN 글 두 where 모두 discovery 게이트를 지나야 한다.
+    const loader = topLevelFunctionRange(bare, HOME_EXPOSURE.loaderFn)
+    const gates = loader.count === 1
+      ? indicesOf(bare.slice(loader.start, loader.end), '...DISCOVERY_ELIGIBLE_WHERE').length
+      : 0
+    if (gates < 2) {
+      errors.push(
+        `${callerFile} 의 ${HOME_EXPOSURE.loaderFn} 가 DISCOVERY_ELIGIBLE_WHERE 를 ${gates}곳에서만 쓴다(자동 후보·PIN 2곳). ` +
+          'Micro Seed·비공개 글이 홈 인기로 샌다 (§7-C).',
+      )
     }
   }
 }
@@ -269,7 +351,8 @@ if (!existsSync(join(ROOT, GATE))) {
 for (const { file, needs, why } of REQUIRED) {
   const abs = join(ROOT, file)
   if (!existsSync(abs)) continue // 미존재 표면은 도입 시 게이트 대상 — 여기서는 통과
-  const src = readFileSync(abs, 'utf-8')
+  // 🔴 주석을 지우고 본다 — "이 게이트를 쓴다" 는 주석만 남기고 코드에서 빼도 통과하면 죽은 가드다.
+  const src = stripComments(readFileSync(abs, 'utf-8'))
   for (const symbol of needs) {
     if (!src.includes(symbol)) {
       errors.push(`${file} 가 ${symbol} 를 쓰지 않는다. ${why}`)

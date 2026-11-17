@@ -2,11 +2,11 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
-import { getHomePopularPosts } from '@/lib/queries/posts'
+import { getHomePopularViews } from '@/lib/queries/posts'
 import { popularityScore } from '@/lib/popularity'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import { boardLabel, formatKst } from '@/lib/admin-format'
-import { HOME_MAGAZINE_COUNT, HOME_POPULAR_COUNT } from '@/lib/home-exposure'
+import { HOME_MAGAZINE_COUNT, HOME_POPULAR_PER_BOARD } from '@/lib/home-exposure'
 import { isOverrideActive } from '@/lib/home-exposure-rules'
 import { DISCOVERY_ELIGIBLE_WHERE } from '@/lib/post-visibility'
 import AdminHomeOverrideForm from '@/components/admin/AdminHomeOverrideForm'
@@ -26,8 +26,11 @@ import {
  * 🔴 자동 인기 점수를 대체하지 않는다. 예외는 그 위의 한 겹이다.
  *    점수는 popularity.ts 가 그대로 매기고, 여기서는 빼거나(HIDE) 앞에 세울(PIN) 뿐이다.
  *
- * 🔴 홈과 같은 함수·같은 상수를 쓴다 (getHomePopularPosts · HOME_POPULAR_COUNT).
+ * 🔴 홈과 같은 함수를 쓴다 (getHomePopularViews — 홈의 getHomePopularPosts 는 그 mobile 이다).
  *    따로 조회하면 화면과 다른 목록을 보게 되어 이 화면이 거짓말이 된다.
+ *
+ * 🔴 데스크톱 게시판별 편성(desktop)은 읽기 전용 미리보기다. 고정·숨김 조작은 모바일 결과 표 한 벌에만 둔다 —
+ *    같은 글에 폼이 두 벌이면 어느 쪽에서 건 예외인지 운영자가 헷갈린다. 예외는 어차피 세 결과 모두에 걸린다.
  *
  * 🔴 고정·숨김은 홈 첫 화면에만 걸린다. /best 는 입성 기록(queries/best.ts loadBestPage)을
  *    써서 이 예외를 타지 않는다. 운영자가 이것을 "글 내리기" 로 오해하면
@@ -36,6 +39,7 @@ import {
  * 화면은 네 구역이고 무게가 다르다.
  *   1) 지금 걸린 예외 — 운영자가 손댄 것. 가장 먼저 본다.
  *   2) 지금 홈에 뜬 글 — 실제 결과. 표로 훑고 그 자리에서 건다.
+ *   2-1) 데스크톱 게시판별 미리보기 — 읽기만 한다.
  *   3) 홈에 없는 글 찾기 — 필요할 때만 쓰는 보조 도구.
  *   4) 매거진 — 조정 기능이 없다. 읽기만 한다.
  */
@@ -76,8 +80,9 @@ export default async function AdminHomeExposurePage({
   const query = (q ?? '').trim()
   const now = new Date()
 
-  const [posts, overrides] = await Promise.all([
-    getHomePopularPosts(HOME_POPULAR_COUNT),
+  const [views, overrides] = await Promise.all([
+    // 🔴 화면의 now 를 넘긴다 — 아래 점수 표시와 만료 판정이 편성과 같은 시각을 본다
+    getHomePopularViews(now),
     prisma.homeExposureOverride.findMany({
       where: { surface: 'HOME_POPULAR', isActive: true },
       select: {
@@ -102,6 +107,11 @@ export default async function AdminHomeExposurePage({
     return m !== null && m <= SOON_MINUTES
   }).length
 
+  const posts = views.mobile
+  const desktopColumns = (['MENOPAUSE', 'FREE'] as const).map((boardType) => ({
+    boardType,
+    posts: views.desktop[boardType],
+  }))
   const pinnedIds = new Set(pinned.map((o) => o.post.id))
 
   const results = query
@@ -209,7 +219,7 @@ export default async function AdminHomeExposurePage({
       {/* ── 2) 지금 홈에 뜬 글 ──────────────────────────── */}
       <AdminSection
         title={`지금 홈에 뜬 글 ${posts.length}건`}
-        description="고정·숨김이 반영된 실제 결과입니다. 점수 = (댓글 수 + 1) / (경과시간h + 4)^0.8"
+        description="고정·숨김이 반영된 실제 결과입니다. 점수 = (실반응 + 1) / (경과시간h + 4)^0.8"
         className="mt-10"
       >
         {posts.length === 0 ? (
@@ -267,6 +277,55 @@ export default async function AdminHomeExposurePage({
             </ul>
           </div>
         )}
+      </AdminSection>
+
+      {/* ── 2-1) 데스크톱 게시판별 미리보기 (읽기 전용) ───── */}
+      <AdminSection
+        title="데스크톱 게시판별 미리보기"
+        description={`넓은 화면(1024px 이상)용으로 같은 점수를 게시판마다 따로 매긴 결과입니다. 각 ${HOME_POPULAR_PER_BOARD}건까지 · 갱년기톡 최소 보장 없음. 고객 화면에는 아직 나가지 않습니다. 고정·숨김은 위 표에서 걸면 여기에도 반영됩니다.`}
+        className="mt-10"
+      >
+        <div className="mt-3 grid gap-6 lg:grid-cols-2">
+          {desktopColumns.map((column) => (
+            <div key={column.boardType} className="min-w-0">
+              <h3 className="m-0 text-sm font-bold text-content-primary">
+                {boardLabel(column.boardType)}{' '}
+                <span className="font-normal tabular-nums text-content-muted">{column.posts.length}건</span>
+              </h3>
+              {column.posts.length === 0 ? (
+                <div className="mt-2">
+                  <AdminEmptyState>이 게시판에 홈 자격 글이 없습니다. 다른 글로 채우지 않습니다.</AdminEmptyState>
+                </div>
+              ) : (
+                <ol className="m-0 mt-2 flex list-none flex-col border-y border-[color:var(--admin-border)] p-0">
+                  {column.posts.map((post, index) => (
+                    <li
+                      key={post.id}
+                      className="flex min-h-[52px] items-start gap-3 border-b border-[color:var(--admin-divider)] px-4 py-2 last:border-b-0"
+                    >
+                      <span className="w-5 shrink-0 pt-0.5 text-right text-xs font-bold tabular-nums text-content-muted">{index + 1}</span>
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          href={`/admin/content/${post.id}`}
+                          className="block truncate text-sm font-semibold text-content-primary no-underline hover:underline"
+                        >
+                          {post.title}
+                        </Link>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
+                          {pinnedIds.has(post.id) ? <AdminStatusBadge kind="override" value="PIN" /> : null}
+                          <span>
+                            실반응 {post.realReactions} · {formatKst(post.createdAt)} ·{' '}
+                            {popularityScore(post, now).toFixed(3)}
+                          </span>
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </div>
       </AdminSection>
 
       {/* ── 3) 홈에 없는 글 찾기 ────────────────────────── */}
