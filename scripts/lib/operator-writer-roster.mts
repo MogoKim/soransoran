@@ -156,7 +156,7 @@ function isPvCode(code: string): boolean {
 
 /**
  * 명단 전체 결함. 비어 있으면 통과.
- * 🔴 `TO_FILL_FROM_DB` 가 있으면 FAIL — CI 가 의도적으로 막는다(§7-1 완료 전).
+ * 🔴 자리표시 `TO_FILL_FROM_DB` 가 있으면 결함이다 — 소개가 정해지기 전에는 CI 와 적용이 모두 막힌다.
  */
 export function validateRoster(r: RosterData): string[] {
   const problems: string[] = []
@@ -192,7 +192,7 @@ export function validateRoster(r: RosterData): string[] {
     if (!e.note || e.note.trim() === '') {
       problems.push(`${e.code}: note 가 비어 있다`)
     } else if (e.note.trim() === 'TO_FILL_FROM_DB') {
-      problems.push(`${e.code}: note 에 TO_FILL_FROM_DB 가 남아 있다 — 운영 DB 에서 채워야 한다(§7-1)`)
+      problems.push(`${e.code}: note 에 자리표시 TO_FILL_FROM_DB 가 남아 있다 — 소개를 정해 채워야 한다`)
     } else {
       if (!NOTE_AGE_RE.test(e.note)) {
         problems.push(`${e.code}: note 나이대가 "40대 중반~60대 중반" 으로 시작하지 않는다: "${e.note.slice(0, 20)}"`)

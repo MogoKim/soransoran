@@ -156,10 +156,10 @@ expect('writers 90행', rosterTyped.writers.length, 90)
 const expectedCodes = Array.from({ length: 90 }, (_, i) => `OP${String(i + 1).padStart(2, '0')}`)
 expect('code 연속 OP01~OP90', rosterTyped.writers.map((e) => e.code), expectedCodes)
 
-// 🔴 TO_FILL_FROM_DB 가 하나라도 남아 있으면 FAIL 이다 — 운영 DB 읽기 전용 미리보기(--show-db-notes)로 OP01~10 소개를
-//    채우기 전에는 이 PR 이 CI 를 통과하지 않는 것이 맞다(문구 없이 통과시키는 예외를 두지 않는다).
+// 🔴 자리표시 `TO_FILL_FROM_DB` 가 하나라도 남아 있으면 FAIL 이다 — 소개 없이 통과시키는 예외를 두지 않는다.
+//    (2026-11-17) OP01~10 은 운영 DB 에도 note 가 없었다(null) — 창업자 승인 초안으로 채웠다.
 const noToFill = rosterTyped.writers.filter((e) => e.note.trim() === 'TO_FILL_FROM_DB')
-expect('🔴 TO_FILL_FROM_DB 0건 — OP01~10 소개를 운영 DB 에서 채웠다', noToFill.map((e) => e.code), [])
+expect('🔴 TO_FILL_FROM_DB 0건 — 자리표시 note 가 남아 있지 않다', noToFill.map((e) => e.code), [])
 
 // 🔴 실제 명단은 결함 0 이어야 한다 — TO_FILL_FROM_DB 도 결함으로 잡힌다
 const rosterErrors = validateRoster(rosterTyped)
