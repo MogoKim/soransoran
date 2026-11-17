@@ -3,7 +3,10 @@
  * D30 Persona cohort(wave7-d30 · P44~P63) **1회 무인 투입** — 🔴 기본은 dry-run(판정만 · write 0)
  *
  *   npx tsx scripts/persona-d30-oneshot.mts --date=2026-11-15            # 판정만 — DB write 0
- *   npx tsx scripts/persona-d30-oneshot.mts --date=2026-11-15 --apply    # 🔴 launchd 가 07:05 에 부른다
+ *   npx tsx scripts/persona-d30-oneshot.mts --date=2026-11-15 --apply    # 🔴 launchd 가 03:45 · 07:05 에 부른다
+ *
+ * 🔴 창 두 개(판정 정본 `oneShotWindowOf`): 03:45~06:05 는 그날 결정 **전**(권위 = 전날 controller 행),
+ *    07:05~07:19 는 그날 결정 뒤(권위 = 그날 controller 행). 앞 창이 끝내면 표식 done 이라 뒤 창은 아무것도 하지 않는다.
  *
  * 🔴 판정은 `scripts/lib/persona-d30-oneshot.mts` 하나다. 이 파일은 관측을 모으고 정본 명령을 부를 뿐이다.
  * 🔴 쓰기는 정본 `persona-cohort-run` 만 한다 — create → seed → check → activate. 이 파일은 DB 에 쓰지 않는다.
@@ -23,8 +26,8 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import {
-  APPROVED_SUPPLEMENT_PLAN_DIGEST, COHORT_CODES, ONESHOT_COHORT, ONESHOT_WINDOW,
-  judgeOneShot, judgeOutcome, remediationEligible, supplementApprovalDigestOf,
+  APPROVED_SUPPLEMENT_PLAN_DIGEST, COHORT_CODES, ONESHOT_COHORT,
+  judgeOneShot, oneShotWindowOf, previousKstDateOf, remediationEligible, supplementApprovalDigestOf,
   type Identity, type MarkerState, type OneShotFacts,
 } from './lib/persona-d30-oneshot.mjs'
 import { executeOneShot, type Step } from './lib/persona-d30-oneshot-exec.mjs'
@@ -151,22 +154,27 @@ async function gather(expectedOld40: readonly string[]): Promise<OneShotFacts> {
   const pinRaw = ((): string | null => { try { return readFileSync(join(CANON_DIR, 'runtime-pinned-sha'), 'utf-8').trim() } catch { return null } })()
   const lock = ((): boolean | null => { try { return existsSync(join(CANON_DIR, 'runtime-deploy.lock')) } catch { return null } })()
   let stage: OneShotFacts['stage']
+  let previousStage: OneShotFacts['previousStage']
   let old40Active: string[] | null = null
   let cohortExisting: string[] | null = null
   let adminCount: number | null = null
   try {
-    const row = await db().stageDecision.findUnique({ where: { kstDate: now.date } })
-    stage = row === null ? null : { kstDate: row.kstDate, state: row.state, release: row.release, capacity: row.capacity, decidedBy: row.decidedBy }
+    const toRow = (r: { kstDate: string; state: string; release: string; capacity: string; decidedBy: string } | null) =>
+      r === null ? null : { kstDate: r.kstDate, state: r.state, release: r.release, capacity: r.capacity, decidedBy: r.decidedBy }
+    stage = toRow(await db().stageDecision.findUnique({ where: { kstDate: now.date } }))
+    const prevDate = previousKstDateOf(now.date)
+    previousStage = prevDate === null ? undefined : toRow(await db().stageDecision.findUnique({ where: { kstDate: prevDate } }))
     old40Active = (await db().persona.findMany({ where: { status: 'active' }, select: { code: true } })).map((r) => r.code)
     cohortExisting = (await db().persona.findMany({ where: { code: { in: [...COHORT_CODES] } }, select: { code: true } })).map((r) => r.code)
     adminCount = await db().user.count({ where: { isAdmin: true } })
   } catch (e) {
     log('db-read-failed', { reason: (e as Error).name })
     stage = undefined
+    previousStage = undefined
   }
   const runtimeIdentity = ((): Identity | null => { const x = readRuntimePersonaAssetIdentity(); return validPersonaAssetIdentity(x) ? x : null })()
   return {
-    targetDate: TARGET_DATE, kstDate: now.date, kstMinute: now.minute, stage,
+    targetDate: TARGET_DATE, kstDate: now.date, kstMinute: now.minute, stage, previousStage,
     originMain: fetched ? read('git', ['rev-parse', 'refs/remotes/origin/main']) : null,
     head: read('git', ['rev-parse', 'HEAD']), pin: pinRaw, manifestSha: manifest.sha, manifestIdentity: manifest.identity,
     deployLock: lock, runningJobs: jobs.running, unknownJobs: jobs.unknown,
@@ -196,18 +204,24 @@ async function main(): Promise<number> {
   prismaClient = new PrismaClient()
   const expectedOld40 = PRODUCTION_PERSONA_CODES.filter((c) => !COHORT_CODES.includes(c))
 
-  // ── 판정 — 잠깐 도는 job(observer 60초 주기)은 창 안에서 다시 본다 ──
+  // ── 판정 — 도는 job 이 있으면 **그 창이 끝날 때까지** 30초마다 다시 본다 ──
+  //    (2026-11-16) 90초 뒤 포기하던 앞판은 03:30·04:30·05:30 수집기나 06:15 공급 회차 하나로 그날 투입을 잃었다.
+  //    판정은 매번 처음부터 다시 한다 — 기다리는 동안 다른 게이트가 바뀌면 그 코드로 멈춘다.
   let facts = await gather(expectedOld40)
   let verdict = judgeOneShot(facts)
-  for (let i = 0; i < 6 && !verdict.go && verdict.code === 'JOB_RUNNING' && kstNow().minute <= ONESHOT_WINDOW.endMinute; i++) {
+  const waitEnd = oneShotWindowOf(facts.kstMinute)?.endMinute ?? -1
+  // 🔴 창 판정(`oneShotWindowOf`)과 같은 포함 경계(<=) — 창의 마지막 분(06:05 · 07:19)까지 다시 본다
+  while (!verdict.go && verdict.code === 'JOB_RUNNING' && kstNow().minute <= waitEnd) {
     log('wait-running-jobs', { running: facts.runningJobs })
-    await new Promise((r) => setTimeout(r, 15_000))
+    await new Promise((r) => setTimeout(r, 30_000))
     facts = await gather(expectedOld40)
     verdict = judgeOneShot(facts)
   }
   log('verdict', {
     code: verdict.code, problems: verdict.problems,
+    mode: oneShotWindowOf(facts.kstMinute)?.mode ?? null,
     stage: facts.stage === undefined ? 'UNKNOWN' : facts.stage === null ? null : `${facts.stage.state}·${facts.stage.release}·${facts.stage.capacity}`,
+    previousStage: facts.previousStage === undefined ? 'UNKNOWN' : facts.previousStage === null ? null : `${facts.previousStage.kstDate} ${facts.previousStage.state}·${facts.previousStage.release}·${facts.previousStage.capacity}`,
     runtime: facts.head?.slice(0, 12) ?? null, approvalDigest: facts.approvalDigest?.slice(0, 12) ?? null,
     expectedApproval: APPROVED_SUPPLEMENT_PLAN_DIGEST.slice(0, 12), cohortExisting: facts.cohortExisting?.length ?? null,
   })
@@ -225,7 +239,10 @@ async function main(): Promise<number> {
     // 🔴 잠금 안의 순서는 `executeOneShot` 하나다 — 격리 DB 통합 검사가 같은 함수를 부른다
     const C = `--cohort=${ONESHOT_COHORT}`
     const N = `--limit=${COHORT_CODES.length}`
-    const REASON = `D30 cohort 무인 1회 투입 — 창업자 승인(2026-11-15 세션) · 실행기 persona-d30-oneshot · ${TARGET_DATE} PREPARE·d20·d30`
+    const authority = oneShotWindowOf(facts.kstMinute)?.mode === 'pre-decision'
+      ? `결정 전 · 전날 ${facts.previousStage?.kstDate ?? '?'} PREPARE·d20·d30`
+      : `${TARGET_DATE} PREPARE·d20·d30`
+    const REASON = `D30 cohort 무인 1회 투입 — 창업자 승인(2026-11-15 · 11-16 결정 전 창) · 실행기 persona-d30-oneshot · ${authority}`
     const STEP_ARGS: Record<Step, string[]> = {
       'seed-file': ['scripts/persona-cohort-seed.mts', C, '--write'],
       create: ['scripts/persona-cohort-run.mts', C, '--step=create', '--apply', N],
