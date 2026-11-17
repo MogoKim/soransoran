@@ -10,6 +10,13 @@
  * 종료 코드: 실패가 있으면 1
  */
 import {
+  OPERATOR_ROSTER_QUIET_WINDOW,
+  PERSONA_VOICE_QUIET_WINDOW,
+  judgeKstQuietWindow,
+  kstMinuteOfDayOf,
+} from '../src/lib/kst-write-quiet-window'
+import { ONESHOT_WINDOW } from './lib/persona-d30-oneshot.mjs'
+import {
   assertOperatorCommentData,
   assertOperatorPostData,
   assertOperatorReplyData,
@@ -68,11 +75,11 @@ console.log('\n══════ ① 작성자 자격 — 모르면 막는다')
   const good = (): OperatorWriterFacts => ({
     status: 'active', accountCount: 0, providerId: null, hasPersona: false,
   })
-  expect('기준 입력은 통과한다', judgeOperatorWriter(good()).ok, true)
-  expect('없는 작성자', judgeOperatorWriter(null), { ok: false, code: 'NOT_FOUND', reason: '그 작성자를 찾을 수 없습니다.' })
+  expect('기준 입력은 통과한다', judgeOperatorWriter(good(), 'operator').ok, true)
+  expect('없는 작성자', judgeOperatorWriter(null, 'operator'), { ok: false, code: 'NOT_FOUND', reason: '그 작성자를 찾을 수 없습니다.' })
 
-  const code = (f: Partial<OperatorWriterFacts>): string => {
-    const v = judgeOperatorWriter({ ...good(), ...f })
+  const code = (f: Partial<OperatorWriterFacts>, voice: 'operator' | 'persona' = 'operator'): string => {
+    const v = judgeOperatorWriter({ ...good(), ...f }, voice)
     return v.ok ? 'OK' : v.code
   }
   expect('retired 는 못 쓴다', code({ status: 'retired' }), 'NOT_ACTIVE')
@@ -82,8 +89,14 @@ console.log('\n══════ ① 작성자 자격 — 모르면 막는다')
   expect('🔴 Account 수를 못 세면 막는다', code({ accountCount: null }), 'UNKNOWN_ACCOUNT')
   expect('🔴 select 누락(undefined)도 막는다', code({ accountCount: undefined }), 'UNKNOWN_ACCOUNT')
   expect('🔴 NaN 은 조용히 통과하지 않는다', code({ accountCount: Number.NaN }), 'UNKNOWN_ACCOUNT')
-  expect('🔴 자동 Persona 가 붙어 있으면 막는다', code({ hasPersona: true }), 'ALSO_PERSONA')
+  expect('🔴 (운영자 이름 모드) 자동 Persona 가 붙어 있으면 막는다', code({ hasPersona: true }), 'ALSO_PERSONA')
   expect('🔴 Persona 연결 여부를 모르면 막는다', code({ hasPersona: null }), 'UNKNOWN_ACCOUNT')
+  // Persona 목소리 모드 — Persona 연결 조건만 반대이고 나머지 판정은 같은 정본이다
+  expect('(Persona 목소리) Persona 계정은 통과한다', code({ hasPersona: true }, 'persona'), 'OK')
+  expect('🔴 (Persona 목소리) Persona 가 아닌 계정은 막는다', code({ hasPersona: false }, 'persona'), 'NOT_PERSONA')
+  expect('🔴 (Persona 목소리) 연결 여부를 모르면 막는다', [code({ hasPersona: null }, 'persona'), code({ hasPersona: undefined }, 'persona')], ['UNKNOWN_ACCOUNT', 'UNKNOWN_ACCOUNT'])
+  expect('🔴 (Persona 목소리) 실회원 계정이 붙으면 막는다', code({ hasPersona: true, accountCount: 1 }, 'persona'), 'REAL_MEMBER')
+  expect('🔴 (Persona 목소리) retired 작성자 행은 막는다', code({ hasPersona: true, status: 'retired' }, 'persona'), 'NOT_ACTIVE')
 }
 
 // ─────────────────────────────────────────────────────────
@@ -546,6 +559,24 @@ console.log('\n══════ ⑪ 작성자 대댓글 — 원글 작성자�
     /targetCommentCounts\(p\.comments\)/.test(list) && /targetCommentCounts\(post\.comments\)/.test(save)
     && /select: TARGET_COMMENT_SELECT/.test(list) && /select: TARGET_COMMENT_SELECT/.test(save)
     && !/personaId === null\)\.length/.test(list + save), true)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ ⑫ KST 쓰기 금지 창 — 임시 · [start, end) 반열림')
+// ─────────────────────────────────────────────────────────
+{
+  const at = (hhmm: string) => new Date(`2026-11-17T${hhmm}:00+09:00`)
+  const ok = (hhmm: string, w: typeof PERSONA_VOICE_QUIET_WINDOW) => judgeKstQuietWindow(at(hhmm), w).ok
+  expect('Persona 목소리 06:29 됨 · 06:30 막힘 · 08:29 막힘 · 08:30 됨',
+    ['06:29', '06:30', '08:29', '08:30'].map((t) => ok(t, PERSONA_VOICE_QUIET_WINDOW)), [true, false, false, true])
+  expect('명단 적용 05:59 됨 · 06:00 막힘 · 08:59 막힘 · 09:00 됨',
+    ['05:59', '06:00', '08:59', '09:00'].map((t) => ok(t, OPERATOR_ROSTER_QUIET_WINDOW)), [true, false, false, true])
+  expect('KST 자정 넘김 — UTC 15:00 = KST 00:00 → 0분', kstMinuteOfDayOf(new Date('2026-11-16T15:00:00Z')), 0)
+  // 🔴 근거가 된 D30 1회 투입기 창이 두 금지 창 안에 있어야 한다 — 그 창이 밖으로 옮겨지면 여기서 깨져 사람이 다시 본다
+  const inside = (w: typeof PERSONA_VOICE_QUIET_WINDOW) => ONESHOT_WINDOW.startMinute >= w.startMinute && ONESHOT_WINDOW.endMinute < w.endMinute
+  expect('D30 1회 투입기 창(07:05~07:19)이 두 금지 창 안', [inside(PERSONA_VOICE_QUIET_WINDOW), inside(OPERATOR_ROSTER_QUIET_WINDOW)], [true, true])
+  const blocked = judgeKstQuietWindow(at('07:00'), PERSONA_VOICE_QUIET_WINDOW)
+  expect('막힐 때 이유에 다시 되는 시각', !blocked.ok && blocked.reason.includes('08:30 부터 다시 됩니다'), true)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

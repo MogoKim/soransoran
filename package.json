@@ -291,7 +291,7 @@
     "check:political-axis": "tsx scripts/political-axis-contract-check.mts",
     "stage:probe": "tsx scripts/stage-decision-probe.mts",
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts",
-    "operator:compose-check": "tsx scripts/operator-compose-check.mts && tsx --tsconfig tsconfig.ops.json scripts/operator-compose-rich-check.mts",
+    "operator:compose-check": "tsx scripts/operator-compose-check.mts && tsx --tsconfig tsconfig.ops.json scripts/operator-compose-rich-check.mts && node scripts/lane-author-identity-guard.mjs && node scripts/lane-author-identity-guard-mutation.mjs",
     "operator:compose-db-check": "tsx --tsconfig tsconfig.ops.json scripts/operator-compose-db-check.mts",
     "check:member-response": "tsx scripts/member-response-check.mts",
     "check:member-response-mutation": "tsx scripts/member-response-mutation.mts",

@@ -89,6 +89,8 @@ async function readWriter(
           providerId: row.user.providerId,
           hasPersona: row.user.persona !== null,
         },
+    // 🔴 이 트랜잭션은 운영자 이름 칸이다 — Persona 목소리는 별도 트랜잭션이 'persona' 로 판정한다
+    'operator',
   )
   if (!verdict.ok) return { blocked: verdict.reason }
   return { id: row!.id, userId: row!.userId }

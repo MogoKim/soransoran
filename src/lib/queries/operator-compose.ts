@@ -4,7 +4,7 @@ import { displayName } from '@/lib/display-name'
 // 🔴 게시판 이름·경로는 board-registry 가 유일한 출처다. 여기서 문자열로 적지 않는다
 import { boardLabel, communityPostHref, formatKst } from '@/lib/admin-format'
 import { toPreview } from '@/lib/post-html'
-import { OPERATOR_BOARDS, judgeOperatorReplyPost, type OperatorBoard } from '@/lib/operator-writer'
+import { OPERATOR_BOARDS, OPERATOR_NAME_CODE_PREFIX, judgeOperatorReplyPost, type OperatorBoard } from '@/lib/operator-writer'
 import {
   NOT_MICRO_SEED_LANE_WHERE, POST_VISIBILITY_SELECT, belongsToMicroSeedLane, pickPostVisibility,
 } from '@/lib/post-visibility'
@@ -30,12 +30,18 @@ export type WriterOption = {
  * 고를 수 있는 작성자.
  *
  * 🔴 **`active` 만 싣는다.** retired 는 이미 쓴 글의 작성자로 남을 뿐 새 글을 쓰지 않는다.
- * 🔴 **자동 Persona 는 애초에 이 표에 없다.** 화면에서 거르는 것이 아니라
- *    `OperatorWriter` 와 `Persona` 가 다른 표이기 때문이다 — 빠뜨릴 필터가 없다.
+ * 🔴 **운영자 이름(`OP`)만 싣는다.** 이 표에는 Persona 목소리(`PV`) 행도 함께 있다(2026-11-16 —
+ *    그 Persona 로 처음 쓸 때 앱이 만든다). 접두사 상수 하나로 가른다 — PV 행이 운영자 이름 칸에 섞이지 않게.
+ *    (골라도 서버가 ALSO_PERSONA 로 막지만, 목록에 보이는 것부터 거짓이 된다.)
  */
+export const OPERATOR_NAME_WRITER_WHERE = {
+  status: 'active',
+  code: { startsWith: OPERATOR_NAME_CODE_PREFIX },
+} satisfies Prisma.OperatorWriterWhereInput
+
 export async function getOperatorWriters(): Promise<WriterOption[]> {
   const rows = await prisma.operatorWriter.findMany({
-    where: { status: 'active' },
+    where: OPERATOR_NAME_WRITER_WHERE,
     orderBy: { code: 'asc' },
     select: {
       id: true,

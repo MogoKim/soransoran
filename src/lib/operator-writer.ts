@@ -5,8 +5,12 @@
  *
  * 🔴 **자동 Persona 를 수동 조작하는 기능이 아니다.**
  *    자동 레인(생성 → Gate → 대기열 → 발행)은 이 파일을 지나지 않고,
- *    이 레인은 provider 를 부르지 않는다. 두 레인은 표부터 갈라져 있다
- *    (`OperatorWriter` ≠ `Persona`) — 그래서 "제외 필터를 빠뜨렸다" 가 생길 수 없다.
+ *    이 레인은 provider 를 부르지 않는다.
+ * 🔴 **같은 Persona User 가 운영 레인에서도 말할 수 있다** (2026-11-16 창업자 결정 — Persona 목소리).
+ *    그 댓글은 `commentOrigin=OPERATOR` · personaId 없음 · 작성자 행은 그 Persona 전용 `PV` 코드다.
+ *    자동 레인의 예산·비율·단계 증거는 commentOrigin 과 personaId 로만 세므로 이 댓글을 보지 않는다.
+ *    그래서 **D100·Persona 레인은 작성자 계정(authorId)으로 Persona 를 판단하지 않는다** —
+ *    scripts/lane-author-identity-guard.mjs 가 지킨다.
  *
  * 🔴 **왜 여기에 판정을 모으는가.** 작성·수정·삭제 세 경로가 같은 질문을 한다 —
  *    *이 작성자를 써도 되는가* · *이 글이 이 도구의 것인가*. 경로마다 적으면
@@ -39,17 +43,26 @@ export type OperatorWriterFacts = {
   /** 🔴 방어적 보조. `undefined` 는 select 누락이므로 역시 막는다 */
   providerId: string | null | undefined
   /**
-   * 🔴 이 User 에 자동 Persona 가 붙어 있는가. 붙어 있으면 **막는다** —
-   *    한 사람이 두 레인에서 말하면 자동 여력 계산과 30% 비율이 동시에 어긋난다.
+   * 🔴 이 User 에 자동 Persona 가 붙어 있는가.
+   *    운영자 이름 모드에서는 **막는다** — 운영자 이름 칸과 Persona 목소리 칸을 섞지 않는다.
+   *    Persona 목소리 모드에서는 **반드시 있어야** 한다. 모르면(null·undefined) 어느 모드든 막는다.
    */
   hasPersona: boolean | null | undefined
 }
+
+/** 운영자 작성자 행 code 접두사 — 운영자 이름(`OP01`~)과 Persona 목소리(`PV<Persona 번호>`)를 가른다 */
+export const OPERATOR_NAME_CODE_PREFIX = 'OP'
+export const PERSONA_VOICE_CODE_PREFIX = 'PV'
+
+/** 어느 칸으로 쓰는가 — 운영자 이름 · Persona 목소리 */
+export type WriterVoice = 'operator' | 'persona'
 
 export type WriterBlockCode =
   | 'NOT_FOUND'
   | 'NOT_ACTIVE'
   | 'REAL_MEMBER'
   | 'ALSO_PERSONA'
+  | 'NOT_PERSONA'
   | 'UNKNOWN_ACCOUNT'
 
 export type WriterVerdict =
@@ -61,7 +74,8 @@ export const WRITER_BLOCK_LABEL: Record<WriterBlockCode, string> = {
   NOT_FOUND: '그 작성자를 찾을 수 없습니다.',
   NOT_ACTIVE: '지금은 쓸 수 없는 작성자입니다.',
   REAL_MEMBER: '🔴 실회원 계정입니다 — 회원 이름으로 글을 쓰지 않습니다.',
-  ALSO_PERSONA: '🔴 자동 페르소나가 함께 붙어 있습니다 — 두 레인이 같은 이름을 쓰지 않습니다.',
+  ALSO_PERSONA: '🔴 자동 페르소나 계정입니다 — 운영자 이름 칸이 아니라 「Persona 목소리」로 씁니다.',
+  NOT_PERSONA: '🔴 Persona 목소리는 Persona 계정으로만 씁니다.',
   UNKNOWN_ACCOUNT: '🔴 계정 정보를 확인하지 못했습니다.',
 }
 
@@ -70,8 +84,10 @@ export const WRITER_BLOCK_LABEL: Record<WriterBlockCode, string> = {
  *
  * 🔴 **모르면 막는다(fail-closed).** 공개된 글은 되돌릴 수 없다 —
  *    `judgeRealMember` 가 같은 이유로 같은 모양을 하고 있다.
+ * 🔴 `voice` 는 **필수**다(기본값 없음) — 부르는 쪽이 어느 칸인지 말해야 한다.
+ *    두 모드는 Persona 연결 조건만 반대이고, 상태·실회원 판정은 같은 정본을 쓴다.
  */
-export function judgeOperatorWriter(f: OperatorWriterFacts | null): WriterVerdict {
+export function judgeOperatorWriter(f: OperatorWriterFacts | null, voice: WriterVoice): WriterVerdict {
   if (f === null) {
     return { ok: false, code: 'NOT_FOUND', reason: WRITER_BLOCK_LABEL.NOT_FOUND }
   }
@@ -82,10 +98,13 @@ export function judgeOperatorWriter(f: OperatorWriterFacts | null): WriterVerdic
       reason: `${WRITER_BLOCK_LABEL.NOT_ACTIVE} (status=${String(f.status)})`,
     }
   }
-  if (f.hasPersona === true) {
+  if (voice === 'operator' && f.hasPersona === true) {
     return { ok: false, code: 'ALSO_PERSONA', reason: WRITER_BLOCK_LABEL.ALSO_PERSONA }
   }
-  if (f.hasPersona !== false) {
+  if (voice === 'persona' && f.hasPersona === false) {
+    return { ok: false, code: 'NOT_PERSONA', reason: WRITER_BLOCK_LABEL.NOT_PERSONA }
+  }
+  if (f.hasPersona !== true && f.hasPersona !== false) {
     return {
       ok: false,
       code: 'UNKNOWN_ACCOUNT',
@@ -385,7 +404,7 @@ export function judgeOperatorReplyPost(
   if ((f.personaId !== null && f.personaId !== '') || f.microSeedLane || f.originalQueueLinked) return blocked('AUTOMATED')
   if (f.operatorWriterId === null || f.operatorWriterId.trim() === '') return blocked('NOT_OPERATOR_POST')
   if (f.writerUserId === null || f.writerUserId !== f.authorId) return blocked('AUTHOR_MISMATCH')
-  const writer = judgeOperatorWriter(f.writer)
+  const writer = judgeOperatorWriter(f.writer, 'operator')
   if (!writer.ok) return { ok: false, code: 'WRITER_BLOCKED', reason: writer.reason }
   if (f.status !== 'PUBLISHED') return blocked('NOT_PUBLISHED')
   if (!isOperatorBoard(f.boardType)) return blocked('NOT_COMMUNITY')
