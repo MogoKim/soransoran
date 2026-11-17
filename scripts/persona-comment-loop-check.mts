@@ -22,6 +22,7 @@ import {
   AUTO_COMMENT_THINKING_LEVEL, AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
   COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
   judgeAutoLane, type AutoLaneFacts,
+  firstCommentDelayMs, firstCommentWaitMs, FIRST_COMMENT_DELAY_MIN_MS, FIRST_COMMENT_DELAY_MAX_MS, AUTO_FIRST_COMMENT_WINDOW_MS,
 } from '../src/lib/persona-comment-auto-lane'
 import { costOf, reserveOf } from '../src/lib/llm-pricing'
 import { ledgerDateOf, type LedgerEntry } from '../src/lib/llm-ledger'
@@ -117,8 +118,28 @@ console.log('\n② 생성 전 대상 필터 · 글당 첫 대상만')
 // ─────────────────────────────────────────────────────────
 {
   const p = (o: Partial<Parameters<typeof isAutoLaneCandidatePost>[0]>) =>
-    isAutoLaneCandidatePost({ id: 'x', publishedAtMs: NOW - 5 * 60_000, personaComments: 0, hasOpenQueue: false, ...o }, NOW)
-  check('🟢 5분 된 새 글 → 대상', p({}))
+    isAutoLaneCandidatePost({ id: 'x', publishedAtMs: NOW - 10 * 60_000, personaComments: 0, hasOpenQueue: false, ...o }, NOW)
+  check('🟢 10분 된 새 글 → 대상', p({}))
+  // 🔴 첫 댓글은 글을 읽을 시간이 지난 뒤에 — 글마다 3~9분 · 글 id 로 정해진다
+  const ids = Array.from({ length: 200 }, (_, i) => `cmw${(i * 7919).toString(36)}post${i}`)
+  const delays = ids.map(firstCommentDelayMs)
+  check('🔴 읽는 시간은 모든 글에서 3분 이상 9분 이하다',
+    delays.every((d) => d >= FIRST_COMMENT_DELAY_MIN_MS && d <= FIRST_COMMENT_DELAY_MAX_MS))
+  check('🔴 같은 글은 언제 물어도 같은 값이다(난수가 아니다)', ids.every((id, i) => firstCommentDelayMs(id) === delays[i]))
+  check('🔴 글마다 흩어진다 — 200편이 분 단위 7칸에 고루 놓인다',
+    new Set(delays.map((d) => Math.floor(d / 60_000))).size >= 6 && new Set(delays).size > 150)
+  check('🔴 방금(2분 전) 올라온 글 → 아직 대상 아님', !p({ publishedAtMs: NOW - 2 * 60_000 }))
+  check('🔴 읽는 시간이 정확히 지난 순간 → 대상', ids.slice(0, 20).every((id) =>
+    !isAutoLaneCandidatePost({ id, publishedAtMs: NOW - firstCommentDelayMs(id) + 1, personaComments: 0, hasOpenQueue: false }, NOW)
+    && isAutoLaneCandidatePost({ id, publishedAtMs: NOW - firstCommentDelayMs(id), personaComments: 0, hasOpenQueue: false }, NOW)))
+  const fresh = { id: 'fresh', publishedAtMs: NOW - 60_000, personaComments: 0, hasOpenQueue: false }
+  check('🔴 기다릴 시간 = 가장 먼저 열리는 글까지 남은 시간',
+    firstCommentWaitMs([fresh, { ...fresh, id: 'older', publishedAtMs: NOW - 20 * 60_000 }], NOW) === firstCommentDelayMs('fresh') - 60_000)
+  check('🔴 기다릴 글이 없으면 0 — 이미 댓글이 있거나 · 열린 후보가 있거나 · 읽는 시간이 지난 글',
+    firstCommentWaitMs([{ ...fresh, personaComments: 1 }, { ...fresh, hasOpenQueue: true }, { ...fresh, publishedAtMs: NOW - 30 * 60_000 }, { ...fresh, publishedAtMs: null }], NOW) === 0)
+  check('🔴 기다림은 9분을 넘지 않는다', firstCommentWaitMs([{ ...fresh, publishedAtMs: NOW }], NOW) <= FIRST_COMMENT_DELAY_MAX_MS)
+  check('🔴 읽는 시간 상한 뒤에도 60분 시한 안에 50분이 남는다 — 정기 회차(20분 간격) 두 번 이상',
+    AUTO_FIRST_COMMENT_WINDOW_MS - FIRST_COMMENT_DELAY_MAX_MS >= 50 * 60_000)
   check('🔴 61분 → 대상 아님(돈을 쓰지 않는다)', !p({ publishedAtMs: NOW - 61 * 60_000 }))
   check('🔴 Persona 댓글이 이미 있으면 대상 아님', !p({ personaComments: 1 }))
   check('🔴 열린 후보가 있으면 대상 아님(sweep 이 먼저 낸다)', !p({ hasOpenQueue: true }))

@@ -337,7 +337,7 @@ async function main(): Promise<void> {
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
     const a = await persona('P01'); await persona('P02'); await persona('P03')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     const g = fakeGen()
     const r = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
@@ -351,7 +351,7 @@ async function main(): Promise<void> {
     check('🔴 같은 회차 추가 댓글 0 · provider 0(방금 단 첫 댓글 → 시간차)', g.calls() === 0 && r.followup !== null && r.followup?.enqueued === 0,
       JSON.stringify(r.followup?.lines))
     // 🔴 대화 감사 FAIL 이어도 첫 댓글은 멈추지 않는다 — 브레이크는 추가 댓글만 막는다
-    const pid2 = await post(a, 5)
+    const pid2 = await post(a, 10)
     const g2 = fakeGen()
     const r2 = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
@@ -920,7 +920,7 @@ async function main(): Promise<void> {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
     const a = await persona('P01'); const b = await persona('P02'); await persona('P03')
     const old = await post(a, 200); await autoFirst(b, old, 180)
-    await post(a, 5) // 🔴 60분 창 안 · 첫 댓글 0
+    await post(a, 10) // 🔴 60분 창 안 · 첫 댓글 0
     const g = fakeGen()
     const r = await phase(g.gen)
     check('🔴 첫 댓글 대기 1편 → 추가 댓글 provider 0', g.calls() === 0 && (await personaRows(old)).length === 1 && r.outcome === 'TICK_ZERO', r.reason)

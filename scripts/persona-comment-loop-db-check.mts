@@ -254,7 +254,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); await persona('P02', 'paused')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     const f = fakeGenerate()
     await loop(f.gen)
     check('🔴 붙일 수 있는 Persona 가 글쓴이뿐 → provider 0 · 댓글 0', f.calls() === 0 && (await personaComments(pid)).length === 0)
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); const b = await persona('P02'); const c = await persona('P03'); const d = await persona('P04')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     await prisma.comment.create({ data: { postId: pid, authorId: b.userId, content: '먼저 단 댓글이에요', commentOrigin: 'PERSONA', personaId: b.id, source: 'SYSTEM' } })
     const f = fakeGenerate()
     await loop(f.gen)
@@ -277,7 +277,7 @@ async function main(): Promise<void> {
 
     await wipe()
     const a2 = await persona('P01'); const c2 = await persona('P03'); const d2 = await persona('P04')
-    const pid2 = await post(a2, 5)
+    const pid2 = await post(a2, 10)
     const q1 = await pending(c2, pid2); const q2 = await pending(d2, pid2)
     const s = await sweep()
     const rows = await prisma.personaApprovalQueue.findMany({ where: { id: { in: [q1, q2] } }, select: { status: true } })
@@ -293,9 +293,9 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); const b = await persona('P02')
-    const busy = await post(a, 5)
+    const busy = await post(a, 10)
     await memberComments(busy, 3)
-    const two = await post(a, 5)
+    const two = await post(a, 10)
     await memberComments(two, 2)
     const f = fakeGenerate()
     await loop(f.gen)
@@ -311,7 +311,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); await persona('P02'); await persona('P03')
-    const p1 = await post(a, 5); const p2 = await post(a, 6); const p3 = await post(a, 7)
+    const p1 = await post(a, 10); const p2 = await post(a, 11); const p3 = await post(a, 12)
     const t1 = (await prisma.post.findUniqueOrThrow({ where: { id: p1 }, select: { title: true, content: true } }))
     const t3 = (await prisma.post.findUniqueOrThrow({ where: { id: p3 }, select: { title: true } })).title
     const f = fakeGenerate((title) => title === t1.title ? t1.content : title === t3 ? new Error('network') : GOOD)
@@ -329,7 +329,7 @@ async function main(): Promise<void> {
 
     await wipe()
     const author = await persona('P01'); await persona('P02'); await persona('P03')
-    const fallbackPost = await post(author, 5)
+    const fallbackPost = await post(author, 10)
     let fallbackCalls = 0
     const fallbackGen: CommentGenerate = async ({ input }) => {
       fallbackCalls += 1
@@ -352,7 +352,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); await persona('P02')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     const f = fakeGenerate()
     const r = await loop(f.gen, { generation: { ok: false, reason: '예산 env 를 읽지 못했다' } })
     check('🔴 예산 보류 → provider 0 · 댓글 0', f.calls() === 0 && r.providerCalls === 0 && (await personaComments(pid)).length === 0)
@@ -392,7 +392,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); await persona('P02'); await persona('P03')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     const [r1, r2] = await Promise.all([loop(fakeGenerate().gen), loop(fakeGenerate().gen)])
     const afterRace = (await personaComments(pid)).length
     check('🔴 🔴 **루프 두 개 동시 → 중복 0 (댓글 1건 이하)**', afterRace <= 1,
@@ -403,7 +403,7 @@ async function main(): Promise<void> {
 
     await wipe()
     const a2 = await persona('P01'); const b2 = await persona('P02'); const c2 = await persona('P03')
-    const pid2 = await post(a2, 5)
+    const pid2 = await post(a2, 10)
     const [x, y] = [await pending(b2, pid2), await pending(c2, pid2)]
     const now = new Date()
     const res = await Promise.all([
@@ -420,7 +420,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); const b = await persona('P02')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     const qid = await pending(b, pid)
     process.env.SORAN_PERSONA_COMMENT_STAGE = 'bootstrap-review'
     const f = fakeGenerate()
@@ -437,7 +437,7 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); const b = await persona('P02'); await persona('P03')
-    const pid = await post(a, 5)
+    const pid = await post(a, 10)
     // (가) 적재(유료 생성 끝)까지 커밋되고 발행 전에 죽었다 — PENDING 1행이 남았다
     const qid = await pending(b, pid)
     const f = fakeGenerate()
@@ -471,8 +471,8 @@ async function main(): Promise<void> {
   {
     await wipe()
     const a = await persona('P01'); const b = await persona('P02'); await persona('P03')
-    const fresh = await post(a, 5)
-    const left = await post(a, 6)
+    const fresh = await post(a, 10)
+    const left = await post(a, 11)
     await pending(b, left)
     const dir = join(HOME, 'ledger-exhausted')
     mkdirSync(dir, { recursive: true })
@@ -575,7 +575,7 @@ async function main(): Promise<void> {
       && c0.parentId === null && c0.personaId !== author.id, `${prov}`)
 
     // C — 다른 글에서는 P14 가 회복한다(영구 잠금 없음 · ⑧ 기억은 그 글에만)
-    const other = await post(author, 5)
+    const other = await post(author, 10)
     const c = await run(() => GOOD)
     const oc = await personaComments(other)
     check('🔴 🔴 C — 다른 글에서는 같은 P14 가 깨끗한 후보로 통과해 발행된다(BASELINE_ONLY · 회복)',

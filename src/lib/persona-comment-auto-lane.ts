@@ -133,6 +133,36 @@ export function judgeAutoLane(f: AutoLaneFacts): AutoLaneVerdict {
 // 🔴 생성 전에 고르는 규칙 — 트랜잭션 규칙과 **같은 축**을 먼저 본다
 // ─────────────────────────────────────────────────────────
 
+/**
+ * 🔴 **첫 댓글은 글을 읽을 시간이 지난 뒤에 단다** — 글마다 3~9분, 글 id 로 정해지는 값이다(같은 글은 언제 물어도 같다).
+ *    발행 직후 깨움이 곧바로 댓글을 만들면 모든 글에 "올라온 그 분의 댓글"이 붙는다. 사람은 읽고 나서 쓴다.
+ *    상한 9분은 60분 시한(`AUTO_FIRST_COMMENT_WINDOW_MINUTES`) 안에 정기 회차가 두 번 이상 더 남는 값이다.
+ *    🔴 이것은 생성 전 고르는 규칙이다. 발행 트랜잭션(`judgeAutoLane`)과 단계 증거는 이 값을 보지 않는다.
+ */
+export const FIRST_COMMENT_DELAY_MIN_MS = 3 * 60_000
+export const FIRST_COMMENT_DELAY_MAX_MS = 9 * 60_000
+export function firstCommentDelayMs(postId: string): number {
+  // FNV-1a — 난수가 아니라 글 id 의 결정적 흩뿌림이다
+  let h = 0x811c9dc5
+  for (let i = 0; i < postId.length; i++) { h ^= postId.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
+  return FIRST_COMMENT_DELAY_MIN_MS + (h % (FIRST_COMMENT_DELAY_MAX_MS - FIRST_COMMENT_DELAY_MIN_MS + 1))
+}
+
+/**
+ * 🔴 **아직 읽는 중인 글이 있으면 그 글이 열릴 때까지 남은 시간** — 없으면 0.
+ *    러너는 이만큼 기다렸다가 회차를 돈다. 이미 Persona 댓글이 있거나 열린 후보가 있는 글은 기다릴 이유가 없다.
+ */
+export function firstCommentWaitMs(posts: readonly AutoLanePostFacts[], nowMs: number): number {
+  let wait = 0
+  for (const p of posts) {
+    if (p.publishedAtMs === null || !Number.isFinite(p.publishedAtMs) || p.publishedAtMs > nowMs) continue
+    if (p.personaComments >= AUTO_PERSONA_COMMENTS_PER_POST_MAX || p.hasOpenQueue) continue
+    const left = p.publishedAtMs + firstCommentDelayMs(p.id) - nowMs
+    if (left > 0 && (wait === 0 || left < wait)) wait = left
+  }
+  return Math.min(wait, FIRST_COMMENT_DELAY_MAX_MS)
+}
+
 export type AutoLanePostFacts = {
   id: string
   publishedAtMs: number | null
@@ -143,13 +173,14 @@ export type AutoLanePostFacts = {
 }
 
 /**
- * 🔴 **유료 호출 전에** 창 밖 · 이미 댓글이 있는 글 · 열린 후보가 있는 글을 뺀다.
+ * 🔴 **유료 호출 전에** 창 밖 · 아직 읽는 중인 글 · 이미 댓글이 있는 글 · 열린 후보가 있는 글을 뺀다.
  *    트랜잭션이 어차피 막을 글에 돈을 쓰지 않기 위해서다 — 막는 권한은 여전히 트랜잭션에 있다.
  */
 export function isAutoLaneCandidatePost(p: AutoLanePostFacts, nowMs: number): boolean {
   if (p.publishedAtMs === null || !Number.isFinite(p.publishedAtMs)) return false
   if (p.publishedAtMs > nowMs) return false
   if (nowMs - p.publishedAtMs > AUTO_FIRST_COMMENT_WINDOW_MS) return false
+  if (nowMs - p.publishedAtMs < firstCommentDelayMs(p.id)) return false
   if (p.personaComments >= AUTO_PERSONA_COMMENTS_PER_POST_MAX) return false
   return !p.hasOpenQueue
 }
