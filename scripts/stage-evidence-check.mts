@@ -40,12 +40,12 @@ import {
 import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import { PRICING_VERSION } from '../src/lib/llm-pricing'
 import {
-  judgeSupplyCostEnvelope, supplyCostContractOf, supplyCostProofBudgetUsd,
+  judgeSupplyCostEnvelope, supplyCostContractOf, supplyCostProofBudgetUsd, supplyCostRecordedBudgetCapOf,
   supplyCostScheduledSlotOf, usesSupplyCostEnvelope, SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
   supplyCostContractHistory, validSupplyCostContractHistory,
 } from '../src/lib/supply-cost-envelope'
 import {
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_PROOF_FIRST_DAILY_USD,
+  SUPPLY_PROOF_FIRST_DAILY_USD,
   SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_RUNS_PER_DAY,
 } from '../src/lib/supply-schedule-contract'
 import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
@@ -777,7 +777,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     const history = supplyCostContractHistory()
     check('🟢 시행일 계약 창은 계약·가격·예산·출처·proof 몫을 날짜에 고정하고 과거 날짜에는 적용되지 않는다',
       contract?.supplyContract === SUPPLY_JIT_CONTRACT && contract.pricingVersion === PRICING_VERSION
-      && contract.approvedDailyUsd === SUPPLY_DAILY_USD_APPROVED
+      && contract.approvedDailyUsd === 1.2
       && contract.trustedBudgetSources.join(',') === 'env.local,process,process-override'
       && contract.proofFullBudgetAtUsd === SUPPLY_PROOF_FIRST_DAILY_USD
       && contract.proofBudgetNumerator === SUPPLY_PROOF_RUNS_PER_DAY
@@ -792,11 +792,19 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       && history[0]?.approvedDailyUsd === 1.2
       && history[0]?.proofBudgetNumerator === 5 && history[0]?.proofBudgetDenominator === 7,
       JSON.stringify(history))
+    {
+      const row = (ceiling: number) => ({ budgetDailyUsd: 1.8, budgetCeilingUsd: ceiling, budgetCapUsd: Math.min(1.8, ceiling), budgetSource: 'env.local' })
+      check('🔴 장부 기록 상한 — 11-17 의 천장 $1.80 은 유효 · 11-16 장부 행에 $1.80 천장은 무효(소급 0) · 11-16 의 $1.20 은 유효',
+        supplyCostRecordedBudgetCapOf(row(1.8), '2026-11-17') === 1.8
+        && supplyCostRecordedBudgetCapOf(row(1.8), '2026-11-16') === null
+        && supplyCostRecordedBudgetCapOf(row(1.2), '2026-11-16') === 1.2
+        && supplyCostProofBudgetUsd('2026-11-17', 1.8) === 1.8 && supplyCostProofBudgetUsd('2026-11-16', 1.2) === 1.2)
+    }
     const latestContract = history.at(-1)
-    check('🔴 최신 비용 계약 창은 현재 producer 계약·가격·승인 예산·proof 몫과 일치한다',
+    check('🔴 최신 비용 계약 창은 현재 producer 계약·가격·승인 예산(11-17 · $1.80)·proof 몫과 일치한다',
       latestContract?.supplyContract === SUPPLY_JIT_CONTRACT
       && latestContract.pricingVersion === PRICING_VERSION
-      && latestContract.approvedDailyUsd === SUPPLY_DAILY_USD_APPROVED
+      && latestContract.fromKstDate === '2026-11-17' && latestContract.approvedDailyUsd === 1.8
       && latestContract.trustedBudgetSources.join(',') === 'env.local,process,process-override'
       && latestContract.proofFullBudgetAtUsd === SUPPLY_PROOF_FIRST_DAILY_USD
       && latestContract.proofBudgetNumerator === SUPPLY_PROOF_RUNS_PER_DAY
