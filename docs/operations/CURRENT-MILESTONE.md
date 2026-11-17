@@ -191,7 +191,7 @@ code·deployed·operating 증거를 서로 대신 쓰지 않는다.
 | 1 | D30 복구 | 11-15 00:00 1순위 runtime deploy · 11-15 07 후 Persona · 첫 현실 후보 11-18 07 D30 | 비용·Persona·댓글·exact-head 모두 green |
 | 2 | OP51~90 직접작성 | D30 파일과 겹치지 않는 별도 worktree에서 즉시 rebase·code PASS | 출처·소유권·Dn 증거 제외 replay |
 | 3 | 댓글 PR-2 | H1 운영 표본 뒤 hook·역할 권위 통합 | 실회원 무개입·중복 hook 0 |
-| 4 | #829 | D30 증거와 파일 분리 뒤 canary | 자동 Dn·기억·베스트 제외 |
+| 4 | Persona 목소리 댓글(운영자 경로 · #829 대체) | D100 판독기 무변경 · 안전 기반 → 본 기능 순서 · 11-17 07:20 뒤 merge | D100 무영향 격리 DB 고정 · 운영자 이름 글 1건 실화면 |
 | 5 | 고객 홈·실제 조회수 | 독립 owner로 병행 | 실제 행동만, Persona·admin·bot 제외 |
 | 6 | M-GRAPH → M-AUTO | 제품 결과 아래 별도 owner | 기사 1개나 자동화 1개 PASS를 전체 완료로 선언하지 않음 |
 | 7 | D50 | D30 operating PASS 뒤 Persona 100·비용·host 준비 | controller 자연 개방 |

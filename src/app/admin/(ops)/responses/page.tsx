@@ -97,6 +97,12 @@ export default async function AdminResponsesPage() {
                   <Link href={`/admin/compose?postId=${encodeURIComponent(row.id)}&from=responses`} className={adminButtonClass('primary')}>
                     답 쓰기
                   </Link>
+                  <Link
+                    href={`/admin/compose?mode=persona-voice&postId=${encodeURIComponent(row.id)}&from=responses#persona-voice`}
+                    className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]"
+                  >
+                    Persona 목소리로
+                  </Link>
                   {row.href ? (
                     <a href={row.href} className="inline-flex min-h-[52px] items-center text-sm font-semibold text-link lg:min-h-[44px]">
                       고객 화면에서 보기
