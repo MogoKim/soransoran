@@ -139,7 +139,7 @@ console.log('\n① 🔴 수집기가 두 번 이어 붙인 본문만 걷어낸�
 console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친 뒤(evidence-v2)')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 근거 묶음 판 = evidence-v2', EVIDENCE_PACKET_VERSION === 'evidence-v2')
+  check('🔴 근거 묶음 판 = evidence-v3', EVIDENCE_PACKET_VERSION === 'evidence-v3')
   const A = CASE('A'); const B = CASE('B'); const C = CASE('C')
   const pa = packetOf(A); const pb = packetOf(B); const pc = packetOf(C)
   const headOf = (p: SourceEvidencePacket) => p.spans.find((s) => s.kind === 'head')?.text ?? ''
@@ -340,7 +340,7 @@ async function runOf(c: Case, ask: Ask) {
     && r.system.includes('구체적 고위험 생활사')
     && MATERIAL_CONTRACT_LINES.every((l) => r.system.includes(l))
     && REVIEW_FAMILY_SPECIFICS_LINES.every((l) => r.system.includes(l)))
-  check('🔴 artifact 근거 판 = evidence-v2 · 길이는 한 벌', a.evidence.packetVersion === 'evidence-v2' && a.evidence.bodyLength === packet.bodyLength && packet.bodyLength < c.v1BodyLength)
+  check('🔴 artifact 근거 판 = evidence-v3 · 길이는 한 벌', a.evidence.packetVersion === 'evidence-v3' && a.evidence.bodyLength === packet.bodyLength && packet.bodyLength < c.v1BodyLength)
 }
 
 // ─────────────────────────────────────────────────────────

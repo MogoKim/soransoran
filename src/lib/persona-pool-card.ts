@@ -15,6 +15,7 @@
 import { isPersonaCode } from './persona-code'
 import { CHILD_AGE_BANDS, readLengthBand, type ChildAgeBand, type PersonaForMatch } from './original-post-persona-match'
 import { isNoGoExpressionItem } from './persona-no-go'
+import { MENOPAUSE_STATUSES } from './persona-life-facts'
 
 export type PoolCard = {
   /** `P01` ~ `P20` */
@@ -89,8 +90,6 @@ const CHILD_BAND_ALIAS: ReadonlyArray<{ keys: readonly string[]; band: ChildAgeB
 
 /** 🔴 혼인 상태 — 카드 표기 그대로 쓴다. `기혼` 만 현재형 배우자 글을 맡을 수 있다(hardFilter) */
 const MARITAL = ['기혼', '이혼', '사별', '비혼', '별거'] as const
-
-const MENOPAUSE = ['전', '진행중', '후'] as const
 
 /** 🔴 카드 `금지` 줄에 나올 수 있는 역할 — 모르는 이름이 나오면 **버리지 않고 문제로 남긴다** */
 export const REACTION_ROLES = [
@@ -227,7 +226,7 @@ export function parseCard(code: string, title: string, body: string): { card: Po
   const workStatus = lifeParts[0] ?? ''
   const economicStatus = lifeParts[1] ?? ''
   const housing = lifeParts[2] ?? ''
-  const menopause = lifeParts.map((p) => readTagged(p, '갱년기', MENOPAUSE)).find((v) => v !== null) ?? null
+  const menopause = lifeParts.map((p) => readTagged(p, '갱년기', MENOPAUSE_STATUSES)).find((v) => v !== null) ?? null
   const care = lifeParts.map((p) => readTagged(p, '간병', PARENT_CARE)).find((v) => v !== null) ?? null
   if (menopause === null) problems.push('갱년기 상태를 읽지 못했다')
   if (care === null) problems.push('간병 상태를 읽지 못했다')

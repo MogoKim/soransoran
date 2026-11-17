@@ -1,28 +1,28 @@
 {
-  "version": "quality-v26",
-  "digest": "eb5000a18491ef928672be43039d5853c6b23f866dec7ef60dc291a7adb07163",
+  "version": "quality-v27",
+  "digest": "0feed191c7434d2d4c57de1c47b2e2d8a5ce55e25b3516d1a0d22e7d387d5a60",
   "files": {
-    "src/lib/quality-contract.ts": "843629941c72525a01adc76e35693e4ebb3233ae328d016714e03b74371adcb9",
+    "src/lib/quality-contract.ts": "b0e4428bf8b37e281f7c420c2bf4cefa5307f2bb18b1009f776cfa34c144a151",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
-    "src/lib/content-core/draft-life-gates.ts": "5e192419adf1e05b9e5718c2eefe361d7406545da3627430eb287dce6bbfdac4",
+    "src/lib/content-core/draft-life-gates.ts": "574b4eeeb2ef157aefa61e8d548547d969b64bb2456a8dc0cdf66b39c67c1652",
     "src/lib/content-core/review.ts": "fb8f476346b2ed561f221c282846ef36412a2f52e625082780242b856af5a33c",
     "src/lib/content-core/pipeline.ts": "19271911d1168118f396f31e2d2f946ae9068a29c5409de280d2a6a27b711ce8",
-    "src/lib/content-core/evidence.ts": "5d057ae291e865cbc3131bb51a858e2568b351239f993c38c4d9453c95980e2e",
+    "src/lib/content-core/evidence.ts": "d27479f1ab3e8490add3e6c6351f4a5c36016b314863173c6604cf6d0dc50558",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "808e7263f27d1943840a99518c4df35c483d33e02d159708f94bd6214a791a5e",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
     "src/lib/supply-schedule-contract.ts": "a75d28635e2f90d854d88b879f7a619b75a59384868d72120a29731e517136a4",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
-    "src/lib/original-post-persona-match.ts": "fd0628adae414a4ec59e7ab2d71272e44368ff73d83ddd0ada00157edac7ee4f",
+    "src/lib/original-post-persona-match.ts": "7f3a2d11544fcb9d6a0a5c5d3e9b036405d29cfda897b2bb19b7e019b3b604aa",
     "scripts/lib/content-core-run.mts": "924ee65a7c60f2914b19fa36ce48037a9d3d21883fd203eab8e89c1eb9c5454b",
     "scripts/lib/content-core-prompts.mts": "37460ae9e74940d63ac92411caf0aed9f1270a46873a76bcc829cf511a259d20",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
-    "src/lib/persona-pool-card.ts": "49ec53fc4f5f61293a20f1384504df7d6d02eb1176f097c026011a02b64c0a73",
-    "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50",
+    "src/lib/persona-pool-card.ts": "f3784f43966de78ff62b8d8a84b89692a11493b9f3b543c5a95f26ef7e3fbb2f",
+    "src/lib/persona-cap.ts": "0f059da6c9a0b3030702823957f74ebc0cc6a68bc1de1fa1a52d4019dd093517",
     "src/lib/founder-gold.ts": "92e7ddb5629d29f4fac275333ab029ffadeb7a0da4a77fcc8f2cda95e05b6b74",
     "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
     "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
@@ -31,14 +31,20 @@
     "src/lib/auto-ready-semantic-audit.ts": "b10e44a0f6d9f512f174b843d1b181fc8c7898f87270fc02af0db89b5a3fec98",
     "scripts/lib/auto-ready-rule-judge.mts": "d9348652c0ab2d5ab6c98a358fd99408c3a34483895ab3b58fe72deb2a48b293",
     "src/lib/content-core/material-contract.ts": "0e17d2d4e46b14dafa948745406c986c3526a6181998cdba528219b022c40e48",
-    "src/lib/content-core/speaker.ts": "d85f51f249e26882a96075eb83d13d67c8c9ab76ffe634014e435ced0ade3a70",
+    "src/lib/content-core/speaker.ts": "ddcc67cbe3c6628070d2ea7761373ece64df35464fcf19b2c5c910fb336a7a30",
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "2026-11-16 D30 — supply-schedule-contract.ts 에서 승인 천장 상수 SUPPLY_DAILY_USD_APPROVED/PROPOSED 삭제(예산 천장은 날짜별 비용 계약 supplyApprovedDailyUsdOf 로 이동)와 설명 문구·주석 갱신뿐 — 품질 게이트·검수 판정 행동 불변",
+    "kind": "bump",
+    "reason": "판 quality-v26 → quality-v27",
     "changedFiles": [
-      "src/lib/supply-schedule-contract.ts"
+      "src/lib/quality-contract.ts",
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/evidence.ts",
+      "src/lib/original-post-persona-match.ts",
+      "src/lib/persona-pool-card.ts",
+      "src/lib/persona-cap.ts",
+      "src/lib/content-core/speaker.ts"
     ]
   }
 }

@@ -22,8 +22,9 @@ export const EVIDENCE_CHAR_BUDGET = 300
 /**
  * 🔴 **evidence-v2 (2026-10-13)** — 묶기 전에 수집기가 두 번 이어 붙인 본문을 걷어낸다(`collapseRepeatedBody`).
  *    옛 판은 같은 글이 두 번 든 300자를 다시 머리·꼬리로 잘라, 끝나지 않은 문장을 꼬리로 보냈다.
+ * **evidence-v3** — 꼬리가 마무리를 보여 주는지를 `closesSentence` 로 본다. 끝맺는 말 뒤의 표정(`ㅠㅠ` · `~` · 이모지)은 걷는다.
  */
-export const EVIDENCE_PACKET_VERSION = 'evidence-v2'
+export const EVIDENCE_PACKET_VERSION = 'evidence-v3'
 
 /**
  * 🔴 **본문이 통째로 한 번 더 이어 붙은 것으로 볼 최소 길이** — 공백 뺀 글자 수.
@@ -36,6 +37,14 @@ export const REPEAT_MIN_CHARS = 20
  *    실측(2026-10-13 보조 Mac 3,124건): 상한에서 잘린 두 벌 본문의 길이는 296~300자였다.
  */
 export const COLLECTION_TRIM_SLACK = 10
+
+/**
+ * 본문이 수집 상한에 닿았는가 — 닿았을 때만 "뒤가 잘렸을 수 있다".
+ * 🔴 잘림을 묻는 자리는 전부 이 함수를 쓴다. 상한에 닿지 않은 글의 끝은 글쓴이가 끝낸 자리다.
+ */
+export function isCutAtCollection(body: string): boolean {
+  return body.trim().length > EVIDENCE_CHAR_BUDGET - COLLECTION_TRIM_SLACK
+}
 
 /**
  * 🔴 **수집기가 본문을 두 번 이어 붙였으면 앞의 한 벌만 남긴다** (2026-10-13 의미 손실 감사).
@@ -58,7 +67,7 @@ export function collapseRepeatedBody(body: string): { text: string; collapsed: b
   const keep = { text: t, collapsed: false }
   if (flat.length < REPEAT_MIN_CHARS * 2) return keep
   // 🔴 수집 상한은 근거 예산과 같은 300자다(`bodyHead`) — 두 값이 같은지는 생성 손실 검사가 본다
-  const cutAtCollection = t.length > EVIDENCE_CHAR_BUDGET - COLLECTION_TRIM_SLACK
+  const cutAtCollection = isCutAtCollection(t)
   const key = flat.slice(0, REPEAT_MIN_CHARS)
   for (let at = flat.indexOf(key, REPEAT_MIN_CHARS); at > 0; at = flat.indexOf(key, at + 1)) {
     const first = flat.slice(0, at)
@@ -219,11 +228,20 @@ export function readMediaDependency(text: string): MediaDependency | null {
   return null
 }
 
+const CLOSING_RE = /[?？]|(?:요|다|죠|네요|까요|세요|군요|네|음)\s*$/
 /**
- * 마무리를 보여 주는가 — 물음표 · 종결 어미 · 부르는 말 중 하나라도.
- * 🔴 (quality-v3) 초안 게이트가 **원문 끝이 잘렸는가**를 이 판정 하나로 본다 — 두 벌을 만들지 않는다.
+ * 문장 끝에 붙는 장식 — 우는 자모(`ㅠㅠ` · `T`) · 웃는 자모(`ㅎㅎ`) · 물결 · 문장부호 · 이모지.
+ * 뜻을 끝맺는 말이 아니라 그 뒤에 얹는 표정이다.
  */
-export const CLOSING_RE = /[?？]|(?:요|다|죠|네요|까요|세요|군요|네|음)\s*[.!…]*\s*$/
+const TAIL_DECORATION_RE = /[\sㄱ-ㅎㅏ-ㅣTt~^*;:()<>'"`,._=+\-|/\\!…♡♥★☆♪\p{Extended_Pictographic}‍️]+$/u
+
+/**
+ * 마무리를 보여 주는가 — 물음표 · 종결 어미 중 하나라도. 끝의 장식은 걷고 본다.
+ * 🔴 "끝맺었는가"를 묻는 자리(근거 묶음의 꼬리 · 초안 게이트의 잘린 원문)는 전부 이 판정 하나다.
+ */
+export function closesSentence(text: string): boolean {
+  return CLOSING_RE.test(text.replace(TAIL_DECORATION_RE, ''))
+}
 
 /**
  * 🔴 **머리와 꼬리를 겹치지 않게 자른다.**
@@ -274,7 +292,7 @@ export function buildEvidencePacket(input: {
      * 🔴 가운데를 절반 넘게 버렸는데 꼬리가 마무리를 보여 주지 않으면
      *    무슨 이야기인지 **확인하지 못한 것**이다.
      */
-    if (omitted > OMITTED_CORE_RATIO && !CLOSING_RE.test(tail)) reasons.push('middleUnverified')
+    if (omitted > OMITTED_CORE_RATIO && !closesSentence(tail)) reasons.push('middleUnverified')
   }
 
   const bodyEvidenceChars = spans

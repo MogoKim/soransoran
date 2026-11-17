@@ -30,6 +30,7 @@
  */
 import { comparePersonaCodes } from '../persona-code'
 import type { PoolCard } from '../persona-pool-card'
+import { hasMenopauseExperience } from '../persona-life-facts'
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
 import {
   CLAIM_FACTS, CLOSING_INTENTS, CONTENT_ROLES, EVIDENCE_REFS, PROTECTED_FACT_KINDS,
@@ -77,7 +78,6 @@ export const SPEAKER_PLAN_VERSION = 'speaker-plan-v8'
  */
 const MARITAL_SINGLE: readonly string[] = ['미혼', '비혼', '이혼', '사별', '별거']
 const PARENT_CARE_YES: readonly string[] = ['간헐', '상시', '있음', '동거 간병']
-const MENOPAUSE_YES: readonly string[] = ['중', '후', '진행', '완료']
 
 /** 화자가 서는 자리 */
 export const STANCES = ['SELF_EXPERIENCE', 'OBSERVATION', 'REFLECTION', 'QUESTION'] as const
@@ -339,7 +339,7 @@ export function hasFact(p: PersonaLifeContract, fact: ClaimFact, requiredValue: 
     case 'menopause': {
       const v = p.menopauseStatus.trim()
       if (v === '') return false
-      if (want === '있음') return MENOPAUSE_YES.includes(v)
+      if (want === '있음') return hasMenopauseExperience(v)
       if (want === '없음') return v === '전'
       return false
     }

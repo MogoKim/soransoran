@@ -40,6 +40,16 @@ export function kstDayStart(now: Date): Date {
   return new Date(midnightKst - KST_OFFSET_MS)
 }
 
+/**
+ * 두 시각 사이에 **KST 날짜가 몇 번 바뀌었는가** — 같은 날이면 0, 어제면 1.
+ *
+ * 🔴 "하루에 한 편" 같은 날짜 단위 규칙의 정본이다. 경과 시간을 24시간으로 나누면 어제 저녁에 쓴 사람이
+ *    오늘 같은 시각 직전까지 막히고, 그 경계가 매일 뒤로 밀린다.
+ */
+export function kstDaysBetween(earlier: Date, later: Date): number {
+  return Math.round((kstDayStart(later).getTime() - kstDayStart(earlier).getTime()) / 86_400_000)
+}
+
 /** 롤링 7일 창의 시작 */
 export function weekWindowStart(now: Date): Date {
   return new Date(now.getTime() - WEEK_WINDOW_DAYS * 24 * 60 * 60 * 1000)

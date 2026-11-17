@@ -39,6 +39,7 @@ import {
 // 🔴 말투·profile 의 정본 — 러너 · 관제 · 예측과 같은 함수를 쓴다
 import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { kstDaysBetween } from '../src/lib/persona-cap'
 
 const argv = process.argv.slice(2)
 const arg = (k: string): string | undefined => {
@@ -130,7 +131,7 @@ for (const r of personaRows) {
     noGoExpressions: r.noGoExpressions,
     voiceLength: typeof vc.length === 'string' ? vc.length : null,
     postsThisWeek,
-    daysSinceLastPost: last === null ? null : Math.floor((Date.now() - last.createdAt.getTime()) / 864e5),
+    daysSinceLastPost: last === null ? null : kstDaysBetween(last.createdAt, new Date()),
   })
 }
 

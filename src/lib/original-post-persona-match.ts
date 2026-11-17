@@ -28,6 +28,7 @@
 
 import { comparePersonaCodes } from './persona-code'
 import { noGoHits } from './persona-no-go'
+import { hasMenopauseExperience } from './persona-life-facts'
 import { judgeRealMember } from './real-member-gate'
 /**
  * 🔴 **생성 말투와 최종 author 를 잇는다** (2026-09-13).
@@ -769,9 +770,8 @@ export function judgeLifeHistory(
   if (req.needsParentCare && (p.parentCare === '없음' || p.parentCare === undefined || p.parentCare === null)) {
     out.push({ code: 'NO_PARENT_CARE', detail: `parentCare=${p.parentCare ?? '—'}` })
   }
-  // 🔴 '전' 만 막는다. '진행중' · '후' 는 경험이 있다
-  if (req.needsMenopauseExperience && p.menopauseStatus === '전') {
-    out.push({ code: 'MENOPAUSE_NOT_YET', detail: 'menopauseStatus=전' })
+  if (req.needsMenopauseExperience && !hasMenopauseExperience(p.menopauseStatus)) {
+    out.push({ code: 'MENOPAUSE_NOT_YET', detail: `menopauseStatus=${p.menopauseStatus ?? '—'}` })
   }
 
   // ── noGo ──
