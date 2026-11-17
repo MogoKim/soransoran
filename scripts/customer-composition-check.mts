@@ -180,7 +180,7 @@ check('🔴 날짜 cutoff 하드코딩 없음', !/20\d\d-\d\d-\d\d/.test(query +
 check('🔴 재방문율·리텐션이라 부르지 않는다', !/재방문율|리텐션|retention/i.test(page))
 check('🔴 만 나이라고 부르지 않는다(부정문만 허용)', (page.match(/만 나이/g) ?? []).length === (page.match(/만 나이가 아닙니다/g) ?? []).length)
 check('🔴 색 리터럴 없음', !/#[0-9a-fA-F]{3,8}\b/.test(page))
-check('운영 메뉴는 7개 그대로', (nav.match(/\{ href: '\/admin/g) ?? []).length === 7 && !nav.includes('composition'))
+check('운영 메뉴는 8개 그대로(2026-11-16 답 기다리는 글 추가)', (nav.match(/\{ href: '\/admin/g) ?? []).length === 8 && !nav.includes('composition'))
 check('「회원」 메뉴가 하위 경로에서 켜진다', nav.includes('pathname.startsWith(`${href}/`)'))
 check('회원 목록·고객 구성이 공통 하위 탭으로 이어진다', read('src/app/admin/(ops)/members/page.tsx').includes('<MemberAdminTabs current="members" />')
   && page.includes('<MemberAdminTabs current="composition" />')

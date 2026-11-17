@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { displayName } from '@/lib/display-name'
 // 🔴 게시판 이름·경로는 board-registry 가 유일한 출처다. 여기서 문자열로 적지 않는다
@@ -62,28 +63,23 @@ export type ComposeTargetPost = {
   href: string | null
 }
 
-/**
- * 댓글을 달 대상 글 목록.
- *
- * 🔴 **공개된 커뮤니티 글만 싣는다.** 매거진은 게시판이 아니라 콘텐츠 영역이고,
- *    베스트는 모아보기다 — 둘 다 글쓰기 진입점이 없다(IA 정본).
- * 🔴 **최근 것부터 조금만.** 이 화면은 글 목록이 아니라 "지금 답을 달 자리" 다.
- */
-export async function getComposeTargetPosts(limit = 30): Promise<ComposeTargetPost[]> {
-  const rows = await prisma.post.findMany({
-    where: { status: 'PUBLISHED', boardType: { in: [...OPERATOR_BOARDS] } },
-    orderBy: { createdAt: 'desc' },
-    take: limit,
-    select: {
-      id: true,
-      title: true,
-      boardType: true,
-      createdAt: true,
-      author: { select: { nickname: true, name: true } },
-      _count: { select: { comments: true } },
-    },
-  })
-  return rows.map((p) => ({
+/** 댓글을 달 수 있는 글 — 목록과 단건이 같은 조건을 쓴다(두 곳에 적지 않는다) */
+const TARGET_WHERE = { status: 'PUBLISHED', boardType: { in: [...OPERATOR_BOARDS] } } satisfies Prisma.PostWhereInput
+
+const TARGET_SELECT = {
+  id: true,
+  title: true,
+  boardType: true,
+  createdAt: true,
+  author: { select: { nickname: true, name: true } },
+  // 🔴 지운 댓글은 세지 않는다 — 고객 목록(queries/posts.ts)과 같은 숫자여야 한다
+  _count: { select: { comments: { where: { isDeleted: false } } } },
+} as const satisfies Prisma.PostSelect
+
+type TargetRow = Prisma.PostGetPayload<{ select: typeof TARGET_SELECT }>
+
+function toTarget(p: TargetRow): ComposeTargetPost {
+  return {
     id: p.id,
     title: p.title,
     boardType: p.boardType as OperatorBoard,
@@ -92,7 +88,35 @@ export async function getComposeTargetPosts(limit = 30): Promise<ComposeTargetPo
     commentCount: p._count.comments,
     createdAt: p.createdAt,
     href: communityPostHref(p.id, p.boardType),
-  }))
+  }
+}
+
+/**
+ * 댓글을 달 대상 글 목록.
+ *
+ * 🔴 **공개된 커뮤니티 글만 싣는다.** 매거진은 게시판이 아니라 콘텐츠 영역이고,
+ *    베스트는 모아보기다 — 둘 다 글쓰기 진입점이 없다(IA 정본).
+ * 🔴 **최근 것부터 조금만.** 이 화면은 글 목록이 아니라 "지금 답을 달 자리" 다.
+ *    🔴 이 목록 밖으로 밀린 글은 getComposeTargetPost 로 한 편만 따로 싣는다(답 기다리는 글 → 답 쓰기).
+ */
+export async function getComposeTargetPosts(limit = 30): Promise<ComposeTargetPost[]> {
+  const rows = await prisma.post.findMany({
+    where: TARGET_WHERE,
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    select: TARGET_SELECT,
+  })
+  return rows.map(toTarget)
+}
+
+/**
+ * 댓글을 달 대상 글 한 편 — 「답 기다리는 글」에서 고른 글을 미리 선택해 둘 때.
+ * 🔴 목록과 같은 조건이다. 조건을 못 지나면(내려간 글 · 매거진 · 없는 글) null — 화면이 그렇다고 말한다.
+ * 🔴 미리 선택일 뿐이다. 실제 자격은 저장 트랜잭션(operator-compose-tx.ts)이 다시 판정한다.
+ */
+export async function getComposeTargetPost(id: string): Promise<ComposeTargetPost | null> {
+  const row = await prisma.post.findFirst({ where: { ...TARGET_WHERE, id }, select: TARGET_SELECT })
+  return row ? toTarget(row) : null
 }
 
 /** 작성자 대댓글 — 답할 수 있는 댓글 한 줄. 🔴 본문 전체가 아니라 발췌다 */

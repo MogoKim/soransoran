@@ -9,6 +9,7 @@
  *
  * 🔴 **판정을 트랜잭션 안에서 한다.** 밖에서 한 판정은 그 시점의 사진이다 —
  *    그 사이 작성자가 retired 되거나, 대상 글이 내려갔거나, 계정이 붙었을 수 있다.
+ *    대상 글 작성자가 그 이름을 차단했는가도 여기서 본다(글쓴이에게 보이지 않는 답을 막는다).
  *    persona-publish-tx · original-post-publish-tx 가 같은 이유로 같은 모양을 한다.
  *
  * 🔴 **중복 등록은 `requestKey` 의 unique 제약이 막는다.**
@@ -165,6 +166,10 @@ export type CreateCommentInput = {
   requestKey: string
 }
 
+/** 글쓴이가 고른 운영 이름을 차단했을 때 — 다른 이름을 고르면 된다 */
+export const OPERATOR_COMMENT_BLOCKED_BY_AUTHOR =
+  '이 글을 쓴 회원이 이 이름을 차단했습니다. 회원에게 보이지 않으니 다른 이름을 골라 주세요.'
+
 export async function createOperatorCommentTx(
   db: PrismaClient,
   input: CreateCommentInput,
@@ -180,13 +185,26 @@ export async function createOperatorCommentTx(
        */
       const post = await tx.post.findUnique({
         where: { id: input.postId },
-        select: { id: true, status: true, boardType: true },
+        select: { id: true, status: true, boardType: true, authorId: true },
       })
       if (post === null || post.status !== 'PUBLISHED') {
         return { kind: 'blocked', message: '대상 글을 찾을 수 없습니다.' }
       }
       if (post.boardType === 'MAGAZINE') {
         return { kind: 'blocked', message: '매거진에는 댓글을 달지 않습니다.' }
+      }
+
+      /**
+       * 🔴 **글쓴이가 이 이름을 차단했으면 막는다.** 글쓴이 화면에서 그 댓글은 "차단한 사람" 자리로만 보인다
+       *    (comment-thread.ts) — 답을 단 것처럼 보여도 회원에게는 닿지 않는다. 회원 답글 경로와 같은 판단이다.
+       *    아무것도 쓰기 전에 거절하므로 이 트랜잭션은 빈 채로 끝난다.
+       */
+      const blockedByAuthor = await tx.userBlock.findUnique({
+        where: { blockerId_blockedUserId: { blockerId: post.authorId, blockedUserId: writer.userId } },
+        select: { id: true },
+      })
+      if (blockedByAuthor !== null) {
+        return { kind: 'blocked', message: OPERATOR_COMMENT_BLOCKED_BY_AUTHOR }
       }
 
       const data = buildOperatorCommentData({

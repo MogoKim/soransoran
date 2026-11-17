@@ -15,7 +15,7 @@ import { TABS as MEMBER_TABS } from '@/components/admin/MemberAdminTabs'
  *    처음에는 지금 화면이 속한 묶음이 펼쳐져 있다. 주소가 바뀌면 다시 맞춘다.
  *
  * 🔴 목록은 세 곳에서 온다. 항목을 여기서 새로 적지 않는다.
- *    - 운영 항목 7개 · 현재 위치 판정: AdminOpsNav(OPS_NAV · isCurrent)
+ *    - 운영 항목 8개 · 현재 위치 판정: AdminOpsNav(OPS_NAV · isCurrent)
  *    - 회원 하위 메뉴: 회원 화면의 공통 하위 탭(MemberAdminTabs.TABS)
  *    - 자동 운영: 아래 AUTO_NAV
  *
@@ -32,7 +32,7 @@ type NavGroup =
   | { key: string; label: string; icon: IconName; href: string; items?: undefined }
   | { key: string; label: string; icon: IconName; href?: undefined; items: readonly NavLeaf[] }
 
-/** 자동 운영 묶음 — 운영 항목(OPS_NAV · 7개)과 따로 센다. 목적지 · 주소는 그대로다 */
+/** 자동 운영 묶음 — 운영 항목(OPS_NAV · 8개)과 따로 센다. 목적지 · 주소는 그대로다 */
 const AUTO_NAV: readonly NavLeaf[] = [
   { href: '/admin/personas', label: '페르소나 관제' },
   { href: '/admin/persona-candidates', label: '댓글 후보 대기열' },
@@ -46,7 +46,7 @@ const ops = (...hrefs: string[]): NavLeaf[] => OPS_NAV.filter((it) => hrefs.incl
 
 const GROUPS: readonly NavGroup[] = [
   { key: 'home', label: '운영 홈', icon: 'home', href: '/admin' },
-  { key: 'content', label: '콘텐츠 운영', icon: 'content', items: ops('/admin/reports', '/admin/content') },
+  { key: 'content', label: '콘텐츠 운영', icon: 'content', items: ops('/admin/reports', '/admin/responses', '/admin/content') },
   /* 「회원」 의 하위 메뉴는 회원 화면의 공통 하위 탭과 같은 목록이다(MemberAdminTabs · 회원가입 전환 정본 §10) */
   { key: 'members', label: '회원', icon: 'members', items: MEMBER_TABS.map(({ href, label }) => ({ href, label })) },
   { key: 'expose', label: '노출·작성', icon: 'expose', items: ops('/admin/home', '/admin/banners', '/admin/compose') },

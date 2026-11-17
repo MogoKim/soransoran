@@ -309,6 +309,9 @@ jobs:
           # 🔴 홈 노출 예외 규칙(PIN·HIDE·fill 재검증)과 갱년기톡 최종 최소 배분의 변이(임시 디렉터리만) — 새 step 아님
           npm run check:home-exposure
           npm run check:home-popularity-mutation
+          # 🔴 답 기다리는 글 — 판정(무엇이 답인가 · 기한 · 새벽) · 변이(임시 디렉터리만). 새 step 이 아니다(무조건 step 상한 불변)
+          npm run check:member-response
+          npm run check:member-response-mutation
 
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.

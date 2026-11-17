@@ -108,6 +108,8 @@ async function requireActor(): Promise<{ actorUserId: string } | null> {
  * 🔴 경로를 문자열로 짐작하지 않는다. `board-registry` 가 유일한 출처다 —
  *    없는 경로를 revalidate 하면 조용히 실패해서 "올렸는데 목록에 없다" 로 나타난다.
  * 🔴 홈과 /best 도 넣는다. 인기글이 두 곳에서 뽑힌다.
+ * 🔴 답 기다리는 글(/admin/responses)도 다시 그린다 — 답을 단 뒤 목록으로 돌아가면 그 글이 빠져 있어야 한다
+ *    (라우터 캐시가 직전 화면을 다시 쓰지 않게).
  */
 function revalidateFor(postId: string, boardType: string): string | null {
   if (!isOperatorBoard(boardType)) return null
@@ -118,6 +120,7 @@ function revalidateFor(postId: string, boardType: string): string | null {
   revalidatePath('/')
   revalidatePath('/best')
   revalidatePath('/admin/compose')
+  revalidatePath('/admin/responses')
   return href
 }
 
@@ -146,6 +149,8 @@ function toState(
   }
   if (res.kind === 'updated' || res.kind === 'deleted') {
     revalidatePath('/admin/compose')
+    // 🔴 운영 댓글을 지우면 그 회원 글은 다시 「답 기다리는 글」로 돌아온다
+    revalidatePath('/admin/responses')
     revalidatePath('/')
     revalidatePath('/best')
     return { ok: true, ...tag }

@@ -214,6 +214,22 @@ async function main(): Promise<void> {
     actorUserId: admin.id, requestKey: 'key-missing',
   })).kind, 'blocked')
 
+  // 🔴 글쓴이가 그 운영 이름을 차단했으면 막는다 — 글쓴이에게 보이지 않는 답이다(답 기다리는 글 · 2026-11-16)
+  await prisma.userBlock.create({ data: { blockerId: memberUser.id, blockedUserId: writerUser.id } })
+  const commentsBeforeBlock = await prisma.comment.count()
+  const logsBeforeBlock = await prisma.operatorWriteLog.count()
+  const byBlocked = await createOperatorCommentTx(prisma, {
+    operatorWriterId: writer.id, postId: memberPost.id, content: '차단한 회원 글에 다는 답',
+    actorUserId: admin.id, requestKey: 'key-blocked-by-author',
+  })
+  expect('🔴 글쓴이가 차단한 이름으로는 못 단다', byBlocked.kind, 'blocked')
+  expect('  └ 댓글 · 감사 기록 write 0', [await prisma.comment.count() - commentsBeforeBlock, await prisma.operatorWriteLog.count() - logsBeforeBlock], [0, 0])
+  await prisma.userBlock.deleteMany({ where: { blockerId: memberUser.id, blockedUserId: writerUser.id } })
+  expect('  └ 차단을 풀면 같은 글에 단다', (await createOperatorCommentTx(prisma, {
+    operatorWriterId: writer.id, postId: memberPost.id, content: '차단을 푼 뒤 다는 답',
+    actorUserId: admin.id, requestKey: 'key-after-unblock',
+  })).kind, 'created')
+
   console.log('\n══════ ⑥ 작성자 위조 · 자격')
   expect('🔴 없는 작성자로는 못 쓴다', (await createOperatorPostTx(prisma, {
     operatorWriterId: 'no-such-writer', boardType: 'FREE',

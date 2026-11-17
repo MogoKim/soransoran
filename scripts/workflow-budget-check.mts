@@ -321,6 +321,7 @@ const EXPECTED_D100_DB_COMMANDS = [
   'check:comment-thread-db',
   // 2026-10-21 작성자 대댓글 — 운영 직접 작성 DB 검사를 같은 격리 DB 한 번에서 잰다(새 job·container·step 없음)
   'operator:compose-db-check',
+  'member-response:db-check',
   'persona:comment-loop-db-check',
   'persona:followup-db-check',
   'persona:autogen-db-check',
@@ -365,6 +366,8 @@ check('🔴 최종 집계는 core 실패와 선택 job 실패를 삼키지 않�
  */
 const MUST_BE_WIRED: readonly string[] = [
   'stage:ready-loss-check', 'supply:jit-contract-check', 'check:political-axis',
+  // 2026-11-16 답 기다리는 글 — 판정 · 변이
+  'check:member-response', 'check:member-response-mutation',
 ]
 for (const cmd of MUST_BE_WIRED) {
   check(`🔴 ${cmd} 가 워크플로우에 배선되어 있다`,
