@@ -12,7 +12,7 @@ import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 
 import { SOURCE_TITLE_CHECK_VERSION } from '../src/lib/draft-originality'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget,
+  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, captureLagOf,
   sourceTitleCheckOf, founderRetitled,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT, REJECT_LABEL,
   type AutoRow,
@@ -60,6 +60,18 @@ const sourceGate = (id: string, capturedAt: string): Record<string, unknown> => 
 
 console.log('\n자동 발행 러너 — 계약 확인')
 console.log('─────────────────────────────────────────────────────────')
+
+console.log('\n⓪ 매일 재는 숫자 — 수집 뒤 몇 시간 · 더 최근에 수집된 채택 글 대기 몇 건')
+{
+  const row = (id: string, capturedAt: string | null) => ({ id, gateResults: capturedAt === null ? {} : sourceGate(id, capturedAt) })
+  const line = [row('new', '2026-09-05T06:00:00Z'), row('mid', '2026-09-05T03:00:00Z'), row('old', '2026-09-04T21:00:00Z'), row('unknown', null)]
+  const now = new Date('2026-09-05T09:00:00Z')
+  const mid = captureLagOf(line[1]!, line, now)
+  check('🔴 수집 뒤 경과 시간과, 더 최근에 수집된 채 줄에 남은 글 수를 센다', mid.hoursSinceCapture === 6 && mid.newerWaiting === 1)
+  const newest = captureLagOf(line[0]!, line, now)
+  check('🔴 가장 최근에 수집된 글이 나가면 대기 0건이다', newest.hoursSinceCapture === 3 && newest.newerWaiting === 0)
+  check('수집 시각을 모르는 글은 모름으로 적는다', captureLagOf(line[3]!, line, now).hoursSinceCapture === null)
+}
 
 console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
 {
