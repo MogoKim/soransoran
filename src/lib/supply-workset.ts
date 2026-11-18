@@ -960,7 +960,7 @@ export function selectionLaneOf(prior: PriorOutcome | undefined): SelectionLane 
  * 🔴 **지금 계약으로 이미 한 번 돌려 본 원천과 그 시각.** 결론이 나지 않았어도
  *    **다시 볼 수는 있다** — 그래서 빼지 않는다. 시각과 단계는 관측·진단에 남긴다(정렬 열쇠가 아니다).
  *    🔴 선택 순서는 **lane 먼저**다(2026-11-10 retry-authority-v7): `selectionLaneOf` 로 신규(fresh)·재선정(retry)을
- *       가르고 신규 lane 을 앞에 세운 뒤, **각 lane 안에서만** 정본 순위 `compareReleaseRank`(원문 나이 1순위)로 정렬한다.
+ *       가르고 신규 lane 을 앞에 세운 뒤, **각 lane 안에서만** 정본 순위 `compareReleaseRank`(수집 시각 최신순)로 정렬한다.
  *       재선정 lane 은 `retrySlotsFor` 몫 안에서만 자리를 받는다. 대기 시간은 어느 lane 에서도 순서에 쓰지 않는다.
  */
 export function attemptedOutcomes(rows: readonly PriorOutcome[]): Map<string, PriorOutcome> {
@@ -1056,7 +1056,7 @@ export function humanDecisionFor(ix: HumanDecisionIndex, site: string, articleId
  *    2 판정 단계 `retryable`·`unknown` — 판정부터 다시 물어야 한다
  *
  * 🔴 단계 · 대기 시간은 순위를 바꾸지 않는다. 신규/재선정 자리는 `selectionLaneOf` 가 정하고(신규 먼저 · 재선정은 신규가 남긴 자리),
- *    각 자리 안에서는 실제 원문 시각이 1순위인 `compareReleaseRank` 하나가 정한다 (2026-11-10 · 앞판 2026-10-19 단일 줄 대체).
+ *    각 자리 안에서는 수집 시각 최신순인 `compareReleaseRank` 하나가 정한다.
  */
 export function retryTierOf(o: PriorOutcome | undefined): number {
   if (o === undefined) return 2

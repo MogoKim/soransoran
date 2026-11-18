@@ -170,8 +170,8 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   check('② preferenceDecided 는 shadow 로 남아 rank-tied 쌍의 주제·출처 차이를 센다 — 적어도 한 쌍 관측',
     pt.summary.preferenceDecided.menopause + pt.summary.preferenceDecided.wgang >= 1,
     JSON.stringify(pt.summary.preferenceDecided))
-  const nt = pipeline({ rows: [ROW({ id: 'nt-hi', ageH: 3, cp: 0.9 }), ROW({ id: 'nt-lo', ageH: 3, cp: 0.5, title: '갱년기 이야기', site: WG })], slots: [S1], cap: 1, traced: true }).trace!
-  check('② 반응이 다르면 rank 동률이 아니라 선호 쌍 0 — 그대로 0 으로 적는다',
+  const nt = pipeline({ rows: [ROW({ id: 'nt-hi', ageH: 3, cp: 0.9 }), ROW({ id: 'nt-lo', ageH: 4, cp: 0.9, title: '갱년기 이야기', site: WG })], slots: [S1], cap: 1, traced: true }).trace!
+  check('② 수집 시각이 다르면 rank 동률이 아니라 선호 쌍 0 — 그대로 0 으로 적는다',
     nt.summary.preferenceDecided.menopause === 0 && nt.summary.preferenceDecided.wgang === 0)
 }
 

@@ -29,8 +29,7 @@ import {
   type SessionLocationCode, type SessionShape,
 } from '../../src/lib/naver-session-canon'
 import { createHash } from 'node:crypto'
-import { assessCandidate, findPoliticalTopicHit, type QualityAssessment } from './micro-seed-quality.mjs'
-import { isPoliticalFigureTitleFlag } from '../../src/lib/political-flags'
+import { assessCandidate, type QualityAssessment } from './micro-seed-quality.mjs'
 import { NAVERCAFE_PREFIX, isNaverCafeSource, slotQuotaOf } from './micro-seed-supply.mjs'
 
 // ─────────────────────────────────────────────────────────
@@ -454,25 +453,12 @@ export type CollectedCandidate = {
   sourcePinned: boolean
   sourceMenuId: string | null
   sourceBoardKey: string | null
-  /** 🔴 제목 단위 정치·진영 판정. true 면 어느 레인으로도 가지 않는다 */
-  sourcePoliticsExcluded: boolean
-  /**
-   * 🔴 자동 상세 fetch 후보에서 **왜** 빠졌는가 (PR-S2-b-8).
-   *
-   *    🔴 (2026-10-04 P0-3) 옛 `publicFigure` 사유를 지웠다 — 연예인 · 방송인 · 대중문화는 정상 원천 기회다.
-   *    정치 인물(`politicalFigure`)은 정치 사유 하나로 간다.
-   */
+  /** 🔴 자동 상세 fetch 후보에서 **왜** 빠졌는가 — 지금은 고정 슬롯(공지·필독·추천) 하나다 */
   sourceExcludeReason: ExcludeReason | null
 }
 
-/**
- * ```
- *   politics     정치 · 진영 · 이념 · 정당 · 정치인 · 공직자   → 🔴 어느 레인에도 안 간다
- *   pinned       공지 · 필독 · 추천 고정 슬롯                 → 🟡 자동 경로에서만 뺀다
- *   📜 publicFigure(제목 실명 · 공인) 사유는 지웠다(P0-3) — 공인 이름은 막을 사유가 아니다
- * ```
- */
-export type ExcludeReason = 'politics' | 'pinned'
+/** `pinned` — 공지 · 필독 · 추천 고정 슬롯. 자동 경로에서만 뺀다 */
+export type ExcludeReason = 'pinned'
 
 // ─────────────────────────────────────────────────────────
 // 목록 메타 정규화 (🔴 순수 함수 · PR-S2-b-4)
@@ -629,35 +615,13 @@ export function buildCollected(
     sourcePinned: item.sourcePinned ?? false,
     sourceMenuId: item.sourceMenuId ?? null,
     sourceBoardKey: item.sourceBoardKey ?? null,
-    // 🔴 제목 단위로만 판정한다 — 게시판 이름·안내문으로 판정하지 않는다
-    sourcePoliticsExcluded: judgePoliticsTitle(item.originalTitle).excluded,
-    sourceExcludeReason: judgeExcludeReason({
-      politicsExcluded: judgePoliticsTitle(item.originalTitle).excluded,
-      pinned: item.sourcePinned ?? false,
-      qualityFlags: a.flags,
-    }),
+    sourceExcludeReason: judgeExcludeReason({ pinned: item.sourcePinned ?? false }),
   }
 }
 
-/**
- * 자동 상세 fetch 후보에서 빼는 **단일 판정**.
- *
- * 🔴 **2026-09-03 실측 문제**: 축이 둘로 갈라져 있었다.
- *    `judgePoliticsTitle` 은 0건인데 `qualityFlags.politicalOrPublicFigure` 는 2건이었고,
- *    그 2건이 `sourcePoliticsExcluded=false` 라 자동 후보에 남을 수 있었다.
- *    "어느 쪽이 최종 차단인가" 를 코드만 보고 답할 수 없으면 언젠가 새어 나간다.
- *
- * 🔴 순서가 규칙이다. **정치를 먼저** 본다. 정치 인물(`politicalFigure`)도 정치다(P0-3) — 연예 · 방송 이름은 사유가 아니다.
- */
-export function judgeExcludeReason(input: {
-  politicsExcluded: boolean
-  pinned: boolean
-  qualityFlags: readonly string[]
-}): ExcludeReason | null {
-  if (input.politicsExcluded || input.qualityFlags.includes('politicalTopicLikely')
-    || input.qualityFlags.some(isPoliticalFigureTitleFlag)) return 'politics'
-  if (input.pinned) return 'pinned'
-  return null
+/** 자동 상세 fetch 후보에서 빼는 **단일 판정** — 고정 슬롯만 뺀다. 글의 주제로는 빼지 않는다 */
+export function judgeExcludeReason(input: { pinned: boolean }): ExcludeReason | null {
+  return input.pinned ? 'pinned' : null
 }
 
 /** 🔴 산출물이 계약을 지키는지 — collector 가 파일에 쓰기 직전에 부른다 */
@@ -1045,7 +1009,7 @@ export const BOARD_TARGETS: readonly BoardTarget[] = [
     label: '유머,연예,가십',
     startPage: 1,
     endPage: 1,
-    purpose: '유머 · 연예 · 셀럽 — 정치·진영은 여기서도 제외다',
+    purpose: '유머 · 연예 · 셀럽',
     // 🔴 회차당 1건. 이 게시판은 상세 대비 글감 수율이 낮다 — 쫑알의 상세 몫을 나눠 주지 않는다
     detailCap: 1,
   },
@@ -1148,28 +1112,6 @@ export function detectRowLabel(labelText: string | null | undefined, rowClass: s
   //    조용히 통과시키면 네이버가 라벨 문구를 바꿨을 때 아무도 모른다.
   if (t !== '') return { label: null, pinned: false, unknown: t }
   return { label: null, pinned: false, unknown: null }
-}
-
-// ─────────────────────────────────────────────────────────
-// 정치 · 진영 제외 (🔴 순수 함수 · 제목 단위 · PR-S2-b-7)
-// ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **정치 · 진영은 public · growth · shadow 어디에도 가지 않는다** (설계 §4-C).
- *
- *    2026-09-03 실측: 제목에 `정치` 가 그대로 든 행을 `politicalTopicLikely` 가 놓쳤다.
- *    기존 정규식이 `정치\\s*성향` · `정치\\s*글` 만 보고 **단독 `정치` 를 안 봤기** 때문이다.
- *
- * 🔴 **판정 단위는 게시글 제목이다.** 게시판 이름·카페 안내문으로 판정하지 않는다 —
- *    게시판 하나가 통째로 정치로 잘못 분류되면 그 게시판의 생활글까지 전부 사라진다.
- *
- * 🔴 **연예 · 방송 · 셀럽은 여기에 넣지 않는다.** 그쪽은 Growth 후보이고 축이 다르다.
- */
-export type PoliticsVerdict = { excluded: boolean; hit: string | null }
-
-export function judgePoliticsTitle(title: string): PoliticsVerdict {
-  const hit = findPoliticalTopicHit((title ?? '').trim())
-  return { excluded: hit !== null, hit }
 }
 
 // ─────────────────────────────────────────────────────────

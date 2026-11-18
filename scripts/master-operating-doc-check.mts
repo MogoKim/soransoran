@@ -234,7 +234,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수', '초기 조회수·공감 보정',
     '자동 품질 생명주기', 'bounded creativity',
     // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
-    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계',
+    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '수집 시각 최신순', '하루 하나의 단계',
     // 🔴 2026-11-17/11-18 창업자 결정 — 대화 계획 · 비용 표본 · 06:15 수요 · 수집 재배분 · 82cook
     '대화 계획', '계획이 대화 크기를 정함', '글쓴이 아닌 사람 두 번까지', '비용 단가 표본 합산', '06:15 공급 회차의 수요 단계',
     '쫑알 2~6쪽 · 상세 20', '재선정은 신규가 남긴 자리', '축은 코드가 정함', '82cook 제외']) {
@@ -305,15 +305,18 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     d100Goal.includes('### 11.1 📜 전환기 호환 — 대체됐지만 코드에 남은 경로 (정책 아님)')
     && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('`stage-active-recovery-v2`')
     && sectionIn(d100Goal, '### 11.1 📜 전환기 호환', '\n### ').includes('해당 코드를 지우는 변경에서 이 절의 항목도 함께 지운다')])
-  out.push(['canon §2.3 이 sourceAge 를 원문 게시 시각 기준 한 줄 정렬로 정의하고 나이 bucket·quota 를 금지한다',
-    goalLive.includes('**`sourceAge` = 예정 공개 시각 − 원문 게시 시각**')
-    && goalLive.includes('적격 후보 **전부**를 `sourceAge` 오름차순 한 줄로 세운다')
+  out.push(['canon §2.3 이 순서를 수집 시각 최신순 하나로 정의하고 sourceAge 는 72시간 자격 판정에만 남긴다 · 나이 bucket·quota 금지',
+    goalLive.includes('**순서는 수집 시각 최신순 하나다**')
+    && goalLive.includes('**가장 최근에 수집된 글이 가장 먼저 나간다**')
+    && goalLive.includes('**`sourceAge` = 예정 공개 시각 − 원문 게시 시각**')
+    && goalLive.includes('**72시간 자격 판정에만** 쓴다')
+    && !goalLive.includes('`sourceAge` 오름차순 한 줄로 세운다')
     && goalLive.includes('runtime bucket·quota·예약석을 만들지 않는다')
     && goalLive.includes('72시간이 지난 원문은 자격 밖이다(hard exclusion)')
     && goalLive.includes('24h 는 관측·조사 목표이지 자격 문턱이 아니다')])
   out.push(['canon §2.3 이 원천 순위 하나를 창업자 순서 그대로 적는다',
-    d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 신선도 -> 동률 반응 -> 결정적 tie')
-    && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')
+    d100Goal.includes('hard safety/truth -> 발행 자격 gate (품질·독창성·반응 관측 등 §2.2) -> 수집 시각 최신순 -> 결정적 tie')
+    && d100Goal.includes('게시 시각·반응 백분위·velocity 는 순서에 들어오지 않는다')
     && d100Goal.includes('출처별 우대 없음')
     && d100Goal.includes('주제형 숫자 보너스 없음')
     && d100Goal.includes('`jjong 20 + humor 1`')])

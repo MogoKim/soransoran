@@ -110,7 +110,6 @@ export const SKIP_LABEL = {
   NO_BODY: '본문이 비어 있다',
   NOT_NAVERCAFE: '네이버 카페 행이 아니다',
   ALREADY: '이미 얇게 저장했다',
-  TITLE_POLITICS: '🔴 제목이 정치·공인 소재다',
   TITLE_SAFETY: '🔴 제목이 안전 기준에 걸린다',
   DROP: '🔴 분류가 drop 이다',
   HARD_EXCLUDE: '🔴 안전 판정이 hardExclude 다',
@@ -135,7 +134,7 @@ export type PlanInput = {
   /** 이미 얇게 저장한 것 — 🔴 `sourceSite|articleId` 다. id 단독이 아니다 */
   seen: ReadonlySet<string>
   /** 제목만 보는 사전 판정. 수집 당시 플래그가 안 붙은 것을 여기서 한 번 더 거른다 */
-  judge?: { isPolitics: (title: string) => boolean; isBlocked: (title: string) => boolean }
+  judge?: { isBlocked: (title: string) => boolean }
   cap?: number
 }
 
@@ -189,11 +188,7 @@ export function planCafeThin(input: PlanInput): Plan {
     // 🔴 소스까지 붙여 본다 — 같은 번호가 다른 카페에 있어도 서로를 막지 않는다
     if (input.seen.has(dedupKeyOf(r.sourceSite, id))) { push(id, 'ALREADY'); continue }
     if (S(r.rawBody) === '') { push(id, 'NO_BODY'); continue }
-    const title = S(r.originalTitle)
-    if (input.judge !== undefined) {
-      if (input.judge.isPolitics(title)) { push(id, 'TITLE_POLITICS'); continue }
-      if (input.judge.isBlocked(title)) { push(id, 'TITLE_SAFETY'); continue }
-    }
+    if (input.judge !== undefined && input.judge.isBlocked(S(r.originalTitle))) { push(id, 'TITLE_SAFETY'); continue }
     targets.push(r)
   }
 

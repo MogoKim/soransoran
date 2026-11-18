@@ -11,12 +11,7 @@
  * 🔴 **네이버 전용 DOM · URL 에 의존하지 않는다.**
  *    입력은 제목 · 본문 · 이미 계산된 메타(qualityFlags · rowLabel 등)뿐이다.
  *    네이버와 82cook 이 같은 입력을 주면 **같은 결과가 나온다** (§4-U ①).
- *
- * 🔴 **정치 판정을 여기서 다시 만들지 않는다.**
- *    `findPoliticalTopicHit` 하나를 쓴다 — 두 곳에서 판정하면 언젠가 갈라진다 (§4-K).
  */
-import { findPoliticalFigureHits, findPoliticalTopicHit } from './micro-seed-quality.mjs'
-import { isPoliticsExcludeReason } from '../../src/lib/political-flags'
 import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
 // 🔴 위기 신호·의료 판단 요청·건강 효능 주장의 정본은 순수 판정 하나다 —
 //    여기서 정규식을 다시 적으면 semantic 판정과 갈라진다
@@ -26,11 +21,10 @@ import { judgeSafetySignals } from '../../src/lib/micro-seed-safety-signals'
 export type SafetyVerdict = 'pass' | 'hold' | 'drop' | 'access' | 'hardExclude'
 
 /**
- * 🔴 사유 코드. **정치는 hardExclude 고 나머지와 급이 다르다** (§4-K).
+ * 🔴 사유 코드.
  *    `volatile` 은 사유이지 제외가 아니다 — 아래 VOLATILE 주석 참조.
  */
 export type SafetyReasonCode =
-  | 'politics'            // ① 정치 hard block
   | 'noticeSlot'          // ② 공지 · 필독 · 추천 고정 슬롯
   | 'personalIdentity'    // ③ 실명 · 개인정보
   | 'medicalClaim'        // ④ 의료 처방 · 효능 단정
@@ -48,7 +42,7 @@ export type SafetyReasonCode =
   | 'medicalDecisionRequest'
   /** 🔴 ⑪ 건강 효능 주장 — 전언형(*"~라고 한다"*)도 면제하지 않는다 */
   | 'healthEfficacyClaim'
-  /** 🔴 ⑫ 실제 한자 문자 — 언어 핏(정치 아님 · 2026-10-04 P0-3 최종) */
+  /** 🔴 ⑫ 실제 한자 문자 — 언어 핏 */
   | 'hanjaLanguageFit'
 
 export type SafetyReason = { code: SafetyReasonCode; note: string }
@@ -95,7 +89,7 @@ export type SafetyInput = {
   sourceRowLabel?: string | null
   sourcePinned?: boolean
   /** 수집기가 이미 내린 단일 제외 판정 (PR-S2-b-8) */
-  /** 🔴 저장된 행의 값 — 옛 사유(`publicFigure`)는 정치로 읽는다(`isPoliticsExcludeReason`) */
+  /** 저장된 행의 값 — `pinned` 면 고정 슬롯이다 */
   sourceExcludeReason?: string | null
   qualityFlags?: readonly string[]
   /** 상세 열람 결과. 못 읽었으면 이유를 준다 */
@@ -105,7 +99,7 @@ export type SafetyInput = {
 }
 
 // ─────────────────────────────────────────────────────────
-// 어휘 — 🔴 정치만 quality lib 을 재사용한다. 나머지는 여기서 정의한다
+// 어휘 — 여기서 정의한다
 // ─────────────────────────────────────────────────────────
 
 /** ② 고정 슬롯 라벨. 🔴 navercafe 의 ROW_LABELS 와 같아야 한다 (fixture 가 대조한다) */
@@ -134,7 +128,6 @@ const PROMOTION =
  *    🔴 일반 욕설 · 거친 감탄(시발 · 지랄 · 미친 · 꺼져) · 작품 비판은 낱말 하나로 버리지 않는다 — 주관적 의견이다.
  *    🔴 특정인 공격 동원 · 위협(죽어라 · 패죽) · 신상 박제 · 근거 없는 중대 사실 단정은 **의미 판정 사유**가 막는다
  *       (`targetedHarassmentOrThreat` · `identifiablePrivatePerson` · `unverifiedDefamation`) — 여기서 낱말로 흉내 내지 않는다.
- *    🔴 진영 멸칭(찢재명 · 쥐박이 …)은 정치 판정(`findPoliticalTopicHit`)이 막는다 — 혐오로 위장하지 않는다.
  */
 const HOSTILITY =
   /틀딱|맘충|한남|김치녀|병신/
@@ -187,14 +180,7 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
     add('access', `읽지 못함(${input.accessStatus})`, 'access')
   }
 
-  // ① 정치 — 🔴 hardExclude. 어디에도 가지 않는다 (§4-K)
-  // 🔴 정치 주제(본문까지) + 제목의 정치 인물(P0-3) — 82cook · 네이버카페가 같은 판정을 지난다. 연예 · 방송 이름은 보지 않는다
-  const politicsHit = findPoliticalTopicHit(title) ?? findPoliticalTopicHit(body) ?? findPoliticalFigureHits(title)[0] ?? null
-  if (isPoliticsExcludeReason(input.sourceExcludeReason) || politicsHit) {
-    add('politics', politicsHit ? `정치 키워드(${politicsHit})` : '수집기 정치 판정', 'hardExclude')
-  }
-
-  // ⑫ 언어 핏 — 🔴 사용자에게 보이는 제목 · 본문의 실제 한자 문자. 정치가 아니다 — 별도 사유로 버린다
+  // ⑫ 언어 핏 — 🔴 사용자에게 보이는 제목 · 본문의 실제 한자 문자
   const hanja = findCjkIdeograph(title) ?? findCjkIdeograph(body)
   if (hanja !== null) add('hanjaLanguageFit', `한자 문자(${hanja})`, 'drop')
 

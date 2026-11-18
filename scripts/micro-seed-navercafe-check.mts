@@ -32,7 +32,7 @@ import {
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, activeCafes,
-  detectRowLabel, judgePoliticsTitle, SCOUT_MAX_PAGES, DETAIL_MAX_PAGES, maxPagesFor,
+  detectRowLabel, SCOUT_MAX_PAGES, DETAIL_MAX_PAGES, maxPagesFor,
   judgeExcludeReason, dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
@@ -891,7 +891,7 @@ check('셀렉터에 라벨이 있다', /board-tag/.test(LIST_SELECTORS.label))
 // 🔴 PR-S2-b-9 에서 필터가 thresholdBasis 안으로 들어갔다. 단정을 그쪽으로 옮긴다.
 check('🔴 collector 가 pinned 행을 상세 후보에서 뺀다',
   /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
-    && judgeExcludeReason({ politicsExcluded: false, pinned: true, qualityFlags: [] }) === 'pinned'
+    && judgeExcludeReason({ pinned: true }) === 'pinned'
     && thresholdBasis([{ sourceExcludeReason: 'pinned' as const }]).eligible.length === 0)
 check('🔴 그래도 목록 JSONL 에는 남긴다',
   COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('sourceExcludeReason'),
@@ -909,91 +909,18 @@ check('🔴 그래도 목록 JSONL 에는 남긴다',
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n㉔ 정치·진영 제외 — 🔴 제목 단위. 게시판으로 판정하지 않는다')
+console.log('\n㉔ 목록에서 글의 주제로 빼지 않는다 — 정치 낱말 사전은 지웠다 (2026-11-18 창업자 결정)')
 // ─────────────────────────────────────────────────────────
-for (const t of ['요즘 정치 얘기 너무 많아요', '진영 논리에 지친다', '이념 갈등이 심하네요',
-  '정당 지지율 보셨어요', '선거 끝나고 조용하네', '대통령 발언 어떻게 보세요',
-  '국회 뉴스 보다가', '공직자 재산공개', '정치인 인터뷰 봤는데', '좌파 우파 싸움']) {
-  check(`제외: "${t.slice(0, 10)}…"`, judgePoliticsTitle(t).excluded)
+{
+  const collected = (title: string) => buildCollected('remonterrace',
+    { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: title, sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+  // 부분일치 사전이 지우던 모양(지어낸 제목) — 진영 · 수구 · 친문 · 장관 · 반일 이 낱말 안에 들어 있다
+  for (const t of ['배우 박진영 나오는 드라마 보셨어요', '하수구가 막혀서 사람 불렀어요', '남친문제로 잠이 안 와요', '공장관리 일 해보신 분', '이것도 약관 위반일까요',
+    '대선 후보 토론 보셨어요', '수능 감독 강화 대책 어떻게 보세요']) {
+    check(`🔴 상세 후보다: "${t.slice(0, 12)}…"`, collected(t).sourceExcludeReason === null)
+  }
+  check('🔴 수집 lib 에 정치 판정이 없다', !/politic|findPolitical/i.test(LIB_CODE))
 }
-for (const t of [
-  '비상계엄 포고령 봤어요',
-  '김건희특검과 채상병특검 뉴스',
-  '조희대 코트패킹 논란',
-  '한덕수 권한대행 이야기',
-  '좌빨 수꼴 댓글부대 싸움',
-  '친문 비명 팬덤정치',
-  '대장동 백현동 성남FC 의혹',
-  '거부권과 체포동의안',
-  '지방선거 출구조사',
-  '기본소득당 사회민주당',
-  '방송3법과 중대재해처벌법 반대 집회',  // 🔴 (P0-3) 정책 · 법안 낱말은 정치 문맥과 함께일 때만 정치
-  '사드 배치와 대북전단',
-  '선관위 감사원 방통위',
-  '촛불집회 탄핵집회',
-]) {
-  check(`제외: 정치 확장 "${t.slice(0, 14)}…"`, judgePoliticsTitle(t).excluded)
-}
-check('🔴 2026-09-03 실측에서 놓쳤던 단독 "정치" 를 이제 잡는다',
-  judgePoliticsTitle('정치 얘기는 그만').excluded && judgePoliticsTitle('정치 얘기는 그만').hit === '정치')
-for (const t of ['오늘 저녁 반찬 고민', '갱년기 불면증 어떻게 하세요', '아들 결혼식 준비',
-  '무릎 관절 병원 추천', '드라마 마지막회 보셨어요', '가수 콘서트 다녀왔어요',
-  '미리 감사드립니다', '부모님 옷 사드릴까요', '반장 선거 준비물', '동대표 선거 안내',
-  '아파트 외벽 보수공사 하는데 시끄럽네요']) {
-  check(`🟢 통과: "${t.slice(0, 10)}…"`, !judgePoliticsTitle(t).excluded)
-}
-// ─────────────────────────────────────────────────────────
-// 🔴 `친한` 오탐 정정 (2026-09-05 · PR-S2-b-33)
-//    "정말친한친구와 수다떠시나요" 가 politics hardExclude 됐다.
-//    친한계·친한파(親韓)는 정치어가 맞지만 일상어 "친한 친구" 와 충돌한다.
-//    → 정치 맥락에서만 잡도록 좁혔다. 다른 계파어는 건드리지 않았다.
-// ─────────────────────────────────────────────────────────
-for (const t of ['친한계', '친한파', '친한동훈 의원', '친한 후보 지지', '친한 의원 발언',
-  '친한 인사', '친한 지도부', '친한 세력', '친한계 갈등']) {
-  check(`🔴 정치 유지: "${t}"`, judgePoliticsTitle(t).excluded)
-}
-for (const t of ['친한 친구', '정말친한친구와 뇌를살짝빼두시고 수다떠시나요???', '친한 언니',
-  '친한 동생', '친한 엄마', '친한 지인', '친한 사람', '친한 사이', '친한 친구와 수다']) {
-  check(`🟢 생활 통과: "${t.slice(0, 14)}…"`, !judgePoliticsTitle(t).excluded,
-    '이대로 두면 레테·우갱·82cook 생활글이 정치로 제외된다')
-}
-// ─────────────────────────────────────────────────────────
-// 🔴 정치 hard block 빈칸 보강 (2026-09-05 · PR-S2-b-34)
-//    친윤 · 친명 · 특검 · 탄핵 은 **원래 목록에 없었다.**
-//    PR-S2-b-33 의 `친한` 오탐을 조사하다 드러난 빈 자리다.
-// ─────────────────────────────────────────────────────────
-for (const t of ['친윤계', '친윤파', '친윤 의원', '친윤 후보', '친윤 지도부', '친윤 세력',
-  '친명계', '친명파', '친명 의원', '친명 후보', '친명 지도부', '친명 세력',
-  '특검', '내란특검', '김건희특검', '채상병특검', '채해병특검', '특검사건',
-  '탄핵', '탄핵소추', '탄핵심판', '탄핵집회']) {
-  check(`🔴 정치 보강: "${t}"`, judgePoliticsTitle(t).excluded)
-}
-// 🔴 실측 충돌 2종 — 이 커뮤니티는 상속·부동산·명절 글이 많다
-for (const t of ['모친명의로 된 집', '모친명절 준비', '부친 명의 아파트',
-  '절친윤아랑 만났어요', '건강검진 특검사', '특검사 받았어요']) {
-  check(`🟢 생활 통과: "${t.slice(0, 14)}…"`, !judgePoliticsTitle(t).excluded,
-    '모친명의·모친명절·특검사가 정치로 잡히면 생활글이 통째로 사라진다')
-}
-
-// 🔴 기존 계파어를 약화시키지 않았는지 — 하나라도 풀리면 정치 hard block 이 헐거워진다
-for (const t of ['친문 지지자', '친박 인사', '비박계', '친이계', '비명계', '반윤 성향', '친조']) {
-  check(`🔴 기존 계파어 유지: "${t}"`, judgePoliticsTitle(t).excluded)
-}
-
-check('🔴 연예·방송·셀럽은 정치와 분리한다',
-  !judgePoliticsTitle('연예인 이혼 소식 놀랍네요').excluded
-    && !judgePoliticsTitle('방송 보다가 눈물났어요').excluded,
-  'Growth 후보이고 축이 다르다 (설계 §4-C)')
-check('🔴 판정 단위가 제목이다 — 게시판 이름으로 판정하지 않는다',
-  /judgePoliticsTitle\(item\.originalTitle\)/.test(LIB_CODE)
-    && !/judgePoliticsTitle\((item\.)?source(BoardName|MenuId|BoardKey)/.test(LIB_CODE),
-  '게시판 하나가 통째로 정치로 분류되면 그 게시판의 생활글까지 전부 사라진다')
-check('🔴 collector 가 정치 행을 상세 후보에서 뺀다',
-  /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
-    && judgeExcludeReason({ politicsExcluded: true, pinned: false, qualityFlags: [] }) === 'politics'
-    && thresholdBasis([{ sourceExcludeReason: 'politics' as const }]).eligible.length === 0)
-check('산출물에 판정이 남는다',
-  buildCollected('remonterrace', { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '정치 얘기', sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z').sourcePoliticsExcluded)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n㉕ scout(list-only) — 🔴 상세에 무조건 들어가지 않는다')
@@ -1035,37 +962,15 @@ check('🔴 board 가 있으면 그 label 로 채운다',
 console.log('\n㉗ 제외 사유 — 🔴 단일 판정. 축을 합치지도 흩뜨리지도 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  const J = (o: Partial<{ politicsExcluded: boolean; pinned: boolean; qualityFlags: string[] }>) =>
-    judgeExcludeReason({ politicsExcluded: false, pinned: false, qualityFlags: [], ...o })
-  check('정치 제목 → politics', J({ politicsExcluded: true }) === 'politics')
-  check('politicalTopicLikely → politics', J({ qualityFlags: ['politicalTopicLikely'] }) === 'politics')
-  check('🔴 politicalFigure(정치 인물) → politics (P0-3 — publicFigure 사유는 지웠다)',
-    J({ qualityFlags: ['politicalFigure'] }) === 'politics',
-    '실측에서 정치 인물 2건이 sourcePoliticsExcluded=false 라 자동 후보에 남을 수 있었다')
-  check('📜 옛 혼합 플래그는 가를 수 없어 politics 로 읽는다(fail-closed · 새로 만들지 않는다)',
-    J({ qualityFlags: ['politicalOrPublicFigure'] }) === 'politics')
-  check('🔵 연예 · 방송 · 드라마 · 예능 제목은 제외 사유가 아니다 — 수집기 플래그 그대로 판정',
-    ['배우 송혜교 새 드라마 첫 방송 봤어요', '가수 임영웅 콘서트 다녀왔어요', '나혼자산다 박나래 편 보셨어요',
-      '예능 런닝맨 유재석 진짜 웃겨요', '드라마 마지막회 결말 어떻게 보셨어요'].every((t) =>
-      J({ qualityFlags: assessCandidate({ originalTitle: t, sourceCommentCount: 5, rawBody: '' }).flags }) === null))
-  check('고정 슬롯 → pinned', J({ pinned: true }) === 'pinned')
-  check('해당 없으면 null', J({ qualityFlags: ['lowEngagement'] }) === null)
-  check('🔴 정치가 고정 슬롯보다 먼저다 — 정치 인물 + 고정',
-    J({ pinned: true, qualityFlags: ['politicalFigure'] }) === 'politics')
-  check('🔴 정치가 고정 슬롯보다 먼저다', J({ politicsExcluded: true, pinned: true }) === 'politics')
-
-  // 🔵 연예·방송·셀럽은 정치와 분리된다
-  check('🔵 연예 제목은 politics 가 아니다',
-    !judgePoliticsTitle('연예인 이혼 소식').excluded && !judgePoliticsTitle('드라마 마지막회').excluded)
-  check('🔴 (P0-3) publicFigure 사유를 지웠다 — 연예 · 방송은 정상 원천 기회 · 정치 인물은 정치 사유 하나',
-    /📜 publicFigure\(제목 실명 · 공인\) 사유는 지웠다/.test(LIB) && /export type ExcludeReason = 'politics' \| 'pinned'/.test(LIB))
+  check('고정 슬롯 → pinned', judgeExcludeReason({ pinned: true }) === 'pinned')
+  check('해당 없으면 null', judgeExcludeReason({ pinned: false }) === null)
+  check('🔴 제외 사유는 고정 슬롯 하나뿐이다', /export type ExcludeReason = 'pinned'/.test(LIB))
   check('collector 가 단일 판정으로 후보를 고른다',
     /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
       && /sourceExcludeReason === null/.test(LIB_CODE)
       && !/!r\.sourcePinned && !r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE),
     '필터는 thresholdBasis 안에 하나만 있어야 한다')
-  check('사유별로 다르게 보고한다',
-    /실명·공인 언급/.test(COLLECTOR) && /고정 슬롯/.test(COLLECTOR) && /정치·진영/.test(COLLECTOR))
+  check('제외 사유를 보고한다', /고정 슬롯/.test(COLLECTOR))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1116,12 +1021,12 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
   // 🔴 2026-09-03 유머·연예 1p 실측을 그대로 옮긴 모양:
   //    고정 슬롯은 조회수 중앙이 2,111 로 일반 글(321)의 7배다.
   //    전체에 threshold 를 걸면 **상세를 열 수도 없는 행이 통과율을 끌어올린다.**
-  const row = (reason: 'pinned' | 'politics' | null, c: number, v: number) =>
+  const row = (reason: 'pinned' | null, c: number, v: number) =>
     ({ sourceExcludeReason: reason, sourceCommentCount: c, sourceViewCount: v })
   const rows = [
     ...Array.from({ length: 7 }, () => row('pinned', 50, 2111)),   // 고정 슬롯 — 전부 통과할 값
-    row('politics', 30, 900),
-    row('politics', 30, 900),
+    row('pinned', 30, 900),
+    row('pinned', 30, 900),
     row(null, 12, 400),                                            // 진짜 후보 중 통과 1건
     ...Array.from({ length: 13 }, () => row(null, 2, 100)),         // 진짜 후보 중 미달
   ]
@@ -1173,10 +1078,7 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
     THRESHOLD_CANDIDATES.length === 2
       && THRESHOLD_CANDIDATES[0].minComments === 10 && THRESHOLD_CANDIDATES[1].minComments === 15
       && THRESHOLD_CANDIDATES.every((t) => t.minViews === 300))
-  check('제외 사유 분포는 계속 출력한다',
-    /정치·진영 \$\{byReason\.politics\}건/.test(COLLECTOR_CODE)
-      && /실명·공인 언급 \$\{byReason\.publicFigure\}건/.test(COLLECTOR_CODE)
-      && /고정 슬롯 \$\{byReason\.pinned\}건/.test(COLLECTOR_CODE))
+  check('제외 사유 분포는 계속 출력한다', /고정 슬롯 \$\{byReason\.pinned\}건/.test(COLLECTOR_CODE))
 }
 
 

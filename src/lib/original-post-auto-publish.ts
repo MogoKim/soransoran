@@ -387,10 +387,25 @@ export function selectAutoTargets(
     targets.push(r)
   }
   /**
-   * 🔴 줄 순서 = 원천 순위 정본(`sortBySourceRank`) — 게시 시각은 판정과 같은 판독기로 읽고, 큐 적재·검토 시각은
-   *    쓰지 않는다. 실제 발행 계획(`planPublishBatch`)은 예정 슬롯 판정 rank 로 다시 세우지만 같은 비교 함수다.
+   * 🔴 줄 순서 = 원천 순위 정본(`sortBySourceRank`) — 가장 최근에 수집된 글이 먼저다. 수집 시각은 판정과 같은
+   *    판독기로 읽고, 큐 적재·검토 시각은 쓰지 않는다. 실제 발행 계획(`planPublishBatch`)은 예정 슬롯 판정 rank 로 다시 세우지만 같은 비교 함수다.
    */
   return { targets: sortBySourceRank(targets, (r) => sourceRankSignalOf(r.gateResults, r.id)), rejected }
+}
+
+/**
+ * 🔴 **매일 재는 숫자 — "가장 최근에 수집된 글이 먼저 나갔는가"** — 발행한 글이 수집 뒤 몇 시간 만에 나갔고,
+ *    그 순간 더 최근에 수집된 채택 글이 줄에 몇 건 남아 있었는가. 발행 러너가 이미 읽은 후보 줄에서만 센다.
+ */
+export function captureLagOf(
+  published: Pick<AutoRow, 'id' | 'gateResults'>, line: readonly Pick<AutoRow, 'id' | 'gateResults'>[], now: Date,
+): { hoursSinceCapture: number | null; newerWaiting: number } {
+  const at = (r: Pick<AutoRow, 'id' | 'gateResults'>): number | null => sourceRankSignalOf(r.gateResults, r.id).latestAtMs
+  const mine = at(published)
+  return {
+    hoursSinceCapture: mine === null ? null : Math.round(((now.getTime() - mine) / 3_600_000) * 10) / 10,
+    newerWaiting: mine === null ? 0 : line.filter((r) => r.id !== published.id && (at(r) ?? Number.NEGATIVE_INFINITY) > mine).length,
+  }
 }
 
 export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: string }

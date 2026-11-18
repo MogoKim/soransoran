@@ -65,7 +65,7 @@ import {
   runCollectorTerminationCleanup, type CollectorTerminationSignal,
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, maxPagesFor,
-  detectRowLabel, judgePoliticsTitle, activeCafes,
+  detectRowLabel, activeCafes,
   dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
@@ -679,16 +679,8 @@ async function main() {
     // 🔴 자동 상세 fetch 에서 빼는 이유는 **하나의 판정**이 정한다 (judgeExcludeReason).
     //    축이 갈라져 있으면 "어느 쪽이 최종 차단인가" 를 코드만 보고 답할 수 없다.
     //    **파일에서 지우는 것이 아니다** — 목록 JSONL 에는 전부 남는다.
-    const byReason = { politics: 0, publicFigure: 0, pinned: 0 }
+    const byReason = { pinned: 0 }
     for (const r of listRows) if (r.sourceExcludeReason) byReason[r.sourceExcludeReason] += 1
-    if (byReason.politics) {
-      console.log(`  🚫 정치·진영 ${byReason.politics}건 — 상세 대상 제외`)
-      console.log('     🔴 public · growth · shadow 어디에도 가지 않는다 (설계 §4-C)')
-    }
-    if (byReason.publicFigure) {
-      console.log(`  🟡 실명·공인 언급 ${byReason.publicFigure}건 — 생활 레인 상세 대상 제외`)
-      console.log('     🔴 연예·방송·셀럽이 섞인다. Growth 레인이 열리면 여기서 갈라야 한다')
-    }
     if (byReason.pinned) console.log(`  📌 고정 슬롯 ${byReason.pinned}건 — 상세 대상 제외 (공지·필독·추천)`)
 
     // 🔴 threshold 는 **제외 후 후보**에 건다 (PR-S2-b-9).

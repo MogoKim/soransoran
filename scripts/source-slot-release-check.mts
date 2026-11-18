@@ -142,8 +142,10 @@ console.log('\n③ 원천 규모 차이로 raw 조회수 왜곡')
   check('🔴 원천마다 따로 백분위를 낸다 — 작은 카페 상위 글의 댓글 백분위가 큰 카페 중간 글보다 높다',
     (smallTop.rank.commentsPct ?? 0) > (bigMid.rank.commentsPct ?? 1),
     `small ${smallTop.rank.commentsPct} · big ${bigMid.rank.commentsPct}`)
-  check('🔴 🔴 **raw 조회수는 큰 카페가 3배인데 순서는 작은 카페 상위 글이 앞선다**',
-    compareReleaseRank(smallTop.rank, bigMid.rank) < 0)
+  check('🔴 원천 규모도 반응 백분위도 순서를 정하지 않는다 — 같은 수집 시각이면 열쇠(`b` < `s`)가 가른다',
+    smallTop.rank.capturedAtMs === bigMid.rank.capturedAtMs
+    && compareReleaseRank({ ...smallTop.rank, tieBreak: 'b' }, { ...bigMid.rank, tieBreak: 's' }) < 0
+    && compareReleaseRank({ ...smallTop.rank, tieBreak: 's' }, { ...bigMid.rank, tieBreak: 'b' }) > 0)
   check('관측 나이 구간 — <3h · 3-6h · 6-12h · 12-24h · 24-72h · 그 밖 null',
     observationBucketOf(1) === '<3h' && observationBucketOf(4) === '3-6h' && observationBucketOf(30) === '24-72h' && observationBucketOf(80) === null)
   check('🔴 다른 관측 나이 구간은 비교 모집단이 아니다 — 7h 관측 글은 <3h 표본으로 백분위를 내지 않는다',
@@ -192,8 +194,9 @@ console.log('\n⑥ 이미 비용 쓴 draft vs 더 좋은 현재 후보')
 {
   const drafted = judge(ev({ id: 'd', views: 150, comments: 3, drafted: hoursAgo(20), posted: hoursAgo(40) }))
   const fresh = judge(ev({ id: 'f', views: 900, comments: 18, drafted: null, posted: hoursAgo(2) }))
-  check('🔴 🔴 **초안이 이미 있다는 사실은 순서에 들어가지 않는다 — 더 좋은 현재 후보가 앞선다**',
-    compareReleaseRank(fresh.rank, drafted.rank) < 0)
+  const undrafted = judge(ev({ id: 'd', views: 150, comments: 3, drafted: null, posted: hoursAgo(40) }))
+  check('🔴 🔴 **초안이 이미 있다는 사실은 순서에 들어가지 않는다 — 초안 유무만 다른 두 판정의 순위가 같다**',
+    compareReleaseRank(drafted.rank, undrafted.rank) === 0 && fresh.verdict === 'eligible')
   check('🔴 rank 성분에 초안 시각 · 비용 칸이 없다', !Object.keys(drafted.rank).some((k) => /draft|cost|usd/i.test(k)))
   check('🔴 만료 사유 목록에 hard gate · Persona 가 없다(구제 레인 없음 · 사유가 정해져 있다)',
     !EXPIRING_REASONS.includes('HARD_GATE') && !EXPIRING_REASONS.includes('NO_PERSONA_AT_SLOT'))
@@ -528,7 +531,7 @@ console.log('\n⑭ 🔴 (Lane B) 작은 표본 정규화 — 신뢰도가 없으
     Math.abs((snap(spread, 4, 40).commentsPct ?? 0) - (snap(withExtreme, 4, 40).commentsPct ?? 0)) < 0.07)
   check('🔴 후보가 극단치여도 백분위는 1 을 넘지 않는다', snap(spread, 1_000_000, 1).commentsPct === 1)
   const vOnly = verdictOf(snap(spread.map((o) => ({ ...o, comments: null })), null, 55), null, 55)
-  check('조회만 있다 → 조회 백분위로 정규화 · eligible · 댓글 백분위 null(순서에서 뒤)', vOnly.verdict === 'eligible' && vOnly.rank.commentsPct === null && vOnly.rank.viewsPct !== null)
+  check('조회만 있다 → 조회 백분위로 정규화 · eligible · 댓글 백분위 null', vOnly.verdict === 'eligible' && vOnly.rank.commentsPct === null && vOnly.rank.viewsPct !== null)
   const cOnly = verdictOf(snap(spread.map((o) => ({ ...o, views: null })), 5, null), 5, null)
   check('댓글만 있다 → 댓글 백분위로 정규화 · eligible', cOnly.verdict === 'eligible' && cOnly.rank.commentsPct !== null && cOnly.rank.viewsPct === null)
   check('🔴 조회 · 댓글 모두 모르고 순위만 있다 → RESPONSE_UNOBSERVED (자리는 반응이 아니다)',
@@ -536,12 +539,11 @@ console.log('\n⑭ 🔴 (Lane B) 작은 표본 정규화 — 신뢰도가 없으
       postedAt: posted, listedAt: seen, capturedAt: seen, sourceSite: 'navercafe:t', sourceArticleId: 'me',
       response: { views: null, comments: null, listRank: 1, listPage: 1, observedAt: seen }, sourceStats: snap(spread, null, null), participationDriver: '동력',
     })).reasons[0] === 'RESPONSE_UNOBSERVED')
-  check('🔴 댓글만 있는 후보가 조회만 있는 후보보다 먼저다(모르는 성분은 뒤)', compareReleaseRank(cOnly.rank, vOnly.rank) < 0)
   const once = verdictOf(snap(spread, 4, 40), 4, 40, [{ observedAt: seen, views: 40, comments: 4 }])
   const twice = verdictOf(snap(spread, 4, 40), 4, 40, [{ observedAt: iso(hoursAgo(1.5)), views: 20, comments: 2 }, { observedAt: seen, views: 40, comments: 4 }])
   check('반복 관측 1회 → velocity null · 판정은 그대로(eligible)', once.verdict === 'eligible' && once.rank.velocity === null)
-  check('반복 관측 2회 → velocity 4/h · 같은 백분위끼리만 가른다', twice.verdict === 'eligible' && twice.rank.velocity === 4
-    && compareReleaseRank(twice.rank, once.rank) < 0)
+  check('반복 관측 2회 → velocity 4/h (관측값 — 순서에는 쓰지 않는다)', twice.verdict === 'eligible' && twice.rank.velocity === 4
+    && compareReleaseRank(twice.rank, once.rank) === 0)
   const legacy = { ...snap(spread, 4, 40), method: undefined } as unknown as ReturnType<typeof snap>
   check('🔴 🔴 **정규화 판이 없는(옛) 스냅샷 → RESPONSE_UNNORMALIZED** — 자기 포함 0.5 를 믿지 않는다', verdictOf(legacy, 4, 40).reasons[0] === 'RESPONSE_UNNORMALIZED')
   check('스냅샷은 지금 정규화 판을 적는다', snap(spread, 4, 40).method === SOURCE_STATS_METHOD)

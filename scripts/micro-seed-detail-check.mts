@@ -72,8 +72,8 @@ for (const a of ['deletedOrExpired', 'permissionDenied', 'renderFailed', 'select
 }
 
 console.log('\n③ 위험은 길이보다 먼저다 — 짧다고 통과시키지 않는다')
-check('🔴 정치 + 30자 → drop (Short Raw 아님)',
-  D({ title: '대선 후보 토론 보셨어요', body: '어떻게 보셨나요 궁금해요' }).axis === 'drop')
+check('🔴 사회·정치 화제 제목이라는 이유로는 drop 하지 않는다 — 정치 낱말 사전은 지웠다',
+  D({ title: '대선 후보 토론 보셨어요', body: '어떻게 보셨나요 궁금해요' }).axis !== 'drop')
 check('🔴 의료 단정 + 40자 → hold (Short Raw 아님)',
   D({ title: '도수치료 어떤가요', body: '도수치료 받아볼까 고민중이에요 추천 부탁' }).axis === 'hold')
 check('🔴 이미지 의존 + 짧은 본문 → drop',

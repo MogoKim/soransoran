@@ -10,7 +10,7 @@ import {
   AUTO_DECISIONS, HUMAN_DECISIONS, HUMAN_PROVENANCE, AUTO_PROVENANCE, RULE_VERSION,
   HARD_BLOCK, HOLD_REASONS, KNOWN_SAFETY_CODES, REASON_LABEL, SEED_AXIS, RAW_AXIS,
   PROVEN_LANES, HOLD_ASSET_AXES, parseSemantic, hardGate, preSemanticGate, normalizeJudgeRow, holdBeforeAsking,
-  SEMANTIC_RISKS, SEMANTIC_DROP, SEMANTIC_HOLD, MIN_CONFIDENCE, BODY_HEAD_MAX,
+  SEMANTIC_RISKS, SEMANTIC_DROP, JUDGE_DROP, JUDGE_RISKS, MIN_CONFIDENCE, BODY_HEAD_MAX,
   SEMANTIC_STATUSES, PROMPT_VERSION, inputHashOf, SKIPPED,
   type JudgeInput, type SemanticVerdict, type SemanticOutcome,
 } from '../src/lib/micro-seed-auto-judge'
@@ -175,9 +175,9 @@ console.log('\n②-c 🔴 semantic judge — 모르면 통과가 아니다')
   })())
   check('앞 중괄호가 없어도 읽는다 (Anthropic prefill · boardTopic 필수)',
     parseSemantic('"decision":"AUTO_SEED","confidence":0.8,"risks":[],"boardTopic":"FREE"}') !== null)
-  check('🔴 모르는 위험 이름은 insufficientContext 로 읽는다', (() => {
-    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":["newRiskName"],"boardTopic":"FREE"}')
-    return v !== null && v.risks.includes('insufficientContext')
+  check('🔴 넷 밖의 위험 이름은 막는 사유가 아니다 — 읽지 않는다(지운 이름 포함)', (() => {
+    const v = parseSemantic('{"decision":"AUTO_SEED","confidence":0.9,"risks":["newRiskName","unverifiedDefamation","identifiablePrivatePerson","politicalCampaigning","purchaseOrSellerRequest","brandListBait","insufficientContext","medicalDecisionRequest","healthEfficacyClaim","crisisSignal"],"boardTopic":"FREE"}')
+    return v !== null && v.risks.join() === 'crisisSignal'
   })())
   check(`🔴 confidence ${MIN_CONFIDENCE} 미만이면 HOLD`,
     j({}, okSem({ confidence: MIN_CONFIDENCE - 0.01 })).decision === 'AUTO_HOLD')
@@ -255,42 +255,11 @@ console.log('\n②-c3 🔴 실행 계약 — 화면이 거짓말하지 않는다
   check('cache hit/miss 를 보고한다', /cache hit \$\{hit\} · miss \$\{miss\}/.test(r))
 }
 
-console.log('\n②-d 🔴 위험 축 — v1 이 못 잡던 것들')
+console.log('\n②-d 🔴 원천 판정이 막는 위험은 넷뿐이다 (2026-11-18 창업자 결정)')
 {
-  for (const r of SEMANTIC_DROP) {
-    check(`🔴 ${r} → AUTO_DROP`, j({}, okSem({ risks: [r] })).decision === 'AUTO_DROP')
-    check(`   사유가 남는다`, j({}, okSem({ risks: [r] })).reasonCodes.includes(r))
-  }
-  for (const r of SEMANTIC_HOLD) {
-    check(`🟡 ${r} → AUTO_HOLD`, j({}, okSem({ risks: [r] })).decision === 'AUTO_HOLD')
-  }
-  // 🔴 2026-09-16 — 위기 신호 · 의료 판단 요청 · 건강 효능 주장 3종을 더했다
-  check('위험 축이 11종', SEMANTIC_RISKS.length === 11)
-  check('🔴 deterministic 축 이름과 semantic 축 이름이 같다',
-    SAFETY_SIGNAL_CODES.every((c) => (SEMANTIC_RISKS as readonly string[]).includes(c)))
-  check('🔴 위기 신호는 버리지 않고 사람에게 넘긴다 (정본 §4)',
-    (SEMANTIC_HOLD as readonly string[]).includes('crisisSignal')
-    && !(SEMANTIC_DROP as readonly string[]).includes('crisisSignal'))
-
-  /**
-   * 🔴 **옛 판은 "연예 소재는 HOLD · 검사 주기 질문은 DROP" 을 계약으로 박고 있었다**
-   *    (2026-09-13 교체). 그 계약 때문에 40~60대 여성이 실제로 쓰는 이야기가
-   *    통째로 막혔고, fixture 를 먼저 깨지 않으면 고칠 수 없었다.
-   *    이제 **소재가 아니라 위해**를 본다.
-   */
-  for (const topic of ['연예·방송', '건강·갱년기', '부부 갈등', '검사·시술 주기 질문'] as const) {
-    check(`🟢 ${topic} 은 이제 위험 축이 아니다 — 이름 자체가 없다`,
-      !(SEMANTIC_RISKS as readonly string[]).some((r) =>
-        ['celebrityOrBroadcast', 'healthScheduleOrMedicalAdvice',
-          'hostilityOrConflictBait', 'medicalAdvice', 'politicsOrPublicFigure',
-          'personalSpecificity'].includes(r)))
-  }
-  check('🟢 위험이 없으면 소재가 무엇이든 AUTO_SEED',
-    j({}, okSem({ risks: [] })).decision === 'AUTO_SEED')
-
-  // 🔴 위해 축은 버린다 — 소재가 무엇이든
-  for (const risk of ['identifiablePrivatePerson', 'unverifiedDefamation',
-    'targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'politicalCampaigning'] as const) {
+  check('🔴 모델이 고를 수 있는 위험은 넷 — 위기 신호 · 해치라는 선동·협박 · 위험한 의료 지시 · 광고',
+    JUDGE_RISKS.join() === 'crisisSignal,targetedHarassmentOrThreat,dangerousMedicalInstruction,promotion')
+  for (const risk of JUDGE_DROP) {
     check(`🔴 ${risk} → AUTO_DROP`, j({}, okSem({ risks: [risk] })).decision === 'AUTO_DROP')
     check(`   사유가 남는다`, j({}, okSem({ risks: [risk] })).reasonCodes.includes(risk))
     check(`   어떤 confidence · 어떤 decision 으로도 통과하지 않는다`, (() => {
@@ -302,26 +271,31 @@ console.log('\n②-d 🔴 위험 축 — v1 이 못 잡던 것들')
       return true
     })())
   }
-  for (const risk of ['purchaseOrSellerRequest', 'brandListBait', 'insufficientContext'] as const) {
-    check(`🟡 ${risk} → AUTO_HOLD (버리지 않는다)`,
-      j({}, okSem({ risks: [risk] })).decision === 'AUTO_HOLD')
+  check('🔴 위기 신호는 버리지 않고 사람에게 넘긴다 (정본 §4)',
+    j({}, okSem({ risks: ['crisisSignal'] })).decision === 'AUTO_HOLD' && !(JUDGE_DROP as readonly string[]).includes('crisisSignal'))
+  // 9일간 오분류된 모양 — 모델이 지운 이름을 적어도(시험장 이야기 → 정치 선동 · 응원 글 → 명예훼손 · 추천 질문 → 구매처 문의) 통과다
+  for (const gone of ['unverifiedDefamation', 'identifiablePrivatePerson', 'politicalCampaigning', 'purchaseOrSellerRequest',
+    'brandListBait', 'insufficientContext', 'medicalDecisionRequest', 'healthEfficacyClaim']) {
+    check(`🔴 지운 사유 ${gone} 를 모델이 적어도 AUTO_SEED 다`, (() => {
+      const v = parseSemantic(JSON.stringify({ decision: 'AUTO_SEED', confidence: 0.9, risks: [gone], boardTopic: 'FREE' }))
+      return v !== null && j({}, v).decision === 'AUTO_SEED'
+    })())
   }
+  check('🔴 deterministic 축 이름과 초안 검수 축 이름이 같다',
+    SAFETY_SIGNAL_CODES.every((c) => (SEMANTIC_RISKS as readonly string[]).includes(c)))
+  check('🟢 위험이 없으면 소재가 무엇이든 AUTO_SEED',
+    j({}, okSem({ risks: [] })).decision === 'AUTO_SEED')
   check('🔴 몸·건강 축으로 격리하지 않는다 — 그 소재가 우리 고객의 이야기다',
     HOLD_ASSET_AXES.length === 0
     && j({ assetAxes: '몸·건강' }, okSem({ risks: [] })).decision === 'AUTO_SEED')
-  check('프롬프트가 소재를 막지 않는다고 말한다', (() => {
+  check('🔴 프롬프트가 넷만 설명하고 "화제 · 자극 · 실명 · 유명인은 막는 이유가 아니다" 를 적는다', (() => {
     const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
-    return /소재를 막지 않는다/.test(r)
-      && !/celebrityOrBroadcast/.test(r) && !/healthScheduleOrMedicalAdvice/.test(r)
+    const prompt = r.slice(r.indexOf('export const SYSTEM_PROMPT'), r.indexOf('export function buildPayload'))
+    return JUDGE_RISKS.every((x) => prompt.includes(`- ${x}:`))
+      && prompt.includes('화제가 되거나 자극적이거나 실명 · 유명인이 나온다는 이유로 막지 않는다')
+      && prompt.includes('커뮤니티의 날것 그대로의 이야기는 통과다')
+      && !/unverifiedDefamation|identifiablePrivatePerson|politicalCampaigning|purchaseOrSellerRequest|brandListBait|insufficientContext|medicalDecisionRequest|healthEfficacyClaim/.test(prompt)
   })())
-  check('프롬프트가 위해 축을 설명한다', (() => {
-    const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
-    return SEMANTIC_RISKS.every((x) => r.includes(x))
-  })())
-  check('🔴 DROP 축과 HOLD 축이 겹치지 않는다',
-    SEMANTIC_DROP.every((r) => !SEMANTIC_HOLD.includes(r)))
-  check('🔴 모든 위험 축이 DROP 이거나 HOLD 다 — 어디에도 없는 축을 만들지 않는다',
-    SEMANTIC_RISKS.every((r) => SEMANTIC_DROP.includes(r) || SEMANTIC_HOLD.includes(r)))
   // 🔴 **정책 taxonomy 가 모델 decision 을 이긴다**
   check('🔴 모델이 AUTO_DROP 인데 버릴 사유가 없으면 HOLD',
     j({}, okSem({ decision: 'AUTO_DROP', risks: [] })).decision === 'AUTO_HOLD')
@@ -354,14 +328,14 @@ console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')
   check('🔴 hardExclude 는 모델이 통과라 해도 DROP',
     j({ safetyVerdict: 'hardExclude' }, strong).decision === 'AUTO_DROP')
   check('🔴 axis=drop 도 DROP', j({ axis: 'drop' }, strong).decision === 'AUTO_DROP')
-  check('🔴 정치 사유도 DROP', j({ safetyReasons: 'politics' }, strong).decision === 'AUTO_DROP')
+  check('🔴 개인정보 사유도 DROP', j({ safetyReasons: 'personalIdentity' }, strong).decision === 'AUTO_DROP')
   check('🔴 access 실패는 모델이 뭐라 해도 HOLD',
     j({ access: 'failed' }, strong).decision === 'AUTO_HOLD')
   check('🔴 safety 미통과도 HOLD', j({ safetyVerdict: 'hold' }, strong).decision === 'AUTO_HOLD')
   check('🔴 hardGate 가 모델보다 먼저다', (() => {
     // 어떤 응답을 줘도 hardGate 에 걸린 것은 DROP 이다
     for (const sem of [strong, okSem({ decision: 'AUTO_SEED', confidence: 1 }), null]) {
-      if (j({ safetyReasons: 'politics' }, sem).decision !== 'AUTO_DROP') return false
+      if (j({ safetyReasons: 'personalIdentity' }, sem).decision !== 'AUTO_DROP') return false
     }
     return true
   })())
@@ -369,14 +343,12 @@ console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')
 
 console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
 {
-  for (const code of ['politics', 'personalIdentity', 'medicalClaim', 'promotion', 'hostility'] as const) {
+  for (const code of ['personalIdentity', 'medicalClaim', 'promotion', 'hostility'] as const) {
     check(`🔴 ${code} → AUTO_DROP`, j({ safetyReasons: code }).decision === 'AUTO_DROP')
     check(`   사유가 남는다`, j({ safetyReasons: code }).reasonCodes.includes(code))
   }
-  check('🔴 목록 플래그 politicalFigure(정치 인물) 도 막는다',
-    j({ qualityFlags: ['politicalFigure'] }).decision === 'AUTO_DROP')
-  check('📜 옛 혼합 플래그(politicalOrPublicFigure)는 정치 · 연예를 가를 수 없어 정치로 읽는다(fail-closed)',
-    j({ qualityFlags: ['politicalOrPublicFigure'] }).decision === 'AUTO_DROP')
+  check('🔴 옛 정치 플래그(politicalFigure · politicalOrPublicFigure)는 막는 사유가 아니다 — 정치 낱말 사전은 지웠다',
+    j({ qualityFlags: ['politicalFigure', 'politicalOrPublicFigure', 'politicalTopicLikely'] }).decision === 'AUTO_SEED')
   // 🔴 v1 은 이걸 medicalClaim 으로 단정해 사유를 왜곡했다. 이름 그대로 의료 **또는** 광고다
   check('🟡 medicalOrAdLikely → AUTO_HOLD (버리지 않는다)',
     j({ qualityFlags: ['medicalOrAdLikely'] }).decision === 'AUTO_HOLD')
@@ -387,12 +359,12 @@ console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
   check('🟢 다른 플래그는 막지 않는다',
     j({ qualityFlags: ['clickbaitTitle'] }).decision === 'AUTO_SEED')
   check('사유 코드 문자열이 `code:note` 여도 읽는다',
-    j({ safetyReasons: 'politics:정치 어휘' }).decision === 'AUTO_DROP')
+    j({ safetyReasons: 'promotion:홍보 어휘' }).decision === 'AUTO_DROP')
   check('여러 사유를 | 로 읽는다',
-    readReasons('politics|promotion').length === 2)
+    readReasons('hostility|promotion').length === 2)
   check('빈 문자열은 사유 0', readReasons('').length === 0)
-  check('플래그 → 사유는 옮기기만 한다 — 정치 인물만 politics',
-    readFlags(['politicalFigure']).join(',') === 'politics' && readFlags(['politicalFigureMention']).length === 0)
+  check('플래그 → 사유는 옮기기만 한다 — 정치 플래그는 사유가 아니다',
+    readFlags(['politicalFigure', 'politicalFigureMention']).length === 0)
   check('🔴 의료와 광고를 합치지 않는다', readFlags(['medicalOrAdLikely']).join(',') === 'medicalOrAd')
 }
 
@@ -402,7 +374,7 @@ console.log('\n④ 🔴 모르는 사유는 통과가 아니라 격리다')
   check('🔴 모르는 사유 → AUTO_HOLD', r.decision === 'AUTO_HOLD')
   check('unknownReason 으로 기록된다', r.reasonCodes.includes('unknownReason'))
   check('🔴 규칙이 모르는 위험이 통과하지 않는다', r.decision !== 'AUTO_SEED')
-  check('아는 사유 목록이 13종 — 언어 핏(hanjaLanguageFit) 포함', KNOWN_SAFETY_CODES.length === 13)
+  check('아는 사유 목록이 12종 — 언어 핏(hanjaLanguageFit) 포함', KNOWN_SAFETY_CODES.length === 12)
   check('🟡 격리 사유는 버리지 않는다 — 사람이 보면 통과할 수도 있다',
     j({ safetyReasons: 'visualDependent' }).decision === 'AUTO_HOLD')
   check('volatile 도 격리 (drop 아님)',

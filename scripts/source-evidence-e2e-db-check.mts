@@ -130,7 +130,7 @@ function writeNavercafe(): void {
     sourceCapturedAt: listed, dedupKey: `navercafe:wgang|${s.id}`, qualityFlags: [], qualitySignals: {},
     sourceListedAt: listed, sourcePostedLabel: '05:10', sourcePostedAt: iso(s.postedAt), sourcePage: 1, sourceRankOnPage: k + 1,
     sourceViewCount: s.views, sourceCommentCountRead: true, sourceRunId: 'lb-nc', sourceRowLabel: null, sourcePinned: false,
-    sourceMenuId: '1', sourceBoardKey: 'free', sourcePoliticsExcluded: false, sourceExcludeReason: null,
+    sourceMenuId: '1', sourceBoardKey: 'free', sourceExcludeReason: null,
   }))
   writeFileSync(join(DATA, `navercafe-wgang-${utcRun(LIST_NC)}.list.jsonl`), `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`)
   // 🔴 수집기가 같은 회차에 쓰는 얇은 행 — 정본 조립 함수(`thinRowFromCollected`) · 정본 판정(`classifyDetail`)
@@ -604,7 +604,7 @@ async function main(): Promise<void> {
     const { sup } = await world('⑨-a hard gate(안전 · gate 판정)가 반응 순위보다 먼저다')
     check('공급 러너 정상 종료', sup.code === 0)
     const order = rankAt(await generated(), PUBLISH_AT)
-    const unsafe = '국회의원 선거 이야기 해 봐요'
+    const unsafe = '공동구매 진행합니다 문의는 쪽지 주세요'
     check('전제 — 그 제목은 정본 안전 판정에서 pass 가 아니다', safetyFilter({ title: unsafe }).verdict !== 'pass', safetyFilter({ title: unsafe }).verdict)
     await prisma.originalPostApprovalQueue.update({ where: { id: order[0]!.id }, data: { draftTitle: unsafe } })
     await prisma.originalPostApprovalQueue.update({ where: { id: order[1]!.id }, data: { gateVerdict: 'HOLD' } })

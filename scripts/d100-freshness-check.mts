@@ -441,20 +441,17 @@ console.log('\n⑦ 레몬테라스 1p 제외 · 2~6p · jjong 20 + humor 1 · �
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 신선도 1순위 (2026-10-19 창업자) — 자격 gate 뒤에는 오래된 고반응 글이 최신 글을 앞서지 않는다 · 출처·주제 보너스 없음')
+console.log('\n⑧ 수집 최신순 하나 (2026-11-18 창업자) — 가장 최근에 수집된 글이 먼저다 · 나이·반응·출처·주제는 순서에 없다')
 // ─────────────────────────────────────────────────────────
 {
-  const rank = (commentsPct: number, viewsPct: number, ageAtSlotH: number) => ({ commentsPct, viewsPct, ageAtSlotH, velocity: null, tieBreak: '' })
+  const rank = (capturedAtMs: number, commentsPct: number, ageAtSlotH: number) => ({ capturedAtMs, commentsPct, viewsPct: 0.5, ageAtSlotH, velocity: null, tieBreak: '' })
   const k = (r: ReturnType<typeof rank>, key: string): SupplyRankKey => ({ rank: r, key })
-  check('🔴 더 낮은 신선도의 고반응 글은 더 신선한 글을 이기지 않는다',
-    compareSupplyRank(k(rank(0.9, 0.5, 40), 'a'), k(rank(0.8, 0.9, 1), 'b')) > 0)
-  check('🔴 신선도가 반응을 이긴다 — 댓글 자리가 더 높아도 늙었으면 뒤',
-    compareReleaseRank(rank(0.9, 0.1, 70), rank(0.89, 0.9, 1)) > 0)
-  check('신선도 동률이면 반응이 앞', compareReleaseRank(rank(0.9, 0.6, 5), rank(0.7, 0.6, 5)) < 0)
-  check('반응 동률이면 더 신선한 글이 앞', compareReleaseRank(rank(0.7, 0.6, 30), rank(0.7, 0.6, 5)) > 0)
-  check('🔴 신선도·반응 모두 동률이면 결정적 열쇠로 — 출처·주제 보너스 없음',
-    compareSupplyRank(k(rank(0.7, 0.6, 5), 'a'), k(rank(0.7, 0.6, 5), 'b')) < 0
-      && compareSupplyRank(k(rank(0.7, 0.6, 5), 'b'), k(rank(0.7, 0.6, 5), 'a')) > 0)
+  check('🔴 더 늦게 수집된 글이 먼저다 — 원문이 더 늙고 반응이 더 낮아도',
+    compareSupplyRank(k(rank(2000, 0.1, 40), 'b'), k(rank(1000, 0.9, 1), 'a')) < 0
+      && compareReleaseRank(rank(2000, 0.1, 70), rank(1000, 0.9, 1)) < 0)
+  check('🔴 수집 시각이 같으면 결정적 열쇠로 — 나이·반응·출처·주제 보너스 없음',
+    compareSupplyRank(k(rank(1000, 0.1, 30), 'a'), k(rank(1000, 0.9, 5), 'b')) < 0
+      && compareSupplyRank(k(rank(1000, 0.9, 5), 'b'), k(rank(1000, 0.1, 30), 'a')) > 0)
   // 정적: 판정 정본 · 공급 순위 · 수집 동률 비교에 주제 · 출처 · 가중치가 들어 있지 않다
   const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   const release = strip(readFileSync('src/lib/source-slot-release.ts', 'utf8'))

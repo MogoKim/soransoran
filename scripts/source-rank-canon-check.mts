@@ -1,14 +1,14 @@
 /**
- * 🔴 **원천 순위 정본 하나 — 검사** (2026-11-06 창업자 결정 · canon §2.3)
+ * 🔴 **원천 순위 정본 하나 — 검사** (canon §2.3 · 2026-11-18 창업자 결정)
  *
- *    계약: 안전·품질 자격 gate 뒤 `sourceAge` 오름차순 → (실질 동률에서만) 댓글 백분위 → 조회 백분위 → velocity →
- *    결정적 열쇠(코드 포인트). `sourceAge` = 기준 시각 − 원문 게시 시각의 이른 끝(수집 시각이 아니다).
+ *    계약: 자격 gate 뒤 **수집 시각 최신순 → 결정적 열쇠(코드 포인트)**. 게시 시각 · 반응은 순서에 들어오지 않는다.
+ *    `sourceAge`(기준 시각 − 원문 게시 시각의 이른 끝)는 72시간 자격 판정의 값으로만 남는다.
  *
  *    ① 생산 경로에 두 번째 비교 구현이 없다 (정적)
  *    ② 정본 정렬이 독립 oracle 과 같다 (무작위)
  *    ③ 결정적 열쇠는 locale 이 아니라 코드 포인트다
- *    ④ 판정 rank 의 나이와 정본 나이 계산이 같다
- *    ⑤ 발행 후보 줄도 정본 정렬이다 · 게시 시각은 판정과 같은 엄격 판독기로 읽는다
+ *    ④ 판정이 적는 나이와 정본 나이 계산이 같다 · 판정 rank 의 수집 시각은 증거의 수집 시각이다
+ *    ⑤ 발행 후보 줄도 정본 정렬이다 · 수집 시각은 판정과 같은 엄격 판독기로 읽는다 · 묶음 선택과 같은 순서를 낸다
  *    ⑥ workset 이 쓴 순위 순서를 읽기에서 잃지 않는다
  *    ⑦ 11-06 반례 재생 — 판정·생성이 workset 순위를 지키면 영수증 원천이 화자 자리를 얻고 queue 결속이 남는다
  *    ⑧ 판정·생성 러너가 그 순서를 실제로 쓴다 (배선)
@@ -19,9 +19,9 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   compareReleaseRank, sortBySourceRank, sourceRankSignalOf, sourceAgeHoursAt, judgeSlotRelease,
-  buildSourceEvidence, postedLowerBoundOf, articleIdHashOf, type ReleaseRank, type SourceRankSignal,
+  buildSourceEvidence, postedLowerBoundOf, postedWindowOfKstDay, articleIdHashOf, type ReleaseRank, type SourceRankSignal,
 } from '../src/lib/source-slot-release'
-import { readWorkset, readRunWorkset, orderByWorksetRank, WORKSET_KIND, WORKSET_VERSION } from '../src/lib/supply-workset'
+import { compareSupplyRank, readWorkset, readRunWorkset, orderByWorksetRank, WORKSET_KIND, WORKSET_VERSION } from '../src/lib/supply-workset'
 import { SUPPLY_JIT_CONTRACT, WORKSET_VERSION_JIT } from '../src/lib/supply-intent'
 import { sourceIdentityOf } from '../src/lib/source-identity'
 import { createAttemptPool } from '../src/lib/content-core/speaker-availability'
@@ -68,7 +68,7 @@ console.log('\n① 생산 경로의 원천 비교 구현은 정본 하나다')
   check('🔴 `compareSupplyRank` 는 정본에 열쇠만 넘기는 한 줄이다',
     /return compareReleaseRank\(\{ \.\.\.a\.rank, tieBreak: a\.key \}, \{ \.\.\.b\.rank, tieBreak: b\.key \}\)\s*\}/.test(adapter), adapter.slice(0, 200))
   const publish = strip(readFileSync('src/lib/original-post-auto-publish.ts', 'utf8'))
-  check('🔴 발행 줄이 게시 시각을 따로 파싱하지 않는다 (`autoRowSourceSignalOf` · `compareAutoRow` 없음)',
+  check('🔴 발행 줄이 시각을 따로 파싱하지 않는다 (`autoRowSourceSignalOf` · `compareAutoRow` 없음)',
     !publish.includes('autoRowSourceSignalOf') && !publish.includes('compareAutoRow'))
   const supply = strip(readFileSync('scripts/lib/micro-seed-supply.mts', 'utf8'))
   check('🔴 수집 목록도 정본 정렬을 쓴다 (`compareFreshFirst` 없음)',
@@ -76,20 +76,17 @@ console.log('\n① 생산 경로의 원천 비교 구현은 정본 하나다')
   const release = strip(readFileSync('src/lib/source-slot-release.ts', 'utf8'))
   const canon = release.slice(release.indexOf('export function compareReleaseRank'), release.indexOf('export function compareReleaseRank') + 500)
   check('🔴 정본 비교는 locale 비교를 쓰지 않는다', canon.length > 0 && !canon.includes('localeCompare'))
+  check('🔴 정본 비교의 성분은 수집 시각과 열쇠 둘뿐이다 — 나이 · 반응 성분이 비교에 없다',
+    canon.includes('a.capturedAtMs') && !/ageAtSlotH|commentsPct|viewsPct|velocity/.test(canon.slice(0, canon.indexOf('\n}'))))
 }
 
 // ─────────────────────────────────────────────────────────
 console.log('\n② 정본 정렬 = 독립 oracle (무작위 400벌)')
 // ─────────────────────────────────────────────────────────
 {
-  /** 독립 oracle — 정본 코드를 부르지 않는다: 게시 이른 끝 최신 → 댓글↓ → 조회↓ → velocity↓ → 코드 포인트 */
-  const nullLast = (a: number | null, b: number | null, dir: 1 | -1): number =>
-    (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : dir * (a - b))
+  /** 독립 oracle — 정본 코드를 부르지 않는다: 시각 최신 → 코드 포인트. 모르는 시각은 뒤 */
   const oracle = (a: SourceRankSignal, b: SourceRankSignal): number =>
-    nullLast(a.postedLowerBoundMs, b.postedLowerBoundMs, -1)
-    || nullLast(a.commentsPct, b.commentsPct, -1)
-    || nullLast(a.viewsPct, b.viewsPct, -1)
-    || nullLast(a.velocity, b.velocity, -1)
+    (a.latestAtMs === null && b.latestAtMs === null ? 0 : a.latestAtMs === null ? 1 : b.latestAtMs === null ? -1 : b.latestAtMs - a.latestAtMs)
     || (a.tieBreak < b.tieBreak ? -1 : a.tieBreak > b.tieBreak ? 1 : 0)
   const r = rng(1106)
   let same = 0
@@ -97,11 +94,8 @@ console.log('\n② 정본 정렬 = 독립 oracle (무작위 400벌)')
   const base = Date.UTC(2026, 10, 5, 0, 0, 0)
   for (let k = 0; k < N; k += 1) {
     const rows: SourceRankSignal[] = Array.from({ length: 2 + Math.floor(r() * 25) }, (_, i) => ({
-      // 분 단위 게시 시각 · 일부 동률 · 일부 모름
-      postedLowerBoundMs: r() < 0.15 ? null : base + Math.floor(r() * 6) * 60 * 60_000 + Math.floor(r() * 3) * 60_000,
-      commentsPct: r() < 0.3 ? null : Math.floor(r() * 4) / 4,
-      viewsPct: r() < 0.3 ? null : Math.floor(r() * 4) / 4,
-      velocity: r() < 0.5 ? null : Math.floor(r() * 3),
+      // 분 단위 시각 · 일부 동률 · 일부 모름
+      latestAtMs: r() < 0.15 ? null : base + Math.floor(r() * 6) * 60 * 60_000 + Math.floor(r() * 3) * 60_000,
       tieBreak: `${String.fromCharCode(65 + Math.floor(r() * 3))}${String.fromCharCode(97 + Math.floor(r() * 3))}${i}`,
     }))
     const got = sortBySourceRank(rows, (x) => x).map((x) => x.tieBreak).join()
@@ -109,24 +103,29 @@ console.log('\n② 정본 정렬 = 독립 oracle (무작위 400벌)')
     if (got === want) same += 1
   }
   check('🔴 `sortBySourceRank` 순서가 독립 oracle 과 모든 벌에서 같다', same === N, `${same}/${N}`)
-  const reversed = sortBySourceRank([...[1, 2, 3].map((i) => ({
-    postedLowerBoundMs: base + i * H, commentsPct: null, viewsPct: null, velocity: null, tieBreak: `t${i}`,
-  }))].reverse(), (x) => x).map((x) => x.tieBreak).join()
-  check('입력 순서와 무관하게 최신 원문이 먼저다', reversed === 't3,t2,t1', reversed)
+  const reversed = sortBySourceRank([...[1, 2, 3].map((i) => ({ latestAtMs: base + i * H, tieBreak: `t${i}` }))].reverse(), (x) => x)
+    .map((x) => x.tieBreak).join()
+  check('입력 순서와 무관하게 최신이 먼저다', reversed === 't3,t2,t1', reversed)
 }
 
 // ─────────────────────────────────────────────────────────
 console.log('\n③ 결정적 열쇠 — 코드 포인트')
 // ─────────────────────────────────────────────────────────
 {
-  const rank = (tieBreak: string): ReleaseRank => ({ ageAtSlotH: 1, commentsPct: 0.5, viewsPct: 0.5, velocity: null, tieBreak })
+  const rank = (tieBreak: string, o: Partial<ReleaseRank> = {}): ReleaseRank =>
+    ({ capturedAtMs: 1000, ageAtSlotH: 1, commentsPct: 0.5, viewsPct: 0.5, velocity: null, tieBreak, ...o })
   // 'B'(66) < 'a'(97) — locale 비교는 'a' 를 앞에 둔다
-  check('🔴 모든 성분이 같으면 코드 포인트 순 (`B` < `a`)', compareReleaseRank(rank('B'), rank('a')) < 0)
+  check('🔴 수집 시각이 같으면 코드 포인트 순 (`B` < `a`)', compareReleaseRank(rank('B'), rank('a')) < 0)
   check('같은 열쇠면 0', compareReleaseRank(rank('x'), rank('x')) === 0)
+  check('🔴 더 늦게 수집된 글이 먼저다 — 원문이 더 오래됐고 반응이 더 낮아도',
+    compareReleaseRank(rank('z', { capturedAtMs: 2000, ageAtSlotH: 60, commentsPct: 0, viewsPct: 0 }), rank('a', { ageAtSlotH: 1, commentsPct: 1, viewsPct: 1, velocity: 9 })) < 0)
+  check('🔴 수집 시각이 같으면 나이 · 반응은 순서를 바꾸지 못한다 — 열쇠만 가른다',
+    compareReleaseRank(rank('a', { ageAtSlotH: 60, commentsPct: 0 }), rank('b', { ageAtSlotH: 1, commentsPct: 1, velocity: 9 })) < 0)
+  check('수집 시각을 모르면 언제나 뒤다', compareReleaseRank(rank('a', { capturedAtMs: null }), rank('z')) > 0)
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 판정 rank 나이 = 정본 나이 계산')
+console.log('\n④ 판정이 적는 나이 = 정본 나이 계산 · rank 의 수집 시각 = 증거의 수집 시각')
 // ─────────────────────────────────────────────────────────
 {
   const postedAt = '2026-11-05T21:22:00.000Z'
@@ -142,6 +141,7 @@ console.log('\n④ 판정 rank 나이 = 정본 나이 계산')
   check('🔴 판정 rank 의 ageAtSlotH 는 `sourceAgeHoursAt(게시 이른 끝, 슬롯)` 이다',
     lb !== null && v.rank.ageAtSlotH === sourceAgeHoursAt(lb.getTime(), slot.getTime()),
     `${String(v.rank.ageAtSlotH)} vs ${lb === null ? 'null' : sourceAgeHoursAt(lb.getTime(), slot.getTime())}`)
+  check('🔴 판정 rank 의 capturedAtMs 는 증거의 수집 시각이다', v.rank.capturedAtMs === Date.parse('2026-11-05T22:00:00.000Z'))
   check('나이는 시간 단위 · 0.001h 반올림 · 음수 없음',
     sourceAgeHoursAt(0, 2.6334 * H) === 2.633 && sourceAgeHoursAt(10 * H, 0) === 0)
 }
@@ -150,26 +150,41 @@ console.log('\n④ 판정 rank 나이 = 정본 나이 계산')
 console.log('\n⑤ 발행 후보 줄 — 정본 정렬 · 엄격 판독')
 // ─────────────────────────────────────────────────────────
 {
-  const gate = (id: string, postedAt: unknown): Record<string, unknown> => ({
-    sourceEvidence: buildSourceEvidence({ sourceSite: 'navercafe:fixture', sourceArticleId: id, postedAt }),
-  })
+  const evOf = (id: string, capturedAt: unknown, posted: Record<string, unknown>): unknown =>
+    buildSourceEvidence({ sourceSite: 'navercafe:fixture', sourceArticleId: id, capturedAt, ...posted })
+  const gate = (id: string, capturedAt: unknown, posted: Record<string, unknown> = { postedAt: '2026-11-05T00:30:00.000Z' }): Record<string, unknown> =>
+    ({ sourceEvidence: evOf(id, capturedAt, posted) })
   const sig = sourceRankSignalOf(gate('a', '2026-11-05T10:00:00.000Z'), 'a')
-  check('🔴 큐 행 신호의 게시 시각은 판정과 같은 `postedLowerBoundOf` 값이다',
-    sig.postedLowerBoundMs === Date.parse('2026-11-05T10:00:00.000Z') && sig.tieBreak === 'a')
-  check('🔴 evidence 를 못 읽으면 게시 시각을 모른다(뒤로 간다) — 느슨한 파싱으로 known 을 만들지 않는다',
-    sourceRankSignalOf({ sourceEvidence: { version: 'nope' } }, 'z').postedLowerBoundMs === null
-    && sourceRankSignalOf(null, 'z').postedLowerBoundMs === null)
+  check('🔴 큐 행 신호는 증거의 수집 시각이다', sig.latestAtMs === Date.parse('2026-11-05T10:00:00.000Z') && sig.tieBreak === 'a')
+  check('🔴 evidence 를 못 읽으면 수집 시각을 모른다(뒤로 간다) — 느슨한 파싱으로 known 을 만들지 않는다',
+    sourceRankSignalOf({ sourceEvidence: { version: 'nope' } }, 'z').latestAtMs === null
+    && sourceRankSignalOf(null, 'z').latestAtMs === null)
   const row = (id: string, gateResults: Record<string, unknown>): AutoRow => ({
     id, status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS', title: `t-${id}`, body: `b-${id}`,
     gateResults, decidedAt: null, createdAt: new Date('2026-11-05T00:00:00Z'),
   } as unknown as AutoRow)
-  const rows = [
-    row('old', gate('old', '2026-11-05T01:00:00.000Z')),
-    row('unk', { sourceEvidence: { version: 'nope' } }),
-    row('new', gate('new', '2026-11-05T09:00:00.000Z')),
+  // 한 fixture — 수집이 늦을수록 원문은 더 오래됐다. `day` 는 날짜만 아는 글(전날 · 가장 늦게 수집), `tieA`·`tieB` 는 수집 시각이 같다
+  const fx: { id: string; capturedAt: string; posted: Record<string, unknown> }[] = [
+    { id: 'early', capturedAt: '2026-11-05T02:00:00.000Z', posted: { postedAt: '2026-11-05T01:50:00.000Z' } },
+    { id: 'tieB', capturedAt: '2026-11-05T05:00:00.000Z', posted: { postedAt: '2026-11-05T04:00:00.000Z' } },
+    { id: 'tieA', capturedAt: '2026-11-05T05:00:00.000Z', posted: { postedAt: '2026-11-04T20:00:00.000Z' } },
+    { id: 'late', capturedAt: '2026-11-05T09:00:00.000Z', posted: { postedAt: '2026-11-04T12:00:00.000Z' } },
+    { id: 'day', capturedAt: '2026-11-05T10:00:00.000Z', posted: { postedAt: null, postedWindow: postedWindowOfKstDay('2026-11-04') } },
   ]
+  const rows = [...fx.map((f) => row(f.id, gate(f.id, f.capturedAt, f.posted))), row('unk', { sourceEvidence: { version: 'nope' } })]
   const want = sortBySourceRank(rows, (r) => sourceRankSignalOf(r.gateResults, r.id)).map((r) => r.id)
-  check('정본 정렬은 최신 → 이른 → 모름 순이다', want.join() === 'new,old,unk', want.join())
+  check('🔴 발행 줄 — 수집이 늦은 글이 먼저(원문이 더 오래됐어도 · 날짜만 알아도) · 같은 수집 시각은 열쇠 · 모름은 맨 뒤',
+    want.join() === 'day,late,tieA,tieB,early,unk', want.join())
+  // 묶음 선택(`selectJitWorkset`)이 세우는 방식 그대로 — 판정 rank 를 `compareSupplyRank` 로
+  const slot = new Date('2026-11-05T12:00:00.000Z')
+  const picked = fx.map((f) => ({
+    key: f.id,
+    rank: judgeSlotRelease({
+      evidence: evOf(f.id, f.capturedAt, f.posted), slotAt: slot, now: slot, hardGates: { ok: true, codes: [] }, assignment: 'pending', tieBreak: f.id,
+    }).rank,
+  })).sort(compareSupplyRank).map((x) => x.key)
+  check('🔴 묶음 선택 순서(`compareSupplyRank` · 판정 rank)가 발행 줄 순서와 같다',
+    picked.join() === want.filter((id) => id !== 'unk').join(), `${picked.join()} vs ${want.join()}`)
   check('🔴 `selectAutoTargets` 는 순서를 따로 정하지 않고 정본 정렬 결과를 낸다 (정적)',
     /targets:\s*sortBySourceRank\(targets,\s*\(r\)\s*=>\s*sourceRankSignalOf\(r\.gateResults,\s*r\.id\)\)/
       .test(readFileSync('src/lib/original-post-auto-publish.ts', 'utf8')))

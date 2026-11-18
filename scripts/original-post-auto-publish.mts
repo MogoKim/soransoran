@@ -35,7 +35,7 @@ import {
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { planBatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 // 🔴 생성 말투 → 최종 author. 러너 · 관제 · 예측 · 준비도가 이 함수 하나를 쓴다
-import { voiceInputOf } from '../src/lib/original-post-auto-publish'
+import { captureLagOf, voiceInputOf } from '../src/lib/original-post-auto-publish'
 // 🔴 생성 말투 → 최종 author. 여기서 읽지 않으면 연결이 끊긴다
 
 import { planStore } from '../src/lib/original-post-match-store'
@@ -462,6 +462,10 @@ if (announced !== null && res.personaCode !== announced) {
 }
 if (replaced.length > 0) console.log(`   🔁 같은 회차 교체 ${replaced.length}건 — ${replaced.map((r) => `${r.id}[${r.reasons.join(',')}]`).join(' · ')}`)
 console.log(`   ✅ Post ${res.postId} · ${res.personaCode} · ${res.boardType}`)
+{
+  const lag = captureLagOf(target, targets, RUN_AT)
+  console.log(`   수집 뒤 ${lag.hoursSinceCapture === null ? '모름' : `${lag.hoursSinceCapture}시간`} · 더 최근에 수집된 채택 글 대기 ${lag.newerWaiting}건`)
+}
 console.log(`   https://soransoran.com/community/free/${res.postId}`)
 console.log('   🔴 이 글은 검색에 노출됩니다 — sitemap 에 실립니다')
 

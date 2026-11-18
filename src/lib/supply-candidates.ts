@@ -100,7 +100,7 @@ const scoreFrom = (plan: BatchPlan, id: string): number => {
  *
  *    ① `at`(예정 슬롯)에서 정본 판정 — 배정은 아직이다(`pending`). eligible 이 아니면 뺀다(held)
  *       🔴 hard gate 는 부르는 쪽 선택기(`selectAutoTargets`)가 이미 통과시킨 행만 온다 — 결과를 그대로 넘긴다
- *    ② 발행 순서 — **compareReleaseRank 하나(신선도 1순위)** (2026-10-19 창업자/Codex).
+ *    ② 발행 순서 — **compareReleaseRank 하나(수집 시각 최신순)** (2026-11-18 창업자).
  *       📜 2026-09-28 "복구 먼저 · lane 우선" 은 superseded — observation 축으로만 보존한다.
  *    ③ 그 순서를 우선권으로 넘겨 최대 매칭
  *    ④ 배정 결과까지 넣어 **같은 함수로 최종 판정**을 남긴다(배정 불가 → `NO_PERSONA_AT_SLOT`)
@@ -145,7 +145,7 @@ export function prepareCandidates(input: {
   })
 
   // ── ② 발행 순서 — 🔴 2026-10-19 창업자/Codex 결정: 복구·lane 선호가 **source rank 를 뒤집지 않는다** ──
-  //    자격 gate 뒤에는 compareReleaseRank(신선도 1순위) 하나로 세운다. 더 신선한 글이 lane·recovery 보다 앞선다.
+  //    자격 gate 뒤에는 compareReleaseRank(수집 시각 최신순) 하나로 세운다. 더 최근에 수집된 글이 lane·recovery 보다 앞선다.
   const ordered = [...keep].sort((a, b) => compareReleaseRank(first.get(a.queueId)!.rank, first.get(b.queueId)!.rank))
   const rank = new Map(ordered.map((c, i) => [c.queueId, i]))
 
