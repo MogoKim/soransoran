@@ -302,8 +302,7 @@ export type WorksetPlan = {
 // 🔴 **축별 자리** (2026-09-28)
 //
 //   생성 레인은 판정이 `AUTO_SEED` 를 준 원천만 읽는다(`micro-seed-auto-draft` 의 입력).
-//   `rawOriginality` 축 원천은 판정이 `AUTO_RAW`(다른 레인) 이거나, 모델이 SEED 라고
-//   답하면 정책이 `axisMismatch` HOLD 로 바꾼다 — **어느 쪽이든 이 레인에서 초안이 0 이다.**
+//   `rawOriginality` 축 원천은 판정을 통과해도 `AUTO_RAW`(다른 레인)다 — **이 레인에서 초안이 0 이다.**
 //
 //   실측(2026-09-21~27, 39회차 195자리): raw 85자리 → AUTO_RAW 23 · HOLD 62(그중 axisMismatch 61)
 //   · 초안 0 · 채택 0. seed 110자리 → AUTO_SEED 90 · 초안 50 · 채택 33.

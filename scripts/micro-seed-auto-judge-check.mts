@@ -183,8 +183,6 @@ console.log('\n②-c 🔴 semantic judge — 모르면 통과가 아니다')
     j({}, okSem({ confidence: MIN_CONFIDENCE - 0.01 })).decision === 'AUTO_HOLD')
   check('사유가 lowConfidence',
     j({}, okSem({ confidence: 0.1 })).reasonCodes.includes('lowConfidence'))
-  check('🔴 모델이 다른 축을 말하면 HOLD — 축은 우리가 정한다',
-    j({}, okSem({ decision: 'AUTO_RAW' })).decision === 'AUTO_HOLD')
 }
 
 console.log('\n②-c2 🔴 실패를 한 덩어리로 세지 않는다')
@@ -331,8 +329,23 @@ console.log('\n②-d 🔴 위험 축 — v1 이 못 잡던 것들')
     j({}, okSem({ decision: 'AUTO_DROP', risks: [] })).reasonCodes.includes('unexplainedModelDrop'))
   check('🔴 모델이 AUTO_HOLD 라 하면 격리한다',
     j({}, okSem({ decision: 'AUTO_HOLD' })).decision === 'AUTO_HOLD')
-  check('축이 어긋나면 axisMismatch',
-    j({}, okSem({ decision: 'AUTO_RAW' })).reasonCodes.includes('axisMismatch'))
+  // 🔴 축은 우리가 정한다 — 모델이 통과로 답한 낱말이 우리 축과 달라도 원천을 막지 않는다.
+  //    앞판은 위험 0 · 확신 0.92 인 생활 글도 모델이 `AUTO_RAW` 라 답하면 `axisMismatch` 로 영구 HOLD 였다.
+  check('🔴 seed 축 · 위험 0 · 확신 0.92 · 모델 답 AUTO_RAW → AUTO_SEED (축 낱말로 막지 않는다)', (() => {
+    const v = j({}, okSem({ decision: 'AUTO_RAW', confidence: 0.92, risks: [] }))
+    return v.decision === 'AUTO_SEED' && v.reasonCodes.join() === 'axisSeed'
+  })())
+  check('🔴 raw 축 · 모델 답 AUTO_SEED → AUTO_RAW (축은 입력이 정한다)',
+    j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_SEED', risks: [] })).decision === 'AUTO_RAW')
+  check('🔴 사유 코드에 axisMismatch 가 없다', !Object.keys(REASON_LABEL).includes('axisMismatch'))
+  check('🔴 프롬프트가 모델에게 축을 묻지 않는다 — 선택지에 AUTO_RAW 가 없고 세 답의 뜻을 적었다', (() => {
+    const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
+    const prompt = r.slice(r.indexOf('export const SYSTEM_PROMPT'), r.indexOf('export function buildPayload'))
+    return !prompt.includes('AUTO_RAW') && prompt.includes('"decision":"AUTO_SEED|AUTO_HOLD|AUTO_DROP"')
+      && ['- AUTO_SEED:', '- AUTO_HOLD:', '- AUTO_DROP:'].every((x) => prompt.includes(x))
+  })())
+  check('🔴 프롬프트 판만 올렸다(v4) — 규칙 판은 발행 경계의 현재 판 열쇠라 그대로다',
+    PROMPT_VERSION === 'semantic-shadow-v4' && RULE_VERSION === 'auto-judge-v4')
 }
 
 console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')

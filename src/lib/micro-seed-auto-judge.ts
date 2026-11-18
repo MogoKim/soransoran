@@ -41,10 +41,14 @@ export const HUMAN_PROVENANCE = ['human-curated', 'founder'] as const
 export const RULE_VERSION = 'auto-judge-v4'
 /** 프롬프트를 고치면 올린다 — 같은 규칙판이라도 물음이 달라지면 답이 달라진다 */
 /**
- * 🔴 **v3** (2026-10-19) — JSON 응답에 boardTopic 을 필수로 요구한다. v2c 응답에는 그 칸이 없어
- *    parseSemantic 이 null 로 거부하므로, 판을 올려 캐시가 섞이지 않게 한다.
+ * 🔴 **v4** — 모델에게 축(SEED/RAW)을 묻지 않는다. 답은 통과·보류·폐기 셋 중 하나이고 뜻을 프롬프트에 적었다.
+ *    v3 는 뜻을 설명하지 않은 `AUTO_RAW` 를 선택지로 줬고, 모델이 그것을 고르면 위험이 없는 원천도 영구 HOLD 였다.
+ *    판을 올려 v3 캐시와 v3 판정 결론(HOLD · DROP 포함)을 지금 결과로 읽지 않는다 — 살아 있는 원천은 다시 묻는다.
+ *
+ * 🔴 `RULE_VERSION` 은 올리지 않는다. 발행 경계(`readAutoJudgeFromGateResults`)가 그 값으로 큐 행을 현재/옛 판으로
+ *    가르므로, 올리면 이미 적재된 READY 가 모르는 판이 되어 발행이 멈춘다.
  */
-export const PROMPT_VERSION = 'semantic-shadow-v3'
+export const PROMPT_VERSION = 'semantic-shadow-v4'
 
 /** 🔴 이 값으로 기록한다. 사람 것과 한 글자도 겹치지 않는다 */
 export const AUTO_PROVENANCE = 'machine-shadow'
@@ -59,7 +63,7 @@ export type ReasonCode =
   | 'laneNotProven' | 'assetHealth'
   | 'medicalOrAd' | 'noTitle' | 'noBodyHead' | 'bodyHeadTooLong'
   | 'semanticUnavailable' | 'lowConfidence' | 'semanticDrop' | 'semanticHold' | 'semanticFailed'
-  | 'unexplainedModelDrop' | 'axisMismatch'
+  | 'unexplainedModelDrop'
   /** 🔴 실제 한자 문자 — 언어 핏(정치 아님 · P0-3 최종) */
   | 'hanjaLanguageFit'
   | SemanticRisk
@@ -104,7 +108,6 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   hanjaLanguageFit: '🔴 실제 한자 문자 — 서비스 언어 핏이 아니다(정치 판정 아님)',
   semanticFailed: '의미 판정 호출이 실패했다',
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
-  axisMismatch: '모델이 다른 축을 말했다 — 축은 우리가 정한다',
   // 🔴 2026-09-16 — 정본 §4 위기 신호 · §5 조언 제한을 코드로 세운 축
   crisisSignal: '자해·자살 위기 신호 — 재생성하지 않고 사람이 본다 (정본 §4)',
   medicalDecisionRequest: '치료·기기·약물의 부작용·교체·중단·계속 사용 판단을 요청한다',
@@ -134,7 +137,7 @@ export const HOLD_REASONS: readonly ReasonCode[] = [
   'laneNotProven', 'assetHealth',
   'medicalOrAd', 'noTitle', 'noBodyHead', 'bodyHeadTooLong',
   'semanticUnavailable', 'lowConfidence', 'semanticHold', 'semanticFailed',
-  'unexplainedModelDrop', 'axisMismatch',
+  'unexplainedModelDrop',
   'purchaseOrSellerRequest', 'brandListBait', 'insufficientContext',
 ] as const
 
@@ -633,13 +636,12 @@ export function judgeOne(
     return { ...base, decision: 'AUTO_HOLD', reasonCodes: dedupe([...risks, 'lowConfidence']) }
   }
 
-  // 🔴 위험 0 · 확신 충분 · 모델도 통과라 했다. 축은 여전히 우리가 정한다
+  // 🔴 위험 0 · 확신 충분 · 모델도 통과라 했다. 축은 우리가 정한다 — 모델에게 축을 묻지 않고,
+  //    모델이 통과로 답한 낱말(SEED · RAW)이 우리 축과 달라도 그것으로 원천을 막지 않는다
   const axis = S(input.axis)
-  const want: AutoDecision = axis === SEED_AXIS ? 'AUTO_SEED' : 'AUTO_RAW'
-  if (semantic.decision !== want) {
-    return { ...base, decision: 'AUTO_HOLD', reasonCodes: ['axisMismatch'] }
-  }
-  return { ...base, decision: want, reasonCodes: [axis === SEED_AXIS ? 'axisSeed' : 'axisRaw'] }
+  return axis === SEED_AXIS
+    ? { ...base, decision: 'AUTO_SEED', reasonCodes: ['axisSeed'] }
+    : { ...base, decision: 'AUTO_RAW', reasonCodes: ['axisRaw'] }
 }
 
 function dedupe(xs: readonly ReasonCode[]): ReasonCode[] {
