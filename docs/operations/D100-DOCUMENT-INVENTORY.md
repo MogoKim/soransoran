@@ -27,7 +27,7 @@
 |---|---|
 | `NORTH-STAR.md` | 고객·제품 본질·장기 North Star·영구 안전장치 |
 | `2026-09-21-d100-goal-canon.md` | D3~D100 정책·Dn 의미·단계 숫자·PASS·Persona·대화 계약 |
-| `CURRENT-MILESTONE.md` | as-of가 붙은 검증 상태·충돌 장부·다음 critical path |
+| `CURRENT-MILESTONE.md` | as-of가 붙은 검증 상태·현재 blocker·다음 critical path |
 
 이 셋의 충돌 순서는 README 표를 따른다. 이 분류표를 네 번째 권위 문서로 해석하지 않는다.
 
@@ -36,7 +36,7 @@
 | 문서 | 역할 |
 |---|---|
 | `MASTER-OPERATING-SYSTEM.md` | 기술 지도·모델/비용 구조·과거 사고 근거. 현재 상태·정책을 말하지 않고 기본 필독이 아니다 |
-| `2026-10-16-public-view-count-design.md` | 실제 상세 열람·목록 노출 기반 공개 조회수의 구현 준비 설계. 구현 전에는 현재 동작이나 정책을 바꾸지 않으며, 채택 시 canon·검사와 함께 반영한다 |
+| `2026-10-16-public-view-count-design.md` | 실제 상세 열람·목록 노출을 세는 조회 원장의 설계 근거. 구현됐다 — 현재 동작은 코드가, 정책은 canon §7.3 이 정한다 |
 
 저장소 밖 handoff·감사 보고서·외부 agent memory 는 이 목록의 어느 분류에도 들지 않는다. 정본이 아니며,
 채택된 결론만 AUTHORITY 문서와 `master:doc-check` 를 같은 변경에서 고쳐 반영한다.
@@ -60,7 +60,7 @@
 | `launchd/README.md` | 템플릿·runtime 배포·스케줄 관측·수동 진단 | `launchctl`, `runtime:deploy`, stage wrapper |
 | `2026-10-13-persona-expansion-runbook.md` | Persona 30 → 40 → 60 → 300 확장 판정·단계별 활성화 순서 | `persona:expansion -- --db`, `persona:expansion-check` |
 | `2026-10-15-persona-voice-evidence-capture.md` | 신규 Persona용 공개 댓글 말투 근거의 최소수집·익명화·보존·삭제 절차 | `persona:voice-evidence-status -- --db`, `persona:voice-evidence-check` |
-| `2026-11-05-stage-bounded-active-recovery.md` | 전환기 runbook — canon이 2026-11-06에 대체한 제한 복구가 코드에서 지워지기 전까지 배포된 경로의 진단·quiesce·rollback 절차. 정책 근거 아님 (canon §11.1) | `stage:active-recovery-check`, 날짜별 intent·source/supply receipt·로그, `CURRENT-MILESTONE.md` §1.3 구현 gap |
+| `2026-11-05-stage-bounded-active-recovery.md` | 전환기 runbook — canon이 2026-11-06에 대체한 제한 복구가 코드에서 지워지기 전까지 배포된 경로의 진단·quiesce·rollback 절차. 정책 근거 아님 (canon §11.1) | `stage:active-recovery-check`, 날짜별 intent·source/supply receipt·로그 |
 
 runbook의 오래된 실측 절은 `📜` 또는 “작성 당시 스냅샷”으로 분리한다. 등록 템플릿이 있다는 사실과
 현재 loaded 상태를 합치지 않는다.
@@ -123,7 +123,7 @@ Voice 역사 문서와 `voice-unao-*` 이름이 남아 있다는 사실은 소�
 | 회원가입 전환 | `MEMBER-CONVERSION-CANON.md` | `MC-*`·`CB-*` 단계. D100 단계·공급·Persona를 변경하지 않음 |
 | 수익화 | `MONETIZATION-CANON.md` | `MON-*` 단계 · D100 공급·Persona·stage·runtime을 변경하지 않음 |
 | 매거진 검색 전략 | `M-GRAPH-PROJECT-CHARTER.md` | 검색 주제망 영역 한정 |
-| 매거진 자동화 | `magazine-automation-runbook.md` | 회사 Mac 매거진 job(현재 구성은 `CURRENT-MILESTONE.md`). 보조 Mac D100 owner와 분리 |
+| 매거진 자동화 | `magazine-automation-runbook.md` | 회사 Mac 매거진 job(현재 구성은 `magazine/MAGAZINE-CURRENT-MILESTONE.md`). 보조 Mac D100 owner와 분리 |
 | 브랜드·UI | `soransoran-brand-design-spec.md` | 화면·색·타이포 정본. D100 운영 상태를 정하지 않음 |
 | 공개 launch 인계 | `2026-08-22-soransoran-public-launch-handoff.md` | 공개 전환 당시 기록. D100 현재 상태가 아님 |
 | 매거진 SEO 생산 전략 | `2026-08-23-soransoran-magazine-seo-production-strategy.md` | 매거진 영역의 과거 생산 전략 |
@@ -132,6 +132,20 @@ Voice 역사 문서와 `voice-unao-*` 이름이 남아 있다는 사실은 소�
 | 매거진 연속 운영 | `2026-08-25-magazine-continuation-runbook.md` | 매거진 과거 인계 절차 |
 | 성능 기준선 | `2026-08-25-soransoran-performance-baseline.md` | 웹 성능 영역의 과거 기준선 |
 | 디자인 시스템 안정화 | `2026-08-26-soransoran-design-system-stabilization.md` | UI·브랜드 영역의 과거 작업 기록 |
+
+### 6.1 하위 폴더와 `docs/decisions/` 의 문서
+
+`docs/operations/` 최상위가 아닌 문서도 정확히 한 분류에 든다.
+
+| 문서 | 분류 | 역할 |
+|---|---|---|
+| `decisions/2026-10-13-quality-v8-transition-runbook.md` | `RUNBOOK` | 품질 계약 판을 올리는 배포의 확인 절차(stage → resolve → recheck → activate). 머리말의 현재 보정이 v8 당시 본문보다 우선한다 |
+| `decisions/2026-10-19-machine-draft-lifecycle.md` | `HISTORY` | 기계 초안을 자동 READY 또는 자동 품질 격리로 끝내는 결정의 근거. 현재 정책은 canon §7 |
+| `../decisions/persona-comment-followup.md` | `REFERENCE` | 추가 댓글·대화 계획의 구현 설명과 profile 적용 절차. 정책은 canon §5 |
+| `magazine/MAGAZINE-CURRENT-MILESTONE.md` | `ADJACENT` | 매거진 영역의 현재 상태. D100 현재 상태가 아님 |
+| `../decisions/magazine-manuscript-lane.md` | `ADJACENT` | 매거진 원고 자동 회수의 결정 기록 |
+| `../decisions/post-media-orphan-files.md` | `ADJACENT` | 글쓰기 미디어의 고아 파일 처리 결정 기록 |
+| `../archive/unao-origin-2026-08/` | `HISTORY` | 저장소 분리 당시의 보관 자료. 소란소란 정책·구현 근거가 아님 |
 
 ## 7. 서비스·작업공간 경계
 
@@ -155,4 +169,4 @@ node -p "require('./package.json').name"
 3. 구조화 Persona 카드 변경: `EXECUTABLE_INPUT`과 파서·fixture를 함께 검증한다.
 4. 실행 절차 변경: RUNBOOK과 실제 CLI help/template/check를 함께 검증한다.
 5. 과거 문서는 삭제해 현재화하지 않는다. 상단 분류를 명확히 하고 증거로 보존한다.
-6. 새 D100 문서를 만들면 이 목록의 정확히 한 분류에 추가한다.
+6. 새 D100 문서를 만들면 이 목록의 정확히 한 분류에 추가한다. 하위 폴더와 `docs/decisions/` 의 문서는 §6.1 에 올린다.

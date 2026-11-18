@@ -196,7 +196,7 @@
 | D30 | D20 operating PASS 선행(11-12 ✅) · controller 자연 개방 | 자동 30/30 · 첫 댓글 30/30 · 비용·감사·provenance · 수동 표식 0 | 날짜로 강제 개방 · 증명 전·도중 runtime 변경 |
 | D20 | D10 operating PASS 선행 · 인증 유지 | 평상일 0..20 자연 운영 | 매일 재증명 강제 |
 | D50 | D30 operating PASS 선행 | Persona 100 · preflight green · 자동 50/50 | D30 생략 |
-| VIEWS | 실제 근거 조회수 | 원장·dedupe·관리자/Persona/봇 제외·UI 표본 PASS | 댓글 배수·최소값·난수 |
+| VIEWS | 조회수·공감 초기 보정(2026-11-18 창업자 결정 · 구현 전 — 지금 화면은 실제 열람·노출) | 설계 승인 · 실제 값 원장 분리 유지 · 순위·North Star 입력 0 · 회원 약 1만 명 종료 조건 · UI 표본 PASS | 접속자 수·실시간 표시 · 더한 값을 순위·North Star 에 넣기 |
 
 공격적 목표일은 PASS 약속이 아니다. D30은 생략하지 않음이 단계 계약이다. 실패 축은 즉시 수리하지만
 code·deployed·operating 증거를 서로 대신 쓰지 않는다.

@@ -209,8 +209,9 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   const invariants = ['자기 답글', '중복 답글', '고아 답글', '상한 없는 깊이', '두 화자 자동 루프',
     '삭제·신고된 대상', '안전 우회', '예산 우회']
   out.push(['canon 이 답글 안전 불변식 여덟 가지를 적는다', invariants.every((t) => d100Goal.includes(t))])
-  out.push(['canon 이 실회원·Persona 댓글에 같은 reply-worthiness 판정을 쓰고 실회원을 우선한다',
-    d100Goal.includes('같은 reply-worthiness 판정') && d100Goal.includes('실회원 대화가 우선한다')])
+  out.push(['canon 이 실회원을 우선한다 — 실회원 댓글이 달리면 Persona 가 물러서고 마지막 말이 실회원이면 멈춘다',
+    d100Goal.includes('실회원 대화가 우선한다') && d100Goal.includes('추가 댓글을 1건까지만 단다')
+    && d100Goal.includes('마지막 말이 실회원이면 멈춘다') && !activeTextOf(d100Goal).includes('reply-worthiness')])
   // ④ source-to-slot 판정과 용어
   out.push(['canon 이 source-to-slot 판정 하나와 원문 증거 용어를 정의한다',
     ['source-to-slot', '`sourcePostedAt`', '`sourceListedAt`', '`sourceCapturedAt`',
@@ -230,10 +231,13 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
     'Dn 최대 용량', '가까운 수요 지평', '댓글 event-assisted·공급 자연 예약', '원천 순위 하나', '날짜 정밀도 보존',
-    'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수',
+    'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수', '초기 조회수·공감 보정',
     '자동 품질 생명주기', 'bounded creativity',
     // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
-    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계']) {
+    '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계',
+    // 🔴 2026-11-17/11-18 창업자 결정 — 대화 계획 · 비용 표본 · 06:15 수요 · 수집 재배분 · 82cook
+    '대화 계획', '계획이 대화 크기를 정함', '글쓴이 아닌 사람 두 번까지', '비용 단가 표본 합산', '06:15 공급 회차의 수요 단계',
+    '쫑알 2~6쪽 · 상세 20', '재선정은 신규가 남긴 자리', '축은 코드가 정함', '82cook 제외']) {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
@@ -344,22 +348,50 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
-  out.push(['canon §5 가 첫 댓글 1 + 선택적 추가 댓글·답글 0~9와 실제 스레드 행을 고정한다',
+  out.push(['canon §5 가 첫 댓글 1 + 추가 댓글·답글 0~9와 실제 스레드 행을 고정한다',
     d100Goal.includes('합계 `1..10`건')
-    && d100Goal.includes('선택적 추가 댓글·답글 0~9건')
+    && d100Goal.includes('추가 댓글·답글 0~9건')
     && d100Goal.includes('부모 댓글을 가리키는 실제 스레드 행')
     && d100Goal.includes('모든 글을 10건으로')
-    && d100Goal.includes('답글로 최대 3회')
-    && d100Goal.includes('일반 Persona는 같은 글에서 한 번만')])
+    && d100Goal.includes('답글로 최대 3회')])
+  out.push(['canon §5.2 가 글마다의 대화 계획(2~10건 · 자리 종류 셋 · 간격 10~90분)과 글쓴이 아닌 사람 두 번까지를 적는다',
+    ['### 5.2 대화 계획', '2~10건으로 정한다', '평균은 약 4.5건', '자리 종류는 셋이다', '10~90분',
+      '글쓴이 아닌 Persona 는 한 글에 두 번까지 말한다', '새 댓글을 두 번 달지 않는다', '한 댓글에는 답이 하나만 달린다',
+      '한 후보의 실패가 글을 멈추지 않는다', '`src/lib/persona-thread-plan.ts`'].every((t) => d100Goal.includes(t))
+    && !d100Goal.includes('같은 글에서 한 번만 말한다') && !/대화 hook만 대상|첫 댓글도 대화 기능을 쓴다/.test(d100Goal)])
+  out.push(['canon §5.2 가 추가 댓글의 일상 경험 허용과 막는 것 넷을 적고 첫 댓글은 제외한다',
+    ['가벼운 일상 경험을 자기 이야기로 말해도 된다', '막는 것은 넷뿐이다', '의료 사실', '갱년기를 자기 일로', '부부 사이가 틀어진 일',
+      '설정 모순', '첫 댓글은 이 허용을 받지 않는다'].every((t) => d100Goal.includes(t))])
+  out.push(['canon §3.4 가 비용 단가 표본(현재 품질 계약 → 최소 표본 미만이면 72시간 창 합산 → 그래도 모자라면 UNKNOWN)을 적는다',
+    ['**비용 단가의 표본**', '하루 목표 ÷ 3 올림', '같은 72시간 창의 모든 품질 계약', '합치는 것은 비용 단가 한 칸뿐이다',
+      '재고와 수율은 현재 품질 계약 표본만 센다'].every((t) => d100Goal.includes(t))
+    && !d100Goal.includes('rolling 72h cohort') && !d100Goal.includes('완전 정산된 소표본을 이유 없이 막지 않되')])
+  out.push(['canon 이 06:15 공급 회차의 수요 단계 예외를 §3 과 §6 에 적는다 — 발행·댓글은 그날 결정만',
+    d100Goal.includes('**06:15 공급 회차의 수요 단계**') && d100Goal.includes('공급 수요만 전날 결정이 지킨 단계로 센다')
+    && d100Goal.split('발행과 댓글은 언제나 그날 결정만 따른다').length - 1 === 2])
+  out.push(['canon §13 이 82cook 을 수집원에서 뺐다고 적고 필수 수집원이라고 하지 않는다',
+    d100Goal.includes('## 13. 82cook — 수집원에서 뺐다') && !d100Goal.includes('필수 수집원이다') && !d100Goal.includes('향후 82cook')])
+  out.push(['NORTH-STAR 가 지금 단계의 목적(검색 유입 · 비회원 가입 · 초기 실회원)을 적고 canon 이 그 절을 가리킨다',
+    ['## 지금 단계의 목적', '네이버 검색 노출과 유입', '사람이 사는 곳으로 느끼고 가입', '실회원이 적은 것이 당연하다'].every((t) => northStar.includes(t))
+    && d100Goal.includes('「지금 단계의 목적」')])
   out.push(['canon §5 가 제한 canary의 실회원 댓글 자동 답글을 금지한다',
     d100Goal.includes('실회원 댓글에는 자동으로 답하지 않는다')])
-  out.push(['North Star와 canon이 실제 상세 열람·목록 노출만 고객 조회수로 허용한다',
+  out.push(['North Star와 canon이 실제 값(실제 상세 열람·목록 노출)을 내부에 분리해 남긴다',
     [northStar, d100Goal].every((body) => body.includes('실제 상세 열람') && body.includes('실제 목록 노출'))
     && d100Goal.includes('내부 원장에서는 두 값을 분리')
     && d100Goal.includes('관리자·Persona·자동화·검색봇을 제외')])
-  out.push(['North Star와 canon이 가짜 조회수 배수·최소값·난수를 금지한다',
-    northStar.includes('임의 배수를 곱하거나 무작위 숫자를 더해')
-    && d100Goal.includes('임의 배수를 곱하거나 최소값·난수를 더한 수')])
+  // 🔴 2026-11-18 창업자 결정 — 조회수·공감 초기 보정. 결정 다섯 줄이 두 문서에 같은 글자로 있고, 구현 전임을 밝힌다
+  out.push(['North Star와 canon이 조회수·공감 초기 보정의 결정 다섯 줄을 같은 문장으로 적고 "구현 전"을 밝힌다',
+    [northStar, d100Goal].every((body) => ['대상은 글의 조회수와, 글·댓글의 공감 수다.',
+      '글의 나이와 댓글 수에 맞춰 자연스럽게 늘어나는 값을 실제 값에 더해 보여 준다.', '회원 약 1만 명에서 끈다.',
+      '실제 값은 내부에 따로 남기고, 순위와 North Star 지표에는 넣지 않는다.',
+      '접속자 수 · "지금 N명 보는 중" 같은 실시간 표시는 하지 않는다.',
+      '결정됨 · 아직 구현 전 — 지금 화면의 숫자는 실제 열람·노출이다.'].every((t) => body.includes(t)))])
+  out.push(['canon 이 더해 보여 주는 값을 실제 값 원장·순위·North Star·단계 증거에 섞는 것과 실시간 표시를 금지한다',
+    d100Goal.includes('더해 보여 주는 값을 실제 값 원장에 쓰지 않는다')
+    && d100Goal.includes('실제 값 원장·순위·North Star 지표·단계 증거에 섞기')
+    && d100Goal.includes('같은 실시간 표시 만들기')
+    && d100Goal.includes('홈·베스트 순위를 올리지 않는다')])
   out.push(['NORTH-STAR 가 Persona · 봇 · 운영자 활동을 North Star 에서 제외한다',
     northStar.includes('Persona · 봇 · 운영자 활동은 제외한다')])
   // ⑤-c 🔴 상대 링크 무결성 — 권위 문서 · 인덱스 · 목록
@@ -502,7 +534,7 @@ check('D100 목표가 Persona 다양성과 지속 용량을 단계 계약에 포
   d100Goal.includes('Persona 확장 계약') && d100Goal.includes('계약 유효 화자'))
 check('D100 목표가 canary 운영 하한과 지속 다양성 300명을 구분한다',
   d100Goal.includes('자동 canary를 실행할 **운영 하한**')
-  && /\| D100 \| 100 \| 180 \| \*\*300\+\*\* \| 100 \| reply-worthiness 실측 \|/.test(d100Goal)
+  && /\| D100 \| 100 \| 180 \| \*\*300\+\*\* \| 100 \| 대화 계획\(§5\.2\) \|/.test(d100Goal)
   && /300명은 상한이\s*아니라 첫 지속 운영 목표/.test(d100Goal))
 check('D100 목표가 고정 20% READY 할증과 상세 원천 고정 환산을 폐기한다',
   d100Goal.includes('보충량은 고정 할증이 아니라 실측이다')
@@ -513,9 +545,10 @@ check('D100 목표가 정치 선동과 연예·방송·셀럽을 분리한다',
   d100Goal.includes('정치와 공개 인물을 한 필터로 묶지 않는다')
   && d100Goal.includes('연예인·배우·가수·방송인·셀럽')
   && d100Goal.includes('정치적 조직화·선동과 생활 이야기를 문맥으로 분리한다'))
-check('D100 목표가 첫 댓글 증명과 선택적 실제 대화량을 구분한다',
+check('D100 목표가 첫 댓글 증명과 대화 계획의 대화량을 구분한다 — 계획의 숫자는 단계 PASS 기준이 아니다',
   d100Goal.includes('첫 댓글 1건은 증명용 하한')
-  && d100Goal.includes('글마다 대화량을 똑같이 맞추지 않는다')
+  && d100Goal.includes('계획의 숫자는 단계 PASS 기준이 아니다')
+  && d100Goal.includes('계획보다 적게 달린 글을')
   && d100Goal.includes('합계 `1..10`건'))
 check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
   d100Goal.includes('홈·베스트는 실회원 반응을 우선한다')
@@ -632,9 +665,10 @@ check('canon 이 routine 기계 초안 사람 검토를 자동 READY·품질 격
   && d100Goal.includes('qualityQuarantine')
   && d100Goal.includes('기계 초안마다 `ready/edit/reject`를 결정하지 않는다')
   && d100Goal.includes('발행 후 20% 표본 감사'))
-check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
-  /^\| VIEWS \| 실제 근거 조회수 \|/m.test(currentLive)
-  && currentLive.includes('댓글 배수·최소값·난수'))
+check('현재 실행이 조회수·공감 초기 보정을 구현 전 critical path로 두고 실시간 표시·순위 혼입을 금지한다',
+  /^\| VIEWS \| 조회수·공감 초기 보정\(2026-11-18 창업자 결정 · 구현 전/m.test(currentLive)
+  && currentLive.includes('접속자 수·실시간 표시')
+  && currentLive.includes('더한 값을 순위·North Star 에 넣기'))
 check('🔴 canon 이 Persona 300+ 를 주간 게시 편수 산식으로 정당화하지 않는다',
   !/주\s*\d+\s*(건|편)씩 맡으면/.test(d100Goal)
   && d100Goal.includes('주간 게시 상한은 집중을 막는 안전 상한이지 고정 생산 목표가 아니다'))
@@ -1518,7 +1552,7 @@ check('🔴 D100 정책 정본과 현재 구현 보고를 구분한다',
   d100Goal.includes('정책 목표는 이 문서가 정본')
   && d100Goal.includes('현재 구현과 운영이 정본에서 얼마나 떨어졌는지')
   && d100Goal.includes('이 문서는 **현재 상태를 적지 않는다.**')
-  && /\| D100 \| 100 \| 180 \| \*\*300\+\*\* \| 100 \| reply-worthiness 실측 \|/.test(d100Goal))
+  && /\| D100 \| 100 \| 180 \| \*\*300\+\*\* \| 100 \| 대화 계획\(§5\.2\) \|/.test(d100Goal))
 
 /**
  * ══ 🔴 하나의 루프 — 권위 문서 재정렬 (2026-09-30 창업자 재동기화) ══

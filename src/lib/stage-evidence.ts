@@ -10,7 +10,7 @@
  * 🔴 **계약 (마스터 결정 · 사람 승인을 더하지 않는다).**
  *    KST 날짜 D 의 단계 S **운영 PASS** 는 아래 여섯이 **전부** 참일 때만이다.
  *      ① D 의 StageDecision 을 controller 가 자동으로 골랐다 — `decidedBy=controller` ·
- *         상태 TRIAL/SUSTAIN/REPROVE(증명일) · 공개 = S. 수동 실행 · 단계 override · env canary/window ·
+ *         상태 TRIAL/REPROVE(증명일) 또는 HOLD/PREPARE(자연 exact-N) · 공개 = S. 수동 실행 · 단계 override · env canary/window ·
  *         사람 승인은 **세지 않는다**.
  *      ② **자동 target 물량** = `profileOf(S).dailyTarget` 이상 — 자동 READY 도장(`AUTO_DECIDER`)으로
  *         만들어져 **무인 러너 표식**으로 예약 발행된 글만 센다(2026-09-29 마스터 최종 보정).
@@ -70,7 +70,7 @@ import {
   AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
 } from './persona-comment-auto-lane'
 import {
-  PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_OTHER_TURNS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
+  otherPersonaTurnsExceed, PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
 import type { CommentStage } from './persona-comment-stage'
 import { auditTarget } from './auto-ready-v2'
@@ -323,13 +323,13 @@ export function judgeConversationAudit(posts: readonly EvidencePost[]): Conversa
     const firstAt = firsts.length === 0 ? null : Math.min(...firsts.map((c) => c.createdAtMs))
     if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt)) codes.add('FOLLOWUP_WITHOUT_FIRST')
     if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')
-    // 🔴 글쓴이 아닌 사람은 한 글에 `PERSONA_OTHER_TURNS_PER_POST_MAX` 번까지 — 한 번을 넘는 말은 답글이어야 한다(새 댓글을 또 달지 않는다)
+    // 🔴 글쓴이 아닌 사람은 한 글에 두 번까지 — 한 번을 넘는 말은 답글이어야 한다(`otherPersonaTurnsExceed`)
     const turns = new Map<string, EvidenceConversationComment[]>()
     for (const c of personaHistory) {
       if (c.personaId !== null && c.personaId !== p.authorPersonaId) turns.set(c.personaId, [...(turns.get(c.personaId) ?? []), c])
     }
     if (fu.some((c) => c.personaId === null) || [...turns.values()].some((mine) =>
-      mine.length > PERSONA_OTHER_TURNS_PER_POST_MAX || mine.filter((c) => c.parentId === null).length > 1)) codes.add('FOLLOWUP_DUP_PERSONA')
+      otherPersonaTurnsExceed(mine.map((c) => ({ isReply: c.parentId !== null }))))) codes.add('FOLLOWUP_DUP_PERSONA')
     // 🔴 삭제된 과거 턴도 셌다. 삭제로 글쓴이 3회 상한이 다시 열리면 안 된다.
     const own = p.authorPersonaId === null ? [] : fu.filter((c) => c.personaId === p.authorPersonaId)
     if (own.some((c) => c.parentId === null) || own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) codes.add('FOLLOWUP_SELF')

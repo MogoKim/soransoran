@@ -30,6 +30,7 @@
 
 - **창업자**: 목적 · 브랜드 · 예산 · credential · 법률 · 하드웨어 · 비가역 정책 결정
 - **Codex**: 운영 마스터 — 목적 · 우선순위 · 병렬 분해 · PASS 기준 · 비용/위험 경계 · 완료 판정
+  - Codex 가 없을 때는 Claude Code 가 마스터를 겸한다 — 목적·우선순위·PASS 기준·완료 판정을 직접 정하고, 창업자 결정 사항은 그대로 창업자에게 묻는다.
 - **Claude Code**: 실행 — 진단 · 구현 · 검사 · PR · 허용된 merge/배포 · 운영 관측 · rollback 준비를 끝까지 수행
 
 - 같은 파일은 한 agent만 쓴다. 다른 agent 의 worktree · 미커밋 변경을 덮어쓰거나 정리하지 않는다.
@@ -42,6 +43,7 @@
 ```
 ✅ 켠다   실제 회원 글쓰기 · 댓글 · 관리형 공개 글 · Persona 댓글(승인된 목표 — D100 canon)
 🔴 끈다   가짜 접속자 수 · 가짜 실시간 지표 · 붉은 알림 도트 남발
+🟡 예외   조회수·공감은 회원 약 1만 명까지 실제 값에 더해 보여 준다(2026-11-18 창업자 결정 · 아직 구현 전 — canon §7.3). 접속자 수·실시간 표시는 계속 끈다
 🔴 끈다   실제 회원 원문을 건드리는 모든 자동화
 ```
 
@@ -51,7 +53,8 @@
    naver-site-verification · GSC · AdSense · sitemap/robots/canonical · agents · workflows · migrations · seed · 콘텐츠 복사
 🚫 "시니어 · 어르신 · 노인 · 실버" 표현 (주석 포함)
 🚫 hex 색상 리터럴을 src/app/globals.css 밖에 작성 — 색·글자 정본은 docs/operations/soransoran-brand-design-spec.md
-🚫 prisma migrate / db push / db seed · Raw SQL
+🚫 db push · db seed · 승인 없는 migrate — DB 스키마 변경은 창업자 승인 뒤 정식 경로(prisma migrate deploy)로만 한다
+🚫 운영 코드의 Raw SQL (예외: 격리 DB 시험 준비 · 읽기 전용 트랜잭션 고정)
 🚫 git add . (항상 파일명 명시) · amend · force push · bare git stash
 🚫 수동 stage·env·장부 조작으로 단계 증거 만들기 · 준비되지 않은 production 배포
 ```

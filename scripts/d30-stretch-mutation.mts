@@ -21,6 +21,7 @@ const F = {
   fate: 'src/lib/ready-fate.ts',
   diag: 'src/lib/supply-cost-diagnostics.ts',
   vit: 'src/lib/comment-vitality.ts',
+  rules: 'src/lib/persona-target-rules.ts',
   facts: 'scripts/lib/stage-preflight-facts.mts',
 }
 const MUTATIONS: { name: string; edits: Edit[] }[] = [
@@ -49,7 +50,13 @@ const MUTATIONS: { name: string; edits: Edit[] }[] = [
   { name: '판정 사실에 epoch 단가를 넣는다(유리한 회차만 골라 판정)',
     edits: [{ file: F.facts, find: '        usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null,', replace: '        usdPerSlotValidResult: costEpochDiagnosticOf({ entries: supplyEntries, fateByKey, cohortRuns: cohort.cohortRuns }).usdPerSlotValidResult,' }] },
   { name: 'vitality — 글쓴이 답글을 일반 중복과 섞는다',
-    edits: [{ file: F.vit, find: '      if (p.authorPersonaKey !== null && k === p.authorPersonaKey) authorReplies = n\n      else if (n > 1) duplicated = true', replace: '      if (n > 1) duplicated = true' }] },
+    edits: [{ file: F.vit, find: '      if (p.authorPersonaKey !== null && k === p.authorPersonaKey) authorReplies = turns.length\n      else if (otherPersonaTurnsExceed(turns)) duplicated = true', replace: '      if (otherPersonaTurnsExceed(turns)) duplicated = true' }] },
+  { name: 'vitality — 글쓴이 아닌 사람의 두 번째 말(답글)을 위반으로 센다(옛 1회 규칙)',
+    edits: [{ file: F.vit, find: '      else if (otherPersonaTurnsExceed(turns)) duplicated = true', replace: '      else if (turns.length > 1) duplicated = true' }] },
+  { name: '글쓴이 아닌 사람이 새 댓글을 두 번 달아도 받아들인다',
+    edits: [{ file: F.rules, find: ' || turns.filter((t) => !t.isReply).length > 1', replace: '' }] },
+  { name: '글쓴이 아닌 사람의 횟수 상한을 지운다(세 번째 말 허용)',
+    edits: [{ file: F.rules, find: '  return turns.length > PERSONA_OTHER_TURNS_PER_POST_MAX || ', replace: '  return ' }] },
   { name: 'vitality — 24시간이 안 된 글도 고립률 분모에 넣는다',
     edits: [{ file: F.vit, find: '    if (nowMs - publishedAt >= VITALITY_ISOLATION_WINDOW_MS) {', replace: '    if (true) {' }] },
   { name: 'vitality — 부분 데이터를 0 으로 읽는다',
