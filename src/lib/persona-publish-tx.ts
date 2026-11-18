@@ -19,7 +19,7 @@ import {
 } from './persona-comment-auto-lane'
 import { readFileSync } from 'node:fs'
 import {
-  followupRoleOf, followupStageOf, judgeFollowupPublish, readFollowupProfileRaw, readFollowupSwitch, stampFromEditDiff, verifyStamp,
+  followupStageOf, judgeFollowupPublish, readFollowupProfileRaw, readFollowupSwitch, stampFromEditDiff, verifyStamp,
   type FollowupCommentRow,
 } from './persona-comment-followup'
 import {
@@ -406,7 +406,7 @@ export async function publishCandidateTx(
         const [qs, ls, reports, otherOpen, fuToday, fuPersonaToday] = await Promise.all([
           tx.personaApprovalQueue.findMany({
             where: { publishedCommentId: { in: personaIds } },
-            select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true, reactionType: true },
+            select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
           }),
           tx.personaActivityLog.findMany({
             where: { kind: 'comment', targetId: { in: personaIds } },
@@ -426,9 +426,6 @@ export async function publishCandidateTx(
         const reported = new Set(reports.map((r) => r.commentId))
         const comments: FollowupCommentRow[] = rows.map((c) => ({
           ...c,
-          // 🔴 트랜잭션은 반응을 다시 분류하지 않는다 — 대상은 도장이 가리키고, 유효성만 다시 본다
-          reaction: null,
-          role: c.commentOrigin !== 'PERSONA' ? null : followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)),
           reported: reported.has(c.id),
           provenance: c.commentOrigin !== 'PERSONA' ? null : personaCommentProvenanceOf({
             comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
@@ -453,10 +450,9 @@ export async function publishCandidateTx(
             authorPersonaId: post.personaId,
             // 🔴 Persona 가 쓴 글만 관리형이다 — 실회원·운영자 글에는 잇지 않는다
             autoManagedPost: post.personaId !== null,
-            postReaction: null, comments, hasOpenQueue: false,
+            comments, hasOpenQueue: false,
           },
           candidatePersonaId: row.persona.id,
-          candidateRole: row.reactionType,
           otherOpenQueue: otherOpen > 0,
           profile: readFollowupProfileRaw(process.env, (p) => readFileSync(p, 'utf-8')),
           // 🔴 그날 단계는 consumer 가 넣은 결정 env 로만 — 러너·트랜잭션은 결정 표를 직접 읽지 않는다(두 번째 판독 금지)

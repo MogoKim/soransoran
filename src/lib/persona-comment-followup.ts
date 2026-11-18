@@ -18,20 +18,16 @@
  *
  * 🔴 **기본 OFF.** `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값일 때만 켜진다. 모르는 값은 OFF.
  *
- * 🔴 **필요성은 대화가 정한다** (2026-10-13 마스터 보정). 추가 댓글은 **아직 답이 없는**
- *    질문·반론·경험·공감이 있을 때만 한 건씩 잇는다. 같은 대상·같은 hook 은 한 번만 쓴다.
- *    근거가 없으면 0건, 근거가 있어도 총량·profile·비용 상한 안에서만 최대 9건이다. 글 id 해시로 수량을 정하지 않는다 —
- *    결정적 해시는 **동률 순서와 시간차 jitter** 에만 쓴다.
- *    한 회차에 한 글에는 최대 한 건이다 — 한꺼번에 달지 않는다.
+ * 🔴 **누가 어디에 말할지는 글의 대화 계획이 정한다** (`persona-thread-plan`). 글 id 하나로 그 글의 Persona 댓글 수(2~10)와
+ *    자리마다의 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해진다. 이 파일은 계획의 다음 자리가
+ *    **지금 사실로 설 수 있는지**만 본다(`followupSeatsOf`). 계획이 정한 자리가 막히면 다른 종류의 자리로 넘어간다 —
+ *    한 자리 · 한 사람의 실패가 글을 멈추지 않는다. 한 회차에 한 글에는 최대 한 건이다.
  *
  * 🔴 **실회원 대화가 먼저다.** 실회원 댓글이 있으면 추가량을 줄이고, 실회원 댓글에는 답하지 않는다
  *    (제한 canary 에서 실회원 댓글 자동 답글은 금지다 — D100 canon §5).
  *
- * 🔴 **글쓴이 답글** (2026-10-24 · canon §5) — 글쓴이 Persona 는 첫 댓글을 달지 않는다. 다만 자기 글의 다른 Persona
- *    댓글이 이어질 거리를 주면 그 댓글에 **답글로만** 답한다. 화자는 `followupSpeakerOf` 하나가 정하고,
- *    고르기(`pickFollowupPersona`)와 발행 트랜잭션(`judgeFollowupPublish`)이 같은 함수를 쓴다 — 그 자리에 다른 Persona 를 넣지 않는다.
- * 🔴 **첫 댓글도 대화 기능을 쓴다** — 글 hook 에 붙는 새 최상위 댓글은 이미 있는 최상위 Persona 댓글(첫 댓글 포함)의
- *    반응 역할과 같은 기능을 반복하지 않는다(`postHookRolesOf`). 그냥 한마디(other)와 공감(empathy)은 같은 일반 반응이다.
+ * 🔴 **사람** — 글쓴이는 자기 글에 답글로만 말한다(글당 3번까지). 다른 사람은 한 글에 두 번까지다 — 새 댓글 한 번,
+ *    그리고 자기 댓글에 답이 달렸을 때 그 답에 한 번 더. 생성 쪽과 발행 트랜잭션이 같은 함수(`followupSeatsOf`)로 본다.
  *
  * 🔴 여기서 막는 것은 **이 레인이 더하는 축**뿐이다. 9관문 · 생활사 · No-Go · 모델 확정 · provenance ·
  *    트랜잭션 재검사는 기존 경로가 그대로 본다. 이 파일은 그 위에 더할 뿐 하나도 빼지 않는다.
@@ -47,12 +43,14 @@ import { requestShapeRejected, transientProviderError } from './content-core/gen
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
 import { kstDayStart } from './persona-cap'
 import { MEMBER_COMMENT_LIMIT_ON_PUBLISH } from './persona-comment-queue'
-import { COMMENT_REACTION_ROLES, isReactionType, type ReactionType } from './persona-reaction-roles'
+import { COMMENT_REACTION_ROLES, type ReactionType } from './persona-reaction-roles'
 import {
   PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX,
   PERSONA_COMMENTS_PER_POST_MAX,
+  PERSONA_OTHER_TURNS_PER_POST_MAX,
   PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
+import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, unitOf, type PlanLength, type PlanSeatKind } from './persona-thread-plan'
 import type { PersonaCommentProvenance } from './stage-evidence'
 import type { DecisionStageEnv } from './scale-runtime'
 import { RUNTIME_STAGES, isRuntimeStage, type RuntimeStage } from './scale-profile'
@@ -90,10 +88,8 @@ export const FOLLOWUP_EXTRA_PER_POST_MAX = FOLLOWUP_TOTAL_PER_POST_MAX - AUTO_PE
  */
 export const FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST = 4
 
-/** 직전 Persona 댓글에서 최소 이만큼 띄운다 */
-export const FOLLOWUP_MIN_GAP_MS = 30 * 60_000
-/** 🔴 그 위에 글·순번마다 결정적으로 0~이만큼 더 띄운다 — 모든 글이 같은 박자로 이어지지 않게 */
-export const FOLLOWUP_JITTER_MAX_MS = 40 * 60_000
+/** 직전 Persona 댓글에서 최소 이만큼 띄운다 — 자리마다의 간격은 계획(`persona-thread-plan`)이 정한다 */
+export const FOLLOWUP_MIN_GAP_MS = PLAN_MIN_GAP_MS
 /** 🔴 공개 후 이 시간이 지난 글에는 잇지 않는다 — 식은 글에 늦게 붙이는 것은 대화가 아니다 */
 export const FOLLOWUP_POST_AGE_MAX_MS = 24 * 3_600_000
 
@@ -102,9 +98,6 @@ export const FOLLOWUP_EXTRA_WITH_MEMBERS_MAX = 1
 
 /** 답글 사슬 길이 상한(루트 포함) — 글쓴이와 다른 Persona 가 최대 세 번 왕복할 수 있다. */
 export const FOLLOWUP_CHAIN_MAX = PERSONA_REPLY_CHAIN_MAX
-
-/** 이어질 거리로 보는 반응 — `other`(그냥 한마디) · `information` 은 자연스러운 끝이다 */
-export const FOLLOWUP_HOOKS: readonly ReactionType[] = ['question', 'rebuttal', 'experience', 'empathy']
 
 // ─────────────────────────────────────────────────────────
 // 🔴 비용 · 상한 · 표식
@@ -185,15 +178,8 @@ export function validateFollowupProfile(
 }
 
 
-// ─────────────────────────────────────────────────────────
-// 🔴 결정적 난수 — 동률 순서와 시간차 jitter 에만 쓴다. 수량·필요성은 정하지 않는다
-// ─────────────────────────────────────────────────────────
-
-/** [0, 1) — sha256 앞 8바이트 */
-export function unitOf(...parts: readonly string[]): number {
-  const hex = createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 13)
-  return parseInt(hex, 16) / 2 ** 52
-}
+/** 결정적 [0, 1) — 계획과 같은 함수다. 여기서는 Persona 동률 순서에만 쓴다 */
+export { unitOf }
 
 /** 🔴 멱등 열쇠 — (글 · 순번). 같은 자리에 두 회차가 동시에 넣으면 unique 가 하나만 남긴다 */
 export const FOLLOWUP_KEY_PREFIX = 'comment-followup:'
@@ -219,19 +205,12 @@ export function closedFollowupKeyOf(dedupKey: string, rowId: string): string {
 // 🔴 한 글 판정
 // ─────────────────────────────────────────────────────────
 
-/** 판정에 쓰는 댓글 한 줄 — 🔴 본문 없음. 반응 라벨은 호출부가 정본 분류기로 붙인다 */
+/** 판정에 쓰는 댓글 한 줄 — 🔴 본문 없음 */
 export type FollowupCommentRow = ContextRow & {
-  /** 이 댓글의 반응 라벨(`classifyReaction`). 모르면 null — 이어질 거리로 세지 않는다 */
-  reaction: ReactionType | null
   /** 신고가 접수된 댓글인가. 모르면 null — 그 댓글에는 답하지 않는다 */
   reported: boolean | null
   /** 🔴 출처 — 정본 `personaCommentProvenanceOf` 결과. Persona 댓글만 의미가 있다. 모르면 null */
   provenance: PersonaCommentProvenance | null
-  /**
-   * 🔴 이 Persona 댓글을 만든 반응 역할 — 발행한 Queue 의 `reactionType`. Persona 댓글만 의미가 있다.
-   *    모르면 null — 그 글의 글 hook 은 이미 쓴 것으로 본다(fail-closed)
-   */
-  role: ReactionType | null
 }
 
 export type FollowupPostFacts = {
@@ -244,101 +223,39 @@ export type FollowupPostFacts = {
   authorPersonaId: string | null | undefined
   /** 🔴 관리형 자동 글인가(무인 러너가 낸 자동 READY 글) — 실회원 글·운영자 글에는 잇지 않는다 */
   autoManagedPost: boolean | null
-  /** 글 자체의 반응 라벨 — 글이 부르는 반응. 모르면 null */
-  postReaction: ReactionType | null
   /** 이 글의 댓글 전부(지운 것 포함 — 스레드 계산에 필요하다) */
   comments: readonly FollowupCommentRow[]
   /** 이 글을 대상으로 열려 있는 Queue 가 있는가(어느 레인이든). 모르면 null */
   hasOpenQueue: boolean | null
 }
 
+/** `hook` 은 계획이 이 자리에 준 모양(반응 역할)이다 */
 export type FollowupTarget =
-  /** 글에 새 최상위 댓글로 잇는다 */
+  /** 글에 새 최상위 댓글로 답한다 */
   | { kind: 'post'; hook: ReactionType }
   /** 그 Persona 댓글에 답한다 */
   | { kind: 'reply'; commentId: string; hook: ReactionType; threadRootId: string }
 
-/** 🔴 이번 자리의 화자 — `author` 면 그 Persona 하나만 쓴다(다른 Persona 로 바꾸지 않는다) */
-export type FollowupSpeaker = { kind: 'author'; personaId: string } | { kind: 'other' }
+/**
+ * 🔴 이번 자리의 화자. `author`(글쓴이) · `returning`(자기 댓글에 답이 달려 한 번 더 오는 사람)은 그 Persona 하나만 선다 —
+ *    다른 Persona 로 바꾸지 않는다. `other` 는 이 글에 아직 없는 사람이다.
+ */
+export type FollowupSpeaker = { kind: 'author' | 'returning'; personaId: string } | { kind: 'other' }
 
-/** 이을 수 있는 자리 하나 — 대상 · 화자 · 그 자리에서 쓸 수 있는 역할 */
+/** 지금 설 수 있는 자리 하나 — 대상 · 화자 · 그 자리에서 쓸 수 있는 역할(앞에서부터 입력이 서는 첫 역할을 쓴다) */
 export type FollowupSeat = { target: FollowupTarget; speaker: FollowupSpeaker; roles: readonly ReactionType[] }
 
 export type FollowupPostVerdict =
   /**
-   * `target` · `speaker` · `roles` 는 첫 자리(`seats[0]`)다. 🔴 한 자리가 막혀도 글은 멈추지 않는다 —
-   * 그 자리에 설 사람이 없으면 부르는 쪽이 `seats` 의 다음 자리로 넘어간다(`followupGoForSeat`).
+   * `target` · `speaker` · `roles` 는 계획이 먼저 서 보라고 한 자리(`seats[0]`)다. 🔴 한 자리가 막혀도 글은 멈추지 않는다 —
+   * 그 자리에 설 사람이 없으면 부르는 쪽이 `seats` 의 다음 자리로 넘어간다(`pickFollowupSeat`).
    */
-  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; reason: string }
+  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; length: PlanLength; reason: string }
   | { verdict: 'WAIT'; notBeforeMs: number | null; reason: string }
   | { verdict: 'STOP'; reason: string }
   | { verdict: 'BLOCK'; reason: string }
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
-
-/** 🔴 정본 순서 — 질문에 먼저 답하고, 반론·경험·공감 순이다 */
-const HOOK_ORDER: readonly ReactionType[] = ['question', 'rebuttal', 'experience', 'empathy']
-
-/**
- * 🔴 대상 반응에 어울리는 역할 — `COMMENT_REACTION_ROLES` 의 부분집합만 쓴다(생성기가 거부하지 않게).
- *    반박(`rebuttal`) 역할은 만들지 않는다 — 가벼운 반론에는 경험이나 한마디로 받는다.
- *    앞에서부터 입력이 서는 첫 역할을 쓴다. 어느 목록이든 **되묻기(`question`)가 마지막 자리**에 있다 —
- *    첫 댓글이 한마디·공감(같은 기능)을 이미 썼고 경험은 근거가 없어 못 쓰는 글에서, 남는 역할이 0개가 되어
- *    그 글의 둘째 댓글 자리가 영영 열리지 않는 것을 막는다. 답글 자리에서는 한마디가 먼저 서므로 달라지지 않는다.
- */
-const ROLES_FOR: Readonly<Record<string, readonly ReactionType[]>> = {
-  question: ['experience', 'other', 'question'],
-  rebuttal: ['experience', 'other', 'question'],
-  experience: ['empathy', 'question', 'other'],
-  empathy: ['other', 'experience', 'question'],
-}
-
-export function rolesFor(hook: ReactionType): readonly ReactionType[] {
-  return (ROLES_FOR[hook] ?? ['other']).filter((r) => COMMENT_REACTION_ROLES.includes(r))
-}
-
-/**
- * 🔴 Persona 댓글의 반응 역할 — 그 댓글을 발행한 Queue 행이 정확히 하나이고 값이 정본 어휘일 때만. 아니면 null(모름).
- *    회차(`persona-comment-followup-run`)와 발행 트랜잭션이 같은 함수로 읽는다.
- */
-export function followupRoleOf(queues: readonly { reactionType: string | null }[]): ReactionType | null {
-  if (queues.length !== 1) return null
-  const r = queues[0]!.reactionType
-  return isReactionType(r) ? r : null
-}
-
-/** 🔴 대화 기능 — 그냥 한마디(other)와 공감(empathy)은 같은 일반 반응이다. 나머지 역할은 저마다 다른 기능이다 */
-const functionOf = (r: ReactionType): string => (r === 'other' || r === 'empathy' ? 'generic' : r)
-
-/**
- * 🔴 **글 hook 에 새 최상위 댓글로 쓸 수 있는 역할** — 이미 있는 최상위 Persona 댓글(첫 댓글 포함 · 지운 것 포함)이
- *    쓴 기능을 뺀다. 역할을 모르는 최상위 Persona 댓글이 하나라도 있으면 빈 목록이다(fail-closed).
- *    생성 쪽(`openHooksOf`)과 발행 트랜잭션(`judgeFollowupPublish`)이 같은 함수를 쓴다.
- */
-export function postHookRolesOf(f: FollowupPostFacts, hook: ReactionType): readonly ReactionType[] {
-  const top = f.comments.filter((c) => c.commentOrigin === 'PERSONA' && c.parentId === null)
-  if (top.some((c) => c.role === null)) return []
-  const used = new Set(top.map((c) => functionOf(c.role as ReactionType)))
-  return rolesFor(hook).filter((r) => !used.has(functionOf(r)))
-}
-
-/**
- * 🔴 **이 답글 자리의 화자** — 글쓴이 Persona 가 자기 글의 **다른 Persona** 댓글에 답할 자리인가.
- *    · 새 최상위 댓글 · 글쓴이를 모름 · 대상이 Persona 댓글이 아님 → `other`
- *    · 대상이 글쓴이 자신의 댓글 · 글쓴이 답글이 상한에 닿음 → `other`
- *    대상 하나는 한 번만 소비되므로 글쓴이가 반복해도 서로 다른 말에 답한다.
- *    대상이 지금 답할 수 있는 자리인지(삭제·신고·이미 답함·사슬 깊이)는 `replyTargetOpen` 이 따로 본다.
- */
-export function followupSpeakerOf(f: FollowupPostFacts, parentCommentId: string | null): FollowupSpeaker {
-  const author = f.authorPersonaId
-  if (parentCommentId === null || author === null || author === undefined) return { kind: 'other' }
-  const parent = f.comments.find((c) => c.id === parentCommentId)
-  if (parent === undefined || parent.commentOrigin !== 'PERSONA') return { kind: 'other' }
-  if (parent.personaId === author) return { kind: 'other' }
-  const authorTurns = f.comments.filter((c) => c.commentOrigin === 'PERSONA' && c.personaId === author).length
-  if (authorTurns >= PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) return { kind: 'other' }
-  return { kind: 'author', personaId: author }
-}
 
 type FollowupBase =
   | { ok: false; verdict: Extract<FollowupPostVerdict, { verdict: 'STOP' | 'BLOCK' }> }
@@ -397,6 +314,8 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
     return stop(`Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한`)
   }
+  const planSize = threadPlanOf(f.postId).size
+  if (personaCount >= planSize) return stop(`Persona 댓글 ${personaCount}건 — 이 글의 대화 계획 ${planSize}건을 다 채웠다`)
   const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
   // ── 실회원 우선 ──
   const realCap = liveReal.length >= MEMBER_COMMENT_LIMIT_ON_PUBLISH
@@ -439,30 +358,24 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
   const b = followupBaseOf(f, nowMs)
   if (!b.ok) return b.verdict
   if (f.hasOpenQueue) return { verdict: 'WAIT', notBeforeMs: null, reason: '이 글에 열린 후보가 있다 — 쌓지 않는다' }
-  const notBeforeMs = b.lastPersonaMs + FOLLOWUP_MIN_GAP_MS
-    + Math.floor(unitOf('followup-jitter', f.postId, String(b.ordinal)) * FOLLOWUP_JITTER_MAX_MS)
+  const here = followupSeatsOf(f, b.ordinal)
+  const first = here.seats[0]
+  if (first === undefined) return { verdict: 'STOP', reason: '이 글의 계획에 남은 자리가 없다' }
+  const notBeforeMs = b.lastPersonaMs + here.gapMs
   if (nowMs < notBeforeMs) {
     return { verdict: 'WAIT', notBeforeMs, reason: `시간차 — ${Math.ceil((notBeforeMs - nowMs) / 60_000)}분 뒤` }
   }
-
-  // ── 이어질 거리 ──
-  const open = openHooksOf(f, b.live)
-  const target = open[0] ?? null
-  if (target === null) return { verdict: 'STOP', reason: '이어질 거리(답 없는 질문·경험·공감·반론)가 없다 — 자연스러운 끝' }
-  const seats: FollowupSeat[] = open.map((t) => ({
-    target: t,
-    speaker: followupSpeakerOf(f, t.kind === 'reply' ? t.commentId : null),
-    roles: t.kind === 'post' ? postHookRolesOf(f, t.hook) : rolesFor(t.hook),
-  }))
-  const { speaker, roles } = seats[0]!
   return {
-    verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, openHooks: open.length,
-    key: followupKeyOf(f.postId, b.ordinal), target, speaker,
+    verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, openHooks: here.seats.length,
+    key: followupKeyOf(f.postId, b.ordinal), target: first.target, speaker: first.speaker,
     excludePersonaIds: [...b.onPost].sort(),
-    roles, seats,
-    reason: `추가 ${b.extrasSoFar + 1}/${b.cap} · 미해결 거리 ${open.length} · ${target.kind === 'reply' ? `${target.hook} 에 ${speaker.kind === 'author' ? '글쓴이 ' : ''}답글` : `글의 ${target.hook} 에 새 댓글`}`,
+    roles: first.roles, seats: here.seats, length: here.length,
+    reason: `추가 ${b.extrasSoFar + 1}/${b.cap} · 계획 ${b.ordinal}번째 · ${seatLabel(first)}`,
   }
 }
+
+const seatLabel = (s: FollowupSeat): string => (s.target.kind === 'post' ? '글에 새 댓글'
+  : s.speaker.kind === 'author' ? '글쓴이 답글' : s.speaker.kind === 'returning' ? '댓글 쓴 사람이 다시 답글' : '다른 사람 답글')
 
 /** 같은 판정을 `seats` 의 다른 자리로 본 것 — 순번 · 열쇠 · 제외 Persona 는 글의 것이라 그대로다 */
 export function followupGoForSeat(
@@ -492,40 +405,58 @@ function replyTargetOpen(f: FollowupPostFacts, c: FollowupCommentRow, consumed: 
   return { ok: true, threadRootId: ctx.threadRootId }
 }
 
-/** 🔴 글 hook 은 최상위 추가 댓글 한 번으로만 소비한다(지운 것 포함) */
-const postHookOpen = (f: FollowupPostFacts): boolean =>
-  !f.comments.some((c) => c.commentOrigin === 'PERSONA' && c.parentId === null && c.provenance === 'followup')
+/** 앞에서부터 입력이 서는 첫 역할을 쓴다 — 계획의 모양이 먼저고, 못 서면 한마디 · 되묻기 · 공감 · 경험 순이다 */
+const rolesOf = (shape: ReactionType): ReactionType[] =>
+  [shape, ...(['other', 'question', 'empathy', 'experience'] as const).filter((r) => r !== shape)]
+    .filter((r) => COMMENT_REACTION_ROLES.includes(r))
 
 /**
- * 🔴 **아직 답이 없는 이어질 거리** — 우선순위 순서로 전부 돌려준다. 첫 원소가 이번 대상이다.
+ * 🔴 **이 순번에서 지금 설 수 있는 자리 — 계획이 정한 종류가 먼저, 나머지 종류가 그 뒤다.**
+ *    생성 쪽(`judgeFollowupPost`)과 발행 트랜잭션(`judgeFollowupPublish`)이 **같은 함수**를 쓴다.
  *
- *    · 답 대상은 **Persona 댓글뿐**이다(실회원 응답은 창업자 결정 항목).
- *    · 🔴 같은 대상은 한 번만 소비한다 — 그 댓글에 **누구든**(실회원 포함) 답한 적이 있으면,
- *      그 답이 지금 지워졌더라도 이미 소비된 거리다. 지운 답을 핑계로 같은 자리에 다시 달지 않는다.
- *    · 신고·삭제·신고 여부 모름·사슬이 긴 댓글은 거리로 세지 않는다.
- *    · 글 자체의 반응(질문·반론·경험·공감)은 **새 최상위 추가 댓글 한 번**으로만 소비한다.
- *      🔴 첫 댓글이 이미 쓴 대화 기능은 다시 쓰지 않는다 — 남은 다른 기능의 역할이 없으면 글 hook 은 닫혀 있다(`postHookRolesOf`).
+ *    · 글에 답 — 이 글에 아직 없는 사람의 새 댓글. 언제나 설 수 있다
+ *    · 글쓴이 답글 — 글쓴이 아닌 Persona 의 아직 답 없는 댓글에(글당 `PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX` 번까지)
+ *    · 다른 사람 답글 — 자기 댓글에 답이 달린 사람이 그 답에 한 번 더(글당 `PERSONA_OTHER_TURNS_PER_POST_MAX` 번까지).
+ *      그런 사람이 없으면 새 사람이 남의 댓글에 답한다
+ *    답 대상은 Persona 댓글뿐이고 한 댓글에는 답이 하나만 달린다(`replyTargetOpen`).
  */
-export function openHooksOf(f: FollowupPostFacts, live: readonly FollowupCommentRow[]): FollowupTarget[] {
+export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats: FollowupSeat[]; length: PlanLength; gapMs: number } {
+  const slot = planSlotAt(threadPlanOf(f.postId), ordinal)
+  if (slot === null) return { seats: [], length: 'normal', gapMs: FOLLOWUP_MIN_GAP_MS }
+  const author = f.authorPersonaId ?? null
   const consumed = consumedOf(f)
-  const options: { hookRank: number; atMs: number; id: string; t: FollowupTarget }[] = []
-  for (const c of live) {
-    if (c.reaction === null || !FOLLOWUP_HOOKS.includes(c.reaction)) continue
-    const open = replyTargetOpen(f, c, consumed)
-    if (!open.ok) continue
-    options.push({
-      hookRank: HOOK_ORDER.indexOf(c.reaction), atMs: c.createdAt.getTime(), id: c.id,
-      t: { kind: 'reply', commentId: c.id, hook: c.reaction, threadRootId: open.threadRootId },
-    })
-  }
+  const byId = new Map(f.comments.map((c) => [c.id, c]))
+  const turnsOf = (personaId: string): number => f.comments.filter((c) => c.commentOrigin === 'PERSONA' && c.personaId === personaId).length
   // 🔴 동률은 시각 → id 순서다(해시 없이도 결정적)
-  options.sort((a, b) => a.hookRank - b.hookRank || a.atMs - b.atMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-  const out = options.map((o) => o.t)
-  if (postHookOpen(f) && f.postReaction !== null && FOLLOWUP_HOOKS.includes(f.postReaction)
-    && postHookRolesOf(f, f.postReaction).length > 0) {
-    out.push({ kind: 'post', hook: f.postReaction })
+  const open = [...f.comments]
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .flatMap((c) => {
+      const o = replyTargetOpen(f, c, consumed)
+      return o.ok ? [{ c, root: o.threadRootId }] : []
+    })
+  type Open = (typeof open)[number]
+  const replyTo = (x: Open, speaker: FollowupSpeaker, hook: ReactionType): FollowupSeat =>
+    ({ target: { kind: 'reply', commentId: x.c.id, hook, threadRootId: x.root }, speaker, roles: rolesOf(hook) })
+  const forAuthor = author === null || turnsOf(author) >= PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX
+    ? undefined : open.find((x) => x.c.personaId !== author)
+  const back = open.flatMap((x) => {
+    const parent = x.c.parentId === null ? undefined : byId.get(x.c.parentId)
+    const who = parent?.commentOrigin === 'PERSONA' ? parent.personaId : null
+    return who !== null && who !== author && who !== x.c.personaId && turnsOf(who) < PERSONA_OTHER_TURNS_PER_POST_MAX ? [{ x, who }] : []
+  })[0]
+  const forNew = open.filter((x) => x.c.personaId !== author).at(-1)
+  const seatOf: Record<PlanSeatKind, (hook: ReactionType) => FollowupSeat | null> = {
+    post: (hook) => ({ target: { kind: 'post', hook }, speaker: { kind: 'other' }, roles: rolesOf(hook) }),
+    author: (hook) => (forAuthor === undefined || author === null ? null : replyTo(forAuthor, { kind: 'author', personaId: author }, hook)),
+    reply: (hook) => (back !== undefined ? replyTo(back.x, { kind: 'returning', personaId: back.who }, hook)
+      : forNew === undefined ? null : replyTo(forNew, { kind: 'other' }, hook)),
   }
-  return out
+  const order: PlanSeatKind[] = [slot.kind, ...(['author', 'reply', 'post'] as const).filter((k) => k !== slot.kind)]
+  const seats = order.flatMap((k) => {
+    const seat = seatOf[k](k === slot.kind ? slot.shape : 'other')
+    return seat === null ? [] : [seat]
+  })
+  return { seats, length: slot.length, gapMs: slot.gapMs }
 }
 
 /**
@@ -854,12 +785,12 @@ export function pickFollowupPersona(
 ): { personaId: string } | { personaId: null; reason: string } {
   if (!isPosInt(perPersonaDailyMax)) return { personaId: null, reason: 'Persona 하루 상한이 손상됐다(fail-closed)' }
   const speaker = go.speaker
-  if (speaker.kind === 'author') {
-    // 🔴 글쓴이 답글 자리 — 다른 Persona 로 바꾸지 않는다. 글쓴이가 못 서면 부르는 쪽이 다음 자리로 넘어간다
+  if (speaker.kind !== 'other') {
+    // 🔴 정해진 사람의 자리 — 다른 Persona 로 바꾸지 않는다. 그 사람이 못 서면 부르는 쪽이 다음 자리로 넘어간다
     const a = candidates.find((c) => c.personaId === speaker.personaId)
     return a !== undefined && a.eligible && isCount(a.followupsToday) && a.followupsToday < perPersonaDailyMax
       ? { personaId: a.personaId }
-      : { personaId: null, reason: '글쓴이 답글 자리 — 글쓴이가 지금 설 수 없다' }
+      : { personaId: null, reason: speaker.kind === 'author' ? '글쓴이 답글 자리 — 글쓴이가 지금 설 수 없다' : '댓글 쓴 사람이 다시 답할 자리 — 그 사람이 지금 설 수 없다' }
   }
   const excluded = new Set(go.excludePersonaIds)
   const pool = candidates.filter((c) => c.eligible && !excluded.has(c.personaId)
@@ -1103,7 +1034,7 @@ export function verifyStamp(raw: unknown, expect: { postId: string; dedupKey: st
   if (s.parentCommentId !== null && (typeof s.parentCommentId !== 'string' || s.parentCommentId === '')) {
     return { ok: false, reason: '답글 대상이 모양이 아니다' }
   }
-  if (typeof s.hook !== 'string' || !FOLLOWUP_HOOKS.includes(s.hook as ReactionType)) return { ok: false, reason: '도장의 이어질 거리가 모양이 아니다' }
+  if (typeof s.hook !== 'string' || !COMMENT_REACTION_ROLES.includes(s.hook as ReactionType)) return { ok: false, reason: '도장의 자리 모양이 정본 역할이 아니다' }
   return { ok: true, stamp: s as FollowupStamp }
 }
 
@@ -1175,8 +1106,6 @@ export type FollowupPublishFacts = {
   /** 트랜잭션 안에서 다시 읽은 글·댓글 사실. 반응 라벨은 없다(null) — 대상 고르기는 생성 쪽 몫이다 */
   post: FollowupPostFacts
   candidatePersonaId: string
-  /** 🔴 후보 Queue 의 반응 역할(`reactionType`) — 글 hook 자리에서 첫 댓글과 같은 기능인지 다시 본다 */
-  candidateRole: string | null
   /** 그 글을 가리키는 **다른** 열린 Queue 가 있는가 */
   otherOpenQueue: boolean | null
   /** 🔴 트랜잭션이 승인 파일에서 다시 읽은 profile · 그날 런타임 단계 */
@@ -1232,28 +1161,15 @@ export function judgeFollowupPublish(f: FollowupPublishFacts): FollowupPublishVe
   if (st.stamp.ordinal !== b.ordinal) blockers.push(`도장 순번 ${st.stamp.ordinal} ≠ 지금 자리 ${b.ordinal}`)
   // 🔴 시간차 — jitter 는 고를 때 이미 지났다. 여기서는 최소 간격만 다시 본다
   if (f.nowMs - b.lastPersonaMs < FOLLOWUP_MIN_GAP_MS) blockers.push('직전 Persona 댓글과 간격이 짧다')
-  // 🔴 화자는 생성 쪽과 같은 함수가 정한다 — 글쓴이 답글 자리면 글쓴이만, 아니면 이 글에 아직 없는 Persona 만
-  const speaker = followupSpeakerOf(f.post, st.stamp.parentCommentId)
+  // 🔴 자리는 생성 쪽과 같은 함수가 정한다 — 도장의 대상이 지금도 이 순번의 자리이고, 그 자리에 설 수 있는 사람이어야 한다
+  const here = followupSeatsOf(f.post, b.ordinal).seats
+    .filter((s) => (s.target.kind === 'reply' ? s.target.commentId : null) === st.stamp.parentCommentId)
   let personaRepeatAllowed = false
-  if (speaker.kind === 'author') {
-    if (f.candidatePersonaId !== speaker.personaId) blockers.push('🔴 글쓴이 답글 자리다 — 다른 Persona 로 바꿔 내보내지 않는다')
-    else personaRepeatAllowed = b.onPost.has(f.candidatePersonaId)
-  } else if (b.onPost.has(f.candidatePersonaId)) blockers.push('🔴 이 Persona 는 이 글에 이미 썼거나 글쓴이다')
-  if (st.stamp.parentCommentId === null) {
-    if (!postHookOpen(f.post)) blockers.push('글 hook 은 이미 최상위 추가 댓글로 소비됐다')
-    else if (f.candidateRole === null || !postHookRolesOf(f.post, st.stamp.hook).some((r) => r === f.candidateRole)) {
-      blockers.push('🔴 이미 있는 최상위 Persona 댓글과 같은 대화 기능이다(또는 역할을 모른다)')
-    }
-  } else {
-    const parent = f.post.comments.find((c) => c.id === st.stamp.parentCommentId)
-    if (parent === undefined) blockers.push('🔴 답글 대상이 이 글에 없다(고아 답글)')
-    else {
-      // 🔴 자기 댓글 답글은 따로 막지 않는다 — 대상 댓글을 쓴 Persona 는 이미 `onPost` 에 있어 위에서 막히고,
-      //    글쓴이 자기 댓글은 `followupSpeakerOf` 가 글쓴이 자리로 보지 않는다(같은 판정 두 벌 금지)
-      const open = replyTargetOpen(f.post, parent, consumedOf(f.post))
-      if (!open.ok) blockers.push(open.reason)
-    }
-  }
+  if (here.length === 0) blockers.push('🔴 지금 설 수 있는 자리가 아니다(답글 대상이 없거나 닫혔다)')
+  else if (here.some((s) => s.speaker.kind !== 'other' && s.speaker.personaId === f.candidatePersonaId)) {
+    personaRepeatAllowed = b.onPost.has(f.candidatePersonaId)
+  } else if (!here.some((s) => s.speaker.kind === 'other')) blockers.push('🔴 정해진 사람의 자리다 — 다른 Persona 로 바꿔 내보내지 않는다')
+  else if (b.onPost.has(f.candidatePersonaId)) blockers.push('🔴 이 Persona 는 이 글에 이미 썼거나 글쓴이다')
   const ok = blockers.length === 0
   const profileDailyRemaining = ok && prof.ok && isCount(f.followupsTodayInTx)
     ? Math.max(0, prof.profile.dailyCount - f.followupsTodayInTx)

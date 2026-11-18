@@ -9,14 +9,14 @@
  *      · 실패 격리 — 첫 댓글과 같은 시도 기억 정책 · 저장소(`persona-comment-attempt-policy` · 추가 댓글 lane 파일)
  *      · 발행 재판정 — `publishCandidateTx({ followupLane: true })` (Serializable · 기존 재검사 전부 + `judgeFollowupPublish`)
  *      · 출처 — #707 정본 `personaCommentProvenanceOf`
- *      · 반응 라벨 — 정본 분류기 `classifyReaction`
+ *      · 자리(누가 어디에 어떤 모양으로) — 글의 대화 계획 `persona-thread-plan` · `followupSeatsOf`
  *
  * 🔴 **스위치(`SORAN_PERSONA_COMMENT_FOLLOWUP`)가 꺼져 있으면 DB 읽기도 0** 이다 — OFF 는 아무것도 바꾸지 않는다.
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
-  FOLLOWUP_KEY_PREFIX, closedFollowupKeyOf, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
+  FOLLOWUP_KEY_PREFIX, closedFollowupKeyOf, followupEditDiffOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
   FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK, addFollowupIsolation, classifyFollowupFailure, followupFailureHaltsRound,
   followupAuthorUnavailableReason, followupIsolationOf, followupPersonaCandidates, followupPlanCap,
   followupSpentRoleKeys, followupStageOf, orderFollowupGo, partitionFollowupSourceContexts, pickFollowupSeat, withoutAuthorOwnPost,
@@ -36,7 +36,7 @@ import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import { judgePostAuthor, type ModelSelection } from '../../src/lib/persona-comment-release'
 import type { ModelCanon } from '../../src/lib/persona-comment-provenance'
 import { buildCommentInput, voiceEvidenceFromAssets, type CommentInput } from '../../src/lib/persona-comment-input'
-import { isAdviceForbidden, isReactionType, type ReactionType } from '../../src/lib/persona-reaction-roles'
+import { isAdviceForbidden } from '../../src/lib/persona-reaction-roles'
 import { judgeSourceContext } from '../../src/lib/persona-comment-source-context'
 import { judgeRealMember } from '../../src/lib/real-member-gate'
 import { commentLifeBlocksOf, publishCandidateTx, type PublishTxResult } from '../../src/lib/persona-publish-tx'
@@ -45,7 +45,6 @@ import { profileOf, type RuntimeStage } from '../../src/lib/scale-profile'
 import { tallyOf, type LedgerEntry } from '../../src/lib/llm-ledger'
 import { priceOf } from '../../src/lib/llm-pricing'
 import { COMMENT_CALL_SHAPE } from '../../src/lib/persona-comment-cost'
-import { classifyReaction } from './voice-comment-signals.mjs'
 import { gateInputOf, sourceTextsOf, type GateContext, type SourcePost, type TargetSource } from './persona-comment-targets'
 import {
   runEnqueuePipeline, type PipelineBeforeProvider, type PipelineGate, type PipelineProvider, type PipelineOutcome, type PipelineResult, type PipelineTarget,
@@ -204,11 +203,6 @@ export function followupReserveUsd(model: string | null, headroom: number | null
   const p = model === null ? null : priceOf(model)
   if (p === null || headroom === null || !Number.isFinite(headroom)) return Number.NaN
   return ((COMMENT_CALL_SHAPE.inputTokens * p.inputPerMTok) + (COMMENT_CALL_SHAPE.outputTokens * p.outputPerMTok)) / 1_000_000 * headroom
-}
-
-const reactionOf = (text: string): ReactionType | null => {
-  const r: unknown = classifyReaction(text)
-  return isReactionType(r) ? r : null
 }
 
 /** 회차가 이을 글 하나(정해진 순서) — 시도 기억의 만료 계산에 글 공개 시각이 필요하다 */
@@ -393,7 +387,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const [qs, ls, reports, openRows, fuRows] = await Promise.all([
     prisma.personaApprovalQueue.findMany({
       where: { publishedCommentId: { in: personaCommentIds } },
-      select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true, reactionType: true },
+      select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
     }),
     prisma.personaActivityLog.findMany({
       where: { kind: 'comment', targetId: { in: personaCommentIds } },
@@ -421,8 +415,6 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     const rows: FollowupCommentRow[] = comments.filter((c) => c.postId === p.id).map((c) => ({
       id: c.id, postId: c.postId, parentId: c.parentId, createdAt: c.createdAt, isDeleted: c.isDeleted, authorId: c.authorId,
       commentOrigin: c.commentOrigin, personaId: c.personaId, operatorWriterId: c.operatorWriterId,
-      reaction: c.commentOrigin === 'PERSONA' ? reactionOf(c.content) : null,
-      role: c.commentOrigin === 'PERSONA' ? followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)) : null,
       reported: reported.has(c.id),
       provenance: c.commentOrigin !== 'PERSONA' ? null : personaCommentProvenanceOf({
         comment: { postId: c.postId, personaId: c.personaId, createdAtMs: c.createdAt.getTime(), topLevel: c.parentId === null },
@@ -439,7 +431,6 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       authorPersonaId: p.personaId,
       // 🔴 외부로 보낼 수 있는 Persona 글만 — 실회원 · 외부 원문 · 운영자 · 불명은 잇지 않는다
       autoManagedPost: author === null ? null : author.externalSendAllowed,
-      postReaction: reactionOf(`${p.title}\n${p.content}`),
       comments: rows,
       hasOpenQueue: openPosts.has(p.id),
     }
