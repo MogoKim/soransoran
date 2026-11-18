@@ -46,7 +46,7 @@ import {
   ATTEMPT_JOURNAL_CORRUPT_FILE, ATTEMPT_JOURNAL_FILE, ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE, createAttemptStore,
   type AttemptFsOps, type AttemptStore,
 } from './lib/persona-comment-attempt-store.mjs'
-import { parseAttemptJournal, serializeAttemptJournal } from '../src/lib/persona-comment-attempt-policy'
+import { failedAttemptCounts, parseAttemptJournal, serializeAttemptJournal, type AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
 import { BOOTSTRAP_SLOTS_PER_POST } from '../src/lib/persona-comment-bootstrap-budget'
 import { lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, LEASE_FD_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
 import { spawn } from 'node:child_process'
@@ -938,6 +938,31 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       nowMs: PUBLISHED_MS + 15 * MIN, windowMs: RATIO_WINDOW_DAYS * 86_400_000,
     })
     check('🟢 기억을 넘기지 않으면 옛 동작 그대로 — 제외 0', plain.counts.attemptExcluded === 0 && plain.targets.length > 0)
+  }
+
+  // ── 방금 탈락한 Persona 는 다음 글의 1번이 아니다 — 탈락도 차례를 쓴 것으로 센다(격리가 아니라 순서) ──
+  {
+    const OTHER_POST = 'post-earlier'
+    const now = PUBLISHED_MS + 15 * MIN
+    const entry = (step: AttemptEntry['step']): AttemptEntry => ({
+      postId: OTHER_POST, personaCode: 'P14', reactionRole: 'empathy', postPublishedAtMs: PUBLISHED_MS - 20 * MIN,
+      attemptedAtMs: PUBLISHED_MS - 10 * MIN, step, failedGates: step === 'ENQUEUE_BLOCKED' ? ['⑦:regenerate'] : [], blockCodes: [],
+    })
+    const failed = failedAttemptCounts([entry('ENQUEUE_BLOCKED')], now)
+    check('🔴 탈락 시도만 센다 — 적재는 세지 않고(댓글 수가 이미 센다) · 기억이 끝나면 사라진다',
+      failed.get('P14') === 1 && failedAttemptCounts([entry('ENQUEUED')], now).size === 0
+      && failedAttemptCounts([entry('ENQUEUE_BLOCKED')], PUBLISHED_MS + 41 * MIN).size === 0)
+    const firstOf = async (recentFailedAttempts?: ReadonlyMap<string, number>) => (await materializeTargets({
+      source: autoLaneTargetSource(sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], [persona('P14'), persona('P15')]), now), limit: 6,
+      nowMs: now, windowMs: RATIO_WINDOW_DAYS * 86_400_000, ...(recentFailedAttempts === undefined ? {} : { recentFailedAttempts }),
+    })).targets[0]?.target.facts.personaCode
+    const before = await firstOf()
+    const after = await firstOf(failed)
+    check('🔴 방금 탈락한 Persona 는 다음 글의 1번으로 다시 서지 않는다(뒤로 갈 뿐 빠지지 않는다)',
+      before === 'P14' && after === 'P15', `기억 없음 1번 ${before} · 탈락 기억 뒤 1번 ${after}`)
+    const loopSrc = readFileSync('scripts/lib/persona-comment-loop.mts', 'utf-8')
+    check('🔴 회차가 탈락 기억을 planner 줄 세우기에 넘긴다(미리보기 · 생성 둘 다)',
+      loopSrc.split('recentFailedAttempts: failedAttemptCounts(').length === 3)
   }
 
   // ── B·C. 가능한 조합이 하나뿐인 글 — 소진되면 유료 호출 0 · 자정을 넘겨도 기억 유지 · 발행+60분 뒤 만료 ──

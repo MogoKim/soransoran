@@ -54,7 +54,7 @@ import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { voiceCauseNote } from '../../src/lib/persona-voice-repeat'
 import { FOLLOWUP_KEY_PREFIX } from '../../src/lib/persona-comment-followup'
 import {
-  attemptedComboKeys, attemptKeyOf, attemptOutcomeOf, voiceFailedPostPersonaKeys, type AttemptEntry, type AttemptOutcomeUpdate,
+  attemptedComboKeys, attemptKeyOf, attemptOutcomeOf, failedAttemptCounts, voiceFailedPostPersonaKeys, type AttemptEntry, type AttemptOutcomeUpdate,
 } from '../../src/lib/persona-comment-attempt-policy'
 import type { AttemptStore } from './persona-comment-attempt-store.mjs'
 import type { FollowupPhaseReport } from './persona-comment-followup-run.mjs'
@@ -407,6 +407,7 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
       ...(previewMemory.ok ? {
         attemptedCombos: attemptedComboKeys(previewMemory.entries, nowMs),
         voiceFailedPostPersonas: voiceFailedPostPersonaKeys(previewMemory.entries, nowMs),
+        recentFailedAttempts: failedAttemptCounts(previewMemory.entries, nowMs),
       } : {}),
     })
     const picked = firstPerPost(preview.targets, (t) => t.target.facts.postId)
@@ -483,6 +484,7 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
       source: autoLaneTargetSource(deps.source, nowMs), limit, nowMs, windowMs,
       attemptedCombos: attemptedComboKeys(memory.entries, nowMs),
       voiceFailedPostPersonas: voiceFailedPostPersonaKeys(memory.entries, nowMs),
+      recentFailedAttempts: failedAttemptCounts(memory.entries, nowMs),
     })
     attemptExcluded = material.counts.attemptExcluded
     // 🔴 같은 글의 후보를 모두 넘긴다. 첫 후보가 Gate 에서 막히면 다음 Persona 로 넘어가고,

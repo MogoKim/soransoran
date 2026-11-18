@@ -147,6 +147,22 @@ export function voiceFailedPostPersonaKeys(
   return new Set(activeAttempts(entries, nowMs, lane).filter(isVoiceFailure).map(postPersonaKeyOf))
 }
 
+/**
+ * 🔴 Persona 별로 이 window 안에서 **적재되지 못하고 끝난 시도 수**. planner 는 "덜 쓴 사람부터" 줄을 세우는데,
+ *    탈락한 사람은 댓글이 안 늘어 다음 글에서도 맨 앞이었다(같은 사람이 연달아 1번으로 서서 연달아 탈락).
+ *    탈락도 차례를 한 번 쓴 것으로 센다 — 격리가 아니라 순서다. 기억이 끝나면(발행 + 60분) 저절로 사라진다.
+ */
+export function failedAttemptCounts(
+  entries: readonly AttemptEntry[], nowMs: number, lane: AttemptLane = FIRST_COMMENT_ATTEMPT_LANE,
+): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const e of activeAttempts(entries, nowMs, lane)) {
+    if (e.step === 'ENQUEUED' || e.step === 'WRITE_SKIPPED') continue
+    out.set(e.personaCode, (out.get(e.personaCode) ?? 0) + 1)
+  }
+  return out
+}
+
 // ─────────────────────────────────────────────────────────
 // 파일 모양 — 엄격하게 읽는다. 모르는 모양은 fail-closed
 // ─────────────────────────────────────────────────────────
