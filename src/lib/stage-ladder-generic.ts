@@ -286,7 +286,7 @@ export type PreflightFacts = {
   /** 🔴 발행 · 공급 러너 최근 회차(`errorSignalOf`) — 모르면 null */
   runnerHealth: Health | null
   /**
-   * 🔴 **비용 단가 표본의 승계 후보** — 창 안에 직전 품질 계약 회차가 있을 때만 준다(없으면 `null`·생략).
+   * 🔴 **비용 단가 표본의 승계 후보** — 창 안에 다른 품질 계약 회차가 있을 때만 준다(없으면 `null`·생략).
    *    판정은 현재 계약 결과 편수가 최소 표본(`supplyCostMinResultSampleOf`)에 못 미칠 때만 이것을 쓴다.
    *    🔴 비용 단가 한 칸뿐이다 — READY 재고·수율·처리량·손실 보충은 언제나 `readyCohort`(현재 계약)만 본다.
    */
@@ -294,14 +294,14 @@ export type PreflightFacts = {
 }
 
 /**
- * 🔴 **현재 + 직전 품질 계약 회차를 합친 비용 표본.** 품질 계약 판이 바뀌어도 원천 1건을 사는 값은 그대로다 —
- *    새 판 표본이 쌓일 때까지 같은 72시간 창의 **직전 판 하나**(현재가 아닌 것 중 가장 최근)만 합친다.
- *    그보다 옛 판은 합치지 않는다. 직전 판의 대기 READY 는 결과로 세지 않는다(공개된 편수만 — 보수적).
+ * 🔴 **72시간 창 안 모든 품질 계약 회차를 합친 비용 표본.** 품질 계약 판이 바뀌어도 원천 1건을 사는 값은 그대로다 —
+ *    새 판 표본이 쌓일 때까지 같은 창의 옛 판 표본을 이어 쓴다. 범위는 창이 묶는다(판을 따로 고르지 않는다).
+ *    옛 판의 대기 READY 는 결과로 세지 않는다(공개된 편수만 — 보수적).
  */
 export type SupplyCostCarryoverFact = {
-  /** 직전 품질 계약 판 이름(예: `quality-v27`) — 판정 줄에 그대로 찍는다 */
-  previous: string
-  /** 합친 표본의 확인된 결과 편수(현재 공개+예정 · 직전 공개) */
+  /** 합친 품질 계약 판 이름 — 옛 판부터, 현재 판이 마지막. 판정 줄에 그대로 찍는다 */
+  versions: readonly string[]
+  /** 합친 표본의 확인된 결과 편수(현재 공개+예정 · 옛 판 공개) */
   results: number
   usdPerSlotValidResult: number | null
   trialCost: ReadyCohortFact['trialCost']
@@ -393,7 +393,7 @@ export type PreflightVerdict = {
   warnings: readonly PreflightWarningCode[]
   counts: Readonly<Record<string, number>>
   /**
-   * 공급 비용 단가를 낸 표본 — `current`(현재 품질 계약만) 또는 `current+previous(<직전 판>)`(승계).
+   * 공급 비용 단가를 낸 표본 — `current`(현재 품질 계약만) 또는 `window72h(<옛 판>+…+<현재 판>)`(창 전체 승계).
    * 비용 단가 한 칸에만 해당한다. 나머지 counts 는 언제나 현재 계약 값이다.
    */
   costCohort: string
@@ -433,7 +433,7 @@ export function preflightPlainLinesOf(pf: PreflightVerdict): string[] {
   const min = c.supplyCostResultsMin
   const sampleShort = results !== undefined && min !== undefined && results < min
   if (pf.costCohort !== 'current') {
-    out.push(`공급 비용 단가는 현재 품질 계약 표본이 모자라 직전 계약 표본을 합쳐 냈다 — ${pf.costCohort} · 결과 ${results ?? '?'}편`)
+    out.push(`공급 비용 단가는 현재 품질 계약 표본이 모자라 최근 72시간의 모든 판 표본을 합쳐 냈다 — ${pf.costCohort} · 결과 ${results ?? '?'}편`)
   }
   if (pf.codes.includes('SUPPLY_COST_UNKNOWN') && sampleShort) {
     out.push(`비용 표본이 글 ${results}편뿐이라 판단 불가 — 최소 ${min}편이 있어야 한다(예산 초과가 아니다)`)
@@ -592,7 +592,7 @@ export function judgeNextPreflight(
    */
   /**
    *   🔴 표본 — 현재 품질 계약의 결과 편수가 최소 표본 이상이면 현재 계약만 쓴다. 못 미치고 승계 후보가 있으면
-   *   현재 + 직전 계약을 합친 표본을 쓴다. 어느 쪽도 최소 표본에 못 미치면 envelope 가 모름으로 닫는다.
+   *   72시간 창 전체를 합친 표본을 쓴다. 어느 쪽도 최소 표본에 못 미치면 envelope 가 모름으로 닫는다.
    *   승계는 이 비용 단가에만 닿는다 — 위 처리량·필요 READY 는 `c`(현재 계약) 그대로다.
    */
   const costSampleMin = supplyCostMinResultSampleOf(n)
@@ -660,7 +660,7 @@ export function judgeNextPreflight(
   return {
     stage, verdict, codes: ordered, forecastWarnings,
     warnings: PREFLIGHT_WARNING_CODES.filter((c) => warnings.has(c)), counts,
-    costCohort: carry === null ? 'current' : `current+previous(${carry.previous})`,
+    costCohort: carry === null ? 'current' : `window72h(${carry.versions.join('+')})`,
   }
 }
 

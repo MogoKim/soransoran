@@ -29,7 +29,7 @@ export const SUPPLY_COST_SAMPLE_WINDOW_DAYS = 3
  *    단가는 `정산 합계 ÷ 결과 편수`라 결과 한 편의 증감이 단가를 `1/편수`만큼 흔든다. 이 문턱 아래의 표본은
  *    "예산 초과"도 "예산 안"도 증명하지 못한다 — 판정은 모름이다(FAIL 로 확정하지 않는다).
  *    표본 창이 3일이므로 하루 목표의 1/3 은 "창 하루치 평균"이다(d30 → 10편: 한 편이 단가를 10% 이상 흔들지 않는다).
- *    preflight 는 현재 품질 계약 표본이 이 문턱에 못 미칠 때만 직전 계약 표본을 합친다 — 문턱은 이 함수 하나다.
+ *    preflight 는 현재 품질 계약 표본이 이 문턱에 못 미칠 때만 같은 72시간 창의 모든 계약 표본을 합친다 — 문턱은 이 함수 하나다.
  */
 export function supplyCostMinResultSampleOf(dailyTarget: number): number {
   if (!Number.isInteger(dailyTarget) || dailyTarget <= 0) return 1

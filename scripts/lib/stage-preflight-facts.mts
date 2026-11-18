@@ -625,7 +625,7 @@ const byHash = (m: ReadonlyMap<string, SupplyIntent>): Map<string, SupplyIntent>
  */
 export function jitWorksetsIn(
   dataDir: string, fromMs: number, toMs: number,
-  /** 세는 품질 계약 — 기본은 현재 계약. 비용 표본 승계만 직전 계약을 넘긴다 */
+  /** 세는 품질 계약 — 기본은 현재 계약. 비용 표본 승계만 창 안의 옛 계약을 넘긴다 */
   quality: QualityContractMark = currentQualityContract(),
 ): { sources: number; byRun: RunIntentIndex } | null {
   const scanned = scanJitWorksets(dataDir, fromMs, toMs)
@@ -636,19 +636,22 @@ export function jitWorksetsIn(
 }
 
 /**
- * 🔴 **창 안의 직전 품질 계약 — 현재가 아닌 계약 중 가장 최근 회차의 것 하나.** 비용 표본 승계 전용이다.
- *    그보다 옛 계약은 돌려주지 않는다(옛 판 여럿을 섞지 않는다). 제한 복구 회차·옛 묶음 판(v1·v2)은 후보가 아니다.
- *    현재가 아닌 계약 묶음이 창 안에 없으면 `null`. 묶음 하나라도 못 읽으면 `null`(모르는 표본을 합치지 않는다).
+ * 🔴 **창 안의 현재가 아닌 품질 계약 전부** — 첫 회차가 이른 것부터. 비용 표본 승계 전용이다.
+ *    범위는 창(72시간)이 묶는다 — 판을 따로 고르지 않는다. 제한 복구 회차·옛 묶음 판(v1·v2)은 후보가 아니다.
+ *    묶음 하나라도 못 읽으면 빈 목록(모르는 표본을 합치지 않는다).
  */
-export function previousQualityContractIn(
+export function otherQualityContractsIn(
   dataDir: string, fromMs: number, toMs: number,
   current: QualityContractMark = currentQualityContract(),
-): QualityContractMark | null {
-  const others = (scanJitWorksets(dataDir, fromMs, toMs) ?? [])
-    .filter((w) => w.quality.version !== current.version || w.quality.digest !== current.digest)
-  if (others.length === 0) return null
-  const latest = others.reduce((a, b) => (b.runId > a.runId ? b : a))
-  return { version: latest.quality.version, digest: latest.quality.digest }
+): QualityContractMark[] {
+  const out: QualityContractMark[] = []
+  const scanned = [...(scanJitWorksets(dataDir, fromMs, toMs) ?? [])].sort((a, b) => a.runId.localeCompare(b.runId))
+  for (const w of scanned) {
+    const q = w.quality
+    if (q.version === current.version && q.digest === current.digest) continue
+    if (!out.some((x) => x.version === q.version && x.digest === q.digest)) out.push({ version: q.version, digest: q.digest })
+  }
+  return out
 }
 
 type JitWorkset = { runId: string; count: number; intents: ReadonlyMap<string, SupplyIntent>; quality: QualityContractMark }
@@ -855,8 +858,8 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   horizon: readonly Date[]
   now: Date
   /**
-   * 읽을 품질 계약 — 기본은 현재 계약이다. 🔴 직전 계약을 넘기는 곳은 비용 표본 승계 하나뿐이고,
-   * 그때는 `matched` 를 비워 넘긴다(직전 계약 대기 READY 는 예정 결과가 아니다).
+   * 읽을 품질 계약 — 기본은 현재 계약이다. 🔴 옛 계약을 넘기는 곳은 비용 표본 승계 하나뿐이고,
+   * 그때는 `matched` 를 비워 넘긴다(옛 계약 대기 READY 는 예정 결과가 아니다).
    */
   quality?: QualityContractMark
 }): Promise<{
@@ -1040,30 +1043,33 @@ const trialCostOf = (a: CostAttribution): NonNullable<ReadyCohortFact['trialCost
 type CostCohortRead = { rows: readonly CohortRow[]; fates: FateCounts; cohortRuns: ReadonlySet<string> }
 
 /**
- * 🔴 **현재 + 직전 품질 계약 회차를 합친 비용 표본** — 순수. 분자는 두 계약 회차의 정산 전부,
- *    분모는 현재 계약의 공개 + 예정과 **직전 계약의 공개 편수**다. 직전 계약의 대기 READY 는 현재 계약으로
+ * 🔴 **72시간 창 안 모든 품질 계약 회차를 합친 비용 표본** — 순수. 분자는 그 회차들의 정산 전부,
+ *    분모는 현재 계약의 공개 + 예정과 **옛 계약들의 공개 편수**다. 옛 계약의 대기 READY 는 현재 계약으로
  *    발행되지 않으므로 결과로 세지 않는다(그 비용은 분자에 남는다 — 단가를 낮게 보지 않는다).
  *    장부를 못 읽었으면 `null`.
  */
 export function supplyCostCarryoverOf(i: {
-  previous: string
+  /** 합친 판 이름 — 옛 판부터, 현재 판이 마지막 */
+  versions: readonly string[]
   entries: readonly LedgerEntry[] | null
   current: CostCohortRead
-  prior: CostCohortRead
+  /** 창 안의 옛 계약 cohort 들 — 창 밖 회차는 넘기지 않는다 */
+  prior: readonly CostCohortRead[]
 }): { fact: SupplyCostCarryoverFact; attribution: CostAttribution } | null {
   const fateByKey = new Map<string, CostFate>()
-  for (const r of i.prior.rows) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
+  for (const p of i.prior) for (const r of p.rows) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
   for (const r of i.current.rows) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
-  const counts = { published: i.current.fates.published + i.prior.fates.published, scheduled: i.current.fates.scheduled }
+  const priorPublished = i.prior.reduce((n, p) => n + p.fates.published, 0)
+  const counts = { published: i.current.fates.published + priorPublished, scheduled: i.current.fates.scheduled }
   const attribution = costAttributionOf({
     entries: i.entries, fateByKey, counts,
-    cohortRuns: new Set([...i.current.cohortRuns, ...i.prior.cohortRuns]),
+    cohortRuns: new Set([...i.current.cohortRuns, ...i.prior.flatMap((p) => [...p.cohortRuns])]),
   })
   if (attribution === null) return null
   return {
     attribution,
     fact: {
-      previous: i.previous,
+      versions: [...new Set(i.versions)],
       results: counts.published + counts.scheduled,
       usdPerSlotValidResult: attribution.usdPerSlotValidResult,
       trialCost: trialCostOf(attribution),
@@ -1204,33 +1210,38 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
     : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns })
   /**
-   * 🔴 **비용 표본 승계 후보** — 창 안에 직전 품질 계약 회차가 있으면 현재 + 직전을 합친 비용 표본을 함께 낸다.
+   * 🔴 **비용 표본 승계 후보** — 창 안에 다른 품질 계약 회차가 있으면 창 전체를 합친 비용 표본을 함께 낸다.
    *    쓸지 말지는 판정(`judgeNextPreflight`)이 최소 표본 규칙으로 정한다. 여기서는 사실만 모은다.
-   *    직전 계약 cohort 는 현재와 같은 판독기·같은 무결성 규칙으로 읽고, 못 읽으면 후보를 내지 않는다.
+   *    옛 계약 cohort 는 현재와 같은 판독기·같은 무결성 규칙으로 읽고, 하나라도 못 읽으면 후보를 내지 않는다.
    *    🔴 위 `cohort`(READY 재고·수율·처리량의 근거)는 건드리지 않는다 — 합치는 것은 비용 귀속 하나다.
    */
   let supplyCostCarryover: SupplyCostCarryoverFact | null = null
   let carryoverAttribution: CostAttribution | null = null
-  const previousQuality = previousQualityContractIn(i.dataDir, win.capacity.from.getTime(), win.capacity.to.getTime())
-  if (previousQuality !== null && rows !== null && fates !== null && recovery.issue === null) {
+  const otherQualities = otherQualityContractsIn(i.dataDir, win.capacity.from.getTime(), win.capacity.to.getTime())
+  if (otherQualities.length > 0 && rows !== null && fates !== null && recovery.issue === null) {
     // 현재 cohort 와 같은 용량 창이다 — 창을 따로 넓히지 않는다
     const { from: windowFrom, to: windowTo } = win.capacity
-    const prev = await readReadyCohort(prisma, {
-      windowFrom, windowTo, dataDir: i.dataDir,
-      matched: new Set(), horizon: i.proofSlots, now: i.now, quality: previousQuality,
-    })
-    if (prev.rows === null || prev.fates === null) {
-      notes.push(`직전 품질 계약(${previousQuality.version}) 비용 표본을 읽지 못했다 — 승계하지 않는다`)
+    const prior: CostCohortRead[] = []
+    let unreadable: string | null = null
+    for (const quality of otherQualities) {
+      const prev = await readReadyCohort(prisma, {
+        windowFrom, windowTo, dataDir: i.dataDir,
+        matched: new Set(), horizon: i.proofSlots, now: i.now, quality,
+      })
+      if (prev.rows === null || prev.fates === null) { unreadable = quality.version; break }
+      prior.push({ rows: prev.rows, fates: prev.fates, cohortRuns: prev.cohortRuns })
+    }
+    if (unreadable !== null) {
+      notes.push(`옛 품질 계약(${unreadable}) 비용 표본을 읽지 못했다 — 승계하지 않는다`)
     } else {
       const carry = supplyCostCarryoverOf({
-        previous: previousQuality.version, entries: supplyEntries,
-        current: { rows, fates, cohortRuns: costCohortRuns },
-        prior: { rows: prev.rows, fates: prev.fates, cohortRuns: prev.cohortRuns },
+        versions: [...otherQualities.map((q) => q.version), currentQualityContract().version], entries: supplyEntries,
+        current: { rows, fates, cohortRuns: costCohortRuns }, prior,
       })
       if (carry !== null) {
         supplyCostCarryover = carry.fact
         carryoverAttribution = carry.attribution
-        notes.push(`비용 표본 승계 후보 — 직전 품질 계약 ${previousQuality.version} 공개 ${prev.fates.published}편을 합치면`
+        notes.push(`비용 표본 승계 후보 — 72시간 창의 ${carry.fact.versions.join('+')} 를 합치면`
           + ` 결과 ${carry.fact.results}편 · 정산 $${carry.attribution.totalUsd.toFixed(4)}`
           + ' (현재 계약 표본이 최소 편수에 못 미칠 때만 쓴다 · READY 재고·수율은 현재 계약만)')
       }
@@ -1287,7 +1298,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
-      // 승계 후보의 비용 귀속(현재 + 직전 품질 계약) — 후보가 없으면 null
+      // 승계 후보의 비용 귀속(72시간 창의 모든 품질 계약) — 후보가 없으면 null
       costCarryover: supplyCostCarryover === null ? null : { ...supplyCostCarryover, attribution: carryoverAttribution },
       /**
        * 🔴 진단 전용(2026-11-13) — 판정은 위 `costAttribution`(rolling 72h 권위 cohort)만 쓴다.
