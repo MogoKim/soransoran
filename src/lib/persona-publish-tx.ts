@@ -92,6 +92,28 @@ function readIdentityLife(identity: unknown): {
 }
 
 /**
+ * 🔴 **이 Persona 가 이 글에 댓글을 달 때의 생활사·No-Go 충돌** — 글 매칭과 같은 함수(`judgeLifeHistory`)를 부른다.
+ *    발행 트랜잭션과 추가 댓글의 Persona 고르기가 **이 함수 하나**를 쓴다 — 고를 때 통과한 사람이 발행에서 닫히지 않게.
+ *    대상 글(남의 글)에는 말버릇 판정을 하지 않는다 — 소재만 본다.
+ */
+export function commentLifeBlocksOf(
+  persona: { code: string; identity: unknown; noGoTopics: readonly string[] },
+  post: { title: string; content: string },
+): ReturnType<typeof judgeLifeHistory> {
+  return judgeLifeHistory(
+    {
+      code: persona.code, status: 'active', accountCount: 0, providerId: null,
+      postsThisWeek: 0, daysSinceLastPost: null,
+      noGoTopics: [...persona.noGoTopics],
+      noGoExpressions: [],
+      ...readIdentityLife(persona.identity),
+    },
+    readPostRequirements(post.title, post.content),
+    post.title, post.content,
+  )
+}
+
+/**
  * 🔴 Serializable 트랜잭션의 시간 손잡이.
  *    `maxWait` 는 잠금을 기다리는 시간, `timeout` 은 트랜잭션 자체의 상한이다.
  *    persona-cohort 가 기본 5초에 걸려 2/2 실패했던 자리와 같은 이유로 넉넉히 둔다.
@@ -333,18 +355,8 @@ export async function publishCandidateTx(
         accountCount: personaUser?._count.accounts ?? null,
         providerId: personaUser?.providerId ?? null,
       })
-      // 🔴 생활사·No-Go — 글 매칭과 **같은 함수**를 부른다
-      const lifeBlocks = post === null ? [] : judgeLifeHistory(
-        {
-          code: row.persona.id, status: 'active', accountCount: 0, providerId: null,
-          postsThisWeek: 0, daysSinceLastPost: null,
-          noGoTopics: row.persona.noGoTopics,
-          // 🔴 대상 글(남의 글)에는 말버릇 판정을 하지 않는다 — `judgeLifeHistory` 는 소재만 본다
-          noGoExpressions: [],
-          ...readIdentityLife(row.persona.identity),
-        },
-        readPostRequirements(post.title, post.content),
-        post.title, post.content,
+      const lifeBlocks = post === null ? [] : commentLifeBlocksOf(
+        { code: row.persona.id, identity: row.persona.identity, noGoTopics: row.persona.noGoTopics }, post,
       )
       /**
        * 🔴 **무인 레인 규칙을 이 트랜잭션 안에서 본다** (2026-09-28).

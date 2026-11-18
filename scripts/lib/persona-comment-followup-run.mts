@@ -16,10 +16,10 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import {
-  FOLLOWUP_KEY_PREFIX, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
+  FOLLOWUP_KEY_PREFIX, closedFollowupKeyOf, followupEditDiffOf, followupRoleOf, isFollowupKey, judgeFollowupPost, judgeFollowupText, judgeFollowupTick,
   FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK, addFollowupIsolation, classifyFollowupFailure, followupFailureHaltsRound,
-  followupIsolationOf, followupPersonaCandidates, followupPlanCap, followupStageOf, orderFollowupGo,
-  partitionFollowupSourceContexts, pickFollowupPersona,
+  followupAuthorUnavailableReason, followupIsolationOf, followupPersonaCandidates, followupPlanCap,
+  followupSpentRoleKeys, followupStageOf, orderFollowupGo, partitionFollowupSourceContexts, pickFollowupSeat, withoutAuthorOwnPost,
   readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
   type FollowupCommentRow, type FollowupFailureCode, type FollowupIsolation, type FollowupPersonaFacts, type FollowupPostFacts,
   type FollowupPostVerdict,
@@ -39,7 +39,7 @@ import { buildCommentInput, voiceEvidenceFromAssets, type CommentInput } from '.
 import { isAdviceForbidden, isReactionType, type ReactionType } from '../../src/lib/persona-reaction-roles'
 import { judgeSourceContext } from '../../src/lib/persona-comment-source-context'
 import { judgeRealMember } from '../../src/lib/real-member-gate'
-import { publishCandidateTx, type PublishTxResult } from '../../src/lib/persona-publish-tx'
+import { commentLifeBlocksOf, publishCandidateTx, type PublishTxResult } from '../../src/lib/persona-publish-tx'
 import { kstDayStart } from '../../src/lib/persona-cap'
 import { profileOf, type RuntimeStage } from '../../src/lib/scale-profile'
 import { tallyOf, type LedgerEntry } from '../../src/lib/llm-ledger'
@@ -117,7 +117,11 @@ export async function sweepFollowupLane(prisma: PrismaClient, now: Date): Promis
     if (res.kind === 'blocked') {
       const closed = await prisma.personaApprovalQueue.updateMany({
         where: { id: r.id, status: 'PENDING', publishedCommentId: null },
-        data: { status: 'EXPIRED', declineReason: FOLLOWUP_EXPIRE_REASON, decidedBy: FOLLOWUP_LANE_DECIDED_BY, decidedAt: now },
+        // 🔴 닫으면서 자리 열쇠를 내놓는다 — 닫힌 행이 (글 · 순번)을 쥐고 그 글을 봉쇄하지 않게
+        data: {
+          status: 'EXPIRED', declineReason: FOLLOWUP_EXPIRE_REASON, decidedBy: FOLLOWUP_LANE_DECIDED_BY, decidedAt: now,
+          dedupKey: closedFollowupKeyOf(r.dedupKey, r.id),
+        },
       }).catch(() => ({ count: 0 }))
       if (closed.count === 1) out.expired += 1
       out.lines.push(`⏭️  추가 ${r.id.slice(0, 8)} 막힘 → ${closed.count === 1 ? '닫음' : '닫지 못함'} — ${res.blocks[0]?.message ?? '?'}`)
@@ -243,7 +247,8 @@ export type FollowupGenerationReport = {
  * 🔴 **추가 댓글 생성 — 실패 분류 · 같은 회차 재선정** (2026-11-14 H1).
  *
  *    글은 정해진 순서(`orderFollowupGo`)로 하나씩 본다. 한 글에서:
- *      1. `planFor` 가 오늘 격리 · 이번 회차 사용 · 이 글 시도를 뺀 Persona 를 고른다(결정적 picker 그대로)
+ *      1. `planFor` 가 오늘 격리 · 이번 회차 사용 · 이 글 시도를 뺀 Persona 를 고른다(결정적 picker 그대로).
+ *         한 자리 · 한 사람이 막히면 그 글의 다음 사람 · 다음 자리로 넘어간 뒤에야 "이 글에 지금 설 사람이 없다" 로 끝난다
  *      2. provider 앞에서 시작 기록(`recordStart`) — 못 남기면 부르지 않는다(IO 면 회차를 멈춘다)
  *      3. 결과를 `classifyFollowupFailure` 로 분류하고 **바로** 기억에 적는다(`FU_*` 를 `blockCodes` 에)
  *      4. Persona 실패 → 그 Persona 를 오늘 빼고 **같은 글에서 다음 정상 Persona** 를 다시 고른다
@@ -557,10 +562,17 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const sourceContextPartition = partitionFollowupSourceContexts(
     [...ctxByPost].map(([postId, ctx]) => ({ postId, operational: ctx.operational, reason: ctx.reason })),
   )
+  const codeByPersonaId = new Map([...personaIdByCode].map(([code, id]) => [id, code]))
+  // 🔴 글쓴이는 자기 글에서 글 × Persona 하루 격리를 받지 않는다 — 오늘 이미 보낸 역할 조합(`spentRoleKeys`)만 다시 보내지 않는다
+  const ownPostFree = withoutAuthorOwnPost(isolation, posts.flatMap((p) => {
+    const code = p.personaId === null ? undefined : codeByPersonaId.get(p.personaId)
+    return code === undefined ? [] : [{ postId: p.id, personaCode: code }]
+  }))
+  const spentRoleKeys = followupSpentRoleKeys(memory.entries, nowMs)
   const phaseIsolation: FollowupIsolation = {
-    personaCodes: new Set(isolation.personaCodes),
-    postIds: new Set([...isolation.postIds, ...sourceContextPartition.blocked.map((x) => x.postId)]),
-    postPersonaKeys: new Set(isolation.postPersonaKeys),
+    personaCodes: ownPostFree.personaCodes,
+    postIds: new Set([...ownPostFree.postIds, ...sourceContextPartition.blocked.map((x) => x.postId)]),
+    postPersonaKeys: ownPostFree.postPersonaKeys,
   }
   for (const b of sourceContextPartition.blocked) {
     lines.push(`출처 문맥 ${b.postId.slice(0, 8)} — ${b.reason} · 이 글만 회차 격리 · provider 0`)
@@ -574,71 +586,95 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const byKey = new Map<string, Planned>()
   const planOf = (input: CommentInput) => byKey.get(`${input.post.id}\u0000${input.personaCode}`)
   type Slot = FollowupSlot & (typeof ordered)[number]
-  /** 🔴 이 글에서 지금 고를 Persona 하나 — 걸러내기는 `followupPersonaCandidates`, 순서는 `pickFollowupPersona`(결정적) */
+  /**
+   * 🔴 이 글에서 지금 설 (자리 · Persona) 하나 — 자리·사람 넘기기는 `pickFollowupSeat`, 여기는 유료 호출 전 준비(`prepare`)만 한다.
+   *    생활사·No-Go 는 발행 트랜잭션과 같은 함수로 **여기서** 본다 — 생성 · 적재 뒤에 닫히면 돈을 쓰고 버린다.
+   */
   const planFor = (slot: Slot, ex: FollowupExclusion): { ok: true; plan: FollowupPlanned } | { ok: false; reason: string } => {
     const { postId, go, facts } = slot
     const src = srcById.get(postId)
     const ctx = ctxByPost.get(postId)
     if (src === undefined || ctx === undefined) return { ok: false, reason: '원문을 찾지 못했다' }
-    const candidates = followupPersonaCandidates({
-      postId, personas: personaFacts, isolation: ex.isolation, usedPersonaIds: ex.usedPersonaIds,
-    })
-    const pick = pickFollowupPersona(go, postId, candidates, perPersonaMax)
-    if (pick.personaId === null) return { ok: false, reason: pick.reason }
-    const pe = personas.find((x) => personaIdByCode.get(x.code) === pick.personaId)
-    if (pe === undefined) return { ok: false, reason: '고른 Persona 를 찾지 못했다' }
-    const replyToDigest = go.target.kind === 'reply'
-      ? (contentOf.get(go.target.commentId) ?? '').slice(0, FOLLOWUP_REPLY_DIGEST_CHARS) : undefined
     const liveComments = facts.comments.filter((c) => !c.isDeleted)
-    let built: ReturnType<typeof buildCommentInput> | null = null
-    for (const role of go.roles) {
-      const b = buildCommentInput({
-        persona: {
-          code: pe.code, ageBand: pe.ageBand, region: pe.region, lifeStage: pe.lifeStage, identity: pe.identity,
-          voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, noGoTopics: pe.noGoTopics,
-          noGoExpressions: pe.noGoExpressions, forbiddenReactionRoles: pe.forbiddenReactionRoles,
-        },
-        post: {
-          id: postId, title: src.title, bodyDigest: src.content.slice(0, DIGEST_CHARS), boardLabel: src.boardType,
-          existingCommentDigests: liveComments.map((c) => (contentOf.get(c.id) ?? '').slice(0, COMMENT_DIGEST_CHARS)),
-          ...(replyToDigest === undefined ? {} : { replyToDigest }),
-          ...(go.speaker.kind === 'author' ? { authorReply: true as const } : {}),
-        },
-        reactionRole: role,
-        voice: voiceEvidenceFromAssets({ voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, recentTexts: pe.comments.map((c) => c.content) }),
-        memory: { has: false, note: '' },
-      })
-      if (b.ok) { built = b; break }
-    }
-    if (built === null || !built.ok) return { ok: false, reason: `${pe.code} 입력을 만들지 못했다` }
-    const recentTexts = pe.comments.map((c) => c.content)
-    const planned: Planned = {
-      go, recentTexts,
-      existing: [
-        { text: `${src.title}\n${src.content}`, persona: false },
-        ...liveComments.map((c) => ({ text: contentOf.get(c.id) ?? '', persona: c.commentOrigin === 'PERSONA' })),
-      ],
-      gate: {
-        sourceTexts: sourceTextsOf(built.input), knownNames, frequency: frequencyRead.corpus, priorTexts: recentTexts,
-        seedUseCount: seedShareByCode.get(pe.code) ?? null, adviceForbidden: isAdviceForbidden(pe.forbiddenReactionRoles),
-        sourceIsCafeOperational: ctx.operational, sourceContextReason: ctx.reason,
+    const picked = pickFollowupSeat<Planned>({
+      go, postId, perPersonaDailyMax: perPersonaMax,
+      candidates: followupPersonaCandidates({ postId, personas: personaFacts, isolation: ex.isolation, usedPersonaIds: ex.usedPersonaIds }),
+      authorWhy: (authorPersonaId) => followupAuthorUnavailableReason({
+        postId, author: personaFacts.find((x) => x.personaId === authorPersonaId),
+        isolation: ex.isolation, usedPersonaIds: ex.usedPersonaIds, perPersonaDailyMax: perPersonaMax,
+      }),
+      prepare: (seatGo, personaId) => {
+        const pe = personas.find((x) => personaIdByCode.get(x.code) === personaId)
+        if (pe === undefined) return { ok: false, reason: '고른 Persona 를 찾지 못했다' }
+        if (commentLifeBlocksOf({ code: pe.code, identity: pe.identity, noGoTopics: pe.noGoTopics }, { title: src.title, content: src.content }).length > 0) {
+          return { ok: false, reason: `${pe.code} 는 이 글과 생활사·No-Go 가 충돌한다` }
+        }
+        const replyToDigest = seatGo.target.kind === 'reply'
+          ? (contentOf.get(seatGo.target.commentId) ?? '').slice(0, FOLLOWUP_REPLY_DIGEST_CHARS) : undefined
+        // 🔴 오늘 이미 보내 실패한 (글 · Persona · 역할)은 다시 보내지 않는다 — 글쓴이는 남은 역할로 다시 선다
+        const roles = seatGo.roles.filter((role) => !spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role })))
+        let built: ReturnType<typeof buildCommentInput> | null = null
+        for (const role of roles) {
+          const b = buildCommentInput({
+            persona: {
+              code: pe.code, ageBand: pe.ageBand, region: pe.region, lifeStage: pe.lifeStage, identity: pe.identity,
+              voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, noGoTopics: pe.noGoTopics,
+              noGoExpressions: pe.noGoExpressions, forbiddenReactionRoles: pe.forbiddenReactionRoles,
+            },
+            post: {
+              id: postId, title: src.title, bodyDigest: src.content.slice(0, DIGEST_CHARS), boardLabel: src.boardType,
+              existingCommentDigests: liveComments.map((c) => (contentOf.get(c.id) ?? '').slice(0, COMMENT_DIGEST_CHARS)),
+              ...(replyToDigest === undefined ? {} : { replyToDigest }),
+              ...(seatGo.speaker.kind === 'author' ? { authorReply: true as const } : {}),
+            },
+            reactionRole: role,
+            voice: voiceEvidenceFromAssets({ voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, recentTexts: pe.comments.map((c) => c.content) }),
+            memory: { has: false, note: '' },
+          })
+          if (b.ok) { built = b; break }
+        }
+        if (built === null || !built.ok) {
+          return {
+            ok: false,
+            reason: roles.length === 0
+              ? `${pe.code} 는 이 자리의 역할(${seatGo.roles.join('·')})을 오늘 이미 다 보냈다`
+              : `${pe.code} 입력을 만들지 못했다(역할 ${roles.join('·')})`,
+          }
+        }
+        const recentTexts = pe.comments.map((c) => c.content)
+        return {
+          ok: true,
+          value: {
+            go: seatGo, recentTexts,
+            existing: [
+              { text: `${src.title}\n${src.content}`, persona: false },
+              ...liveComments.map((c) => ({ text: contentOf.get(c.id) ?? '', persona: c.commentOrigin === 'PERSONA' })),
+            ],
+            gate: {
+              sourceTexts: sourceTextsOf(built.input), knownNames, frequency: frequencyRead.corpus, priorTexts: recentTexts,
+              seedUseCount: seedShareByCode.get(pe.code) ?? null, adviceForbidden: isAdviceForbidden(pe.forbiddenReactionRoles),
+              sourceIsCafeOperational: ctx.operational, sourceContextReason: ctx.reason,
+            },
+            target: {
+              input: built.input,
+              author: {
+                authorPersonaCode: src.authorPersonaCode, authorOperatorWriterId: src.authorOperatorWriterId, source: src.source,
+                authorRealMember: src.author === null ? null : { accountCount: src.author.accountCount, providerId: src.author.providerId },
+                authorIsAdmin: src.author?.isAdmin ?? null, visibility: src.visibility,
+              },
+              facts: {
+                postId, personaCode: pe.code, reactionRole: built.input.reactionRole, hasOpenQueue: false,
+                personaCommentsOnPost: liveComments.filter((c) => c.commentOrigin === 'PERSONA').length,
+                personaAlreadyOnPost: false, postStatus: src.visibility.status, personaActive: true, personaRealMember: false,
+              },
+            },
+          },
+        }
       },
-      target: {
-        input: built.input,
-        author: {
-          authorPersonaCode: src.authorPersonaCode, authorOperatorWriterId: src.authorOperatorWriterId, source: src.source,
-          authorRealMember: src.author === null ? null : { accountCount: src.author.accountCount, providerId: src.author.providerId },
-          authorIsAdmin: src.author?.isAdmin ?? null, visibility: src.visibility,
-        },
-        facts: {
-          postId, personaCode: pe.code, reactionRole: built.input.reactionRole, hasOpenQueue: false,
-          personaCommentsOnPost: liveComments.filter((c) => c.commentOrigin === 'PERSONA').length,
-          personaAlreadyOnPost: false, postStatus: src.visibility.status, personaActive: true, personaRealMember: false,
-        },
-      },
-    }
-    byKey.set(`${postId}\u0000${pe.code}`, planned)
-    return { ok: true, plan: { target: planned.target, personaId: pick.personaId } }
+    })
+    if (!picked.ok) return picked
+    byKey.set(`${postId}\u0000${picked.value.target.facts.personaCode}`, picked.value)
+    return { ok: true, plan: { target: picked.value.target, personaId: picked.personaId } }
   }
   // 🔴 생성기는 첫 시도에서 한 번 만든다 — 말투 근거는 고를 수 있는 Persona 전체 기준(자산이 하나라도 있으면 전원 강제)
   let generate: FollowupGenerate | null = null

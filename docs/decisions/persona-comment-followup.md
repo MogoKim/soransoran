@@ -97,9 +97,9 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 
 | 코드 | 원인 | 오늘(KST) 격리 범위 | 같은 회차 |
 |---|---|---|---|
-| `FU_PERSONA_DAY` | Persona 에 묶인 결정적 실패(설정 · 말투 · bootstrap · prompt 근거 · 비활성 · 실회원) | 그 Persona — 모든 글 | 같은 글에서 다음 정상 Persona 재선정 |
+| `FU_PERSONA_DAY` | Persona 에 묶인 결정적 실패(⑧ 말투 · prompt 근거 · 비활성 · 실회원) | 그 Persona — 모든 글 | 같은 글에서 다음 정상 Persona 재선정 |
 | `FU_POST_DAY` | 글에 묶인 실패(글 사라짐 · 비공개 · 게시판 바뀜 · Persona 댓글 꽉 참 · 글 상태 모름) | 그 글 하나 | 다음 글로 넘어간다 |
-| `FU_COMBO_DAY` | 그 글 × 그 Persona 본문 실패(관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복) | 글 × Persona 쌍 | 같은 글에서 재선정 |
+| `FU_COMBO_DAY` | 그 글 × 그 Persona 본문 실패(①~⑦ · ⑨ 관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복). 막은 관문이 분류를 정한다 — ⑧ 미실행 꼬리표(`BOOTSTRAP_*`)는 원인이 아니다. 글쓴이는 자기 글에서 이 격리를 받지 않고 실패한 역할만 다시 보내지 않는다 | 글 × Persona 쌍 | 같은 글에서 재선정 |
 | `FU_TRANSIENT` | 일시 provider · IO · 장부(429 · 5xx · NETWORK · TIMEOUT · LEDGER_BLOCKED · DB ERROR) | 없음 | 회차를 멈춘다. 다음 회차에 같은 조합을 새로 시작할 수 있다 |
 | `FU_HALT` | 모르는 · 내부 실패 · 요청 모양 거부(400) | 글 × Persona 쌍 | 회차를 멈춘다 |
 

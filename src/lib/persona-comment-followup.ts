@@ -205,6 +205,15 @@ export function followupKeyOf(postId: string, ordinal: number): string {
  *    첫 댓글 sweep 은 이 행을 집지 않고(집으면 글당 1건 규칙에 막혀 닫힌다), 추가 댓글 sweep 은 이 행만 집는다.
  */
 export const isFollowupKey = (dedupKey: string): boolean => dedupKey.startsWith(FOLLOWUP_KEY_PREFIX)
+/**
+ * 🔴 **닫힌 행은 자리 열쇠를 내놓는다.** 발행 재검사에서 닫힌(EXPIRED) 행이 `(글 · 순번)` 열쇠를 쥐고 있으면
+ *    순번은 댓글이 늘어야 바뀌므로 그 글은 식을 때까지 아무도 못 선다. 닫을 때 열쇠를 이 모양으로 바꾼다 —
+ *    추가 댓글 열쇠 모양이 아니라 sweep 이 다시 집지 않고, 행 id 가 붙어 서로 겹치지 않는다.
+ */
+export const FOLLOWUP_CLOSED_KEY_PREFIX = 'comment-followup-closed:'
+export function closedFollowupKeyOf(dedupKey: string, rowId: string): string {
+  return `${FOLLOWUP_CLOSED_KEY_PREFIX}${dedupKey.slice(FOLLOWUP_KEY_PREFIX.length)}:${rowId}`
+}
 
 // ─────────────────────────────────────────────────────────
 // 🔴 한 글 판정
@@ -252,8 +261,15 @@ export type FollowupTarget =
 /** 🔴 이번 자리의 화자 — `author` 면 그 Persona 하나만 쓴다(다른 Persona 로 바꾸지 않는다) */
 export type FollowupSpeaker = { kind: 'author'; personaId: string } | { kind: 'other' }
 
+/** 이을 수 있는 자리 하나 — 대상 · 화자 · 그 자리에서 쓸 수 있는 역할 */
+export type FollowupSeat = { target: FollowupTarget; speaker: FollowupSpeaker; roles: readonly ReactionType[] }
+
 export type FollowupPostVerdict =
-  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; reason: string }
+  /**
+   * `target` · `speaker` · `roles` 는 첫 자리(`seats[0]`)다. 🔴 한 자리가 막혀도 글은 멈추지 않는다 —
+   * 그 자리에 설 사람이 없으면 부르는 쪽이 `seats` 의 다음 자리로 넘어간다(`followupGoForSeat`).
+   */
+  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; reason: string }
   | { verdict: 'WAIT'; notBeforeMs: number | null; reason: string }
   | { verdict: 'STOP'; reason: string }
   | { verdict: 'BLOCK'; reason: string }
@@ -433,14 +449,26 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
   const open = openHooksOf(f, b.live)
   const target = open[0] ?? null
   if (target === null) return { verdict: 'STOP', reason: '이어질 거리(답 없는 질문·경험·공감·반론)가 없다 — 자연스러운 끝' }
-  const speaker = followupSpeakerOf(f, target.kind === 'reply' ? target.commentId : null)
+  const seats: FollowupSeat[] = open.map((t) => ({
+    target: t,
+    speaker: followupSpeakerOf(f, t.kind === 'reply' ? t.commentId : null),
+    roles: t.kind === 'post' ? postHookRolesOf(f, t.hook) : rolesFor(t.hook),
+  }))
+  const { speaker, roles } = seats[0]!
   return {
     verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, openHooks: open.length,
     key: followupKeyOf(f.postId, b.ordinal), target, speaker,
     excludePersonaIds: [...b.onPost].sort(),
-    roles: target.kind === 'post' ? postHookRolesOf(f, target.hook) : rolesFor(target.hook),
+    roles, seats,
     reason: `추가 ${b.extrasSoFar + 1}/${b.cap} · 미해결 거리 ${open.length} · ${target.kind === 'reply' ? `${target.hook} 에 ${speaker.kind === 'author' ? '글쓴이 ' : ''}답글` : `글의 ${target.hook} 에 새 댓글`}`,
   }
+}
+
+/** 같은 판정을 `seats` 의 다른 자리로 본 것 — 순번 · 열쇠 · 제외 Persona 는 글의 것이라 그대로다 */
+export function followupGoForSeat(
+  go: Extract<FollowupPostVerdict, { verdict: 'GO' }>, seat: FollowupSeat,
+): Extract<FollowupPostVerdict, { verdict: 'GO' }> {
+  return { ...go, target: seat.target, speaker: seat.speaker, roles: seat.roles }
 }
 
 /** 🔴 답이 한 번이라도 달린 댓글(지운 답·실회원 답 포함) — 다시 소비하지 않는다 */
@@ -553,12 +581,14 @@ export const kstDayEndMs = (t: number): number => kstDayStart(new Date(t)).getTi
  *    **같은 실패 Persona 가 다음 회차에도 같은 자리에 다시 뽑힌다**. 그렇다고 글 전체를 막으면 그 글의 정상 Persona 까지
  *    하루 동안 못 고른다. 그래서 실패의 원인이 묶인 범위만 막는다.
  *
- *    · `FU_PERSONA_DAY` — 원인이 Persona 에 묶인 결정적 실패(⑦ 설정 · ⑧ 말투 · ⑧ bootstrap · prompt 근거 · 비활성 · 실회원).
+ *    · `FU_PERSONA_DAY` — 원인이 Persona 에 묶인 결정적 실패(⑧ 말투 · prompt 근거 · 비활성 · 실회원).
  *      그 Persona 를 KST 하루 동안 모든 글에서 빼고, **같은 회차에서** 다음 정상 Persona 를 다시 고른다
  *    · `FU_POST_DAY` — 원인이 글에 묶인 실패(글 사라짐 · 비공개 · 게시판 바뀜 · Persona 댓글 꽉 참 · 글 상태 모름).
  *      그 글만 KST 하루 동안 뺀다. 그 Persona 는 다른 글에서 그대로 쓴다
- *    · `FU_COMBO_DAY` — 그 글 × 그 Persona 의 본문에 묶인 실패(①~⑥ · ⑨ 관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복 · 미완 기록).
- *      그 글에서 그 Persona 만 뺀다
+ *    · `FU_COMBO_DAY` — 그 글 × 그 Persona 의 본문에 묶인 실패(①~⑦ · ⑨ 관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복 · 미완 기록).
+ *      그 글에서 그 Persona 만 뺀다. ⑦(설정 모순 · 근거 없는 자기 경험)도 그 한 번의 본문이 만든 실패다 — 같은 사람이 다음 글에서는 통과한다.
+ *      🔴 분류는 **실제로 막은 관문**이 정한다. ⑧ 표본이 모자란 신규 Persona 의 표시(`BOOTSTRAP_*`)는 원인이 아니라 꼬리표다 —
+ *      그 꼬리표로 Persona 를 하루 빼면 본문 문제(②·⑦) 한 번에 그 사람이 모든 글에서 빠진다
  *    · `FU_TRANSIENT` — 일시 provider · IO · 장부 · 환경 실패(429 · 5xx · NETWORK · TIMEOUT · LEDGER_BLOCKED · 정산 모름 · DB ERROR).
  *      🔴 **아무것도 격리하지 않는다** — 다음 회차에 같은 조합을 다시 고를 수 있다. 이번 회차의 남은 호출은 멈춘다(fail-closed)
  *    · `FU_HALT` — 모르는 · 내부 실패 · 요청 모양 거부(400). 같은 글 × Persona 를 오늘 다시 보내지 않고 이번 회차를 멈춘다
@@ -571,9 +601,7 @@ const isFailureCode = (c: string): c is FollowupFailureCode => (FOLLOWUP_FAILURE
 /** 🔴 이 분류가 이번 회차의 남은 provider 호출을 멈추는가 */
 export const followupFailureHaltsRound = (c: FollowupFailureCode): boolean => c === 'FU_TRANSIENT' || c === 'FU_HALT'
 
-const PERSONA_BLOCK_CODES: ReadonlySet<string> = new Set([
-  'BOOTSTRAP_NEEDS_HUMAN', 'BOOTSTRAP_CLAIM_INVALID', 'PERSONA_NOT_ACTIVE', 'PERSONA_REAL_MEMBER',
-])
+const PERSONA_BLOCK_CODES: ReadonlySet<string> = new Set(['PERSONA_NOT_ACTIVE', 'PERSONA_REAL_MEMBER'])
 const POST_BLOCK_CODES: ReadonlySet<string> = new Set([
   'POST_PERSONA_COMMENTS_FULL', 'POST_STATE_UNKNOWN', 'POST_NOT_PUBLISHED',
 ])
@@ -590,10 +618,6 @@ const COMBO_PROVIDER_CODES: ReadonlySet<string> = new Set([
 const TRANSIENT_PROVIDER_CODES: ReadonlySet<string> = new Set([
   'TIMEOUT', 'PROVIDER_EXCEPTION', 'SETTLE_NOT_RECORDED', 'SETTLE_AMOUNT_UNKNOWN', 'NO_API_KEY',
 ])
-
-/** ⑦ (Persona 설정 · 금지 역할)이 막았는가 — `notRun` 은 막은 것이 아니다 */
-const isPersonaGateFailure = (failedGates: readonly string[]): boolean =>
-  failedGates.some((g) => g.startsWith('⑦:') && g !== '⑦:notRun')
 
 /**
  * 🔴 **한 시도의 결과 → 분류 코드.** 적재(`ENQUEUED`)는 실패가 아니다(null).
@@ -627,7 +651,7 @@ export function classifyFollowupFailure(o: {
     case 'PARSE_FAILED':
       return 'FU_COMBO_DAY'
     case 'ENQUEUE_BLOCKED':
-      if (isVoiceFailure({ failedGates: gates }) || isPersonaGateFailure(gates) || codes.some((c) => PERSONA_BLOCK_CODES.has(c))) {
+      if (isVoiceFailure({ failedGates: gates }) || codes.some((c) => PERSONA_BLOCK_CODES.has(c))) {
         return 'FU_PERSONA_DAY'
       }
       if (codes.some((c) => POST_BLOCK_CODES.has(c))) return 'FU_POST_DAY'
@@ -695,10 +719,33 @@ export function followupIsolationReason(iso: FollowupIsolation, e: { postId: str
 }
 
 /**
+ * 🔴 **글쓴이는 자기 글에서 글 × Persona 하루 격리를 받지 않는다.** 글쓴이 답글 자리는 다른 사람으로 바꿀 수 없어,
+ *    한 번 탈락했다고 그 쌍을 하루 빼면 그 글의 대화가 자정까지 멈춘다. 대신 같은 (글 · 글쓴이 · 역할) 조합만
+ *    시도 기억이 막는다(`followupSpentRoleKeys`) — 다음 회차에 남은 역할로 다시 선다.
+ *    Persona 하루 격리(⑧ 말투 · 비활성)는 글쓴이에게도 그대로다.
+ */
+export function withoutAuthorOwnPost(
+  iso: FollowupIsolation, authors: readonly { postId: string; personaCode: string }[],
+): FollowupIsolation {
+  const own = new Set(authors.map(postPersonaKeyOf))
+  return {
+    personaCodes: new Set(iso.personaCodes), postIds: new Set(iso.postIds),
+    postPersonaKeys: new Set([...iso.postPersonaKeys].filter((k) => !own.has(k))),
+  }
+}
+
+/** 🔴 오늘 이미 보내 실패로 끝난 (글 · Persona · 역할) 조합 — 같은 조합은 시작 기록이 거절하므로 고를 때 미리 뺀다 */
+export function followupSpentRoleKeys(entries: readonly AttemptEntry[], nowMs: number): Set<string> {
+  return new Set(activeAttempts(entries, nowMs, FOLLOWUP_ATTEMPT_LANE)
+    .filter((e) => !FOLLOWUP_ATTEMPT_LANE.replaceableOnRestart(e)).map(attemptKeyOf))
+}
+
+/**
  * 🔴 **추가 댓글 시도 기억 lane.** 기억은 시도한 KST 날의 자정까지다 — 영구 차단 목록을 만들지 않는다.
  *    시도는 공개 후 `FOLLOWUP_POST_AGE_MAX_MS` 안에서만 일어난다(식은 글 규칙과 같은 범위).
  *    · 같은 조합 재시작 — 적재로 끝난 조합(다음 자리의 새 시도)과 `FU_TRANSIENT` 만 새 시작으로 바꾼다
- *    · 마지막 방어선 — 오늘 격리된 Persona · 글 · 글 × Persona 면 시작 기록을 받지 않는다
+ *    · 마지막 방어선 — 오늘 격리된 Persona · 글이면 시작 기록을 받지 않는다. 글 × Persona 는 여기서 막지 않는다 —
+ *      글쓴이가 자기 글에서 역할을 바꿔 다시 서는 길이고(`withoutAuthorOwnPost`), 같은 조합은 열쇠 중복으로 이미 거절된다
  */
 export const FOLLOWUP_ATTEMPT_LANE: AttemptLane = Object.freeze({
   name: 'followup',
@@ -711,7 +758,7 @@ export const FOLLOWUP_ATTEMPT_LANE: AttemptLane = Object.freeze({
     const iso = emptyFollowupIsolation()
     const key = attemptKeyOf(e)
     for (const x of live) if (attemptKeyOf(x) !== key) addFollowupIsolation(iso, x, followupFailureCodeOf(x))
-    const why = followupIsolationReason(iso, e)
+    const why = followupIsolationReason({ ...iso, postPersonaKeys: new Set() }, e)
     return why === null ? null : `${why} — 다시 보내지 않는다`
   },
 })
@@ -774,6 +821,30 @@ export type FollowupPersonaCandidate = {
   followupsToday: number | null
 }
 
+/**
+ * 🔴 글쓴이 답글 자리에 글쓴이가 설 수 없는 **실제 사유** — 로그가 원인을 가리지 않게 한다.
+ *    `followupPersonaCandidates` 가 거르는 순서와 같다. 설 수 있으면 null.
+ */
+export function followupAuthorUnavailableReason(i: {
+  postId: string
+  author: FollowupPersonaFacts | undefined
+  isolation: FollowupIsolation
+  usedPersonaIds: ReadonlySet<string>
+  perPersonaDailyMax: number
+}): string | null {
+  const a = i.author
+  if (a === undefined || a.personaId === null) return '글쓴이 Persona 를 찾지 못했다'
+  if (!a.active) return `글쓴이 ${a.code} 가 비활성이다`
+  if (a.realMember) return `글쓴이 ${a.code} 에 실회원 계정이 붙어 있다`
+  if (!a.profileComplete) return `글쓴이 ${a.code} 의 프로필이 덜 찼다`
+  if (!a.voiceCapable) return `글쓴이 ${a.code} 는 말투 고정 잠금이다`
+  if (i.usedPersonaIds.has(a.personaId)) return `글쓴이 ${a.code} 는 이번 회차에 이미 다른 글에 썼다`
+  const iso = followupIsolationReason(i.isolation, { postId: i.postId, personaCode: a.code })
+  if (iso !== null) return iso
+  if (a.followupsToday >= i.perPersonaDailyMax) return `글쓴이 ${a.code} 의 오늘 추가 댓글 ${a.followupsToday}건 — 하루 상한 ${i.perPersonaDailyMax}`
+  return null
+}
+
 export function pickFollowupPersona(
   go: Extract<FollowupPostVerdict, { verdict: 'GO' }>,
   postId: string,
@@ -784,11 +855,11 @@ export function pickFollowupPersona(
   if (!isPosInt(perPersonaDailyMax)) return { personaId: null, reason: 'Persona 하루 상한이 손상됐다(fail-closed)' }
   const speaker = go.speaker
   if (speaker.kind === 'author') {
-    // 🔴 글쓴이 답글 자리 — 글쓴이가 지금 답할 수 없으면 이번 회차는 비운다. 다른 Persona 로 바꾸지 않는다
+    // 🔴 글쓴이 답글 자리 — 다른 Persona 로 바꾸지 않는다. 글쓴이가 못 서면 부르는 쪽이 다음 자리로 넘어간다
     const a = candidates.find((c) => c.personaId === speaker.personaId)
     return a !== undefined && a.eligible && isCount(a.followupsToday) && a.followupsToday < perPersonaDailyMax
       ? { personaId: a.personaId }
-      : { personaId: null, reason: '글쓴이 답글 자리 — 글쓴이가 지금 답할 수 없다(자격·하루 상한·이번 회차 사용) · 다른 Persona 로 바꾸지 않는다' }
+      : { personaId: null, reason: '글쓴이 답글 자리 — 글쓴이가 지금 설 수 없다' }
   }
   const excluded = new Set(go.excludePersonaIds)
   const pool = candidates.filter((c) => c.eligible && !excluded.has(c.personaId)
@@ -799,6 +870,47 @@ export function pickFollowupPersona(
     unitOf('followup-persona', postId, String(go.ordinal), a.personaId)
     - unitOf('followup-persona', postId, String(go.ordinal), b.personaId))
   return { personaId: ranked[0]!.personaId }
+}
+
+type FollowupGo = Extract<FollowupPostVerdict, { verdict: 'GO' }>
+
+/**
+ * 🔴 **이 글에서 지금 설 수 있는 (자리 · Persona) 하나 — 한 후보의 실패가 글을 멈추지 않는다.**
+ *    자리는 `go.seats` 순서, 사람은 `pickFollowupPersona` 순서(결정적)다. 고른 사람이 `prepare`(유료 호출 **전** 준비 —
+ *    생활사·No-Go · 입력 만들기)에서 막히면 같은 자리의 다음 사람으로, 그 자리에 설 사람이 없으면 다음 자리로 간다.
+ *    글쓴이 자리는 글쓴이 한 사람뿐이라 글쓴이가 못 서면 바로 다음 자리다. 끝까지 없으면 **실제 사유**를 모아 돌려준다.
+ */
+export function pickFollowupSeat<T>(i: {
+  go: FollowupGo
+  postId: string
+  candidates: readonly FollowupPersonaCandidate[]
+  perPersonaDailyMax: number
+  prepare: (seatGo: FollowupGo, personaId: string) => { ok: true; value: T } | { ok: false; reason: string }
+  /** 글쓴이 자리에 글쓴이가 후보로 없을 때의 실제 사유(`followupAuthorUnavailableReason`) */
+  authorWhy?: (authorPersonaId: string) => string | null
+}): { ok: true; value: T; personaId: string } | { ok: false; reason: string } {
+  const why: string[] = []
+  for (const seat of i.go.seats) {
+    const seatGo = followupGoForSeat(i.go, seat)
+    const tried = new Set<string>()
+    for (;;) {
+      const pick = pickFollowupPersona(seatGo, i.postId, i.candidates.filter((c) => !tried.has(c.personaId)), i.perPersonaDailyMax)
+      if (pick.personaId === null) {
+        // 앞사람들의 사유는 이미 적혔다 — 아무도 서 보지 못한 자리만 고르기 사유를 적는다
+        if (tried.size === 0) {
+          const authorWhy = seat.speaker.kind === 'author' ? i.authorWhy?.(seat.speaker.personaId) ?? null : null
+          why.push(authorWhy === null ? pick.reason : `${pick.reason} — ${authorWhy}`)
+        }
+        break
+      }
+      tried.add(pick.personaId)
+      const r = i.prepare(seatGo, pick.personaId)
+      if (r.ok) return { ok: true, value: r.value, personaId: pick.personaId }
+      why.push(r.reason)
+    }
+  }
+  const uniq = [...new Set(why)]
+  return { ok: false, reason: `지금 설 사람이 없다 — ${uniq.slice(0, 4).join(' / ')}${uniq.length > 4 ? ` 외 ${uniq.length - 4}건` : ''}` }
 }
 
 // ─────────────────────────────────────────────────────────

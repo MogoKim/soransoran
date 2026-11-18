@@ -396,7 +396,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const g = (postId: string, extras: number) => ({
       postId,
       go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1, key: M.followupKeyOf(postId, extras + 2),
-        target: { kind: 'post' as const, hook: 'question' as const }, speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], reason: '' },
+        target: { kind: 'post' as const, hook: 'question' as const }, speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], reason: '' },
     })
     let allOk = true
     for (let i = 0; i < 50; i++) {
@@ -414,7 +414,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       postId, publishedAtMs,
       go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1,
         key: M.followupKeyOf(postId, extras + 2), target: { kind: 'post' as const, hook: 'question' as const },
-        speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], reason: '' },
+        speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], reason: '' },
     })
     const hIds = ['p-h1', 'p-h2', 'p-h3', 'p-h4', 'p-h5']
     // hash 오름차순으로 줄 세우기
@@ -791,7 +791,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑩ 🔴 run 이 Persona 댓글 역할을 Queue reactionType 에서 정본 함수로 읽는다',
     runSrc.includes("role: c.commentOrigin === 'PERSONA' ? followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id)) : null")
     && /publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true, reactionType: true/.test(runSrc))
-  check('⑩ 🔴 run 이 글쓴이 자리 입력에 authorReply 를 싣는다', runSrc.includes("...(go.speaker.kind === 'author' ? { authorReply: true as const } : {})"))
+  check('⑩ 🔴 run 이 글쓴이 자리 입력에 authorReply 를 싣는다', runSrc.includes("...(seatGo.speaker.kind === 'author' ? { authorReply: true as const } : {})"))
   check('⑩ 🔴 트랜잭션이 같은 정본으로 역할을 읽고 후보 역할을 넘긴다',
     txSrc.includes("role: c.commentOrigin !== 'PERSONA' ? null : followupRoleOf(qs.filter((q) => q.publishedCommentId === c.id))")
     && txSrc.includes('candidateRole: row.reactionType,'))
@@ -923,10 +923,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const C = M.classifyFollowupFailure
   const cases: [string, Parameters<typeof C>[0], ReturnType<typeof C>][] = [
     ['⑧ regenerate → Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:regenerate'] }, 'FU_PERSONA_DAY'],
-    ['⑦ 금지 역할 → Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:reject'] }, 'FU_PERSONA_DAY'],
+    ['⑦ 설정 모순 · 근거 없는 경험 → 글 × Persona(본문 탓 — 그 사람을 하루 빼지 않는다)', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:regenerate'] }, 'FU_COMBO_DAY'],
     ['⑦:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:notRun', '②:regenerate'] }, 'FU_COMBO_DAY'],
     ['⑧:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:notRun', '③:reject'] }, 'FU_COMBO_DAY'],
-    ['BOOTSTRAP_NEEDS_HUMAN → Persona', { step: 'ENQUEUE_BLOCKED', blockCodes: ['BOOTSTRAP_NEEDS_HUMAN'] }, 'FU_PERSONA_DAY'],
+    ['🔴 신규 Persona 의 ② 탈락(⑧ 미실행 꼬리표) → 글 × Persona — 꼬리표가 아니라 막은 관문이 정한다',
+      { step: 'ENQUEUE_BLOCKED', failedGates: ['②:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
+    ['🔴 신규 Persona 의 ⑦ 탈락(⑧ 미실행 꼬리표) → 글 × Persona',
+      { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
+    ['BOOTSTRAP_NEEDS_HUMAN 꼬리표 + 글 쪽 실패 → 글', { step: 'ENQUEUE_BLOCKED', blockCodes: ['BOOTSTRAP_NEEDS_HUMAN', 'POST_NOT_PUBLISHED'] }, 'FU_POST_DAY'],
+    ['⑧ 가 실제로 막았으면 꼬리표가 있어도 Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:regenerate'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_PERSONA_DAY'],
     ['PERSONA_REAL_MEMBER → Persona', { step: 'ENQUEUE_BLOCKED', blockCodes: ['PERSONA_REAL_MEMBER'] }, 'FU_PERSONA_DAY'],
     ['PROMPT_BLOCKED → Persona', { step: 'PROVIDER_FAILED', errorCode: 'PROMPT_BLOCKED' }, 'FU_PERSONA_DAY'],
     ['POST_PERSONA_COMMENTS_FULL → 글', { step: 'ENQUEUE_BLOCKED', blockCodes: ['POST_PERSONA_COMMENTS_FULL'] }, 'FU_POST_DAY'],
@@ -1042,6 +1047,104 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 
   check('⑫ 호출 상한 — followupPlanCap(allowed) = allowed × 2 · 글당 회차 시도 2',
     M.followupPlanCap(0) === 0 && M.followupPlanCap(3) === 6 && M.FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK === 2)
+}
+
+// ═════════ ⑬ 한 후보의 실패가 글을 멈추지 않는다 — 자리 넘기기 · 글쓴이 재시도 · 닫힌 행 열쇠 ═════════
+{
+  const at = T0 + 200 * MIN
+  const fxFacts = (comments: FxComment[], postReaction: ReactionType | null = 'other') => factsOf(FX_POST, { post: { postReaction }, comments })
+  const first: FxComment = { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', reaction: 'question', provenance: 'auto', role: 'other' }
+  const v = M.judgeFollowupPost(fxFacts([first], 'question'), at)
+  const go = v.verdict === 'GO' ? v : null
+  check('⑬ GO 는 열린 자리를 전부 준다 — 글쓴이 답글 자리 다음에 글 자리',
+    go !== null && go.seats.length === 2 && go.seats[0]!.speaker.kind === 'author' && go.seats[0]!.target.kind === 'reply'
+    && go.seats[1]!.target.kind === 'post' && go.seats[1]!.speaker.kind === 'other' && go.target === go.seats[0]!.target,
+    JSON.stringify(go?.seats.map((x) => `${x.target.kind}/${x.speaker.kind}`)))
+  if (go !== null) {
+    const cand = (ids: string[]): FollowupModule.FollowupPersonaCandidate[] => ids.map((personaId) => ({ personaId, eligible: true, followupsToday: 0 }))
+    const ok = (seatGo: typeof go, personaId: string) => ({ ok: true as const, value: `${seatGo.target.kind}:${personaId}` })
+    // (a) 글쓴이가 오늘 격리돼 후보에 없다 → 그 자리를 건너뛰고 글 자리에 다른 사람이 선다
+    const skip = M.pickFollowupSeat({ go, postId: FX_POST, candidates: cand(['pX', 'pY']), perPersonaDailyMax: 3, prepare: ok })
+    check('⑬ 🔴 (a) 글쓴이가 못 서도 글이 멈추지 않는다 — 다음 자리(글)에 다른 Persona',
+      skip.ok && skip.value.startsWith('post:') && skip.personaId !== 'pA', JSON.stringify(skip))
+    const authorSeat = M.pickFollowupSeat({ go, postId: FX_POST, candidates: cand(['pX', 'pA']), perPersonaDailyMax: 3, prepare: ok })
+    check('⑬ 글쓴이가 설 수 있으면 글쓴이 답글 자리가 먼저다', authorSeat.ok && authorSeat.value === 'reply:pA')
+    // (a) 글쓴이의 입력이 서지 않는다 → 같은 자리를 다른 사람으로 바꾸지 않고 다음 자리로
+    const authorFail = M.pickFollowupSeat({
+      go, postId: FX_POST, candidates: cand(['pX', 'pA']), perPersonaDailyMax: 3,
+      prepare: (seatGo, id) => (id === 'pA' ? { ok: false as const, reason: 'pA 입력을 만들지 못했다' } : ok(seatGo, id)),
+    })
+    check('⑬ 🔴 (a) 글쓴이 자리는 다른 사람으로 바꾸지 않는다 — 글쓴이가 막히면 글 자리로 간다',
+      authorFail.ok && authorFail.value === 'post:pX', JSON.stringify(authorFail))
+    // (b) 고른 사람의 입력이 서지 않는다 → 같은 자리의 다음 사람
+    const postOnly = { ...go, seats: [go.seats[1]!] }
+    const order: string[] = []
+    const next = M.pickFollowupSeat({
+      go: postOnly, postId: FX_POST, candidates: cand(['pX', 'pY', 'pZ']), perPersonaDailyMax: 3,
+      prepare: (seatGo, id) => { order.push(id); return order.length === 1 ? { ok: false as const, reason: `${id} 입력을 만들지 못했다` } : ok(seatGo, id) },
+    })
+    check('⑬ 🔴 (b) 입력을 못 만든 사람에서 멈추지 않는다 — 같은 자리의 다음 사람이 선다',
+      next.ok && order.length === 2 && order[0] !== order[1] && next.personaId === order[1], order.join(','))
+    // 끝까지 없으면 실제 사유를 돌려준다
+    const none = M.pickFollowupSeat({
+      go, postId: FX_POST, candidates: cand(['pX']), perPersonaDailyMax: 3,
+      prepare: (_g, id) => ({ ok: false as const, reason: `${id} 는 이 글과 생활사·No-Go 가 충돌한다` }),
+      authorWhy: () => '이 글에서 pA 는 오늘(KST) 이미 실패했다',
+    })
+    check('⑬ 🔴 (a) 설 사람이 없으면 실제 사유를 찍는다(자격·하루 상한 같은 뭉뚱그린 말이 아니다)',
+      !none.ok && none.reason.includes('오늘(KST) 이미 실패했다') && none.reason.includes('생활사·No-Go') && !none.reason.includes('자격·하루 상한'),
+      none.ok ? '' : none.reason)
+  }
+  // 글쓴이 사유 — 거르는 순서대로 실제 원인 하나
+  const author = { code: 'pc-a', personaId: 'id-a', active: true, realMember: false, profileComplete: true, voiceCapable: true, followupsToday: 0 }
+  const iso = M.emptyFollowupIsolation()
+  M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-a' }, 'FU_COMBO_DAY')
+  const whyOf = (o: Partial<Parameters<typeof M.followupAuthorUnavailableReason>[0]>) => M.followupAuthorUnavailableReason({
+    postId: 'post-1', author, isolation: M.emptyFollowupIsolation(), usedPersonaIds: new Set(), perPersonaDailyMax: 3, ...o,
+  })
+  check('⑬ 글쓴이 사유 — 격리 · 이번 회차 사용 · 하루 상한을 가른다 · 설 수 있으면 null',
+    whyOf({}) === null && (whyOf({ isolation: iso }) ?? '').includes('이미 실패')
+    && (whyOf({ usedPersonaIds: new Set(['id-a']) }) ?? '').includes('이번 회차')
+    && (whyOf({ author: { ...author, followupsToday: 3 } }) ?? '').includes('하루 상한 3'))
+  // 글쓴이는 자기 글에서 글 × Persona 하루 격리를 받지 않는다 — 남의 글 · Persona 격리는 그대로
+  M.addFollowupIsolation(iso, { postId: 'post-2', personaCode: 'pc-a' }, 'FU_COMBO_DAY')
+  M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-b' }, 'FU_COMBO_DAY')
+  M.addFollowupIsolation(iso, { postId: 'post-9', personaCode: 'pc-v' }, 'FU_PERSONA_DAY')
+  const free = M.withoutAuthorOwnPost(iso, [{ postId: 'post-1', personaCode: 'pc-a' }, { postId: 'post-9', personaCode: 'pc-v' }])
+  check('⑬ 🔴 (a) 글쓴이는 자기 글에서 하루 격리되지 않는다 — 남의 글 · 다른 사람 · Persona 격리는 그대로',
+    M.followupIsolationReason(free, { postId: 'post-1', personaCode: 'pc-a' }) === null
+    && M.followupIsolationReason(free, { postId: 'post-2', personaCode: 'pc-a' }) !== null
+    && M.followupIsolationReason(free, { postId: 'post-1', personaCode: 'pc-b' }) !== null
+    && M.followupIsolationReason(free, { postId: 'post-9', personaCode: 'pc-v' }) !== null
+    && iso.postPersonaKeys.size === 3)
+  // 같은 (글 · Persona · 역할)은 다시 보내지 않는다 — 적재 · 일시 실패로 끝난 조합은 다시 보낼 수 있다
+  const pub = Date.parse('2026-11-13T10:00:00+09:00')
+  const tried = Date.parse('2026-11-13T11:00:00+09:00')
+  const e = (reactionRole: string, step: AttemptEntry['step'], blockCodes: string[]): AttemptEntry => ({
+    postId: 'post-1', personaCode: 'pc-a', reactionRole, postPublishedAtMs: pub, attemptedAtMs: tried, step, failedGates: [], blockCodes,
+  })
+  const journal = [e('experience', 'ENQUEUE_BLOCKED', ['FU_COMBO_DAY']), e('other', 'ENQUEUED', []), e('question', 'PROVIDER_FAILED', ['FU_TRANSIENT'])]
+  const spent = M.followupSpentRoleKeys(journal, tried + MIN)
+  check('⑬ 🔴 (a) 글쓴이 재시도 — 실패한 역할만 빠지고 남은 역할로 다시 선다 · 자정 뒤에는 비워진다',
+    spent.size === 1 && [...spent][0]!.endsWith(':pc-a:experience')
+    && M.followupSpentRoleKeys(journal, Date.parse('2026-11-14T00:00:00+09:00')).size === 0, [...spent].join(','))
+  check('⑬ 🔴 (a) 시작 기록 방어선이 글쓴이의 다른 역할 재시도를 막지 않는다 — Persona · 글 격리는 그대로 막는다',
+    M.FOLLOWUP_ATTEMPT_LANE.startBlockedBy([journal[0]!], e('other', 'STARTED', [])) === null
+    && M.FOLLOWUP_ATTEMPT_LANE.startBlockedBy([e('experience', 'ENQUEUE_BLOCKED', ['FU_PERSONA_DAY'])], { ...e('other', 'STARTED', []), postId: 'post-2' }) !== null
+    && M.FOLLOWUP_ATTEMPT_LANE.startBlockedBy([e('experience', 'WRITE_FAILED', ['FU_POST_DAY'])], { ...e('other', 'STARTED', []), personaCode: 'pc-b' }) !== null)
+  // (d) 닫힌 행은 자리 열쇠를 내놓는다
+  const key = M.followupKeyOf('post-1', 3)
+  const closed = M.closedFollowupKeyOf(key, 'row-1')
+  check('⑬ 🔴 (d) 닫힌 행의 열쇠는 자리 열쇠가 아니다 — 같은 (글 · 순번)을 다시 쓸 수 있고 행마다 다르다',
+    !M.isFollowupKey(closed) && closed !== key && closed.includes('post-1:3') && closed !== M.closedFollowupKeyOf(key, 'row-2'), closed)
+  const runSrc13 = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
+  check('⑬ 🔴 (d) run — sweep 이 닫으면서 열쇠를 바꾼다 · 생활사·No-Go 를 유료 호출 전에 발행 트랜잭션과 같은 함수로 본다',
+    runSrc13.includes('dedupKey: closedFollowupKeyOf(r.dedupKey, r.id)')
+    && /prepare: \(seatGo, personaId\) => \{[\s\S]{0,400}commentLifeBlocksOf\(/.test(runSrc13)
+    && readFileSync(join(here, '../src/lib/persona-publish-tx.ts'), 'utf-8').includes('const lifeBlocks = post === null ? [] : commentLifeBlocksOf('))
+  check('⑬ 🔴 (a)(b) run — 자리 · 사람 넘기기를 정본 함수로 하고 글쓴이 자기 글 격리를 푼다',
+    runSrc13.includes('pickFollowupSeat<Planned>({') && runSrc13.includes('withoutAuthorOwnPost(isolation,')
+    && runSrc13.includes('!spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role }))'))
 }
 
 for (const l of lines) console.log(l)
