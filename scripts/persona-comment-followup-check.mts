@@ -33,6 +33,8 @@ import {
 } from '../src/lib/stage-evidence'
 import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { toGateInput, toPromptPost } from './lib/persona-comment-bridge'
+import { buildPrompt } from './lib/persona-prompt'
+import { selfFactsOf } from '../src/lib/persona-comment-input'
 import { sourceTextsOf } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
 import { decisionStageEnv } from '../src/lib/scale-runtime'
@@ -1122,6 +1124,43 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const big = plans.find((p) => p.size === 5)!
   check('⑭ 순번이 계획을 넘으면(지운 댓글) 마지막 자리 · 1번 자리는 계획 밖',
     planSlotAt(big, 1) === null && planSlotAt(big, 2) === big.slots[0] && planSlotAt(big, 99) === big.slots[3])
+}
+
+// ═════════ ⑮ 자리의 입력 — 길이 · 자기 사실 · 일상 경험. 첫 댓글 프롬프트는 한 글자도 바뀌지 않는다 ═════════
+{
+  const persona = { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] }
+  const post = { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }
+  const built = (o: Record<string, unknown>) => buildPrompt({ persona, post, requireReference: false, ...o } as never)
+  const shaOf = (o: Record<string, unknown>) => createHash('sha256').update(JSON.stringify(built(o))).digest('hex').slice(0, 12)
+  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 자리 도입 전 main 과 대조해 고정한 값이다
+  check('⑮ 🔴 자리 칸이 없으면(첫 댓글) 프롬프트가 도입 전과 바이트 동일하다',
+    shaOf({ reactionType: 'other' }) === 'ea9f95f7cd19' && shaOf({ reactionType: 'experience' }) === '72a2ce655183'
+    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '47e61a85835f',
+    `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
+  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, reply: true }
+  const text = JSON.stringify(built({ reactionType: 'experience', seat }))
+  check('⑮ 🔴 자리 — 길이를 정해 주고, 자기 사실과 가벼운 일상 경험을 말하게 한다("들려줄 이야기가 없다"가 아니다)',
+    text.includes('**한 줄**') && text.includes('- 자녀 2명 (고등학생)') && text.includes('가벼운 일상 경험')
+    && !text.includes('들려줄 자기 이야기가 없습니다') && text.includes('내 경우를 말하는 것'))
+  check('⑮ 🔴 자리 — 병명·약·시술·검사 수치와 제품·업체 권유는 그대로 막고, 갱년기를 안 겪은 사람은 자기 일로 말하지 않는다',
+    text.includes('병명 · 약 이름 · 시술 · 검사 수치') && text.includes('특정 제품 · 업체') && text.includes('갱년기를 직접 겪은 것처럼 말하지 않습니다')
+    && !JSON.stringify(built({ reactionType: 'experience', seat: { ...seat, menopauseExperienced: true } })).includes('갱년기를 직접 겪은 것처럼'))
+  check('⑮ 🔴 답글 자리만 — 앞 댓글을 되받지 않게 한다(메아리 방지)',
+    text.includes('되받아 쓰지 않습니다') && !JSON.stringify(built({ reactionType: 'other', seat: { ...seat, reply: false } })).includes('되받아 쓰지 않습니다'))
+  const lengths = (['short', 'normal', 'long'] as const).map((length) => JSON.stringify(built({ reactionType: 'other', seat: { ...seat, length } })))
+  check('⑮ 길이 세 등급이 서로 다른 지시로 나간다', lengths[0]!.includes('한 줄') && lengths[1]!.includes('한두 문장') && lengths[2]!.includes('서너 문장') && new Set(lengths).size === 3)
+  const facts = selfFactsOf({
+    ageBand: '50대 초반', region: '경기', ownPostTitles: ['아침 산책', '', '둘째 도시락', '셋', '넷'],
+    identity: { maritalStatus: '기혼', childrenCount: 2, childrenAgeBands: ['고등학생'], workStatus: '전업', parentCare: '없음', menopauseStatus: '진행중', job: '합성', note: '시험' },
+  })
+  check('⑮ 🔴 자기 사실은 Persona 행에 이미 있는 칸만 — 모르는 칸은 적지 않고 설정 메모(job·note)는 싣지 않는다',
+    facts.join('|') === '50대 초반 · 경기|혼인 — 기혼|자녀 2명 (고등학생)|일 — 전업|부모 돌봄 — 없음|갱년기 — 진행중|내가 쓴 글 — 아침 산책|내가 쓴 글 — 둘째 도시락'
+    && selfFactsOf({ ageBand: null, region: null, identity: null, ownPostTitles: [] }).length === 0
+    && selfFactsOf({ ageBand: null, region: null, identity: { childrenCount: 0 }, ownPostTitles: [] }).join() === '자녀 없음', facts.join('|'))
+  const runSrc15 = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
+  check('⑮ 🔴 run 이 계획의 길이와 자기 사실을 입력에 싣는다 · 첫 댓글 materializer 는 싣지 않는다',
+    runSrc15.includes('length: seatGo.length,') && runSrc15.includes('selfFacts: selfFactsOf({') && /authorReply: true as const \} : \{\}\),\n\s+threadSeat,/.test(runSrc15)
+    && !readFileSync(join(here, 'lib/persona-comment-targets.ts'), 'utf-8').includes('threadSeat'))
 }
 
 for (const l of lines) console.log(l)

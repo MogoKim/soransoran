@@ -127,6 +127,10 @@ export function buildPromptFromInput(
     requireReference: opts.requireReference,
     // 🔴 생성과 검증이 **같은 grounding** 을 본다 (P0-1)
     grounding: groundingTextOf({ identity: input.persona.identity, memory: input.memory }),
+    // 🔴 추가 댓글만 — 첫 댓글 입력에는 이 칸이 없어 프롬프트가 한 글자도 바뀌지 않는다
+    ...(input.post.threadSeat === undefined
+      ? {}
+      : { seat: { ...input.post.threadSeat, reply: input.post.replyToDigest !== undefined } }),
   })
 }
 

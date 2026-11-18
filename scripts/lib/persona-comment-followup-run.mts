@@ -35,7 +35,8 @@ import { isAutoLaneCandidatePost } from '../../src/lib/persona-comment-auto-lane
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import { judgePostAuthor, type ModelSelection } from '../../src/lib/persona-comment-release'
 import type { ModelCanon } from '../../src/lib/persona-comment-provenance'
-import { buildCommentInput, voiceEvidenceFromAssets, type CommentInput } from '../../src/lib/persona-comment-input'
+import { buildCommentInput, selfFactsOf, voiceEvidenceFromAssets, type CommentInput } from '../../src/lib/persona-comment-input'
+import { hasMenopauseExperience } from '../../src/lib/persona-life-facts'
 import { isAdviceForbidden } from '../../src/lib/persona-reaction-roles'
 import { judgeSourceContext } from '../../src/lib/persona-comment-source-context'
 import { judgeRealMember } from '../../src/lib/real-member-gate'
@@ -604,6 +605,16 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           ? (contentOf.get(seatGo.target.commentId) ?? '').slice(0, FOLLOWUP_REPLY_DIGEST_CHARS) : undefined
         // 🔴 오늘 이미 보내 실패한 (글 · Persona · 역할)은 다시 보내지 않는다 — 글쓴이는 남은 역할로 다시 선다
         const roles = seatGo.roles.filter((role) => !spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role })))
+        // 🔴 계획이 정한 길이와, 이 사람이 자기 이야기로 말해도 되는 사실(카드 생활 축 · 자기가 쓴 글 제목 — 이미 있는 칸만)
+        const threadSeat = {
+          length: seatGo.length,
+          selfFacts: selfFactsOf({
+            ageBand: pe.ageBand, region: pe.region, identity: pe.identity,
+            ownPostTitles: sourcePosts.filter((x) => x.authorPersonaCode === pe.code && x.id !== postId).map((x) => x.title),
+          }),
+          menopauseExperienced: hasMenopauseExperience(
+            pe.identity !== null && typeof pe.identity === 'object' ? (pe.identity as { menopauseStatus?: string | null }).menopauseStatus : null),
+        }
         let built: ReturnType<typeof buildCommentInput> | null = null
         for (const role of roles) {
           const b = buildCommentInput({
@@ -617,6 +628,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
               existingCommentDigests: liveComments.map((c) => (contentOf.get(c.id) ?? '').slice(0, COMMENT_DIGEST_CHARS)),
               ...(replyToDigest === undefined ? {} : { replyToDigest }),
               ...(seatGo.speaker.kind === 'author' ? { authorReply: true as const } : {}),
+              threadSeat,
             },
             reactionRole: role,
             voice: voiceEvidenceFromAssets({ voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, recentTexts: pe.comments.map((c) => c.content) }),

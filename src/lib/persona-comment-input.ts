@@ -83,6 +83,45 @@ export type CommentInputPost = {
    *    없으면 프롬프트가 한 글자도 바뀌지 않는다.
    */
   authorReply?: true
+  /**
+   * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 프롬프트 · 입력 판정이 한 글자도 바뀌지 않는다(첫 댓글 입력에는 없다).
+   *    길이는 계획이 정하고, `selfFacts` 는 이 사람이 자기 이야기로 말해도 되는 사실이다.
+   */
+  threadSeat?: ThreadSeat
+}
+
+export type ThreadSeat = {
+  length: 'short' | 'normal' | 'long'
+  /** Persona 카드의 생활 사실과 자기가 쓴 글 제목 — 🔴 새로 지어낸 것이 아니라 이미 있는 칸에서 읽은 것만 */
+  selfFacts: readonly string[]
+  /** 갱년기를 겪고 있거나 겪었는가(`hasMenopauseExperience`) — 아니면 자기 일로 말하지 않는다 */
+  menopauseExperienced: boolean
+}
+
+/**
+ * 🔴 **이 Persona 가 자기 이야기로 말해도 되는 사실** — Persona 행에 이미 있는 칸만 읽는다(운영 DB 변경 0).
+ *    모르는 칸은 적지 않는다(지어내지 않는다). 순수 함수다.
+ */
+export function selfFactsOf(p: { ageBand: string | null; region: string | null; identity: unknown; ownPostTitles: readonly string[] }): string[] {
+  const id = (p.identity !== null && typeof p.identity === 'object' ? p.identity : {}) as Record<string, unknown>
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
+  const out: string[] = []
+  const who = [str(p.ageBand), str(p.region)].filter((x) => x !== null)
+  if (who.length > 0) out.push(who.join(' · '))
+  const marital = str(id.maritalStatus)
+  if (marital !== null) out.push(`혼인 — ${marital}`)
+  if (typeof id.childrenCount === 'number') {
+    const bands = Array.isArray(id.childrenAgeBands) ? id.childrenAgeBands.filter((x): x is string => typeof x === 'string') : []
+    out.push(id.childrenCount === 0 ? '자녀 없음' : `자녀 ${id.childrenCount}명${bands.length > 0 ? ` (${bands.join(' · ')})` : ''}`)
+  }
+  const work = str(id.workStatus)
+  if (work !== null) out.push(`일 — ${work}`)
+  const care = str(id.parentCare)
+  if (care !== null) out.push(`부모 돌봄 — ${care}`)
+  const meno = str(id.menopauseStatus)
+  if (meno !== null) out.push(`갱년기 — ${meno}`)
+  for (const t of p.ownPostTitles.slice(0, 3)) if (t.trim() !== '') out.push(`내가 쓴 글 — ${t.trim()}`)
+  return out
 }
 
 export type InputBlockCode =
@@ -218,7 +257,8 @@ export function buildCommentInput(args: {
       reactionRole: args.reactionRole,
       hasMemory: args.memory.has,
       // 🔴 lifeStage 는 "어떤 시기인가" 일 뿐 겪은 일이 아니다. identity 의 실제 내용을 본다
-      hasLifeGround: hasLifeGroundIn(persona.identity),
+      // 🔴 대화 계획의 자리에서는 가벼운 일상 경험을 말할 수 있다 — 무엇을 말해도 되는지는 관문이 다시 본다
+      hasLifeGround: hasLifeGroundIn(persona.identity) || post.threadSeat !== undefined,
     })
     if (!ground.allowed) {
       blocks.push({
