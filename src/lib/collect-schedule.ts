@@ -119,15 +119,15 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     id: 'navercafe:remonterrace',
     listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-remonterrace.log "목록 1p → 누적 21건"' },
     listPagesPerRun: {
-      value: 16, when: '2026-09-14',
+      value: 6, when: '2026-11-18',
       how: 'planCafeRun("remonterrace").listPerRun — BOARD_TARGETS 페이지 합 (fixture 가 동등성을 잠근다)',
     },
-    detailPerRun: 11,
+    detailPerRun: 21,
     newPerHourFloor: { value: 1.0, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:55→09-08 09:20 신규 16/21 (하한)' },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0,
-    note: 'launchd -multi 5회/day (00:30·02:30·05:30·13:30·21:30 KST) · 회차당 상세 11건'
+    note: 'launchd -multi 5회/day (00:30·02:30·05:30·13:30·21:30 KST) · 회차당 상세 21건'
       + ' · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
   {

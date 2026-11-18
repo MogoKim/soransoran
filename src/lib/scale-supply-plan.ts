@@ -151,13 +151,13 @@ export const SOURCES: readonly SourcePlan[] = [
     id: 'navercafe:remonterrace',
     template: 'com.soransoran.navercafe-collect-remonterrace-multi.plist.template',
     /**
-     * 🔴 **회차당 상세는 runner 가 역산한다** — 게시판·페이지는 그대로이고
-     *    회차가 4→5 로 늘면서 하루 상한(150) 안에서 예산이 재분배됐다: 12 → 11.
+     * 🔴 **회차당 상세는 runner 가 역산한다** — 쫑알 목록을 2~6쪽으로 줄이고
+     *    아낀 목록 요청을 상세로 옮겼다(하루 요청 145 그대로).
      *    fixture 가 `planCafeRun().detailPerRun` 과 이 값을 대조한다.
      */
-    maxPerRun: 11, runsPerDay: RUNS_PER_DAY['navercafe:remonterrace'].start, loaded: true,
+    maxPerRun: 21, runsPerDay: RUNS_PER_DAY['navercafe:remonterrace'].start, loaded: true,
     note: 'launchd -multi 5회/day (00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST)'
-      + ' · 회차당 상세 11건(jjong 10 + humor 1)',
+      + ' · 회차당 상세 21건(jjong 20 + humor 1)',
   },
   {
     id: 'navercafe:wgang',

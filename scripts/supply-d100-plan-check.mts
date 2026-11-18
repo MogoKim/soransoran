@@ -212,7 +212,7 @@ console.log('\n⑤ 계획된 게시판이 실제 인자로 나간다')
   check('🟢 remonterrace 계획에 jjong 과 humor 가 둘 다 있다',
     keys === 'remonterrace:jjong,remonterrace:humor')
   const jjong = rem.boards.find((b) => b.key === 'remonterrace:jjong')!
-  check('🟢 jjong 이 2~16p 다', jjong.startPage === 2 && jjong.endPage === 16 && jjong.pages === 15)
+  check('🟢 jjong 이 2~6p 다', jjong.startPage === 2 && jjong.endPage === 6 && jjong.pages === 5)
   const humor = rem.boards.find((b) => b.key === 'remonterrace:humor')!
   check('🟢 humor 가 1p 다', humor.startPage === 1 && humor.endPage === 1)
   const wg = planCafeRun({ cafeId: 'wgang' })

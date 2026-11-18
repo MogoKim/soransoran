@@ -312,7 +312,7 @@ const QUOTA = slotQuota(CAFE_ID)
  * 🔴 **승인된 게시판 범위가 곧 페이지 상한이다** (2026-09-11).
  *
  *    옛 판은 `detail` 모드를 언제나 `DETAIL_MAX_PAGES`(5)장으로 잘랐다. 그런데
- *    `BOARD_TARGETS` 의 `remonterrace:jjong` 은 **2~16p(15장)** 이다 —
+ *    그때 `BOARD_TARGETS` 의 `remonterrace:jjong` 은 15장이었다 —
  *    그 게시판을 계획대로 열면 `fail()` 로 죽는다. 계획은 코드에 있고 실행은 막혀 있었다.
  *
  *    `--board=` 로 **승인된 범위**를 지목했으면 그 범위가 상한이다. 무제한이 아니다 —

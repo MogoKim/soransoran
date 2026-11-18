@@ -60,8 +60,8 @@ export const perBoardCeiling = (cafeId: string): number => slotQuota(cafeId)
  * 🔴 **하루 요청 상한 안에서 목록과 상세를 나눈다.**
  *
  *    목록은 게시판·페이지가 정하므로 먼저 빠지고, 남은 몫이 상세다.
- *    상세를 게시판에 나눌 때는 **페이지 수에 비례**시키되 슬롯 quota 를 넘지 않는다 —
- *    깊은 게시판이 많은 후보를 내므로 그쪽에 더 주는 것이 맞다.
+ *    고정 상한(`detailCap`)이 있는 게시판이 먼저 그만큼만 가져가고,
+ *    나머지 게시판이 남은 몫을 **페이지 수에 비례**해 나누되 카페 몫(슬롯 quota)을 넘지 않는다.
  *
  * 🔴 모르는 카페면 던지지 않고 빈 계획을 낸다. 조용한 0건을 만들지 않기 위해
  *    `withinLimit: false` 와 사유를 함께 낸다.
@@ -91,11 +91,17 @@ export function planCafeRun(input: { cafeId: string; phase?: Phase }): CafeRunPl
   const detailBudgetPerRun = Math.max(0, Math.floor((limitPerDay - listPerDay - memberCheckPerDay) / runsPerDay))
   const ceiling = perBoardCeiling(input.cafeId)
 
+  const capped = targets.map((t) => (t.detailCap === undefined ? null : Math.max(0, Math.min(t.detailCap, ceiling))))
+  const cappedTotal = Math.min(detailBudgetPerRun, capped.reduce<number>((a, c) => a + (c ?? 0), 0))
+  /** 고정 상한이 없는 게시판끼리 나눌 몫과 그 게시판들의 페이지 합 */
+  const sharedBudget = detailBudgetPerRun - cappedTotal
+  const sharedPages = pageCounts.reduce((a, n, i) => a + (capped[i] === null ? n : 0), 0)
+
   let left = detailBudgetPerRun
   const boards: BoardSlice[] = targets.map((t, i) => {
     const pages = pageCounts[i]!
-    const share = Math.ceil((detailBudgetPerRun * pages) / listPerRun)
-    const detailMax = Math.max(0, Math.min(ceiling, share, left))
+    const want = capped[i] ?? Math.min(ceiling, Math.ceil((sharedBudget * pages) / sharedPages))
+    const detailMax = Math.max(0, Math.min(want, left))
     left -= detailMax
     return {
       key: t.key, label: t.label, startPage: t.startPage, endPage: t.endPage, pages, detailMax,

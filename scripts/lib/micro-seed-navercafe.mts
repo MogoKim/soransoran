@@ -1015,6 +1015,11 @@ export type BoardTarget = {
   endPage: number
   /** 사람이 읽는 목적 메모. 🔴 판정에 쓰지 않는다 */
   purpose: string
+  /**
+   * 이 게시판이 한 회차에 여는 상세의 고정 상한. 없으면 카페 몫(`CAFE_SLOT_QUOTA`)을 쓴다.
+   * 글감 수율이 낮은 보조 게시판이 주 게시판의 상세 몫을 먹지 않게 한다.
+   */
+  detailCap?: number
 }
 
 export const BOARD_TARGETS: readonly BoardTarget[] = [
@@ -1024,10 +1029,12 @@ export const BOARD_TARGETS: readonly BoardTarget[] = [
     cafeNo: '10298136',
     menuId: '23',
     label: '쫑알쫑알 게시판',
-    // 🔴 1페이지를 뺀다. 실측상 1p 는 방금 올라온 글이라 반응이 붙을 시간이 없었고,
-    //    상단에 인기글·공지 슬롯이 섞여 평균을 흔든다.
+    // 🔴 1페이지를 뺀다. 상단에 인기글·공지 슬롯이 섞인다.
+    // 🔴 2~6쪽(약 75행)만 읽는다. 상세는 게시 최신순으로 회차당 20건을 열므로 그 뒤 쪽은
+    //    선별에 쓰이지 않는다. 75행이면 새 글이 한 건도 없는 새벽 연속 3회차에도
+    //    안 본 글이 20건 넘게 남는다(75 − 20×2 = 35). 아낀 목록 요청은 상세로 간다.
     startPage: 2,
-    endPage: 16,
+    endPage: 6,
     purpose: '생활 · 가정 · 관계 · 일상 핵심 Raw',
   },
   {
@@ -1038,7 +1045,9 @@ export const BOARD_TARGETS: readonly BoardTarget[] = [
     label: '유머,연예,가십',
     startPage: 1,
     endPage: 1,
-    purpose: '유머 · 연예 · 셀럽 — 🔴 Growth 후보. 정치·진영은 여기서도 제외다',
+    purpose: '유머 · 연예 · 셀럽 — 정치·진영은 여기서도 제외다',
+    // 🔴 회차당 1건. 이 게시판은 상세 대비 글감 수율이 낮다 — 쫑알의 상세 몫을 나눠 주지 않는다
+    detailCap: 1,
   },
   {
     key: 'wgang:all',
