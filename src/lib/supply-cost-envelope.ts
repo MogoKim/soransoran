@@ -20,6 +20,21 @@ export const SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE = '2026-11-05' as const
 export const SUPPLY_COST_ENVELOPE_MIN_CLEAN_SETTLED_REQUESTS = 1
 export const SUPPLY_COST_ENVELOPE_MIN_BOUNDED_SETTLED_REQUESTS = 20
 export const SUPPLY_COST_ENVELOPE_MIN_SETTLED_RATIO = 0.95
+
+/** 결과당 공급 비용을 재는 롤링 창의 일수 — preflight 용량 창(72시간)과 같은 값이다 */
+export const SUPPLY_COST_SAMPLE_WINDOW_DAYS = 3
+
+/**
+ * 🔴 **결과당 비용 표본의 최소 결과 편수** — 하루 목표 편수의 1/3(올림).
+ *    단가는 `정산 합계 ÷ 결과 편수`라 결과 한 편의 증감이 단가를 `1/편수`만큼 흔든다. 이 문턱 아래의 표본은
+ *    "예산 초과"도 "예산 안"도 증명하지 못한다 — 판정은 모름이다(FAIL 로 확정하지 않는다).
+ *    표본 창이 3일이므로 하루 목표의 1/3 은 "창 하루치 평균"이다(d30 → 10편: 한 편이 단가를 10% 이상 흔들지 않는다).
+ *    preflight 는 현재 품질 계약 표본이 이 문턱에 못 미칠 때만 같은 72시간 창의 모든 계약 표본을 합친다 — 문턱은 이 함수 하나다.
+ */
+export function supplyCostMinResultSampleOf(dailyTarget: number): number {
+  if (!Number.isInteger(dailyTarget) || dailyTarget <= 0) return 1
+  return Math.ceil(dailyTarget / SUPPLY_COST_SAMPLE_WINDOW_DAYS)
+}
 /**
  * proof 날짜가 어떤 장부 계약을 기대하는지 고정한다. 현재 상수를 직접 비교하면 나중에
  * 가격표나 공급 계약을 올린 날 과거 PASS까지 소급 UNKNOWN이 된다. 새 판을 배포할 때는
@@ -341,6 +356,11 @@ export type SupplyCostEnvelopeInput = {
   riskUsd: number | null
   /** 같은 판정 범위에 승인된 공급 예산 */
   budgetUsd: number | null
+  /**
+   * 위험액이 **결과당 단가 × 목표 편수** 투영일 때만 준다(preflight). 단가를 만든 결과 편수와 최소 표본이다.
+   * 하루 실제 지출을 예산과 비교하는 운영 증거는 주지 않는다 — 그쪽은 투영이 아니라 실측 합계다.
+   */
+  resultSample?: { results: number; minimum: number }
 }
 
 export type SupplyCostEvidence = {
@@ -403,14 +423,23 @@ export function judgeSupplyCostEnvelope(input: SupplyCostEnvelopeInput): SupplyC
   }
   if (!positive(input.riskUsd)) reasons.push('위험액을 확정할 수 없다')
   if (!positive(input.budgetUsd)) reasons.push('승인 예산을 확정할 수 없다')
-  // 승인 예산 초과는 귀속 불명·표본 부족과 함께 있어도 알려진 FAIL이다.
+  const sample = input.resultSample
+  const resultSampleShort = sample !== undefined
+    && (!count(sample.results) || !count(sample.minimum) || sample.results < sample.minimum)
+  if (resultSampleShort && sample !== undefined) {
+    reasons.push(`비용 표본이 글 ${sample.results}편뿐이다 — 최소 ${sample.minimum}편이 있어야 단가를 판단한다`)
+  }
+  // 승인 예산 초과는 귀속 불명·정산 표본 부족과 함께 있어도 알려진 FAIL이다.
   // UNKNOWN을 먼저 반환하면 이미 입증된 예산 초과가 안전한 보류로 약화된다.
   if (positive(input.riskUsd) && positive(input.budgetUsd) && input.riskUsd > input.budgetUsd) {
-    return {
-      version: SUPPLY_COST_ENVELOPE_VERSION,
-      kind: 'bad',
-      settledRatio,
-      reasons: [`위험액 $${input.riskUsd.toFixed(6)} > 승인 예산 $${input.budgetUsd.toFixed(6)}`],
+    // 단, 결과 편수가 최소 표본에 못 미치는 투영 단가는 초과를 입증하지 못한다 — 아래에서 모름으로 닫는다.
+    if (!resultSampleShort) {
+      return {
+        version: SUPPLY_COST_ENVELOPE_VERSION,
+        kind: 'bad',
+        settledRatio,
+        reasons: [`위험액 $${input.riskUsd.toFixed(6)} > 승인 예산 $${input.budgetUsd.toFixed(6)}`],
+      }
     }
   }
   if (reasons.length > 0) {

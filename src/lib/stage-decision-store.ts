@@ -131,6 +131,33 @@ export async function consumeStageDecision(io: {
 }
 
 /**
+ * 🔴 **그날 결정이 아직 없는 아침 공급 회차의 수요 단계 — 전날 결정이 이미 지킨 단계** (공급 전용).
+ *    06:15 공급 회차는 07:00 결정보다 먼저 돈다. 가장 안전한 단계(d1)로 돌면 그날 아침 슬롯을 채울 글을 사지 못한다.
+ *    전날 행이 검증을 통과하면 그 날 **확실히 지킨 단계**만 쓴다 — 시험일(TRIAL)이면 시험 대상이 아니라 기반 단계,
+ *    그 밖은 그날 공개 단계다. 시험 결과를 미리 믿지 않으므로 오늘 결정보다 높을 일은 운영 신호 감속(한 칸)뿐이다.
+ *    🔴 결정 행을 만들지도 고치지도 않는다. 공개(발행)·댓글은 이 값을 받지 않는다 — 그날 결정만 따른다.
+ *    전날 행이 없거나 깨졌으면 `ok: false` — 부르는 쪽이 가장 안전한 단계로 간다.
+ */
+export type SupplyHeadStart =
+  | { ok: true; stage: ValidatedStageDecision['release']; previousKstDate: string }
+  | { ok: false; reason: string }
+
+export async function readSupplyHeadStart(io: {
+  /** 전날 행 읽기 */
+  read: () => Promise<unknown>
+  /** 🔴 전날 날짜를 기대하는 정본 validator */
+  validate: (row: unknown) => ValidateResult
+}): Promise<SupplyHeadStart> {
+  const row = await io.read()
+  if (row === null || row === undefined) return { ok: false, reason: '전날 결정도 없다' }
+  const v = io.validate(row)
+  if (!v.ok) return { ok: false, reason: `전날 결정 행이 깨졌다 — ${v.reason}` }
+  const d = v.decision
+  const stage = d.state === 'TRIAL' && d.transition?.kind === 'TRIAL' ? d.transition.trialBase : d.release
+  return { ok: true, stage, previousKstDate: d.kstDate }
+}
+
+/**
  * 🔴 **두 러너가 부르는 한 경로.**
  *
  *    ```

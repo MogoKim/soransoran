@@ -15,7 +15,6 @@ import {
   judgeKstQuietWindow,
   kstMinuteOfDayOf,
 } from '../src/lib/kst-write-quiet-window'
-import { ONESHOT_WINDOW } from './lib/persona-d30-oneshot.mjs'
 import {
   assertOperatorCommentData,
   assertOperatorPostData,
@@ -575,9 +574,6 @@ console.log('\n══════ ⑫ KST 쓰기 금지 창 — 임시 · [start
   expect('명단 적용 05:59 됨 · 06:00 막힘 · 08:59 막힘 · 09:00 됨',
     ['05:59', '06:00', '08:59', '09:00'].map((t) => ok(t, OPERATOR_ROSTER_QUIET_WINDOW)), [true, false, false, true])
   expect('KST 자정 넘김 — UTC 15:00 = KST 00:00 → 0분', kstMinuteOfDayOf(new Date('2026-11-16T15:00:00Z')), 0)
-  // 🔴 근거가 된 D30 1회 투입기 창이 두 금지 창 안에 있어야 한다 — 그 창이 밖으로 옮겨지면 여기서 깨져 사람이 다시 본다
-  const inside = (w: typeof PERSONA_VOICE_QUIET_WINDOW) => ONESHOT_WINDOW.startMinute >= w.startMinute && ONESHOT_WINDOW.endMinute < w.endMinute
-  expect('D30 1회 투입기 창(07:05~07:19)이 두 금지 창 안', [inside(PERSONA_VOICE_QUIET_WINDOW), inside(OPERATOR_ROSTER_QUIET_WINDOW)], [true, true])
   const blocked = judgeKstQuietWindow(at('07:00'), PERSONA_VOICE_QUIET_WINDOW)
   expect('막힐 때 이유에 다시 되는 시각', !blocked.ok && blocked.reason.includes('08:30 부터 다시 됩니다'), true)
 }

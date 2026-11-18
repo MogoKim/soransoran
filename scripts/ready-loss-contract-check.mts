@@ -187,9 +187,10 @@ console.log('\n⑥ 생산자 · 감사 경계 — 결말만 분류 · 감사는 
     && /readyCount = fates === null \? null : fates\.published \+ fates\.lost \+ fates\.scheduled \+ fates\.unknown/.test(facts))
   check('🔴 비용은 같은 cohort 의 완전 연결 결과당 비용과 제한 trial 위험으로 사실에 담긴다 — raw 정산 ÷ 행 수 없음',
     /usdPerSlotValidResult: costAttribution\?\.usdPerSlotValidResult \?\? null/.test(facts)
-    && /settledRequests: costAttribution\.settledRequests/.test(facts)
-    && /usageUnknownRequests: costAttribution\.usageUnknownRequests/.test(facts)
-    && /riskUsdPerSlotValidResult: costAttribution\.trialRiskUsdPerSlotValidResult/.test(facts)
+    && /trialCost: costAttribution === null \|\| recovery\.issue !== null \? null : trialCostOf\(costAttribution\)/.test(facts)
+    && /settledRequests: a\.settledRequests/.test(facts)
+    && /usageUnknownRequests: a\.usageUnknownRequests/.test(facts)
+    && /riskUsdPerSlotValidResult: a\.trialRiskUsdPerSlotValidResult/.test(facts)
     && !/supplyUsdPerReady|supplyUsd: spent/.test(facts))
   check('🔴 감사 retry · overdue · 확정 결함은 전역 quality signal 이 막는다',
     qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 }).health === 'bad'

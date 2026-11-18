@@ -33,7 +33,10 @@ import {
   WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, type PriorOutcome,
 } from '../src/lib/supply-workset'
-import { judgeNextPreflight, type PreflightFacts } from '../src/lib/stage-ladder-generic'
+import {
+  judgeNextPreflight, preflightLogLine, preflightPlainLinesOf, type PreflightFacts, type SupplyCostCarryoverFact,
+} from '../src/lib/stage-ladder-generic'
+import { judgeSupplyCostEnvelope, supplyCostMinResultSampleOf } from '../src/lib/supply-cost-envelope'
 import { jitCoverageOf, type LoadedStock, type ResolvedScale } from './lib/publishable-stock.mjs'
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { profileOf } from '../src/lib/scale-profile'
@@ -45,6 +48,7 @@ import { PRICING_VERSION } from '../src/lib/llm-pricing'
 import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import {
   pooledEntries, worksetSourcesIn, latestOpportunities, combineOpportunityBounds, slotValidOpportunitiesOf, costFateOf, RUNNER_GRID,
+  jitWorksetsIn, otherQualityContractsIn, supplyCostCarryoverOf, type CohortRow,
 } from './lib/stage-preflight-facts.mjs'
 
 let pass = 0
@@ -881,6 +885,177 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
   const fate = strip('src/lib/ready-fate.ts')
   check('🔴 대기 결말 분류는 정본 judgeSlotRelease 하나 — 새 점수 · 가중치 없음',
     (fate.match(/judgeSlotRelease\(/g) ?? []).length === 1 && !/score|weight/i.test(fate))
+}
+
+console.log('\n⑩ 품질 계약 판이 바뀐 직후의 비용 표본 — 최소 결과 편수 · 72시간 창 전체 승계')
+{
+  // 최소 표본 — 하루 목표의 1/3(올림). preflight 판정과 승계 조건이 이 함수 하나를 쓴다
+  check('🔴 최소 결과 표본 = 하루 목표 ÷ 3 올림 (d30 → 10 · d20 → 7 · d50 → 17 · d1 → 1)',
+    supplyCostMinResultSampleOf(30) === 10 && supplyCostMinResultSampleOf(20) === 7
+    && supplyCostMinResultSampleOf(50) === 17 && supplyCostMinResultSampleOf(1) === 1)
+  const env = (o: { riskUsd: number; resultSample?: { results: number; minimum: number } }) => judgeSupplyCostEnvelope({
+    settledRequests: 25, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, budgetUsd: 1.8, ...o,
+  })
+  const oneResult = env({ riskUsd: 3.307, resultSample: { results: 1, minimum: 10 } })
+  check('🔴 🔴 **결과 1편짜리 표본은 예산 초과로 확정하지 않는다 — 모름**(11-18 07:00 재현: $0.1102 × 30 = $3.307 > $1.80)',
+    oneResult.kind === 'unknown' && oneResult.reasons.some((r) => r.includes('글 1편뿐')), JSON.stringify(oneResult))
+  check('🔴 표본이 충분하면 예산 초과는 그대로 FAIL(bad)',
+    env({ riskUsd: 3.307, resultSample: { results: 10, minimum: 10 } }).kind === 'bad')
+  check('🔴 표본이 모자라면 예산 안이어도 초록이 아니다 — 모름',
+    env({ riskUsd: 1.0, resultSample: { results: 9, minimum: 10 } }).kind === 'unknown')
+  check('운영 증거(실측 합계 · resultSample 없음)의 예산 초과 판정은 그대로다',
+    env({ riskUsd: 3.307 }).kind === 'bad' && env({ riskUsd: 1.0 }).kind === 'clean')
+
+  // 판정 — d30. 현재 계약 표본은 06:15 미니 회차 하나(원천 6 · 결과 1 · $0.1102 · 정산 25요청)
+  const trialOf = (settled: number): NonNullable<NonNullable<PreflightFacts['readyCohort']>['trialCost']> => ({
+    settledRequests: settled, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: null,
+  })
+  const d30Facts = (o: Partial<PreflightFacts> = {}): PreflightFacts => ({
+    proofKstDate: '2026-11-18', slotValidOpportunities: 30, slotValidReadyStock: 1, futureSupplyCapacity: 0,
+    readyCohort: {
+      sources: 6, published: 0, lost: 0, scheduled: 1, unknown: 0,
+      usdPerSlotValidResult: 0.11023825, trialCost: trialOf(25),
+    },
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 60, stageActivePersonas: 60,
+    commentUsdPerRequest: 0.00155, commentDailyUsdCap: 0.5,
+    auditUsdPerCall: 0.003, auditDailyUsdCap: 0.3,
+    supplyDailyUsdCap: 1.8, runnerHealth: 'ok', ...o,
+  })
+  const carryOf = (o: Partial<SupplyCostCarryoverFact> = {}): SupplyCostCarryoverFact => ({
+    versions: ['quality-v26', 'quality-v27'], results: 64, usdPerSlotValidResult: 0.0487, trialCost: trialOf(1700), ...o,
+  })
+  const judge = (f: PreflightFacts) => judgeNextPreflight('d30', f, RUNNER_GRID)
+  const costCodes = (v: ReturnType<typeof judge>): string => v.codes.filter((c) => c.startsWith('SUPPLY_COST')).join(',')
+
+  const alone = judge(d30Facts())
+  check('🔴 🔴 **11-18 07:00 재현 — 창 안에 다른 판 표본이 없으면 SUPPLY_COST_SHORT 가 아니라 SUPPLY_COST_UNKNOWN**',
+    costCodes(alone) === 'SUPPLY_COST_UNKNOWN' && alone.costCohort === 'current'
+    && alone.counts.supplyCostResults === 1 && alone.counts.supplyCostResultsMin === 10, `${costCodes(alone)} ${alone.costCohort}`)
+  const carried = judge(d30Facts({ supplyCostCarryover: carryOf() }))
+  check('🔴 🔴 **현재 표본 1편 < 10편 → 72시간 창 전체를 합친 단가로 판정한다 — 비용 코드 없음 · 판정 줄에 승계가 찍힌다**',
+    costCodes(carried) === '' && carried.costCohort === 'window72h(quality-v26+quality-v27)'
+    && carried.counts.supplyCostResults === 64 && carried.counts.usdPerSlotValidResult === 0.0487
+    && Math.abs(carried.counts.supplyDailyUsdNeeded! - 1.461) < 1e-9
+    && preflightLogLine('d30', carried).includes(' costCohort=window72h(quality-v26+quality-v27) ('),
+    `${costCodes(carried)} ${carried.costCohort} ${JSON.stringify(carried.counts)}`)
+  const quality = (v: ReturnType<typeof judge>): string => JSON.stringify([
+    v.counts.readyRaw, v.counts.readySources, v.counts.readyPublished, v.counts.readyScheduled, v.counts.readyStock,
+    v.counts.readyCapacity, v.counts.readyNeededMin, v.counts.readyNeededMax, v.counts.opportunities, v.forecastWarnings,
+  ])
+  check('🔴 🔴 **승계는 비용 단가 한 칸뿐 — READY 재고·수율·처리량·필요 READY·예측 경고는 현재 판 값 그대로**',
+    quality(carried) === quality(alone) && carried.counts.readySources === 6 && carried.counts.readyRaw === 1,
+    `${quality(carried)} ≠ ${quality(alone)}`)
+
+  const enough = { sources: 60, published: 10, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.05, trialCost: trialOf(300) }
+  const noCarry = judge(d30Facts({ readyCohort: enough, supplyCostCarryover: carryOf({ usdPerSlotValidResult: 0.2 }) }))
+  check('🔴 🔴 **현재 표본이 충분하면(10편) 승계하지 않는다 — 비싼 옛 판이 있어도 현재 단가로 통과**',
+    costCodes(noCarry) === '' && noCarry.costCohort === 'current' && noCarry.counts.usdPerSlotValidResult === 0.05,
+    `${costCodes(noCarry)} ${noCarry.costCohort}`)
+  const noRescue = judge(d30Facts({ readyCohort: { ...enough, usdPerSlotValidResult: 0.07 }, supplyCostCarryover: carryOf() }))
+  check('🔴 🔴 **현재 표본이 충분하고 예산을 넘으면 싼 옛 판이 구제하지 않는다 — SUPPLY_COST_SHORT**',
+    costCodes(noRescue) === 'SUPPLY_COST_SHORT' && noRescue.costCohort === 'current', `${costCodes(noRescue)} ${noRescue.costCohort}`)
+  const bothShort = judge(d30Facts({ supplyCostCarryover: carryOf({ results: 9 }) }))
+  check('🔴 합쳐도 최소 표본에 못 미치면 모름(SUPPLY_COST_UNKNOWN)',
+    costCodes(bothShort) === 'SUPPLY_COST_UNKNOWN' && bothShort.costCohort === 'window72h(quality-v26+quality-v27)', costCodes(bothShort))
+  const carriedOver = judge(d30Facts({ supplyCostCarryover: carryOf({ usdPerSlotValidResult: 0.0625 }) }))
+  check('🔴 합친 표본이 충분하고 예산을 넘으면 FAIL(SUPPLY_COST_SHORT) — 승계가 예산 관문을 열어 주지 않는다',
+    costCodes(carriedOver) === 'SUPPLY_COST_SHORT', costCodes(carriedOver))
+  const carriedUnknown = judge(d30Facts({ supplyCostCarryover: carryOf({ usdPerSlotValidResult: null, trialCost: null }) }))
+  check('🔴 합친 표본의 단가를 모르면(미정산·미연결) 모름', costCodes(carriedUnknown) === 'SUPPLY_COST_UNKNOWN', costCodes(carriedUnknown))
+
+  // 사람이 읽는 한 줄 — 같은 코드 이름 아래의 "표본 부족"과 "예산 초과"를 문장으로 가른다
+  check('🔴 표본 부족은 "글 1편뿐이라 판단 불가 · 예산 초과가 아니다"로 읽힌다',
+    preflightPlainLinesOf(alone).join(' | ') === '비용 표본이 글 1편뿐이라 판단 불가 — 최소 10편이 있어야 한다(예산 초과가 아니다)',
+    preflightPlainLinesOf(alone).join(' | '))
+  check('🔴 예산 초과는 단가 × 편수 > 예산 숫자로 읽힌다',
+    preflightPlainLinesOf(noRescue).join(' | ') === '공급 비용이 예산을 넘는다 — 글 1편당 $0.0700 × 30편 = $2.10 > 하루 예산 $1.80 (표본 10편)',
+    preflightPlainLinesOf(noRescue).join(' | '))
+  check('🔴 승계가 쓰였으면 그 사실이 문장으로 찍힌다 · 문제없는 날은 한 줄도 없다',
+    preflightPlainLinesOf(carried).join(' | ') === '공급 비용 단가는 현재 품질 계약 표본이 모자라 최근 72시간의 모든 판 표본을 합쳐 냈다 — window72h(quality-v26+quality-v27) · 결과 64편'
+    && preflightPlainLinesOf(noCarry).length === 0, preflightPlainLinesOf(carried).join(' | '))
+  check('🔴 controller 가 판정 줄 앞에 이 문장들을 찍는다',
+    /for \(const line of preflightPlainLinesOf\(nextPreflight\)\) log\(`   ▸ \$\{line\}`\)\n\s+log\(preflightLogLine\(target, nextPreflight\)\)/
+      .test(readFileSync('scripts/stage-controller.mts', 'utf-8')))
+
+  // 합칠 판 — 72시간 창 안 묶음 파일의 현재가 아닌 계약 전부(창이 범위를 묶는다)
+  const dir = mkdtempSync(join(tmpdir(), 'jit-carry-'))
+  try {
+    const older = { version: 'quality-older', digest: 'a'.repeat(64) }
+    const prev = { version: 'quality-prev', digest: 'b'.repeat(64) }
+    const w = (runId: string, n: number, q: { version: string; digest: string }): void => writeFileSync(join(dir, worksetFileName(runId)), JSON.stringify({
+      kind: WORKSET_KIND, version: WORKSET_VERSION_JIT, contract: SUPPLY_JIT_CONTRACT, qualityContract: q,
+      runId, takenAt: '2026-10-03T03:15:00.000Z', limit: 20,
+      sources: Array.from({ length: n }, (_, k) => ({ sourceSite: 'fx', sourceArticleId: `${runId}-${k}`, slotAt: '2026-10-03T05:00:00.000Z', ageAtSlotH: 4 })),
+    }))
+    const from = Date.parse('2026-10-01T22:00:00Z')
+    const to = Date.parse('2026-10-04T22:00:00Z')
+    const names = (): string => otherQualityContractsIn(dir, from, to).map((q) => q.version).join('+')
+    w('20261004-211500', 6, QUALITY)
+    check('현재 계약 묶음만 있으면 합칠 판 없음(빈 목록) — 승계 후보를 만들지 않는다', otherQualityContractsIn(dir, from, to).length === 0)
+    w('20261001-031500', 20, { version: 'quality-outside', digest: 'd'.repeat(64) })
+    w('20261002-031500', 20, older)
+    w('20261002-091500', 20, older)
+    w('20261003-031500', 20, prev)
+    w('20261003-091500', 13, prev)
+    check('🔴 🔴 **72시간 창 안의 옛 판은 전부 합친다(옛 것부터) — 창 밖 묶음의 판은 들어오지 않는다**',
+      names() === 'quality-older+quality-prev', names())
+    const prevSet = jitWorksetsIn(dir, from, to, prev)
+    check('🔴 판별 cohort 는 그 판 회차만이다(원천 33 · 회차 2)',
+      prevSet?.sources === 33 && [...prevSet.byRun.keys()].sort().join() === '20261003-031500,20261003-091500', JSON.stringify(prevSet?.sources))
+    check('🔴 현재 계약 cohort 는 그대로다(원천 6) — READY·수율의 분모에 옛 판이 들어오지 않는다', worksetSourcesIn(dir, from, to) === 6)
+    check('창을 좁히면 그 밖의 판은 빠진다', otherQualityContractsIn(dir, Date.parse('2026-10-04T00:00:00Z'), to).length === 0)
+    w('20261004-011500', 5, { version: 'quality-recovery-only', digest: 'c'.repeat(64) })
+    writeFileSync(join(dir, runFileName('20261004-011500')), JSON.stringify({
+      runId: '20261004-011500', runTokenShadow: { trigger: 'recovery', launchTrigger: 'recovery' },
+    }))
+    check('제한 복구 회차의 판은 합치지 않는다', names() === 'quality-older+quality-prev', names())
+    writeFileSync(join(dir, worksetFileName('20261004-051500')), '{broken')
+    check('🔴 묶음 하나라도 못 읽으면 합칠 판이 없다(빈 목록) — 모르는 표본을 합치지 않는다', otherQualityContractsIn(dir, from, to).length === 0)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+
+  // 합친 비용 귀속 — 분자는 창 안 모든 판 회차 정산 · 분모는 현재 공개+예정 + 옛 판 공개
+  const line = (run: string, key: string, usd: number): LedgerEntry => ({
+    runId: `${run}-d`, stage: 'judge', attemptId: `${run}-${key}-${usd}`, requestNo: 0, provider: 'google',
+    apiModelId: 'm', model: 'm', status: 'settled', blockCode: null, countedInputTokens: null, maxOutputTokens: 1, reservedUsd: 0.5,
+    inputTokens: null, outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [], settledUsd: usd,
+    pricingVersion: null, startedAt: '', endedAt: null, errorCode: null, sourceKey: key, supplyContract: SUPPLY_JIT_CONTRACT,
+  })
+  const row = (id: string, status: string, fate: CohortRow['fate'] = null): CohortRow => ({ id, status, hash: articleIdHashOf('fx', id), fate })
+  const curRows = [row('c1', 'APPROVED', 'scheduled')]
+  const prevRows = [row('p1', 'PUBLISHED'), row('p2', 'PUBLISHED'), row('p3', 'APPROVED', 'unknown'), row('p4', 'EXPIRED')]
+  const olderRows = [row('o1', 'PUBLISHED')]
+  const merged = supplyCostCarryoverOf({
+    versions: ['quality-older', 'quality-prev', 'quality-now'],
+    entries: [
+      line('20261004-211500', articleIdHashOf('fx', 'c1'), 0.11),
+      line('20261003-091500', articleIdHashOf('fx', 'p1'), 0.03), line('20261003-091500', articleIdHashOf('fx', 'p2'), 0.03),
+      line('20261003-091500', articleIdHashOf('fx', 'p3'), 0.03), line('20261003-031500', articleIdHashOf('fx', 'p4'), 0.04),
+      line('20261002-091500', articleIdHashOf('fx', 'o1'), 0.05),
+      line('20260930-091500', articleIdHashOf('fx', 'outside'), 9),
+    ],
+    current: { rows: curRows, fates: cohortFatesOf(curRows), cohortRuns: new Set(['20261004-211500']) },
+    prior: [
+      { rows: olderRows, fates: cohortFatesOf(olderRows), cohortRuns: new Set(['20261002-091500']) },
+      // 옛 판 대기 행에 예정(scheduled)이 섞여 들어와도 결과로 세지 않는다
+      { rows: prevRows, fates: { ...cohortFatesOf(prevRows), scheduled: 5 }, cohortRuns: new Set(['20261003-031500', '20261003-091500']) },
+    ],
+  })
+  check('🔴 🔴 **합친 표본 = (창 안 세 판 정산 $0.29) ÷ (현재 예정 1 + 옛 판 공개 3) — 옛 판 대기·창 밖 회차 $9 는 밖**',
+    merged !== null && merged.fact.results === 4 && Math.abs(merged.attribution.totalUsd - 0.29) < 1e-9
+    && Math.abs((merged.fact.usdPerSlotValidResult ?? 0) - 0.0725) < 1e-9 && merged.attribution.otherCohortUsd === 9
+    && merged.fact.versions.join('+') === 'quality-older+quality-prev+quality-now' && merged.fact.trialCost?.settledRequests === 6,
+    JSON.stringify(merged))
+  check('장부를 못 읽었으면 승계 후보도 없다(null)',
+    supplyCostCarryoverOf({ versions: ['quality-prev', 'quality-now'], entries: null,
+      current: { rows: curRows, fates: cohortFatesOf(curRows), cohortRuns: new Set() },
+      prior: [{ rows: prevRows, fates: cohortFatesOf(prevRows), cohortRuns: new Set() }] }) === null)
+  const facts = strip('scripts/lib/stage-preflight-facts.mts')
+  check('🔴 배선 — 사실 수집이 창 안 옛 판 cohort 를 같은 판독기·같은 창으로 읽어 승계 후보를 사실에 싣는다(현재 cohort 는 그대로)',
+    /const otherQualities = otherQualityContractsIn\(i\.dataDir, win\.capacity\.from\.getTime\(\), win\.capacity\.to\.getTime\(\)\)/.test(facts)
+    && /const \{ from: windowFrom, to: windowTo \} = win\.capacity/.test(facts)
+    && /matched: new Set\(\), horizon: i\.proofSlots, now: i\.now, quality,/.test(facts)
+    && /\n    supplyCostCarryover,\n/.test(facts)
+    && /sources: worksetSources, \.\.\.fates,\n\s+usdPerSlotValidResult: costAttribution\?\.usdPerSlotValidResult \?\? null,/.test(facts))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

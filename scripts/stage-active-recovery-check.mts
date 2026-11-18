@@ -89,6 +89,7 @@ const preflight = (i: {
     readyCapacityNatural: i.readyCapacityNatural ?? 20,
     readyNeededMax: i.readyNeededMax ?? 20,
   },
+  costCohort: 'current',
 })
 const plan = (p: PreflightVerdict, now = atKst('07:00'), s = signals): ActiveRecoveryPlan =>
   planActiveRecovery({ target: 'd20', preflight: p, signals: s, failures: [], now })

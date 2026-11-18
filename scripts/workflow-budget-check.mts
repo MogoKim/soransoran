@@ -329,7 +329,6 @@ const EXPECTED_D100_DB_COMMANDS = [
   'persona:remediation-db-check',
   // 2026-11-15 P15 정본 교정 1회 — 같은 격리 DB 한 번에서 실제 트랜잭션·되돌림을 잰다(새 job·step 없음)
   'persona:p15-remediation-db-check',
-  'persona:d30-oneshot-exec-db-check',
   // 실제 조회 원장은 같은 격리 DB 한 번에서 확인한다. 새 job·container·step은 만들지 않는다.
   'check:post-exposure-db',
   // 2026-10-21 어드민 게시판 변경 — 자동 운영 글 · 열린 Persona 후보 차단을 같은 격리 DB 한 번에서 잰다
