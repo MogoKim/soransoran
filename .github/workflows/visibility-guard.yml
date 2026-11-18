@@ -1100,10 +1100,10 @@ jobs:
           #    고정 잠금 · 회피 표지 · readiness 관측 + 변이(방어를 지우면 FAIL · 원본 해시 복원). DB · 네트워크 0
           npm run persona:voice-repeat-check
 
-      - name: Persona 생성 계약 · D30 1회 투입 판정
+      - name: Persona 생성 계약 · P15 교정 판정
         run: |
           npm run persona:generate-check
-          npm run persona:d30-oneshot-check
+          npm run persona:p15-remediation-check
 
       - name: Persona 발행·대상 규칙
         run: |

@@ -161,7 +161,7 @@
    새 runtime은 위의 11-15 00:00~00:25 또는 01:00~01:25에 실제 idle을 확인한 뒤에만 배포한다.
 7. 11-15 07:00 controller가 `PREPARE`를 확정하고 그날이 증명일이 아닐 때만 새 Persona 20명을
    create→seed→check→activate 한다. 수동 stage·READY·장부 보정은 하지 않는다.
-   실행 수단은 무인 1회 job `com.soransoran.persona-d30-oneshot`(07:05 · 고정 날짜)이다 — `scripts/persona-d30-oneshot.mts`가
+   실행 수단은 무인 1회 job `com.soransoran.persona-d30-oneshot`(07:05 · 고정 날짜)였다(11-17 투입을 끝낸 뒤 코드와 job 을 지웠다) — 그 도구가
    그날 controller 행 `PREPARE · d20 · d30`·비증명일·origin/main=HEAD=pin=manifest·배포 잠금/실행 중 job 0·승인 digest `be47bb88…`와
    runtime 자산 식별자(따로)·기존 40 말투/상태·P44~P63 전원 미존재·관리자 1명을 모두 확인한 뒤에만 정본 `persona-cohort-run`을 부른다.
    하나라도 어긋나면 write 0. 켠 뒤에는 정본 `readPersonaCapacity` 한 번의 판독이 contract-valid 60·stage-active 60이고, active 행 60·새 cohort active 20·
