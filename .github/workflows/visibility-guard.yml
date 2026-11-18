@@ -1233,6 +1233,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 🔴 품질 계약 전환 검사가 과거 runtime 커밋을 임시 worktree 로 꺼낸다(scripts/lib/source-snapshot-fixture.mts).
+          #    depth 1 이면 그 커밋이 없어 git worktree add 가 죽는다 — main 을 그대로 checkout 하는 야간 실행이 그랬다.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
