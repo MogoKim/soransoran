@@ -24,12 +24,14 @@ import {
 } from '../src/lib/stage-ladder'
 import {
   ensureStageDecision, consumeStageDecision, validateStoredDecision,
-  controllerEnabled, CONTROLLER_ENV, ENSURE_STEPS, DECISION_CONSUMERS,
+  controllerEnabled, readSupplyHeadStart, CONTROLLER_ENV, ENSURE_STEPS, DECISION_CONSUMERS,
   STORED_COLUMNS, decisionToRow, rowToDecisionInput, decisionKeyOf,
 } from '../src/lib/stage-decision-store'
 import { STAGE_DECISION_V5 } from '../src/lib/stage-decision-contract'
 import { RUNTIME_PROFILES as PROFILES, RELEASE_ENV, CAPACITY_ENV, type RuntimeStage } from '../src/lib/scale-profile'
-import { consumerEnvOf } from '../src/lib/stage-controller'
+import { consumerEnvOf, supplyHeadStartEnvOf } from '../src/lib/stage-controller'
+import { resolveScale, STAGE_DECISION_MARK_ENV } from '../src/lib/scale-runtime'
+import { PROOF_ENV_KEYS } from '../src/lib/stage-proof-day'
 import { COMMENT_STAGE_ENV } from '../src/lib/persona-comment-stage'
 import { judgeNextPreflight, readyCapacityOf, forecastSupplyOf, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID, PREFLIGHT_ENV_KEYS } from './lib/stage-preflight-facts.mjs'
@@ -1075,6 +1077,38 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
       && merged[RELEASE_ENV] === 'd1' && merged[CAPACITY_ENV] === 'd1'
       && /if \(!flagOn\) \{[^}]*consumerEnvOf\(\{ ok: false, code: 'NO_DECISION', fallback: 'safest'/.test(exec)
       && /env: \{ \.\.\.process\.env, \.\.\.overrides \}/.test(exec)
+  })())
+  // 🔴 06:15 공급 회차 — 그날 결정(07:00)보다 먼저 돈다. 공급 수요만 전날이 지킨 단계로 센다
+  const headOf = (row: unknown) => readSupplyHeadStart({
+    read: async () => row, validate: (r) => validateStoredDecision({ row: r, expectKstDate: PREV_DATE }),
+  })
+  const headTrial = await headOf(prevRow('d30', {
+    state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd20', previousKstDate: previousKstDate(PREV_DATE), target: 'd30', basis: 'PASS' },
+  }))
+  check('🔴 🔴 **전날이 시험일(TRIAL d20→d30)이면 미리 사기 단계는 시험 대상 d30 이 아니라 기반 d20 — 시험 결과를 미리 믿지 않는다**',
+    headTrial.ok && headTrial.stage === 'd20' && headTrial.previousKstDate === PREV_DATE, JSON.stringify(headTrial))
+  const headPlain = await headOf(prevRow('d20'))
+  check('🔴 전날이 평상일이면 그날 공개 단계 그대로(d20)', headPlain.ok && headPlain.stage === 'd20', JSON.stringify(headPlain))
+  const headNone = await headOf(null)
+  const headBroken = await headOf({ ...(prevRow('d20') as Record<string, unknown>), release: 'd999' })
+  const headWrongDay = await headOf({ ...(prevRow('d20') as Record<string, unknown>), kstDate: DATE })
+  check('🔴 🔴 **전날 행이 없거나 · 깨졌거나 · 다른 날짜면 미리 사지 않는다(ok:false → safest)**',
+    !headNone.ok && !headBroken.ok && !headWrongDay.ok, JSON.stringify([headNone, headBroken, headWrongDay]))
+  check('🔴 🔴 **미리 사기 env — 두 단계 칸은 전날이 지킨 단계 · 표식은 전날 결정 날짜 · 증명일 칸은 빈 값(증명일로 돌지 않는다)**', (() => {
+    if (!headTrial.ok) return false
+    const env = supplyHeadStartEnvOf(headTrial)
+    const scale = resolveScale(env)
+    return env[RELEASE_ENV] === 'd20' && env[CAPACITY_ENV] === 'd20' && env[STAGE_DECISION_MARK_ENV] === PREV_DATE
+      && PROOF_ENV_KEYS.every((k) => env[k] === '')
+      && scale.releaseStage === 'd20' && scale.capacityStage === 'd20' && scale.source === 'env'
+  })())
+  check('🔴 🔴 **미리 사기는 공급 · "그날 결정이 아직 없다" 한 갈래뿐 — 발행·댓글 · 깨진 행 · kill switch 는 그대로 safest**', (() => {
+    const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
+    return (exec.match(/supplyHeadStartEnvOf\(/g) ?? []).length === 1
+      && /if \(BY === 'supply' && !outcome\.ok && outcome\.code === 'NO_DECISION' && prisma !== null\) \{/.test(exec)
+      && /const yesterday = kstDateString\(new Date\(NOW\.getTime\(\) - 864e5\)\)/.test(exec)
+      && /if \(head\.ok\) \{\s+overrides = supplyHeadStartEnvOf\(head\)/.test(exec)
+      && !/stageDecision\.(create|update|upsert)|insert\(/.test(exec)
   })())
   check('🔴 🔴 **controller 단계 결정은 기존 허용 env만 읽고 복구 worker env 상속은 권위가 아니다**', (() => {
     const code = readFileSync('scripts/stage-controller.mts', 'utf-8')

@@ -380,6 +380,20 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
   return { [RELEASE_ENV]: SAFEST_STAGE, [CAPACITY_ENV]: SAFEST_STAGE, [STAGE_DECISION_MARK_ENV]: '', ...blankProof }
 }
 
+/**
+ * 🔴 **아침 공급 회차의 미리 사기 env** — 그날 결정이 아직 없을 때 공급 러너에만 넣는다(`readSupplyHeadStart`).
+ *    두 단계 칸 모두 전날이 지킨 단계 · 표식은 그 전날 결정의 날짜(출처) · 증명일 칸은 언제나 빈 값이다
+ *    (오늘이 증명일인지는 아직 아무도 정하지 않았다).
+ */
+export function supplyHeadStartEnvOf(h: { stage: RuntimeStage; previousKstDate: string }): Record<string, string> {
+  return {
+    [RELEASE_ENV]: h.stage,
+    [CAPACITY_ENV]: h.stage,
+    [STAGE_DECISION_MARK_ENV]: h.previousKstDate,
+    ...Object.fromEntries(PROOF_ENV_KEYS.map((k) => [k, ''])),
+  }
+}
+
 // ─────────────────────────────────────────────────────────
 // 🔴 신호 만들기 — 정본 값을 그대로 옮긴다. 새 문턱값 0
 // ─────────────────────────────────────────────────────────
