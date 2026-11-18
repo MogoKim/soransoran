@@ -42,6 +42,7 @@ if ! npx prisma migrate deploy >/tmp/d100-ci-migrate.log 2>&1; then
   exit 1
 fi
 
+npm run persona:comment-cap-db-check
 npm run stage:db-check
 npm run stage:active-recovery-check
 npm run stage:preflight-window-check

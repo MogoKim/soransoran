@@ -1104,6 +1104,7 @@ jobs:
         run: |
           npm run persona:generate-check
           npm run persona:p15-remediation-check
+          npm run persona:comment-cap-check
 
       - name: Persona 발행·대상 규칙
         run: |
