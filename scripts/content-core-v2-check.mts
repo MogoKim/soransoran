@@ -1600,7 +1600,7 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
    *
    * 🔴 **재선정 계약** (2026-11-10 retry-authority-v7 · 앞판 2026-09-23 대체). `AUTO_HOLD` 원천이 다시 뽑히는지는
    *    그 artifact 의 처리(`retryClassOf`)가 정한다 — 결론이면 `concluded`, transient · speakerBound 이면 근거 지문당 한 번,
-   *    신규 먼저 · 재선정 몫 10% 안에서만. 다음 회차 즉시 선택은 보장되지 않는다(`check:retry-authority` · 아래 실행 검사).
+   *    신규 먼저 · 재선정은 신규가 남긴 자리에서만. 다음 회차 즉시 선택은 보장되지 않는다(`check:retry-authority` · 아래 실행 검사).
    */
   const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 HOLD 도 `picks` 산출물에는 남는다',
@@ -1727,7 +1727,7 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
    * 🔴 앞판은 "다음 회차에 그 원천이 다시 뽑힌다" 고 단언했다. **철회한다.**
    *    정확한 계약은 이렇다.
    *      · 선택기는 결론 집합(`concluded`)만 본다 — 무엇이 결론인지는 단일 권위(`retryClassOf` · `concludedSourceKeys`)가 정한다
-   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 먼저이고 재선정은 몫 10% 안이다 (2026-11-10)
+   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 먼저이고 재선정은 신규가 남긴 자리만 쓴다
    *      · 대기 시간 · 단계는 각 자리 안의 순위를 바꾸지 않는다
    */
   const NOW = new Date('2026-09-23T05:00:00Z')

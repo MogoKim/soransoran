@@ -94,7 +94,7 @@ export const SOURCE_BASELINE: readonly SourceBaseline[] = Object.freeze([
     thinNewPerDay: 8, eligibleBacklog: null, scheduled: true,
     evidence: '24h · 🔴 목록 1p 만 읽던 회차의 관측이다 — 신규 thin 8. '
       + '🔴 이 8 은 1p 조건의 관측이지 source 유량의 상한이 아니다. '
-      + 'BOARD_TARGETS(jjong 2~16p · humor 1p)를 실제로 연 회차가 나오면 다시 잰다',
+      + 'BOARD_TARGETS(jjong 2~6p · humor 1p)를 실제로 연 회차가 나오면 다시 잰다',
   },
   {
     id: 'navercafe:wgang',
@@ -264,7 +264,7 @@ export type SourceRequestPlan = {
  *
  * 🔴 **"페이지·회차로는 더 늘릴 수 없다" 고 단정하지 않는다.**
  *    앞선 판이 그렇게 적었는데, 그때 관측값은 **1페이지만 읽던 회차**의 것이었다.
- *    `BOARD_TARGETS` 범위(jjong 2~16p 등)를 실제로 열어 본 뒤에야 유량을 말할 수 있다.
+ *    `BOARD_TARGETS` 범위(jjong 2~6p 등)를 실제로 열어 본 뒤에야 유량을 말할 수 있다.
  *
  * 🔴 관측이 없으면 역산하지 않는다. 없는 수로 계획을 세우면 그 계획이 근거가 된다.
  */

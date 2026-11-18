@@ -212,8 +212,9 @@ supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 �
 새벽 슬롯은 상시 호스트가 **AC 전원 · 로그인 · 덮개 열림 · keep-awake**를 모두 만족할 때만 능력이다.
 배터리·잠자기·로그아웃 상태를 능력으로 세지 않으며, 전제가 깨지면 controller가 fail-closed한다.
 
-🔴 **게시판·페이지 설정은 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
-바뀐 것은 **언제 도는가** 하나다.
+🔴 그때 **게시판·페이지 설정은 바꾸지 않았다.** 바뀐 것은 **언제 도는가** 하나였다.
+지금 범위는 jjong 2~6p · humor 1p · wgang:all 1~5p 다(2026-11-18 — 쫑알 목록 10쪽을 상세로 옮겼다 ·
+회차 상세 jjong 20 + humor 1 · 하루 요청 145 그대로). 정본은 `BOARD_TARGETS` 다.
 
 🔴 시각의 정본은 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
 `SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.

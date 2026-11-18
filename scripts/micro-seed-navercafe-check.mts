@@ -846,7 +846,7 @@ check('🔴 활성 카페의 게시판만 있다',
   BOARD_TARGETS.every((b) => activeCafes().some((c) => c.cafeId === b.cafeId)))
 {
   const j = findBoard('remonterrace:jjong')!
-  check('쫑알쫑알 menuId=23 · 2~16p', j.menuId === '23' && j.startPage === 2 && j.endPage === 16)
+  check('쫑알쫑알 menuId=23 · 2~6p', j.menuId === '23' && j.startPage === 2 && j.endPage === 6)
   check('🔴 쫑알쫑알은 1페이지를 보지 않는다',
     j.startPage > 1,
     '1p 는 방금 올라온 글이라 반응이 붙을 시간이 없고, 상단에 인기글·공지가 섞인다')
@@ -860,7 +860,7 @@ check('🔴 활성 카페의 게시판만 있다',
     boardListUrl(j, 3) === 'https://cafe.naver.com/f-e/cafes/10298136/menus/23?viewType=L&page=3',
     `받은 값: ${boardListUrl(j, 3)}`)
   check('우갱 cafeNo 가 다르다', boardListUrl(w, 1).includes('29349320'))
-  check('page range 가 펼쳐진다', pagesOf(j).length === 15 && pagesOf(j)[0] === 2 && pagesOf(j)[14] === 16)
+  check('page range 가 펼쳐진다', pagesOf(j).length === 5 && pagesOf(j)[0] === 2 && pagesOf(j)[4] === 6)
   check('1p만 타깃이면 1장', pagesOf(h).length === 1)
   check('🔴 잘못된 range 는 조용히 빈 배열이 아니라 던진다',
     [{ startPage: 5, endPage: 2 }, { startPage: 0, endPage: 3 }, { startPage: 1.5, endPage: 3 }]
@@ -1000,9 +1000,8 @@ console.log('\n㉕ scout(list-only) — 🔴 상세에 무조건 들어가지 �
 // ─────────────────────────────────────────────────────────
 check('scout 가 detail 보다 깊이 본다', SCOUT_MAX_PAGES > DETAIL_MAX_PAGES)
 check('모드별 상한', maxPagesFor('scout') === SCOUT_MAX_PAGES && maxPagesFor('detail') === DETAIL_MAX_PAGES)
-check('쫑알쫑알 15장이 scout 상한 안에 든다', pagesOf(findBoard('remonterrace:jjong')!).length <= SCOUT_MAX_PAGES)
-check('🔴 쫑알쫑알 15장은 detail 상한을 넘는다 (상세는 얕게)',
-  pagesOf(findBoard('remonterrace:jjong')!).length > DETAIL_MAX_PAGES,
+check('🔴 쫑알쫑알 목록은 상세 회차의 얕은 범위(5장) 안이다 — 선별에 안 쓰는 쪽을 읽지 않는다',
+  pagesOf(findBoard('remonterrace:jjong')!).length <= DETAIL_MAX_PAGES,
   '깊게 보려면 --scout 로 목록만 본다')
 check('🔴 scout 는 상세를 열지 않고 종료한다',
   /if \(SCOUT\) \{[\s\S]{0,1400}return\s*\n\s*\}/.test(COLLECTOR_CODE),
@@ -2225,7 +2224,7 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
       return p.memberCheckPerDay === p.boards.length * p.runsPerDay && p.withinLimit
         && p.requestsPerDay + p.memberCheckPerDay <= p.limitPerDay
     })
-    return ok && planCafeRun({ cafeId: 'remonterrace', phase: 'start' }).detailPerRun === 11
+    return ok && planCafeRun({ cafeId: 'remonterrace', phase: 'start' }).detailPerRun === 21
       && planCafeRun({ cafeId: 'wgang', phase: 'start' }).detailPerRun === 16
   })())
   check('🔴 scout(목록만) 은 회원 확인 요청을 쓰지 않는다', /if \(!SCOUT\) \{\s*await guardedNavigate\(\{\s*url: CAFE_HOME_URL/.test(COLLECTOR_CODE))

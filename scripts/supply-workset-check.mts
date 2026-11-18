@@ -1042,7 +1042,7 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
   })())
 
   // ── 🔴 비운영 legacy 경로(`jit` 없는 `selectWorkset`) 호환 — 이미 본 원천 표식이 이 경로의 축 자리·순위를 바꾸지 않는다 ──
-  //    운영 공급은 JIT 경로(`selectJitWorkset`)다: 신규 lane 먼저 · 재선정 몫 10% 는 `check:retry-authority` ·
+  //    운영 공급은 JIT 경로(`selectJitWorkset`)다: 신규 lane 먼저 · 재선정 몫(신규가 남긴 자리)은 `check:retry-authority` ·
   //    supply-jit-selection-check 가 본다. 이 블록은 그 계약을 말하지 않는다.
   {
     const rows = [...seeds(10, 90), SEED('rs1', 1), SEED('rs2', 1), SEED('rs3', 1), ...raws(5, 200)]

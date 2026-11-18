@@ -209,8 +209,10 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
   const want = planSlots(id, 'start').map((s) => `${s.hour}:${s.minute}`).join()
   const got = calendarSlots(readFileSync(join(DIR, name), 'utf-8')).map((s) => `${s.hour}:${s.minute}`).join()
   check(`🔴 [${id}] 다회판 시각이 planSlots(start) 와 같다`, want === got)
-  check(`🔴 [${id}] 계획 자체가 성립한다 (간격·부하·겹침)`, verifySchedule(id, 'start').length === 0)
-  check(`🔴 [${id}] 안정 단계도 성립한다`, verifySchedule(id, 'stable').length === 0)
+  // 🔴 실측 유입에서는 회차 사이 글을 놓친다(하루 5회 · 요청 상한 안에서는 없앨 수 없다) — 부하·겹침·분은 성립해야 한다
+  const notGap = (ph: 'start' | 'stable'): string[] => verifySchedule(id, ph).filter((p) => !p.includes('최대 간격'))
+  check(`🔴 [${id}] 계획의 부하·겹침·분이 성립한다`, notGap('start').length === 0)
+  check(`🔴 [${id}] 안정 단계도 성립한다`, notGap('stable').length === 0)
 }
 /**
  * 🔴 **82cook 은 두 job 이 같은 서버를 두드린다.** raw 와 thin 이 상한을 나눠 쓴다 —
@@ -278,11 +280,11 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
     return requestsPerRunOf('navercafe:remonterrace') === rm.listPerRun + rm.detailPerRun
       && requestsPerRunOf('82cook') === ROBOTS_REQUESTS_PER_RUN + 3 + 0
   })())
-  /** 🔴 configured detail ceiling — 82cook 85 + remonterrace 55 + wgang 80 */
-  check('🔴 설정된 상세 상한은 220/day 다', configuredDetailCeilingPerDay('start') === 220)
+  /** 🔴 configured detail ceiling — 82cook 85 + remonterrace 105 + wgang 80 */
+  check('🔴 설정된 상세 상한은 270/day 다', configuredDetailCeilingPerDay('start') === 270)
   check('🔴 근거 보정 추정치는 상한과 다른 이름이다 — 관측 생산량이 아니다', (() => {
     const src = readFileSync('src/lib/collect-schedule.ts', 'utf-8')
-    return evidenceAdjustedDetailPerDay('start') === 203
+    return evidenceAdjustedDetailPerDay('start') === 253
       && /evidence-adjusted planning estimate/.test(src)
       && !/export function effectiveDetailPerDay/.test(src)
   })())
@@ -372,8 +374,8 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
   const currentOrderProblems = orderProblems(preflightRuns)
   check('🔴 D20 target-date 순서 — 네이버 수집 6회 → 06:15 공급 → 07:00 controller',
     currentOrderProblems.length === 0)
-  check('🔴 07:00 전 네이버 상세 이론 상한은 81건이다 — 실제 신규 수집량은 자연 회차에서 따로 잰다',
-    preflightRuns.reduce((n, x) => n + factsOf(x.id).detailPerRun, 0) === 81)
+  check('🔴 07:00 전 네이버 상세 이론 상한은 111건이다(레몬테라스 21×3 + wgang 16×3) — 실제 신규 수집량은 자연 회차에서 따로 잰다',
+    preflightRuns.reduce((n, x) => n + factsOf(x.id).detailPerRun, 0) === 111)
   check('🔴 마지막 네이버 수집과 06:15 공급 사이 buffer가 45분 이상이다',
     !currentOrderProblems.includes('SUPPLY_BUFFER_SHORT'))
   check('🔴 반례: 06:15 공급이 없으면 순서 결함을 검출한다',

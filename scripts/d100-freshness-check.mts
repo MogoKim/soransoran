@@ -11,7 +11,7 @@
  *      (별도 method). 날짜 · 회차 · 원천 · 정밀도가 다르면 섞지 않는다 · 한 점 표본은 모름
  *   ④ 정확한 게시 시각의 판정 · 스냅샷은 앞판과 **같다**(무작위 대조)
  *   ⑤ 수집 상세 선별: hard exclusion 뒤 **실제 원문 시각 최신 순** — 옛 점수가 신선도를 이기지 않는다(무작위 대조)
- *   ⑥ 레몬테라스 1p 제외 · 2~16p · 회차 상세 jjong 10 + humor 1 · 요청량 · 회차 · 페이지 수 불변
+ *   ⑥ 레몬테라스 1p 제외 · 2~6p · 회차 상세 jjong 20 + humor 1 · 하루 요청량 · 회차 불변
  *   ⑦ 출처·주제 선호 없음 — quota · 가중치 · 예약석이 없다
  *   ⑧ 배선 — 수집 행 → 얇은 행 → adapt → 공급 러너(`worksetRows`) → 생성 전 판정 · 적재기(`sourceEvidenceOf`)가 같은 구간을 싣는다
  */
@@ -415,21 +415,24 @@ console.log('\n⑥ 수집 상세 선별 — 신선도 1순위 (2026-10-19 창업
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑦ 레몬테라스 1p 제외 · 2~16p · jjong 10 + humor 1 · 요청량 · 회차 불변')
+console.log('\n⑦ 레몬테라스 1p 제외 · 2~6p · jjong 20 + humor 1 · 요청량 · 회차 불변')
 // ─────────────────────────────────────────────────────────
 {
   const jjong = BOARD_TARGETS.find((b) => b.key === 'remonterrace:jjong')!
   const humor = BOARD_TARGETS.find((b) => b.key === 'remonterrace:humor')!
   const wgang = BOARD_TARGETS.find((b) => b.key === 'wgang:all')!
-  check('🔴 jjong 2~16p · 1p 를 읽지 않는다', jjong.startPage === 2 && jjong.endPage === 16 && !pagesOf(jjong).includes(1) && pagesOf(jjong).length === 15)
+  check('🔴 jjong 2~6p · 1p 를 읽지 않는다', jjong.startPage === 2 && jjong.endPage === 6 && !pagesOf(jjong).includes(1) && pagesOf(jjong).length === 5)
   check('humor 1p 하나', humor.startPage === 1 && humor.endPage === 1)
   check('wgang 1~5p 그대로', wgang.startPage === 1 && wgang.endPage === 5)
   const rt = planCafeRun({ cafeId: 'remonterrace' })
   const wg = planCafeRun({ cafeId: 'wgang' })
   const d = (p: typeof rt, k: string): number | undefined => p.boards.find((b) => b.key === k)?.detailMax
-  check('🔴 회차 상세 jjong 10 + humor 1', d(rt, 'remonterrace:jjong') === 10 && d(rt, 'remonterrace:humor') === 1 && rt.detailPerRun === 11,
+  check('🔴 회차 상세 jjong 20 + humor 1', d(rt, 'remonterrace:jjong') === 20 && d(rt, 'remonterrace:humor') === 1 && rt.detailPerRun === 21,
     `${String(d(rt, 'remonterrace:jjong'))} + ${String(d(rt, 'remonterrace:humor'))}`)
-  check('🔴 레몬테라스 하루 요청 145 ≤ 150 · 목록 16/회차 · 5회차', rt.requestsPerDay + rt.memberCheckPerDay === 145 && rt.listPerRun === 16 && rt.runsPerDay === 5 && rt.withinLimit)
+  check('🔴 레몬테라스 하루 요청 145 ≤ 150(목록을 줄이기 전과 같다) · 목록 6/회차 · 5회차', rt.requestsPerDay + rt.memberCheckPerDay === 145 && rt.listPerRun === 6 && rt.runsPerDay === 5 && rt.withinLimit)
+  // 쫑알 목록 한 쪽은 15행이다(운영 로그 "목록 2p → 누적 15건"). 새 글이 한 건도 없는 채 연속 3회차가 돌아도
+  // 세 번째 회차에 안 본 글이 상세 몫만큼 남아야 목록을 줄인 것이 상세를 굶기지 않는다.
+  check('🔴 쫑알 목록 범위가 연속 3회차의 상세 몫을 채운다', pagesOf(jjong).length * 15 - 2 * (d(rt, 'remonterrace:jjong') ?? 0) >= (d(rt, 'remonterrace:jjong') ?? 0))
   check('🔴 wgang 하루 요청 110 ≤ 150 · 상세 16/회차 · 5회차', wg.requestsPerDay + wg.memberCheckPerDay === 110 && wg.detailPerRun === 16 && wg.runsPerDay === 5 && wg.withinLimit)
   check('🔴 일 상한 · 회차 · 슬롯 quota 상수 불변',
     MAX_REQUESTS_PER_DAY['navercafe:remonterrace'] === 150 && MAX_REQUESTS_PER_DAY['navercafe:wgang'] === 150

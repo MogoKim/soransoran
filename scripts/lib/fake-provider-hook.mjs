@@ -193,7 +193,7 @@ const PAYLOAD = {
  * 🔴 **보낸 프롬프트로 가른다.** 판정 지시문에만 들어 있는 선택지 열거를 본다 —
  *    검사가 지어낸 표시가 아니라 실제로 나간 요청의 내용이다.
  */
-const JUDGE_MARK = 'AUTO_SEED|AUTO_RAW|AUTO_HOLD|AUTO_DROP'
+const JUDGE_MARK = 'AUTO_SEED|AUTO_HOLD|AUTO_DROP'
 const JUDGE_PAYLOAD = {
   decision: process.env.FAKE_PROVIDER_JUDGE_DECISION ?? 'AUTO_HOLD',
   confidence: 0.8,

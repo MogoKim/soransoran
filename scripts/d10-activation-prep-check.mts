@@ -269,13 +269,13 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
   check('🔴 그 근거가 함께 적혀 있다',
     factsOf('82cook').listPageSize.how.includes('82cook.list.jsonl')
     && factsOf('82cook').listPageSize.how.includes('25'))
-  check('🔴 카페 페이지 크기는 로그 실측 21건',
-    factsOf('navercafe:remonterrace').listPageSize.value === 21
-    && factsOf('navercafe:wgang').listPageSize.how.includes('목록 1p'))
+  check('🔴 카페 페이지 크기는 2026-11-17 로그 실측이다 (쫑알 15 · wgang 16)',
+    factsOf('navercafe:remonterrace').listPageSize.value === 15 && factsOf('navercafe:wgang').listPageSize.value === 16
+    && factsOf('navercafe:remonterrace').listPageSize.when === '2026-11-17' && factsOf('navercafe:wgang').listPageSize.when === '2026-11-17')
   /**
    * 🔴 **82cook 은 템플릿 인자, 네이버는 `planCafeRun` 정본에서 온다** (2026-09-14).
    *    옛 fixture 는 네이버도 `1페이지` 로 잠갔는데, 실제 `BOARD_TARGETS` 는
-   *    remonterrace 16페이지 · wgang 5페이지를 읽는다.
+   *    remonterrace 6페이지 · wgang 5페이지를 읽는다.
    */
   check('🔴 82cook 회차당 페이지 수가 템플릿 인자와 묶여 있다',
     factsOf('82cook').listPagesPerRun.value === 3
@@ -311,11 +311,18 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
   check('🔴 카페는 유입 실측이 있어 상한이 계산된다',
     (maxSafeGapHours(factsOf('navercafe:remonterrace')) ?? 0) > 0
     && (maxSafeGapHours(factsOf('navercafe:wgang')) ?? 0) > 0)
-  check('🔴 카페 계획은 성립한다',
-    verifySchedule('navercafe:remonterrace', 'start').length === 0
-    && verifySchedule('navercafe:wgang', 'start').length === 0
-    && verifySchedule('navercafe:remonterrace', 'stable').length === 0
-    && verifySchedule('navercafe:wgang', 'stable').length === 0)
+  // 🔴 2026-09-08 값(1.0 · 0.8건/h)은 실제의 1/18~1/100 이라 이 검사가 무엇이든 통과시켰다.
+  //    실측 유입에서는 두 카페 모두 회차 사이 글을 놓친다 — 그 사실 하나만 문제로 나오고, 부하·겹침·분은 성립한다.
+  check('🔴 카페 유입은 2026-11-17 실측이다 (쫑알 88.8 · wgang 14.8건/h) — 옛 하한값이 아니다',
+    factsOf('navercafe:remonterrace').newPerHourFloor?.value === 88.8 && factsOf('navercafe:wgang').newPerHourFloor?.value === 14.8)
+  check('🔴 실측 유입에서는 지금 수집 시각이 회차 사이 글을 놓친다고 드러난다 (그 밖의 문제는 0)',
+    (['navercafe:remonterrace', 'navercafe:wgang'] as const).every((id) => (['start', 'stable'] as const).every((ph) => {
+      const ps = verifySchedule(id, ph)
+      return ps.length === 1 && ps[0]!.includes('최대 간격') && ps[0]!.includes('회차 직전 약')
+    })))
+  check('🔴 목록 창 — wgang 약 5.4h · 쫑알 약 1.0h (안전 상한은 그 절반)',
+    Math.abs((pageWindowHours(factsOf('navercafe:wgang')) ?? 0) - 5.4) < 0.05
+    && Math.abs((pageWindowHours(factsOf('navercafe:remonterrace')) ?? 0) - 1.0) < 0.05)
   check('🔴 유입이 빨라지면 같은 회차도 위험하다고 잡는다', (() => {
     const f = { ...factsOf('navercafe:wgang'), newPerHourFloor: { value: 20, when: 't', how: 't' } }
     return (maxSafeGapHours(f) ?? 99) < 6
@@ -377,13 +384,13 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
     && evidenceAdjustedDetailPerDay('stable') === wantEffective('stable'))
   /** 🔴 확정 일정에서의 계획값 — 82cook thin 17×5×0.8 + remonterrace 11×5 + wgang 16×5 */
   /**
-   * 🔴 **설정 상한 220 = 82cook thin 85 + remonterrace 55 + wgang 80** (2026-10-31).
-   *    근거 보정 추정치는 여기에 실측 성공률을 곱한 **203** 이다.
+   * 🔴 **설정 상한 270 = 82cook thin 85 + remonterrace 105 + wgang 80**.
+   *    근거 보정 추정치는 여기에 실측 성공률을 곱한 **253** 이다.
    *    옛 값 210·158 은 세 번 틀렸다 — raw 목록 job 의 죽은 상세를 세고,
    *    실제로 상세를 여는 thin 을 빼고, 네이버를 옛 1페이지·10건으로 계산했다.
    */
-  check('🔴 설정 상한은 220건/day · 근거 보정 추정치는 203건/day 다',
-    configuredDetailCeilingPerDay('start') === 220 && evidenceAdjustedDetailPerDay('start') === 203)
+  check('🔴 설정 상한은 270건/day · 근거 보정 추정치는 253건/day 다',
+    configuredDetailCeilingPerDay('start') === 270 && evidenceAdjustedDetailPerDay('start') === 253)
   check('🔴 raw 목록 job 은 유효 처리량에 0 을 보탠다 — 상세를 열지 않는다',
     factsOf('82cook').detailPerRun === 0)
   check('🔴 82cook 몫은 thin 경로에서 나온다 — 상한 85 · 보정 68', (() => {
@@ -551,7 +558,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 그래서 current 는 관측된 job 몫뿐이다',
     cur.effectivePerDay === observedDetailPerDay(OBSERVED_NOW))
   check('🔴 prepared 는 정본 계획값이다 — current 와 합치지 않는다',
-    prep.effectivePerDay === evidenceAdjustedDetailPerDay('start') && prep.effectivePerDay === 203)
+    prep.effectivePerDay === evidenceAdjustedDetailPerDay('start') && prep.effectivePerDay === 253)
   check('🔴 82cook 은 미등록이라 current 기여가 0 이다',
     cur.perSource.find((x) => x.id === '82cook')!.effectivePerDay === 0)
 
@@ -596,7 +603,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 안정 단계도 BLOCKED 다', readyStable.status === 'BLOCKED')
   check('🔴 current · prepared · required 를 각각 낸다',
     readyStart.configuredPerDay === observedDetailPerDay(OBSERVED_NOW)
-      && readyStart.preparedPerDay === 203
+      && readyStart.preparedPerDay === 253
     && readyStart.requiredPerDay === 382)
   check('🔴 지금 열리는 것이 모자란다고 숫자로 적는다', (() => {
     // 🔴 이름을 `설정된 것` 으로 바꿨다 — 등록은 능력이 아니다(2026-09-10)
@@ -607,7 +614,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   })())
   check('🔴 전부 올려도 모자란다는 것을 따로 적는다',
     readyStart.reasons.some((r) => r.includes('전부 올려도')
-      && r.includes(`${382 - 203}건 모자란다`)))
+      && r.includes(`${382 - 253}건 모자란다`)))
   check('🔴 판정은 이론 최대로 하지 않는다',
     readyStart.theoreticalPerDay === wantTheoretical('start')
     && readyStart.theoreticalPerDay > readyStart.preparedPerDay)

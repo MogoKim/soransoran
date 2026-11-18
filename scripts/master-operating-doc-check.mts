@@ -312,7 +312,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('오래된 고반응 글이 최신 글을 앞서지 않는다')
     && d100Goal.includes('출처별 우대 없음')
     && d100Goal.includes('주제형 숫자 보너스 없음')
-    && d100Goal.includes('`jjong 10 + humor 1`')])
+    && d100Goal.includes('`jjong 20 + humor 1`')])
   out.push(['canon §7 이 게시판을 중심 주제로만 라우팅하고 호환 경계를 닫는다',
     d100Goal.includes('게시판 라우팅 — 중심 주제 하나')
     && d100Goal.includes('중심 주제**를 `MENOPAUSE`')

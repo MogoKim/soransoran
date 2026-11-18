@@ -43,7 +43,8 @@ import {
   readSettleHold, readSettleHoldAsOf, settleHoldPathOf, withLedgerLock, writeSettleHold,
 } from './lib/llm-ledger-store.mjs'
 import {
-  BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SUPPLY_LEDGER_ISOLATION_MARK, SupplyLlmSession, limitsFromEnv,
+  BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SUPPLY_LEDGER_ISOLATION_MARK, SupplyLlmSession, budgetEnvProvenance, limitsFromEnv,
+  moneyBudgetOverrides,
   usageUnknownAlertMessage, type LedgerIo, type UsageUnknownAlert,
 } from './lib/supply-llm-call.mjs'
 import { STAGE_MODEL, STAGE_MAX_OUTPUT_TOKENS } from '../src/lib/content-core/pipeline'
@@ -143,6 +144,17 @@ console.log('① 단가 — 🔴 공식 문서에서 확인한 값만 쓴다')
 }
 
 // ─────────────────────────────────────────────────────────
+{
+  // 공급 처리기는 단계마다 회차 요청 상한을 자식 env 로 싣는다 — 그 차이는 경고가 아니다. 돈의 한도를 덮은 것만 경고다
+  const file = `${BUDGET_ENV.dailyUsd}=1.8\n${BUDGET_ENV.runRequestCap}=20\n${BUDGET_ENV.headroomMultiplier}=1.2\n`
+  const staged = budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '1.8', [BUDGET_ENV.runRequestCap]: '80', [BUDGET_ENV.headroomMultiplier]: '1.2' }, file)
+  check('🔴 단계별 회차 요청 상한(부모가 실은 값)은 덮어쓰기 경고 대상이 아니다',
+    staged.overrides.length === 1 && moneyBudgetOverrides(staged.overrides).length === 0)
+  const hand = budgetEnvProvenance({ [BUDGET_ENV.dailyUsd]: '5', [BUDGET_ENV.runRequestCap]: '80', [BUDGET_ENV.headroomMultiplier]: '1.2' }, file)
+  check('🔴 하루 예산을 덮으면 그대로 경고 대상이다',
+    moneyBudgetOverrides(hand.overrides).map((o) => o.name).join() === BUDGET_ENV.dailyUsd)
+}
+
 console.log('\n② 예약액 — 🔴 확정 상한이 아니다')
 // ─────────────────────────────────────────────────────────
 {

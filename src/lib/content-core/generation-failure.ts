@@ -333,17 +333,19 @@ export function failureFingerprintOf(i: {
 }
 
 /**
- * 🔴 **유료 생성 재선정 몫** — 신규 원천을 언제나 먼저 처리하고, 재선정은 묶음 상한의 10% 까지만 쓴다.
- *    상한이 10 보다 작으면 0 이다(억지로 채우지 않는다). `freshOnly` 는 축소 운영 — 재선정 0.
+ * 🔴 **유료 생성 재선정 몫** — 신규 원천이 언제나 먼저 자리를 받고, 재선정은 **신규가 채우지 못한 자리**만 쓴다.
+ *    신규가 묶음 상한을 채우면 0 이다(재선정이 신규를 밀어내지 못한다). 신규가 모자란 회차에는 남은 자리 전부를
+ *    재선정이 쓴다 — 자리를 비워 두면 그 슬롯은 생성 시도 없이 빈다. 재구매 총량은 여기가 아니라 근거 지문당
+ *    한 번(`CROSS_RUN_TRANSIENT_RETRY_MAX`)과 결론 제외(`terminal`)가 막는다. `freshOnly` 는 축소 운영 — 재선정 0.
  */
-export const RETRY_SHARE_MAX = 0.1
 export const RETRY_MODES = ['normal', 'freshOnly'] as const
 export type RetryMode = (typeof RETRY_MODES)[number]
 
-export function retrySlotsFor(i: { limit: number; mode: RetryMode }): number {
+export function retrySlotsFor(i: { limit: number; fresh: number; mode: RetryMode }): number {
   if (i.mode === 'freshOnly') return 0
   const limit = Number.isInteger(i.limit) && i.limit > 0 ? i.limit : 0
-  return Math.floor(limit * RETRY_SHARE_MAX)
+  const fresh = Number.isInteger(i.fresh) && i.fresh > 0 ? i.fresh : 0
+  return Math.max(0, limit - fresh)
 }
 
 /**

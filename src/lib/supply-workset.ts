@@ -302,8 +302,7 @@ export type WorksetPlan = {
 // 🔴 **축별 자리** (2026-09-28)
 //
 //   생성 레인은 판정이 `AUTO_SEED` 를 준 원천만 읽는다(`micro-seed-auto-draft` 의 입력).
-//   `rawOriginality` 축 원천은 판정이 `AUTO_RAW`(다른 레인) 이거나, 모델이 SEED 라고
-//   답하면 정책이 `axisMismatch` HOLD 로 바꾼다 — **어느 쪽이든 이 레인에서 초안이 0 이다.**
+//   `rawOriginality` 축 원천은 판정을 통과해도 `AUTO_RAW`(다른 레인)다 — **이 레인에서 초안이 0 이다.**
 //
 //   실측(2026-09-21~27, 39회차 195자리): raw 85자리 → AUTO_RAW 23 · HOLD 62(그중 axisMismatch 61)
 //   · 초안 0 · 채택 0. seed 110자리 → AUTO_SEED 90 · 초안 50 · 채택 33.
@@ -386,7 +385,7 @@ export function worksetAxisQuota(
  * `terminal`  이 원천은 끝났다 — 다음 회차에서 뺀다
  * `rawLane`   판정이 **다른 레인(원문 그대로)** 으로 보냈다 — 이 생성 레인에서는 끝이다
  * `retryable` 끝나지 않았다(판정 미완 · 생성 transient · speakerBound · unattempted) — 처리(`retryClass`)에 따라
- *             신규 자리(unattempted) 또는 재선정 자리(몫 10% · 근거 지문당 한 번)에 선다 (2026-11-10 retry-authority-v7)
+ *             신규 자리(unattempted) 또는 재선정 자리(신규가 남긴 자리 · 근거 지문당 한 번)에 선다 (2026-11-10 retry-authority-v7)
  * `candidate` 초안이 채택됐다 — 유료로 다시 만들지 않는다(결론 집합). 적재 못 한 후보는 이월이 같은 후보를 다시 적재한다
  * `unknown`   읽지 못했다 — 결론은 아니지만 돈을 쓴 시도일 수 있다. 재선정 자리 · 근거 지문당 상한에 함께 센다
  */
@@ -1056,7 +1055,7 @@ export function humanDecisionFor(ix: HumanDecisionIndex, site: string, articleId
  *    1 생성 단계 결과(`retryable`·`unknown`·`candidate`) — 판정은 이미 통과했다
  *    2 판정 단계 `retryable`·`unknown` — 판정부터 다시 물어야 한다
  *
- * 🔴 단계 · 대기 시간은 순위를 바꾸지 않는다. 신규/재선정 자리는 `selectionLaneOf` 가 정하고(신규 먼저 · 재선정 몫 10%),
+ * 🔴 단계 · 대기 시간은 순위를 바꾸지 않는다. 신규/재선정 자리는 `selectionLaneOf` 가 정하고(신규 먼저 · 재선정은 신규가 남긴 자리),
  *    각 자리 안에서는 실제 원문 시각이 1순위인 `compareReleaseRank` 하나가 정한다 (2026-11-10 · 앞판 2026-10-19 단일 줄 대체).
  */
 export function retryTierOf(o: PriorOutcome | undefined): number {
@@ -1288,7 +1287,7 @@ export function worksetEligibility(input: WorksetEligibilityInput): WorksetEligi
  *    아래 옛 판의 축 자리 · 재시도 예약석 · 순위 자르기를 JIT 하류에서 **다시 하지 않는다**.
  *
  * 옛 판(v2 — 슬롯 없이 손으로 부르는 경로 · 검사)은 source rank 하나를 쓴다. 결론(`terminal`)·소진 지문·채택 초안은
- * `concluded` 로 이미 빠진다. 🔴 운영 JIT 판은 신규 먼저 · 재선정 몫 10%(`retrySlotsFor`)다 — 아래 `selectJitWorkset`.
+ * `concluded` 로 이미 빠진다. 🔴 운영 JIT 판은 신규 먼저 · 재선정은 신규가 남긴 자리(`retrySlotsFor`)다 — 아래 `selectJitWorkset`.
  * 🔴 비운영 호환 경로의 seed/raw 생산축 자리는 유지한다 (2026-09-28, `worksetAxisQuota`).
  *    상한 20 → raw 최대 4 · seed 가 충분하면 seed 16 이상 (상한 5 → 1 · 4).
  *    이것은 출처 사이트·게시판 주제 quota 가 아니다. 운영 JIT 자동 공급은 raw 를 소비하지 않고 seed 만 한 줄로 세운다.
@@ -1366,7 +1365,7 @@ export type JitSelectionInput = {
   /** 현재 생성·게이트 계약. 공급 수율·비용 cohort가 다른 품질 판과 섞이지 않게 묶음에 고정한다. */
   qualityContract: SupplyQualityContractMark
   /**
-   * 🔴 **재선정 운영 모드** — `normal` 은 묶음 상한의 10% 까지, `freshOnly` 는 0(축소 운영).
+   * 🔴 **재선정 운영 모드** — `normal` 은 신규가 채우지 못한 자리까지, `freshOnly` 는 0(축소 운영).
    *    기본값이 없다 — 부르는 쪽이 단일 권위(`retryModeFor`)로 정해 넘긴다.
    */
   retryMode: RetryMode
@@ -1511,14 +1510,14 @@ function selectJitWorkset(input: SelectWorksetInput, jit: JitSelectionInput): Wo
    * 🔴 **신규 먼저 · 재선정은 몫 안에서만** (2026-11-10 retry-authority-v7 · canon §2.3 갱신).
    *    앞판(2026-10-19)은 fresh/retry 를 한 줄로 세워 더 신선한 retry 가 신규를 앞섰다 — 11-09·11-10 실측 5회차에서
    *    신규 seed 가 `CAP_REACHED` 로 남은 채 retry 36자리가 팔렸다. 각 자리 안에서는 정본 순위(신선도 1순위) 그대로다.
-   *    재선정 몫은 단일 권위 `retrySlotsFor`(상한의 10% · 상한 10 미만이면 0 · `freshOnly` 면 0)다.
+   *    재선정 몫은 단일 권위 `retrySlotsFor`(상한 − 연결 가능한 신규 수 · 신규가 상한을 채우면 0 · `freshOnly` 면 0)다.
    *    🔴 결론(`terminal`)·지문 소진 원천은 이미 `concluded` 로 빠졌다 — 여기 오는 retry 는 transient·unknown·판정 미완뿐이다.
    */
   const laneOf = (c: Cand): SelectionLane => selectionLaneOf(c.prior)
   // 🔴 `excluded` 는 이미 `concluded` 로 빠졌다 — 여기 오면 불변식 위반이라 자리에 세우지 않는다(유료 0)
   const ranked = [...pool].filter((c) => laneOf(c) !== 'excluded').sort((a, b) => compareSupplyRank(a.sk, b.sk))
   const byRank = [...ranked.filter((c) => laneOf(c) === 'fresh'), ...ranked.filter((c) => laneOf(c) === 'retry')]
-  const retrySlots = retrySlotsFor({ limit: cap, mode: jit.retryMode })
+  const retrySlots = retrySlotsFor({ limit: cap, fresh: byRank.filter((c) => laneOf(c) === 'fresh').length, mode: jit.retryMode })
   const idx = new Map(pool.map((c, i) => [c, i]))
   const valid = pool.map((c) => c.valid)
   /**
