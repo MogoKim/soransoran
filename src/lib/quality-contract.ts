@@ -231,8 +231,13 @@ import {
  * 글쓴이가 끝낸 글이었다. 상한에서 잘린 원문 뒤에 결말을 이어 쓴 초안은 계속 막는다.
  * 갱년기 경험 판정(화자 자격 · 초안 게이트 · 발행 배정)은 `persona-life-facts` 한 곳으로 모았다 — 카드 값 `진행중` 이
  * 화자 자격에서만 경험으로 읽히지 않던 어긋남을 없앤다.
+ *
+ * `quality-v28` (2026-11-18) = **의미 검수 항목 하나가 곧 탈락이던 구조를 등급으로 바꾼다.**
+ * 검수가 항목마다 막음(`block`)/참고(`note`)를 답하고 막음만 HOLD 다(`review-v10` · `v2-review-p12`) — 참고는 기록만 한다.
+ * 코드가 원문 나이를 Persona 나이로 바꾼 자리는 검수에 알리고 모순으로 세지 않는다. 초안 지시의 상반된 전달자 두 줄은
+ * 하나로 — 전달자를 세우지 않고 그 주제에 대한 자기 질문·생각으로 쓴다(`v2-draft-p15`).
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v27'
+export const QUALITY_CONTRACT_VERSION = 'quality-v28'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

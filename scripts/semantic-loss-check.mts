@@ -422,13 +422,39 @@ async function runOf(c: Case, ask: Ask) {
   check('🔴 🔴 초안·검수·판독이 같은 한 벌 원문을 본다 — 두 번째 벌이 없다',
     dp !== null && dp.원문 === sourceBlock(packet) && r !== undefined && (JSON.parse(r.payload) as { 원문: string }).원문 === sourceBlock(packet)
     && p !== undefined && !p.payload.includes(c.rawBody.slice(c.rawBody.length - 40)))
-  check('🔴 🔴 러너가 보낸 p11 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 가족 사실 보호가 함께 실렸다',
+  check('🔴 🔴 러너가 보낸 p12 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 등급 · 가족 사실 보호가 함께 실렸다',
     r !== undefined
     && r.system.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰')
     && r.system.includes('구체적 고위험 생활사')
     && MATERIAL_CONTRACT_LINES.every((l) => r.system.includes(l))
+    && REVIEW_SEVERITY_LINES.every((l) => r.system.includes(l))
     && REVIEW_FAMILY_SPECIFICS_LINES.every((l) => r.system.includes(l)))
   check('🔴 artifact 근거 판 = evidence-v3 · 길이는 한 벌', a.evidence.packetVersion === 'evidence-v3' && a.evidence.bodyLength === packet.bodyLength && packet.bodyLength < c.v1BodyLength)
+
+  // 🔴 등급이 러너까지 이어졌는가 — 같은 지적을 참고로 답하면 한 번에 채택, 등급 없이 답하면 지금까지처럼 HOLD
+  const line = c.draft.body.split('\n').find((x) => x.trim().length >= 6)!.trim()
+  const reviewWith = (sev: Record<string, string>) => JSON.stringify({
+    droppedFromSource: [], lifeContradictions: [], issues: [], confidence: 0.95, note: '',
+    unsupportedAdditions: [{ ...sev, evidence: line, why: '원문에 없는 감정 표현' }],
+  })
+  const runWith = async (sev: Record<string, string>) => {
+    const stages: string[] = []
+    const art = await runOf(c, async (stage) => {
+      stages.push(stage)
+      return ok(stage === 'speakerPlan' ? JSON.stringify(c.plan) : stage === 'draftGen' ? JSON.stringify(c.draft) : reviewWith(sev))
+    })
+    return { art, reviews: stages.filter((x) => x === 'semanticReview').length }
+  }
+  const noted = await runWith({ severity: 'note' })
+  const ungraded = await runWith({})
+  check('🟢 🔴 러너 — 참고만 적힌 검수는 확인 호출 없이 채택하고 참고를 artifact 에 남긴다',
+    noted.art.review.machineOutcome === 'adopt' && noted.reviews === 1
+    && noted.art.review.unsupportedAdditions.length === 0 && noted.art.review.semantic?.advisories?.length === 1
+    && noted.art.review.semanticConfirmation?.status === 'notRequired',
+    `${noted.art.review.machineOutcome} · ${noted.art.review.machineReason} · 검수 ${noted.reviews}회`)
+  check('🔴 러너 — 같은 지적을 등급 없이 답하면 막음이다(HOLD)',
+    ungraded.art.review.machineOutcome === 'hold' && ungraded.reviews >= 1,
+    `${ungraded.art.review.machineOutcome} · ${ungraded.art.review.machineReason} · 검수 ${ungraded.reviews}회`)
 }
 
 // ─────────────────────────────────────────────────────────

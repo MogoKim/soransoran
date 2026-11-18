@@ -21,6 +21,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SEM = 'src/lib/auto-ready-semantic-audit.ts'
 const MAT = 'src/lib/content-core/material-contract.ts'
 const PROMPTS = 'scripts/lib/content-core-prompts.mts'
+const REVIEW = 'src/lib/content-core/review.ts'
 const PIPE = 'scripts/lib/persona-comment-pipeline.ts'
 const GENF = 'src/lib/content-core/generation-failure.ts'
 const FU = 'src/lib/persona-comment-followup.ts'
@@ -57,7 +58,19 @@ const MUTATIONS: Mutation[] = [
   M('시간 바꿔쓰기 줄 제거(공유 계약)', MAT, AUDIT_CHECK,
     "  '시간 표현은 낱말이 달라졌다는 이유만으로 바뀐 것이 아니다. \"새벽\"·\"이 밤\"·\"밤늦게\"처럼 같은 장면의 시간대를 달리 말한 것은 바꿔쓰기다.',\n", ''),
   M('Content Core 검수 지시문이 공유 실질 변경 계약을 싣지 않음', PROMPTS, LOSS_CHECK,
-    "    ...MATERIAL_CONTRACT_LINES,\n    '',\n    '## ① droppedFromSource", "    '',\n    '## ① droppedFromSource"),
+    "    ...MATERIAL_CONTRACT_LINES,\n    '',\n    ...REVIEW_SEVERITY_LINES,", "    ...REVIEW_SEVERITY_LINES,"),
+  // ── 검수 등급(막음/참고) · 시스템이 바꾼 나이 · 전달자 지시 (quality-v28) ──
+  M('검수 지시문이 등급 줄을 싣지 않음', PROMPTS, LOSS_CHECK,
+    "    ...REVIEW_SEVERITY_LINES,\n", ''),
+  M('등급 없는 항목을 참고로 읽음(fail-open)', REVIEW, LOSS_CHECK,
+    "o.severity === 'note'", "o.severity !== 'block'"),
+  M('참고 항목이 막음 배열에 남음', REVIEW, LOSS_CHECK,
+    "      if (isNote(o)) advisories.push({ axis: key, ...item })\n      else out.push(item)", '      out.push(item)'),
+  M('시스템이 바꾼 나이 낱말이면 나이 축이 아닌 모순도 참고로 옮김', REVIEW, LOSS_CHECK,
+    "    x.fact === 'age' && marks.some(", '    marks.some('),
+  M('초안 지시문에 전달자를 세워 전하라는 줄 부활', PROMPTS, LOSS_CHECK,
+    "말과 행동만 **그 사람을 주어로** 둡니다. 없던 전달자를 앞에 세우지 않습니다.',",
+    "말과 행동은 \"어떤 분이 … 그러셨대요\" 처럼 **그 사람을 주어로** 전합니다.',"),
   // ── C · 400 요청 모양 거부 ──
   M('400 도 다음 후보로 재시도', PIPE, ENGINE_CHECK,
     'if (!res.ok && requestShapeRejected(res.errorCode)) {', 'if (false) {'),
