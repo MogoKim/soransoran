@@ -421,6 +421,35 @@ export function preflightLogLine(target: string, pf: PreflightVerdict): string {
     + ` (${Object.entries(pf.counts).map(([k, x]) => `${k}=${x}`).join(',')})`
 }
 
+/**
+ * 🔴 **사람이 읽는 preflight 한 줄들** — 코드 이름이 말하지 못하는 사실을 숫자로 적는다. 판정에는 쓰지 않는다.
+ *    `SUPPLY_COST_SHORT`·`SUPPLY_COST_UNKNOWN` 은 "예산 초과"와 "표본 부족"을 이름만으로 가를 수 없어 여기서 가른다.
+ */
+export function preflightPlainLinesOf(pf: PreflightVerdict): string[] {
+  const out: string[] = []
+  const c = pf.counts
+  const usd = (v: number): string => `$${v.toFixed(2)}`
+  const results = c.supplyCostResults
+  const min = c.supplyCostResultsMin
+  const sampleShort = results !== undefined && min !== undefined && results < min
+  if (pf.costCohort !== 'current') {
+    out.push(`공급 비용 단가는 현재 품질 계약 표본이 모자라 직전 계약 표본을 합쳐 냈다 — ${pf.costCohort} · 결과 ${results ?? '?'}편`)
+  }
+  if (pf.codes.includes('SUPPLY_COST_UNKNOWN') && sampleShort) {
+    out.push(`비용 표본이 글 ${results}편뿐이라 판단 불가 — 최소 ${min}편이 있어야 한다(예산 초과가 아니다)`)
+  } else if (pf.codes.includes('SUPPLY_COST_UNKNOWN')) {
+    out.push('공급 비용을 확정하지 못했다 — 미정산·미연결 요청이 있거나 장부를 읽지 못했다(예산 초과가 아니다)')
+  }
+  if (pf.codes.includes('SUPPLY_COST_SHORT')) {
+    const need = c.supplyDailyUsdNeeded
+    const budget = c.supplyProofBudgetUsd
+    out.push(need !== undefined && budget !== undefined && c.usdPerSlotValidResult !== undefined && need > budget
+      ? `공급 비용이 예산을 넘는다 — 글 1편당 $${c.usdPerSlotValidResult.toFixed(4)} × ${c.target}편 = ${usd(need)} > 하루 예산 ${usd(budget)} (표본 ${results ?? '?'}편)`
+      : '공급 비용 결함 — 실제 정산액이 예약액을 넘은 요청이 있다')
+  }
+  return out
+}
+
 export type PreflightJudgeOptions = {
   /**
    * 검증된 제한 복구가 완주한 뒤 exact nonce·supply run·원천 hash로 귀속되고 실제 proof slot에

@@ -50,13 +50,13 @@ import { observeJob, proofDaySupplyHealth, publishFailing, readProcessRuns, supp
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
 import { fillDbConnection, readCostSignals, readEnvKeys } from './lib/ops-signals.mjs'
 import {
-  judgeStageEvidence, trialPlanOf, carriedTrialPlanFor, evidenceReasonOf,
+  judgeStageEvidence, trialPlanOf, carriedTrialPlanFor, evidenceReasonOf, evidencePlainLineOf,
   type StageEvidenceVerdict, type StageEvidenceFacts, type EvidenceSideSignals, type TrialPlan,
 } from '../src/lib/stage-evidence'
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { personaCommentCapFor } from '../src/lib/stage-evidence'
 import { COMMENT_STAGE_ENV, readCommentStage } from '../src/lib/persona-comment-stage'
-import { judgeNextPreflight, preflightLogLine, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
+import { judgeNextPreflight, preflightLogLine, preflightPlainLinesOf, slotTimesOn, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { readPreflightFacts, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { readPersonaCapacity } from './lib/persona-reserve-facts.mjs'
 import { probeSupplyLease } from './lib/supply-lease.mjs'
@@ -241,6 +241,8 @@ async function evidenceOnly(date: string): Promise<number> {
     else {
       log(`\n══ 운영 증거 ${date} · ${stage} (read-only · DB write 0) ══`)
       log(`   결정  ${decision === null ? '없음/깨짐' : `${decision.state} · 공개 ${decision.release} · ${decision.contractVersion}`}`)
+      const plain = evidencePlainLineOf(v)
+      if (plain !== null) log(`   ▸ ${plain}`)
       log(`   ${evidenceReasonOf(v)}`)
       if (decision !== null) {
         const plan = trialPlanOf(decision, v)
@@ -340,6 +342,8 @@ async function computeToday(
       evidence = await evidenceFor(prisma, {
         kstDate: authorityRow.kstDate, stage: authorityRow.release, decision: authorityRow,
       })
+      const evidencePlain = evidencePlainLineOf(evidence)
+      if (evidencePlain !== null) log(`   ▸ ${evidencePlain}`)
       log(`   ${evidence.verdict === 'PASS' ? '🟢' : '🔴'} ${evidenceReasonOf(evidence)}`)
     }
     // 🔴 계획 되짚기는 인접한 전날 행에서만 — 다리 날은 시험을 열지 않는다
@@ -399,6 +403,7 @@ async function computeToday(
         }
         nextPreflight = judgeNextPreflight(target, r.facts, RUNNER_GRID, { boundedRecoveryReadyGain })
         preflightDetail = r.detail
+        for (const line of preflightPlainLinesOf(nextPreflight)) log(`   ▸ ${line}`)
         log(preflightLogLine(target, nextPreflight))
         for (const n of r.notes) log(`      ⬚ ${n}`)
       }

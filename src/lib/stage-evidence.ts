@@ -681,6 +681,20 @@ export function evidenceReasonOf(v: StageEvidenceVerdict): string {
   return `EVIDENCE ${v.kstDate} ${v.stage} ${v.verdict}${v.codes.length > 0 ? ` [${v.codes.join(',')}]` : ''}${n === '' ? '' : ` (${n})`}${conv}`
 }
 
+/**
+ * 🔴 **사람이 읽는 증거 한 줄** — 코드 이름이 실제와 다른 자리만. 판정에는 쓰지 않는다.
+ *    `PUBLISH_NOT_AUTO_READY` 는 "자동 READY 가 아닌 글이 나갔다"가 아니라 **자동 공개 편수가 목표보다 적다**는 뜻이다.
+ */
+export function evidencePlainLineOf(v: StageEvidenceVerdict): string | null {
+  if (!v.codes.includes('PUBLISH_NOT_AUTO_READY')) return null
+  const target = v.counts.target
+  const auto = v.counts.autoTargets
+  if (target === undefined || auto === undefined) return null
+  const human = v.counts.humanApproved ?? 0
+  return `${v.kstDate} 자동 공개 ${auto}편 / 목표 ${target}편 — ${target - auto}편 부족`
+    + (human > 0 ? ` (사람 승인 글 ${human}편은 자동 물량으로 세지 않는다)` : '')
+}
+
 export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: TrialBasis }
 
 /**

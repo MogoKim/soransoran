@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  judgeStageEvidence, trialPlanOf, evidenceReasonOf, STAGE_EVIDENCE_CODES, personaCommentCapFor,
+  judgeStageEvidence, trialPlanOf, evidenceReasonOf, evidencePlainLineOf, STAGE_EVIDENCE_CODES, personaCommentCapFor,
   commentProvenanceOf, AUTO_COMMENT_CLOCK_SKEW_MS, type CommentLinkFacts,
   personaCommentProvenanceOf, judgeConversationAudit, CONVERSATION_AUDIT_CODES,
   FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY,
@@ -149,6 +149,13 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   check('그때 counts — 자동 target 2', manual.counts.autoTargets === 2, JSON.stringify(manual.counts))
   const humanOnly = judge(facts('d3', { posts: [0, 1, 2].map((i) => post(i, { decider: 'human', personaComments: [] })), audits: { ...CLEAN_AUDITS, rows: [] } }))
   failWith('🔴 🔴 **전부 사람 승인 글 3건 · 감사 0 → 승격 물량 0 · FAIL (앞판은 PASS 였다)**', humanOnly, 'PUBLISH_NOT_AUTO_READY')
+  // 코드 이름(PUBLISH_NOT_AUTO_READY)이 말하지 않는 사실 — 자동 공개 편수가 목표보다 적다 — 을 문장으로 낸다
+  check('🔴 편수 부족은 "자동 공개 2편 / 목표 3편 — 1편 부족"으로 읽힌다',
+    evidencePlainLineOf(judge(facts('d3', { posts: [post(0), post(1)] }))) === `${D} 자동 공개 2편 / 목표 3편 — 1편 부족`,
+    String(evidencePlainLineOf(judge(facts('d3', { posts: [post(0), post(1)] })))))
+  check('🔴 사람 승인 글이 섞였으면 그 편수를 따로 적는다 · PASS 인 날은 한 줄도 없다',
+    (evidencePlainLineOf(humanOnly) ?? '').endsWith('자동 공개 0편 / 목표 3편 — 3편 부족 (사람 승인 글 3편은 자동 물량으로 세지 않는다)')
+    && evidencePlainLineOf(judge(facts('d3'))) === null, String(evidencePlainLineOf(humanOnly)))
   check('그때 counts — 자동 target 0 · 사람 승인 3', humanOnly.counts.autoTargets === 0 && humanOnly.counts.humanApproved === 3, JSON.stringify(humanOnly.counts))
   const mixed = judge(facts('d3', { posts: [post(0), post(1), post(2, { decider: 'human' })] }))
   failWith('🔴 혼합(자동 2 · 사람 1) — 사람 글은 세지 않는다 → FAIL', mixed, 'PUBLISH_NOT_AUTO_READY')

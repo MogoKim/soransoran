@@ -33,7 +33,9 @@ import {
   WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, WORKSET_VERSION_JIT_LEGACY,
   SUPPLY_JIT_CONTRACT, SUPPLY_JIT_CONTRACT_LEGACY, type PriorOutcome,
 } from '../src/lib/supply-workset'
-import { judgeNextPreflight, preflightLogLine, type PreflightFacts, type SupplyCostCarryoverFact } from '../src/lib/stage-ladder-generic'
+import {
+  judgeNextPreflight, preflightLogLine, preflightPlainLinesOf, type PreflightFacts, type SupplyCostCarryoverFact,
+} from '../src/lib/stage-ladder-generic'
 import { judgeSupplyCostEnvelope, supplyCostMinResultSampleOf } from '../src/lib/supply-cost-envelope'
 import { jitCoverageOf, type LoadedStock, type ResolvedScale } from './lib/publishable-stock.mjs'
 import { AUTO_DECIDER } from '../src/lib/auto-ready-v2'
@@ -960,6 +962,20 @@ console.log('\n⑩ 품질 계약 판이 바뀐 직후의 비용 표본 — 최�
     costCodes(carriedOver) === 'SUPPLY_COST_SHORT', costCodes(carriedOver))
   const carriedUnknown = judge(d30Facts({ supplyCostCarryover: carryOf({ usdPerSlotValidResult: null, trialCost: null }) }))
   check('🔴 합친 표본의 단가를 모르면(미정산·미연결) 모름', costCodes(carriedUnknown) === 'SUPPLY_COST_UNKNOWN', costCodes(carriedUnknown))
+
+  // 사람이 읽는 한 줄 — 같은 코드 이름 아래의 "표본 부족"과 "예산 초과"를 문장으로 가른다
+  check('🔴 표본 부족은 "글 1편뿐이라 판단 불가 · 예산 초과가 아니다"로 읽힌다',
+    preflightPlainLinesOf(alone).join(' | ') === '비용 표본이 글 1편뿐이라 판단 불가 — 최소 10편이 있어야 한다(예산 초과가 아니다)',
+    preflightPlainLinesOf(alone).join(' | '))
+  check('🔴 예산 초과는 단가 × 편수 > 예산 숫자로 읽힌다',
+    preflightPlainLinesOf(noRescue).join(' | ') === '공급 비용이 예산을 넘는다 — 글 1편당 $0.0700 × 30편 = $2.10 > 하루 예산 $1.80 (표본 10편)',
+    preflightPlainLinesOf(noRescue).join(' | '))
+  check('🔴 승계가 쓰였으면 그 사실이 문장으로 찍힌다 · 문제없는 날은 한 줄도 없다',
+    preflightPlainLinesOf(carried).join(' | ') === '공급 비용 단가는 현재 품질 계약 표본이 모자라 직전 계약 표본을 합쳐 냈다 — current+previous(quality-v26) · 결과 64편'
+    && preflightPlainLinesOf(noCarry).length === 0, preflightPlainLinesOf(carried).join(' | '))
+  check('🔴 controller 가 판정 줄 앞에 이 문장들을 찍는다',
+    /for \(const line of preflightPlainLinesOf\(nextPreflight\)\) log\(`   ▸ \$\{line\}`\)\n\s+log\(preflightLogLine\(target, nextPreflight\)\)/
+      .test(readFileSync('scripts/stage-controller.mts', 'utf-8')))
 
   // 직전 판 선택 — 창 안 묶음 파일에서 현재가 아닌 계약 중 가장 최근 회차의 것 하나
   const dir = mkdtempSync(join(tmpdir(), 'jit-carry-'))
