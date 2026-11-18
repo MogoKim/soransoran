@@ -207,7 +207,13 @@ export type GroundingVerdict = {
 export function judgeExperienceGrounding(input: {
   text: string
   grounding: string
+  /**
+   * 🔴 **대화 계획의 자리(추가 댓글)** — 가벼운 일상 경험은 근거 없이 말해도 된다(`judgeEverydayExperience`).
+   *    없으면 위 계약 그대로다 — 첫 댓글은 이 칸을 넘기지 않는다.
+   */
+  everyday?: { menopauseExperienced: boolean }
 }): GroundingVerdict {
+  if (input.everyday !== undefined) return judgeEverydayExperience({ ...input, everyday: input.everyday })
   const claims = findExperienceClaims(input.text)
   if (claims.length === 0) {
     return { ok: true, claims, ungrounded: [], reason: '자기 사실 주장 없음 — 맞장구·질문·원글 반응' }
@@ -238,5 +244,44 @@ export function judgeExperienceGrounding(input: {
       ? `자기 사실 주장 ${claims.length}건 전부 Persona 근거와 이어진다`
       : `근거 없는 자기 사실 주장 ${ungrounded.length}/${claims.length}건`
         + ` (${[...new Set(ungrounded.map((c) => c.kind))].join(' · ')})`,
+  }
+}
+
+/**
+ * 🔴 **자기 일로 말하려면 근거가 있어야 하는 무거운 사실** — 의료(진단 · 처방 · 약 · 시술 · 수술 · 입원 · 검사 · 수치)다.
+ *    "잠이 안 와요" · "무릎이 시려요" 같은 몸 상태는 여기 들지 않는다 — 이 커뮤니티의 일상이다.
+ *    낱말을 막는 목록이 아니라 **갈래의 정의**다. 갈래를 늘릴 때만 고친다.
+ */
+const MEDICAL_FACT = /(진단|처방|수술|시술|입원|퇴원|검사|수치|주사|호르몬|복용|약\s*(을|은|이|도)?\s*(먹|타|받|끊|바꿨)|병원\s*(에서|가서|다녀))/u
+const MENOPAUSE_FACT = /(갱년기|폐경|완경)/u
+
+/**
+ * 🔴 **가벼운 일상 경험은 자기 이야기로 말해도 된다.** 근거를 묻는 것은 둘뿐이다.
+ *      · 의료 사실을 자기 일로 말한다 → Persona 근거(자기가 쓴 글 포함)와 이어져야 한다
+ *      · 갱년기를 자기 일로 말한다   → 그 사람이 겪고 있거나 겪었어야 한다(카드의 갱년기 상태)
+ *    가족 · 일 · 사는 곳이 카드와 어긋나는지는 설정 모순 판정(관문 ⑦ 의 다른 절반)이 본다 — 여기서 다시 보지 않는다.
+ *    막으려던 사고는 그대로 막힌다: 참고 댓글의 장면을 옮기는 것은 ① · ② 가, 아픈 것을 지어내는 것은 여기가 막는다.
+ */
+export function judgeEverydayExperience(input: {
+  text: string
+  grounding: string
+  everyday: { menopauseExperienced: boolean }
+}): GroundingVerdict {
+  const claims = findExperienceClaims(input.text)
+  const tokensOf = (s: string): Set<string> => new Set((s.match(/[가-힣]{2,}/gu) ?? []).map((w) => w.slice(0, 3)))
+  const ground = tokensOf(input.grounding)
+  const ungrounded = claims.filter((c) => {
+    if (!input.everyday.menopauseExperienced && MENOPAUSE_FACT.test(c.sentence)) return true
+    if (!MEDICAL_FACT.test(c.sentence)) return false
+    for (const w of tokensOf(c.sentence)) if (ground.has(w)) return false
+    return true
+  })
+  return {
+    ok: ungrounded.length === 0,
+    claims,
+    ungrounded,
+    reason: ungrounded.length === 0
+      ? `자기 사실 주장 ${claims.length}건 — 일상 경험이거나 Persona 근거와 이어진다`
+      : `근거 없는 의료 · 갱년기 자기 주장 ${ungrounded.length}/${claims.length}건`,
   }
 }

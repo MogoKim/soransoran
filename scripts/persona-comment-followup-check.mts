@@ -34,6 +34,8 @@ import {
 import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { toGateInput, toPromptPost } from './lib/persona-comment-bridge'
 import { buildPrompt } from './lib/persona-prompt'
+import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
+import { judgeExperienceGrounding } from '../src/lib/persona-experience-grounding'
 import { selfFactsOf } from '../src/lib/persona-comment-input'
 import { sourceTextsOf } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
@@ -1161,6 +1163,37 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑮ 🔴 run 이 계획의 길이와 자기 사실을 입력에 싣는다 · 첫 댓글 materializer 는 싣지 않는다',
     runSrc15.includes('length: seatGo.length,') && runSrc15.includes('selfFacts: selfFactsOf({') && /authorReply: true as const \} : \{\}\),\n\s+threadSeat,/.test(runSrc15)
     && !readFileSync(join(here, 'lib/persona-comment-targets.ts'), 'utf-8').includes('threadSeat'))
+}
+
+// ═════════ ⑯ 경험담 — 가벼운 일상 경험은 허용, 의료 · 겪지 않은 갱년기는 막는다. 첫 댓글 판정은 그대로다 ═════════
+{
+  const J = (text: string, o: { grounding?: string; everyday?: { menopauseExperienced: boolean } } = {}) =>
+    judgeExperienceGrounding({ text, grounding: o.grounding ?? '', ...(o.everyday === undefined ? {} : { everyday: o.everyday }) }).ok
+  const yes = { everyday: { menopauseExperienced: true } }
+  const no = { everyday: { menopauseExperienced: false } }
+  const daily = ['저도 그 드라마 봤어요 주말에 몰아서 봤네요', '저는 그럴 때 그냥 동네 한 바퀴 걸어요', '우리 나이엔 다 그런 것 같아요 무릎도 시리고', '저도 요즘 새벽에 자꾸 깨요']
+  check('⑯ 🔴 첫 댓글 계약은 그대로 — 근거 없는 1인칭 내용은 막는다(자리 칸 없음)', daily.every((t) => !J(t)) && J('저도요') && J('많이 놀라셨겠어요'))
+  check('⑯ 🔴 자리 — 가벼운 일상 경험(본 것 · 해 본 것 · 요즘 몸 상태)은 통과한다', daily.every((t) => J(t, no)), daily.filter((t) => !J(t, no)).join(' / '))
+  const medical = ['저도 작년에 수술 받았어요', '저는 호르몬제 복용 중이에요', '저도 검사 수치가 높게 나왔어요', '저도 병원에서 약 타 왔어요']
+  check('⑯ 🔴 자리 — 의료 사실을 자기 일로 말하면 막는다(근거 없음)', medical.every((t) => !J(t, yes)), medical.filter((t) => J(t, yes)).join(' / '))
+  check('⑯ 🟢 자리 — 글쓴이가 자기 글에 쓴 의료 사실은 다시 말할 수 있다(근거와 이어짐)',
+    J('저도 수술 받고 한동안 고생했어요', { ...yes, grounding: '지난달 무릎 수술 받았어요' }))
+  check('⑯ 🔴 자리 — 갱년기를 겪지 않은 사람은 자기 일로 말하지 못하고, 겪은 사람은 말한다',
+    !J('저도 갱년기라 밤마다 열이 올라요', no) && J('저도 갱년기라 밤마다 열이 올라요', yes)
+    && J('갱년기 얘기 들으니 걱정되시겠어요', no))
+  // 관문 입력 — 자리 칸이 있는 입력(추가 댓글)에만 실린다
+  const base = {
+    personaCode: 'P01', reactionRole: 'experience',
+    persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: {}, voiceVariations: {}, noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
+    post: { id: 'p', title: '주말 드라마 뭐 보세요', bodyDigest: '요즘 볼 게 없어서요.', boardLabel: 'FREE', existingCommentDigests: [] },
+    voice: {}, memory: { has: false, note: '' }, fingerprint: 'x',
+  } as unknown as CommentInput
+  const seated = { ...base, post: { ...base.post, threadSeat: { length: 'normal', selfFacts: [], menopauseExperienced: false } } } as CommentInput
+  const text = '저도 그 드라마 봤어요 주말에 몰아서 봤네요'
+  const sevenOf = (input: CommentInput) => checkCommentCandidate(toGateInput({ input, text, sourceTexts: [input.post.title, input.post.bodyDigest] }))
+    .gates.find((g) => g.gate === '⑦')?.outcome
+  check('⑯ 🔴 관문 ⑦ — 같은 말이 첫 댓글 입력에서는 막히고 자리 입력에서는 통과한다(배선 확인)',
+    sevenOf(base) === 'regenerate' && sevenOf(seated) === 'pass', `첫 댓글 ${sevenOf(base)} · 자리 ${sevenOf(seated)}`)
 }
 
 for (const l of lines) console.log(l)
