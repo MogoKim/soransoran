@@ -21,7 +21,7 @@ import {
   judgeCrisisSignal, judgeMedicalDecisionRequest, judgeHealthEfficacyClaim,
   judgeSafetySignals, SAFETY_SIGNAL_CODES,
 } from '../src/lib/micro-seed-safety-signals'
-import { SEMANTIC_RISKS, SEMANTIC_HOLD, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
+import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   callBudgetOf, CallBudget, HARM_BANS, MAX_ORIGINALITY_RETRIES,

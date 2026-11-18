@@ -95,9 +95,6 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   lowConfidence: '모델이 확신하지 못했다',
   semanticDrop: '🔴 의미 판정이 버리라고 했다',
   semanticHold: '의미 판정이 사람에게 넘겼다',
-  purchaseOrSellerRequest: '🔴 구매처 · 판매처를 묻는 글',
-  brandListBait: '🔴 댓글이 브랜드 나열로 흐를 소재',
-  insufficientContext: '판단할 만큼 내용이 없다',
   identifiablePrivatePerson: '🔴 비공개 개인을 알아볼 수 있다 (공인은 해당하지 않는다)',
   unverifiedDefamation: '🔴 확인되지 않은 범죄 · 불륜 · 질병을 사실로 단정한다',
   targetedHarassmentOrThreat: '🔴 특정인을 향한 위협 · 괴롭힘 · 혐오 선동',
@@ -136,7 +133,6 @@ export const HOLD_REASONS: readonly ReasonCode[] = [
   'medicalOrAd', 'noTitle', 'noBodyHead', 'bodyHeadTooLong',
   'semanticUnavailable', 'lowConfidence', 'semanticHold', 'semanticFailed',
   'unexplainedModelDrop',
-  'purchaseOrSellerRequest', 'brandListBait', 'insufficientContext',
 ] as const
 
 /**
@@ -171,67 +167,40 @@ export const HOLD_ASSET_AXES: readonly string[] = [] as const
  */
 
 /**
- * 🔴 위험 축 — semantic judge 가 이 이름으로 답한다.
- *
- * 🔴 **주제를 막지 않는다. 위해 행동을 막는다** (2026-09-13, 창업자 결정).
- *
- *    옛 판은 `celebrityOrBroadcast` · `healthScheduleOrMedicalAdvice` 처럼
- *    **소재 자체**를 위험으로 봤다. 그래서 이런 글이 전부 막혔다 —
- *      "미우새 보다가 남편이랑 또 말다툼했어요"
- *      "갱년기 때문에 잠을 못 자는데 다들 어떤가요"
- *      "스케일링 몇 년에 한 번씩 받으세요?"
- *    전부 40~60대 여성이 실제로 쓰는 글이고, 검색으로 사람이 들어오는 글이다.
- *    막을 이유가 없는 것을 막으면 남는 것은 **안전하지만 아무도 안 읽는 글**뿐이다.
- *
- *    바꾼 기준은 하나다 — **누군가에게 해가 되는가.**
- *      · 비공개 개인이 특정되는가
- *      · 확인되지 않은 것을 사실로 단정해 명예를 훼손하는가
- *      · 특정인을 향한 위협·괴롭힘·혐오 선동인가
- *      · 약·용량·진단·치료를 확정적으로 지시하는가
- *
+ * 🔴 **원천 판정이 막는 것은 넷뿐이다** (2026-11-18 창업자 결정) — 모델이 고를 수 있는 위험의 전부다.
+ *    커뮤니티는 날것의 글이 오가는 곳이다. 화제가 되거나 자극적이거나 실명 · 유명인이 나온다는 이유로 막지 않는다.
+ *      crisisSignal                 자해 · 자살 암시 — 버리지 않고 사람에게 넘긴다(HOLD)
+ *      targetedHarassmentOrThreat   사람을 해치라는 선동 · 협박 · 특정인 괴롭힘 — 버린다
+ *      dangerousMedicalInstruction  약을 끊어라 · 용량을 바꿔라 같은 위험한 의료 지시 — 버린다
+ *      promotion                    광고 · 홍보 · 판매 글 — 버린다(결정적 판정의 `promotion` 과 같은 이름)
+ *    여기 없는 이름을 모델이 적어도 막는 사유가 아니다.
+ */
+export const JUDGE_RISKS = ['crisisSignal', 'targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'promotion'] as const
+export type JudgeRisk = (typeof JUDGE_RISKS)[number]
+/** 버리는 위험 — 나머지(`crisisSignal`)는 사람에게 넘긴다 */
+export const JUDGE_DROP: readonly JudgeRisk[] = ['targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'promotion']
+
+/**
+ * 🔴 **초안 검수(생성 쪽)의 위해 축 이름** — 원천 판정은 이 목록을 쓰지 않는다(`JUDGE_RISKS`).
+ *    생성 쪽 품질 계약이 `SEMANTIC_DROP` · `DRAFT_HARM_AXES` 값을 그대로 읽으므로 값은 그 계약과 함께만 바꾼다.
  */
 export const SEMANTIC_RISKS = [
-  'purchaseOrSellerRequest',
-  'brandListBait',
-  'insufficientContext',
-  // 🔴 여기부터가 **위해** 축이다. 소재가 아니라 행동을 본다
   'identifiablePrivatePerson',
   'unverifiedDefamation',
   'targetedHarassmentOrThreat',
   'dangerousMedicalInstruction',
   'politicalCampaigning',
-  /**
-   * 🔴 **deterministic 판정과 같은 이름을 쓴다** (2026-09-16).
-   *    `micro-seed-safety-signals` 의 `SAFETY_SIGNAL_CODES` 와 짝이다 —
-   *    두 단계가 다른 이름을 쓰면 언젠가 한쪽만 고쳐진다.
-   */
   'crisisSignal',
   'medicalDecisionRequest',
   'healthEfficacyClaim',
 ] as const
 export type SemanticRisk = (typeof SEMANTIC_RISKS)[number]
 
-/**
- * 🔴 **버리는 위험과 격리하는 위험.**
- *
- * 앞 다섯은 사람이 실제로 그 이유로 막았다(2026-09-07 memo 실측).
- * `insufficientContext` 는 "모르겠다" 이므로 버리지 않고 사람에게 남긴다.
- */
-/** 🔴 **위해다. 버린다.** 소재가 무엇이든 여기 걸리면 쓰지 않는다 */
+/** 🔴 초안 검수에서 버리는 위해 축 */
 export const SEMANTIC_DROP: readonly SemanticRisk[] = [
   'identifiablePrivatePerson', 'unverifiedDefamation',
   'targetedHarassmentOrThreat', 'dangerousMedicalInstruction',
   'politicalCampaigning',
-] as const
-/** 🟡 위해는 아니지만 그대로 쓰기 어려운 것 — 사람에게 넘긴다 */
-export const SEMANTIC_HOLD: readonly SemanticRisk[] = [
-  'purchaseOrSellerRequest', 'brandListBait', 'insufficientContext',
-  /**
-   * 🔴 **위기 신호는 버리지 않고 사람에게 넘긴다** (정본 §4).
-   *    `crisis_hold` 로 남기고 운영자가 본다 — 재생성하지 않는다(§8).
-   *    의료 판단 요청 · 건강 효능 주장도 소재 자체는 우리 주제라 버리지 않는다.
-   */
-  'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
 ] as const
 
 /**
@@ -444,7 +413,7 @@ export type BoardTopic = (typeof BOARD_TOPICS)[number]
 export type SemanticVerdict = {
   decision: AutoDecision
   confidence: number
-  risks: SemanticRisk[]
+  risks: JudgeRisk[]
   communityAngle: string
   /** 🔴 2026-10-19 창업자 — 중심 주제. parseSemantic 이 'MENOPAUSE'|'FREE' 가 아니면 전체를 null 로 거부(HOLD) */
   boardTopic: BoardTopic
@@ -468,12 +437,8 @@ export function parseSemantic(rawText: string): SemanticVerdict | null {
   if (!Number.isFinite(conf) || conf < 0 || conf > 1) return null
   const rawRisks = Array.isArray(j.risks) ? j.risks.map(String)
     : Array.isArray(j.reasonCodes) ? j.reasonCodes.map(String) : []
-  // 🔴 모르는 위험 이름이 오면 버리지 않고 남긴다 — insufficientContext 로 읽는다
-  const risks: SemanticRisk[] = []
-  for (const r of rawRisks) {
-    if ((SEMANTIC_RISKS as readonly string[]).includes(r)) risks.push(r as SemanticRisk)
-    else risks.push('insufficientContext')
-  }
+  // 🔴 막는 위험은 `JUDGE_RISKS` 넷뿐이다 — 그 밖의 이름은 막는 사유가 아니라서 읽지 않는다
+  const risks = rawRisks.filter((r): r is JudgeRisk => (JUDGE_RISKS as readonly string[]).includes(r))
   // 🔴 2026-10-19 — boardTopic 은 필수 enum. 누락·unknown 은 null (호출부가 HOLD 로 보낸다).
   const bt = String(j.boardTopic ?? '')
   if (!(BOARD_TOPICS as readonly string[]).includes(bt)) return null
@@ -608,12 +573,11 @@ export function judgeOne(
   //    447520(연예 소재)이 **Growth Issue 레인 후보로 보존되지 못하고 폐기**됐다(§4-C).
   //    모델은 위험을 **알려주는** 쪽이고, 그 위험을 어떻게 다룰지는 **정책이 정한다.**
   const risks = semantic.risks
-  const drops = risks.filter((r) => SEMANTIC_DROP.includes(r))
+  const drops = risks.filter((r) => JUDGE_DROP.includes(r))
   if (drops.length > 0) {
     return { ...base, decision: 'AUTO_DROP', reasonCodes: dedupe([...risks, 'semanticDrop']) }
   }
-  const holds = risks.filter((r) => SEMANTIC_HOLD.includes(r))
-  if (holds.length > 0) {
+  if (risks.length > 0) {
     return { ...base, decision: 'AUTO_HOLD', reasonCodes: dedupe([...risks, 'semanticHold']) }
   }
   // 🔴 모델이 버리라 했는데 **버릴 사유를 대지 못했다.** 버리지 않고 사람에게 넘긴다 —
