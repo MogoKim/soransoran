@@ -354,14 +354,14 @@ console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')
   check('🔴 hardExclude 는 모델이 통과라 해도 DROP',
     j({ safetyVerdict: 'hardExclude' }, strong).decision === 'AUTO_DROP')
   check('🔴 axis=drop 도 DROP', j({ axis: 'drop' }, strong).decision === 'AUTO_DROP')
-  check('🔴 정치 사유도 DROP', j({ safetyReasons: 'politics' }, strong).decision === 'AUTO_DROP')
+  check('🔴 개인정보 사유도 DROP', j({ safetyReasons: 'personalIdentity' }, strong).decision === 'AUTO_DROP')
   check('🔴 access 실패는 모델이 뭐라 해도 HOLD',
     j({ access: 'failed' }, strong).decision === 'AUTO_HOLD')
   check('🔴 safety 미통과도 HOLD', j({ safetyVerdict: 'hold' }, strong).decision === 'AUTO_HOLD')
   check('🔴 hardGate 가 모델보다 먼저다', (() => {
     // 어떤 응답을 줘도 hardGate 에 걸린 것은 DROP 이다
     for (const sem of [strong, okSem({ decision: 'AUTO_SEED', confidence: 1 }), null]) {
-      if (j({ safetyReasons: 'politics' }, sem).decision !== 'AUTO_DROP') return false
+      if (j({ safetyReasons: 'personalIdentity' }, sem).decision !== 'AUTO_DROP') return false
     }
     return true
   })())
@@ -369,14 +369,12 @@ console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')
 
 console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
 {
-  for (const code of ['politics', 'personalIdentity', 'medicalClaim', 'promotion', 'hostility'] as const) {
+  for (const code of ['personalIdentity', 'medicalClaim', 'promotion', 'hostility'] as const) {
     check(`🔴 ${code} → AUTO_DROP`, j({ safetyReasons: code }).decision === 'AUTO_DROP')
     check(`   사유가 남는다`, j({ safetyReasons: code }).reasonCodes.includes(code))
   }
-  check('🔴 목록 플래그 politicalFigure(정치 인물) 도 막는다',
-    j({ qualityFlags: ['politicalFigure'] }).decision === 'AUTO_DROP')
-  check('📜 옛 혼합 플래그(politicalOrPublicFigure)는 정치 · 연예를 가를 수 없어 정치로 읽는다(fail-closed)',
-    j({ qualityFlags: ['politicalOrPublicFigure'] }).decision === 'AUTO_DROP')
+  check('🔴 옛 정치 플래그(politicalFigure · politicalOrPublicFigure)는 막는 사유가 아니다 — 정치 낱말 사전은 지웠다',
+    j({ qualityFlags: ['politicalFigure', 'politicalOrPublicFigure', 'politicalTopicLikely'] }).decision === 'AUTO_SEED')
   // 🔴 v1 은 이걸 medicalClaim 으로 단정해 사유를 왜곡했다. 이름 그대로 의료 **또는** 광고다
   check('🟡 medicalOrAdLikely → AUTO_HOLD (버리지 않는다)',
     j({ qualityFlags: ['medicalOrAdLikely'] }).decision === 'AUTO_HOLD')
@@ -387,12 +385,12 @@ console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
   check('🟢 다른 플래그는 막지 않는다',
     j({ qualityFlags: ['clickbaitTitle'] }).decision === 'AUTO_SEED')
   check('사유 코드 문자열이 `code:note` 여도 읽는다',
-    j({ safetyReasons: 'politics:정치 어휘' }).decision === 'AUTO_DROP')
+    j({ safetyReasons: 'promotion:홍보 어휘' }).decision === 'AUTO_DROP')
   check('여러 사유를 | 로 읽는다',
-    readReasons('politics|promotion').length === 2)
+    readReasons('hostility|promotion').length === 2)
   check('빈 문자열은 사유 0', readReasons('').length === 0)
-  check('플래그 → 사유는 옮기기만 한다 — 정치 인물만 politics',
-    readFlags(['politicalFigure']).join(',') === 'politics' && readFlags(['politicalFigureMention']).length === 0)
+  check('플래그 → 사유는 옮기기만 한다 — 정치 플래그는 사유가 아니다',
+    readFlags(['politicalFigure', 'politicalFigureMention']).length === 0)
   check('🔴 의료와 광고를 합치지 않는다', readFlags(['medicalOrAdLikely']).join(',') === 'medicalOrAd')
 }
 
@@ -402,7 +400,7 @@ console.log('\n④ 🔴 모르는 사유는 통과가 아니라 격리다')
   check('🔴 모르는 사유 → AUTO_HOLD', r.decision === 'AUTO_HOLD')
   check('unknownReason 으로 기록된다', r.reasonCodes.includes('unknownReason'))
   check('🔴 규칙이 모르는 위험이 통과하지 않는다', r.decision !== 'AUTO_SEED')
-  check('아는 사유 목록이 13종 — 언어 핏(hanjaLanguageFit) 포함', KNOWN_SAFETY_CODES.length === 13)
+  check('아는 사유 목록이 12종 — 언어 핏(hanjaLanguageFit) 포함', KNOWN_SAFETY_CODES.length === 12)
   check('🟡 격리 사유는 버리지 않는다 — 사람이 보면 통과할 수도 있다',
     j({ safetyReasons: 'visualDependent' }).decision === 'AUTO_HOLD')
   check('volatile 도 격리 (drop 아님)',

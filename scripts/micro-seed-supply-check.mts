@@ -128,29 +128,31 @@ console.log('\n⑤ 자동 선별 — 자동 경로에는 사람이 없다')
 {
   const rows = [
     { sourceArticleId: 'a1', score: 90, flags: ['targetLikely'] },
-    { sourceArticleId: 'a2', score: 80, flags: ['targetLikely', 'politicalFigure'] },
+    { sourceArticleId: 'a2', score: 80, flags: ['targetLikely', 'hanjaLanguageFit'] },
     { sourceArticleId: 'a3', score: 70, flags: ['personalExperienceLikely'] },
     { sourceArticleId: 'a4', score: 10, flags: [] },
-    { sourceArticleId: 'a5', score: 60, flags: ['politicalTopicLikely'] },
+    { sourceArticleId: 'a5', score: 60, flags: ['clickbaitTitle'] },
     { sourceArticleId: 'a6', score: 50, flags: [], alreadyInVault: true },
   ]
   const p = planAutoFetch(rows)
-  check('🔴 정치·실명은 자동으로 열지 않는다', !p.picked.includes('a2'))
-  check('🔴 정치 주제도 자동으로 열지 않는다', !p.picked.includes('a5'))
+  check('🔴 언어 핏(한자 제목)은 자동으로 열지 않는다', !p.picked.includes('a2'))
+  check('🔴 그 밖의 플래그는 여는 것을 막지 않는다 — 글의 주제로 빼지 않는다', p.picked.includes('a5'))
+  check('🔴 옛 정치 플래그가 붙은 행도 연다 — 정치 낱말 사전은 지웠다',
+    planAutoFetch([{ sourceArticleId: 'p1', score: 1, flags: ['politicalFigure', 'politicalTopicLikely'] }]).picked.includes('p1'))
   /**
    * 🔴 **점수 하한을 없앴다** (2026-09-11). 낮은 점수는 **나중에** 열릴 뿐 버려지지 않는다 —
    *    후보가 남아 있는데 상세가 0 으로 끝나던 것이 병목이었다(실측 후보 15 → 상세 2~4).
    */
   check('🟢 점수가 낮아도 자리가 남으면 열린다', p.picked.includes('a4'))
   check('이미 Vault 에 있으면 열지 않는다', !p.picked.includes('a6'))
-  check('점수 높은 순으로 열린다', p.picked.join(',') === 'a1,a3,a4', p.picked.join(','))
+  check('게시 시각을 모르면 결정적 열쇠(글 번호) 순으로 열린다', p.picked.join(',') === 'a1,a3,a4,a5', p.picked.join(','))
   check(
     '🔴 제외는 버려지지 않고 사유와 함께 남는다',
-    p.skipped.length === 3 && p.skipped.every((s) => s.detail.length > 0),
+    p.skipped.length === 2 && p.skipped.every((s) => s.detail.length > 0),
     JSON.stringify(p.skipped),
   )
   /**
-   * a2·a5 가 둘 다 SKIP_FLAG 라 제외 3건의 사유는 2종이다.
+   * a2 는 SKIP_FLAG · a6 은 ALREADY_IN_VAULT — 제외 2건의 사유는 2종이다.
    * 🔴 `BELOW_MIN_SCORE` 는 사라졌다 — 하드 차단은 중복과 플래그 둘뿐이다.
    */
   check(
@@ -184,14 +186,7 @@ console.log('\n⑤-B 🔴 구조 가드 — 목록 단계에 없는 플래그에
   const titleOnly = (title: string) =>
     assessCandidate({ originalTitle: title, rawBody: '', sourceCommentCount: 3 }).flags as readonly string[]
 
-  check(
-    '[구조·증명] politicalFigure 는 제목만으로 발화한다',
-    titleOnly('이재명 대통령 발언 어떻게 보세요').includes('politicalFigure'),
-  )
-  check(
-    '[구조·증명] politicalTopicLikely 는 제목만으로 발화한다',
-    titleOnly('나라별 극우의 특징').includes('politicalTopicLikely'),
-  )
+  check('[구조·증명] hanjaLanguageFit 는 제목만으로 발화한다', titleOnly('韓國 여행 다녀왔어요').includes('hanjaLanguageFit'))
   check(
     '🔴 [구조] medicalOrAdLikely 는 목록 단계 제외 목록에 없다',
     !(AUTO_SKIP_LIST_FLAGS as readonly string[]).includes('medicalOrAdLikely'),
@@ -212,11 +207,8 @@ console.log('\n⑤-C 자동 보류 — 상세를 연 뒤, 적재 전에 (PR-S2-a
     '🔴 의료·광고성은 자동 적재에서 보류된다',
     judgeAutoHold({ sourceArticleId: 'h1', flags: ['medicalOrAdLikely', 'highEngagement'] }).hold,
   )
-  check(
-    '🔴 본문 정치 인물도 보류된다(옛 혼합 본문 플래그도 가를 수 없어 보류)',
-    judgeAutoHold({ sourceArticleId: 'h2', flags: ['politicalFigureMention'] }).hold
-      && judgeAutoHold({ sourceArticleId: 'h3', flags: ['publicFigureMention'] }).hold,
-  )
+  check('🔴 옛 본문 정치 인물 플래그로는 보류하지 않는다',
+    !judgeAutoHold({ sourceArticleId: 'h2', flags: ['politicalFigureMention', 'publicFigureMention'] }).hold)
   check(
     '깨끗한 글은 보류하지 않는다',
     !judgeAutoHold({ sourceArticleId: 'h3', flags: ['targetLikely', 'personalExperienceLikely'] }).hold,
@@ -259,73 +251,11 @@ console.log('\n⑤-D 실측 회귀 — 2026-09-03 live 수집 3건')
     judgeAutoHold({ sourceArticleId: '4234897', flags: ['medicalOrAdLikely'] }).hold,
   )
 
-  // ③ 4234894 — 나라별 극우의 특징. 🔴 이번엔 목록 단계에서 잡혀야 한다
-  const t3 = assess('나라별 극우의 특징', '')
-  check(
-    '🔴 4234894 극우 — politicalTopicLikely 가 붙는다',
-    (t3.flags as readonly string[]).includes('politicalTopicLikely'),
-    JSON.stringify(t3.flags),
-  )
-  check(
-    '🔴 4234894 — 정치 인물 플래그와 분리돼 있다',
-    !(t3.flags as readonly string[]).includes('politicalFigure'),
-    '실명이 없는데 공인 플래그가 붙으면 두 축이 섞인 것이다',
-  )
-  check(
-    '🔴 4234894 — 목록 단계 자동 선별에서 빠진다',
-    !planAutoFetch([{ sourceArticleId: '4234894', score: 90, flags: [...t3.flags] }]).picked.includes('4234894'),
-  )
-
-  // 과차단 회귀 — 정상 생활글이 걸리면 안 된다
-  const safe = [
-    '작년 은퇴한 남편 건보료 궁금해요',
-    '기미 어째야 하나요',
-    '서울 나이들어 살 동네 추천해주세요.',
-    '고2딸',
-    '아파트 외벽 보수공사 하는데 시끄럽네요',
-    '요즘 애들 진보한 게 눈에 보여요',
-  ]
-  for (const s of safe) {
-    check(
-      `[과차단] "${s.slice(0, 18)}" 에 정치 주제 플래그가 안 붙는다`,
-      !(assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
-    )
-  }
-
-  const expandedPolitics = [
-    '비상계엄 포고령 봤어요',
-    '김건희특검 채상병특검 뉴스',
-    '김용현 노상원 여인형 곽종근',
-    '한덕수 우원식 오세훈 홍준표',
-    '좌빨 수꼴 국짐 대깨문',
-    '친문 비명 팬덤정치',
-    '도이치모터스 주가조작 명품백',
-    '필리버스터 패스트트랙 법사위',
-    '지방선거 리얼미터 NBS',
-    '더불어민주연합 국민의미래',
-    '방송3법 노란봉투법 의료대란 법안 반대',  // 🔴 (P0-3) 정책 · 법안 낱말은 정치 문맥과 함께일 때만 정치
-    '한미동맹 사드 대북전단',
-    '선관위 방통위 뉴스공장',
-    '광화문집회 단식농성',
-  ]
-  for (const s of expandedPolitics) {
-    check(
-      `[정치 확장] "${s.slice(0, 18)}" 에 politicalTopicLikely 가 붙는다`,
-      (assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
-    )
-  }
-
-  const politicalOverblockSafe = [
-    '미리 감사드립니다',
-    '어머니께 옷 사드릴까요',
-    '반장 선거 준비물',
-    '동대표 선거 안내',
-  ]
-  for (const s of politicalOverblockSafe) {
-    check(
-      `[정치 과차단] "${s}" 는 통과한다`,
-      !(assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
-    )
+  // ③ 사회 · 정치 화제 제목도 목록 단계에서 빼지 않는다 — 부분일치 사전이 지우던 모양 포함(지어낸 제목)
+  for (const s of ['나라별 극우의 특징', '대선 후보 토론 보셨어요', '배우 박진영 나오는 드라마 보셨어요', '하수구가 막혀서 사람 불렀어요', '남친문제로 잠이 안 와요', '이것도 약관 위반일까요']) {
+    const flags = assess(s, '').flags
+    check(`🔴 "${s.slice(0, 14)}" — 자동 선별에서 빠지지 않는다`,
+      planAutoFetch([{ sourceArticleId: 'x', score: 0, flags: [...flags] }]).picked.includes('x'), JSON.stringify(flags))
   }
 }
 {

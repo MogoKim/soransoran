@@ -21,7 +21,6 @@
  *    여기서는 그 결과를 **읽어서 조합만** 한다 — 새 정규식을 만들지 않는다.
  */
 import { sourceIdentityOf } from './source-identity'
-import { isPoliticalFigureTitleFlag } from './political-flags'
 import { HANJA_LANGUAGE_FIT } from './cjk-ideograph'
 import { isMemberGateText } from './naver-member-gate'
 
@@ -57,7 +56,7 @@ export type ReasonCode =
   | 'axisSeed' | 'axisRaw'
   | 'notEligibleAxis' | 'accessNotOk' | 'safetyNotPass'
   | 'noArticleId' | 'noBodyLength'
-  | 'politics' | 'personalIdentity' | 'medicalClaim' | 'promotion'
+  | 'personalIdentity' | 'medicalClaim' | 'promotion'
   | 'hostility' | 'visualDependent' | 'noticeSlot' | 'volatile'
   | 'unknownReason' | 'hardExclude' | 'dropAxis'
   | 'laneNotProven' | 'assetHealth'
@@ -76,7 +75,6 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   safetyNotPass: 'safety 가 pass 가 아니다',
   noArticleId: '글 id 가 없다',
   noBodyLength: '본문 길이가 없다',
-  politics: '🔴 정치 · 진영',
   personalIdentity: '🔴 실명 · 개인정보',
   medicalClaim: '🔴 의료 처방 · 효능 단정',
   promotion: '🔴 광고 · 홍보',
@@ -119,7 +117,7 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
  *    정치·실명·의료·광고·적대는 `AUTO_DROP` 으로 확실히 버린다.
  */
 export const HARD_BLOCK: readonly ReasonCode[] = [
-  'politics', 'personalIdentity', 'medicalClaim', 'promotion', 'hostility',
+  'personalIdentity', 'medicalClaim', 'promotion', 'hostility',
   'hardExclude', 'dropAxis',
   'semanticDrop',
   'identifiablePrivatePerson', 'unverifiedDefamation',
@@ -191,9 +189,6 @@ export const HOLD_ASSET_AXES: readonly string[] = [] as const
  *      · 특정인을 향한 위협·괴롭힘·혐오 선동인가
  *      · 약·용량·진단·치료를 확정적으로 지시하는가
  *
- * 🔴 **정치는 그대로 막는다.** 허용 목록에 없고 헌법(§4-K)이 hardExclude 로 둔다.
- *    다만 옛 `politicsOrPublicFigure` 는 정치와 **공인 언급**을 한 이름에 묶고 있었다 —
- *    공인 이름이 나왔다는 이유로 막히던 것이 이 축이다. 둘을 갈랐다.
  */
 export const SEMANTIC_RISKS = [
   'purchaseOrSellerRequest',
@@ -255,7 +250,7 @@ export const MIN_CONFIDENCE = 0.7
 
 /** 🔴 우리가 아는 safety 사유 코드 — 여기 없는 것이 오면 `unknownReason` 이다 */
 export const KNOWN_SAFETY_CODES: readonly string[] = [
-  'politics', 'noticeSlot', 'personalIdentity', 'medicalClaim',
+  'noticeSlot', 'personalIdentity', 'medicalClaim',
   'promotion', 'hostility', 'visualDependent', 'access', 'volatile',
   // 🔴 2026-09-16 추가 — 여기 없으면 `unknownReason` 으로 잡힌다
   'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
@@ -431,10 +426,7 @@ export function readReasons(raw: string): ReasonCode[] {
 export function readFlags(flags: readonly string[]): ReasonCode[] {
   const out: ReasonCode[] = []
   for (const f of flags) {
-    // 🔴 정치 인물 제목만 정치다(P0-3) — 연예 · 방송 이름은 플래그가 아니다. 옛 혼합 플래그는 가를 수 없어 정치로 읽는다
-    if (isPoliticalFigureTitleFlag(f)) out.push('politics')
-    // 🔴 언어 핏은 언어 핏 사유로 — 정치로 위장하지 않는다
-    else if (f === HANJA_LANGUAGE_FIT) out.push('hanjaLanguageFit')
+    if (f === HANJA_LANGUAGE_FIT) out.push('hanjaLanguageFit')
     // 🔴 `medicalOrAdLikely` 는 이름 그대로 **의료 또는 광고**다. 둘을 가르는 정보가
     //    이 플래그에 없는데 v1 이 `medicalClaim` 으로 단정했다 — 사유를 왜곡한 것이다.
     //    이제 별도 코드로 남기고, 의료인지 광고인지는 semantic judge 가 본다.

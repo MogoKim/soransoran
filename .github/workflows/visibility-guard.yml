@@ -952,7 +952,6 @@ jobs:
           npm run supply:jit-selection-check
           npm run check:retry-authority
           npm run ops:shadow-plan-check
-          npm run check:political-axis
       # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
       #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
       - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)

@@ -15,7 +15,6 @@
  *
  * 🔴 **이 파일은 무엇을 열지만 정한다.** 여는 것도 저장도 러너의 일이다.
  */
-import { isPoliticalFigureTitleFlag } from './political-flags'
 import { HANJA_LANGUAGE_FIT } from './cjk-ideograph'
 
 /**
@@ -75,20 +74,17 @@ export type ListRow = {
 }
 
 export type SkipCode =
-  | 'NOT_82COOK' | 'HAS_BODY' | 'EXCLUDED' | 'POLITICS' | 'FLAG_POLITICS'
-  | 'FLAG_MEDICAL' | 'LOW_COMMENT' | 'NO_ID' | 'TITLE_POLITICS' | 'TITLE_SAFETY' | 'FLAG_LANGUAGE'
+  | 'NOT_82COOK' | 'HAS_BODY' | 'EXCLUDED'
+  | 'FLAG_MEDICAL' | 'LOW_COMMENT' | 'NO_ID' | 'TITLE_SAFETY' | 'FLAG_LANGUAGE'
 
 export const SKIP_LABEL: Record<SkipCode, string> = {
   NOT_82COOK: '82cook 이 아니다 (네이버는 브라우저·세션이 든다)',
   HAS_BODY: '이미 본문을 읽었다',
   EXCLUDED: '목록에서 이미 제외됐다 (고정글 등)',
-  POLITICS: '정치로 제외됐다',
-  FLAG_POLITICS: '정치 주제 · 정치 인물 플래그가 있다',
-  FLAG_LANGUAGE: '🔴 실제 한자 문자 — 언어 핏(정치 아님)',
+  FLAG_LANGUAGE: '🔴 실제 한자 문자 — 언어 핏',
   FLAG_MEDICAL: '의료·광고성 플래그가 있다',
   LOW_COMMENT: `댓글이 ${COMMENT_TIER_LOW}개 미만이다`,
   NO_ID: '글 id 가 없다',
-  TITLE_POLITICS: '🔴 제목이 정치·진영 이슈다 (플래그가 안 붙은 것도 잡는다)',
   TITLE_SAFETY: '🔴 제목 안전 판정에서 걸렀다',
 }
 
@@ -110,12 +106,8 @@ const N = (v: unknown): number => {
 }
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
-/**
- * 제목 판정 — 🔴 **주입받는다.** 정치·안전 판정의 정본은 기존 lib 이고,
- *    여기서 규칙을 새로 쓰면 판단이 두 곳이 된다.
- */
+/** 제목 판정 — 🔴 **주입받는다.** 안전 판정의 정본은 기존 lib 이고, 여기서 규칙을 새로 쓰면 판단이 두 곳이 된다. */
 export type TitleJudge = {
-  isPolitics: (title: string) => boolean
   isBlocked: (title: string) => boolean
 }
 
@@ -159,24 +151,11 @@ export function planThinFetch(input: PlanInput): Plan {
     if (S(r.sourceSite) !== '82cook') { push(id, 'NOT_82COOK'); continue }
     if (input.hasBody.has(id)) { push(id, 'HAS_BODY'); continue }
     if (S(r.sourceExcludeReason) !== '') { push(id, 'EXCLUDED'); continue }
-    if (r.sourcePoliticsExcluded === true) { push(id, 'POLITICS'); continue }
     const flags = flagsOf(r)
-    // 🔴 정치 = 정치 주제 + 정치 인물(P0-3) — 네이버카페 `judgeExcludeReason` 과 같은 두 축. 연예 · 방송 이름은 막지 않는다.
-    //    앞판은 정치 주제(`politicalTopicLikely`)를 여기서 보지 않았다 — 제목만 정치 주제인 82cook 글이 상세를 열었다.
-    //    옛 혼합 플래그는 가를 수 없어 정치로 읽는다
-    if (flags.includes('politicalTopicLikely') || flags.some(isPoliticalFigureTitleFlag)) { push(id, 'FLAG_POLITICS'); continue }
-    // 🔴 언어 핏 — 정치와 다른 사유로 남긴다
     if (flags.includes(HANJA_LANGUAGE_FIT)) { push(id, 'FLAG_LANGUAGE'); continue }
     if (flags.includes('medicalOrAdLikely')) { push(id, 'FLAG_MEDICAL'); continue }
     if (N(r.sourceCommentCount) < COMMENT_TIER_LOW) { push(id, 'LOW_COMMENT'); continue }
-    // 🔴 플래그만으로는 모자란다. 목록 수집 당시 플래그가 안 붙은 정치 글이 남아 있다
-    //    (2026-09-07 실측: 50건 대상에 조국·이준석·정청래·극우 제목이 10건 넘게 섞였다).
-    //    §13 은 정치·진영 이슈를 **어느 레인으로도** 가져가지 않는다고 못박았다.
-    const title = S(r.originalTitle)
-    if (input.judge !== undefined) {
-      if (input.judge.isPolitics(title)) { push(id, 'TITLE_POLITICS'); continue }
-      if (input.judge.isBlocked(title)) { push(id, 'TITLE_SAFETY'); continue }
-    }
+    if (input.judge !== undefined && input.judge.isBlocked(S(r.originalTitle))) { push(id, 'TITLE_SAFETY'); continue }
     ok.push(r)
   }
 

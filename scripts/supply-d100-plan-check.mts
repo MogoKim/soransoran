@@ -262,11 +262,11 @@ console.log('\n⑥ 본문을 읽기 전에 후보를 버리지 않는다 — 신
     p.skipped.every((x) => x.reason === 'OVER_MAX'))
   /** 🔴 하드 차단은 그대로다 */
   const hard = planAutoFetch([
-    { sourceArticleId: 'p1', score: 99, flags: ['politicalFigure'] },
+    { sourceArticleId: 'p1', score: 99, flags: ['hanjaLanguageFit'] },
     { sourceArticleId: 'v1', score: 99, flags: [], alreadyInVault: true },
     { sourceArticleId: 'ok', score: 1, flags: [] },
   ], { max: 10 })
-  check('🔴 정치·실명은 여전히 열지 않는다', !hard.picked.includes('p1'))
+  check('🔴 언어 핏(한자 제목)은 여전히 열지 않는다', !hard.picked.includes('p1'))
   check('🔴 이미 연 글은 여전히 열지 않는다', !hard.picked.includes('v1'))
   check('🟢 점수가 낮아도 막을 이유가 없으면 열린다', hard.picked.includes('ok'))
 }

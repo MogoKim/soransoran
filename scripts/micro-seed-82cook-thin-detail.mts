@@ -35,7 +35,6 @@ import {
 import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
 // 🔴 정치·안전 판정의 정본은 기존 lib 이다. 규칙을 여기서 새로 쓰지 않는다
-import { judgePoliticsTitle } from './lib/micro-seed-navercafe.mjs'
 import { safetyFilter, safetyReasonCodes } from './lib/micro-seed-safety-filter.mjs'
 import { runIdOf } from './micro-seed-detail-fetch.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
@@ -183,7 +182,6 @@ async function main(): Promise<void> {
   const plan = planThinFetch({
     rows, hasBody, cap: CAP,
     judge: {
-      isPolitics: (title) => judgePoliticsTitle(title).excluded,
       // 🔴 제목만으로 확실히 버릴 것만 — hold 는 남긴다(읽어봐야 안다)
       isBlocked: (title) => {
         const v = safetyFilter({ title }).verdict

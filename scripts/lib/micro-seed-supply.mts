@@ -17,7 +17,6 @@
  *    Original Post 레인은 Raw 를 **재료로만** 쓰고 승인은 별도 대기열에서 받는다 →
  *    Raw 적재는 배치로 연다. **같은 importer 지만 여는 문이 다르다.**
  */
-import { isPoliticalFigureBodyFlag, isPoliticalFigureTitleFlag } from '../../src/lib/political-flags'
 import { sortBySourceRank } from '../../src/lib/source-slot-release'
 
 // ─────────────────────────────────────────────────────────
@@ -201,7 +200,7 @@ export const AUTO_FETCH_MAX = 30
  *    목록 JSONL 에는 전부 남고, 사람이 `--fetch=<id>` 로 지정하면 언제든 열린다.
  *    자동 경로에는 넘길 눈이 없기 때문에 그 경로만 좁힌다.
  */
-export const AUTO_SKIP_LIST_FLAGS = ['politicalFigure', 'politicalTopicLikely', 'hanjaLanguageFit'] as const
+export const AUTO_SKIP_LIST_FLAGS = ['hanjaLanguageFit'] as const
 
 /**
  * ② 상세 단계 자동 보류 — 본문을 읽은 **뒤**, Raw Vault 자동 적재 **전**에 뺀다.
@@ -213,7 +212,7 @@ export const AUTO_SKIP_LIST_FLAGS = ['politicalFigure', 'politicalTopicLikely', 
  *    Vault 저장은 발행이 아니다. 다만 **자동 원료 공급**에서는 더 보수적으로 간다 —
  *    자동으로 들어온 원문은 자동으로 생성기의 재료가 되고, 그 경로에 사람이 없다.
  */
-export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely', 'politicalFigureMention'] as const
+export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely'] as const
 
 /**
  * 🔴 **`AUTO_MIN_SCORE` 는 삭제했다** (2026-09-11).
@@ -274,8 +273,7 @@ export function planAutoFetch(
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'ALREADY_IN_VAULT', detail: '이미 Raw Vault 에 있다' })
       continue
     }
-    // 🔴 정치 주제 · 정치 인물(옛 혼합 플래그는 정치로 읽는다) — 연예 · 방송 이름은 제외 사유가 아니다(P0-3)
-    const hit = r.flags.filter((f) => (AUTO_SKIP_LIST_FLAGS as readonly string[]).includes(f) || isPoliticalFigureTitleFlag(f))
+    const hit = r.flags.filter((f) => (AUTO_SKIP_LIST_FLAGS as readonly string[]).includes(f))
     if (hit.length > 0) {
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'SKIP_FLAG', detail: `자동 제외 플래그 ${hit.join('·')} — 지정(--fetch)하면 열린다` })
       continue
@@ -292,7 +290,7 @@ export function planAutoFetch(
      *    읽지도 않고 버리면 그 게이트들이 볼 것이 없다.
      *
      * 🔴 이것을 대신할 새 관문을 만들지 않는다. 하드 차단으로 남는 것은
-     *    위의 `ALREADY_IN_VAULT`(중복)와 `SKIP_FLAG`(공지·정치 등) 둘뿐이다.
+     *    위의 `ALREADY_IN_VAULT`(중복)와 `SKIP_FLAG`(언어 핏) 둘뿐이다.
      */
     if (picked.length >= max) {
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'OVER_MAX', detail: `한 실행 상한 ${max}건을 넘었다 — 다음 실행에서 열린다` })
@@ -331,7 +329,7 @@ export type AutoHoldVerdict =
  */
 export function judgeAutoHold(input: AutoHoldInput): AutoHoldVerdict {
   if (input.humanDesignated === true) return { hold: false }
-  const hit = input.flags.filter((f) => (AUTO_HOLD_DETAIL_FLAGS as readonly string[]).includes(f) || isPoliticalFigureBodyFlag(f))
+  const hit = input.flags.filter((f) => (AUTO_HOLD_DETAIL_FLAGS as readonly string[]).includes(f))
   if (hit.length === 0) return { hold: false }
   return {
     hold: true,

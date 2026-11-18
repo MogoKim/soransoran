@@ -5,7 +5,7 @@
  * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-U ⑤ · §4-X ⑦ · §4-Y ⑤
  *
  * 🔴 이 fixture 가 막는 사고
- *    ① 정치·공지가 hold 로 새어 어딘가로 가는 것 (둘은 hardExclude 다)
+ *    ① 공지가 hold 로 새어 어딘가로 가는 것 (hardExclude 다)
  *    ② 펑·펑예가 Drop 으로 취급되는 것 (휘발 신호는 Drop 이 아니다)
  *    ③ 건강 **주제** 가 제외되는 것 (막는 것은 단정·시술이다)
  *    ④ 네이버와 82cook 이 같은 입력에 다른 답을 내는 것
@@ -23,7 +23,6 @@ import { thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
 import { toDetailRecord } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { KNOWN_SAFETY_CODES, mergeJudgeRows, readReasons } from '../src/lib/micro-seed-auto-judge'
 import { ROW_LABELS } from './lib/micro-seed-navercafe.mjs'
-import { findPoliticalTopicHit } from './lib/micro-seed-quality.mjs'
 
 const SRC = readFileSync('scripts/lib/micro-seed-safety-filter.mts', 'utf-8')
 const codeOf = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
@@ -45,63 +44,18 @@ console.log('\n안전 · 브랜드 필터 fixture')
 console.log('─────────────────────────────────────────────────────────')
 
 // ─────────────────────────────────────────────────────────
-console.log('\n① 정치 — 🔴 hardExclude. 어디에도 가지 않는다')
+console.log('\n① 낱말 사전으로 글을 버리지 않는다 — 정치 낱말 사전은 지웠다 (2026-11-18 창업자 결정)')
 // ─────────────────────────────────────────────────────────
 {
-  for (const t of ['대선 후보 토론 보셨어요', '이재명 대통령 발언 어떻게 보세요', '민주당 의료대란 책임 공방']) {
-    const v = verdict({ title: t })
-    check(`🔴 "${t.slice(0, 14)}…" → hardExclude`, v === 'hardExclude', `실제 ${v}`)
+  // 부분일치 사전이 무관한 글을 지우던 모양(지어낸 제목): 진영 · 수구 · 친문 · 장관 · 반일 이 낱말 안에 들어 있다
+  for (const t of ['배우 박진영 나오는 드라마 보셨어요', '하수구가 막혀서 사람 불렀어요', '남친문제로 잠이 안 와요', '공장관리 일 해보신 분', '이것도 약관 위반일까요']) {
+    check(`🔴 "${t.slice(0, 12)}…" 는 통과다`, verdict({ title: t }) === 'pass', `실제 ${verdict({ title: t })}`)
   }
-  // 🔵 (2026-10-04 창업자 확정 · P0-3 최종) 생활 정책 낱말은 단독으로 정치 근거가 아니다 — 다른 정치 신호가 있을 때만
-  check('🔵 "의료대란 언제 끝날까요" (생활 정책 낱말 단독) → 정치 아님', verdict({ title: '의료대란 언제 끝날까요' }) !== 'hardExclude')
-  check('🔴 수집기 politics 판정도 hardExclude',
-    verdict({ title: '평범한 제목', sourceExcludeReason: 'politics' }) === 'hardExclude')
-  check('🔴 사유 코드가 politics 다', codes({ title: '대선 후보 토론 보셨어요' }).includes('politics'))
-  // 🔴 보강된 정치어도 safety 에서 hardExclude 여야 한다 (PR-S2-b-34)
-  for (const t of ['친윤계 갈등', '친명 후보', '내란특검', '탄핵심판']) {
-    check(`🔴 보강 정치어 "${t}" → hardExclude`, verdict({ title: t }) === 'hardExclude')
+  // 사회 · 정치 화제도 낱말로는 버리지 않는다 — 해가 되는 글인지는 판정이 본다
+  for (const t of ['대선 후보 토론 보셨어요', '탄핵심판 뉴스 보고 한마디', '수능 감독 강화 대책 어떻게 보세요']) {
+    check(`🔴 화제 글 "${t.slice(0, 12)}…" 도 낱말로 버리지 않는다`, verdict({ title: t, body: t }) === 'pass', `실제 ${verdict({ title: t, body: t })}`)
   }
-  for (const t of ['모친명의로 된 집', '모친명절 준비', '특검사 받았어요']) {
-    check(`🟢 생활 표현 "${t.slice(0, 12)}…" 는 hardExclude 아님`, verdict({ title: t }) !== 'hardExclude')
-  }
-  // ─────────────────────────────────────────────────────────
-  // 🔴 짧은 어휘의 일상어 충돌 (2026-09-06 실측 · 어휘 10개 정밀화)
-  //
-  //    `찢` 한 글자가 "바지가 찢어졌어요" 를 정치로 만들었다. 254자 생활글이
-  //    실제로 그렇게 hardExclude 됐고, 4444자 글도 politics 로 잘렸다.
-  //    Raw 레인은 정의상 **긴 글**을 찾는데, 본문 전체를 훑는 필터라
-  //    **글이 길수록 우연히 걸릴 확률이 올라간다** — 찾는 것을 정확히 겨냥해 자르는 셈이었다.
-  //
-  //    🔴 정치 hard block 원칙은 그대로다. 좁힌 것은 **낱말의 모양**뿐이다.
-  //       아래 두 묶음이 함께 지켜져야 한다 — 하나만 보면 반대쪽으로 넘어간다.
-  // ─────────────────────────────────────────────────────────
-  for (const t of [
-    '바지가 찢어졌어요', '남친이랑 밥 먹었어요', '남사친이 보고싶대요', '비명을 질렀어요',
-    '땅을 파면 물이 나와요', '정당한 요구예요', '수박 사왔어요', '텃밭 가꿔요',
-    '험지 등반했어요', '엑셀 매크로 배웠어요', '586 컴퓨터 얘기',
-  ]) {
-    check(`🟢 일상 문장 "${t}" 는 politics 가 아니다`, !codes({ title: t }).includes('politics'))
-  }
-  for (const t of [
-    '이재명 탄핵', '국민의힘 전당대회', '민주당 비명계 갈등', '친이계 인사',
-    '댓글매크로 의혹', '586세대 정치인', '찢재명 논란',
-    // 🔴 단독 '정당' 을 뺀 자리는 결합형이 메운다 — 띄어쓴 형태까지
-    '정당 지지율 보셨어요', '정당지지율 발표', '정당 정치 얘기',
-  ]) {
-    check(`🔴 정치 문장 "${t}" 는 여전히 hardExclude`, verdict({ title: t }) === 'hardExclude')
-  }
-  // 🔴 본문에서도 같아야 한다 — 실제 사고가 본문 쪽에서 났다
-  check('🟢 본문의 "찢어지게" 는 politics 가 아니다',
-    !codes({ title: '병원비 이야기', body: '형편이 찢어지게 어려웠어요' }).includes('politics'))
-  check('🔴 본문의 "찢재명" 은 여전히 hardExclude',
-    verdict({ title: '평범한 제목', body: '찢재명 논란 얘기' }) === 'hardExclude')
-
-  // 🔴 판정을 두 벌 만들지 않는다 — quality lib 의 matcher 하나를 쓴다 (§4-K)
-  check('🔴 정치 matcher 를 재정의하지 않는다',
-    !/POLITICAL_TOPIC_TERMS|const POLITICAL_TOPIC\s*=/.test(CODE))
-  check('🟢 findPoliticalTopicHit 을 재사용한다', /findPoliticalTopicHit/.test(CODE))
-  check('🟢 같은 matcher 가 같은 답을 낸다',
-    (findPoliticalTopicHit('대선 후보 토론') !== null) === (verdict({ title: '대선 후보 토론' }) === 'hardExclude'))
+  check('🔴 안전 필터에 정치 사유 · 정치 판정 호출이 없다', !/politic|findPolitical/i.test(CODE))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -274,10 +228,9 @@ console.log('\n⑪ 이 필터가 하지 않는 것 — 🔴 발행·fetch·DB·S
   ]
   for (const [re, label] of BANNED) check(`🔴 ${label} 없음`, !re.test(CODE))
   // 🔴 2026-09-16 — 위기 신호 판정부를 정본 순수 모듈 하나에서 가져온다(규칙 복제 금지)
-  // 🔴 (2026-10-04 P0-3) 정치 사유 이름 정본(`political-flags` — 의존 없는 순수 이름 모듈)이 셋째다
-  // 🔴 (P0-3 최종) 한자 언어 핏 shared helper(`cjk-ideograph` — 의존 없는 순수 모듈)가 넷째다
-  check('🟢 import 는 quality lib · 안전 신호 판정부 · 정치 사유 이름 · 한자 helper 넷뿐이다',
-    (CODE.match(/^import /gm) ?? []).length === 4 && /from '\.\.\/\.\.\/src\/lib\/political-flags'/.test(CODE)
+  // 🔴 한자 언어 핏 shared helper(`cjk-ideograph` — 의존 없는 순수 모듈)가 둘째다
+  check('🟢 import 는 안전 신호 판정부 · 한자 helper 둘뿐이다',
+    (CODE.match(/^import /gm) ?? []).length === 2
     && /from '\.\.\/\.\.\/src\/lib\/cjk-ideograph'/.test(CODE),
     `${(CODE.match(/^import /gm) ?? []).length}개`)
   check('🔴 위기·의료 판정 규칙을 필터가 다시 쓰지 않는다',

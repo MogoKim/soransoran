@@ -57,17 +57,10 @@ check('🔴 이미 얇게 저장한 것은 다시 하지 않는다 — 재탕 �
 })())
 check('🔴 id 만 담은 옛 키로는 막히지 않는다 — 정본 키를 쓰지 않으면 여기서 드러난다',
   planCafeThin({ rows: [row()], seen: new Set(['447520']) }).targets.length === 1)
-check('🔴 제목이 정치·공인이면 **가져오지 않는다** — 판정까지 가면 본문이 한 번 더 저장된다', (() => {
-  const p = planCafeThin({
-    rows: [row()], seen: NONE,
-    judge: { isPolitics: () => true, isBlocked: () => false },
-  })
-  return p.targets.length === 0 && p.skipped[0].code === 'TITLE_POLITICS'
-})())
 check('🔴 제목이 안전 기준에 걸리면 가져오지 않는다', (() => {
   const p = planCafeThin({
     rows: [row()], seen: NONE,
-    judge: { isPolitics: () => false, isBlocked: () => true },
+    judge: { isBlocked: () => true },
   })
   return p.skipped[0].code === 'TITLE_SAFETY'
 })())

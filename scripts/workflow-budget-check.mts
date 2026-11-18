@@ -365,7 +365,7 @@ check('🔴 최종 집계는 core 실패와 선택 job 실패를 삼키지 않�
  *    package.json 에만 있고 CI 에서 한 번도 돌지 않던 상태로 merge 직전까지 갔다. 주석 줄은 배선으로 세지 않는다.
  */
 const MUST_BE_WIRED: readonly string[] = [
-  'stage:ready-loss-check', 'supply:jit-contract-check', 'check:political-axis',
+  'stage:ready-loss-check', 'supply:jit-contract-check',
   // 2026-11-16 답 기다리는 글 — 판정 · 변이
   'check:member-response', 'check:member-response-mutation',
 ]
