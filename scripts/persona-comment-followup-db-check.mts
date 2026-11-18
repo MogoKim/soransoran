@@ -601,7 +601,7 @@ async function main(): Promise<void> {
     const rep = await prisma.user.create({ data: { nickname: `rep${seq}x` }, select: { id: true } })
     await prisma.report.create({ data: { reporterId: rep.id, commentId: first, reason: 'fx' } })
     const q1 = await injectFollowup(c, pid, stamp(pid, 2, first), 2)
-    const w1 = await blockedFor(q1, '신고')
+    const w1 = await blockedFor(q1, '자리가 아니다')
     const s1 = await sweepFollowupLane(prisma, new Date())
     check('🔴 신고된 댓글에 답글 → 그 사유로 막힘 · 발행 0', w1.ok && s1.published === 0
       && (await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: q1 }, select: { status: true } })).status === 'EXPIRED', w1.detail)
@@ -610,7 +610,7 @@ async function main(): Promise<void> {
     // 삭제는 그 글의 다른 Persona 첫 댓글 위에 추가로 — 첫 댓글 자체를 지우면 첫 댓글 계약에서 먼저 멈춘다
     const extra = await prisma.comment.create({ data: { postId: pid, authorId: d.userId, content: '삭제될 질문 있으세요?', commentOrigin: 'PERSONA', personaId: d.id, source: 'SYSTEM', isDeleted: true, createdAt: new Date(Date.now() - 150 * MIN) }, select: { id: true } })
     const q2 = await injectFollowup(c, pid, stamp(pid, 2, extra.id), 2)
-    const w2 = await blockedFor(q2, '지워졌다')
+    const w2 = await blockedFor(q2, '자리가 아니다')
     const s2 = await sweepFollowupLane(prisma, new Date())
     check('🔴 삭제된 댓글에 답글 → 그 사유로 막힘 · 발행 0', w2.ok && s2.published === 0
       && (await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: q2 }, select: { status: true } })).status === 'EXPIRED', w2.detail)
@@ -653,7 +653,8 @@ async function main(): Promise<void> {
     const otherQ = await injectFollowup(
       d,
       dialogPid,
-      stamp(dialogPid, 3, authorFirstReply.id),
+      // 🔴 글쓴이 답에는 그 댓글을 쓴 사람만 다시 답한다 — 글쓴이의 두 번째 대상은 다른 사람의 새 댓글로 만든다
+      stamp(dialogPid, 3, null),
       3,
       '저도 읽으면서 계속 마음에 남았어요. 그 뒤에는 조금 나아지셨나요?',
     )
@@ -726,7 +727,8 @@ async function main(): Promise<void> {
     const fourthTargetQueue = await injectFollowup(
       e,
       dialogPid,
-      stamp(dialogPid, 7, authorThird.id),
+      // 🔴 글쓴이 답에는 그 댓글을 쓴 사람만 다시 답한다 — 네 번째 대상도 다른 사람의 새 댓글로 만든다
+      stamp(dialogPid, 7, null),
       7,
       '오늘 밤은 더 편안하시길 바랄게요. 나중에도 소식 들려주세요.',
     )
@@ -744,7 +746,8 @@ async function main(): Promise<void> {
     const authorFourthResult = await publishCandidateTx(prisma, { id: authorFourthQueue, now: new Date(), followupLane: true })
     check('🔴 글쓴이 4번째 답글 → planner 우회 PENDING 이어도 transaction 차단 · write 0',
       authorFourthResult.kind === 'blocked'
-      && authorFourthResult.blocks.some((x) => x.message.includes('이미 썼거나 글쓴이'))
+      // 글쓴이가 세 번 답한 뒤에는 그 댓글에 글쓴이가 설 자리가 없다
+      && authorFourthResult.blocks.some((x) => x.message.includes('자리가 아니다'))
       && (await personaRows(dialogPid)).filter((x) => x.personaId === f.id).length === 3,
       JSON.stringify(authorFourthResult))
     followupOn(false)
