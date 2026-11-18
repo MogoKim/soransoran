@@ -197,7 +197,7 @@ export function toGateInput(args: {
      */
     personaGrounding: ownPost ? [baseGrounding, post.title, post.bodyDigest].filter((t) => t.trim() !== '').join(' ') : baseGrounding,
     // 🔴 추가 댓글만 — 첫 댓글 입력에는 자리 칸이 없어 ⑦ 판정이 그대로다
-    ...(post.threadSeat === undefined ? {} : { everydayExperience: { menopauseExperienced: post.threadSeat.menopauseExperienced } }),
+    ...(post.threadSeat === undefined ? {} : { everydayExperience: { menopauseExperienced: post.threadSeat.menopauseExperienced, spouseStrain: post.threadSeat.spouseStrain } }),
     noGoTopics: p.noGoTopics,
     noGoExpressions: p.noGoExpressions,
     ...(args.frequencyLookup === undefined

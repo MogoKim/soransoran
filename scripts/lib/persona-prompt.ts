@@ -284,7 +284,7 @@ export function buildPrompt(input: {
    * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 프롬프트가 한 글자도 바뀌지 않는다(첫 댓글에는 없다).
    *    길이를 정해 주고, 가벼운 일상 경험을 자기 이야기로 말하게 한다. 무거운 사실은 그대로 막는다.
    */
-  seat?: { length: 'short' | 'normal' | 'long'; selfFacts: readonly string[]; menopauseExperienced: boolean; reply: boolean }
+  seat?: { length: 'short' | 'normal' | 'long'; selfFacts: readonly string[]; menopauseExperienced: boolean; spouseStrain: boolean; reply: boolean }
 }): PromptPlan {
   const blocks: PromptBlock[] = []
   const { persona, post } = input
@@ -418,6 +418,10 @@ export function buildPrompt(input: {
         '자기 이야기로 말해도 됩니다. "저도 그랬어요" 로 끝내지 말고 **내 경우 한 토막**을 보태면 좋습니다.',
         '🔴 병명 · 약 이름 · 시술 · 검사 수치는 자기 일로 말하지 않습니다. 가족 · 일 · 사는 곳을 위 사실과 다르게 말하지 않습니다.',
         ...(input.seat.menopauseExperienced ? [] : ['🔴 갱년기를 직접 겪은 것처럼 말하지 않습니다 — 당신은 아직 겪지 않았습니다.']),
+        ...(input.seat.spouseStrain ? [] : [
+          '🔴 부부 사이의 큰 싸움 · 말을 안 섞음 · 각방 · 별거 · 이혼을 **자기 일로** 말하지 않습니다 — 위 사실에 그런 일이 없습니다.',
+          '   그런 글에는 공감하거나 묻거나, "주변에서 봤다"로 말합니다.',
+        ]),
       ]
       : input.grounding !== undefined && input.grounding.trim() !== ''
       ? [

@@ -36,6 +36,7 @@ import { toGateInput, toPromptPost } from './lib/persona-comment-bridge'
 import { buildPrompt } from './lib/persona-prompt'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { judgeExperienceGrounding } from '../src/lib/persona-experience-grounding'
+import { hasSpouseStrain } from '../src/lib/persona-life-facts'
 import { selfFactsOf } from '../src/lib/persona-comment-input'
 import { sourceTextsOf } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
@@ -1150,7 +1151,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     shaOf({ reactionType: 'other' }) === 'ea9f95f7cd19' && shaOf({ reactionType: 'experience' }) === '72a2ce655183'
     && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '47e61a85835f',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
-  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, reply: true }
+  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
   check('⑮ 🔴 자리 — 길이를 정해 주고, 자기 사실과 가벼운 일상 경험을 말하게 한다("들려줄 이야기가 없다"가 아니다)',
     text.includes('**한 줄**') && text.includes('- 자녀 2명 (고등학생)') && text.includes('가벼운 일상 경험')
@@ -1164,10 +1165,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑮ 길이 세 등급이 서로 다른 지시로 나간다', lengths[0]!.includes('한 줄') && lengths[1]!.includes('한두 문장') && lengths[2]!.includes('서너 문장') && new Set(lengths).size === 3)
   const facts = selfFactsOf({
     ageBand: '50대 초반', region: '경기', ownPostTitles: ['아침 산책', '', '둘째 도시락', '셋', '넷'],
-    identity: { maritalStatus: '기혼', childrenCount: 2, childrenAgeBands: ['고등학생'], workStatus: '전업', parentCare: '없음', menopauseStatus: '진행중', job: '합성', note: '시험' },
+    identity: { maritalStatus: '기혼', spouseRelationship: '원만', childrenCount: 2, childrenAgeBands: ['고등학생'], workStatus: '전업', parentCare: '없음', menopauseStatus: '진행중', job: '합성', note: '시험' },
   })
   check('⑮ 🔴 자기 사실은 Persona 행에 이미 있는 칸만 — 모르는 칸은 적지 않고 설정 메모(job·note)는 싣지 않는다',
-    facts.join('|') === '50대 초반 · 경기|혼인 — 기혼|자녀 2명 (고등학생)|일 — 전업|부모 돌봄 — 없음|갱년기 — 진행중|내가 쓴 글 — 아침 산책|내가 쓴 글 — 둘째 도시락'
+    facts.join('|') === '50대 초반 · 경기|혼인 — 기혼(원만)|자녀 2명 (고등학생)|일 — 전업|부모 돌봄 — 없음|갱년기 — 진행중|내가 쓴 글 — 아침 산책|내가 쓴 글 — 둘째 도시락'
     && selfFactsOf({ ageBand: null, region: null, identity: null, ownPostTitles: [] }).length === 0
     && selfFactsOf({ ageBand: null, region: null, identity: { childrenCount: 0 }, ownPostTitles: [] }).join() === '자녀 없음', facts.join('|'))
   const runSrc15 = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
@@ -1178,10 +1179,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 
 // ═════════ ⑯ 경험담 — 가벼운 일상 경험은 허용, 의료 · 겪지 않은 갱년기는 막는다. 첫 댓글 판정은 그대로다 ═════════
 {
-  const J = (text: string, o: { grounding?: string; everyday?: { menopauseExperienced: boolean } } = {}) =>
+  const J = (text: string, o: { grounding?: string; everyday?: { menopauseExperienced: boolean; spouseStrain: boolean } } = {}) =>
     judgeExperienceGrounding({ text, grounding: o.grounding ?? '', ...(o.everyday === undefined ? {} : { everyday: o.everyday }) }).ok
-  const yes = { everyday: { menopauseExperienced: true } }
-  const no = { everyday: { menopauseExperienced: false } }
+  const yes = { everyday: { menopauseExperienced: true, spouseStrain: false } }
+  const no = { everyday: { menopauseExperienced: false, spouseStrain: false } }
   const daily = ['저도 그 드라마 봤어요 주말에 몰아서 봤네요', '저는 그럴 때 그냥 동네 한 바퀴 걸어요', '우리 나이엔 다 그런 것 같아요 무릎도 시리고', '저도 요즘 새벽에 자꾸 깨요']
   check('⑯ 🔴 첫 댓글 계약은 그대로 — 근거 없는 1인칭 내용은 막는다(자리 칸 없음)', daily.every((t) => !J(t)) && J('저도요') && J('많이 놀라셨겠어요'))
   check('⑯ 🔴 자리 — 가벼운 일상 경험(본 것 · 해 본 것 · 요즘 몸 상태)은 통과한다', daily.every((t) => J(t, no)), daily.filter((t) => !J(t, no)).join(' / '))
@@ -1192,6 +1193,30 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑯ 🔴 자리 — 갱년기를 겪지 않은 사람은 자기 일로 말하지 못하고, 겪은 사람은 말한다',
     !J('저도 갱년기라 밤마다 열이 올라요', no) && J('저도 갱년기라 밤마다 열이 올라요', yes)
     && J('갱년기 얘기 들으니 걱정되시겠어요', no))
+  // 부부 불화 — 카드가 뒷받침할 때만 자기 일로 말한다. 부부의 일상은 막지 않는다
+  const strained = { everyday: { menopauseExperienced: false, spouseStrain: true } }
+  const strife = ['저희도 크게 싸우고 몇 달 말 안 섞어봤는데 진짜 피가 마르더라고요', '저도 작년에 이혼했어요', '우리도 각방 쓴 지 오래예요', '저희 집도 한바탕 엎어지고 한동안 투명인간 취급했거든요']
+  check('⑯ 🔴 자리 — 부부 사이가 원만한 사람은 큰 싸움 · 각방 · 이혼을 자기 일로 말하지 못한다', strife.every((t) => !J(t, no)), strife.filter((t) => J(t, no)).join(' / '))
+  check('⑯ 🟢 자리 — 카드가 뒷받침하면(갈등 · 소원 · 별거 · 이혼) 같은 말을 자기 일로 한다', strife.every((t) => J(t, strained)))
+  const couple = ['저희도 주말마다 남편이랑 장 보러 가요', '저도 남편이랑 가끔 투닥거리긴 해요', '제 친구도 이혼하고 한동안 힘들어했어요', '많이 싸우셨나 봐요 속상하시겠어요']
+  check('⑯ 🟢 자리 — 부부의 일상 · 남의 일 · 공감은 막지 않는다', couple.every((t) => J(t, no)), couple.filter((t) => !J(t, no)).join(' / '))
+  check('⑯ 부부 불화의 근거 — 혼인 칸이 이혼 · 별거이거나 배우자 관계가 갈등 · 소원일 때만(관계 칸이 없으면 근거 없음)',
+    hasSpouseStrain({ maritalStatus: '기혼', spouseRelationship: '갈등' }) && hasSpouseStrain({ maritalStatus: '기혼', spouseRelationship: '소원' })
+    && hasSpouseStrain({ maritalStatus: '이혼' }) && hasSpouseStrain({ maritalStatus: '별거' })
+    && !hasSpouseStrain({ maritalStatus: '기혼', spouseRelationship: '원만' }) && !hasSpouseStrain({ maritalStatus: '기혼' })
+    && !hasSpouseStrain({ maritalStatus: '비혼' }) && !hasSpouseStrain(null))
+  const calm = JSON.stringify(buildPrompt({
+    persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] },
+    post: { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }, reactionType: 'experience', requireReference: false,
+    seat: { length: 'normal', selfFacts: ['혼인 — 기혼(원만)'], menopauseExperienced: true, spouseStrain: false, reply: false },
+  } as never))
+  check('⑯ 🔴 프롬프트 — 뒷받침이 없으면 부부 불화를 자기 일로 말하지 말고 공감 · 질문 · "주변에서 봤다"로 말하게 한다',
+    calm.includes('별거 · 이혼을 **자기 일로** 말하지 않습니다') && calm.includes('주변에서 봤다')
+    && !JSON.stringify(buildPrompt({
+      persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] },
+      post: { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }, reactionType: 'experience', requireReference: false,
+      seat: { length: 'normal', selfFacts: ['혼인 — 기혼(갈등)'], menopauseExperienced: true, spouseStrain: true, reply: false },
+    } as never)).includes('별거 · 이혼을 **자기 일로** 말하지 않습니다'))
   // 관문 입력 — 자리 칸이 있는 입력(추가 댓글)에만 실린다
   const base = {
     personaCode: 'P01', reactionRole: 'experience',
@@ -1199,7 +1224,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     post: { id: 'p', title: '주말 드라마 뭐 보세요', bodyDigest: '요즘 볼 게 없어서요.', boardLabel: 'FREE', existingCommentDigests: [] },
     voice: {}, memory: { has: false, note: '' }, fingerprint: 'x',
   } as unknown as CommentInput
-  const seated = { ...base, post: { ...base.post, threadSeat: { length: 'normal', selfFacts: [], menopauseExperienced: false } } } as CommentInput
+  const seated = { ...base, post: { ...base.post, threadSeat: { length: 'normal', selfFacts: [], menopauseExperienced: false, spouseStrain: false } } } as CommentInput
   const text = '저도 그 드라마 봤어요 주말에 몰아서 봤네요'
   const sevenOf = (input: CommentInput) => checkCommentCandidate(toGateInput({ input, text, sourceTexts: [input.post.title, input.post.bodyDigest] }))
     .gates.find((g) => g.gate === '⑦')?.outcome

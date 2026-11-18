@@ -96,6 +96,8 @@ export type ThreadSeat = {
   selfFacts: readonly string[]
   /** 갱년기를 겪고 있거나 겪었는가(`hasMenopauseExperience`) — 아니면 자기 일로 말하지 않는다 */
   menopauseExperienced: boolean
+  /** 부부 사이가 틀어졌거나 갈라섰는가(`hasSpouseStrain`) — 아니면 부부 불화를 자기 일로 말하지 않는다 */
+  spouseStrain: boolean
 }
 
 /**
@@ -109,7 +111,8 @@ export function selfFactsOf(p: { ageBand: string | null; region: string | null; 
   const who = [str(p.ageBand), str(p.region)].filter((x) => x !== null)
   if (who.length > 0) out.push(who.join(' · '))
   const marital = str(id.maritalStatus)
-  if (marital !== null) out.push(`혼인 — ${marital}`)
+  const relation = str(id.spouseRelationship)
+  if (marital !== null) out.push(`혼인 — ${marital}${relation === null ? '' : `(${relation})`}`)
   if (typeof id.childrenCount === 'number') {
     const bands = Array.isArray(id.childrenAgeBands) ? id.childrenAgeBands.filter((x): x is string => typeof x === 'string') : []
     out.push(id.childrenCount === 0 ? '자녀 없음' : `자녀 ${id.childrenCount}명${bands.length > 0 ? ` (${bands.join(' · ')})` : ''}`)

@@ -36,7 +36,7 @@ import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import { judgePostAuthor, type ModelSelection } from '../../src/lib/persona-comment-release'
 import type { ModelCanon } from '../../src/lib/persona-comment-provenance'
 import { buildCommentInput, selfFactsOf, voiceEvidenceFromAssets, type CommentInput } from '../../src/lib/persona-comment-input'
-import { hasMenopauseExperience } from '../../src/lib/persona-life-facts'
+import { hasMenopauseExperience, hasSpouseStrain } from '../../src/lib/persona-life-facts'
 import { isAdviceForbidden } from '../../src/lib/persona-reaction-roles'
 import { judgeSourceContext } from '../../src/lib/persona-comment-source-context'
 import { judgeRealMember } from '../../src/lib/real-member-gate'
@@ -614,6 +614,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           }),
           menopauseExperienced: hasMenopauseExperience(
             pe.identity !== null && typeof pe.identity === 'object' ? (pe.identity as { menopauseStatus?: string | null }).menopauseStatus : null),
+          spouseStrain: hasSpouseStrain(pe.identity),
         }
         let built: ReturnType<typeof buildCommentInput> | null = null
         for (const role of roles) {

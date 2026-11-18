@@ -17,3 +17,15 @@ export function hasMenopauseExperience(status: string | null | undefined): boole
   const v = (status ?? '').trim()
   return v === '진행중' || v === '후'
 }
+
+/**
+ * 부부 사이가 틀어졌거나 갈라선 사람인가 — 혼인 칸이 이혼 · 별거이거나, 배우자 관계 칸이 갈등 · 소원일 때만 참이다.
+ * 부부 갈등 · 별거 · 이혼을 **자기 일로** 말해도 되는지의 근거다. 관계 칸이 없으면 근거가 없다(fail-closed).
+ */
+export function hasSpouseStrain(identity: unknown): boolean {
+  if (identity === null || typeof identity !== 'object') return false
+  const id = identity as { maritalStatus?: unknown; spouseRelationship?: unknown }
+  const marital = typeof id.maritalStatus === 'string' ? id.maritalStatus.trim() : ''
+  const relation = typeof id.spouseRelationship === 'string' ? id.spouseRelationship.trim() : ''
+  return marital === '이혼' || marital === '별거' || relation === '갈등' || relation === '소원'
+}
