@@ -74,7 +74,11 @@ export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p14'
  * 핵심 뜻·결론 손실과 고위험 허구만 차단 finding에 남긴다. 발행 뒤 의미 감사와 같은 실질 변경 계약
  * (`material-contract.ts` · 약한 일반화 · 시간 바꿔쓰기 · 커뮤니티식 1인칭 다시 말하기 · 사소한 생략)을 그대로 싣는다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p11'
+/**
+ * 🔴 **v2-review-p12 (quality-v28)** — 항목마다 등급(`block` 막음 / `note` 참고)을 답하게 한다. 막음만 HOLD 다.
+ * 코드가 원문 화자의 사실을 Persona 값으로 바꿔 쓰게 한 자리는 검수 지시에 싣는다 — 그 값은 지어낸 사실도 모순도 아니다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p12'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

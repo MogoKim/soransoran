@@ -420,17 +420,40 @@ export const REVIEW_FAMILY_SPECIFICS_LINES: readonly string[] = [
   '      🔴 남의 자녀 · 남이 한 말(`할아버지가 본인도 아들 둘이라고`) · 화제로서의 "딸 얘기" 는 아니다.',
 ]
 
+/**
+ * 🔴 **등급 — 항목마다 막음/참고를 답하게 한다** (v2-review-p12 · `review.ts` `FINDING_SEVERITIES`).
+ *    "적지 않는다" 를 아무리 적어도 검수 모델은 감정·비유 부연을 항목으로 적었고, 항목 하나가 곧 탈락이었다.
+ *    적을 자리를 따로 준다 — 참고로 적은 것은 기록만 하고 막지 않는다.
+ */
+export const REVIEW_SEVERITY_LINES: readonly string[] = [
+  '## 🔴 등급 — ①②③ 의 모든 항목에 severity 를 붙인다',
+  '   "block" (막음): 독자가 **사실로 믿을** 새 사건·사실 · 주체나 결과가 바뀐 것 · 원문 화자의 일을 새 전달자의 일로 바꾼 것 ·',
+  '      빠져서 원문의 결론·핵심 질문이 달라지는 손실 · 카드와 **양립할 수 없는** 생활사.',
+  '   "note" (참고): 감정 · 비유 · 말투 · 강조 · 같은 뜻의 다른 표현처럼 **사실을 바꾸지 않는 부연**, 약해진 어조,',
+  '      네 스스로 "실질 변경은 아니다" · "경계선이다" · "카드와 일치한다" 고 보는 것.',
+  '   🔴 note 는 기록만 하고 글을 막지 않는다. block 하나면 글이 나가지 못한다 — 사실이 바뀐 것에만 쓴다.',
+  '   🔴 severity 를 비우면 block 으로 읽는다.',
+]
+
 export function buildV2ReviewSystemPrompt(input: {
   plan: SpeakerPlan
   voice: VoiceEvidence
   life: PersonaLifeContract
+  /**
+   * 🔴 **초안 지시에 실은 그 변환 계획** — 원문 화자의 사실을 이 사람 값으로 바꿔 쓰라고 코드가 시킨 것이다.
+   *    검수가 이것을 모르면 시킨 대로 바꾼 값을 "원문과 다르다" 며 지어낸 사실·생활사 모순으로 적는다.
+   */
+  mappings: readonly AxisMapping[]
 }): string {
   const warrants = input.plan.warrants
+  const swapped = input.mappings.filter((m) => m.personaText !== null)
   return [
     '너는 40대 중반~60대 중반 여성 커뮤니티의 글 검수자다.',
     '[원문]과 [초안]을 **직접 견주어** 아래 여섯 가지만 본다.',
-    // 🔴 (v2-review-p10 · quality-v20) 발행 뒤 의미 감사와 같은 실질 변경 계약 — 정본은 `material-contract.ts` 한 곳이다
+    // 🔴 발행 뒤 의미 감사와 같은 실질 변경 계약 — 정본은 `material-contract.ts` 한 곳이다
     ...MATERIAL_CONTRACT_LINES,
+    '',
+    ...REVIEW_SEVERITY_LINES,
     '',
     '## ① droppedFromSource — 빠져서 원문의 뜻·결론·핵심 질문이 달라지는 내용이 있는가',
     '   evidence 에는 **[원문]에 실제로 있는 문장**을 그대로 옮긴다.',
@@ -512,10 +535,16 @@ export function buildV2ReviewSystemPrompt(input: {
     '## 이 사람의 생활사 (정본 카드)',
     ...lifeContractLines(input.life).map((x) => `- ${x}`),
     '',
+    ...(swapped.length > 0
+      ? ['## 🔴 시스템이 일부러 바꾼 값 — 지어낸 사실도 생활사 모순도 아니다',
+        '   원문 글쓴이의 사실을 이 사람의 값으로 바꿔 쓰도록 시스템이 시켰다. 아래 값이 [원문]과 다르다는 이유로는 어느 칸에도 적지 않는다.',
+        ...swapped.map((m) => `   · 원문 "${m.sourceText}" → 초안 "${m.personaText}"`),
+        '']
+      : []),
     'JSON 만 답한다:',
-    '{"droppedFromSource":[{"evidence":"원문에 있는 문장 그대로","why":"한 줄"}],',
-    ' "unsupportedAdditions":[{"evidence":"초안에 있는 문장 그대로","why":"한 줄"}],',
-    ' "lifeContradictions":[{"fact":"위 목록의 이름 하나",',
+    '{"droppedFromSource":[{"severity":"block 또는 note","evidence":"원문에 있는 문장 그대로","why":"한 줄"}],',
+    ' "unsupportedAdditions":[{"severity":"block 또는 note","evidence":"초안에 있는 문장 그대로","why":"한 줄"}],',
+    ' "lifeContradictions":[{"severity":"block 또는 note","fact":"위 목록의 이름 하나",',
     '                       "drafted":"초안이 주장한 것","card":"카드가 가진 것","evidence":"초안에 있는 문장 그대로"}],',
     ' "issues":["해당하는 것만"],"confidence":0.0~1.0,"note":"한 줄"}',
   ].filter((x) => x !== '').join('\n')

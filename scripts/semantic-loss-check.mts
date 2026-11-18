@@ -22,7 +22,7 @@ import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult,
 } from './lib/content-core-run.mjs'
 import {
-  REVIEW_FAMILY_SPECIFICS_LINES, buildV2DraftPayload, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, sourceBlock, sourceKeepOf,
+  REVIEW_FAMILY_SPECIFICS_LINES, REVIEW_SEVERITY_LINES, buildV2DraftPayload, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, sourceBlock, sourceKeepOf,
 } from './lib/content-core-prompts.mjs'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import {
@@ -30,7 +30,7 @@ import {
   buildEvidencePacket, collapseRepeatedBody, type SourceEvidencePacket,
 } from '../src/lib/content-core/evidence'
 import {
-  REVIEW_VERSION, groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview,
+  REVIEW_VERSION, groundedInDraft, groundedInSource, demoteSystemAgeSubstitutions, judgeMachine, parseSemanticReview, semanticNeedsConfirmation,
 } from '../src/lib/content-core/review'
 import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION, STAGE_MAX_OUTPUT_LABEL,
@@ -210,13 +210,13 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v9 · 검수 프롬프트 p11', V2_REVIEW_PROMPT_VERSION === 'v2-review-p11' && REVIEW_VERSION === 'review-v9')
+  check('🔴 검수 판 review-v10 · 검수 프롬프트 p12', V2_REVIEW_PROMPT_VERSION === 'v2-review-p12' && REVIEW_VERSION === 'review-v10')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
   }))
   const c = CASE('B'); const plan = planOf(c)
-  const reviewSys = buildV2ReviewSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan) })
+  const reviewSys = buildV2ReviewSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
   check('🟢 사소한 생략·재구성은 droppedFromSource로 세지 않는다',
     reviewSys.includes('사소한 세부 · 문장 순서 · 표현')
     && reviewSys.includes('재구성했어도 핵심 뜻과 결론이 남아 있으면 적지 않는다'))
@@ -269,6 +269,80 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
     semanticCompletion: { complete: true, reason: null, cause: null },
   })
   check('🟢 안전한 창작은 finding 0이며 자동 ADOPT다', safe.outcome === 'adopt' && safe.warnings.length === 0)
+
+  // 🔴 등급 — 막음만 HOLD 다. 참고는 기록만 한다 (review-v10 · v2-review-p12)
+  const DET_OK = { pass: true, failures: [] }
+  const DONE = { complete: true, reason: null, cause: null } as const
+  const answer = (o: Record<string, unknown>): string => JSON.stringify({
+    droppedFromSource: [], unsupportedAdditions: [], lifeContradictions: [], issues: [], confidence: 0.95, note: '', ...o,
+  })
+  const judged = (raw: string) => {
+    const semantic = parseSemanticReview(raw)
+    return { semantic, j: judgeMachine({ deterministic: DET_OK, semantic, semanticCompletion: DONE }) }
+  }
+  check('🔴 검수 지시문이 등급 줄과 severity 칸을 싣는다',
+    REVIEW_SEVERITY_LINES.every((l) => reviewSys.split('\n').includes(l))
+    && reviewSys.split('"severity":"block 또는 note"').length === 4)
+  const notes = judged(answer({
+    unsupportedAdditions: [
+      { severity: 'note', evidence: '가슴이 두근두근했어요', why: '원문에 없는 감정 표현' },
+      { severity: 'note', evidence: '안개처럼 남아서', why: '비유 추가' },
+    ],
+    droppedFromSource: [{ severity: 'note', evidence: '아 진짜 싫다', why: '어조가 약해짐' }],
+    lifeContradictions: [{ severity: 'note', fact: 'children', drafted: '중학생 아이', card: '자녀 1명(중고등)', evidence: '중학생 아이가' }],
+  }))
+  check('🟢 참고만 적힌 답은 ADOPT — 세 finding 배열은 비고 참고 4건이 warnings 한 줄로 남는다',
+    notes.j.outcome === 'adopt' && notes.semantic !== null
+    && notes.semantic.unsupportedAdditions.length + notes.semantic.droppedFromSource.length + notes.semantic.lifeContradictions.length === 0
+    && notes.semantic.advisories?.length === 4
+    && notes.j.warnings.length === 1 && notes.j.warnings[0]!.startsWith('참고(막지 않음) 4건'), JSON.stringify(notes.j))
+  check('🟢 참고만 적힌 답은 확인 호출 대상이 아니다', notes.semantic !== null && !semanticNeedsConfirmation(notes.semantic))
+  check('🟢 🔴 참고는 적재 요약·자동 READY finding 으로 세지 않는다(뒤에서 다시 막지 않는다)',
+    semanticHoldsOf(semanticSummaryOf({
+      deterministic: { pass: true }, semanticCompletion: DONE, semantic: notes.semantic,
+    })).length === 0)
+  const mixed = judged(answer({
+    unsupportedAdditions: [
+      { severity: 'note', evidence: '가슴이 두근두근했어요', why: '감정' },
+      { severity: 'block', evidence: '원룸을 한 달 빌려서', why: '원문에 없는 숙소' },
+    ],
+  }))
+  check('🔴 막음이 하나라도 있으면 HOLD — 사유는 막음 수만 센다',
+    mixed.j.outcome === 'hold' && mixed.j.reason === '근거 없는 위험 사실 1건' && mixed.semantic?.advisories?.length === 1, JSON.stringify(mixed.j))
+  for (const [label, sev] of [['등급 없음', undefined], ['모르는 값', 'low'], ['한국어 값', '참고'], ['대문자', 'NOTE']] as const) {
+    const r = judged(answer({ unsupportedAdditions: [{ ...(sev === undefined ? {} : { severity: sev }), evidence: '가슴이 두근두근했어요', why: '감정' }] }))
+    check(`🔴 ${label} → 막음으로 읽는다(fail-closed)`, r.j.outcome === 'hold' && r.semantic?.unsupportedAdditions.length === 1 && r.semantic.advisories?.length === 0)
+  }
+  const lifeNoGrade = judged(answer({ lifeContradictions: [{ fact: 'children', drafted: '아들 둘', card: '자녀 1명', evidence: '아들 둘 데리고' }] }))
+  check('🔴 등급 없는 생활사 모순도 막음', lifeNoGrade.j.outcome === 'hold' && lifeNoGrade.j.reason === '생활사 모순 children')
+  const unknownFact = judged(answer({ lifeContradictions: [{ severity: 'note', fact: 'hobby', drafted: 'x', card: 'y', evidence: 'z' }] }))
+  check('🔴 우리 축이 아닌 생활사 이름은 참고라 해도 채택하지 않는다', unknownFact.j.outcome === 'hold')
+  // 🔴 시스템이 바꾼 나이 — 검수가 그 값을 가리켜 적은 나이 모순만 참고로 옮긴다
+  const swapSys = buildV2ReviewSystemPrompt({
+    plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan),
+    mappings: [{ axis: 'age', sourceText: '30대 후반', personaText: '58살', outputRule: 'x' }],
+  })
+  check('🔴 검수 지시문이 시스템이 바꾼 값을 싣는다 — 바꾼 것이 없으면 그 칸도 없다',
+    swapSys.includes('시스템이 일부러 바꾼 값') && swapSys.includes('원문 "30대 후반" → 초안 "58살"')
+    && !reviewSys.includes('시스템이 일부러 바꾼 값'))
+  const ageRaw = answer({ lifeContradictions: [
+    { fact: 'age', drafted: '58살', card: '50대 후반', evidence: '제가 올해 58살인데' },
+  ] })
+  const agePlain = parseSemanticReview(ageRaw)!
+  const ageSwapped = demoteSystemAgeSubstitutions(agePlain, ['58살'])
+  check('🔴 (재현) 치환 계획을 모르면 시스템이 넣은 나이가 생활사 모순으로 HOLD',
+    judgeMachine({ deterministic: DET_OK, semantic: agePlain, semanticCompletion: DONE }).reason === '생활사 모순 age')
+  check('🟢 시스템이 넣은 나이를 가리킨 나이 모순은 참고로 옮겨 ADOPT',
+    ageSwapped.lifeContradictions.length === 0 && ageSwapped.advisories?.length === 1
+    && judgeMachine({ deterministic: DET_OK, semantic: ageSwapped, semanticCompletion: DONE }).outcome === 'adopt')
+  const otherAge = demoteSystemAgeSubstitutions(parseSemanticReview(answer({ lifeContradictions: [
+    { fact: 'age', drafted: '45살', card: '50대 후반', evidence: '저는 45살이라' },
+    { fact: 'children', drafted: '58살 된 딸', card: '자녀 없음', evidence: '58살 된 딸이' },
+  ] }))!, ['58살'])
+  check('🔴 다른 나이를 가리킨 모순 · 나이 축이 아닌 모순은 그대로 막는다', otherAge.lifeContradictions.length === 2)
+  check('🟢 바꾼 나이가 없으면 아무것도 옮기지 않는다', demoteSystemAgeSubstitutions(agePlain, []).lifeContradictions.length === 1)
+  check('🟢 fail-closed 기본값이 정상 답(항목 0)을 막지 않는다', judged(answer({})).j.outcome === 'adopt')
+  check('🔴 위해는 등급과 무관하게 DROP', judged(answer({ issues: ['harm'], unsupportedAdditions: [{ severity: 'note', evidence: 'a', why: 'b' }] })).j.outcome === 'drop')
 }
 
 // ─────────────────────────────────────────────────────────
