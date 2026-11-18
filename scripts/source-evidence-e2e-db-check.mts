@@ -130,7 +130,7 @@ function writeNavercafe(): void {
     sourceCapturedAt: listed, dedupKey: `navercafe:wgang|${s.id}`, qualityFlags: [], qualitySignals: {},
     sourceListedAt: listed, sourcePostedLabel: '05:10', sourcePostedAt: iso(s.postedAt), sourcePage: 1, sourceRankOnPage: k + 1,
     sourceViewCount: s.views, sourceCommentCountRead: true, sourceRunId: 'lb-nc', sourceRowLabel: null, sourcePinned: false,
-    sourceMenuId: '1', sourceBoardKey: 'free', sourcePoliticsExcluded: false, sourceExcludeReason: null,
+    sourceMenuId: '1', sourceBoardKey: 'free', sourceExcludeReason: null,
   }))
   writeFileSync(join(DATA, `navercafe-wgang-${utcRun(LIST_NC)}.list.jsonl`), `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`)
   // 🔴 수집기가 같은 회차에 쓰는 얇은 행 — 정본 조립 함수(`thinRowFromCollected`) · 정본 판정(`classifyDetail`)
