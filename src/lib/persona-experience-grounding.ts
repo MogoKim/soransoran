@@ -259,6 +259,8 @@ const MENOPAUSE_FACT = /(갱년기|폐경|완경)/u
  *    자기 일로 말하려면 카드가 뒷받침해야 한다(`hasSpouseStrain`) — 원만한 부부인 사람이 남의 글에 맞춰 불화를 지어내지 않게.
  */
 const SPOUSE_STRAIN_FACT = /(크게\s*싸우|크게\s*싸웠|한바탕|말\s*(도\s*)?안\s*섞|투명\s*인간|각방|별거|이혼|갈라서|갈라섰|남남|냉전|집을?\s*나[가갔왔])/u
+/** 남의 집 이야기 — "저희 언니네도 각방 쓰더라" 는 자기 부부의 일이 아니다. 프롬프트가 권하는 "주변에서 봤다"가 이 모양이다 */
+const SOMEONE_ELSE = /(언니|동생|오빠|친정|시댁|친구|지인|주변|이웃|옆집|부모님|엄마|아빠|아는\s*(분|사람))/u
 
 /** 자리의 화자에 대해 아는 사실 — 무거운 자기 주장의 근거다 */
 export type EverydayFacts = {
@@ -286,7 +288,7 @@ export function judgeEverydayExperience(input: {
   const ground = tokensOf(input.grounding)
   const ungrounded = claims.filter((c) => {
     if (!input.everyday.menopauseExperienced && MENOPAUSE_FACT.test(c.sentence)) return true
-    const strain = !input.everyday.spouseStrain && SPOUSE_STRAIN_FACT.test(c.sentence)
+    const strain = !input.everyday.spouseStrain && SPOUSE_STRAIN_FACT.test(c.sentence) && !SOMEONE_ELSE.test(c.sentence)
     if (!strain && !MEDICAL_FACT.test(c.sentence)) return false
     for (const w of tokensOf(c.sentence)) if (ground.has(w)) return false
     return true

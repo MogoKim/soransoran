@@ -1198,8 +1198,9 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const strife = ['저희도 크게 싸우고 몇 달 말 안 섞어봤는데 진짜 피가 마르더라고요', '저도 작년에 이혼했어요', '우리도 각방 쓴 지 오래예요', '저희 집도 한바탕 엎어지고 한동안 투명인간 취급했거든요']
   check('⑯ 🔴 자리 — 부부 사이가 원만한 사람은 큰 싸움 · 각방 · 이혼을 자기 일로 말하지 못한다', strife.every((t) => !J(t, no)), strife.filter((t) => J(t, no)).join(' / '))
   check('⑯ 🟢 자리 — 카드가 뒷받침하면(갈등 · 소원 · 별거 · 이혼) 같은 말을 자기 일로 한다', strife.every((t) => J(t, strained)))
-  const couple = ['저희도 주말마다 남편이랑 장 보러 가요', '저도 남편이랑 가끔 투닥거리긴 해요', '제 친구도 이혼하고 한동안 힘들어했어요', '많이 싸우셨나 봐요 속상하시겠어요']
-  check('⑯ 🟢 자리 — 부부의 일상 · 남의 일 · 공감은 막지 않는다', couple.every((t) => J(t, no)), couple.filter((t) => !J(t, no)).join(' / '))
+  const couple = ['저희도 주말마다 남편이랑 장 보러 가요', '저도 남편이랑 가끔 투닥거리긴 해요', '제 친구도 이혼하고 한동안 힘들어했어요', '많이 싸우셨나 봐요 속상하시겠어요',
+    '저희 언니네도 딱 저러다 결국 각방 쓰더라구요', '우리 친정에서도 한바탕 하고 몇 달 말을 안 섞더라고요']
+  check('⑯ 🟢 자리 — 부부의 일상 · 남의 집 이야기("주변에서 봤다") · 공감은 막지 않는다', couple.every((t) => J(t, no)), couple.filter((t) => !J(t, no)).join(' / '))
   check('⑯ 부부 불화의 근거 — 혼인 칸이 이혼 · 별거이거나 배우자 관계가 갈등 · 소원일 때만(관계 칸이 없으면 근거 없음)',
     hasSpouseStrain({ maritalStatus: '기혼', spouseRelationship: '갈등' }) && hasSpouseStrain({ maritalStatus: '기혼', spouseRelationship: '소원' })
     && hasSpouseStrain({ maritalStatus: '이혼' }) && hasSpouseStrain({ maritalStatus: '별거' })
