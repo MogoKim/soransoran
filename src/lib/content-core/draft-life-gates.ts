@@ -1101,7 +1101,7 @@ function readSelfEncounters(title: string, body: string): string[] {
 
 /**
  * 🔴 **만남 판정 — 자리 · 원천이 아니라 Persona 근거로 가른다** (v6 보정 · 2026-10-01 코디네이터 결정).
- *    🔴 원문에 만남이 있다는 것은 Persona 의 1인칭 경험을 허가하지 않는다 — 원천의 경험은 제3자 주어(`어떤 분이 그러셨대요`)로만 옮긴다.
+ *    🔴 원문에 만남이 있다는 것은 Persona 의 1인칭 경험을 허가하지 않는다 — 원문에 나오는 사람의 말은 그 사람을 주어로 둘 때만 지난다.
  *    · `selfBasis=null`(QUESTION · REFLECTION · OBSERVATION 모두) → 확정
  *    · `noLifeFactNeeded` → 확정(보편 감정 글은 생활사 허가가 아니다)
  *    · `lifeFacts` → 계획이 코드로 확인한 근거 문장(`verifySelfWarrants` 가 원문 · 정본 카드와 대조한 `warrants[].evidenceText`)이

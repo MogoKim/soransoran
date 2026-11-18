@@ -747,7 +747,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     check(`${c.why} → ${c.want}`, got === c.want, got)
   }
   const prompts = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
-  check('🔴 초안 프롬프트(모든 자리)가 원문 글쓴이의 만남·들음은 그 사람을 주어로 전하라고 말한다',
+  check('🔴 초안 프롬프트(모든 자리)가 원문 글쓴이의 만남·들음을 자기 일로 옮기지 말고, 원문에 나오는 사람만 그 사람을 주어로 두라고 말한다',
     prompts.includes('누구를 만나고 · 이야기를 나누고 · 들은 일') && prompts.includes('그 사람을 주어로'))
 }
 

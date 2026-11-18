@@ -166,7 +166,7 @@ console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친
 console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안전한 창작만 허용한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 초안 프롬프트 판 = v2-draft-p14', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p14'))
+  check('🔴 초안 프롬프트 판 = v2-draft-p15', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p15' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p15'))
   for (const id of ['A', 'B', 'C']) {
     const c = CASE(id); const packet = packetOf(c); const plan = planOf(c)
     const keep = sourceKeepOf(plan, packet)
@@ -204,6 +204,20 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
   check('🔴 원문에 없는 시간대·상대 시점과 전언 경로를 만들지 않는다',
     sys.includes('새벽 · 아침 · 퇴근길 · 방금 · 어제')
     && sys.includes('새 전달자의 일로 바꾸지 않습니다'))
+  // 🔴 (v2-draft-p15) 상반 지시 — 전달자를 세우라는 줄이 금지 줄과 함께 있으면 안 된다
+  const relayOrders = sys.split('\n').filter((l) => /전합니다|전한다/.test(l) && !/않습니다|않는다|않고/.test(l))
+  check('🔴 초안 지시문에 전달자를 세워 "전하라" 는 줄이 없다 — 금지와 한 방향이다',
+    relayOrders.length === 0 && !sys.includes('그러셨대요') && sys.includes('"어떤 분이"'), relayOrders.join(' | '))
+  check('🔴 자기 경험으로 쓸 수 없으면 사건으로 전하지 않고 질문·생각으로 쓴다',
+    sys.includes('사건으로 전하지 않고') && sys.includes('당신의 질문·생각으로 씁니다'))
+  const askPlan = { ...plan, stance: 'QUESTION' as const, selfBasis: null }
+  const askSys = buildV2DraftSystemPrompt({ plan: askPlan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
+  check('🔴 1인칭이 아닌 자리 — 겪었다고도 쓰지 않고 남의 사연으로도 옮기지 않는다',
+    askSys.includes('겪었다고 쓰지 않습니다') && askSys.includes('남의 사연으로 옮겨 전하지도 않습니다'))
+  const askReview = buildV2ReviewSystemPrompt({ plan: askPlan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
+  check('🔴 검수도 같은 선 — 그 자리에서 경험 서술이 빠진 것은 손실이 아니고, 새 전달자는 계속 적는다',
+    askReview.includes('같은 주제의 질문·생각') && askReview.includes('droppedFromSource 가 아니다')
+    && askReview.includes('새 전달자의 일로 바꾸는 것도 여기 적는다'))
 }
 
 // ─────────────────────────────────────────────────────────
