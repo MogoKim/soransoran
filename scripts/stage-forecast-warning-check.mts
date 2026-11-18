@@ -67,9 +67,10 @@ check('green d20 → PASS · 코드 0 · 경고 0',
 const forecastCases: readonly [ForecastWarningCode, Partial<PreflightFacts>][] = [
   ['OPPORTUNITY_SHORT', { slotValidOpportunities: 0, futureSupplyCapacity: 0 }],
   ['OPPORTUNITY_UNKNOWN', { slotValidOpportunities: null }],
-  ['THROUGHPUT_SHORT', { readyCohort: cohort({ sources: 400, published: 1 }) }],
+  ['THROUGHPUT_SHORT', { readyCohort: cohort({ sources: 4000 }) }],
   ['THROUGHPUT_UNKNOWN', { readyCohort: cohort({ sources: 0 }) }],
-  ['READY_REQUIREMENT_UNKNOWN', { readyCohort: cohort({ published: 0, unknown: N }) }],
+  // 공개 N · 결말 모름 N — 용량이 필요량 하한은 채우고 상한은 못 채운다(비용 표본은 충분)
+  ['READY_REQUIREMENT_UNKNOWN', { readyCohort: cohort({ unknown: N, sources: N * 10 }) }],
 ]
 for (const [code, patch] of forecastCases) {
   const v = pf(patch)
@@ -259,9 +260,9 @@ console.log('\n⑩ controller 운영 로그 — 막는 코드 · 운영 경고 �
     && / FORECAST \[OPPORTUNITY_UNKNOWN\]/.test(line) && !/\[[^\]]*OPPORTUNITY_UNKNOWN[^\]]*\] WARN/.test(line), line)
   const forecastOnly = preflightLogLine('d20', pf({ slotValidOpportunities: null }))
   check('🔴 🔴 **예측만 있는 날 — PASS 여도 FORECAST 가 보인다(PASS 뒤에 숨지 않는다)**',
-    / preflight PASS FORECAST \[OPPORTUNITY_UNKNOWN\] \(/.test(forecastOnly), forecastOnly)
+    / preflight PASS FORECAST \[OPPORTUNITY_UNKNOWN\] costCohort=current \(/.test(forecastOnly), forecastOnly)
   const clean = preflightLogLine('d20', pf())
-  check('경고 없는 날 — 빈 FORECAST·WARN 꼬리를 찍지 않는다', / preflight PASS \(/.test(clean) && !/FORECAST|WARN/.test(clean), clean)
+  check('경고 없는 날 — 빈 FORECAST·WARN 꼬리를 찍지 않는다', / preflight PASS costCohort=current \(/.test(clean) && !/FORECAST|WARN/.test(clean), clean)
   const controller = readFileSync('scripts/stage-controller.mts', 'utf8')
   check('🔴 production controller 가 이 함수로 preflight 줄을 찍는다(손으로 조립한 옛 줄 없음)',
     /log\(preflightLogLine\(target, nextPreflight\)\)/.test(controller)

@@ -905,7 +905,7 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
     // 🔴 예측 경고(기회·처리량)만 있는 날도 TRIAL 이 열리고, 경고는 결정 행의 v6 supply 에 남는다 (PR1b)
     at('TRIAL + 예측 경고 (기회 모름 · 처리량 부족)', {
       sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
-      preflight: preflightFor('d5', { slotValidOpportunities: null, readyCohort: { ...GOOD_FACTS('d5').readyCohort!, sources: 400, published: 1 } }),
+      preflight: preflightFor('d5', { slotValidOpportunities: null, readyCohort: { ...GOOD_FACTS('d5').readyCohort!, sources: 4000 } }),
     }),
     at('TRIAL RETEST (d3)', { sustained: 'd1', prev: prevTrial('d1', 'd3'), preflight: preflightFor('d3') }),
     at('TRIAL FLOOR (d1 → d3)', { sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') }),

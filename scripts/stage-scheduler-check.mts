@@ -644,7 +644,7 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
   { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
   { name: '공급 결과당 비용 $0.025 × 목표 50 > $1.20', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.025 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
-  { name: '🔴 결말이 전부 대기(공개 0 · 대기 5) → 필요량 상한을 모른다 → 예측 경고', s: 'd5', o: { readyCohort: cohortFor('d5', { published: 0, unknown: 5 }) }, want: 'PASS', code: 'READY_REQUIREMENT_UNKNOWN', lane: 'forecast' },
+  { name: '🔴 결말 절반이 모름(공개 5 · 모름 5) → 필요량 상한까지는 못 채운다 → 예측 경고', s: 'd5', o: { readyCohort: cohortFor('d5', { unknown: 5, sources: 150 }) }, want: 'PASS', code: 'READY_REQUIREMENT_UNKNOWN', lane: 'forecast' },
   { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족(예측 경고 · 산술은 그대로)', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'PASS', code: 'THROUGHPUT_SHORT', lane: 'forecast' },
   { name: '결과당 공급 비용 모름(미연결 · legacy)', s: 'd20', o: { readyCohort: cohortFor('d20', { usdPerSlotValidResult: null }) }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'UNKNOWN', code: 'SUPPLY_COST_UNKNOWN' },

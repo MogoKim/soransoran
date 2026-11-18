@@ -17,6 +17,8 @@ const LEDGER = 'src/lib/llm-ledger.ts'
 const ENVELOPE = 'src/lib/supply-cost-envelope.ts'
 const SIGNALS = 'scripts/lib/ops-signals.mts'
 const FATE = 'src/lib/ready-fate.ts'
+const LADDER = 'src/lib/stage-ladder-generic.ts'
+const FACTS = 'scripts/lib/stage-preflight-facts.mts'
 const RESERVE_CHECK = 'scripts/supply-scheduled-reserve-check.mts'
 const EVIDENCE_CHECK = 'scripts/stage-evidence-check.mts'
 const OPS_CHECK = 'scripts/ops-loop-check.mts'
@@ -81,6 +83,55 @@ const mutations: readonly Mutation[] = [
     file: FATE,
     from: 'if (manuallyResolved && belongsToCohort) {',
     to: 'if (false) {',
+    check: JIT_CHECK,
+  },
+  {
+    name: '결과 1편짜리 표본의 예산 초과를 FAIL로 확정했다',
+    file: ENVELOPE,
+    from: 'if (!resultSampleShort) {',
+    to: 'if (true) {',
+    check: JIT_CHECK,
+  },
+  {
+    name: '결과 최소 표본 미달을 모름으로 닫지 않았다',
+    file: ENVELOPE,
+    from: '(!count(sample.results) || !count(sample.minimum) || sample.results < sample.minimum)',
+    to: '(!count(sample.results) || !count(sample.minimum))',
+    check: JIT_CHECK,
+  },
+  {
+    name: '현재 표본이 충분해도 직전 품질 계약 비용을 승계했다',
+    file: LADDER,
+    from: 'const carry = c !== null && currentResults < costSampleMin ? facts.supplyCostCarryover ?? null : null',
+    to: 'const carry = c !== null ? facts.supplyCostCarryover ?? null : null',
+    check: JIT_CHECK,
+  },
+  {
+    name: '현재 표본이 부족해도 직전 품질 계약 비용을 승계하지 않았다',
+    file: LADDER,
+    from: 'const carry = c !== null && currentResults < costSampleMin ? facts.supplyCostCarryover ?? null : null',
+    to: 'const carry = c !== null && currentResults >= costSampleMin ? facts.supplyCostCarryover ?? null : null',
+    check: JIT_CHECK,
+  },
+  {
+    name: '직전이 아닌 더 옛 품질 계약을 승계 대상으로 골랐다',
+    file: FACTS,
+    from: 'const latest = others.reduce((a, b) => (b.runId > a.runId ? b : a))',
+    to: 'const latest = others.reduce((a, b) => (b.runId < a.runId ? b : a))',
+    check: JIT_CHECK,
+  },
+  {
+    name: '직전 품질 계약의 대기 READY를 비용 결과로 셌다',
+    file: FACTS,
+    from: 'scheduled: i.current.fates.scheduled }',
+    to: 'scheduled: i.current.fates.scheduled + i.prior.fates.scheduled }',
+    check: JIT_CHECK,
+  },
+  {
+    name: '승계 표본을 READY 수율·처리량의 현재 cohort에 섞었다',
+    file: FACTS,
+    from: 'sources: worksetSources, ...fates,',
+    to: 'sources: worksetSources, ...fates, published: supplyCostCarryover?.results ?? fates.published,',
     check: JIT_CHECK,
   },
 ]

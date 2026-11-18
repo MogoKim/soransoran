@@ -35,7 +35,7 @@ import {
   FORECAST_WARNING_CODES, type ForecastSupplySignal, type ForecastWarningCode, type StageBlock,
 } from './stage-decision-contract'
 import type { EvidenceVerdictKind } from './stage-evidence'
-import { judgeSupplyCostEnvelope, supplyCostProofBudgetUsd } from './supply-cost-envelope'
+import { judgeSupplyCostEnvelope, supplyCostMinResultSampleOf, supplyCostProofBudgetUsd } from './supply-cost-envelope'
 
 export { HIGHEST_RUNTIME_STAGE, isRuntimeStage }
 
@@ -285,6 +285,26 @@ export type PreflightFacts = {
   supplyDailyUsdCap: number | null
   /** 🔴 발행 · 공급 러너 최근 회차(`errorSignalOf`) — 모르면 null */
   runnerHealth: Health | null
+  /**
+   * 🔴 **비용 단가 표본의 승계 후보** — 창 안에 직전 품질 계약 회차가 있을 때만 준다(없으면 `null`·생략).
+   *    판정은 현재 계약 결과 편수가 최소 표본(`supplyCostMinResultSampleOf`)에 못 미칠 때만 이것을 쓴다.
+   *    🔴 비용 단가 한 칸뿐이다 — READY 재고·수율·처리량·손실 보충은 언제나 `readyCohort`(현재 계약)만 본다.
+   */
+  supplyCostCarryover?: SupplyCostCarryoverFact | null
+}
+
+/**
+ * 🔴 **현재 + 직전 품질 계약 회차를 합친 비용 표본.** 품질 계약 판이 바뀌어도 원천 1건을 사는 값은 그대로다 —
+ *    새 판 표본이 쌓일 때까지 같은 72시간 창의 **직전 판 하나**(현재가 아닌 것 중 가장 최근)만 합친다.
+ *    그보다 옛 판은 합치지 않는다. 직전 판의 대기 READY 는 결과로 세지 않는다(공개된 편수만 — 보수적).
+ */
+export type SupplyCostCarryoverFact = {
+  /** 직전 품질 계약 판 이름(예: `quality-v27`) — 판정 줄에 그대로 찍는다 */
+  previous: string
+  /** 합친 표본의 확인된 결과 편수(현재 공개+예정 · 직전 공개) */
+  results: number
+  usdPerSlotValidResult: number | null
+  trialCost: ReadyCohortFact['trialCost']
 }
 
 /**
@@ -372,6 +392,11 @@ export type PreflightVerdict = {
   /** 🔴 막지 않는 관측 경고 — 결정 행에 넣지 않는다 */
   warnings: readonly PreflightWarningCode[]
   counts: Readonly<Record<string, number>>
+  /**
+   * 공급 비용 단가를 낸 표본 — `current`(현재 품질 계약만) 또는 `current+previous(<직전 판>)`(승계).
+   * 비용 단가 한 칸에만 해당한다. 나머지 counts 는 언제나 현재 계약 값이다.
+   */
+  costCohort: string
 }
 
 /**
@@ -392,6 +417,7 @@ export function preflightLogLine(target: string, pf: PreflightVerdict): string {
   return `   ${target} preflight ${pf.verdict}${pf.codes.length > 0 ? ` [${pf.codes.join(',')}]` : ''}`
     + `${pf.warnings.length > 0 ? ` WARN [${pf.warnings.join(',')}]` : ''}`
     + `${pf.forecastWarnings.length > 0 ? ` FORECAST [${pf.forecastWarnings.join(',')}]` : ''}`
+    + ` costCohort=${pf.costCohort}`
     + ` (${Object.entries(pf.counts).map(([k, x]) => `${k}=${x}`).join(',')})`
 }
 
@@ -535,8 +561,19 @@ export function judgeNextPreflight(
    *   🔴 결과당 비용에는 손실 비용이 이미 들어 있다 — 손실률(필요 READY 구간)을 다시 곱하지 않는다.
    *   🔴 완전히 연결된 현재 계약 비용이 없으면 모른다 — raw READY 단가로 대신하지 않는다.
    */
-  const perResult = c === null ? null : c.usdPerSlotValidResult
-  const trial = c?.trialCost ?? null
+  /**
+   *   🔴 표본 — 현재 품질 계약의 결과 편수가 최소 표본 이상이면 현재 계약만 쓴다. 못 미치고 승계 후보가 있으면
+   *   현재 + 직전 계약을 합친 표본을 쓴다. 어느 쪽도 최소 표본에 못 미치면 envelope 가 모름으로 닫는다.
+   *   승계는 이 비용 단가에만 닿는다 — 위 처리량·필요 READY 는 `c`(현재 계약) 그대로다.
+   */
+  const costSampleMin = supplyCostMinResultSampleOf(n)
+  const currentResults = c === null ? 0 : c.published + c.scheduled
+  const carry = c !== null && currentResults < costSampleMin ? facts.supplyCostCarryover ?? null : null
+  const costResults = carry === null ? currentResults : carry.results
+  const perResult = carry !== null ? carry.usdPerSlotValidResult : c === null ? null : c.usdPerSlotValidResult
+  const trial = carry !== null ? carry.trialCost : c?.trialCost ?? null
+  counts.supplyCostResults = costResults
+  counts.supplyCostResultsMin = costSampleMin
   const observed = trial === null ? 0 : trial.settledRequests + trial.usageUnknownRequests
   const settledRatio = observed > 0 && trial !== null ? trial.settledRequests / observed : 0
   if (perResult !== null && perResult > 0) {
@@ -572,6 +609,7 @@ export function judgeNextPreflight(
       ineligibleRequests: trial.ineligibleRequests,
       riskUsd,
       budgetUsd: proofBudget,
+      resultSample: { results: costResults, minimum: costSampleMin },
     })
     if (envelope === null || envelope.kind === 'unknown') codes.add('SUPPLY_COST_UNKNOWN')
     else if (envelope.kind === 'bad') codes.add('SUPPLY_COST_SHORT')
@@ -593,6 +631,7 @@ export function judgeNextPreflight(
   return {
     stage, verdict, codes: ordered, forecastWarnings,
     warnings: PREFLIGHT_WARNING_CODES.filter((c) => warnings.has(c)), counts,
+    costCohort: carry === null ? 'current' : `current+previous(${carry.previous})`,
   }
 }
 

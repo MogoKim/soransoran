@@ -29,7 +29,7 @@ import { join } from 'node:path'
 import type { PrismaClient } from '@prisma/client'
 
 import type { LedgerEntry } from '../../src/lib/llm-ledger'
-import type { PreflightFacts, ReadyCohortFact, RunnerGrid } from '../../src/lib/stage-ladder-generic'
+import type { PreflightFacts, ReadyCohortFact, RunnerGrid, SupplyCostCarryoverFact } from '../../src/lib/stage-ladder-generic'
 import {
   READY_LOSS_STATUSES, cohortFatesOf, costAttributionOf, pendingFateOf, pipelineRunOfLedger, terminalYieldOf,
   type CostAttribution, type CostFate, type FateCounts, type PendingFate,
@@ -58,7 +58,7 @@ import {
   type OpportunitySnapshot, type SupplyIntent,
 } from '../../src/lib/supply-workset'
 import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
-import { currentQualityContract } from '../../src/lib/quality-contract'
+import { currentQualityContract, type QualityContractMark } from '../../src/lib/quality-contract'
 import type { Health } from '../../src/lib/ops-status'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
@@ -623,12 +623,40 @@ const byHash = (m: ReadonlyMap<string, SupplyIntent>): Map<string, SupplyIntent>
  * 🔴 **창 안 JIT 묶음 — 원천 수와 회차별 의도 색인** (2026-10-04 P0-2 최종). 하나라도 못 읽으면 `null`.
  *    옛 판(v1 · v2)은 손상이 아니라 legacy — 읽되 세지 않는다. 창 안 JIT 묶음이 없으면 `null`.
  */
-export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { sources: number; byRun: RunIntentIndex } | null {
+export function jitWorksetsIn(
+  dataDir: string, fromMs: number, toMs: number,
+  /** 세는 품질 계약 — 기본은 현재 계약. 비용 표본 승계만 직전 계약을 넘긴다 */
+  quality: QualityContractMark = currentQualityContract(),
+): { sources: number; byRun: RunIntentIndex } | null {
+  const scanned = scanJitWorksets(dataDir, fromMs, toMs)
+  if (scanned === null) return null
+  const mine = scanned.filter((w) => w.quality.version === quality.version && w.quality.digest === quality.digest)
+  if (mine.length === 0) return null
+  return { sources: mine.reduce((n, w) => n + w.count, 0), byRun: new Map(mine.map((w) => [w.runId, byHash(w.intents)] as const)) }
+}
+
+/**
+ * 🔴 **창 안의 직전 품질 계약 — 현재가 아닌 계약 중 가장 최근 회차의 것 하나.** 비용 표본 승계 전용이다.
+ *    그보다 옛 계약은 돌려주지 않는다(옛 판 여럿을 섞지 않는다). 제한 복구 회차·옛 묶음 판(v1·v2)은 후보가 아니다.
+ *    현재가 아닌 계약 묶음이 창 안에 없으면 `null`. 묶음 하나라도 못 읽으면 `null`(모르는 표본을 합치지 않는다).
+ */
+export function previousQualityContractIn(
+  dataDir: string, fromMs: number, toMs: number,
+  current: QualityContractMark = currentQualityContract(),
+): QualityContractMark | null {
+  const others = (scanJitWorksets(dataDir, fromMs, toMs) ?? [])
+    .filter((w) => w.quality.version !== current.version || w.quality.digest !== current.digest)
+  if (others.length === 0) return null
+  const latest = others.reduce((a, b) => (b.runId > a.runId ? b : a))
+  return { version: latest.quality.version, digest: latest.quality.digest }
+}
+
+type JitWorkset = { runId: string; count: number; intents: ReadonlyMap<string, SupplyIntent>; quality: QualityContractMark }
+
+/** 창 안 JIT 묶음 전부(품질 계약 무관) — 하나라도 못 읽으면 `null`. 제한 복구 회차·옛 묶음 판은 뺀다 */
+function scanJitWorksets(dataDir: string, fromMs: number, toMs: number): JitWorkset[] | null {
   if (!existsSync(dataDir)) return null
-  let n = 0
-  let files = 0
-  const byRun = new Map<string, ReadonlyMap<string, SupplyIntent>>()
-  const quality = currentQualityContract()
+  const out: JitWorkset[] = []
   for (const f of readdirSync(dataDir)) {
     const m = WORKSET_FILE_RE.exec(f)
     if (m === null) continue
@@ -648,12 +676,11 @@ export function jitWorksetsIn(dataDir: string, fromMs: number, toMs: number): { 
       const r = readWorkset(JSON.parse(readFileSync(join(dataDir, f), 'utf-8')), m[1]!)
       if (!r.ok) return null
       if (r.intents === null) continue
-      if (r.qualityContract?.version !== quality.version || r.qualityContract.digest !== quality.digest) continue
-      n += r.count; files += 1
-      byRun.set(m[1]!, byHash(r.intents))
+      if (r.qualityContract === null || r.qualityContract === undefined) continue
+      out.push({ runId: m[1]!, count: r.count, intents: r.intents, quality: r.qualityContract })
     } catch { return null }
   }
-  return files === 0 ? null : { sources: n, byRun }
+  return out
 }
 
 
@@ -827,6 +854,11 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   matched: ReadonlySet<string>
   horizon: readonly Date[]
   now: Date
+  /**
+   * 읽을 품질 계약 — 기본은 현재 계약이다. 🔴 직전 계약을 넘기는 곳은 비용 표본 승계 하나뿐이고,
+   * 그때는 `matched` 를 비워 넘긴다(직전 계약 대기 READY 는 예정 결과가 아니다).
+   */
+  quality?: QualityContractMark
 }): Promise<{
   rows: CohortRow[] | null; fates: FateCounts | null; readyCount: number | null; legacyExcluded: number | null
   /**
@@ -849,7 +881,8 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
   let legacyExcluded: number | null = null
   let autoIneligibleExcluded: number | null = null
   const intentMismatches: IntentLinkIssue[] = []
-  const ws = jitWorksetsIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime())
+  const quality = i.quality ?? currentQualityContract()
+  const ws = jitWorksetsIn(i.dataDir, i.windowFrom.getTime(), i.windowTo.getTime(), quality)
   const worksetSources = ws?.sources ?? null
   try {
     /**
@@ -881,7 +914,6 @@ export async function readReadyCohort(prisma: PrismaClient, i: {
      *    하나라도 다르면 legacy 로 빼지 않고 cohort 전체를 모름으로 닫는다. 주장하지 않는 옛 READY 는 수만 보고한다.
      */
     const claimed = autoPath.filter((r) => claimsJitContract(r.gateResults))
-    const quality = currentQualityContract()
     const currentClaimed = claimed.filter((r) => {
       const intent = readSupplyIntent(r.gateResults)
       return intent === null || (intent.qualityContract.version === quality.version && intent.qualityContract.digest === quality.digest)
@@ -992,6 +1024,51 @@ export async function publishLatencyHours(prisma: PrismaClient, from: Date, to: 
     lat.push((eventAt.getTime() - posted) / 3_600_000)
   }
   return lat
+}
+
+/** 비용 귀속 → 판정이 읽는 trial 비용 표본 — 현재 계약 표본과 승계 표본이 같은 모양을 쓴다 */
+const trialCostOf = (a: CostAttribution): NonNullable<ReadyCohortFact['trialCost']> => ({
+  settledRequests: a.settledRequests,
+  usageUnknownRequests: a.usageUnknownRequests,
+  recoverySettledRequests: a.recoverySettledRequests,
+  recoveryUsageUnknownRequests: a.recoveryUsageUnknownRequests,
+  overrunRequests: a.trialOverrunRequests,
+  ineligibleRequests: a.trialIneligibleRequests,
+  riskUsdPerSlotValidResult: a.trialRiskUsdPerSlotValidResult,
+})
+
+type CostCohortRead = { rows: readonly CohortRow[]; fates: FateCounts; cohortRuns: ReadonlySet<string> }
+
+/**
+ * 🔴 **현재 + 직전 품질 계약 회차를 합친 비용 표본** — 순수. 분자는 두 계약 회차의 정산 전부,
+ *    분모는 현재 계약의 공개 + 예정과 **직전 계약의 공개 편수**다. 직전 계약의 대기 READY 는 현재 계약으로
+ *    발행되지 않으므로 결과로 세지 않는다(그 비용은 분자에 남는다 — 단가를 낮게 보지 않는다).
+ *    장부를 못 읽었으면 `null`.
+ */
+export function supplyCostCarryoverOf(i: {
+  previous: string
+  entries: readonly LedgerEntry[] | null
+  current: CostCohortRead
+  prior: CostCohortRead
+}): { fact: SupplyCostCarryoverFact; attribution: CostAttribution } | null {
+  const fateByKey = new Map<string, CostFate>()
+  for (const r of i.prior.rows) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
+  for (const r of i.current.rows) if (r.hash !== null) fateByKey.set(r.hash, costFateOf(r))
+  const counts = { published: i.current.fates.published + i.prior.fates.published, scheduled: i.current.fates.scheduled }
+  const attribution = costAttributionOf({
+    entries: i.entries, fateByKey, counts,
+    cohortRuns: new Set([...i.current.cohortRuns, ...i.prior.cohortRuns]),
+  })
+  if (attribution === null) return null
+  return {
+    attribution,
+    fact: {
+      previous: i.previous,
+      results: counts.published + counts.scheduled,
+      usdPerSlotValidResult: attribution.usdPerSlotValidResult,
+      trialCost: trialCostOf(attribution),
+    },
+  }
 }
 
 export async function readPreflightFacts(prisma: PrismaClient, i: {
@@ -1126,6 +1203,39 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   if (recoveryCostRunId !== null) costCohortRuns.add(recoveryCostRunId)
   const costAttribution: CostAttribution | null = rows === null || fates === null ? null
     : costAttributionOf({ entries: supplyEntries, fateByKey, counts: fates, cohortRuns: costCohortRuns })
+  /**
+   * 🔴 **비용 표본 승계 후보** — 창 안에 직전 품질 계약 회차가 있으면 현재 + 직전을 합친 비용 표본을 함께 낸다.
+   *    쓸지 말지는 판정(`judgeNextPreflight`)이 최소 표본 규칙으로 정한다. 여기서는 사실만 모은다.
+   *    직전 계약 cohort 는 현재와 같은 판독기·같은 무결성 규칙으로 읽고, 못 읽으면 후보를 내지 않는다.
+   *    🔴 위 `cohort`(READY 재고·수율·처리량의 근거)는 건드리지 않는다 — 합치는 것은 비용 귀속 하나다.
+   */
+  let supplyCostCarryover: SupplyCostCarryoverFact | null = null
+  let carryoverAttribution: CostAttribution | null = null
+  const previousQuality = previousQualityContractIn(i.dataDir, win.capacity.from.getTime(), win.capacity.to.getTime())
+  if (previousQuality !== null && rows !== null && fates !== null && recovery.issue === null) {
+    // 현재 cohort 와 같은 용량 창이다 — 창을 따로 넓히지 않는다
+    const { from: windowFrom, to: windowTo } = win.capacity
+    const prev = await readReadyCohort(prisma, {
+      windowFrom, windowTo, dataDir: i.dataDir,
+      matched: new Set(), horizon: i.proofSlots, now: i.now, quality: previousQuality,
+    })
+    if (prev.rows === null || prev.fates === null) {
+      notes.push(`직전 품질 계약(${previousQuality.version}) 비용 표본을 읽지 못했다 — 승계하지 않는다`)
+    } else {
+      const carry = supplyCostCarryoverOf({
+        previous: previousQuality.version, entries: supplyEntries,
+        current: { rows, fates, cohortRuns: costCohortRuns },
+        prior: { rows: prev.rows, fates: prev.fates, cohortRuns: prev.cohortRuns },
+      })
+      if (carry !== null) {
+        supplyCostCarryover = carry.fact
+        carryoverAttribution = carry.attribution
+        notes.push(`비용 표본 승계 후보 — 직전 품질 계약 ${previousQuality.version} 공개 ${prev.fates.published}편을 합치면`
+          + ` 결과 ${carry.fact.results}편 · 정산 $${carry.attribution.totalUsd.toFixed(4)}`
+          + ' (현재 계약 표본이 최소 편수에 못 미칠 때만 쓴다 · READY 재고·수율은 현재 계약만)')
+      }
+    }
+  }
   const slotValidRecoveryReadyStock = recovery.lineage === null ? null : slotValidRecoveryReadyStockOf({
     rows: i.loaded.allRows,
     matchedReady,
@@ -1143,15 +1253,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
         sources: worksetSources, ...fates,
         usdPerSlotValidResult: costAttribution?.usdPerSlotValidResult ?? null,
         // 🔴 복구 비용 신원을 모르면 trial 비용도 모른다 — 기존 SUPPLY_COST_UNKNOWN 경로로 승급하지 않는다
-        trialCost: costAttribution === null || recovery.issue !== null ? null : {
-          settledRequests: costAttribution.settledRequests,
-          usageUnknownRequests: costAttribution.usageUnknownRequests,
-          recoverySettledRequests: costAttribution.recoverySettledRequests,
-          recoveryUsageUnknownRequests: costAttribution.recoveryUsageUnknownRequests,
-          overrunRequests: costAttribution.trialOverrunRequests,
-          ineligibleRequests: costAttribution.trialIneligibleRequests,
-          riskUsdPerSlotValidResult: costAttribution.trialRiskUsdPerSlotValidResult,
-        },
+        trialCost: costAttribution === null || recovery.issue !== null ? null : trialCostOf(costAttribution),
       }
 
   const facts: PreflightFacts = {
@@ -1171,6 +1273,7 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     // 🔴 그 증명일의 날짜 계약 천장으로 누른다 — 공급 러너가 그날 실제로 쓸 수 있는 값과 같아야 한다
     supplyDailyUsdCap: cappedBy(limitsFromEnv(i.env).dailyUsd, decisionDate === null ? null : supplyApprovedDailyUsdOf(decisionDate)),
     runnerHealth: i.runnerHealth,
+    supplyCostCarryover,
   }
   return {
     facts, notes,
@@ -1184,6 +1287,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       autoIneligibleExcluded: cohort.autoIneligibleExcluded, worksetSources, yieldBounds, fates,
       intentMismatches: cohort.intentMismatches,
       costAttribution,
+      // 승계 후보의 비용 귀속(현재 + 직전 품질 계약) — 후보가 없으면 null
+      costCarryover: supplyCostCarryover === null ? null : { ...supplyCostCarryover, attribution: carryoverAttribution },
       /**
        * 🔴 진단 전용(2026-11-13) — 판정은 위 `costAttribution`(rolling 72h 권위 cohort)만 쓴다.
        *    noReady 장부 단계 분해 · PR 838 병합 시각 뒤 회차만의 단가. 원천 종류·막은 gate 는 장부에 없어 `unknown`.
