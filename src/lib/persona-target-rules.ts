@@ -46,7 +46,8 @@ export const MEMBER_COMMENT_LIMIT = 3
  *    실제로 막은 것은 상호작용이 아니라 **대화처럼 보이는 것 전부**였다.
  *    댓글이 하나 달린 글은 대화가 아니라 통보다 — 사람은 그런 글에 끼어들지 않는다.
  *
- *    그래서 상한을 10 으로 연다. 대신 **일반 Persona 가 같은 글에 두 번 달지 않는다** —
+ *    그래서 상한을 10 으로 연다. 대신 **글쓴이 아닌 Persona 는 새 댓글을 한 번만 단다** —
+ *    두 번째 말은 자기 댓글에 달린 답에 답글로만 온다(`otherPersonaTurnsExceed`).
  *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 **"한 사람이 여럿인 척하는 것"** 이다.
  *    글쓴이 Persona 는 자기 글의 서로 다른 답글 대상에 제한된 수만큼 답할 수 있다.
  *
@@ -60,6 +61,15 @@ export const PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX = 3
 
 /** 글쓴이 아닌 Persona 가 한 글에 말할 수 있는 횟수 — 자기 댓글에 답이 달렸을 때 답글로 한 번 더 온다 */
 export const PERSONA_OTHER_TURNS_PER_POST_MAX = 2
+
+/**
+ * 🔴 글쓴이 아닌 한 Persona 가 한 글에 남긴 말이 계약을 넘는가 — 횟수가 상한을 넘거나 새(최상위) 댓글이 둘 이상이다.
+ *    지운 댓글도 이미 한 말이므로 부르는 쪽이 빼지 않고 넘긴다.
+ *    대화 감사(`stage-evidence`)와 생동감 관측(`comment-vitality`)이 이 함수 하나를 쓴다.
+ */
+export function otherPersonaTurnsExceed(turns: readonly { isReply: boolean }[]): boolean {
+  return turns.length > PERSONA_OTHER_TURNS_PER_POST_MAX || turns.filter((t) => !t.isReply).length > 1
+}
 
 /** 루트를 포함한 자동 Persona 답글 사슬 상한. 화면은 평면화하므로 모바일 들여쓰기와 분리된다. */
 export const PERSONA_REPLY_CHAIN_MAX = 6
