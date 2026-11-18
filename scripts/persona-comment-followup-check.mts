@@ -1123,6 +1123,17 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     all.every((x) => x.gapMs >= PLAN_MIN_GAP_MS && x.gapMs <= 90 * MIN && x.gapMs >= Math.min(60, 10 * (x.ordinal - 1)) * MIN))
   check('⑭ 모양은 배정 가능한 역할뿐 · 자리 종류는 셋뿐',
     all.every((x) => ['other', 'empathy', 'question', 'experience'].includes(x.shape) && ['post', 'author', 'reply'].includes(x.kind)))
+  // 🔴 이미 댓글이 달린 글 — 살아 있는 Persona 댓글을 채운 자리로 세어 남은 자리만 잇는다(배포 전 글에도 같다)
+  const small = ids.find((id) => threadPlanOf(id).size === 2)!
+  const old = (n: number): FxComment[] => Array.from({ length: n }, (_, i): FxComment => (i === 0
+    ? { id: 'o1', atMin: 10, origin: 'PERSONA', persona: 'pB', provenance: 'auto' }
+    : { id: `o${i + 1}`, atMin: 10 + i * 60, parent: 'o1', origin: 'PERSONA', persona: 'pA', provenance: 'followup' }))
+  const left = M.judgeFollowupPost(factsOf(small, { post: {}, comments: old(1) }), T0 + 300 * MIN)
+  const done = M.judgeFollowupPost(factsOf(small, { post: {}, comments: old(2) }), T0 + 300 * MIN)
+  check('⑭ 🔴 계획 2건인 글 — 댓글 1건이면 남은 한 자리만 열리고, 2건이면 끝난다(더 달지 않는다)',
+    left.verdict === 'GO' && left.ordinal === 2 && done.verdict === 'STOP' && done.reason.includes('대화 계획 2건'), `${left.verdict} · ${done.verdict} ${done.reason}`)
+  const justPosted = M.judgeFollowupPost(factsOf(small, { post: {}, comments: old(1) }), T0 + 15 * MIN)
+  check('⑭ 🔴 계획이 있어도 한꺼번에 달지 않는다 — 앞 댓글에서 자리 간격이 지나야 선다', justPosted.verdict === 'WAIT', justPosted.verdict)
   const big = plans.find((p) => p.size === 5)!
   check('⑭ 순번이 계획을 넘으면(지운 댓글) 마지막 자리 · 1번 자리는 계획 밖',
     planSlotAt(big, 1) === null && planSlotAt(big, 2) === big.slots[0] && planSlotAt(big, 99) === big.slots[3])
