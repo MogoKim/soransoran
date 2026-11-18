@@ -39,7 +39,7 @@ import {
   checkUniqueExpression, checkIdentifyingDetail, checkStructureCopy,
   type FrequencyLookup,
 } from './persona-gate-234.mjs'
-import { judgeExperienceGrounding } from '../../src/lib/persona-experience-grounding'
+import { judgeExperienceGrounding, type EverydayFacts } from '../../src/lib/persona-experience-grounding'
 import {
   checkPersonaConsistency, checkVoiceFingerprint,
   type PersonaIdentityFacts, type FingerprintThresholds,
@@ -88,6 +88,8 @@ export type CandidateInput = {
    *    🔴 참고 댓글은 여기 들어가지 않는다 — 말투 근거이지 인생 사실의 근거가 아니다.
    */
   personaGrounding?: string
+  /** 🔴 대화 계획의 자리(추가 댓글)만 — 가벼운 일상 경험을 허용한다. 첫 댓글은 넘기지 않는다 */
+  everydayExperience?: EverydayFacts
   personaCode: string
   /** 후보 댓글 본문 — 🔴 판정에만 쓰고 반환값에 담지 않는다 */
   text: string
@@ -275,6 +277,7 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   const grounding = judgeExperienceGrounding({
     text,
     grounding: input.personaGrounding ?? '',
+    ...(input.everydayExperience === undefined ? {} : { everyday: input.everydayExperience }),
   })
   if (!grounding.ok) {
     sevenOutcome = stricter(sevenOutcome, 'regenerate')

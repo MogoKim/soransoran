@@ -44,6 +44,7 @@ const { GATE_CODES } = await import('../src/lib/persona-comment-gate-report')
 const { publishCandidateTx } = await import('../src/lib/persona-publish-tx')
 const { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } = await import('../src/lib/persona-comment-auto-lane')
 const F = await import('../src/lib/persona-comment-followup')
+const { threadPlanOf } = await import('../src/lib/persona-thread-plan')
 const {
   FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, judgeConversationAudit, judgeEvidenceForTarget, personaCommentProvenanceOf,
 } = await import('../src/lib/stage-evidence')
@@ -170,6 +171,17 @@ const kstDayStartMs = (nowMs: number): number => {
 }
 const managedCreatedAtMs = (nowMs: number, minutesAgo: number): number =>
   Math.max(nowMs - minutesAgo * MIN, kstDayStartMs(nowMs) + 1)
+/**
+ * 🔴 글 id 가 그 글의 대화 계획을 정한다. 시험 글은 계획이 가장 크고(10건) 2번 자리가 글쓴이 답글인 id 로 만든다 —
+ *    그래야 "첫 댓글 뒤 글쓴이 답글" · "상한 10 도달" 시나리오가 실행마다 같은 모양으로 돈다.
+ */
+function bigPlanPostId(n: number): string {
+  for (let k = 0; ; k += 1) {
+    const id = `fu-db-${n}-${k}`
+    const plan = threadPlanOf(id)
+    if (plan.size === 10 && plan.slots[0]?.kind === 'author') return id
+  }
+}
 async function post(author: P, minutesAgo: number): Promise<string> {
   seq += 1
   const now = Date.now()
@@ -180,6 +192,7 @@ async function post(author: P, minutesAgo: number): Promise<string> {
   const createdAt = managedCreatedAtMs(now, minutesAgo)
   const p = await prisma.post.create({
     data: {
+      id: bigPlanPostId(seq),
       boardType: 'FREE', title: `요즘 밤마다 잠이 안 와요 ${seq}`, status: 'PUBLISHED', source: 'SYSTEM',
       content: `새벽 세 시만 되면 눈이 떠져서 다시 잠들기가 어렵네요. 다들 이런 밤 어떻게 보내세요? (${seq})`,
       authorId: author.userId, personaId: author.id, publishAt: new Date(publishedAt),
@@ -487,7 +500,8 @@ async function main(): Promise<void> {
     ]
     const g = fakeGen(asks)
     const roundLines: string[] = []
-    for (let round = 0; round < 16; round += 1) {
+    // 🔴 뒤 자리일수록 간격이 길다(최대 90분) — 75분씩 늙히면 한 번 쉬는 회차가 있어 넉넉히 돈다
+    for (let round = 0; round < 24; round += 1) {
       const report = await phase(g.gen)
       roundLines.push(
         `r${round + 1}:${report.outcome}:${report.reason}:${report.lines.join(' / ')}`
@@ -510,8 +524,12 @@ async function main(): Promise<void> {
       cs.length === 10,
       `${cs.length} · queues=${JSON.stringify(queueRows)} · ${roundLines.join(' || ')}`,
     )
-    check('🔴 일반 Persona는 한 번씩 · 글쓴이는 서로 다른 대상에 답글 최대 3회 · 최상위 0',
-      new Set(nonAuthorIds).size === nonAuthorIds.length
+    const nonAuthorRows = cs.filter((c) => c.personaId !== a.id)
+    check('🔴 일반 Persona는 두 번까지(새 댓글은 한 번) · 글쓴이는 서로 다른 대상에 답글 최대 3회 · 최상위 0',
+      [...new Set(nonAuthorIds)].every((id) => {
+        const mine = nonAuthorRows.filter((c) => c.personaId === id)
+        return mine.length <= 2 && mine.filter((c) => c.parentId === null).length <= 1
+      })
       && authorRows.length <= 3
       && authorRows.every((c) => c.parentId !== null),
       `일반=${nonAuthorIds.length}/${new Set(nonAuthorIds).size} 글쓴이=${authorRows.length}`)
@@ -558,11 +576,11 @@ async function main(): Promise<void> {
       return { ok: r.kind === 'blocked' && msgs.some((m) => m.includes(expect)), detail: msgs.join(' | ') }
     }
     const cases: [string, string, () => Promise<string>][] = [
-      ['🔴 다른 글의 댓글에 답글(고아)', '고아', () => injectFollowup(c, pid, stamp(pid, 2, otherFirst), 2)],
-      ['🔴 실회원 댓글에 답글', 'Persona 댓글이 아니다', () => injectFollowup(c, pid, stamp(pid, 2, mem), 2)],
+      ['🔴 다른 글의 댓글에 답글(고아)', '자리가 아니다', () => injectFollowup(c, pid, stamp(pid, 2, otherFirst), 2)],
+      ['🔴 실회원 댓글에 답글', '자리가 아니다', () => injectFollowup(c, pid, stamp(pid, 2, mem), 2)],
       // 🔴 글쓴이는 다른 Persona 댓글에 답글로만 말한다 — 최상위(글 hook) 자리는 여전히 자기 글이다
       ['🔴 글쓴 Persona 의 최상위 추가 댓글(자기 글)', '이미 썼거나 글쓴이', () => injectFollowup(a, pid, stamp(pid, 2, null), 2)],
-      ['🔴 글쓴이 답글 자리에 다른 Persona(이미 단 Persona)', '글쓴이 답글 자리', () => injectFollowup(b, pid, stamp(pid, 2, first), 2)],
+      ['🔴 그 댓글을 쓴 본인이 자기 댓글에 답글(이미 단 Persona)', '이미 썼거나 글쓴이', () => injectFollowup(b, pid, stamp(pid, 2, first), 2)],
       ['🔴 순번이 지금 자리와 다름', '도장 순번', () => injectFollowup(c, pid, stamp(pid, 3, first), 3)],
       ['🔴 도장 없음', '도장이 없다', async () => {
         const id = await injectFollowup(c, pid, stamp(pid, 2, first), 2)
@@ -583,7 +601,7 @@ async function main(): Promise<void> {
     const rep = await prisma.user.create({ data: { nickname: `rep${seq}x` }, select: { id: true } })
     await prisma.report.create({ data: { reporterId: rep.id, commentId: first, reason: 'fx' } })
     const q1 = await injectFollowup(c, pid, stamp(pid, 2, first), 2)
-    const w1 = await blockedFor(q1, '신고')
+    const w1 = await blockedFor(q1, '자리가 아니다')
     const s1 = await sweepFollowupLane(prisma, new Date())
     check('🔴 신고된 댓글에 답글 → 그 사유로 막힘 · 발행 0', w1.ok && s1.published === 0
       && (await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: q1 }, select: { status: true } })).status === 'EXPIRED', w1.detail)
@@ -592,7 +610,7 @@ async function main(): Promise<void> {
     // 삭제는 그 글의 다른 Persona 첫 댓글 위에 추가로 — 첫 댓글 자체를 지우면 첫 댓글 계약에서 먼저 멈춘다
     const extra = await prisma.comment.create({ data: { postId: pid, authorId: d.userId, content: '삭제될 질문 있으세요?', commentOrigin: 'PERSONA', personaId: d.id, source: 'SYSTEM', isDeleted: true, createdAt: new Date(Date.now() - 150 * MIN) }, select: { id: true } })
     const q2 = await injectFollowup(c, pid, stamp(pid, 2, extra.id), 2)
-    const w2 = await blockedFor(q2, '지워졌다')
+    const w2 = await blockedFor(q2, '자리가 아니다')
     const s2 = await sweepFollowupLane(prisma, new Date())
     check('🔴 삭제된 댓글에 답글 → 그 사유로 막힘 · 발행 0', w2.ok && s2.published === 0
       && (await prisma.personaApprovalQueue.findUniqueOrThrow({ where: { id: q2 }, select: { status: true } })).status === 'EXPIRED', w2.detail)
@@ -635,7 +653,8 @@ async function main(): Promise<void> {
     const otherQ = await injectFollowup(
       d,
       dialogPid,
-      stamp(dialogPid, 3, authorFirstReply.id),
+      // 🔴 글쓴이 답에는 그 댓글을 쓴 사람만 다시 답한다 — 글쓴이의 두 번째 대상은 다른 사람의 새 댓글로 만든다
+      stamp(dialogPid, 3, null),
       3,
       '저도 읽으면서 계속 마음에 남았어요. 그 뒤에는 조금 나아지셨나요?',
     )
@@ -708,7 +727,8 @@ async function main(): Promise<void> {
     const fourthTargetQueue = await injectFollowup(
       e,
       dialogPid,
-      stamp(dialogPid, 7, authorThird.id),
+      // 🔴 글쓴이 답에는 그 댓글을 쓴 사람만 다시 답한다 — 네 번째 대상도 다른 사람의 새 댓글로 만든다
+      stamp(dialogPid, 7, null),
       7,
       '오늘 밤은 더 편안하시길 바랄게요. 나중에도 소식 들려주세요.',
     )
@@ -726,7 +746,8 @@ async function main(): Promise<void> {
     const authorFourthResult = await publishCandidateTx(prisma, { id: authorFourthQueue, now: new Date(), followupLane: true })
     check('🔴 글쓴이 4번째 답글 → planner 우회 PENDING 이어도 transaction 차단 · write 0',
       authorFourthResult.kind === 'blocked'
-      && authorFourthResult.blocks.some((x) => x.message.includes('이미 썼거나 글쓴이'))
+      // 글쓴이가 세 번 답한 뒤에는 그 댓글에 글쓴이가 설 자리가 없다
+      && authorFourthResult.blocks.some((x) => x.message.includes('자리가 아니다'))
       && (await personaRows(dialogPid)).filter((x) => x.personaId === f.id).length === 3,
       JSON.stringify(authorFourthResult))
     followupOn(false)

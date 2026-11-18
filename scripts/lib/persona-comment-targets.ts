@@ -300,6 +300,8 @@ export async function materializeTargets(args: {
    *    ⑧ 의 원인은 역할이 아니라 말투라, 그 글에서는 그 Persona 의 다른 역할도 뺀다. 다른 글은 그대로다.
    */
   voiceFailedPostPersonas?: ReadonlySet<string>
+  /** 🔴 방금 탈락한 시도 수(`failedAttemptCounts`) — 줄을 세울 때 차례를 쓴 것으로 센다. 탈락자가 다음 글의 1번이 되지 않게 */
+  recentFailedAttempts?: ReadonlyMap<string, number>
 }): Promise<MaterializeResult> {
   const digestChars = args.digestChars ?? 600
   const commentDigestChars = args.commentDigestChars ?? 60
@@ -384,7 +386,8 @@ export async function materializeTargets(args: {
     seedComplete: pe.identity !== null && pe.voiceCore !== null
       && pe.lifeStage !== null && pe.lifeStage.trim() !== '',
     forbiddenReactionRoles: pe.forbiddenReactionRoles,
-    recentComments: pe.comments.filter((c) => c.createdAtMs >= windowStartMs).length,
+    recentComments: pe.comments.filter((c) => c.createdAtMs >= windowStartMs).length
+      + (args.recentFailedAttempts?.get(pe.code) ?? 0),
     // 🔴 역할 쏠림은 회차 조건 — planner 가 `roleRoundVerdict` 로 이 역할만 이번 회차에 빼고, 모르면 사람을 뺀다
     recentRoles: pe.recentRoles,
     // 🔴 **생활사 축을 전부 넘긴다.** 한 축만 넘기면 planner 의 다양성 판정이 죽는다

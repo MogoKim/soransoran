@@ -70,7 +70,7 @@ import {
   AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
 } from './persona-comment-auto-lane'
 import {
-  PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
+  PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_OTHER_TURNS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
 import type { CommentStage } from './persona-comment-stage'
 import { auditTarget } from './auto-ready-v2'
@@ -287,7 +287,7 @@ export type EvidenceConversationComment = {
  *    · 출처가 깨진 추가 댓글                                           FOLLOWUP_PROVENANCE_BROKEN
  *    · 자동 첫 댓글(`auto`)이 없는 글 · 첫 댓글보다 앞선 추가 댓글         FOLLOWUP_WITHOUT_FIRST
  *    · 그 글의 Persona 댓글 총수 > 장기 정본 `PERSONA_COMMENTS_PER_POST_MAX` FOLLOWUP_OVER_TOTAL
- *    · 글쓴이가 아닌 추가 댓글 Persona 가 그 글에 이미 쓴 Persona            FOLLOWUP_DUP_PERSONA
+ *    · 글쓴이가 아닌 Persona 가 한 글에 두 번 넘게 말했거나 새 댓글을 두 번 달았다  FOLLOWUP_DUP_PERSONA
  *    · 글쓴이의 추가 댓글이 최상위이거나 승인 상한을 넘음                  FOLLOWUP_SELF
  *    · 발행 시점에 대상이 없거나 Persona가 아니거나 이미 신고됨                 FOLLOWUP_TARGET_INVALID
  *    · 발행 시점까지 한 댓글을 둘 이상이 답글 대상으로 소비함                  FOLLOWUP_TARGET_REUSED
@@ -323,9 +323,13 @@ export function judgeConversationAudit(posts: readonly EvidencePost[]): Conversa
     const firstAt = firsts.length === 0 ? null : Math.min(...firsts.map((c) => c.createdAtMs))
     if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt)) codes.add('FOLLOWUP_WITHOUT_FIRST')
     if (p.personaComments.length > PERSONA_COMMENTS_PER_POST_MAX) codes.add('FOLLOWUP_OVER_TOTAL')
-    const seen = personaHistory.map((c) => c.personaId ?? '(없음)')
-    if (fu.some((c) => c.personaId === null || (c.personaId !== p.authorPersonaId
-      && seen.filter((x) => x === c.personaId).length > 1))) codes.add('FOLLOWUP_DUP_PERSONA')
+    // 🔴 글쓴이 아닌 사람은 한 글에 `PERSONA_OTHER_TURNS_PER_POST_MAX` 번까지 — 한 번을 넘는 말은 답글이어야 한다(새 댓글을 또 달지 않는다)
+    const turns = new Map<string, EvidenceConversationComment[]>()
+    for (const c of personaHistory) {
+      if (c.personaId !== null && c.personaId !== p.authorPersonaId) turns.set(c.personaId, [...(turns.get(c.personaId) ?? []), c])
+    }
+    if (fu.some((c) => c.personaId === null) || [...turns.values()].some((mine) =>
+      mine.length > PERSONA_OTHER_TURNS_PER_POST_MAX || mine.filter((c) => c.parentId === null).length > 1)) codes.add('FOLLOWUP_DUP_PERSONA')
     // 🔴 삭제된 과거 턴도 셌다. 삭제로 글쓴이 3회 상한이 다시 열리면 안 된다.
     const own = p.authorPersonaId === null ? [] : fu.filter((c) => c.personaId === p.authorPersonaId)
     if (own.some((c) => c.parentId === null) || own.length > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) codes.add('FOLLOWUP_SELF')

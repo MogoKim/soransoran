@@ -1036,11 +1036,20 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
   failWith('🔴 첫 댓글 축 broken 은 추가 댓글이 있어도 단계 FAIL',
     withThread([first, { ...first, personaId: 'x', provenance: 'broken' }, fu(1)], 5), 'COMMENT_PROVENANCE_BROKEN')
 
-  const dupFirst = withThread([first, fu(1, { personaId: 'commenter-0' })])
-  check('🔴 추가 댓글 Persona = 첫 댓글 Persona → 단계 DUP_COMMENT 아님 · 대화 감사 FOLLOWUP_DUP_PERSONA',
+  // 🔴 글쓴이 아닌 사람은 한 글에 두 번까지 — 두 번째는 자기 댓글에 달린 답에 다는 답글이다(새 댓글을 또 달지 않는다)
+  const comeBack = withThread([first, fu(1, { personaId: 'author-0' }), fu(2, { personaId: 'commenter-0' })])
+  check('🟢 댓글 쓴 사람이 글쓴이 답에 한 번 더 답한다 → 대화 감사 PASS · 단계 증거 PASS 그대로(첫 댓글 3 · 수동 0)',
+    comeBack.verdict === 'PASS' && comeBack.conversation?.verdict === 'PASS' && comeBack.counts.firstCommentOk === 3
+    && comeBack.counts.manualPersonaComments === 0 && comeBack.counts.followupComments === 2,
+    `${comeBack.verdict} ${comeBack.codes.join(',')} ${JSON.stringify(comeBack.conversation)}`)
+  check('🔴 대화 규칙이 바뀌어도 단계 증거는 추가 댓글을 세지 않는다 — 추가 댓글만 다른 두 스레드의 단계 판정이 같다',
+    JSON.stringify({ ...comeBack, conversation: null, counts: { ...comeBack.counts, followupComments: 0 } })
+    === JSON.stringify({ ...withThread([first]), conversation: null, counts: { ...withThread([first]).counts, followupComments: 0 } }))
+  const dupFirst = withThread([first, fu(1, { personaId: 'commenter-0', parentId: null, topLevel: true })])
+  check('🔴 첫 댓글 Persona 가 새 댓글을 또 단다 → 단계 DUP_COMMENT 아님 · 대화 감사 FOLLOWUP_DUP_PERSONA',
     dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
-  const dupFu = withThread([first, fu(1), fu(2, { personaId: 'fu-1' })])
-  check('🔴 추가 댓글끼리 같은 Persona → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
+  const dupFu = withThread([first, fu(1), fu(2), fu(3, { personaId: 'fu-1' }), fu(4), fu(5, { personaId: 'fu-1' })])
+  check('🔴 같은 Persona 가 세 번 말한다 → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
   // 🔴 (2026-11-04) 글쓴이는 자기 글의 서로 다른 Persona 발화에 답글로 최대 세 번 답할 수 있다.
   const authorReply = withThread([first, fu(1, { personaId: 'author-0' })])
   check('🟢 글쓴이 답글 한 번(최상위 아님) → 대화 감사 PASS · 단계 COMMENT_SELF 아님',

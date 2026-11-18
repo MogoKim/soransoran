@@ -52,7 +52,7 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 |---|---|---|
 | 1 | 첫 댓글 1개 계약·provenance 유지 | 자동 출처(`auto`) 첫 댓글이 없는 글 `STOP` · 60분 안 첫 댓글 대기 글이 있으면 회차 0건 · 표식·분류는 #707 정본(`FOLLOWUP_LANE_*` · `personaCommentProvenanceOf`) · 대화 감사 FAIL·판독 불가 → 추가 0(첫 댓글은 계속) |
 | 2 | 추가 0~9 | `FOLLOWUP_EXTRA_PER_POST_MAX = 10 − 1` |
-| 3 | 모든 글을 10개로 채우지 않음 | 수량은 **미해결 hook** 이 정한다. 근거 0 → 0. 한 건이 hook 하나를 소비 — 답이 한 번이라도 달린 대상(실회원·지운 답 포함)과 이미 쓴 글 hook 은 재소비 금지. 해시는 동률 순서·jitter 에만 |
+| 3 | 모든 글을 10개로 채우지 않음 | 수량은 **글의 대화 계획**이 정한다(`src/lib/persona-thread-plan.ts` — 글 id 로 2~10건 · 평균 4.5). 자리마다 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해지고, 계획이 정한 자리가 막히면 다른 종류의 자리로 넘어간다. 한 댓글에는 답이 하나만 달린다. 이전의 "미해결 hook" 정규식 판정은 폐기했다(전부 성공해도 글당 2.2건이 천장이었다) |
 | 4 | 일반 Persona 반복 금지 · 글쓴이 제한 답글 | 일반 Persona는 그 글에 1회. 글쓴이는 최상위 댓글 0, 서로 다른 유효 대상에 답글로 최대 3회. 정규화 일치 / bigram Jaccard ≥0.5 / 같은 도입 6자 |
 | 5 | 실회원 우선 · 추가량 축소 | 실회원 1~2건 → 추가 ≤1 · 3건 이상 → 0 · 마지막 말이 실회원이면 0 · 실회원 댓글에는 답하지 않음 |
 | 6 | 시간차 | 직전 Persona 댓글 + 30분 + 결정적 0~40분 · 한 회차 한 글 1건 · 회차 전체는 profile `runMax` · 같은 회차 같은 Persona 한 글 · 공개 24시간 뒤 종료 |
@@ -97,9 +97,9 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 
 | 코드 | 원인 | 오늘(KST) 격리 범위 | 같은 회차 |
 |---|---|---|---|
-| `FU_PERSONA_DAY` | Persona 에 묶인 결정적 실패(설정 · 말투 · bootstrap · prompt 근거 · 비활성 · 실회원) | 그 Persona — 모든 글 | 같은 글에서 다음 정상 Persona 재선정 |
+| `FU_PERSONA_DAY` | Persona 에 묶인 결정적 실패(⑧ 말투 · prompt 근거 · 비활성 · 실회원) | 그 Persona — 모든 글 | 같은 글에서 다음 정상 Persona 재선정 |
 | `FU_POST_DAY` | 글에 묶인 실패(글 사라짐 · 비공개 · 게시판 바뀜 · Persona 댓글 꽉 참 · 글 상태 모름) | 그 글 하나 | 다음 글로 넘어간다 |
-| `FU_COMBO_DAY` | 그 글 × 그 Persona 본문 실패(관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복) | 글 × Persona 쌍 | 같은 글에서 재선정 |
+| `FU_COMBO_DAY` | 그 글 × 그 Persona 본문 실패(①~⑦ · ⑨ 관문 · 본문 중복 · 파싱 · 잘림 · 자리 중복). 막은 관문이 분류를 정한다 — ⑧ 미실행 꼬리표(`BOOTSTRAP_*`)는 원인이 아니다. 글쓴이는 자기 글에서 이 격리를 받지 않고 실패한 역할만 다시 보내지 않는다 | 글 × Persona 쌍 | 같은 글에서 재선정 |
 | `FU_TRANSIENT` | 일시 provider · IO · 장부(429 · 5xx · NETWORK · TIMEOUT · LEDGER_BLOCKED · DB ERROR) | 없음 | 회차를 멈춘다. 다음 회차에 같은 조합을 새로 시작할 수 있다 |
 | `FU_HALT` | 모르는 · 내부 실패 · 요청 모양 거부(400) | 글 × Persona 쌍 | 회차를 멈춘다 |
 
@@ -151,7 +151,7 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - 🔴 첫 연결판은 그날 단계를 `StageDecision` 표에서 직접 읽었다 — `stage:ladder-check`(adapter 는 controller·consumer·운영 화면만)가 잡았다.
   consumer env 로 바꾸자 지금 댓글 러너 모양에서는 단계가 비어 0건이 된다. 켜려면 E6(댓글 러너 consumer 경유)이 먼저다.
 
-- stamina 를 지운 뒤 근거 있는 글이 길게 이어진다. 구조는 추가 0~9건까지 허용하지만 실제 수량은 미해결 hook과 승인 profile이 정한다.
+- 수량은 대화 계획과 승인 profile(하루 건수 · USD · 회차 상한)이 정한다. 글쓴이 아닌 사람은 한 글에 두 번까지(새 댓글 한 번 + 자기 댓글에 달린 답에 한 번)이고, 대화 감사(`judgeConversationAudit`)가 같은 계약을 사후에 다시 본다.
   추가 댓글이 스스로 질문을 만들면 다음 거리가 되기 때문이다. 상한 10·사슬 6·같은 대상 1회·실회원 우선이 막지만, 실제 생성기가 질문을 얼마나 자주 내는지는
   운영 관측 전이다 — profile 의 `dailyCount` · `runMax` 를 정할 때 이 수치를 본다.
 - 정기 회차가 사건 표식을 거두면 trigger 가 `event` 로 기록되어 그 회차는 추가 댓글을 건너뛴다. 사건이 잦은 날 추가 댓글이 적게 돌 수 있다(첫 댓글에는 영향 없음).

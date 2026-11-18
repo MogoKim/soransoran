@@ -254,6 +254,13 @@ const listOr = (xs: readonly string[], fallback: string): string =>
  * 🔴 막을 것은 여기서 막는다 — 금지 역할로 생성을 요청하면 Gate ⑦ 이 뒤에서 잡지만,
  *    돈을 쓰고 나서 잡는 것과 쓰기 전에 막는 것은 다르다.
  */
+/** 대화 계획이 정한 길이 — 글마다 같은 길이로 달리지 않게 한다 */
+const SEAT_LENGTH_GUIDE: Readonly<Record<'short' | 'normal' | 'long', string>> = {
+  short: '**한 줄**입니다 — 20자 안팎. 한마디면 됩니다.',
+  normal: '**한두 문장**입니다.',
+  long: '**서너 문장**입니다 — 내 경우를 한 토막 풀어 씁니다.',
+}
+
 export function buildPrompt(input: {
   persona: PromptPersona
   post: PromptTargetPost
@@ -273,6 +280,11 @@ export function buildPrompt(input: {
    *    🔴 참고 댓글은 여기 들어가지 않는다.
    */
   grounding?: string
+  /**
+   * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 프롬프트가 한 글자도 바뀌지 않는다(첫 댓글에는 없다).
+   *    길이를 정해 주고, 가벼운 일상 경험을 자기 이야기로 말하게 한다. 무거운 사실은 그대로 막는다.
+   */
+  seat?: { length: 'short' | 'normal' | 'long'; selfFacts: readonly string[]; menopauseExperienced: boolean; spouseStrain: boolean; reply: boolean }
 }): PromptPlan {
   const blocks: PromptBlock[] = []
   const { persona, post } = input
@@ -380,12 +392,16 @@ export function buildPrompt(input: {
     '맞출 필요는 없습니다. 할 말이 짧으면 한 줄이면 되고,',
     '맥락이 필요하면 두세 문장으로 써도 됩니다. 매번 같은 길이로 쓰지 않습니다.',
     `(운영 상한 ${MAX_COMMENT_LENGTH}자 · 최소 ${MIN_COMMENT_LENGTH}자 — 목표가 아니라 한계입니다)`,
+    ...(input.seat === undefined ? [] : [`🔴 이번 댓글은 ${SEAT_LENGTH_GUIDE[input.seat.length]}`]),
     '',
     '## 🔴 원문을 옮기지 않습니다',
     '윗글에 나온 표현을 **한 조각도 그대로 쓰지 않습니다.** 말을 살짝 바꿔 옮기는 것도 안 됩니다.',
     '특히 그 사람만의 독특한 말("새벽 세시쯤", "아침이 무겁다" 같은 구체적인 묘사)은',
     '따라 쓰지 말고, 읽고 **내 안에 남은 느낌만** 내 말로 적습니다.',
     '증상·시간·상황을 되풀이해 요약하지 않습니다. 그건 읽었다는 표시일 뿐 반응이 아닙니다.',
+    ...(input.seat?.reply === true
+      ? ['🔴 답하는 댓글의 낱말을 되받아 쓰지 않습니다. "네" · "그쵸" · "맞아요" 로 시작하지 말고, 그 말에 **새로 보탤 한 가지**만 적습니다.']
+      : []),
     '',
     // 🔴 **지어내지 않기** — 옛 판이 "지금 뭘 하다 이 글을 봤는지" 를 요구했다.
     //    그것이 없는 장면을 만들게 했다. 요구를 없애고 금지만 남긴다.
@@ -393,7 +409,21 @@ export function buildPrompt(input: {
     //    `judgeExperienceGrounding` 이 검증에서 잡는 것을 여기서 미리 말한다.
     //    두 곳에 각각 적으면 언젠가 갈리고, 그날부터 프롬프트가 막는 것을 Gate 가 통과시킨다.
     '## 내 이야기를 할 수 있는 범위',
-    ...(input.grounding !== undefined && input.grounding.trim() !== ''
+    ...(input.seat !== undefined
+      ? [
+        '아래는 **당신에 대한 사실**입니다. 이 사실과 어긋나는 말은 하지 않습니다.',
+        ...(input.seat.selfFacts.length === 0 ? ['(적힌 사실 없음)'] : input.seat.selfFacts.map((f) => `- ${f}`)),
+        ...(input.grounding !== undefined && input.grounding.trim() !== '' ? [input.grounding.trim()] : []),
+        '가벼운 일상 경험 — 본 것 · 해 본 것 · 가 본 곳 · 요즘 몸 상태(잠이 안 온다 · 열이 오른다 · 무릎이 시리다) — 은',
+        '자기 이야기로 말해도 됩니다. "저도 그랬어요" 로 끝내지 말고 **내 경우 한 토막**을 보태면 좋습니다.',
+        '🔴 병명 · 약 이름 · 시술 · 검사 수치는 자기 일로 말하지 않습니다. 가족 · 일 · 사는 곳을 위 사실과 다르게 말하지 않습니다.',
+        ...(input.seat.menopauseExperienced ? [] : ['🔴 갱년기를 직접 겪은 것처럼 말하지 않습니다 — 당신은 아직 겪지 않았습니다.']),
+        ...(input.seat.spouseStrain ? [] : [
+          '🔴 부부 사이의 큰 싸움 · 말을 안 섞음 · 각방 · 별거 · 이혼을 **자기 일로** 말하지 않습니다 — 위 사실에 그런 일이 없습니다.',
+          '   그런 글에는 공감하거나 묻거나, "주변에서 봤다"로 말합니다.',
+        ]),
+      ]
+      : input.grounding !== undefined && input.grounding.trim() !== ''
       ? [
         '아래는 **당신이 실제로 겪은 일**입니다. 이 안에서라면 자기 이야기를 해도 됩니다.',
         input.grounding.trim(),
@@ -423,9 +453,17 @@ export function buildPrompt(input: {
     `- 다루지 않는 주제: ${listOr(persona.noGoTopics, '(없음)')}`,
     // 🔴 개인 말버릇(열쇠) + 전원 공통 금지(§7-2) — `persona-no-go` 하나
     `- 쓰지 않는 표현: ${promptNoGoExpressions(persona.noGoExpressions).join(' · ')}`,
-    '- 진단·처방·약 이름·용량을 말하지 않습니다. 병원에 가라 마라도 정하지 않습니다.',
-    '- 방법을 알려주지 않습니다. 무엇이 좋다 나쁘다 판단하지 않습니다.',
-    '  묻지 않은 정보를 얹지 않습니다 — 여기는 답하는 자리가 아니라 곁에 있는 자리입니다.',
+    ...(input.seat === undefined
+      ? [
+        '- 진단·처방·약 이름·용량을 말하지 않습니다. 병원에 가라 마라도 정하지 않습니다.',
+        '- 방법을 알려주지 않습니다. 무엇이 좋다 나쁘다 판단하지 않습니다.',
+        '  묻지 않은 정보를 얹지 않습니다 — 여기는 답하는 자리가 아니라 곁에 있는 자리입니다.',
+      ]
+      : [
+        '- 진단·처방·약 이름·용량·시술·검사 수치를 말하지 않습니다. 병원에 가라 마라도 정하지 않습니다.',
+        '- 특정 제품 · 업체 · 가게 이름을 권하지 않습니다.',
+        '- 지시하거나 단정하지 않습니다("~하셔야 해요"). 묻는 글에는 "저는 이렇게 했어요" 처럼 **내 경우를 말하는 것**으로 답합니다.',
+      ]),
     '- 정리된 목록·번호·소제목을 쓰지 않습니다. 사람이 쓴 댓글은 그렇게 생기지 않았습니다.',
     '- 존재하지 않는 가족을 근거로 말하지 않습니다.',
     '- 어느 카페·사이트에서 봤다는 말을 하지 않습니다.',

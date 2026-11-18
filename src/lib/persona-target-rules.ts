@@ -58,6 +58,9 @@ export const PERSONA_COMMENTS_PER_POST_MAX = 10
 /** 글쓴이 Persona 가 자기 글에 남길 수 있는 추가 답글 상한. 최상위 댓글은 허용하지 않는다. */
 export const PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX = 3
 
+/** 글쓴이 아닌 Persona 가 한 글에 말할 수 있는 횟수 — 자기 댓글에 답이 달렸을 때 답글로 한 번 더 온다 */
+export const PERSONA_OTHER_TURNS_PER_POST_MAX = 2
+
 /** 루트를 포함한 자동 Persona 답글 사슬 상한. 화면은 평면화하므로 모바일 들여쓰기와 분리된다. */
 export const PERSONA_REPLY_CHAIN_MAX = 6
 

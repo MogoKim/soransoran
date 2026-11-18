@@ -127,6 +127,10 @@ export function buildPromptFromInput(
     requireReference: opts.requireReference,
     // 🔴 생성과 검증이 **같은 grounding** 을 본다 (P0-1)
     grounding: groundingTextOf({ identity: input.persona.identity, memory: input.memory }),
+    // 🔴 추가 댓글만 — 첫 댓글 입력에는 이 칸이 없어 프롬프트가 한 글자도 바뀌지 않는다
+    ...(input.post.threadSeat === undefined
+      ? {}
+      : { seat: { ...input.post.threadSeat, reply: input.post.replyToDigest !== undefined } }),
   })
 }
 
@@ -192,6 +196,8 @@ export function toGateInput(args: {
      *    호출부가 따로 넘기지 않아도 이어지게 한다 — 잊을 자리를 없앤다.
      */
     personaGrounding: ownPost ? [baseGrounding, post.title, post.bodyDigest].filter((t) => t.trim() !== '').join(' ') : baseGrounding,
+    // 🔴 추가 댓글만 — 첫 댓글 입력에는 자리 칸이 없어 ⑦ 판정이 그대로다
+    ...(post.threadSeat === undefined ? {} : { everydayExperience: { menopauseExperienced: post.threadSeat.menopauseExperienced, spouseStrain: post.threadSeat.spouseStrain } }),
     noGoTopics: p.noGoTopics,
     noGoExpressions: p.noGoExpressions,
     ...(args.frequencyLookup === undefined
