@@ -43,7 +43,8 @@
 ## 충돌이 나면
 
 - **목적·정책 충돌**: 위 순서의 앞 문서가 이긴다. 정책 숫자는 D100 canon 이 정본이고, 코드는 그
-  구현이다. 코드가 canon 과 다르면 코드가 낡은 것이다 — `CURRENT-MILESTONE.md` 충돌 장부에 적고 코드를 고친다.
+  구현이다. 코드가 canon 과 다르면 코드가 낡은 것이다 — 충돌로 보고하고 코드를 고친다.
+  창업자가 승인한 정책 변경은 코드와 같은 변경에서 canon 을 고친다.
 - **가변 상태 충돌**: runtime·DB·로그 실측이 낡은 상태 스냅샷을 이긴다. 실측은 제품 목표를 이기지 못한다.
 - **새 정책**은 자기가 대체한 옛 경로를 canon 의 "제거·대체한 옛 경로" 표에 같은 변경으로 적는다.
   같은 결정을 내리는 정본이 둘이면 결함이다.
@@ -89,7 +90,7 @@
 |---|---|
 | `ALWAYS-ON-HOST.md` | 상시 실행 호스트의 사전 점검·rehearsal·quiesce·cutover·rollback. 단계·콘텐츠·Persona 정책은 정하지 않고 위 권위 문서를 실행한다 |
 | `launchd/README.md` | 보조 Mac의 템플릿·runtime 배포·스케줄 관측·진단 절차. 실제 loaded 상태는 `launchctl`이 정한다 |
-| `2026-11-05-stage-bounded-active-recovery.md` | 🔴 **전환기 runbook** — canon이 2026-11-06에 대체한 제한 복구 경로가 코드·runtime에서 지워지기 전까지만, 이미 배포된 경로를 진단·quiesce·rollback하는 절차. 새 정책 근거가 아니며 복구를 넓히는 데 쓰지 않는다(canon §11 · §11.1, 구현 gap은 `CURRENT-MILESTONE.md` §1.3) |
+| `2026-11-05-stage-bounded-active-recovery.md` | 🔴 **전환기 runbook** — canon이 2026-11-06에 대체한 제한 복구 경로가 코드·runtime에서 지워지기 전까지만, 이미 배포된 경로를 진단·quiesce·rollback하는 절차. 새 정책 근거가 아니며 복구를 넓히는 데 쓰지 않는다(canon §11 · §11.1) |
 
 runbook의 명령은 현재 정본 정책과 현재 상태를 먼저 확인한 뒤 실행한다. 역사 문서에 남은 수동 stage env,
 GitHub 예약, 완성 글 재고 절차를 runbook처럼 사용하지 않는다.
