@@ -269,9 +269,9 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
   check('🔴 그 근거가 함께 적혀 있다',
     factsOf('82cook').listPageSize.how.includes('82cook.list.jsonl')
     && factsOf('82cook').listPageSize.how.includes('25'))
-  check('🔴 카페 페이지 크기는 로그 실측 21건',
-    factsOf('navercafe:remonterrace').listPageSize.value === 21
-    && factsOf('navercafe:wgang').listPageSize.how.includes('목록 1p'))
+  check('🔴 카페 페이지 크기는 2026-11-17 로그 실측이다 (쫑알 15 · wgang 16)',
+    factsOf('navercafe:remonterrace').listPageSize.value === 15 && factsOf('navercafe:wgang').listPageSize.value === 16
+    && factsOf('navercafe:remonterrace').listPageSize.when === '2026-11-17' && factsOf('navercafe:wgang').listPageSize.when === '2026-11-17')
   /**
    * 🔴 **82cook 은 템플릿 인자, 네이버는 `planCafeRun` 정본에서 온다** (2026-09-14).
    *    옛 fixture 는 네이버도 `1페이지` 로 잠갔는데, 실제 `BOARD_TARGETS` 는
@@ -311,11 +311,18 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
   check('🔴 카페는 유입 실측이 있어 상한이 계산된다',
     (maxSafeGapHours(factsOf('navercafe:remonterrace')) ?? 0) > 0
     && (maxSafeGapHours(factsOf('navercafe:wgang')) ?? 0) > 0)
-  check('🔴 카페 계획은 성립한다',
-    verifySchedule('navercafe:remonterrace', 'start').length === 0
-    && verifySchedule('navercafe:wgang', 'start').length === 0
-    && verifySchedule('navercafe:remonterrace', 'stable').length === 0
-    && verifySchedule('navercafe:wgang', 'stable').length === 0)
+  // 🔴 2026-09-08 값(1.0 · 0.8건/h)은 실제의 1/18~1/100 이라 이 검사가 무엇이든 통과시켰다.
+  //    실측 유입에서는 두 카페 모두 회차 사이 글을 놓친다 — 그 사실 하나만 문제로 나오고, 부하·겹침·분은 성립한다.
+  check('🔴 카페 유입은 2026-11-17 실측이다 (쫑알 88.8 · wgang 14.8건/h) — 옛 하한값이 아니다',
+    factsOf('navercafe:remonterrace').newPerHourFloor?.value === 88.8 && factsOf('navercafe:wgang').newPerHourFloor?.value === 14.8)
+  check('🔴 실측 유입에서는 지금 수집 시각이 회차 사이 글을 놓친다고 드러난다 (그 밖의 문제는 0)',
+    (['navercafe:remonterrace', 'navercafe:wgang'] as const).every((id) => (['start', 'stable'] as const).every((ph) => {
+      const ps = verifySchedule(id, ph)
+      return ps.length === 1 && ps[0]!.includes('최대 간격') && ps[0]!.includes('회차 직전 약')
+    })))
+  check('🔴 목록 창 — wgang 약 5.4h · 쫑알 약 1.0h (안전 상한은 그 절반)',
+    Math.abs((pageWindowHours(factsOf('navercafe:wgang')) ?? 0) - 5.4) < 0.05
+    && Math.abs((pageWindowHours(factsOf('navercafe:remonterrace')) ?? 0) - 1.0) < 0.05)
   check('🔴 유입이 빨라지면 같은 회차도 위험하다고 잡는다', (() => {
     const f = { ...factsOf('navercafe:wgang'), newPerHourFloor: { value: 20, when: 't', how: 't' } }
     return (maxSafeGapHours(f) ?? 99) < 6

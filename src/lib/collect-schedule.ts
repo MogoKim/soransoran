@@ -40,15 +40,14 @@ export type SourceId = '82cook' | 'navercafe:remonterrace' | 'navercafe:wgang'
 export type Evidence<T> = { value: T; when: string; how: string }
 
 /**
- * 🔴 **실측값이다** (2026-09-08 로그·목록 파일 read-only 조사).
+ * 🔴 **실측값이다.** 값마다 잰 날과 방법을 함께 든다.
  *
- *    카페: `~/Library/Logs/soransoran/navercafe-collect-*.log`
- *      목록 1p → 21건 · 정치 제외 1 · 고정 슬롯 제외 5 · 자동 선별 6 · 상세 성공 6/6
- *      에러 로그 0B — **세션 오류 0**
- *    신규 유입: 목록 JSONL 을 회차별로 대조
- *      remonterrace  09-07 17:55 → 09-08 09:20 (15.4h) 신규 16/21 → 약 1.0건/h
- *      wgang         09-07 17:56 → 09-08 13:20 (19.4h) 신규 15/21 → 약 0.8건/h
- *      🔴 긴 간격에서는 페이지1(21건)이 넘쳐 **하한**만 알 수 있다. 보수적으로 쓴다
+ *    카페(2026-11-17 운영 로그·목록 파일 read-only 조사): 쪽 크기 · 시간당 신규 유입.
+ *      유입은 한 회차 목록의 게시 시각 구간(가장 이른 글 ~ 가장 늦은 글)으로 잰다.
+ *      🔴 2026-09-08 값(remonterrace 1.0 · wgang 0.8건/h)은 목록 1쪽(21건)이 넘친 긴 간격에서 잰 **하한**이었고
+ *         실제의 1/18~1/100 이었다. 그 값으로는 어떤 회차 간격도 "놓치지 않는다" 로 통과했다.
+ *      🔴 지금 값으로는 두 카페 모두 회차 사이 글을 놓친다 — `verifySchedule` 이 그렇게 말한다.
+ *         하루 5회 · 요청 상한 150 안에서는 없앨 수 없는 사실이고, 회차 시각을 정할 때 감안할 숫자다.
  *    82cook 목록 페이지: `.microseed-data/82cook.list.jsonl` 의 회차 경계(글번호가 다시
  *      커지는 지점)로 회차를 나누면 25 · 125 · 150 · 75 건 — **전부 25의 배수**이고
  *      `82cook-verify.list.jsonl`(`--pages=1`)이 정확히 25건이다 → **1페이지 = 25건**
@@ -117,13 +116,16 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
   },
   {
     id: 'navercafe:remonterrace',
-    listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-remonterrace.log "목록 1p → 누적 21건"' },
+    listPageSize: { value: 15, when: '2026-11-17', how: 'navercafe-collect-remonterrace-multi.log 쫑알 "목록 2p → 누적 15건" (쪽마다 15행)' },
     listPagesPerRun: {
       value: 6, when: '2026-11-18',
       how: 'planCafeRun("remonterrace").listPerRun — BOARD_TARGETS 페이지 합 (fixture 가 동등성을 잠근다)',
     },
     detailPerRun: 21,
-    newPerHourFloor: { value: 1.0, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:55→09-08 09:20 신규 16/21 (하한)' },
+    newPerHourFloor: {
+      value: 88.8, when: '2026-11-17',
+      how: '쫑알 목록의 게시 시각 구간 — 21:30 회차 88.8건/h · 13:30 회차 222건이 1.8h(123건/h). 낮은 쪽을 쓴다',
+    },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0,
@@ -132,13 +134,16 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
   },
   {
     id: 'navercafe:wgang',
-    listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-wgang.log "목록 1p → 누적 21건"' },
+    listPageSize: { value: 16, when: '2026-11-17', how: 'navercafe-collect-wgang-multi.log 목록 1p~5p 누적 82행 (쪽마다 약 16행)' },
     listPagesPerRun: {
       value: 5, when: '2026-09-14',
       how: 'planCafeRun("wgang").listPerRun — BOARD_TARGETS 페이지 합 (fixture 가 동등성을 잠근다)',
     },
     detailPerRun: 16,
-    newPerHourFloor: { value: 0.8, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:56→09-08 13:20 신규 15/21 (하한)' },
+    newPerHourFloor: {
+      value: 14.8, when: '2026-11-17',
+      how: '전체글 목록의 게시 시각 구간 — 11:30 회차 75건이 5.1h(14.8건/h) · 20:30 회차 15.7건/h. 낮은 쪽을 쓴다',
+    },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0,
@@ -350,7 +355,8 @@ export function verifySchedule(id: SourceId, phase: Phase): ScheduleProblem[] {
       + ' — 회차별 목록 스냅숏을 시각과 함께 남겨 유입을 재야 한다')
   } else if (maxGapH > limit) {
     out.push(`최대 간격 ${maxGapH.toFixed(1)}h 가 안전 상한 ${limit.toFixed(1)}h 를 넘는다`
-      + ` — 목록 ${f.listPageSize.value * f.listPagesPerRun.value}건이 ${pageWindowHours(f)!.toFixed(1)}h 만에 넘어간다`)
+      + ` — 목록 ${f.listPageSize.value * f.listPagesPerRun.value}건이 ${pageWindowHours(f)!.toFixed(1)}h 만에 넘어간다.`
+      + ` 상세는 최신순 ${f.detailPerRun}건만 열어 회차 직전 약 ${(f.detailPerRun / f.newPerHourFloor!.value).toFixed(1)}h 의 글만 잡는다`)
   }
   // ② 부하 — 하루 요청 수
   const perDay = slots.length * requestsPerRunOf(f.id)
