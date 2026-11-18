@@ -20,7 +20,7 @@
  *    ③ 슬롯 시점 나이(시간) — `slotAt − postedAt`. 상한은 **기존 hot 72h 하나**. 이벤트·키워드·상시 분기 없음
  *       🔴 (2026-10-13 Batch D1 · canon §2.1) 날짜만 아는 게시 시각은 00:00 으로 만들지 않는다 — 그날 구간
  *       (`postedWindow`)을 그대로 받아 **구간 전체**로 판정한다. 가장 늙은 끝도 상한 안 → 통과 · 가장 어린 끝도
- *       상한 밖 → `SOURCE_TOO_OLD_AT_SLOT` · 그 사이 → `POSTED_WITHIN_DAY_AT_SLOT`(unknown). rank 나이는 늙은 끝이다.
+ *       상한 밖 → `SOURCE_TOO_OLD_AT_SLOT` · 그 사이 → `POSTED_WITHIN_DAY_AT_SLOT`(unknown). 기록하는 나이는 늙은 끝이다.
  *       🔴 (Lane B) 기록은 **모든 중첩 칸**을 먼저 확인한다(`parseEvidence`) — 손상은 예외가 아니라
  *       `EVIDENCE_INVALID` + 손상 위치(`issue`)다. 게시 · 수집 코드 다음에 중첩 시각의 순서 · 미래를 본다.
  *    ④ 반응 증거 — 수집 때 관측이 없으면 unknown. 있으면 **같은 원천 · 같은 관측 나이 구간** 안 백분위로만 비교한다
@@ -30,7 +30,7 @@
  *    ⑤ 참여 동력 — 판정기가 낸 `communityAngle` 이 없으면 unknown (새 가중치 없음 · 존재만 본다)
  *    ⑥ Persona 배정 — 기존 판정(`judgeAutoAssignment` · `planBatch`)의 결과를 입력으로 받는다. 불가 → ineligible
  *
- * 🔴 **rank 는 합산 점수가 아니다.** 가중치 없이 성분을 사전식으로 비교한다(`compareReleaseRank`).
+ * 🔴 **순서는 수집 시각 최신순 하나다**(`compareReleaseRank` · 2026-11-18). 게시 시각은 72시간 자격 판정에만 쓴다.
  * 🔴 **순수 함수다.** DB · 파일 · env · 시각 조회 0 — 시각은 인자로 받는다.
  * 🔴 원문 URL · 닉네임 · 본문을 싣지 않는다 — 시각 · 수 · 해시 · 판정기 요약 한 줄뿐이다.
  */
@@ -648,13 +648,18 @@ export const EXPIRING_REASONS: readonly ReleaseReason[] = [
 
 export type ReleaseVerdictKind = 'eligible' | 'ineligible' | 'unknown'
 
-/** 🔴 비교 성분 — 합산하지 않는다. 비교는 `compareReleaseRank` 하나다 */
+/**
+ * 🔴 순위 성분은 **수집 시각 하나**다(`capturedAtMs` → `tieBreak`). 비교는 `compareReleaseRank` 하나다.
+ *    나머지 칸은 판정이 읽은 관측값이다 — 묶음 · 관측 기록이 그대로 옮겨 적고, 순서에는 쓰지 않는다.
+ */
 export type ReleaseRank = {
-  /** 예정 슬롯에서의 원문 나이(시간) — 🔴 신선도가 1순위다. 어린 것이 먼저. 날짜만 알면 늙은 끝(그날 00:00 기준) */
+  /** 수집 시각(ms) — 늦게 수집된 것이 먼저. 모르면 언제나 뒤다 */
+  capturedAtMs: number | null
+  /** 예정 슬롯에서의 원문 나이(시간) — 72시간 자격 판정의 값. 날짜만 알면 늙은 끝(그날 00:00 기준) */
   ageAtSlotH: number | null
-  /** 같은 원천 · 같은 관측 나이 안 댓글 백분위 — 🔴 실질적으로 같은 나이에서만 선다 */
+  /** 같은 원천 · 같은 관측 나이 안 댓글 백분위 */
   commentsPct: number | null
-  /** 같은 모집단 안 조회 백분위 — 같은 댓글 백분위끼리만 가른다 */
+  /** 같은 모집단 안 조회 백분위 */
   viewsPct: number | null
   /** 실제 반복 관측 2개 이상일 때만 — 시간당 댓글 증가 */
   velocity: number | null
@@ -711,7 +716,7 @@ export type SlotReleaseVerdict = {
  * 🔴 **정본 판정.** 공급 묶음 · 발행 계획 · 발행 트랜잭션 · 단계 증거 · 관제가 이 함수 하나를 부른다.
  */
 export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
-  const rank: ReleaseRank = { commentsPct: null, viewsPct: null, ageAtSlotH: null, velocity: null, tieBreak: i.tieBreak }
+  const rank: ReleaseRank = { capturedAtMs: null, commentsPct: null, viewsPct: null, ageAtSlotH: null, velocity: null, tieBreak: i.tieBreak }
   const pending: ('driver' | 'assignment')[] = []
   let evidenceVersion: string | null = null
   const out = (verdict: ReleaseVerdictKind, reason: ReleaseReason | null, issue: string | null = null): SlotReleaseVerdict => ({
@@ -741,6 +746,7 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   if (captured === null) return out('unknown', 'CAPTURED_MISSING')
   if (captured === 'corrupt') return out('unknown', 'CAPTURED_CORRUPT')
   if (captured.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'CAPTURED_IN_FUTURE')
+  rank.capturedAtMs = captured.getTime()
   if (oldest.getTime() - captured.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_AFTER_CAPTURE')
   if (oldest.getTime() - i.now.getTime() > SOURCE_CLOCK_SKEW_MS) return out('unknown', 'POSTED_IN_FUTURE')
   // 🔴 수집보다 늦게 올라올 수는 없다 — 날짜 구간의 어린 끝은 수집 시각에서 닫는다(목록 시각으로 메우지 않는다)
@@ -801,74 +807,48 @@ export function velocityOf(observations: readonly SourceObservation[]): number |
 
 const desc = (a: number | null, b: number | null): number =>
   (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : b - a)
-const asc = (a: number | null, b: number | null): number =>
-  (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : a - b)
 
 /**
- * 🔴 **`sourceAge`(시간)** — 기준 시각 − 원문 게시 시각의 이른 끝(`postedLowerBoundOf`). 수집 시각이 아니다.
- *    0.001h 반올림 · 음수 없음. 판정 rank 와 순위 정렬이 이 함수 하나로 잰다(canon §2.3).
+ * 🔴 **`sourceAge`(시간)** — 기준 시각 − 원문 게시 시각의 이른 끝(`postedLowerBoundOf`). 72시간 자격 판정의 값이다.
+ *    0.001h 반올림 · 음수 없음. 순서에는 쓰지 않는다(canon §2.3).
  */
 export function sourceAgeHoursAt(postedLowerBoundMs: number, atMs: number): number {
   return Math.round((Math.max(0, atMs - postedLowerBoundMs) / HOUR_MS) * 1000) / 1000
 }
 
 /**
- * 🔴 **원천 순위의 유일한 정본 비교 — 사전식 · 가중치 없음** (canon §2.3 · 2026-10-19 · 2026-11-06).
- *    `sourceAge` ↑ → 댓글 백분위 ↓ → 조회 백분위 ↓ → velocity ↓ → 결정적 열쇠(코드 포인트). 모르는 성분은 언제나 뒤다.
- *    자격 gate 를 지난 뒤에는 오래된 고반응 글이 최신 글을 앞서지 않는다 — 반응은 실질적으로 같은 나이에서만 선다.
+ * 🔴 **원천 순위의 유일한 정본 비교** (canon §2.3 · 2026-11-18 창업자 결정) — 가장 최근에 수집된 글이 먼저다.
+ *    수집 시각 ↓ → 결정적 열쇠(코드 포인트). 모르는 수집 시각은 언제나 뒤다. 게시 시각 · 반응은 순서에 들어오지 않는다.
  *    🔴 열쇠는 `localeCompare` 가 아니다 — 실행 locale 이 순서를 바꾸면 결정적이지 않다.
  */
 export function compareReleaseRank(a: ReleaseRank, b: ReleaseRank): number {
-  return asc(a.ageAtSlotH, b.ageAtSlotH)
-    || desc(a.commentsPct, b.commentsPct)
-    || desc(a.viewsPct, b.viewsPct)
-    || desc(a.velocity, b.velocity)
+  return desc(a.capturedAtMs, b.capturedAtMs)
     || (a.tieBreak < b.tieBreak ? -1 : a.tieBreak > b.tieBreak ? 1 : 0)
 }
 
-/** 🔴 판정 슬롯이 없는 자리(수집 목록 · 발행 후보 줄)의 순위 입력 — 정본 비교에 들어갈 성분 그대로 */
+/** 🔴 판정 슬롯이 없는 자리(수집 목록 · 발행 후보 줄)의 순위 입력 — 최신이 먼저 서는 시각 하나와 결정적 열쇠 */
 export type SourceRankSignal = {
-  /** 원문 게시 시각의 이른 끝(ms). 모르면 null — 언제나 뒤다 */
-  postedLowerBoundMs: number | null
-  commentsPct: number | null
-  viewsPct: number | null
-  velocity: number | null
+  /** 발행 후보 줄은 수집 시각 · 수집 전 목록은 게시 시각의 이른 끝(ms). 모르면 null — 언제나 뒤다 */
+  latestAtMs: number | null
   tieBreak: string
 }
 
 /**
- * 🔴 큐 행 `gateResults` 의 순위 입력 — 판정과 **같은 판독기**(`readSourceEvidence` · `postedLowerBoundOf`)로 읽는다.
- *    못 읽으면 전부 모름이다. 느슨한 파싱으로 known 을 만들지 않는다.
+ * 🔴 큐 행 `gateResults` 의 순위 입력 — 판정과 **같은 판독기**(`readSourceEvidence`)로 수집 시각을 읽는다.
+ *    못 읽으면 모름이다. 느슨한 파싱으로 known 을 만들지 않는다.
  */
 export function sourceRankSignalOf(gateResults: unknown, tieBreak: string): SourceRankSignal {
   const read = readSourceEvidence(gateResults)
-  if (!read.ok) return { postedLowerBoundMs: null, commentsPct: null, viewsPct: null, velocity: null, tieBreak }
-  const ev = read.record
-  const lb = postedLowerBoundOf(ev)
-  return {
-    postedLowerBoundMs: lb === null ? null : lb.getTime(),
-    commentsPct: ev.sourceStats?.commentsPct ?? null,
-    viewsPct: ev.sourceStats?.viewsPct ?? null,
-    velocity: velocityOf(ev.observations),
-    tieBreak,
-  }
+  const captured = read.ok ? strictIso(read.record.capturedAt) : null
+  return { latestAtMs: captured instanceof Date ? captured.getTime() : null, tieBreak }
 }
 
-/**
- * 🔴 **정본 정렬** — 모든 행의 `sourceAge` 를 **같은 기준 시각**(알려진 게시 이른 끝 중 가장 늦은 시각)에서 재고
- *    `compareReleaseRank` 로 세운다. 같은 기준이라 나이 오름차순 = 게시 시각 최신순이다. 입력을 바꾸지 않는다.
- */
+/** 🔴 **정본 정렬** — `compareReleaseRank` 로 세운다(최신 먼저 → 결정적 열쇠). 입력을 바꾸지 않는다. */
 export function sortBySourceRank<T>(rows: readonly T[], signalOf: (row: T) => SourceRankSignal): T[] {
-  const signals = rows.map((row) => ({ row, s: signalOf(row) }))
-  const known = signals.map((x) => x.s.postedLowerBoundMs).filter((ms): ms is number => ms !== null)
-  const refMs = known.length === 0 ? 0 : Math.max(...known)
-  const ranked = signals.map(({ row, s }) => ({
-    row,
-    rank: {
-      ageAtSlotH: s.postedLowerBoundMs === null ? null : sourceAgeHoursAt(s.postedLowerBoundMs, refMs),
-      commentsPct: s.commentsPct, viewsPct: s.viewsPct, velocity: s.velocity, tieBreak: s.tieBreak,
-    } satisfies ReleaseRank,
-  }))
+  const ranked = rows.map((row) => {
+    const s = signalOf(row)
+    return { row, rank: { capturedAtMs: s.latestAtMs, ageAtSlotH: null, commentsPct: null, viewsPct: null, velocity: null, tieBreak: s.tieBreak } satisfies ReleaseRank }
+  })
   return ranked.sort((a, b) => compareReleaseRank(a.rank, b.rank)).map((x) => x.row)
 }
 

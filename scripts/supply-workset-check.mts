@@ -96,8 +96,9 @@ const ROW = (o: {
     },
   }])
   /**
-   * 🔴 (2026-09-30) 원천 증거 — 순서는 정본 rank 다. 옛 fixture 의 댓글 수는 원천 상대 백분위로, 게시 시각은
-   *    그 나이로 옮겨 싣는다(없으면 6시간 전). 72h 를 넘긴 게시 시각이면 예정 슬롯에서 ineligible 이다.
+   * 🔴 원천 증거 — 순서는 정본 rank(수집 시각 최신순)다. 옛 fixture 의 댓글 수는 수집 시각으로 옮겨 싣는다
+   *    (댓글 수가 클수록 더 늦게 수집 · 5~6시간 전). 게시 시각을 주면 그 나이 그대로다(수집 = 게시 + 1.1h).
+   *    72h 를 넘긴 게시 시각이면 예정 슬롯에서 ineligible 이다.
    */
   const posted = o.sourcePostedAt !== undefined && o.sourcePostedAt !== '' ? new Date(o.sourcePostedAt) : undefined
   return {
@@ -108,7 +109,8 @@ const ROW = (o: {
     evidence: fakeSourceEvidence(NOW, {
       site: o.sourceSite ?? W, id: o.sourceArticleId, commentsPct: Math.min(1, (o.commentCount ?? 0) / 100),
       // 🔴 게시 시각이 없고 목록 시각만 있으면 **게시 시각 모름**이다 — 목록 시각으로 대신하지 않는다
-      ...(posted !== undefined ? { postedAt: posted } : o.sourceListedAt !== undefined ? { postedAt: null } : {}),
+      ...(posted !== undefined ? { postedAt: posted } : o.sourceListedAt !== undefined ? { postedAt: null }
+        : { ageH: 6 - Math.min(1, (o.commentCount ?? 0) / 100) }),
     }),
   }
 }

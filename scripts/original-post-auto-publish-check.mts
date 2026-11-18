@@ -50,9 +50,11 @@ const legacy = (o: Partial<AutoRow> = {}): AutoRow => ok({
   sourceSite: '82cook', title: '주기적으로 사람 잡는 친정아빠', ...o,
 })
 const allPass = (): string => 'pass'
-const sourceGate = (id: string, postedAt: string): Record<string, unknown> => ({
+/** 발행 줄 순서는 수집 시각 최신순이다 — fixture 는 수집 시각을 받는다(게시 시각은 그 10분 전) */
+const sourceGate = (id: string, capturedAt: string): Record<string, unknown> => ({
   sourceEvidence: buildSourceEvidence({
-    sourceSite: 'navercafe:fixture', sourceArticleId: id, postedAt,
+    sourceSite: 'navercafe:fixture', sourceArticleId: id, capturedAt,
+    postedAt: new Date(Date.parse(capturedAt) - 600_000).toISOString(),
   }),
 })
 
@@ -174,13 +176,13 @@ console.log('\n③ 줄 세우기 — 실제 원문 게시 시각이 최신인 �
     decidedAt: D('2026-09-05T00:00:00Z'), createdAt: D('2026-09-05T00:00:00Z'),
   })
   const r = selectAutoTargets([stale, fresh], allPass)
-  check('🔴 더 최신 원문이 앞 — 큐 시각과 id가 반대여도 source time이 이긴다',
+  check('🔴 더 최근에 수집된 글이 앞 — 큐 시각과 id가 반대여도 수집 시각이 이긴다',
     r.targets.map((t) => t.id).join(',') === 'zzz,aaa')
   check('입력 순서를 바꿔도 같다',
     selectAutoTargets([fresh, stale], allPass).targets.map((t) => t.id).join(',') === 'zzz,aaa')
   // 🔴 후보 2건이면 최신 원문 1건만 나간다
   const g = judgeApply({ targets: r.targets, picked: r.targets[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
-  check('🔴 후보 2건이면 최신 원문 1건을 고른다', g.ok && g.target.id === 'zzz')
+  check('🔴 후보 2건이면 가장 최근에 수집된 1건을 고른다', g.ok && g.target.id === 'zzz')
   const t2 = selectAutoTargets([fresh, stale], allPass).targets
   const g2 = judgeApply({ targets: t2, picked: t2[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
   check('🔴 입력 순서가 바뀌어도 같은 1건을 고른다', g2.ok && g2.target.id === 'zzz')
@@ -294,7 +296,7 @@ console.log('\n③-c 🔴 복구는 관측값 — 원문 최신 순을 뒤집지
     assignedOf: () => 'PXX',
     isRecovery: (id) => id === 'newer2',
   })
-  check('🔴 뒤의 복구 행이 더 최신 원문을 추월하지 않는다', r2.picked?.id === 'stuck' && !r2.recovered)
+  check('🔴 뒤의 복구 행이 더 최근에 수집된 글을 추월하지 않는다', r2.picked?.id === 'stuck' && !r2.recovered)
   check('복구 신호 때문에 앞줄을 건너뛰지 않는다', r2.skipped.length === 0)
 
   // 🔴 복구 행의 배정이 깨졌으면(assignedOf null) 복구 대상이 아니다 — 다음 배정 행이 나간다
@@ -307,7 +309,7 @@ console.log('\n③-c 🔴 복구는 관측값 — 원문 최신 순을 뒤집지
 
   // 🔴 복구 행이 없으면 원문 최신 순 첫 배정 행
   const r4 = pickPublishTarget({ ordered: rows, assignedOf: () => 'PXX', isRecovery: () => false })
-  check('복구 행이 없으면 가장 최신 원문 배정 행이 나간다', r4.picked?.id === 'stuck' && !r4.recovered)
+  check('복구 행이 없으면 가장 최근에 수집된 배정 행이 나간다', r4.picked?.id === 'stuck' && !r4.recovered)
 
   // 🔴 한 회차 1건은 그대로다
   check('🔴 복구여도 한 회차 1건이다', r2.skipped.length + 1 + r2.waiting.length === rows.length)

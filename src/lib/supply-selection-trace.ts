@@ -59,8 +59,8 @@ const STEP_REASON: Readonly<Record<JitSelectStep, TraceReason>> = {
   SELECTED_COVER: 'SELECTED_COVER', SELECTED_EXTRA: 'SELECTED_EXTRA',
 }
 
-/** 🔴 지금 공급 순위(`compareReleaseRank`)가 실제로 쓰는 성분 그대로 — 기준 슬롯(가장 이른 부족 슬롯)의 정본 rank */
-export type TraceRank = { commentsPct: number | null; viewsPct: number | null; ageAtSlotH: number | null; velocity: number | null }
+/** 🔴 기준 슬롯(가장 이른 부족 슬롯)의 정본 rank 그대로 — 순위 성분은 `capturedAtMs` 하나, 나머지는 관측값이다 */
+export type TraceRank = { capturedAtMs: number | null; commentsPct: number | null; viewsPct: number | null; ageAtSlotH: number | null; velocity: number | null }
 
 export type TraceCandidate = {
   /** `sha256("<site>::<articleId>")` — 원문 id 평문 없음 */
@@ -263,7 +263,7 @@ export function buildSupplySelectionTrace(input: {
       lastValidSlot: lastValid < 0 ? null : lastValid,
       assignedSlot: assignedIdx === null || assignedIdx < 0 ? null : assignedIdx,
       stage,
-      rank: rk === null ? null : { commentsPct: rk.commentsPct, viewsPct: rk.viewsPct, ageAtSlotH: rk.ageAtSlotH, velocity: rk.velocity },
+      rank: rk === null ? null : { capturedAtMs: rk.capturedAtMs, commentsPct: rk.commentsPct, viewsPct: rk.viewsPct, ageAtSlotH: rk.ageAtSlotH, velocity: rk.velocity },
       sourceAgeH,
       freshnessBand: observationBucketOf(sourceAgeH),
       selected,
@@ -398,7 +398,7 @@ const CANDIDATE_KEYS = [
   'sourceHash', 'source', 'axis', 'retry', 'retryTier', 'retryWaitedH', 'retryReserved', 'slotAgesH', 'lastValidSlot',
   'assignedSlot', 'stage', 'rank', 'sourceAgeH', 'freshnessBand', 'selected', 'position', 'reason', 'menopauseCore', 'wgangSource',
 ]
-const RANK_KEYS = ['commentsPct', 'viewsPct', 'ageAtSlotH', 'velocity']
+const RANK_KEYS = ['capturedAtMs', 'commentsPct', 'viewsPct', 'ageAtSlotH', 'velocity']
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 const sameKeys = (o: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(o).length === keys.length && keys.every((k) => k in o)

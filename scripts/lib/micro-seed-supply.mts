@@ -265,13 +265,9 @@ export function planAutoFetch(
   const picked: string[] = []
   const skipped: AutoFetchPlan['skipped'] = []
 
-  // 🔴 순서 = 원천 순위 정본(canon §2.3) — 수집·생성·READY·발행이 같은 비교를 흐른다.
-  //    목록 단계에는 반응 관측이 없으므로 게시 시각 최신 → 결정적 열쇠(글 번호, 코드 포인트)다.
+  // 🔴 수집 전이라 수집 시각이 없다 — 게시 시각 최신 → 결정적 열쇠(글 번호, 코드 포인트)다.
   //    점수·주제·출처는 순위에 들어오지 않는다. 숫자 글 번호를 게시 시각 대용으로 쓰지 않는다.
-  //    상한을 넘긴 후보는 다음 실행에서 열린다.
-  const ordered = sortBySourceRank(rows, (r) => ({
-    postedLowerBoundMs: postedMsOf(r), commentsPct: null, viewsPct: null, velocity: null, tieBreak: r.sourceArticleId,
-  }))
+  const ordered = sortBySourceRank(rows, (r) => ({ latestAtMs: postedMsOf(r), tieBreak: r.sourceArticleId }))
 
   for (const r of ordered) {
     if (r.alreadyInVault === true) {

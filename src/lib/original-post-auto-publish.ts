@@ -387,8 +387,8 @@ export function selectAutoTargets(
     targets.push(r)
   }
   /**
-   * 🔴 줄 순서 = 원천 순위 정본(`sortBySourceRank`) — 게시 시각은 판정과 같은 판독기로 읽고, 큐 적재·검토 시각은
-   *    쓰지 않는다. 실제 발행 계획(`planPublishBatch`)은 예정 슬롯 판정 rank 로 다시 세우지만 같은 비교 함수다.
+   * 🔴 줄 순서 = 원천 순위 정본(`sortBySourceRank`) — 가장 최근에 수집된 글이 먼저다. 수집 시각은 판정과 같은
+   *    판독기로 읽고, 큐 적재·검토 시각은 쓰지 않는다. 실제 발행 계획(`planPublishBatch`)은 예정 슬롯 판정 rank 로 다시 세우지만 같은 비교 함수다.
    */
   return { targets: sortBySourceRank(targets, (r) => sourceRankSignalOf(r.gateResults, r.id)), rejected }
 }
