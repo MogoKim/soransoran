@@ -130,6 +130,15 @@ export function missingBudgetEnvNames(limits: BudgetLimits): string[] {
 }
 
 /**
+ * 🔴 **사람이 봐야 하는 덮어쓰기 — 돈의 한도(하루 예산 · 예약 여유)뿐이다.**
+ *    회차 요청 상한은 공급 처리기가 단계마다 자식 env 로 싣는 값이라(판정 N · 생성 4N) `.env.local` 과 다른 것이 정상이다.
+ *    그것까지 경고하면 모든 단계가 한 줄씩 찍어 진짜 오류가 묻힌다.
+ */
+export function moneyBudgetOverrides<T extends { name: string }>(overrides: readonly T[]): T[] {
+  return overrides.filter((o) => o.name !== BUDGET_ENV.runRequestCap)
+}
+
+/**
  * 🔴 **예산 env 값의 출처** (2026-09-30) — 순수 함수. `.env.local` 본문을 **받는다**.
  *
  *    `loadEnvLocal` 은 이미 있는 `process.env` 를 덮지 않는다. 그래서 셸에서
@@ -529,8 +538,9 @@ export class SupplyLlmSession {
     this.budgetEnv = this.supply
       ? budgetEnvProvenance(process.env, readEnvLocalText(cfg.envLocalPath ?? join(process.cwd(), '.env.local')))
       : null
-    if (this.budgetEnv !== null && this.budgetEnv.overrides.length > 0) {
-      console.warn(`🔴 예산 env 를 프로세스가 .env.local 과 다르게 덮었다 — ${this.budgetEnv.overrides
+    const moneyOverrides = this.budgetEnv === null ? [] : moneyBudgetOverrides(this.budgetEnv.overrides)
+    if (moneyOverrides.length > 0) {
+      console.warn(`🔴 예산 env 를 프로세스가 .env.local 과 다르게 덮었다 — ${moneyOverrides
         .map((o) => `${o.name} (.env.local ${o.envLocal} · 프로세스 ${o.process})`).join(' · ')}`
         + ' · 공급 장부 하루 상한은 min(env, 계약 천장) 그대로다 — 장부 줄에 budgetSource=process-override 로 남긴다')
     }
@@ -596,7 +606,7 @@ export class SupplyLlmSession {
         `  적용 한도 — env 하루 예산 ${this.limits.dailyUsd === null ? '없음' : `$${this.limits.dailyUsd}`}`
           + ` (출처 ${this.budgetEnv.sources.dailyUsd})`
           + (this.lastKind?.protect == null ? '' : ` · 천장 ${this.lastKind.protect.ceilingUsd === null ? '없음' : `$${this.lastKind.protect.ceilingUsd}`}`)
-          + (this.budgetEnv.overrides.length > 0 ? ' · 🔴 프로세스가 .env.local 예산을 덮었다' : ''),
+          + (moneyBudgetOverrides(this.budgetEnv.overrides).length > 0 ? ' · 🔴 프로세스가 .env.local 예산을 덮었다' : ''),
       ] : []),
       `  사전 계산 ${this.t.countTokens}건 (무료)`,
       `  예약 $${this.t.reservedUsd.toFixed(6)} · 정산 $${this.t.settledUsd.toFixed(6)}`
