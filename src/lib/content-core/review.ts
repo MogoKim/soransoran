@@ -20,7 +20,7 @@
 import { CLAIM_FACTS } from './source-facts'
 import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
 
-export const REVIEW_VERSION = 'review-v10'
+export const REVIEW_VERSION = 'review-v11'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -161,9 +161,23 @@ export type SemanticVerdict = {
  *    원문 화자의 나이는 코드가 Persona 나이로 바꿔 쓴다(`planAxisMapping` · `fixSourceSpeakerAge`). 그 값이 카드와
  *    맞는지는 결정적 검사(`checkAgeMappingApplied` · `judgeSelfAgeConflict`)가 검수 앞에서 이미 확정했다.
  *    그래서 검수가 **그 바꾼 값을 가리켜** 적은 나이 모순은 참고로 옮긴다. 다른 나이를 가리킨 모순은 그대로 막는다.
+ *    "지어낸 사실"(`unsupportedAdditions`)로 적은 것은 근거 문장이 **그 값과 기능어뿐일 때만** 옮긴다
+ *    (`제가 이제 62살인데`). 다른 말이 한 낱말이라도 섞이면 그대로 막는다 — 같은 문장의 다른 지어낸 사실을 놓치지 않는다.
  *
  * @param substituted 이번 초안에 코드가 넣은 Persona 나이 표현들(`AxisMapping.personaText`)
  */
+// 나이를 말하는 절에 붙는 기능어뿐이다 — 내용어를 넣지 않는다. 긴 것부터 걷는다
+const AGE_CLAUSE_FUNCTION_WORDS = [
+  '이거든요', '거든요', '입니다', '이에요', '이라서', '이니까', '인데요', '이네요',
+  '제가', '저는', '저도', '나는', '내가', '이제', '올해', '벌써', '지금', '인데', '이라', '이고', '예요', '네요',
+].sort((a, b) => b.length - a.length)
+function onlySystemAge(evidence: string, marks: readonly string[]): boolean {
+  let rest = flat(evidence)
+  if (!marks.some((m) => rest.includes(m))) return false
+  for (const m of marks) rest = rest.split(m).join('')
+  for (const w of AGE_CLAUSE_FUNCTION_WORDS) rest = rest.split(w).join('')
+  return rest.replace(/[.,!?~…·]/g, '') === ''
+}
 export function demoteSystemAgeSubstitutions(
   s: SemanticVerdict, substituted: readonly string[],
 ): SemanticVerdict {
@@ -172,15 +186,20 @@ export function demoteSystemAgeSubstitutions(
   const ours = (x: LifeContradiction): boolean =>
     x.fact === 'age' && marks.some((m) => flat(x.evidence).includes(m) || flat(x.drafted).includes(m))
   const moved = s.lifeContradictions.filter(ours)
-  if (moved.length === 0) return s
+  const movedAdds = s.unsupportedAdditions.filter((x) => onlySystemAge(x.evidence, marks))
+  if (moved.length + movedAdds.length === 0) return s
   return {
     ...s,
     lifeContradictions: s.lifeContradictions.filter((x) => !ours(x)),
+    unsupportedAdditions: s.unsupportedAdditions.filter((x) => !onlySystemAge(x.evidence, marks)),
     advisories: [
       ...(s.advisories ?? []),
       ...moved.map((x) => ({
         axis: 'lifeContradictions' as const, evidence: x.evidence,
         why: `시스템이 바꾼 나이(${x.drafted}) — 카드 ${x.card}`,
+      })),
+      ...movedAdds.map((x) => ({
+        axis: 'unsupportedAdditions' as const, evidence: x.evidence, why: `시스템이 바꾼 나이 — ${x.why}`,
       })),
     ],
   }

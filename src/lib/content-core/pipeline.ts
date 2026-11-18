@@ -83,7 +83,11 @@ export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p15'
  * 🔴 **v2-review-p12 (quality-v28)** — 항목마다 등급(`block` 막음 / `note` 참고)을 답하게 한다. 막음만 HOLD 다.
  * 코드가 원문 화자의 사실을 Persona 값으로 바꿔 쓰게 한 자리는 검수 지시에 싣는다 — 그 값은 지어낸 사실도 모순도 아니다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p12'
+/**
+ * 🔴 **v2-review-p13 (quality-v28)** — p12 실측(53건)에서 흔들린 네 곳을 좁힌다: 코드가 넣은 나이는 어느 칸에도 적지 않는다 ·
+ * 피로의 일상 표현은 참고, 병명·진단·약·시술은 막음 · 새 전달자는 자리와 무관하게 막음 · 생활사 모순은 카드가 명시한 값과 양립할 수 없을 때만.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p13'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

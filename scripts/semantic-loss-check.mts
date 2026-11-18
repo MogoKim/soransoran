@@ -216,7 +216,8 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
     askSys.includes('겪었다고 쓰지 않습니다') && askSys.includes('남의 사연으로 옮겨 전하지도 않습니다'))
   const askReview = buildV2ReviewSystemPrompt({ plan: askPlan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
   check('🔴 검수도 같은 선 — 그 자리에서 경험 서술이 빠진 것은 손실이 아니고, 새 전달자는 계속 적는다',
-    askReview.includes('같은 주제의 질문·생각') && askReview.includes('droppedFromSource 가 아니다')
+    askReview.includes('같은 주제의 질문·생각') && askReview.includes('**자기 일로도 남의 사연으로도 옮기지 않고**')
+    && askReview.includes('droppedFromSource 가 아니다')
     && askReview.includes('새 전달자의 일로 바꾸는 것도 여기 적는다'))
 }
 
@@ -224,7 +225,7 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v10 · 검수 프롬프트 p12', V2_REVIEW_PROMPT_VERSION === 'v2-review-p12' && REVIEW_VERSION === 'review-v10')
+  check('🔴 검수 판 review-v11 · 검수 프롬프트 p13', V2_REVIEW_PROMPT_VERSION === 'v2-review-p13' && REVIEW_VERSION === 'review-v11')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
@@ -284,7 +285,7 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
   })
   check('🟢 안전한 창작은 finding 0이며 자동 ADOPT다', safe.outcome === 'adopt' && safe.warnings.length === 0)
 
-  // 🔴 등급 — 막음만 HOLD 다. 참고는 기록만 한다 (review-v10 · v2-review-p12)
+  // 🔴 등급 — 막음만 HOLD 다. 참고는 기록만 한다 (review-v10~ · v2-review-p12~)
   const DET_OK = { pass: true, failures: [] }
   const DONE = { complete: true, reason: null, cause: null } as const
   const answer = (o: Record<string, unknown>): string => JSON.stringify({
@@ -337,8 +338,28 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
     mappings: [{ axis: 'age', sourceText: '30대 후반', personaText: '58살', outputRule: 'x' }],
   })
   check('🔴 검수 지시문이 시스템이 바꾼 값을 싣는다 — 바꾼 것이 없으면 그 칸도 없다',
-    swapSys.includes('시스템이 일부러 바꾼 값') && swapSys.includes('원문 "30대 후반" → 초안 "58살"')
-    && !reviewSys.includes('시스템이 일부러 바꾼 값'))
+    swapSys.includes('시스템이 넣은 값 — 어느 칸에도 적지 않는다') && swapSys.includes('원문 "30대 후반" → 초안 "58살"')
+    && swapSys.includes('**코드가 넣었고**') && !reviewSys.includes('시스템이 넣은 값'))
+  // 🔴 (p13 실측 보정) 같은 치환을 "지어낸 사실"로 적은 경우 — 그 값과 기능어뿐인 문장만 참고로 옮긴다
+  const addOf = (evidence: string) => demoteSystemAgeSubstitutions(parseSemanticReview(answer({
+    unsupportedAdditions: [{ severity: 'block', evidence, why: '원문과 다른 나이' }],
+  }))!, ['58살'])
+  for (const ev of ['제가 이제 58살인데', '저는 올해 58살이거든요.', '58살입니다']) {
+    const r = addOf(ev)
+    check(`🟢 시스템 나이뿐인 문장은 참고로 — "${ev}"`, r.unsupportedAdditions.length === 0 && r.advisories?.length === 1
+      && judgeMachine({ deterministic: DET_OK, semantic: r, semanticCompletion: DONE }).outcome === 'adopt')
+  }
+  for (const ev of ['제가 이제 58살인데 작년에 수술을 받았어요', '58살에 이혼하고', '남편은 58살인데', '제가 이제 61살인데', '58살 되던 해 가게를 접었어요']) {
+    const r = addOf(ev)
+    check(`🔴 다른 말이 섞인 문장은 그대로 막는다 — "${ev}"`, r.unsupportedAdditions.length === 1
+      && judgeMachine({ deterministic: DET_OK, semantic: r, semanticCompletion: DONE }).outcome === 'hold')
+  }
+  check('🔴 (p13) 등급 줄 — 피로의 일상 표현은 참고 · 병명·진단·약·시술은 막음 · 새 전달자는 자리와 무관하게 막음',
+    reviewSys.includes('수고와 피로의 일상 표현') && reviewSys.includes('병명 · 진단 · 약 · 시술 · 검사 수치 · 지속되는 질환')
+    && reviewSys.includes('**자리가 무엇이든**') && reviewSys.includes('"…라는 분이 계시더군요"'))
+  check('🔴 (p13) 생활사 모순은 카드가 명시한 값과 양립할 수 없을 때만 — 원문 근거의 자녀 성별은 모순이 아니다',
+    reviewSys.includes('**명시한 값과 양립할 수 없는 사실**') && reviewSys.includes('카드와 함께 성립할 수 있는 일')
+    && reviewSys.includes('근거 문장에 이미 있는 자녀 성별은 아니다'))
   const ageRaw = answer({ lifeContradictions: [
     { fact: 'age', drafted: '58살', card: '50대 후반', evidence: '제가 올해 58살인데' },
   ] })
@@ -422,7 +443,7 @@ async function runOf(c: Case, ask: Ask) {
   check('🔴 🔴 초안·검수·판독이 같은 한 벌 원문을 본다 — 두 번째 벌이 없다',
     dp !== null && dp.원문 === sourceBlock(packet) && r !== undefined && (JSON.parse(r.payload) as { 원문: string }).원문 === sourceBlock(packet)
     && p !== undefined && !p.payload.includes(c.rawBody.slice(c.rawBody.length - 40)))
-  check('🔴 🔴 러너가 보낸 p12 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 등급 · 가족 사실 보호가 함께 실렸다',
+  check('🔴 🔴 러너가 보낸 p13 검수 지시문 — 안전한 창작 carve-out · 실질 변경 계약 · 등급 · 가족 사실 보호가 함께 실렸다',
     r !== undefined
     && r.system.includes('독자에게 던지는 질문 · 비유 · 연결 문장 · 일반적인 관찰')
     && r.system.includes('구체적 고위험 생활사')
