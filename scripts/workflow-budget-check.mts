@@ -292,6 +292,7 @@ check('🔴 D100 DB 사슬은 전용 job에서만 실행된다',
   && /bash scripts\/ci-d100-db-check\.sh/.test(d100DbJob)
   && !/ci-d100-db-check/.test(coreJob))
 const EXPECTED_D100_DB_COMMANDS = [
+  'persona:comment-cap-db-check',
   'stage:db-check',
   // 2026-11-05 D20+ 제한 복구 — DB 사슬을 늘리지 않고 같은 격리 job에서 순수 상태·시간·once-only 계약을 고정한다
   'stage:active-recovery-check',
