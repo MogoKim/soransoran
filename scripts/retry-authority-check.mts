@@ -10,8 +10,8 @@
  *   ③ 지문 — 근거 지문(evidence · 계약 · 정책판)과 실패 지문(+ 원인 · 마지막 요청 결과)의 결정성 · 변화 규칙
  *   ④ transient 상한 — 같은 근거 지문당 회차를 넘어 한 번(원인이 바뀌어도 초기화되지 않는다)
  *   ⑤ 선택 자리 표 — 상태 × 단계 × 처리 → fresh · retry · excluded (채택 candidate 는 유료 재생성 lane 이 아니다)
- *   ⑥ 재선정 몫 — floor(상한 × 10%) · 상한 10 미만 0 · `freshOnly` 0 · 축소 운영 선택
- *   ⑦ 11-09·11-10 비식별 재생(12회차) — 옛 결과 대 v7: 결론 재선정 0 · 신규 굶김 0 · transient 지문당 1 · 재선정 ≤ 10%
+ *   ⑥ 재선정 몫 — 신규가 남긴 자리(상한 − 신규) · 신규가 상한을 채우면 0 · `freshOnly` 0 · 축소 운영 선택
+ *   ⑦ 11-09·11-10 비식별 재생(12회차) — 옛 결과 대 v7: 결론 재선정 0 · 신규 굶김 0 · transient 지문당 1 · 재선정 ≤ 신규가 남긴 자리
  *   ⑧ 비용 귀속 — 통합 장부 현행 칸(sourceKey · runId · settledUsd)으로 opportunity · attempt · 원인에 붙인다 · 확정 회피 비용
  *
  * 🔴 DB 0 · 네트워크 0 · provider 0 · 운영 파일 0. fixture 는 불투명 라벨뿐이다(원문 · id · 해시 · 닉네임 없음).
@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 
 import {
-  CROSS_RUN_TRANSIENT_RETRY_MAX, RETRY_CLASSES, RETRY_MODES, RETRY_POLICY_VERSION, RETRY_SHARE_MAX,
+  CROSS_RUN_TRANSIENT_RETRY_MAX, RETRY_CLASSES, RETRY_MODES, RETRY_POLICY_VERSION,
   completionRetryClass, evidenceFingerprintOf, failureFingerprintOf, generationAttemptKeyOf, retryClassOf, retryModeFor,
   isSpeakerSetKey, retrySlotsFor, speakerRemedyOf, speakerSetKeyOf, SPEAKER_SET_KEY_RE,
   type CallOutcome, type RetryClass,
@@ -422,15 +422,17 @@ console.log('\n⑤ 선택 자리 표 — 상태 × 단계 × 처리')
 // ─────────────────────────────────────────────────────────
 console.log('\n⑥ 재선정 몫 · 축소 운영')
 // ─────────────────────────────────────────────────────────
-check('몫 = floor(상한 × 10%) — 1..9 → 0 · 10..19 → 1 · 20 → 2',
-  RETRY_SHARE_MAX === 0.1 && [1, 5, 9].every((n) => retrySlotsFor({ limit: n, mode: 'normal' }) === 0)
-  && retrySlotsFor({ limit: 10, mode: 'normal' }) === 1 && retrySlotsFor({ limit: 19, mode: 'normal' }) === 1
-  && retrySlotsFor({ limit: 20, mode: 'normal' }) === 2)
-check('🔴 freshOnly(축소 운영)는 0', retrySlotsFor({ limit: 20, mode: 'freshOnly' }) === 0 && RETRY_MODES.join(',') === 'normal,freshOnly')
+check('🔴 몫 = 신규가 남긴 자리 — 신규가 상한을 채우거나 넘으면 0(재선정이 신규를 밀어내지 못한다)',
+  retrySlotsFor({ limit: 20, fresh: 20, mode: 'normal' }) === 0 && retrySlotsFor({ limit: 20, fresh: 35, mode: 'normal' }) === 0
+  && retrySlotsFor({ limit: 20, fresh: 19, mode: 'normal' }) === 1 && retrySlotsFor({ limit: 5, fresh: 0, mode: 'normal' }) === 5)
+check('🔴 신규가 모자란 회차는 남은 자리를 재선정이 쓴다 — 11-17 17:15 모양(상한 20 · 신규 3 → 17자리 · 앞판은 2)',
+  retrySlotsFor({ limit: 20, fresh: 3, mode: 'normal' }) === 17)
+check('🔴 freshOnly(축소 운영)는 0', retrySlotsFor({ limit: 20, fresh: 0, mode: 'freshOnly' }) === 0 && RETRY_MODES.join(',') === 'normal,freshOnly')
 check('🔴 실측 수율이 없는 회복 canary · 수요 0 은 신규만 — 측정 자리에 재선정을 섞지 않는다',
   retryModeFor({ paidBasis: 'boundedRecovery' }) === 'freshOnly' && retryModeFor({ paidBasis: 'noDemand' }) === 'freshOnly'
   && retryModeFor({ paidBasis: 'measuredYield' }) === 'normal')
-check('잘못된 상한은 0', retrySlotsFor({ limit: -3, mode: 'normal' }) === 0 && retrySlotsFor({ limit: 2.5, mode: 'normal' }) === 0)
+check('잘못된 상한은 0 · 잘못된 신규 수는 0 으로 읽는다', retrySlotsFor({ limit: -3, fresh: 0, mode: 'normal' }) === 0 && retrySlotsFor({ limit: 2.5, fresh: 0, mode: 'normal' }) === 0
+  && retrySlotsFor({ limit: 4, fresh: -2, mode: 'normal' }) === 4)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n⑦ 11-09·11-10 비식별 재생 — 옛 결과 대 v7')
@@ -479,7 +481,7 @@ for (const run of fx.runs) {
   const byAge = (a: FxCand, b: FxCand): number => a.ageH - b.ageH || a.s.localeCompare(b.s)
   const fresh = cands.filter((c) => laneOf(c) === 'fresh').sort(byAge)
   const retry = cands.filter((c) => laneOf(c) === 'retry').sort(byAge)
-  const K = retrySlotsFor({ limit: run.cap, mode: 'normal' })
+  const K = retrySlotsFor({ limit: run.cap, fresh: fresh.length, mode: 'normal' })
   const pickedFresh = fresh.slice(0, run.cap)
   const pickedRetry = retry.slice(0, Math.min(K, Math.max(0, run.cap - pickedFresh.length)))
   terminalReselectedNew += [...pickedFresh, ...pickedRetry].filter((c) => {
@@ -549,14 +551,14 @@ check('옛 판에서 결론을 다시 산 재선정이 있었다(결함 재현)'
 check('옛 판에서 retry 가 신규를 밀어냈다(결함 재현)', freshDisplacedOld > 0, `${freshDisplacedOld}자리`)
 check('🔴 v7 — 결론(terminal · 채택) 재선정 0', terminalReselectedNew === 0, `${terminalReselectedNew}`)
 check('🔴 v7 — 신규 굶김 0(재선정이 들어온 회차에 남은 신규 0)', freshStarvedNew === 0, `${freshStarvedNew}`)
-check('🔴 v7 — 재선정 ≤ floor(상한 × 10%)', retryOverShareNew === 0)
+check('🔴 v7 — 재선정 ≤ 신규가 남긴 자리', retryOverShareNew === 0)
 check('🔴 v7 — transient 는 같은 근거 지문당 1회를 넘지 않는다', transientOverCapNew === 0, `${transientOverCapNew}`)
 {
-  // 17:15 — 재선정 13건 전부가 창 안에서 결론 났거나(재구매 금지) 몫 밖이다 → v7 유료 0~2
+  // 17:15 — 신규가 0 인 회차다. 재선정 13건 중 창 안에서 결론 난 것(재구매 금지)을 뺀 6건만 남은 자리를 쓴다
   const line = report.find((l) => l.startsWith('11-10 17:15'))!
-  check('🔴 v7 — 11-10 17:15 는 결론 원천을 사지 않는다(신규 0 · 재선정 ≤ 2)', /v7 신규 0 \+ 재선정 [0-2] /.test(line), line)
+  check('🔴 v7 — 11-10 17:15 는 결론 원천을 사지 않는다(신규 0 · 결론 아닌 재선정 6 — 옛 선택 13)', /v7 신규 0 \+ 재선정 6 /.test(line), line)
   const l21 = report.find((l) => l.startsWith('11-10 21:15'))!
-  check('🔴 v7 — 11-10 21:15 는 신규 7 전부 · 그 7 의 실제 채택 3 은 그대로', /v7 신규 7 \+ 재선정 [0-2] · 신규 중 실제 채택 3/.test(l21), l21)
+  check('🔴 v7 — 11-10 21:15 는 신규 7 전부 · 그 7 의 실제 채택 3 은 그대로', /v7 신규 7 \+ 재선정 0 · 신규 중 실제 채택 3/.test(l21), l21)
 }
 
 // ─────────────────────────────────────────────────────────

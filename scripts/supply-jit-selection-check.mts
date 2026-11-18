@@ -156,10 +156,10 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
     const retries = rows.filter(() => rnd() < 0.35)
     const attempted = retryOf(retries, 1 + Math.floor(rnd() * 12))
     const cap = 1 + Math.floor(rnd() * 24)
-    const K = retrySlotsFor({ limit: cap, mode: 'normal' })
     const p = run({ rows, slots, cap, attempted })
     const seedsLinkable = rows.filter((r) => r.input.axis === SEED_AXIS && validOf(r, slots).some(Boolean))
     const freshLinkable = seedsLinkable.filter((r) => !attempted.has(KEY(r)))
+    const K = retrySlotsFor({ limit: cap, fresh: freshLinkable.length, mode: 'normal' })
     const retryLinkable = seedsLinkable.filter((r) => attempted.has(KEY(r)))
     const maxCover = bruteCapped(freshLinkable.map((r) => validOf(r, slots)), retryLinkable.map((r) => validOf(r, slots)), slots.length, K)
     const selectedCover = bruteCover(p.picked.map((r) => validOf(r, slots)), slots.length)
@@ -171,15 +171,15 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
     const retryPicked = retryLinkable.filter((r) => pickedSet.has(KEY(r)))
     // 🔴 신규 먼저 — 재선정이 하나라도 들어왔으면 연결 가능 신규는 전부 들어와 있다(신규 굶김 0)
     if (retryPicked.length === 0 || freshLinkable.every((r) => pickedSet.has(KEY(r)))) freshFirstOk += 1
-    // 🔴 재선정 ≤ K = floor(상한 × 10%) · 상한 10 미만이면 0
-    if (retryPicked.length <= K && (cap >= 10 || retryPicked.length === 0)) retryCapOk += 1
+    // 🔴 재선정 ≤ K = 신규가 남긴 자리(상한 − 연결 가능 신규) · 신규가 상한을 채우면 0
+    if (retryPicked.length <= K && (freshLinkable.length < cap || retryPicked.length === 0)) retryCapOk += 1
     if ((p.jit?.retryReserved ?? -1) === retryPicked.length) reservedOk += 1
     // 결정성 — 입력 순서를 뒤집어도 같은 묶음
     if (JSON.stringify(run({ rows: [...rows].reverse(), slots: [...slots].reverse(), cap, attempted }).workset) === JSON.stringify(p.workset)) detOk += 1
   }
   check(`② 무작위 ${N}벌 — 재선정 ≤ K 제약 아래 최대 슬롯 · 실제 덮음을 전수 탐색과 대조 · 선택 수 = min(상한, 신규 + min(K, 재선정))`, coverOk === N, `${coverOk}/${N} ${coverMiss}`)
   check(`② 무작위 ${N}벌 — 🔴 신규 먼저: 재선정이 들어온 묶음에는 연결 가능 신규가 전부 있다`, freshFirstOk === N, `${freshFirstOk}/${N}`)
-  check(`② 무작위 ${N}벌 — 🔴 재선정 ≤ floor(상한 × 10%) · 상한 10 미만이면 0`, retryCapOk === N, `${retryCapOk}/${N}`)
+  check(`② 무작위 ${N}벌 — 🔴 재선정 ≤ 신규가 남긴 자리 · 신규가 상한을 채우면 0`, retryCapOk === N, `${retryCapOk}/${N}`)
   check(`② 무작위 ${N}벌 — reserved 집계가 선택된 재선정 수와 일치 (관측 지표 정합)`, reservedOk === N, `${reservedOk}/${N}`)
   check(`② 무작위 ${N}벌 — raw 0`, rawOk === N, `${rawOk}/${N}`)
   check(`② 무작위 ${N}벌 — 입력 · 슬롯 순서를 뒤집어도 같은 묶음(결정성)`, detOk === N, `${detOk}/${N}`)
@@ -209,18 +209,18 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
     ids(one).join() === 'f0' && ids(oneShort).join() === 'f0', `${ids(one)} · ${ids(oneShort)}`)
 }
 
-// ── 🔴 신규 먼저 · 재선정 몫 반례 · 변이 탐지 (2026-11-10 retry-authority-v7 · 앞판 2026-10-19 단일 줄 대체) ──
+// ── 🔴 신규 먼저 · 재선정 몫(신규가 남긴 자리) 반례 · 변이 탐지 ──
 {
-  // cap10 · 신규 8건 · 재선정 3건 → 몫 K = 1 → 신규 8 + 가장 신선한 재선정 1(rv0) = 9 · 나머지 자리는 비운다
+  // cap10 · 신규 8건 · 재선정 3건 → 몫 K = 10 − 8 = 2 → 신규 8 + 신선한 순 재선정 2(rv0 · rv1) = 10 · rv2 는 상한 밖
   const slots10 = Array.from({ length: 10 }, (_, i) => at(1 + i))
   const fresh8 = Array.from({ length: 8 }, (_, i) => ROW({ id: `n${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
   const ret3 = [ROW({ id: 'rv0', ageH: 20, cp: 0.1 }), ROW({ id: 'rv1', ageH: 21, cp: 0.11 }), ROW({ id: 'rv2', ageH: 22, cp: 0.12 })]
   const att3 = new Map([...retryOf([ret3[0]!], 9), ...retryOf([ret3[1]!], 7), ...retryOf([ret3[2]!], 3)])
   const p8 = run({ rows: [...fresh8, ...ret3], slots: slots10, cap: 10, attempted: att3 })
-  check('🔴 상한 10 — 신규 8건 전부 + 재선정은 몫 1(가장 신선한 rv0)만 · 남는 자리를 재선정으로 억지로 채우지 않는다',
+  check('🔴 상한 10 — 신규 8건 전부 + 재선정은 신규가 남긴 2자리(rv0 · rv1)만 · 상한을 넘지 않는다',
     fresh8.every((r) => ids(p8).includes(r.sourceArticleId))
-    && ids(p8).includes('rv0') && !ids(p8).includes('rv1') && !ids(p8).includes('rv2')
-    && p8.jit?.retryReserved === 1 && p8.picked.length === 9, ids(p8).join(','))
+    && ids(p8).includes('rv0') && ids(p8).includes('rv1') && !ids(p8).includes('rv2')
+    && p8.jit?.retryReserved === 2 && p8.picked.length === 10, ids(p8).join(','))
   // 🔴 상한 1 — 몫 0: 같은 신선도에서 반응이 더 커도 재선정은 들어오지 않는다
   const sfresh = ROW({ id: 'sf1', ageH: 5, cp: 0.4 })
   const sretry = ROW({ id: 'sr1', ageH: 5, cp: 0.99 })
@@ -231,13 +231,17 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
   const retryNew = ROW({ id: 'rn1', ageH: 3, cp: 0.1 })
   const pn = run({ rows: [freshOld, retryNew], slots: [at(1)], cap: 1, attempted: retryOf([retryNew], 9) })
   check('🔴 반례 — 더 신선한 재선정(3h)보다 더 늙은 신규(40h)가 먼저다 (신규 굶김 0)', ids(pn).join() === 'fo1', `selected: ${ids(pn).join()}`)
-  // 🔴 21:15 모양 — 상한 20 · 신규 7 · 재선정 13 → 신규 7 + 몫 2 = 9 (앞판 20 = 신규 7 + 재선정 13)
+  // 🔴 신규가 모자란 회차 — 상한 20 · 신규 7 · 재선정 13 → 신규 7 이 먼저 서고 남은 13자리를 재선정이 쓴다(자리를 비우지 않는다)
   const slots20 = Array.from({ length: 20 }, (_, i) => at(1 + i))
   const fresh7 = Array.from({ length: 7 }, (_, i) => ROW({ id: `g${i}`, ageH: 30 + i, cp: 0.5 }))
   const ret13 = Array.from({ length: 13 }, (_, i) => ROW({ id: `q${i}`, ageH: 6 + i, cp: 0.5 }))
   const p21 = run({ rows: [...fresh7, ...ret13], slots: slots20, cap: 20, attempted: retryOf(ret13, 4) })
-  check('🔴 21:15 모양 — 상한 20 · 신규 7 · 재선정 13 → 신규 7 전부 + 재선정 2(몫)',
-    fresh7.every((r) => ids(p21).includes(r.sourceArticleId)) && p21.jit?.retryReserved === 2 && p21.picked.length === 9, ids(p21).join(','))
+  check('🔴 신규 부족 회차 — 상한 20 · 신규 7 · 재선정 13 → 신규 7 이 앞자리 + 재선정 13(더 신선해도 뒤)',
+    ids(p21).slice(0, 7).every((id) => id.startsWith('g')) && p21.jit?.retryReserved === 13 && p21.picked.length === 20, ids(p21).join(','))
+  // 🔴 신규가 상한을 채우면 재선정은 0 — 재선정이 더 신선하고, 신규가 못 덮는 슬롯을 덮을 수 있어도 들어오지 못한다
+  const full = run({ rows: [...fresh7, ...ret13], slots: slots20, cap: 7, attempted: retryOf(ret13, 4) })
+  check('🔴 신규가 상한을 채운 회차 — 재선정 0(재선정이 신규를 밀어내지 못한다)',
+    full.jit?.retryReserved === 0 && full.picked.length === 7 && ids(full).every((id) => id.startsWith('g')), ids(full).join(','))
   // 🔴 축소 운영 — `freshOnly` 면 재선정 0
   const pf = runWith({ rows: [...fresh7, ...ret13], slots: slots20, cap: 20, attempted: retryOf(ret13, 4) }, 'freshOnly')
   check('🔴 축소 운영(freshOnly) — 재선정 0 · 신규만', pf.jit?.retryReserved === 0 && pf.picked.length === 7, ids(pf).join(','))

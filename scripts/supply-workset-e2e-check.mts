@@ -562,7 +562,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     }
   }
 
-  // ── 2회차 — 채택 원천은 유료 재생성 0 · 처음 보는 원천이 신규 자리로 먼저 선다(2026-11-10 신규 먼저 · 재선정 몫 10%) ──
+  // ── 2회차 — 채택 원천은 유료 재생성 0 · 처음 보는 원천이 신규 자리로 먼저 선다(신규 먼저 · 재선정은 신규가 남긴 자리) ──
   const attempted1 = attemptedOutcomes(outcomesOf(w))
   check('🔴 1회차가 본 원천은 5건이다', attempted1.size === 5, `${attempted1.size}건`)
   const second = selectAt(`${RUN}-2`)
