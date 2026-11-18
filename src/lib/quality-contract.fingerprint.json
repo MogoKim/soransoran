@@ -1,12 +1,12 @@
 {
-  "version": "quality-v27",
-  "digest": "0feed191c7434d2d4c57de1c47b2e2d8a5ce55e25b3516d1a0d22e7d387d5a60",
+  "version": "quality-v28",
+  "digest": "bd1eecba48c36bc0821dd1461ffa329607833af1acd708484b99a46195343a45",
   "files": {
-    "src/lib/quality-contract.ts": "b0e4428bf8b37e281f7c420c2bf4cefa5307f2bb18b1009f776cfa34c144a151",
+    "src/lib/quality-contract.ts": "c839ddc90fb6605e21b8efb8f9ab10b5c6730d41363285f455cd715e048f4b32",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
-    "src/lib/content-core/draft-life-gates.ts": "574b4eeeb2ef157aefa61e8d548547d969b64bb2456a8dc0cdf66b39c67c1652",
-    "src/lib/content-core/review.ts": "fb8f476346b2ed561f221c282846ef36412a2f52e625082780242b856af5a33c",
-    "src/lib/content-core/pipeline.ts": "19271911d1168118f396f31e2d2f946ae9068a29c5409de280d2a6a27b711ce8",
+    "src/lib/content-core/draft-life-gates.ts": "60464ba75050f5eb370ed67e553d189bc7e597ed737ab70d48ce5a9ad6b07c15",
+    "src/lib/content-core/review.ts": "520abd9b06d8695cac7e5e7aaa9f8d17e827fb21230107eb07dc383e36a90b15",
+    "src/lib/content-core/pipeline.ts": "f8ffa2754c209fb99d94dc8b37e368054489c15c5940e0e7db4a39f8251a6e75",
     "src/lib/content-core/evidence.ts": "d27479f1ab3e8490add3e6c6351f4a5c36016b314863173c6604cf6d0dc50558",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "808e7263f27d1943840a99518c4df35c483d33e02d159708f94bd6214a791a5e",
@@ -15,8 +15,8 @@
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "7f3a2d11544fcb9d6a0a5c5d3e9b036405d29cfda897b2bb19b7e019b3b604aa",
-    "scripts/lib/content-core-run.mts": "924ee65a7c60f2914b19fa36ce48037a9d3d21883fd203eab8e89c1eb9c5454b",
-    "scripts/lib/content-core-prompts.mts": "37460ae9e74940d63ac92411caf0aed9f1270a46873a76bcc829cf511a259d20",
+    "scripts/lib/content-core-run.mts": "97f321a1f32d1915c0da29efd7a00d096c81e521970efc5e37ed17e4f66f471b",
+    "scripts/lib/content-core-prompts.mts": "03a931048abdef0efb6f17c31896cf9d4995836d54d74aa96b5f2820e991182c",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -36,15 +36,14 @@
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v26 → quality-v27",
+    "reason": "판 quality-v27 → quality-v28",
     "changedFiles": [
       "src/lib/quality-contract.ts",
       "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/content-core/evidence.ts",
-      "src/lib/original-post-persona-match.ts",
-      "src/lib/persona-pool-card.ts",
-      "src/lib/persona-cap.ts",
-      "src/lib/content-core/speaker.ts"
+      "src/lib/content-core/review.ts",
+      "src/lib/content-core/pipeline.ts",
+      "scripts/lib/content-core-run.mts",
+      "scripts/lib/content-core-prompts.mts"
     ]
   }
 }

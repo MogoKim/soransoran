@@ -20,7 +20,7 @@
 import { CLAIM_FACTS } from './source-facts'
 import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
 
-export const REVIEW_VERSION = 'review-v9'
+export const REVIEW_VERSION = 'review-v10'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -124,19 +124,72 @@ export type LifeContradiction = {
   evidence: string
 }
 
+/**
+ * 🔴 **finding 등급 — 둘뿐이다.** 검수 모델이 항목마다 답한다.
+ *    · `block` 막음 — 독자가 사실로 믿을 새 사건·사실 · 원문의 결론·핵심 질문 손실 · 카드와 양립할 수 없는 생활사
+ *    · `note`  참고 — 감정 · 비유 · 말투 · 강조처럼 사실을 바꾸지 않는 부연
+ *
+ *    막음만 세 finding 배열(`unsupportedAdditions` · `droppedFromSource` · `lifeContradictions`)에 남는다.
+ *    그 배열의 **길이**를 적재 요약(`semanticSummaryOf`)과 자동 READY 가 그대로 세므로, 참고를 같은 배열에
+ *    두면 채택한 글을 뒤에서 다시 막는다. 참고는 `advisories` 로만 간다.
+ * 🔴 등급이 없거나 모르는 값이면 **막음**이다(fail-closed).
+ */
+export const FINDING_SEVERITIES = ['block', 'note'] as const
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number]
+
+export const ADVISORY_AXES = ['unsupportedAdditions', 'droppedFromSource', 'lifeContradictions'] as const
+export type AdvisoryAxis = (typeof ADVISORY_AXES)[number]
+
+/** 🔴 검수가 **참고**로 적은 것 — 기록만 한다. 채택도 자동 READY 도 이것으로 막지 않는다 */
+export type ReviewAdvisory = { axis: AdvisoryAxis; evidence: string; why: string }
+
 export type SemanticVerdict = {
   issues: SemanticAxis[]
   unknownIssues: string[]
+  /** 🔴 아래 세 배열은 **막음 등급만** 담는다 */
   droppedFromSource: DroppedFromSource[]
   unsupportedAdditions: UnsupportedAddition[]
   lifeContradictions: LifeContradiction[]
+  /** 참고 등급. `review-v10` 앞 artifact 에는 이 칸이 없다 */
+  advisories?: ReviewAdvisory[]
   confidence: number
   note: string
 }
 
 /**
+ * 🔴 **시스템이 일부러 바꾼 나이를 모순으로 세지 않는다.**
+ *    원문 화자의 나이는 코드가 Persona 나이로 바꿔 쓴다(`planAxisMapping` · `fixSourceSpeakerAge`). 그 값이 카드와
+ *    맞는지는 결정적 검사(`checkAgeMappingApplied` · `judgeSelfAgeConflict`)가 검수 앞에서 이미 확정했다.
+ *    그래서 검수가 **그 바꾼 값을 가리켜** 적은 나이 모순은 참고로 옮긴다. 다른 나이를 가리킨 모순은 그대로 막는다.
+ *
+ * @param substituted 이번 초안에 코드가 넣은 Persona 나이 표현들(`AxisMapping.personaText`)
+ */
+export function demoteSystemAgeSubstitutions(
+  s: SemanticVerdict, substituted: readonly string[],
+): SemanticVerdict {
+  const marks = substituted.map(flat).filter((x) => x !== '')
+  if (marks.length === 0) return s
+  const ours = (x: LifeContradiction): boolean =>
+    x.fact === 'age' && marks.some((m) => flat(x.evidence).includes(m) || flat(x.drafted).includes(m))
+  const moved = s.lifeContradictions.filter(ours)
+  if (moved.length === 0) return s
+  return {
+    ...s,
+    lifeContradictions: s.lifeContradictions.filter((x) => !ours(x)),
+    advisories: [
+      ...(s.advisories ?? []),
+      ...moved.map((x) => ({
+        axis: 'lifeContradictions' as const, evidence: x.evidence,
+        why: `시스템이 바꾼 나이(${x.drafted}) — 카드 ${x.card}`,
+      })),
+    ],
+  }
+}
+
+/**
  * 차단 finding은 한 번 더 같은 검수에서 재현돼야 확정한다.
  * 위해는 한 번만 발견돼도 즉시 DROP하며 확인 대상이 아니다.
+ * 🔴 참고(`advisories`)만 있는 답은 확인 대상이 아니다 — 한 번에 채택한다.
  */
 export function semanticNeedsConfirmation(s: SemanticVerdict): boolean {
   if (s.issues.includes('harm')) return false
@@ -345,13 +398,19 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
     if ((SEMANTIC_AXES as readonly string[]).includes(x)) issues.push(x as SemanticAxis)
     else unknown.push(x)
   }
-  const evidenced = (key: string): { evidence: string; why: string }[] => {
+  const advisories: ReviewAdvisory[] = []
+  // 🔴 `note` 라고 **분명히** 답한 것만 참고다. 등급이 없거나 다른 값이면 막음으로 남긴다
+  const isNote = (o: Record<string, unknown>): boolean => o.severity === 'note'
+  const evidenced = (key: 'droppedFromSource' | 'unsupportedAdditions'): { evidence: string; why: string }[] => {
     const out: { evidence: string; why: string }[] = []
     for (const v of Array.isArray(j[key]) ? (j[key] as unknown[]) : []) {
+      if (typeof v !== 'object' || v === null) continue
       const o = v as Record<string, unknown>
       const evidence = typeof o.evidence === 'string' ? o.evidence.trim() : ''
       if (evidence === '') continue
-      out.push({ evidence, why: typeof o.why === 'string' ? o.why.slice(0, 120) : '' })
+      const item = { evidence, why: typeof o.why === 'string' ? o.why.slice(0, 120) : '' }
+      if (isNote(o)) advisories.push({ axis: key, ...item })
+      else out.push(item)
     }
     return out
   }
@@ -368,19 +427,25 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
       unknown.push(`lifeContradiction:${fact}`)
       continue
     }
-    lifes.push({
+    const life: LifeContradiction = {
       fact: fact as LifeContradictionFact,
       drafted: typeof o.drafted === 'string' ? o.drafted.slice(0, 60) : '',
       card: typeof o.card === 'string' ? o.card.slice(0, 60) : '',
       evidence: typeof o.evidence === 'string' ? o.evidence.trim() : '',
-    })
+    }
+    if (isNote(o)) {
+      advisories.push({ axis: 'lifeContradictions', evidence: life.evidence, why: `${fact}: ${life.drafted} / 카드 ${life.card}` })
+    } else lifes.push(life)
   }
+  const droppedFromSource = evidenced('droppedFromSource')
+  const unsupportedAdditions = evidenced('unsupportedAdditions')
   return {
     issues: [...new Set(issues)],
     unknownIssues: [...new Set(unknown)],
-    droppedFromSource: evidenced('droppedFromSource'),
-    unsupportedAdditions: evidenced('unsupportedAdditions'),
+    droppedFromSource,
+    unsupportedAdditions,
     lifeContradictions: lifes,
+    advisories,
     confidence: conf,
     note: typeof j.note === 'string' ? j.note.slice(0, 200) : '',
   }
@@ -392,10 +457,8 @@ export const MACHINE_OUTCOMES = ['adopt', 'hold', 'drop'] as const
 export type MachineOutcome = (typeof MACHINE_OUTCOMES)[number]
 
 /**
- * 🔴 quality-v20: p10은 공유 실질 변경 계약에 따라 안전한 창작·사소한 생략을 두 finding 배열에 적지 않는다.
- * 따라서 `unsupportedAdditions`는 확인된 위험 허구, `droppedFromSource`는 핵심 손실이며
- * 하나라도 있으면 Content Core가 HOLD한다. finding 근거는 artifact에 보존하되,
- * 별도 사람 검토를 정상 운영 경로로 만들지 않는다. 완주하지 못한 검수도 HOLD다.
+ * 🔴 세 finding 배열은 **막음 등급만** 담는다(`FINDING_SEVERITIES`). 하나라도 있으면 Content Core 가 HOLD 한다.
+ *    참고 등급(`advisories`)은 warnings 로 기록만 하고 채택을 막지 않는다. 완주하지 못한 검수도 HOLD 다.
  */
 /**
  * 🔴 **재선정 판정은 여기 없다** (2026-11-10 retry-authority-v7). 앞판의 `artifactRetryable`·`RETRYABLE_CAUSES` 는
@@ -406,11 +469,15 @@ export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource']
 export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]
 
 /**
- * 🔴 구조화 finding의 근거를 한 줄씩 보존한다. 빈 배열이면 차단 finding이 없다.
+ * 🔴 구조화 finding의 근거를 한 줄씩 보존한다. 막음과 참고를 **다른 줄**로 적는다 — 빈 배열이면 둘 다 없다.
  */
 export function reviewWarnings(s: SemanticVerdict | null): string[] {
   if (s === null) return []
+  const notes = s.advisories ?? []
   return [
+    ...(notes.length > 0
+      ? [`참고(막지 않음) ${notes.length}건 — ${notes.map((a) => a.evidence).join(' / ')}`]
+      : []),
     ...(s.unsupportedAdditions.length > 0
       ? [`원문에 없어 보이는 것 ${s.unsupportedAdditions.length}건`
         + ` — ${s.unsupportedAdditions.map((a) => a.evidence).join(' / ')}`]

@@ -133,7 +133,7 @@ import {
   type GenerationContract,
 } from '../src/lib/content-core/pipeline'
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
-import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
+import { REVIEW_VERSION } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
 import type { DraftGatePlan, DraftGateSource } from '../src/lib/content-core/draft-life-gates'
 import {
@@ -1437,9 +1437,13 @@ async function main(): Promise<void> {
   console.log(`   🟡 AUTO_HOLD  ${s.AUTO_HOLD}건`)
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
   console.log(`   🔴 v2 가 초안을 만들지 않고 멈춘 원천 ${v2Held}건 · artifact ${artifacts.length}장`)
-  const findingHeld = artifacts.filter((a) =>
-    a.review.machineOutcome === 'hold' && reviewWarnings(a.review.semantic).length > 0)
-  console.log(`   🟡 위험 허구·핵심 손실 finding으로 HOLD ${findingHeld.length}건`)
+  // 🔴 막음 등급만 센다 — 참고(`advisories`)는 채택을 막지 않으므로 따로 적는다
+  const findingHeld = artifacts.filter((a) => a.review.machineOutcome === 'hold'
+    && a.review.unsupportedAdditions.length + a.review.droppedFromSource.length + a.review.lifeContradictions.length > 0)
+  console.log(`   🟡 의미 검수 막음 등급(위험 허구·핵심 손실·생활사 모순)으로 HOLD ${findingHeld.length}건`)
+  const notedAdopt = artifacts.filter((a) =>
+    a.review.machineOutcome === 'adopt' && (a.review.semantic?.advisories ?? []).length > 0)
+  console.log(`   🟢 의미 검수가 참고만 적어 채택 ${notedAdopt.length}건`)
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)

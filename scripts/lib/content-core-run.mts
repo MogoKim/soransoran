@@ -65,7 +65,8 @@ import {
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { GenerationContract } from '../../src/lib/content-core/pipeline'
 import {
-  groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, semanticNeedsConfirmation, INCOMPLETE_LABEL,
+  demoteSystemAgeSubstitutions, groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, semanticNeedsConfirmation,
+  INCOMPLETE_LABEL,
   type DeterministicFailure, type DeterministicResult, type IncompleteCause,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
@@ -722,7 +723,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const draftSystem = buildV2DraftSystemPrompt({
     plan, voice, life: persona, mappings: mapping.mappings, keep: keepRules,
   })
-  const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona })
+  const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona, mappings: mapping.mappings })
   const voiceless = [
     ...(voiceStandardMissingFrom(draftSystem, voice) ? ['생성'] : []),
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
@@ -843,14 +844,16 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   // ── ⑤ 의미 검수 — 차단 finding이 있을 때만 같은 요청으로 1회 확인 ──
   phase = 'semanticReview'
   const reviewPayload = buildV2ReviewPayload({ draft, packet })
+  // 🔴 코드가 초안에 넣은 Persona 나이 — 위 자동 보정과 이행 후조건이 이미 확정한 값이다
+  const systemAges = ageMaps.flatMap((m) => (m.personaText === null ? [] : [m.personaText]))
   const groundSemantic = (raw: string): SemanticVerdict | null => {
     const parsed = parseSemanticReview(raw)
-    return parsed === null ? null : {
+    return parsed === null ? null : demoteSystemAgeSubstitutions({
       ...parsed,
       droppedFromSource: groundedInSource(parsed.droppedFromSource, sourceBlock(packet)),
       unsupportedAdditions: groundedInDraft(parsed.unsupportedAdditions, draftText),
       lifeContradictions: groundedInDraft(parsed.lifeContradictions, draftText),
-    }
+    }, systemAges)
   }
   const rRes = await ask('semanticReview', reviewSystem, reviewPayload)
   const semanticC = completionOf(rRes)

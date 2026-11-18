@@ -60,7 +60,12 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
  * 🔴 **v2-draft-p14 (2026-10-23 · quality-v20)** — bounded creativity는 유지하고, 원문에 없는
  * 시간대·상대 시점과 원문 화자를 새 전달자로 바꾸는 전언 경로만 명시적으로 금지한다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p14'
+/**
+ * 🔴 **v2-draft-p15 (quality-v28)** — 상반된 두 지시를 하나로. "새 전달자로 바꾸지 않는다" 와 "어떤 분이 … 그러셨대요 로 전한다" 가
+ * 함께 있어, 1인칭이 아닌 자리의 초안이 전달자를 세웠다가 검수(②-4)에 막혔다. 전달자를 세우는 길을 없애고,
+ * 자기 경험으로 쓸 수 없으면 그 주제에 대한 자기 질문·생각으로 쓰게 한다. 원문에 이미 나오는 사람만 그 사람을 주어로 둔다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p15'
 /**
  * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
  *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.
@@ -74,7 +79,11 @@ export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p14'
  * 핵심 뜻·결론 손실과 고위험 허구만 차단 finding에 남긴다. 발행 뒤 의미 감사와 같은 실질 변경 계약
  * (`material-contract.ts` · 약한 일반화 · 시간 바꿔쓰기 · 커뮤니티식 1인칭 다시 말하기 · 사소한 생략)을 그대로 싣는다.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p11'
+/**
+ * 🔴 **v2-review-p12 (quality-v28)** — 항목마다 등급(`block` 막음 / `note` 참고)을 답하게 한다. 막음만 HOLD 다.
+ * 코드가 원문 화자의 사실을 Persona 값으로 바꿔 쓰게 한 자리는 검수 지시에 싣는다 — 그 값은 지어낸 사실도 모순도 아니다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p12'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

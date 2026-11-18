@@ -1276,7 +1276,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p14'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p15'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
@@ -1435,8 +1435,10 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용
     const i = src.indexOf('const findingHeld = artifacts.filter(')
     if (i === -1) return false
     const block = src.slice(i, i + 220)
+    // 🔴 막음 등급 배열만 센다 — 참고(`advisories`)가 섞이면 채택을 막지 않은 것까지 HOLD 사유로 적는다
     return block.includes("a.review.machineOutcome === 'hold'")
-      && block.includes('reviewWarnings(a.review.semantic).length > 0')
+      && block.includes('a.review.unsupportedAdditions.length + a.review.droppedFromSource.length + a.review.lifeContradictions.length > 0')
+      && !block.includes('reviewWarnings(')
   })())
   {
     /** 🔴 같은 판정 함수로 센다 — 집계 규칙을 손으로 다시 쓰지 않는다 */
