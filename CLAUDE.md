@@ -12,7 +12,7 @@
 ## 프로젝트 개요
 
 - Next.js 14 App Router + TypeScript strict
-- Supabase + Prisma (**Raw SQL 절대 금지**)
+- Supabase + Prisma (**운영 코드에서 Raw SQL 금지** — 예외는 격리 DB 시험 준비 · 읽기 전용 트랜잭션 고정)
 - NextAuth v5 카카오 전용
 - Tailwind + CSS Variables semantic token / Pretendard Variable
 - `cn()` = clsx + tailwind-merge / 컴포넌트 PascalCase · 파일 kebab-case
@@ -125,6 +125,7 @@
 - 목록·상세 쿼리에 **`UserBlock` 필터를 반드시 적용**한다
   (차단 UI 를 숨기더라도 필터는 넣는다. 저장만 하고 필터가 없으면 미구현보다 나쁘다)
 - 활동 숫자(접속자 수 · 실시간 배지 · 총 게시글/회원 수)는 **실제로 커진 뒤에** 넣는다
+  - 조회수·공감의 초기 보정은 예외다 — canon §7.3 (2026-11-18 창업자 결정 · 아직 구현 전)
 
 ## 작업 방식
 
