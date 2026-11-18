@@ -231,7 +231,7 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     '지속 준비도', 'Persona 4상태', '선택적 다중 턴', '자동 사다리', '계약 경계',
     // 🔴 2026-10-11 창업자 결정 — 새 정책마다 대체한 옛 경로를 같은 변경에서 적는다
     'Dn 최대 용량', '가까운 수요 지평', '댓글 event-assisted·공급 자연 예약', '원천 순위 하나', '날짜 정밀도 보존',
-    'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수',
+    'Persona 결정 분리', '자동 댓글 provenance', '댓글 최대 10 · 실제 답글', '실제 열람·노출 조회수', '초기 조회수·공감 보정',
     '자동 품질 생명주기', 'bounded creativity',
     // 🔴 2026-11-06 창업자 결정 — 예측은 경고 · 같은 실행 경로 · 공급 부족 재시험 · sourceAge 단일 정렬
     '공급 예측 경고화', '평상일·증명일 같은 경로', '공급 부족 재시험', '`sourceAge` 단일 정렬', '하루 하나의 단계',
@@ -376,13 +376,22 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('「지금 단계의 목적」')])
   out.push(['canon §5 가 제한 canary의 실회원 댓글 자동 답글을 금지한다',
     d100Goal.includes('실회원 댓글에는 자동으로 답하지 않는다')])
-  out.push(['North Star와 canon이 실제 상세 열람·목록 노출만 고객 조회수로 허용한다',
+  out.push(['North Star와 canon이 실제 값(실제 상세 열람·목록 노출)을 내부에 분리해 남긴다',
     [northStar, d100Goal].every((body) => body.includes('실제 상세 열람') && body.includes('실제 목록 노출'))
     && d100Goal.includes('내부 원장에서는 두 값을 분리')
     && d100Goal.includes('관리자·Persona·자동화·검색봇을 제외')])
-  out.push(['North Star와 canon이 가짜 조회수 배수·최소값·난수를 금지한다',
-    northStar.includes('임의 배수를 곱하거나 무작위 숫자를 더해')
-    && d100Goal.includes('임의 배수를 곱하거나 최소값·난수를 더한 수')])
+  // 🔴 2026-11-18 창업자 결정 — 조회수·공감 초기 보정. 결정 다섯 줄이 두 문서에 같은 글자로 있고, 구현 전임을 밝힌다
+  out.push(['North Star와 canon이 조회수·공감 초기 보정의 결정 다섯 줄을 같은 문장으로 적고 "구현 전"을 밝힌다',
+    [northStar, d100Goal].every((body) => ['대상은 글의 조회수와, 글·댓글의 공감 수다.',
+      '글의 나이와 댓글 수에 맞춰 자연스럽게 늘어나는 값을 실제 값에 더해 보여 준다.', '회원 약 1만 명에서 끈다.',
+      '실제 값은 내부에 따로 남기고, 순위와 North Star 지표에는 넣지 않는다.',
+      '접속자 수 · "지금 N명 보는 중" 같은 실시간 표시는 하지 않는다.',
+      '결정됨 · 아직 구현 전 — 지금 화면의 숫자는 실제 열람·노출이다.'].every((t) => body.includes(t)))])
+  out.push(['canon 이 더해 보여 주는 값을 실제 값 원장·순위·North Star·단계 증거에 섞는 것과 실시간 표시를 금지한다',
+    d100Goal.includes('더해 보여 주는 값을 실제 값 원장에 쓰지 않는다')
+    && d100Goal.includes('실제 값 원장·순위·North Star 지표·단계 증거에 섞기')
+    && d100Goal.includes('같은 실시간 표시 만들기')
+    && d100Goal.includes('홈·베스트 순위를 올리지 않는다')])
   out.push(['NORTH-STAR 가 Persona · 봇 · 운영자 활동을 North Star 에서 제외한다',
     northStar.includes('Persona · 봇 · 운영자 활동은 제외한다')])
   // ⑤-c 🔴 상대 링크 무결성 — 권위 문서 · 인덱스 · 목록
@@ -656,9 +665,10 @@ check('canon 이 routine 기계 초안 사람 검토를 자동 READY·품질 격
   && d100Goal.includes('qualityQuarantine')
   && d100Goal.includes('기계 초안마다 `ready/edit/reject`를 결정하지 않는다')
   && d100Goal.includes('발행 후 20% 표본 감사'))
-check('현재 실행이 실제 조회수 구현을 별도 critical path로 두고 가짜 숫자를 금지한다',
-  /^\| VIEWS \| 실제 근거 조회수 \|/m.test(currentLive)
-  && currentLive.includes('댓글 배수·최소값·난수'))
+check('현재 실행이 조회수·공감 초기 보정을 구현 전 critical path로 두고 실시간 표시·순위 혼입을 금지한다',
+  /^\| VIEWS \| 조회수·공감 초기 보정\(2026-11-18 창업자 결정 · 구현 전/m.test(currentLive)
+  && currentLive.includes('접속자 수·실시간 표시')
+  && currentLive.includes('더한 값을 순위·North Star 에 넣기'))
 check('🔴 canon 이 Persona 300+ 를 주간 게시 편수 산식으로 정당화하지 않는다',
   !/주\s*\d+\s*(건|편)씩 맡으면/.test(d100Goal)
   && d100Goal.includes('주간 게시 상한은 집중을 막는 안전 상한이지 고정 생산 목표가 아니다'))
