@@ -41,7 +41,7 @@ required  그 capacity 단계가 요구하는 상세 요청 수
   소유한다. 같은 일을 GitHub Actions schedule 이 따로 돌리면 owner 가 둘이다 — 결함이다.
 - 오늘 단계는 **`StageDecision` 행 하나**가 정한다. GitHub stage Variables · `.env` 의 단계 값 · canary 창은
   단계를 정하는 근거가 아니다. 사람이 단계를 올리는 routine 절차는 없다.
-- 이 구조는 main과 보조 Mac runtime에 배포됐다. 2026-10-09 현재 보조 Mac이 D100 9개 job의 유일한 owner이고,
+- 이 구조는 main과 보조 Mac runtime에 배포됐다. 보조 Mac이 D100 job의 유일한 owner이고(상시 job 10개 — 아래 「상시 job 시각표」),
   회사 Mac의 D100 job은 0개다. exact runtime·오늘 단계·loaded 상태는
   [`CURRENT-MILESTONE.md`](../CURRENT-MILESTONE.md)와 실제 관측이 정한다.
 - 🔴 `supply:health` 같은 하위 명령이 wrapper 없이 env 기본값을 읽어 d1을 보고하는 결함은 아직 남아 있다.
@@ -102,13 +102,13 @@ npm run runtime:deploy -- --apply --target=<full sha>   # 🔴 실제 cutover
 
 ```bash
 # ── 0) 값을 한 번만 계산한다 ──
-REPO=/Users/yanadoo/Documents/soransoran-m0
+REPO="$HOME/Documents/soransoran-runtime"   # 상시 호스트의 runtime 트리(모든 plist 의 WorkingDirectory)
 NPX="$(which npx)"
 NODEBIN="$(dirname "$(which node)")"
 LOGDIR="$HOME/Library/Logs/soransoran"   # 🔴 Documents 밖이어야 한다
 # 🔴 JOB 하나가 **템플릿 파일명이자 launchd Label** 이다. 이 디렉터리의 템플릿은
 #    파일명과 Label 을 일치시켜 두었으므로, 아래 render·lint·load·print 가 전부 같은 것을 가리킨다.
-JOB=com.soransoran.supply-collect-82cook-thin
+JOB=com.soransoran.supply-process
 
 # ── 1) 로그 디렉터리를 먼저 만든다 ──
 mkdir -p "$LOGDIR"
@@ -144,30 +144,32 @@ grep -o '__[A-Z_]*__' "$HOME/Library/LaunchAgents/${JOB}.plist" || echo "남은 
 2026-09-07 에 등록된 plist 하나를 그렇게 날렸다. 읽기만 할 거면 `plutil -p` 를 쓴다.
 
 🔴 **`.env.local` 에 그 job 의 스위치가 없으면 `--live` 는 무시된다.**
-(`raw-collect-82cook` → `SORAN_82COOK_COLLECT_ENABLED` ·
- `supply-collect-82cook-thin` → `SORAN_82COOK_THIN_DETAIL_ENABLED`)
+(`supply-process` → `SORAN_SUPPLY_PROCESS_ENABLED` ·
+ 네이버 수집 둘 → `SORAN_NAVERCAFE_COLLECT_ENABLED`)
 kill switch 는 plist 가 아니라 환경변수다 — plist 를 지우지 않고도 멈출 수 있어야 한다.
 
 ## 되돌리기
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.soransoran.supply-collect-82cook-thin.plist
-rm ~/Library/LaunchAgents/com.soransoran.supply-collect-82cook-thin.plist
+launchctl unload ~/Library/LaunchAgents/com.soransoran.supply-process.plist
+rm ~/Library/LaunchAgents/com.soransoran.supply-process.plist
 ```
 
 또는 **더 빠르게**: `.env.local` 에서 그 job 의 스위치를 `false` 로.
 plist 는 계속 돌지만 수집이 일어나지 않는다.
 
-## 지원 수집원은 셋이고, 현재 active 수집원은 둘이다
+## 수집원은 네이버 카페 둘이다 — 82cook 은 뺐다 (2026-11-17 창업자 결정)
+
+🔴 82cook 은 수집원이 아니다(canon §13). 상시 호스트에 82cook job 은 없고 다시 등록하지 않는다.
+아래 82cook 템플릿·시각·요청량은 **지우기 전까지 저장소에 남은 잔재**다 — 코드(`RUNTIME_JOBS`)·템플릿·검사와 함께
+별도 작업에서 지운다. 현재 처리량이 아니고 등록 계획도 아니다.
 
 🔴 **한 source 의 실패가 다른 source 의 공급을 세우지 않는다.** 그래서 수집은 job 으로 나뉘어 있다 —
 세 source 를 한 회차에 묶어 돌리던 옛 구조에서는 82cook 하나가 `ECONNREFUSED` 이면
 이미 받아 둔 네이버 수집물까지 처리되지 못했다(2026-09-10 실측: 이틀간 신규 공급 0).
 그 구조의 폐기 경위는 [Raw 공급망 설계 §4-AU](../2026-09-03-raw-supply-chain-design.md) 에 있다.
 
-2026-10-09 현재 `navercafe:remonterrace`와 `navercafe:wgang`만 installed·loaded·enabled다.
-82cook 두 템플릿은 prepared 상태지만 job은 installed 0·loaded 0·policy-disabled이며 clean canary도 0회다.
-아래 82cook 시각과 요청량은 **등록할 경우의 준비 계약**이지 현재 처리량이 아니다.
+운영 수집 job 은 `navercafe:remonterrace`와 `navercafe:wgang` 둘이다.
 
 | 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
 |---|---|---|---|
@@ -198,7 +200,7 @@ npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
 수집기가 아는 카페일 뿐 확정 수집원도 현재 스케줄도 아니며, **실행 템플릿을 두지 않는다.**
 늘리려면 그때 승인을 받고 템플릿을 새로 만든다 — fixture 가 이 넷의 템플릿이 없는지 검사한다.
 
-## 🔴 일정 계약 (전부 KST · 82cook은 prepared/off)
+## 🔴 일정 계약 (전부 KST · 82cook은 잔재 — 돌지 않는다)
 
 ```
 82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
@@ -220,16 +222,43 @@ supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 �
 `SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.
 이 문서의 표는 그것을 옮겨 적은 것이고, fixture 가 **render 한 실제 plist** 와 대조한다.
 
-## 🔴 공급 수집·처리 템플릿은 다섯이고, 현재 loaded 공급 job은 셋이다
+## 🔴 상시 job 시각표 (전부 KST)
+
+상시 호스트의 D100 job 은 열 개다. 시각의 출처는 템플릿과 설치기 코드이고, 2026-11-18 호스트 plist 와 대조했다.
+지금 올라와 있는지는 언제나 `launchctl list | grep soransoran` 으로 본다.
+
+| job (`com.soransoran.` 생략) | 하는 일 | 언제 |
+|---|---|---|
+| `navercafe-collect-remonterrace-multi` | 레몬테라스 수집 | 00:30 · 02:30 · 05:30 · 13:30 · 21:30 (5회) |
+| `navercafe-collect-wgang-multi` | 우아한 갱년기 수집 | 01:30 · 03:30 · 04:30 · 11:30 · 20:30 (5회) |
+| `supply-process` | 공급 처리 | 06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 (7회) |
+| `stage-controller` | 그날 단계 결정 | 07:00 · 07:20 · 07:40 · 07:55 · 07:58 (5회 — 결정은 하루 한 번만 저장된다) |
+| `original-post-runner` | 글 발행 | 08:00~22:00 10분마다 (85회 · 한 회차 1편) |
+| `persona-comment-runner` | 첫 댓글 · 추가 댓글 | 08:07~22:00 약 20분마다 (43회) |
+| `auto-ready-audit` | 발행 뒤 감사 | 08:10~23:40 30분마다 (32회) |
+| `runner-recover` | 놓친 회차 복구 | 30분마다 |
+| `ops-shadow-observer` | 읽기 전용 관측(권위 0) | 60초마다 |
+| `keep-awake` | 잠들지 않게 유지 | 상시 |
+
+🔴 **1회용 job 은 끝나면 내린다.** 배포·투입을 위해 잠깐 올린 job 은 상시 목록이 아니다. 아래 셋은 퇴역했다 —
+호스트에 남아 있으면 내리고 plist 를 지운다. 다시 등록하지 않는다.
+
+```
+com.soransoran.overnight-deploy-1117   퇴역 (11-17 밤 배포용)
+com.soransoran.overnight-audit-1117    퇴역 (11-17 05:30 점검용)
+com.soransoran.persona-d30-oneshot     퇴역 (11-17 Persona 투입용 · 스크립트는 저장소에서 지웠다)
+```
+
+## 🔴 공급 수집·처리 템플릿은 다섯이고, 운영 공급 job은 셋이다
 
 정본은 [`src/lib/runtime-isolation.ts`](../../../src/lib/runtime-isolation.ts) 의 `RUNTIME_JOBS` 다.
 격리 검사와 배포가 **이 목록과 실제 loaded 를 정확히 대조**한다.
 
-현재 loaded 공급 job은 네이버 수집 2개와 `supply-process` 1개다. 82cook 2개는 아래 준비 목록에는 있지만
-loaded가 아니며 current capacity에 합치지 않는다. D100 전체 allowlist는 발행·댓글·감사·controller·recovery·
-keep-awake를 포함한 9개와 선택 설치 ops shadow observer 1개(설치본이 있을 때만 이전)이고 `ALWAYS-ON-HOST.md`가 싣는다.
+운영 공급 job은 네이버 수집 2개와 `supply-process` 1개다. 82cook 2개는 아래 목록에 남아 있지만 수집원이 아니며
+current capacity에 합치지 않는다. D100 전체 allowlist는 발행·댓글·감사·controller·recovery·
+keep-awake를 포함한 9개와 ops shadow observer 1개이고 `ALWAYS-ON-HOST.md`가 싣는다.
 
-> 🔴 **ops shadow observer(`com.soransoran.ops-shadow-observer`) · 권위 0 · 2026-11-11 Phase 2 코드만(미설치)** —
+> 🔴 **ops shadow observer(`com.soransoran.ops-shadow-observer`) · 권위 0 · 상시 job 이다(60초마다 · 2026-11-18 호스트에서 설치 확인)** —
 > 정적 템플릿이 아니다. `scripts/lib/ops-loop-templates.ts` 의 `renderOpsShadowObserverPlist` 가 동적으로 render 하고
 > ops-loop 설치기가 설치 · snapshot · rollback 을 맡는다. 🔴 **`npm run ops:loop-install -- --apply --observer=on` 으로만 설치**한다 —
 > 플래그가 없으면 지금 상태를 유지한다(설치돼 있으면 새 원문으로 교체 · 없으면 없는 채로). 제거는 `--observer=off`.
@@ -267,8 +296,11 @@ keep-awake를 포함한 9개와 선택 설치 ops shadow observer 1개(설치본
 | `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (5슬롯 · 현재 OFF) | 로컬 (위와 같다 — owner 는 한쪽뿐) |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
 | `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (5슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
-| `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
+| `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (5슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
 | `com.soransoran.supply-process.plist.template` | 공급 처리(drain) — 미처리 입력을 변환→판정→초안→적재 (7슬롯) | 🔴 **로컬 전용** (§4-AU) |
+
+매거진 템플릿 5개는 `magazine/` 에 따로 있다(producer 00:10 · auto-register 01:00 · auto-merge-recovery 02:00 · watch 11:00 ·
+graph-watch 11:05). 회사 Mac 전용이고 절차는 [`magazine-automation-runbook.md`](../magazine-automation-runbook.md)가 싣는다.
 
 ## 공급 처리(drain) 등록 (승인 후)
 
