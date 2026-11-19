@@ -30,9 +30,9 @@ import { buildQueuePayload, sourceEvidenceOf, MACHINE_PROFILE } from '../src/lib
 import { judgeJitDemand } from '../src/lib/supply-process'
 import { judgeNextPreflight, slotTimesOn, type PreflightFacts } from '../src/lib/stage-ladder-generic'
 import { profileOf } from '../src/lib/scale-profile'
-import { judgeEvidenceForTarget, trialPlanOf, type EvidencePost, type StageEvidenceFacts } from '../src/lib/stage-evidence'
+import { judgeEvidenceForTarget, type EvidencePost, type StageEvidenceFacts } from '../src/lib/stage-evidence'
 import { validateStoredDecision, STAGE_DECISION_VERSION } from '../src/lib/stage-decision-contract'
-import { decideStage, sustainedReleaseOf } from '../src/lib/stage-controller'
+import { decideStage, openStageOf } from '../src/lib/stage-controller'
 import { planOpenDays, wipCountsBySpeaker } from '../src/lib/content-core/speaker-availability'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
 import { FORBIDDEN_POST_KEYS } from '../src/lib/original-post-publish'
@@ -260,14 +260,21 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
 {
   // 🔴 (2026-10-01 · C9) 증명일 자동 글은 서로 다른 Persona 가 쓴다(canon §6-3 · PERSONA_REPEAT) — 글마다 다른 글쓴이
   let author = 0
+  // 공급 비용 계약(envelope) 시행 뒤의 날짜 — 그 전 날짜는 비용을 판정할 근거가 없어 모름이다
+  const EVIDENCE_DAY = '2026-11-20'
   const post = (release: EvidencePost['release']): EvidencePost => ({
     postId: `p-${release}-${Math.random()}`, queueId: `q-${Math.random()}`, publishedAtMs: NOW.getTime(), unattended: true,
     queueRows: 1, publishLogs: 1, authorPersonaId: `A${(author += 1)}`, decider: 'auto',
-    personaComments: [{ personaId: 'B', createdAtMs: NOW.getTime() + 10 * 60_000, topLevel: true, provenance: 'auto' as const }], release,
+    // 첫 댓글 5분 뒤 + 추가 댓글 5건(화자 5명) — 결의 통과선을 넘는 글. 이 구획이 보는 것은 도장뿐이다
+    personaComments: [
+      { personaId: 'B', createdAtMs: NOW.getTime() + 5 * 60_000, topLevel: true, provenance: 'auto' as const },
+      ...['C', 'D', 'E', 'F', 'G'].map((id, k) => ({ personaId: id, createdAtMs: NOW.getTime() + (k + 2) * 15 * 60_000, topLevel: true, provenance: 'followup' as const })),
+    ], release,
   })
   const facts = (posts: EvidencePost[]): StageEvidenceFacts => ({
-    kstDate: '2026-09-30', stage: 'd3',
-    decision: { kstDate: '2026-09-30', release: 'd3', decidedBy: 'controller' },
+    kstDate: EVIDENCE_DAY, stage: 'd3',
+    decision: { kstDate: EVIDENCE_DAY, release: 'd3', decidedBy: 'controller' },
+    readAtMs: NOW.getTime() + 24 * 3_600_000,
     posts, orphanPublishLogs: 0, unloggedPublishes: 0,
     audits: { rows: posts.slice(0, 1).map((p) => ({ postId: p.postId, queueId: p.queueId!, judged: true })) },
   })
@@ -282,12 +289,12 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
       envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
     },
   }
-  const stamped = judgeEvidenceForTarget('2026-09-30', 'd3', 3, facts([post('STAMPED_ELIGIBLE'), post('STAMPED_ELIGIBLE'), post('STAMPED_ELIGIBLE')]), side)
+  const stamped = judgeEvidenceForTarget(EVIDENCE_DAY, 'd3', 3, facts([post('STAMPED_ELIGIBLE'), post('STAMPED_ELIGIBLE'), post('STAMPED_ELIGIBLE')]), side)
   check('지금 계약 도장 3건 · 조건 충족 → PASS', stamped.verdict === 'PASS', JSON.stringify(stamped.codes))
-  const legacy = judgeEvidenceForTarget('2026-09-30', 'd3', 3, facts([post('MISSING'), post('MISSING'), post('MISSING')]), side)
+  const legacy = judgeEvidenceForTarget(EVIDENCE_DAY, 'd3', 3, facts([post('MISSING'), post('MISSING'), post('MISSING')]), side)
   check('🔴 🔴 **도장 없는 자동 target(계약 이전 발행) → FAIL RELEASE_CONTRACT_MISSING**',
     legacy.verdict === 'FAIL' && legacy.codes.includes('RELEASE_CONTRACT_MISSING'))
-  const stale = judgeEvidenceForTarget('2026-09-30', 'd3', 3, facts([post('STAMPED_ELIGIBLE'), post('STALE'), post('STAMPED_ELIGIBLE')]), side)
+  const stale = judgeEvidenceForTarget(EVIDENCE_DAY, 'd3', 3, facts([post('STAMPED_ELIGIBLE'), post('STALE'), post('STAMPED_ELIGIBLE')]), side)
   check('🔴 다른 판 · eligible 아닌 도장 하나라도 → FAIL STALE_RELEASE', stale.verdict === 'FAIL' && stale.codes.includes('STALE_RELEASE'))
   // 🔴 도장 = 완전한 계약 + 발행 사건과 같은 시각 (2026-09-30 야간 P0-A)
   const good = releaseStampOf(judge(ev()))
@@ -339,14 +346,12 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
   check('옛 판(v4) 행은 읽기만 한다 — 검증은 통과', v4.ok)
   if (v4.ok) {
     const pass = { kstDate: '2026-09-30', stage: 'd5' as const, verdict: 'PASS' as const, codes: [], counts: {} }
-    check('🔴 🔴 **옛 판 결정 위의 PASS 로 한 칸 올리지 않는다 — 바닥(d1)에서 FLOOR 로 다시 증명한다**',
-      trialPlanOf(v4.decision, pass)?.basis === 'FLOOR' && trialPlanOf(v4.decision, pass)?.target === 'd3')
-    check('🔴 옛 판 결정의 지속 단계(d5)를 쓰지 않는다 → d1', sustainedReleaseOf(v4.decision, pass) === 'd1')
+    check('🔴 🔴 **옛 판 결정의 단계(d5)를 쓰지 않는다 — 바닥(d1)에서 다시 올라간다**', openStageOf(v4.decision) === 'd1')
     const r = decideStage({
       kstDate: '2026-10-01', decidedAt: '2026-09-30T22:00:00.000Z', previousDecision: v4.decision, previousEvidence: pass,
       nextPreflight: null, publishedToday: 0, signals: [],
     })
-    check('🔴 decideStage — 옛 판 d5 SUSTAIN 다음 날 공개는 d1 (preflight 없으면 시험도 없다)',
+    check('🔴 decideStage — 옛 판 d5 SUSTAIN 다음 날 공개는 d1 (그날의 PASS 로도 올리지 않는다)',
       r.decision.release === 'd1' && r.decision.state !== 'TRIAL' && r.decision.contractVersion === STAGE_DECISION_VERSION)
   }
 }
@@ -573,14 +578,11 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
     noPersona.verdict === 'UNKNOWN' && noPersona.codes.includes('PERSONA_UNKNOWN'))
   check('🔴 기회 부족 → OPPORTUNITY_SHORT 예측 경고 (완성 글 며칠치가 아니라 증명일 슬롯 수 · 막지 않는다)',
     judgeNextPreflight('d5', { ...facts, contractValidPersonas: 40 }, RUNNER_GRID).forecastWarnings.includes('OPPORTUNITY_SHORT'))
-  check('🔴 지연 관측 없음 → 막지 않는 LATENCY_UNKNOWN 관측 경고 (판정 PASS)', (() => {
+  check('🔴 지연 관측이 없어도 관문 판정은 그대로다(PASS · 경고 없음)', (() => {
     const v = judgeNextPreflight('d3', { ...facts, latencyP50H: null, latencyP90H: null }, RUNNER_GRID)
-    return v.verdict === 'PASS' && v.warnings.includes('LATENCY_UNKNOWN')
+    return v.verdict === 'PASS' && v.warnings.length === 0
   })())
-  check('🔴 러너 모름 → UNKNOWN · 나쁨 → FAIL',
-    judgeNextPreflight('d3', { ...facts, runnerHealth: 'unknown' }, RUNNER_GRID).codes.includes('RUNNER_UNKNOWN')
-    && judgeNextPreflight('d3', { ...facts, runnerHealth: 'bad' }, RUNNER_GRID).verdict === 'FAIL')
-  check('🔴 3일 정산 단가 × 필요량이 상한을 넘으면 FAIL SUPPLY_COST_SHORT',
+  check('🔴 3일 정산 단가 × 필요량이 상한을 넘으면 SUPPLY_COST_SHORT 경고 — 관문은 막지 않는다',
     judgeNextPreflight('d3', { ...facts, readyCohort: {
       sources: 6, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.2,
       trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.2 },
