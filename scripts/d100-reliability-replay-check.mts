@@ -118,13 +118,12 @@ const OK_SIGNALS: HealthSignal[] = [
 ]
 const SIDE_OK: EvidenceSideSignals = {
   cost: [
-    { lane: 'supply', name: '공급 장부', health: 'ok' },
     { lane: 'comment', name: '댓글 장부', health: 'ok' },
     { lane: 'audit', name: '감사 장부', health: 'ok' },
   ],
-  errors: 'ok',
+
   supplyCostEvidence: {
-    legacyUsageUnknownRequests: 0,
+
     wholeDayCriticalHealth: 'ok',
     envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
   },
@@ -144,9 +143,7 @@ const preflightFacts = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): Prefl
     contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
     // 🔴 2026-11-13 — D30 이상 stage-active 하한(canon §4). 기준선은 하한과 같은 수가 active 다
     stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
-    commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
-    auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-    supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'), runnerHealth: 'ok', ...o,
+    supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'),...o,
   }
 }
 
@@ -168,10 +165,10 @@ function dayFacts(kstDate: string, stage: RuntimeStage, state: TransitionState, 
     }
   })
   const rows = posts.slice(0, auditTarget(posts.length))
-    .map((p) => ({ postId: p.postId, queueId: p.queueId ?? '', judged: true, defectYes: false, retryable: false, overdue: false }))
+    .map((p) => ({ postId: p.postId, queueId: p.queueId ?? '', judged: true }))
   return {
     kstDate, stage, decision: { kstDate, state, release: stage, decidedBy: DECISION_WRITER },
-    posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1, audits: { rows },
+    posts, orphanPublishLogs: 0, unloggedPublishes: 0,audits: { rows },
   }
 }
 

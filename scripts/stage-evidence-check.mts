@@ -88,7 +88,7 @@ const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
 })
 /** 🔴 감사 표본 한 행 — 그날 자동 target(postId·queueId)에 속해야 표본으로 센다 */
 const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean }> = {}) => ({
-  postId: `p-${i}`, queueId: `q-${i}`, judged: true, defectYes: false, retryable: false, overdue: false, ...o,
+  postId: `p-${i}`, queueId: `q-${i}`, judged: true, ...o,
 })
 const JUDGED = sample(0)
 const CLEAN_AUDITS = {
@@ -96,25 +96,24 @@ const CLEAN_AUDITS = {
 }
 const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}): StageEvidenceFacts => ({
   kstDate: D, stage,
-  decision: { kstDate: D, state: 'TRIAL', release: stage, decidedBy: DECISION_WRITER },
+  decision: { kstDate: D, release: stage, decidedBy: DECISION_WRITER },
   posts: Array.from({ length: PROFILES[stage].dailyTarget }, (_, i) => post(i)),
-  orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: personaCommentCapFor('bootstrap-auto'), audits: CLEAN_AUDITS, ...o,
+  orphanPublishLogs: 0, unloggedPublishes: 0,audits: CLEAN_AUDITS, ...o,
 })
 /** 🔴 비용은 정본 `judgeCost` 로 만든다 — health 를 손으로 적지 않는다 */
 const tally = (usd: number, overruns = 0): DayTally => ({ ...tallyOf([]), settledUsd: usd, overruns })
 const costOk = judgeCost({ uses: true, tally: tally(0.01), ledgerError: null, settleHold: null, capUsd: 1 })
 const SUPPLY_COST_OK = {
-  legacyUsageUnknownRequests: 0,
+
   wholeDayCriticalHealth: 'ok',
   envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
 } as const
 const side = (o: Partial<EvidenceSideSignals> = {}): EvidenceSideSignals => ({
   cost: [
-    { lane: 'supply', name: '공급 장부', health: costOk.health },
     { lane: 'comment', name: '댓글 장부', health: costOk.health },
     { lane: 'audit', name: '감사 장부', health: costOk.health },
   ],
-  errors: 'ok', supplyCostEvidence: SUPPLY_COST_OK, ...o,
+supplyCostEvidence: SUPPLY_COST_OK, ...o,
 })
 const judge = (f: StageEvidenceFacts | null, s: EvidenceSideSignals | null = side(), stage: RuntimeStage = 'd3') =>
   judgeStageEvidence(D, stage, f, s)
@@ -133,14 +132,14 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   // ① 결정
   failWith('🔴 결정 없음 → FAIL', judge(facts('d3', { decision: null })), 'DECISION_MISSING')
   failWith('🔴 사람이 쓴 결정(decidedBy≠controller) → FAIL', judge(facts('d3', {
-    decision: { kstDate: D, state: 'TRIAL', release: 'd3', decidedBy: 'human' } })), 'DECISION_NOT_CONTROLLER')
+    decision: { kstDate: D, release: 'd3', decidedBy: 'human' } })), 'DECISION_NOT_CONTROLLER')
   const naturalHold = judge(facts('d3', {
-    decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } }))
+    decision: { kstDate: D, release: 'd3', decidedBy: DECISION_WRITER } }))
   check('🟢 자연 HOLD 날도 자동 exact 3 · 나머지 증거 완전이면 D3 운영 PASS', naturalHold.verdict === 'PASS', naturalHold.codes.join(','))
   failWith('🔴 자연 HOLD 날 2/3은 정상 평상 운영이지만 단계 PASS는 아니다', judge(facts('d3', {
-    posts: [post(0), post(1)], decision: { kstDate: D, state: 'HOLD', release: 'd3', decidedBy: DECISION_WRITER } })), 'PUBLISH_NOT_AUTO_READY')
+    posts: [post(0), post(1)], decision: { kstDate: D, release: 'd3', decidedBy: DECISION_WRITER } })), 'PUBLISH_NOT_AUTO_READY')
   failWith('🔴 결정 공개 단계 ≠ 판정 단계 → FAIL', judge(facts('d3', {
-    decision: { kstDate: D, state: 'TRIAL', release: 'd1', decidedBy: DECISION_WRITER } })), 'DECISION_STAGE_MISMATCH')
+    decision: { kstDate: D, release: 'd1', decidedBy: DECISION_WRITER } })), 'DECISION_STAGE_MISMATCH')
 
   // ② 발행 — 🔴 자동 READY 로 무인 발행된 글만 자동 target 이다(사람 승인 글은 0건)
   failWith('🔴 자동 target 이 목표보다 적다(2/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1)] })), 'PUBLISH_NOT_AUTO_READY')
@@ -174,13 +173,13 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 반례② D10 증명일 자동 11 → FAIL', d10Of([...ten, post(10)]), 'PUBLISH_OVER')
   failWith('🔴 반례② D10 증명일 자동 9 + 사람 1 → FAIL', d10Of([...ten.slice(0, 9), post(9, { decider: 'human' })]), 'PUBLISH_NOT_AUTO_READY')
   const retest10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
-    decision: { kstDate: D, state: 'TRIAL', release: 'd10', decidedBy: DECISION_WRITER } }), side())
+    decision: { kstDate: D, release: 'd10', decidedBy: DECISION_WRITER } }), side())
   check('🟢 반례② RETEST 도 TRIAL 상태다 — 같은 exact 10 판정', retest10.verdict === 'PASS')
   const naturalPrepare10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
-    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side())
+    decision: { kstDate: D, release: 'd10', decidedBy: DECISION_WRITER } }), side())
   check('🟢 반례② 평상일 PREPARE도 자동 exact 10이면 운영 PASS', naturalPrepare10.verdict === 'PASS', naturalPrepare10.codes.join(','))
   failWith('🔴 반례② 평상일 PREPARE 4/10은 단계 PASS가 아니다', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
-    decision: { kstDate: D, state: 'PREPARE', release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'PUBLISH_NOT_AUTO_READY')
+    decision: { kstDate: D, release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'PUBLISH_NOT_AUTO_READY')
 
   // ③ 첫 댓글
   failWith('🔴 09:30 글 Persona 댓글 없음 → FAIL (09-29 반례)', judge(facts('d3', {
@@ -420,7 +419,6 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       `${bounded.verdict} ${bounded.codes.join(',')}`)
     const lateWholeDayBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
       cost: [
-        { lane: 'supply', name: '공급 장부', health: 'bad' },
         { lane: 'comment', name: '댓글 장부', health: 'ok' },
         { lane: 'audit', name: '감사 장부', health: 'ok' },
       ],
@@ -438,7 +436,6 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       criticalWholeDayBad, 'COST_BAD')
     const nonSupplyBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
       cost: [
-        { lane: 'supply', name: '공급 장부', health: 'ok' },
         { lane: 'comment', name: '댓글 장부', health: 'bad' },
         { lane: 'audit', name: '감사 장부', health: 'ok' },
       ],
@@ -995,7 +992,7 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     provenance: c.provenance,
   }))
   const withThread = (cs: readonly ThreadComment[], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
-    judge(facts('d3', { commentCapPerPost: cap, posts: [post(0, {
+    judge(facts('d3', {posts: [post(0, {
       personaComments: cs,
       conversationComments: conversationOf(cs),
     }), post(1), post(2)] }))
@@ -1168,8 +1165,8 @@ const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
     trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001 },
   },
   latencyP50H: 20, latencyP90H: 50,
-  contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
-  supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  contractValidPersonas: 500,
+  supplyDailyUsdCap: 0.5,
 })
 const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}) => judgeNextPreflight(s, { ...GOOD_FACTS(s), ...o }, RUNNER_GRID)
 const OK_SIGNALS: HealthSignal[] = [

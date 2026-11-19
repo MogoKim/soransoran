@@ -101,12 +101,11 @@ const addDays = (d: string, n: number): string => new Date(Date.parse(`${d}T00:0
 const at0700 = (d: string): string => new Date(`${d}T07:00:00+09:00`).toISOString()
 const SIDE_OK: EvidenceSideSignals = {
   cost: [
-    { lane: 'supply', name: '공급', health: 'ok' },
     { lane: 'comment', name: '댓글', health: 'ok' },
     { lane: 'audit', name: '감사', health: 'ok' },
-  ], errors: 'ok',
+  ],
   supplyCostEvidence: {
-    legacyUsageUnknownRequests: 0,
+
     wholeDayCriticalHealth: 'ok',
     envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
   },
@@ -501,9 +500,7 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
   contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
   // 🔴 2026-11-13 — D30 이상은 stage-active 도 하한을 넘어야 연다(canon §4). 기준선은 하한과 같은 수가 active 다
   stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
-  commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
-  auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-  supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'), runnerHealth: 'ok', ...o,
+  supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'),...o,
 })
 const D20_TRANSITION = judgeNextPreflight('d20', factsFor('d20', {
     readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
@@ -520,7 +517,7 @@ check('🔴 비용 변동 경계 — 결과당 실측 비용이 30% 상승하면
       sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1,
       usdPerSlotValidResult: 0.0502934 * 1.3,
     }),
-  }), GRID).codes.includes('SUPPLY_COST_SHORT'))
+  }), GRID).warnings.includes('SUPPLY_COST_SHORT'))
 const COST_EDGE_PASS = judgeNextPreflight('d20', factsFor('d20', {
   readyCohort: cohortFor('d20', { usdPerSlotValidResult: 0.058 }),
 }), GRID)
@@ -531,8 +528,8 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
   COST_EDGE_PASS.counts.readyCapacity === 20
   && Math.abs((COST_EDGE_PASS.counts.supplyDailyUsdNeeded ?? 0) - 1.16) < 1e-9
   && !COST_EDGE_PASS.forecastWarnings.includes('THROUGHPUT_SHORT')
-  && !COST_EDGE_PASS.codes.includes('SUPPLY_COST_SHORT')
-  && COST_EDGE_FAIL.codes.includes('SUPPLY_COST_SHORT'))
+  && !COST_EDGE_PASS.warnings.includes('SUPPLY_COST_SHORT')
+  && COST_EDGE_FAIL.warnings.includes('SUPPLY_COST_SHORT'))
 {
   // 🔴 2026-11-16 창업자 결정 — 11-17 부터 공급 승인 천장 $1.80. env 를 $1.80 으로 올려도 천장이 날짜 계약이므로
   //    11-16 증명일에는 $1.20 으로 눌린다(소급 0). 11-17 D30(30편)은 실측 $0.052/result → $1.56 으로 PASS 해야 한다.
@@ -545,12 +542,12 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
   const edgePass = d30('2026-11-17', 0.06)
   const edgeFail = d30('2026-11-17', 0.060001)
   check('🔴 11-17 D30 — env $1.80 · 날짜 천장 $1.80 · 결과당 $0.052 × 30 = $1.56 → SUPPLY_COST_SHORT 없음 · 증명 예산 $1.80',
-    !open1117.codes.includes('SUPPLY_COST_SHORT') && open1117.counts.supplyProofBudgetUsd === 1.8
+    !open1117.warnings.includes('SUPPLY_COST_SHORT') && open1117.counts.supplyProofBudgetUsd === 1.8
     && Math.abs((open1117.counts.supplyDailyUsdNeeded ?? 0) - 1.56) < 1e-9, JSON.stringify(open1117.codes))
   check('🔴 11-16 은 env 가 $1.80 이어도 날짜 천장 $1.20 으로 눌려 SUPPLY_COST_SHORT (소급 0)',
-    shut1116.codes.includes('SUPPLY_COST_SHORT') && shut1116.counts.supplyProofBudgetUsd === 1.2, JSON.stringify(shut1116.counts))
+    shut1116.warnings.includes('SUPPLY_COST_SHORT') && shut1116.counts.supplyProofBudgetUsd === 1.2, JSON.stringify(shut1116.counts))
   check('🔴 11-17 경계 — $0.060 × 30 = $1.80 PASS · $0.060001 FAIL',
-    !edgePass.codes.includes('SUPPLY_COST_SHORT') && edgeFail.codes.includes('SUPPLY_COST_SHORT'))
+    !edgePass.warnings.includes('SUPPLY_COST_SHORT') && edgeFail.warnings.includes('SUPPLY_COST_SHORT'))
 }
 check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 승인 천장 $0.50',
   supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
@@ -560,8 +557,8 @@ check('🔴 저예산 7회 profile은 앞 5회 몫만 비용 용량으로 센다
   && judgeNextPreflight('d20', factsFor('d20', {
     supplyDailyUsdCap: 1.19,
     readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
-  }), GRID).codes.includes('SUPPLY_COST_SHORT')
-  && !judgeNextPreflight('d10', factsFor('d10', { supplyDailyUsdCap: 0.5 }), GRID).codes.includes('SUPPLY_COST_SHORT'))
+  }), GRID).warnings.includes('SUPPLY_COST_SHORT')
+  && !judgeNextPreflight('d10', factsFor('d10', { supplyDailyUsdCap: 0.5 }), GRID).warnings.includes('SUPPLY_COST_SHORT'))
 for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
   const v = judgeNextPreflight(s, factsFor(s), GRID)
   check(`${s} preflight PASS — 댓글 ${v.counts.firstComments}건 · 감사 ${v.counts.auditExpected}건 · READY ${v.counts.readyNeeded}건 비용 상한 안`,
@@ -637,12 +634,6 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '🔴 계약 유효 Persona 0 < D3 하한 24 (2026-09-30 운영 실측) — D1→D3 부터 막힌다', s: 'd3', o: { contractValidPersonas: 0 }, want: 'FAIL', code: 'PERSONA_SHORT' },
   { name: '러너 최근 회차 실패', s: 'd5', o: { runnerHealth: 'bad' }, want: 'FAIL', code: 'RUNNER_BAD' },
   { name: '러너 모름', s: 'd5', o: { runnerHealth: null }, want: 'UNKNOWN', code: 'RUNNER_UNKNOWN' },
-  { name: '댓글 단가 모름', s: 'd20', o: { commentUsdPerRequest: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
-  { name: '댓글 단가 0 은 모름', s: 'd20', o: { commentUsdPerRequest: 0 }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
-  { name: '댓글 상한 모름', s: 'd20', o: { commentDailyUsdCap: null }, want: 'UNKNOWN', code: 'COMMENT_COST_UNKNOWN' },
-  { name: '댓글 단가 $0.026 × 20 > $0.50', s: 'd20', o: { commentUsdPerRequest: 0.026 }, want: 'FAIL', code: 'COMMENT_COST_SHORT' },
-  { name: '감사 단가 $0.05 × 10 > $0.30', s: 'd50', o: { auditUsdPerCall: 0.05 }, want: 'FAIL', code: 'AUDIT_COST_SHORT' },
-  { name: '감사 상한 모름', s: 'd20', o: { auditDailyUsdCap: null }, want: 'UNKNOWN', code: 'AUDIT_COST_UNKNOWN' },
   { name: '공급 결과당 비용 $0.025 × 목표 50 > $1.20', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.025 }) }, want: 'FAIL', code: 'SUPPLY_COST_SHORT' },
   { name: '🔴 결말 절반이 모름(공개 5 · 모름 5) → 필요량 상한까지는 못 채운다 → 예측 경고', s: 'd5', o: { readyCohort: cohortFor('d5', { unknown: 5, sources: 150 }) }, want: 'PASS', code: 'READY_REQUIREMENT_UNKNOWN', lane: 'forecast' },
   { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족(예측 경고 · 산술은 그대로)', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'PASS', code: 'THROUGHPUT_SHORT', lane: 'forecast' },
@@ -705,19 +696,19 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
   const auto = posts.filter((x) => x.decider === 'auto' && x.unattended)
   const want = auditTarget(auto.length)
   const sample = auto.slice(0, mode === 'auditShort' ? Math.max(0, want - 1) : want)
-  const rows = sample.map((x) => ({ postId: x.postId, queueId: x.queueId ?? '', judged: true, defectYes: false, retryable: false, overdue: false }))
-  if (mode === 'auditOutside') rows.push({ postId: 'elsewhere', queueId: 'elsewhere', judged: true, defectYes: false, retryable: false, overdue: false })
+  const rows = sample.map((x) => ({ postId: x.postId, queueId: x.queueId ?? '', judged: true }))
+  if (mode === 'auditOutside') rows.push({ postId: 'elsewhere', queueId: 'elsewhere', judged: true })
   return {
     kstDate: d.kstDate, stage: d.release,
-    decision: { kstDate: d.kstDate, state: d.state, release: d.release, decidedBy: d.decidedBy },
-    posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
+    decision: { kstDate: d.kstDate, release: d.release, decidedBy: d.decidedBy },
+    posts, orphanPublishLogs: 0, unloggedPublishes: 0,
     audits: { rows },
   }
 }
 const evidenceOfDay = (d: StageDecision, mode: DayMode): StageEvidenceVerdict =>
   judgeStageEvidence(d.kstDate, d.release, factsOfDay(d, mode),
     mode === 'costUnknown'
-      ? { cost: [{ lane: 'comment', name: '댓글', health: 'unknown' }], errors: 'ok', supplyCostEvidence: SIDE_OK.supplyCostEvidence }
+      ? { cost: [{ lane: 'comment', name: '댓글', health: 'unknown' }],supplyCostEvidence: SIDE_OK.supplyCostEvidence }
       : SIDE_OK)
 
 type DayOpts = {
@@ -1244,7 +1235,6 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   }
   const cases: { name: string; o: DayOpts; code: string }[] = [
     { name: 'Persona canary 하한 미달', o: { facts: (s) => factsFor(s, { contractValidPersonas: 10 }) }, code: 'PREFLIGHT_FAIL' },
-    { name: '댓글 비용 초과', o: { facts: (s) => factsFor(s, { commentUsdPerRequest: 0.05 }) }, code: 'PREFLIGHT_FAIL' },
     { name: '공급 비용 모름', o: { facts: (s) => factsFor(s, { readyCohort: cohortFor(s, { usdPerSlotValidResult: null }) }) }, code: 'PREFLIGHT_UNKNOWN' },
     { name: '08:30 에 늦게 돈 controller', o: { runAt: (d) => new Date(`${d}T08:30:00+09:00`).toISOString() }, code: 'LATE_START' },
   ]
@@ -1261,7 +1251,7 @@ for (const m of ['human', 'mixed', 'manualRun'] as const) {
   }).some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
   // 🔴 (2026-09-30) d3~d10 도 같은 관문이다 — 사실을 모르면 d5 도 열리지 않는다
   const d5 = runDay(addDays(D0, 1), startRow('d3', 'REPROVE'), 'perfect', { facts: (s) => factsFor(s, {
-    slotValidOpportunities: null, contractValidPersonas: null, commentUsdPerRequest: null, auditUsdPerCall: null, readyCohort: null,
+    slotValidOpportunities: null, contractValidPersonas: null, readyCohort: null,
   }) })
   check('🔴 🔴 S7 d3~d10 시험도 같은 관문을 지난다(사실 전부 모름 → d5 열지 않음 · 평상일 PREPARE d3)',
     tr(d5) === 'PREPARE:d3' && blocked(d5, 'PREFLIGHT_UNKNOWN'), tr(d5))

@@ -230,11 +230,10 @@ async function main(): Promise<void> {
       commentCapPerPost: personaCommentCapFor('bootstrap-auto') })
     const ev = judgeStageEvidence(TODAY, 'd3', facts, {
       cost: [
-        { lane: 'supply', name: '공급', health: 'ok' },
         { lane: 'comment', name: '댓글', health: 'ok' },
         { lane: 'audit', name: '감사', health: 'ok' },
-      ], errors: 'ok',
-      supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+      ],
+      supplyCostEvidence: {wholeDayCriticalHealth: 'ok', envelope: {
         settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
       } },
     })
@@ -257,11 +256,10 @@ async function main(): Promise<void> {
       commentCapPerPost: personaCommentCapFor('bootstrap-auto') })
     const ev = judgeStageEvidence(TODAY, 'd3', facts, {
       cost: [
-        { lane: 'supply', name: '공급', health: 'ok' },
         { lane: 'comment', name: '댓글', health: 'ok' },
         { lane: 'audit', name: '감사', health: 'ok' },
-      ], errors: 'ok',
-      supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+      ],
+      supplyCostEvidence: {wholeDayCriticalHealth: 'ok', envelope: {
         settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
       } },
     })

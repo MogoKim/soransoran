@@ -90,27 +90,26 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
   const n = PROFILES[stage].dailyTarget
   return judgeStageEvidence(PREV_DATE, stage, {
     kstDate: PREV_DATE, stage,
-    decision: { kstDate: PREV_DATE, state: 'TRIAL', release: stage, decidedBy: DECISION_WRITER },
+    decision: { kstDate: PREV_DATE, release: stage, decidedBy: DECISION_WRITER },
     posts: Array.from({ length: n }, (_, i) => ({
       postId: `pp-${i}`, queueId: `pq-${i}`,
       publishedAtMs: at + i * 3600_000, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `pa-${i}`,
       decider: 'auto' as const, release: 'STAMPED_ELIGIBLE' as const,
       personaComments: [{ personaId: `pc-${i}`, createdAtMs: at + i * 3600_000 + 600_000, topLevel: true, provenance: 'auto' as const }],
     })),
-    orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
+    orphanPublishLogs: 0, unloggedPublishes: 0,
     audits: {
       rows: Array.from({ length: auditTarget(n) }, (_, i) => ({
-        postId: `pp-${i}`, queueId: `pq-${i}`, judged: true, defectYes: false, retryable: false, overdue: false,
+        postId: `pp-${i}`, queueId: `pq-${i}`, judged: true,
       })),
     },
   }, {
     cost: [
-      { lane: 'supply', name: '공급', health: 'ok' },
       { lane: 'comment', name: '댓글', health: 'ok' },
       { lane: 'audit', name: '감사', health: 'ok' },
     ],
-    errors: 'ok',
-    supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+
+    supplyCostEvidence: {wholeDayCriticalHealth: 'ok', envelope: {
       settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
     } },
   })
@@ -126,8 +125,8 @@ const GOOD_FACTS = (s: RuntimeStage): PreflightFacts => ({
     trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001 },
   },
   latencyP50H: 20, latencyP90H: 50,
-  contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3,
-  supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+  contractValidPersonas: 500,
+  supplyDailyUsdCap: 0.5,
 })
 const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): PreflightVerdict =>
   judgeNextPreflight(s, { ...GOOD_FACTS(s), ...o }, RUNNER_GRID)
@@ -208,7 +207,7 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
     unkPf.state !== 'TRIAL' && unkPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
   const missingProofDate = preflightFor('d5', { proofKstDate: null })
   check('🔴 proof 날짜를 모르면 현재 상수로 대신하지 않고 SUPPLY_COST_UNKNOWN',
-    missingProofDate.verdict === 'UNKNOWN' && missingProofDate.codes.includes('SUPPLY_COST_UNKNOWN'),
+    missingProofDate.verdict === 'UNKNOWN' && missingProofDate.warnings.includes('SUPPLY_COST_UNKNOWN'),
     JSON.stringify(missingProofDate.codes))
   const baseReady = GOOD_FACTS('d5').readyCohort!
   const overrunPf = preflightFor('d5', { readyCohort: {
@@ -216,8 +215,8 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
     trialCost: { ...baseReady.trialCost!, overrunRequests: 1, ineligibleRequests: 1 },
   } })
   check('🔴 예약 초과는 귀속 불명과 함께 있어도 UNKNOWN으로 약화하지 않고 SUPPLY_COST_SHORT',
-    overrunPf.verdict === 'FAIL' && overrunPf.codes.includes('SUPPLY_COST_SHORT')
-    && !overrunPf.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(overrunPf.codes))
+    overrunPf.verdict === 'FAIL' && overrunPf.warnings.includes('SUPPLY_COST_SHORT')
+    && !overrunPf.warnings.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(overrunPf.codes))
   const cohortForCapacity = (capacity: number): NonNullable<PreflightFacts['readyCohort']> => {
     for (let sources = 1; sources <= 200; sources += 1) {
       for (let raw = 0; raw <= 200; raw += 1) {

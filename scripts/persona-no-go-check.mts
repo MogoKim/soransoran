@@ -106,7 +106,7 @@ console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경
   check('🔴 역할 모름 → 계약 유효 · 이번 회차 배정 안 함', unk.valid && unk.roundUnknown.includes('roleShare'))
   const ev = (authors: (string | null)[]): string[] => {
     const facts: EvidenceFactsFor<string> = {
-      kstDate: '2026-10-02', stage: 'd3', decision: null, commentCapPerPost: 3,
+      kstDate: '2026-10-02', stage: 'd3', decision: null,
       posts: authors.map((a, i) => ({ postId: `p${i}`, queueId: `q${i}`, publishedAtMs: 0, unattended: true, queueRows: 1, publishLogs: 1,
         authorPersonaId: a, decider: 'auto' as const, personaComments: [], release: 'STAMPED_ELIGIBLE' as const })),
       orphanPublishLogs: 0, unloggedPublishes: 0,

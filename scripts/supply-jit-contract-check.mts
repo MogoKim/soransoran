@@ -577,13 +577,11 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
       },
     },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2,
-    auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: 1.2, runnerHealth: 'ok',
+    supplyDailyUsdCap: 1.2,
   }, RUNNER_GRID)
   check('🔴 hard overrun이 하나라도 있으면 preflight는 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
-    overrunPreflight.codes.includes('SUPPLY_COST_SHORT')
-      && !overrunPreflight.codes.includes('SUPPLY_COST_UNKNOWN'),
+    overrunPreflight.warnings.includes('SUPPLY_COST_SHORT')
+      && !overrunPreflight.warnings.includes('SUPPLY_COST_UNKNOWN'),
     JSON.stringify(overrunPreflight.codes))
   const linked = costAttributionOf({
     entries: [e(hp, 0.02), e(hs, 0.02), e(hl, 0.02), e(articleIdHashOf('fx', 'hold'), 0.04)],
@@ -611,12 +609,11 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
       usdPerSlotValidResult: legacyOnly?.usdPerSlotValidResult ?? null, trialCost: null,
     },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    supplyDailyUsdCap: 0.5,
   }
   const lv = judgeNextPreflight('d5', legacyFacts, RUNNER_GRID)
   check('🔴 🔴 **옛 장부 $0.939 만 있는 상태 → SUPPLY_COST_UNKNOWN (SUPPLY_COST_SHORT 아님 · raw 단가 authority 없음)**',
-    lv.codes.includes('SUPPLY_COST_UNKNOWN') && !lv.codes.includes('SUPPLY_COST_SHORT') && !('rawReadyUsd' in lv.counts),
+    lv.warnings.includes('SUPPLY_COST_UNKNOWN') && !lv.warnings.includes('SUPPLY_COST_SHORT') && !('rawReadyUsd' in lv.counts),
     JSON.stringify(lv.codes))
   // 🔴 B — legacy + 완전 연결 현재 계약 → 현재 계약 표본만으로 단가(legacy 는 보고만 · 분자에 없음)
   const mixed = costAttributionOf({
@@ -669,11 +666,10 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
         riskUsdPerSlotValidResult: cUu.trialRiskUsdPerSlotValidResult,
       },
     },
-    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24, supplyDailyUsdCap: 0.5,
   }, RUNNER_GRID)
   check('🔴 🔴 **예약 있는 usageUnknown 이 cohort 에 있으면 preflight 는 SUPPLY_COST_UNKNOWN (SHORT · PASS 아님)**',
-    unkV.codes.includes('SUPPLY_COST_UNKNOWN') && !unkV.codes.includes('SUPPLY_COST_SHORT'), JSON.stringify(unkV.codes))
+    unkV.warnings.includes('SUPPLY_COST_UNKNOWN') && !unkV.warnings.includes('SUPPLY_COST_SHORT'), JSON.stringify(unkV.codes))
   const liveSettled = Array.from({ length: 34 }, (_, i) => ({ ...e(hp, 0.003), attemptId: `20261004-031500-s${i}` }))
   const liveUnknown = { ...e(hp, null, 'usageUnknown'), attemptId: '20261004-031500-u', reservedUsd: 0.006 }
   const liveCost = costAttributionOf({
@@ -694,35 +690,34 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
       usdPerSlotValidResult: cost.usdPerSlotValidResult, trialCost: trialCostOf(cost),
     },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 24,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: cap, runnerHealth: 'ok',
+    supplyDailyUsdCap: cap,
   }, RUNNER_GRID)
   const liveTrial = liveCost === null ? null : trialVerdict(liveCost)
   check('🟢 제한 trial — 정산 34 + usageUnknown 1(예약 양수) · 비율 97.1% · 위험액 D5 상한 안 → PASS + 명시 경고',
     liveCost !== null && liveCost.usdPerSlotValidResult === null && liveCost.settledRequests === 34
     && liveCost.usageUnknownRequests === 1 && liveCost.trialIneligibleRequests === 0
     && liveTrial?.verdict === 'PASS' && liveTrial.warnings.includes('SUPPLY_COST_TRIAL_RISK')
-    && !liveTrial.codes.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify({ liveCost, liveTrial }))
+    && !liveTrial.warnings.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify({ liveCost, liveTrial }))
   const tooSmall = costAttributionOf({
     entries: [...liveSettled.slice(0, 19), liveUnknown], fateByKey, counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
   check('🔴 정산 표본 19건은 제한 trial 하한 20 미달 → SUPPLY_COST_UNKNOWN',
-    tooSmall !== null && trialVerdict(tooSmall).codes.includes('SUPPLY_COST_UNKNOWN'))
+    tooSmall !== null && trialVerdict(tooSmall).warnings.includes('SUPPLY_COST_UNKNOWN'))
   const twoUnknown = costAttributionOf({
     entries: [...liveSettled, liveUnknown, { ...liveUnknown, attemptId: 'u2' }], fateByKey,
     counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
   check('🔴 정산 34 + usageUnknown 2는 정산 비율 95% 미만 → SUPPLY_COST_UNKNOWN',
-    twoUnknown !== null && trialVerdict(twoUnknown).codes.includes('SUPPLY_COST_UNKNOWN'))
+    twoUnknown !== null && trialVerdict(twoUnknown).warnings.includes('SUPPLY_COST_UNKNOWN'))
   const noReservationTrial = costAttributionOf({
     entries: [...liveSettled, { ...liveUnknown, reservedUsd: null }], fateByKey,
     counts: { published: 3, scheduled: 0 }, cohortRuns: COHORT,
   })
   check('🔴 양수 예약 없는 usageUnknown은 위험 envelope를 만들지 않는다 → SUPPLY_COST_UNKNOWN',
     noReservationTrial !== null && noReservationTrial.trialIneligibleRequests === 1
-    && trialVerdict(noReservationTrial).codes.includes('SUPPLY_COST_UNKNOWN'))
+    && trialVerdict(noReservationTrial).warnings.includes('SUPPLY_COST_UNKNOWN'))
   check('🔴 제한 trial 위험액이 공급 상한을 넘으면 UNKNOWN으로 숨기지 않고 SUPPLY_COST_SHORT',
-    liveCost !== null && trialVerdict(liveCost, 0.1).codes.includes('SUPPLY_COST_SHORT'))
+    liveCost !== null && trialVerdict(liveCost, 0.1).warnings.includes('SUPPLY_COST_SHORT'))
   check('🟢 결말 모름 $0.01도 분자에 포함 — 전체 $0.03 ÷ 확인 결과 1 = 보수적 상한 $0.03',
     cUnknown !== null && Math.abs((cUnknown.usdPerSlotValidResult ?? 0) - 0.03) < 1e-12
     && Math.abs(cUnknown.byFate.unknown - 0.01) < 1e-12, JSON.stringify(cUnknown))
@@ -745,12 +740,11 @@ console.log('\n⑧ 비용 귀속 — 원천 해시로 연결된 비용만 결과
       },
     },
     latencyP50H: 57.14, latencyP90H: 70.59, contractValidPersonas: 24,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    supplyDailyUsdCap: 0.5,
   }, RUNNER_GRID)
   check('🟢 운영 모양 표본 5건 — 전부 정산·귀속 완전·예산 안이면 clean 비용 PASS',
     currentShapeCost !== null && Math.abs((currentShapeCost.usdPerSlotValidResult ?? 0) - 0.05504775) < 1e-12
-    && !currentShape.codes.includes('SUPPLY_COST_UNKNOWN') && !currentShape.codes.includes('SUPPLY_COST_SHORT'),
+    && !currentShape.warnings.includes('SUPPLY_COST_UNKNOWN') && !currentShape.warnings.includes('SUPPLY_COST_SHORT'),
     JSON.stringify({ cost: currentShapeCost, verdict: currentShape }))
   check('🔴 현재 계약 정산 0 · slot-valid 결과 0 → 모름',
     costAttributionOf({ entries: [e(hp, 0)], fateByKey, counts: { published: 1, scheduled: 0 }, cohortRuns: COHORT })?.usdPerSlotValidResult === null
@@ -917,9 +911,7 @@ console.log('\n⑩ 품질 계약 판이 바뀐 직후의 비용 표본 — 최�
       usdPerSlotValidResult: 0.11023825, trialCost: trialOf(25),
     },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 60, stageActivePersonas: 60,
-    commentUsdPerRequest: 0.00155, commentDailyUsdCap: 0.5,
-    auditUsdPerCall: 0.003, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: 1.8, runnerHealth: 'ok', ...o,
+    supplyDailyUsdCap: 1.8,...o,
   })
   const carryOf = (o: Partial<SupplyCostCarryoverFact> = {}): SupplyCostCarryoverFact => ({
     versions: ['quality-v26', 'quality-v27'], results: 64, usdPerSlotValidResult: 0.0487, trialCost: trialOf(1700), ...o,

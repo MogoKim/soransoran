@@ -33,7 +33,7 @@ import {
 } from '../src/lib/persona-thread-target'
 import {
   FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, commentProvenanceOf, judgeConversationAudit,
-  personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
+  personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
 } from '../src/lib/stage-evidence'
 import { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { toGateInput, toPromptPost } from './lib/persona-comment-bridge'
@@ -452,8 +452,6 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     personaCommentProvenanceOf(link(FOLLOWUP_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY)) === 'broken')
   check('⑤ 정본 분류: 추가 댓글 로그 누락 → followup-broken',
     personaCommentProvenanceOf(link(FOLLOWUP_LANE_DECIDED_BY, null)) === 'followup-broken')
-  check('⑤ #707 이후에도 bootstrap-auto 단계 상한 1 은 그대로(추가 댓글은 상한 밖에서 따로 센다)',
-    personaCommentCapFor('bootstrap-auto') === 1)
 
   // ── 정본 분류 결과를 모듈 입력으로 — followup-broken 이 있는 글은 BLOCK ──
   {

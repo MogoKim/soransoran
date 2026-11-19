@@ -267,18 +267,17 @@ console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
   })
   const facts = (posts: EvidencePost[]): StageEvidenceFacts => ({
     kstDate: '2026-09-30', stage: 'd3',
-    decision: { kstDate: '2026-09-30', state: 'TRIAL', release: 'd3', decidedBy: 'controller' },
-    posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1,
-    audits: { rows: posts.slice(0, 1).map((p) => ({ postId: p.postId, queueId: p.queueId!, judged: true, defectYes: false, retryable: false, overdue: false })) },
+    decision: { kstDate: '2026-09-30', release: 'd3', decidedBy: 'controller' },
+    posts, orphanPublishLogs: 0, unloggedPublishes: 0,
+    audits: { rows: posts.slice(0, 1).map((p) => ({ postId: p.postId, queueId: p.queueId!, judged: true })) },
   })
   const side = {
     cost: [
-      { lane: 'supply' as const, name: '공급', health: 'ok' as const },
       { lane: 'comment' as const, name: '댓글', health: 'ok' as const },
       { lane: 'audit' as const, name: '감사', health: 'ok' as const },
-    ], errors: 'ok' as const,
+    ],
     supplyCostEvidence: {
-      legacyUsageUnknownRequests: 0,
+
       wholeDayCriticalHealth: 'ok' as const,
       envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
     },
@@ -566,8 +565,7 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
       trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.02 },
     },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    supplyDailyUsdCap: 0.5,
   }
   check('d3 모든 사실이 있으면 PASS', judgeNextPreflight('d3', facts, RUNNER_GRID).verdict === 'PASS', JSON.stringify(judgeNextPreflight('d3', facts, RUNNER_GRID).codes))
   const noPersona = judgeNextPreflight('d3', { ...facts, contractValidPersonas: null }, RUNNER_GRID)
@@ -586,7 +584,7 @@ console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
     judgeNextPreflight('d3', { ...facts, readyCohort: {
       sources: 6, published: 3, lost: 0, scheduled: 0, unknown: 0, usdPerSlotValidResult: 0.2,
       trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.2 },
-    } }, RUNNER_GRID).codes.includes('SUPPLY_COST_SHORT'))
+    } }, RUNNER_GRID).warnings.includes('SUPPLY_COST_SHORT'))
   const slots = slotTimesOn('2026-10-01', profileOf('d3'))
   const always: SlotOpportunity = { key: 'r', validAt: () => true }
   const src = (k: string): SlotOpportunity => ({ key: k, validAt: () => true })

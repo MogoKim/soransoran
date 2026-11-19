@@ -134,8 +134,8 @@ check('READY 기준 재고가 없으면 intent 신원·감사 기준선을 만�
   const { readyStock: _readyStock, ...counts } = p.counts
   return plan({ ...p, counts }).kind === 'none'
 })())
-check('러너·품질 같은 다른 결함이 섞이면 열지 않는다',
-  plan(preflight({ codes: ['OPPORTUNITY_SHORT', 'RUNNER_BAD'] })).kind === 'none')
+check('Persona 하한 같은 다른 결함이 섞이면 열지 않는다',
+  plan(preflight({ codes: ['OPPORTUNITY_SHORT', 'PERSONA_SHORT'] })).kind === 'none')
 check('PASS를 다시 실행하지 않는다', plan(preflight({ verdict: 'PASS', codes: [] })).kind === 'none')
 check('D10 이하는 새 복구 경로를 열지 않는다',
   planActiveRecovery({ target: 'd10', preflight: preflight(), signals, failures: [], now: atKst('07:00') }).kind === 'none')
@@ -525,10 +525,9 @@ console.log('\n⑤ 소스 배선 — 실행 경계와 자연 증거 분리')
     && !/recoveryLineage/.test(controller + facts))
   check('🔴 운영 controller에 시각을 바꾸는 플래그가 없다(다른 날짜 결정을 쓰는 수동 통로 금지)',
     !/--now|NOW_OVERRIDE|process\.env\.[A-Z_]*NOW/.test(controller) && /const NOW = new Date\(\)/.test(controller))
-  check('controller는 recovery 단계를 주입 실행부 하나로만 돌린다',
-    (controller.match(/runStageRecoveryStep\(/g) ?? []).length === 1
-    && !/ensureStageDecision\(\{/.test(controller.slice(controller.indexOf('async function main(')))
-    && /compute: \(mode\) => computeToday\(prisma, mode, flagOn\)/.test(controller))
+  check('🔴 운영 controller 는 제한 복구를 부르지 않는다 — 결정 저장은 create-only 한 자리',
+    !/runStageRecoveryStep|planActiveRecovery|launchActiveRecovery|stage-active-recovery/.test(controller)
+    && (controller.match(/ensureStageDecision\(\{/g) ?? []).length === 1)
   check('recovery-tagged workset은 다음 시험의 자연 수율 분자·분모에서 뺀다',
     /isSupplyCostRecoveryTagged\(run\.runTokenShadow\)/.test(facts))
 }
@@ -637,7 +636,7 @@ const prevD10 = ((): ValidatedStageDecision => {
 })()
 const decisionWith = (s: readonly HealthSignal[], at = '07:55'): ControllerResult => decideStage({
   kstDate: DAY, decidedAt: atKst(at).toISOString(), previousDecision: prevD10, previousEvidence: null,
-  carriedPlan: null, nextPreflight: null, publishedToday: 0, signals: s,
+  nextPreflight: null, publishedToday: 0, signals: s,
 })
 const okResult = decisionWith(signals)
 const memoryIo = (): { io: StageRecoveryStepDeps['io']; inserts: () => number } => {

@@ -96,13 +96,12 @@ const MIN = 60_000
 const SLOTS = [at(9, 30), at(13, 30), at(17, 30)]
 const SIDE_OK: EvidenceSideSignals = {
   cost: [
-    { lane: 'supply', name: '공급 장부', health: 'ok' },
     { lane: 'comment', name: '댓글 장부', health: 'ok' },
     { lane: 'audit', name: '감사 장부', health: 'ok' },
   ],
-  errors: 'ok',
+
   supplyCostEvidence: {
-    legacyUsageUnknownRequests: 0,
+
     wholeDayCriticalHealth: 'ok',
     envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
   },
