@@ -14,6 +14,8 @@
  */
 import { readFileSync } from 'node:fs'
 
+import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
+
 import { judgeNextPreflight, requiresStageActiveFloor, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { profileOf } from '../src/lib/scale-profile'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
@@ -294,8 +296,8 @@ console.log('\n⑤ 댓글 vitality — 결과값 · 불변식')
   check('🟢 글쓴이 답글 3회는 허용(일반 중복 아님)', authorThree.verdict === 'PASS', JSON.stringify(authorThree.codes))
   const authorFour = judgeCommentVitality([post([c('PERSONA', 600_000, 'p1'), ...[1, 2, 3, 4].map((i) => re(600_000 * (i + 1), 'author'))])], NOW)
   check('🔴 글쓴이 답글 4회 → FAIL AUTHOR_REPLY_OVER_CAP', authorFour.codes.includes('AUTHOR_REPLY_OVER_CAP'))
-  const eleven = judgeCommentVitality([post(Array.from({ length: 11 }, (_, i) => c('PERSONA', 600_000 * (i + 1), `q${i}`)))], NOW)
-  check('🔴 Persona 11건 → FAIL PERSONA_OVER_CAP · 분포 11+ (최대 20 아님)', eleven.codes.includes('PERSONA_OVER_CAP') && eleven.distribution['11+'] === 1)
+  const eleven = judgeCommentVitality([post(Array.from({ length: PERSONA_COMMENTS_PER_POST_MAX + 1 }, (_, i) => c('PERSONA', 600_000 * (i + 1), `q${i}`)))], NOW)
+  check('🔴 Persona 구조 상한 + 1건 → FAIL PERSONA_OVER_CAP · 분포 11+', eleven.codes.includes('PERSONA_OVER_CAP') && eleven.distribution['11+'] === 1)
   check('🔴 중복 판정은 대화 감사와 같은 함수 하나를 쓴다(복제 0)', /otherPersonaTurnsExceed\(/.test(readFileSync('src/lib/comment-vitality.ts', 'utf8'))
     && /otherPersonaTurnsExceed\(/.test(readFileSync('src/lib/stage-evidence.ts', 'utf8')))
   const lib = readFileSync('src/lib/comment-vitality.ts', 'utf8').replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')

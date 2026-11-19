@@ -187,7 +187,7 @@ export function isAutoLaneCandidatePost(p: AutoLanePostFacts, nowMs: number): bo
 
 /**
  * 🔴 **글마다 첫 대상 하나만 남긴다.** planner 는 라운드로빈으로 한 글에 둘째 자리를
- *    채울 수 있다(구조 상한 10). 이 레인은 글당 1건이므로 둘째부터는 만들지도 부르지도 않는다.
+ *    채울 수 있다(구조 상한 `PERSONA_COMMENTS_PER_POST_MAX`). 이 레인은 글당 1건이므로 둘째부터는 만들지도 부르지도 않는다.
  */
 export function firstPerPost<T>(items: readonly T[], postIdOf: (t: T) => string): T[] {
   const seen = new Set<string>()

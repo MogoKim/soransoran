@@ -1,5 +1,5 @@
 /**
- * 글당 Persona **추가 댓글**(첫 댓글 뒤 0~9건) 판정 — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
+ * 글당 Persona **추가 댓글**(첫 댓글 뒤 — 몇 건인지는 글의 대화 계획) 판정 — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
  *
  * 🔴 **왜 생겼나** (2026-10-13 · D100 canon §5 "첫 댓글에서 선택적 다중 턴으로").
  *
@@ -18,7 +18,7 @@
  *
  * 🔴 **기본 OFF.** `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값일 때만 켜진다. 모르는 값은 OFF.
  *
- * 🔴 **누가 어디에 말할지는 글의 대화 계획이 정한다** (`persona-thread-plan`). 글 id 하나로 그 글의 Persona 댓글 수(2~10)와
+ * 🔴 **누가 어디에 말할지는 글의 대화 계획이 정한다** (`persona-thread-plan`). 글 id 하나로 그 글의 Persona 댓글 수(목표 평균에서 나온 분포 — `persona-thread-target`)와
  *    자리마다의 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해진다. 이 파일은 계획의 다음 자리가
  *    **지금 사실로 설 수 있는지**만 본다(`followupSeatsOf`). 계획이 정한 자리가 막히면 새 사람의 자리로 넘어간다 —
  *    한 자리 · 한 사람의 실패가 글을 멈추지 않는다. 한 회차에 한 글에는 최대 한 건이다.
@@ -50,7 +50,9 @@ import {
   PERSONA_OTHER_TURNS_PER_POST_MAX,
   PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
-import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, unitOf, type PlanLength, type PlanSeatKind } from './persona-thread-plan'
+import {
+  PLAN_MIN_GAP_MS, THREAD_DEADLINE_MS, planSlotAt, threadPlanOf, unitOf, type PlanLength, type PlanSeatKind,
+} from './persona-thread-plan'
 import type { PersonaCommentProvenance } from './stage-evidence'
 import type { DecisionStageEnv } from './scale-runtime'
 import { RUNTIME_STAGES, isRuntimeStage, type RuntimeStage } from './scale-profile'
@@ -77,9 +79,9 @@ export function readFollowupSwitch(env: Readonly<Record<string, string | undefin
 // 🔴 수량 · 시간 정본 — 새 숫자는 여기에만 있다
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 글당 Persona 댓글 총량 절대 상한 = 10 */
+/** 🔴 글당 Persona 댓글 총량 절대 상한 — 대화 계획의 가장 큰 크기(`PERSONA_COMMENTS_PER_POST_MAX`) */
 export const FOLLOWUP_TOTAL_PER_POST_MAX = PERSONA_COMMENTS_PER_POST_MAX
-/** 🔴 첫 댓글 뒤 추가 절대 상한 = 10 − 첫 댓글 1 = 9 */
+/** 🔴 첫 댓글 뒤 추가 절대 상한 = 총량 상한 − 첫 댓글 1 */
 export const FOLLOWUP_EXTRA_PER_POST_MAX = FOLLOWUP_TOTAL_PER_POST_MAX - AUTO_PERSONA_COMMENTS_PER_POST_MAX
 
 /**
@@ -90,8 +92,11 @@ export const FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST = 4
 
 /** 직전 Persona 댓글에서 최소 이만큼 띄운다 — 자리마다의 간격은 계획(`persona-thread-plan`)이 정한다 */
 export const FOLLOWUP_MIN_GAP_MS = PLAN_MIN_GAP_MS
-/** 🔴 공개 후 이 시간이 지난 글에는 잇지 않는다 — 식은 글에 늦게 붙이는 것은 대화가 아니다 */
-export const FOLLOWUP_POST_AGE_MAX_MS = 24 * 3_600_000
+/**
+ * 🔴 **대화 마감** — 공개 후 이 시간이 지난 글에는 새 자리를 열지 않는다(`THREAD_DEADLINE_MS` 하나에서 읽는다).
+ *    계획의 간격이 이 마감에서 역산되므로 계획은 마감 안에 끝난다. 생성 · 발행 트랜잭션 · 시도 기억 창이 같은 값이다.
+ */
+export const FOLLOWUP_POST_AGE_MAX_MS = THREAD_DEADLINE_MS
 
 /** 실회원 댓글이 1~2건이면 추가 상한을 이만큼으로 줄인다 */
 export const FOLLOWUP_EXTRA_WITH_MEMBERS_MAX = 1
@@ -314,7 +319,7 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
     return stop(`Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한`)
   }
-  const planSize = threadPlanOf(f.postId).size
+  const planSize = threadPlanOf(f.postId, f.publishedAtMs).size
   if (personaCount >= planSize) return stop(`Persona 댓글 ${personaCount}건 — 이 글의 대화 계획 ${planSize}건을 다 채웠다`)
   const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
   // ── 실회원 우선 ──
@@ -330,9 +335,9 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   if (latest !== undefined && (latest.commentOrigin === 'MEMBER' || latest.commentOrigin === 'GUEST')) {
     return stop('마지막 말이 실회원이다 — Persona 가 끼어들지 않는다(실회원 대화 우선)')
   }
-  // ── 현재성 ──
+  // ── 마감 ──
   if (nowMs - f.publishedAtMs > FOLLOWUP_POST_AGE_MAX_MS) {
-    return stop(`공개 ${Math.floor((nowMs - f.publishedAtMs) / 3_600_000)}시간 — 식은 글에 잇지 않는다`)
+    return stop(`공개 ${Math.floor((nowMs - f.publishedAtMs) / 3_600_000)}시간 — 대화 마감(${FOLLOWUP_POST_AGE_MAX_MS / 3_600_000}시간)이 지났다`)
   }
   const onPost = new Set<string>()
   for (const c of f.comments) if (c.commentOrigin === 'PERSONA' && c.personaId !== null) onPost.add(c.personaId)
@@ -349,7 +354,7 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
  * 🔴 **이 글에 지금 한 건 더 이어도 되는가.**
  *
  *    BLOCK — 사실을 못 읽었거나 모순이다(fail-closed). 그 글만 뺀다.
- *    STOP  — 이 글의 대화는 끝났다(상한 · 실회원 우선 · 식음 · 미해결 거리 없음).
+ *    STOP  — 이 글의 대화는 끝났다(계획을 다 채움 · 상한 · 실회원 우선 · 대화 마감).
  *    WAIT  — 아직 이르다(시간차). `notBeforeMs` 이후 다시 본다.
  *    GO    — 순번 · 멱등 열쇠 · 대상 · 제외 Persona · 역할 후보를 준다. Persona 를 고르지는 않는다.
  */
@@ -421,7 +426,7 @@ const rolesOf = (shape: ReactionType): ReactionType[] =>
  *    답 대상은 Persona 댓글뿐이고 한 댓글에는 답이 하나만 달린다(`replyTargetOpen`).
  */
 export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats: FollowupSeat[]; length: PlanLength; gapMs: number } {
-  const slot = planSlotAt(threadPlanOf(f.postId), ordinal)
+  const slot = planSlotAt(threadPlanOf(f.postId, f.publishedAtMs), ordinal)
   if (slot === null) return { seats: [], length: 'normal', gapMs: FOLLOWUP_MIN_GAP_MS }
   const author = f.authorPersonaId ?? null
   const consumed = consumedOf(f)
@@ -675,7 +680,7 @@ export function followupSpentRoleKeys(entries: readonly AttemptEntry[], nowMs: n
 
 /**
  * 🔴 **추가 댓글 시도 기억 lane.** 기억은 시도한 KST 날의 자정까지다 — 영구 차단 목록을 만들지 않는다.
- *    시도는 공개 후 `FOLLOWUP_POST_AGE_MAX_MS` 안에서만 일어난다(식은 글 규칙과 같은 범위).
+ *    시도는 공개 후 `FOLLOWUP_POST_AGE_MAX_MS`(대화 마감) 안에서만 일어난다.
  *    · 같은 조합 재시작 — 적재로 끝난 조합(다음 자리의 새 시도)과 `FU_TRANSIENT` 만 새 시작으로 바꾼다
  *    · 마지막 방어선 — 오늘 격리된 Persona · 글이면 시작 기록을 받지 않는다. 글 × Persona 는 여기서 막지 않는다 —
  *      글쓴이가 자기 글에서 역할을 바꿔 다시 서는 길이고(`withoutAuthorOwnPost`), 같은 조합은 열쇠 중복으로 이미 거절된다
@@ -1041,7 +1046,7 @@ export function verifyStamp(raw: unknown, expect: { postId: string; dedupKey: st
   const s = raw as Partial<FollowupStamp>
   if (s.v !== FOLLOWUP_STAMP_VERSION) return { ok: false, reason: `도장 판이 ${String(s.v)} 다` }
   if (s.postId !== expect.postId) return { ok: false, reason: '도장의 글과 대상 글이 다르다' }
-  // 순번은 구조 상한이 아니라 삭제 이력을 포함한 사건 순서다. live 상한 10은 followupBaseOf가 따로 지킨다.
+  // 순번은 구조 상한이 아니라 삭제 이력을 포함한 사건 순서다. live 구조 상한은 followupBaseOf가 따로 지킨다.
   if (!isCount(s.ordinal) || s.ordinal < 2) return { ok: false, reason: '도장 순번이 범위 밖이다' }
   if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey) return { ok: false, reason: '도장 순번과 멱등 열쇠가 다르다' }
   if (s.parentCommentId !== null && (typeof s.parentCommentId !== 'string' || s.parentCommentId === '')) {

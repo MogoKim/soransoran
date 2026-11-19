@@ -20,7 +20,7 @@ import {
   FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK, addFollowupIsolation, classifyFollowupFailure, followupFailureHaltsRound,
   followupAuthorUnavailableReason, followupIsolationOf, followupPersonaCandidates, followupPlanCap,
   followupSpentRoleKeys, followupStageOf, orderFollowupGo, partitionFollowupSourceContexts, pickFollowupSeat, withoutAuthorOwnPost,
-  readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
+  FOLLOWUP_POST_AGE_MAX_MS, readFollowupProfileRaw, readFollowupSwitch, stampOf, validateFollowupProfile,
   type FollowupCommentRow, type FollowupFailureCode, type FollowupIsolation, type FollowupPersonaFacts, type FollowupPostFacts,
   type FollowupPostVerdict,
 } from '../../src/lib/persona-comment-followup'
@@ -364,8 +364,8 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const lines: string[] = []
   const sweepBefore = await sweepFollowupLane(prisma, now)
 
-  // ── 사실 — 공개 24시간 안의 Persona 글 ──
-  const since = new Date(nowMs - 24 * 3_600_000)
+  // ── 사실 — 대화 마감 안의 Persona 글 ──
+  const since = new Date(nowMs - FOLLOWUP_POST_AGE_MAX_MS)
   const dayStart = kstDayStart(now)
   const sourcePosts = await deps.source.posts()
   const srcById = new Map<string, SourcePost>(sourcePosts.map((p) => [p.id, p]))

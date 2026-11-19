@@ -101,7 +101,7 @@
       }
     },
     {
-      "name": "Persona 10건이 이미 있다 → STOP",
+      "name": "Persona 10건 — 이 글의 대화 계획(10건)을 다 채웠다 → STOP",
       "nowMin": 600,
       "post": {},
       "comments": [
@@ -186,7 +186,7 @@
       ],
       "expect": {
         "verdict": "STOP",
-        "reasonIncludes": "10건 상한"
+        "reasonIncludes": "대화 계획 10건"
       }
     },
     {
@@ -308,8 +308,8 @@
       }
     },
     {
-      "name": "공개 25시간 → 식은 글 STOP",
-      "nowMin": 1500,
+      "name": "공개 8시간 1분 → 대화 마감 STOP",
+      "nowMin": 481,
       "post": {},
       "comments": [
         {
@@ -322,7 +322,7 @@
       ],
       "expect": {
         "verdict": "STOP",
-        "reasonIncludes": "식은 글"
+        "reasonIncludes": "대화 마감"
       }
     },
     {
@@ -393,19 +393,19 @@
     },
     {
       "name": "사슬 길이 6 끝에는 답하지 않는다 → 글에 새 댓글로 넘어간다",
-      "nowMin": 600,
+      "nowMin": 450,
       "post": {},
       "comments": [
         {
           "id": "c1",
-          "atMin": 10,
+          "atMin": 8,
           "origin": "PERSONA",
           "persona": "pB",
           "provenance": "auto"
         },
         {
           "id": "c2",
-          "atMin": 90,
+          "atMin": 68,
           "parent": "c1",
           "origin": "PERSONA",
           "persona": "pC",
@@ -413,7 +413,7 @@
         },
         {
           "id": "c3",
-          "atMin": 200,
+          "atMin": 150,
           "parent": "c2",
           "origin": "PERSONA",
           "persona": "pD",
@@ -421,7 +421,7 @@
         },
         {
           "id": "c4",
-          "atMin": 280,
+          "atMin": 210,
           "parent": "c3",
           "origin": "PERSONA",
           "persona": "pE",
@@ -429,7 +429,7 @@
         },
         {
           "id": "c5",
-          "atMin": 360,
+          "atMin": 270,
           "parent": "c4",
           "origin": "PERSONA",
           "persona": "pF",
@@ -437,7 +437,7 @@
         },
         {
           "id": "c6",
-          "atMin": 440,
+          "atMin": 330,
           "parent": "c5",
           "origin": "PERSONA",
           "persona": "pG",
@@ -574,19 +574,19 @@
     },
     {
       "name": "🔴 추가 3건 뒤 계획 5번 자리 — 순번 5 GO",
-      "nowMin": 600,
+      "nowMin": 450,
       "post": {},
       "comments": [
         {
           "id": "c1",
-          "atMin": 10,
+          "atMin": 8,
           "origin": "PERSONA",
           "persona": "pB",
           "provenance": "auto"
         },
         {
           "id": "c2",
-          "atMin": 80,
+          "atMin": 60,
           "parent": "c1",
           "origin": "PERSONA",
           "persona": "pC",
@@ -594,7 +594,7 @@
         },
         {
           "id": "c3",
-          "atMin": 160,
+          "atMin": 120,
           "parent": "c2",
           "origin": "PERSONA",
           "persona": "pD",
@@ -602,7 +602,7 @@
         },
         {
           "id": "c4",
-          "atMin": 240,
+          "atMin": 180,
           "origin": "PERSONA",
           "persona": "pE",
           "provenance": "followup"

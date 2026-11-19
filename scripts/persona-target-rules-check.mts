@@ -8,6 +8,7 @@
  * 실행: npx tsx scripts/persona-target-rules-check.mts
  * 종료 코드: 실패가 있으면 1
  */
+import { THREAD_SIZE_CAP } from '../src/lib/persona-thread-target'
 import {
   canSetTarget, judgeTargetPost, planSetTarget, planClearTarget,
   MEMBER_COMMENT_LIMIT, PERSONA_COMMENTS_PER_POST_MAX,
@@ -102,16 +103,16 @@ console.log('\n══════ ⑤ 공개 글만 대상이다')
   expect('PUBLISHED → 통과', has(base(), 'POST_NOT_PUBLISHED'), false)
 }
 
-console.log('\n══════ ⑥ 한 글에 Persona 댓글 1~10건 (2026-11-04 계약 교체)')
+console.log(`\n══════ ⑥ 한 글에 Persona 댓글 1~${PERSONA_COMMENTS_PER_POST_MAX}건 — 대화 계획의 가장 큰 크기`)
 {
-  expect('상한 상수', PERSONA_COMMENTS_PER_POST_MAX, 10)
-  // 🔴 경계값만 본다 — 9 는 자리가 남았고 10 은 찼다
+  expect('상한 상수 = 대화 계획의 가장 큰 크기', PERSONA_COMMENTS_PER_POST_MAX, THREAD_SIZE_CAP)
+  // 🔴 경계값만 본다 — 상한 − 1 은 자리가 남았고 상한은 찼다
   const nine = base()
   nine.post = { ...goodPost(), personaComments: PERSONA_COMMENTS_PER_POST_MAX - 1 }
-  expect('9건 → 통과(자리 1개 남음)', has(nine, 'POST_PERSONA_COMMENTS_FULL'), false)
+  expect('상한 − 1건 → 통과(자리 1개 남음)', has(nine, 'POST_PERSONA_COMMENTS_FULL'), false)
   const ten = base()
   ten.post = { ...goodPost(), personaComments: PERSONA_COMMENTS_PER_POST_MAX }
-  expect('10건 → POST_PERSONA_COMMENTS_FULL', has(ten, 'POST_PERSONA_COMMENTS_FULL'), true)
+  expect('상한 건 → POST_PERSONA_COMMENTS_FULL', has(ten, 'POST_PERSONA_COMMENTS_FULL'), true)
   const one = base()
   one.post = { ...goodPost(), personaComments: 1 }
   expect('🔴 1건은 더 이상 막지 않는다(옛 계약 폐기)', has(one, 'POST_PERSONA_COMMENTS_FULL'), false)

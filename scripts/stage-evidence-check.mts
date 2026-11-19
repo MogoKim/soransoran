@@ -21,6 +21,7 @@ import {
 } from '../src/lib/stage-evidence'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
+import { THREAD_SIZE_CAP } from '../src/lib/persona-thread-target'
 import { AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { decideStage, consumerEnvOf, qualitySignalOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
 import { nextStage } from '../src/lib/stage-decision-contract'
@@ -190,10 +191,10 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   check('경계 — 정확히 60분은 시한 안이다', judge(facts('d3', { posts: [post(0, {
     personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })).verdict === 'PASS')
   // (b) 추가 댓글 계약 — 상한은 댓글 단계의 정본 상수다
-  check('상한 — bootstrap-auto 1 · review/organic 10 · shadow 0 (정본 상수 그대로)',
+  check('상한 — bootstrap-auto 1 · review/organic 구조 상한(대화 계획의 가장 큰 크기) · shadow 0 (정본 상수 그대로)',
     personaCommentCapFor('bootstrap-auto') === AUTO_PERSONA_COMMENTS_PER_POST_MAX && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1
-    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === 10
-    && personaCommentCapFor('bootstrap-review') === 10 && personaCommentCapFor('shadow') === 0)
+    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP
+    && personaCommentCapFor('bootstrap-review') === PERSONA_COMMENTS_PER_POST_MAX && personaCommentCapFor('shadow') === 0)
   const withComments = (n: number, o: { same?: boolean; self?: boolean } = {}): EvidencePost => post(0, {
     personaComments: Array.from({ length: n }, (_, k) => ({
       personaId: o.self === true && k === n - 1 ? 'author-0' : o.same === true ? 'c-same' : `c${k}`,
@@ -1078,8 +1079,8 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
   })])
   check('🔴 삭제된 글쓴이 답글도 과거 턴이다 — 4회를 3회로 축소하지 않음',
     deletedAuthorStillCounts.codes.includes('FOLLOWUP_SELF'), JSON.stringify(deletedAuthorStillCounts))
-  const over = withThread([first, ...Array.from({ length: 10 }, (_, i) => fu(i + 1, { personaId: `fu-${i + 1}` }))])
-  check('🔴 첫 댓글 1 + 추가 10(총 11 > 10) → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
+  const over = withThread([first, ...Array.from({ length: PERSONA_COMMENTS_PER_POST_MAX }, (_, i) => fu(i + 1, { personaId: `fu-${i + 1}` }))])
+  check('🔴 첫 댓글 1 + 추가가 구조 상한을 넘김 → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
     over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
   const early = withThread([first, fu(1, { createdAtMs: T0 + 6 * MIN })])
   check('🔴 첫 댓글보다 앞선 추가 댓글 → FOLLOWUP_WITHOUT_FIRST', early.conversation?.codes.includes('FOLLOWUP_WITHOUT_FIRST') === true)

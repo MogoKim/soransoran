@@ -29,6 +29,9 @@ import { runPaidCountOf } from '../src/lib/llm-ledger'
 import type { AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
 import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, type ThreadPlan } from '../src/lib/persona-thread-plan'
 import {
+  PLAN_RUNNER_TICK_MS, THREAD_DEADLINE_MS, THREAD_SIZE_CAP, THREAD_SIZE_MIN, THREAD_TARGETS, threadMeanSizeAt,
+} from '../src/lib/persona-thread-target'
+import {
   FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, commentProvenanceOf, judgeConversationAudit,
   personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
 } from '../src/lib/stage-evidence'
@@ -44,9 +47,9 @@ import type { CommentInput } from '../src/lib/persona-comment-input'
 import { decisionStageEnv } from '../src/lib/scale-runtime'
 import { kstDateString } from '../src/lib/release-canary'
 import { followupEligibleFor } from './lib/persona-comment-followup-run.mjs'
-import { COMMENT_CONSUMER_BY, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
+import { COMMENT_CONSUMER_BY, COMMENT_RUNNER_MAX_GAP_MINUTES, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
 import { DECISION_CONSUMERS } from '../src/lib/stage-decision-store'
-import { PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX } from '../src/lib/persona-target-rules'
+import { PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.FOLLOWUP_MODULE ?? join(here, '../src/lib/persona-comment-followup.ts')
@@ -63,7 +66,7 @@ const MIN = 60_000
 const T0 = Date.parse('2026-10-13T00:00:00Z')
 
 // 🔴 글 id 가 그 글의 대화 계획을 정한다. 시나리오는 계획이 큰 고정 id 하나로 돈다 —
-//    계획 10건 · 2번 글쓴이 답글 · 3~5번 글에 답 · 6~7번 글쓴이 답글 (⑭ 가 이 모양을 잠근다)
+//    계획 10건 · 2번 글쓴이 답글 · 3~5번 글에 답 · 6번 글쓴이 답글 · 7~8번 글에 답 · 9~10번 다른 사람 답글 (⑭ 가 이 모양을 잠근다)
 const FX_POST = 'post-fx-100'
 
 type FxComment = {
@@ -101,10 +104,12 @@ for (const v of ['1', 'true', 'ON', 'On', 'yes', 'enabled', ' on2']) {
   check(`① ${JSON.stringify(v)} → OFF`, M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: v }).enabled === false)
 }
 check('① 정확히 on → ON', M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: 'on' }).enabled === true)
-check('① 구조 상한 = 첫 댓글 1 + 선택적 추가 0~9 = 총 10',
-  M.FOLLOWUP_EXTRA_PER_POST_MAX === 9 && M.FOLLOWUP_TOTAL_PER_POST_MAX === 10)
-check('① 운영 profile 산출 기준은 추가 4로 동결(구조 상한과 비용 envelope 분리)',
-  M.FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST === 4)
+check('① 구조 상한 = 대화 계획의 가장 큰 크기(목표 평균의 두 배) · 추가 = 그 − 첫 댓글 1',
+  M.FOLLOWUP_TOTAL_PER_POST_MAX === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP
+  && THREAD_SIZE_CAP === Math.max(...THREAD_TARGETS.map((t) => Math.ceil(t.meanSize * 2)))
+  && M.FOLLOWUP_EXTRA_PER_POST_MAX === THREAD_SIZE_CAP - 1, `상한 ${THREAD_SIZE_CAP}`)
+check('① 🔴 대화 마감 = 계획 마감 하나(생성 · 발행 · 시도 기억이 같은 값)',
+  M.FOLLOWUP_POST_AGE_MAX_MS === THREAD_DEADLINE_MS && M.FOLLOWUP_ATTEMPT_LANE.attemptWindowMs === THREAD_DEADLINE_MS)
 {
   const p = M.partitionFollowupSourceContexts([
     { postId: 'good-1', operational: true, reason: '운영 문맥' },
@@ -865,7 +870,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     { id: 'c9', atMin: 380, parent: 'c8', origin: 'PERSONA', persona: 'pJ', provenance: 'followup' },
   ])
   const v6 = M.judgeFollowupPost(full, T0 + 500 * MIN)
-  check('⑪ 🔴 글쓴이 답글 포함 Persona 10건 → STOP(글당 10 상한)', v6.verdict === 'STOP' && v6.reason.includes('상한'), `${v6.verdict} · ${v6.reason}`)
+  check('⑪ 🔴 글쓴이 답글 포함 Persona 10건 → STOP(이 글의 계획 10건)', v6.verdict === 'STOP' && v6.reason.includes('대화 계획 10건'), `${v6.verdict} · ${v6.reason}`)
 }
 
 // ═════════ ⑫ H1 — 실패 분류 · 최소 범위 격리 · KST 자정 · 같은 회차 재선정 후보 ═════════
@@ -1117,12 +1122,29 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 {
   const ids = Array.from({ length: 3000 }, (_, i) => `plan-post-${i}`)
   const plans = ids.map((id) => threadPlanOf(id))
-  const share = (n: number) => plans.filter((p) => p.size === n).length / plans.length
   const mean = plans.reduce((s, p) => s + p.size, 0) / plans.length
-  check('⑭ 🔴 크기 — 2~10 · 평균 4.5 안팎 · 분포가 정본 표를 따른다',
-    plans.every((p) => p.size >= 2 && p.size <= 10 && p.slots.length === p.size - 1) && mean > 4.3 && mean < 4.7
-    && Math.abs(share(4) - 0.25) < 0.03 && Math.abs(share(2) - 0.10) < 0.03 && Math.abs(share(10) - 0.02) < 0.015,
-    `평균 ${mean.toFixed(2)} · 2개 ${share(2).toFixed(3)} · 4개 ${share(4).toFixed(3)} · 10개 ${share(10).toFixed(3)}`)
+  const target = threadMeanSizeAt(null)
+  check('⑭ 🔴 크기 — 평균이 목표 평균(`THREAD_TARGETS`)이고, 범위는 하한~평균의 두 배 · 양 끝까지 실제로 나온다',
+    plans.every((p) => p.size >= THREAD_SIZE_MIN && p.size <= Math.ceil(target * 2) && p.slots.length === p.size - 1)
+    && Math.abs(mean - target) < 0.1 && plans.some((p) => p.size === THREAD_SIZE_MIN) && plans.some((p) => p.size >= Math.ceil(target * 2) - 1),
+    `평균 ${mean.toFixed(2)} · 목표 ${target} · 최대 ${Math.max(...plans.map((p) => p.size))}`)
+  check('⑭ 🔴 공개 시각의 줄을 쓴다 — 첫 줄보다 이른 글은 첫 줄 · 모르면 마지막 줄',
+    threadMeanSizeAt(0) === THREAD_TARGETS[0]!.meanSize && threadMeanSizeAt(null) === THREAD_TARGETS[THREAD_TARGETS.length - 1]!.meanSize
+    && JSON.stringify(threadPlanOf('plan-post-1', Date.parse(THREAD_TARGETS[0]!.since))) === JSON.stringify(threadPlanOf('plan-post-1', 0)))
+  check('⑭ 🔴 계획의 틱 여유가 실제 댓글 러너 간격과 같다', PLAN_RUNNER_TICK_MS === COMMENT_RUNNER_MAX_GAP_MINUTES * MIN,
+    `${PLAN_RUNNER_TICK_MS / MIN} · ${COMMENT_RUNNER_MAX_GAP_MINUTES}`)
+  // 🔴 가장 나쁜 경우 — 첫 댓글 +9분 · 자리마다 간격 + 다음 틱까지 한 틱을 기다려도 마감 안에 끝난다
+  const worst = (p: ThreadPlan) => 9 * MIN + p.slots.reduce((s, x) => s + x.gapMs + PLAN_RUNNER_TICK_MS, 0)
+  check('⑭ 🔴 간격은 마감에서 역산 — 어느 계획이든 마감 안에 끝난다 · 10분 이상',
+    plans.every((p) => worst(p) <= THREAD_DEADLINE_MS && p.slots.every((x) => x.gapMs >= PLAN_MIN_GAP_MS)),
+    `가장 긴 계획 ${Math.round(Math.max(...plans.map(worst)) / MIN)}분`)
+  const avgGap = (n: number) => {
+    const xs = plans.filter((p) => p.size === n).flatMap((p) => p.slots.map((x) => x.gapMs))
+    return xs.reduce((a, b) => a + b, 0) / xs.length
+  }
+  check('⑭ 🔴 큰 대화일수록 빨리 돈다 — 평균 간격이 크기와 함께 줄어든다',
+    avgGap(4) > avgGap(6) && avgGap(6) > avgGap(8) && avgGap(8) > avgGap(10),
+    [4, 6, 8, 10].map((n) => `${n}개 ${Math.round(avgGap(n) / MIN)}분`).join(' · '))
   check('⑭ 결정적 — 같은 글은 언제 세워도 같은 계획', JSON.stringify(threadPlanOf('plan-post-7')) === JSON.stringify(plans[7]))
   const count = (p: ThreadPlan, k: string) => p.slots.filter((x) => x.kind === k).length
   check('⑭ 🔴 4개 이상인 글은 새 사람의 댓글이 2개 이상(글쓴이 아닌 사람 3명 이상) · 글쓴이 답글은 1~3',
@@ -1134,8 +1156,6 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const lenShare = (l: string) => all.filter((x) => x.length === l).length / all.length
   check('⑭ 길이 — 한 줄 30% · 한두 문장 50% · 서너 문장 20%',
     Math.abs(lenShare('short') - 0.3) < 0.03 && Math.abs(lenShare('normal') - 0.5) < 0.03 && Math.abs(lenShare('long') - 0.2) < 0.03)
-  check('⑭ 🔴 간격 — 10분 이상 90분 이하 · 뒤 자리일수록 길다(바닥이 올라간다)',
-    all.every((x) => x.gapMs >= PLAN_MIN_GAP_MS && x.gapMs <= 90 * MIN && x.gapMs >= Math.min(60, 10 * (x.ordinal - 1)) * MIN))
   check('⑭ 모양은 배정 가능한 역할뿐 · 자리 종류는 셋뿐',
     all.every((x) => ['other', 'empathy', 'question', 'experience'].includes(x.shape) && ['post', 'author', 'reply'].includes(x.kind)))
   // 🔴 이미 댓글이 달린 글 — 살아 있는 Persona 댓글을 채운 자리로 세어 남은 자리만 잇는다(배포 전 글에도 같다)

@@ -351,16 +351,15 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
-  out.push(['canon §5 가 첫 댓글 1 + 추가 댓글·답글 0~9와 실제 스레드 행을 고정한다',
-    d100Goal.includes('합계 `1..10`건')
-    && d100Goal.includes('추가 댓글·답글 0~9건')
+  out.push(['canon §5 가 첫 댓글 1 + 추가 댓글·답글(구조 상한 = 코드 값)과 실제 스레드 행을 고정한다',
+    d100Goal.includes(`합계 \`1..${PERSONA_COMMENTS_PER_POST_MAX}\`건`)
     && d100Goal.includes('부모 댓글을 가리키는 실제 스레드 행')
-    && d100Goal.includes('모든 글을 10건으로')
+    && d100Goal.includes('모든 글을 상한으로 채우지 않는다')
     && d100Goal.includes('답글로 최대 3회')])
-  out.push(['canon §5.2 가 글마다의 대화 계획(2~10건 · 자리 종류 셋 · 간격 10~90분)과 글쓴이 아닌 사람 두 번까지를 적는다',
-    ['### 5.2 대화 계획', '2~10건으로 정한다', '평균은 약 4.5건', '자리 종류는 셋이다', '10~90분',
+  out.push(['canon §5.2 가 글마다의 대화 계획(목표 평균 · 마감에서 역산한 간격 · 자리 종류 셋)과 글쓴이 아닌 사람 두 번까지를 적는다',
+    ['### 5.2 대화 계획', '**글당 목표 평균**', '**대화 마감**', '줄을 **덧붙인다**', '자리 종류는 셋이다', '대화 마감에서 역산한다',
       '글쓴이 아닌 Persona 는 한 글에 두 번까지 말한다', '새 댓글을 두 번 달지 않는다', '한 댓글에는 답이 하나만 달린다',
-      '한 후보의 실패가 글을 멈추지 않는다', '`src/lib/persona-thread-plan.ts`'].every((t) => d100Goal.includes(t))
+      '한 후보의 실패가 글을 멈추지 않는다', '`src/lib/persona-thread-target.ts`'].every((t) => d100Goal.includes(t))
     && !d100Goal.includes('같은 글에서 한 번만 말한다') && !/대화 hook만 대상|첫 댓글도 대화 기능을 쓴다/.test(d100Goal)])
   out.push(['canon §5.2 가 추가 댓글의 일상 경험 허용과 막는 것 넷을 적고 첫 댓글은 제외한다',
     ['가벼운 일상 경험을 자기 이야기로 말해도 된다', '막는 것은 넷뿐이다', '의료 사실', '갱년기를 자기 일로', '부부 사이가 틀어진 일',
@@ -552,7 +551,7 @@ check('D100 목표가 첫 댓글 증명과 대화 계획의 대화량을 구분�
   d100Goal.includes('첫 댓글 1건은 증명용 하한')
   && d100Goal.includes('계획의 숫자는 단계 PASS 기준이 아니다')
   && d100Goal.includes('계획보다 적게 달린 글을')
-  && d100Goal.includes('합계 `1..10`건'))
+  && d100Goal.includes(`합계 \`1..${PERSONA_COMMENTS_PER_POST_MAX}\`건`))
 check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
   d100Goal.includes('홈·베스트는 실회원 반응을 우선한다')
   && d100Goal.includes('Persona 댓글 수를 실회원 인기처럼 합산해 홈 순위를 올리지 않는다'))
@@ -600,8 +599,8 @@ check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
   current.includes('## 5. 다음 critical path') && /^\| D\d+-FIX \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
-  current.includes('첫 댓글 1 + 선택적 0~9')
-  && current.includes('총 구조 상한 10')
+  current.includes('첫 댓글 1 + 대화 계획')
+  && current.includes(`총 구조 상한 ${PERSONA_COMMENTS_PER_POST_MAX}`)
   && current.includes('글쓴이 답글 최대 3회')
   && current.includes('automatic provenance'))
 /**

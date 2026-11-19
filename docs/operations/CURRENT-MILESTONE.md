@@ -34,7 +34,7 @@
 | 비용 기준선 | 49개 slot-valid · $2.4056 · 약 **$0.04909/result** · D30 기준 $0.040 초과 |
 | 비용 수리 | 유료 의미 검수 전에 지배 판정 · publish/safety/quality gate 완화 0 · 운영 효과 UNKNOWN |
 | 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 · 80건/$0.16 profile은 창업자 승인(아직 미배포) |
-| 현재 댓글 정책 | 첫 댓글 1 + 선택적 0~9 · 총 구조 상한 10 · 글쓴이 답글 최대 3회 · automatic provenance |
+| 현재 댓글 정책 | 첫 댓글 1 + 대화 계획(목표 평균 · 마감 8시간 — `persona-thread-target`) · 총 구조 상한 12 · 글쓴이 답글 최대 3회 · automatic provenance |
 | 댓글 기준선과 수리 | 11-12 글당 1.9 · 실패 254건의 두 Persona 집중 원인 확인 · typed block code·KST-day 격리·same-tick 재선정은 코드 검증, 운영 효과 UNKNOWN |
 | 완료 상태 계약 | 상태기계 self-test 6/6 · Git·CI·host 실제 증거는 별도 live 명령으로 수집(자가 수집 하네스가 아님) |
 

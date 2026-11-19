@@ -503,7 +503,7 @@ export async function publishCandidateTx(
         memberCommentsOnPost,
         // 🔴 **총 상한**을 넘긴다. 남은 수량은 트랜잭션이 사용량으로 다시 뺀다.
         // 🔴 첫 댓글과 추가 댓글은 서로 다른 글당 예산이다. 추가 댓글에 bootstrap 예산(글당 5)을
-        // 다시 적용하면 구조 상한 10이어도 오늘 다섯 번째 Persona 댓글에서 영구 정지한다.
+        // 다시 적용하면 구조 상한이 더 커도 다섯 번째 Persona 댓글에서 영구 정지한다.
         // profile 잔량을 공통 재검사의 총 상한 모양으로 변환하되, 두 레인이 공유하는 하루 절대 상한 500은 유지한다.
         allowanceCap: followupLane
           ? (followupDailyRemaining === null

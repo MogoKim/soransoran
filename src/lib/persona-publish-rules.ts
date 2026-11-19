@@ -161,8 +161,8 @@ export function planPublish(input: PublishInput): PublishPlan {
     block('BODY_TOO_LONG', `본문이 ${len}자입니다 — ${MAX_COMMENT_LENGTH}자를 넘을 수 없습니다`)
   }
 
-  // ⑦ 🔴 한 글에 페르소나 댓글은 최대 10건이다 (2026-11-04 계약 교체).
-  //    10은 대화가 이어질 수 있는 구조 상한이지 모든 글을 채우는 목표가 아니다.
+  // ⑦ 🔴 한 글에 페르소나 댓글은 구조 상한(`PERSONA_COMMENTS_PER_POST_MAX`)까지다 (2026-11-04 계약 교체).
+  //    대화가 이어질 수 있는 구조 상한이지 모든 글을 채우는 목표가 아니다.
   //    🔴 **같은 페르소나가 두 번 다는 것**은 여기가 아니라 댓글 레인 재검사가 막는다
   //    (`recheckBeforePublish.personaAlreadyOnPost`) — 글쓴이의 제한된 답글 예외도
   //    그쪽이 후보의 personaId·parentId·대상을 함께 본 뒤에만 허용한다.

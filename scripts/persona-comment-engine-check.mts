@@ -45,6 +45,7 @@ import {
 } from '../src/lib/persona-comment-bootstrap-budget'
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
 import { FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST } from '../src/lib/persona-comment-followup'
+import { THREAD_SIZE_CAP } from '../src/lib/persona-thread-target'
 import {
   isGateEightColdStart, GATE_NAMES,
 } from '../src/lib/persona-comment-gate-report'
@@ -293,7 +294,7 @@ console.log('③ 댓글 분산 planner')
       ['HIDDEN 은 제외', post({ id: 'h', status: 'HIDDEN' }), 'POST_NOT_PUBLISHED'],
       ['DELETED 는 제외', post({ id: 'd', status: 'DELETED' }), 'POST_NOT_PUBLISHED'],
       // 🔴 글당 1건 계약은 폐기했다 — 구조 상한 10건이 차야 막힌다
-      ['Persona 댓글 10건이면 제외', post({ id: 'p', personaComments: 10 }), 'POST_PERSONA_COMMENTS_FULL'],
+      ['Persona 댓글이 구조 상한이면 제외', post({ id: 'p', personaComments: PERSONA_COMMENTS_PER_POST_MAX }), 'POST_PERSONA_COMMENTS_FULL'],
       [`회원 댓글 ${MEMBER_COMMENT_LIMIT}건 이상이면 끼어들지 않는다`, post({ id: 'm', memberComments: MEMBER_COMMENT_LIMIT }), 'POST_MEMBER_COMMENTS_FULL'],
       // 🔴 열린 대기열은 글을 빼는 것이 아니라 **자리를 먹는다**. 10자리가 다 차야 막힌다
       ['대기열이 10자리를 다 먹으면 제외',
@@ -4894,13 +4895,13 @@ console.log('㊺ bootstrap 단계 — 아무도 없을 때 먼저 말을 건다'
   check('🔴 글 200 이어도 500 을 넘지 않는다', leftFor(200) === BOOTSTRAP_DAILY_MAX)
   check('🔴 글 1000 이어도 500 을 넘지 않는다', leftFor(1000) === BOOTSTRAP_DAILY_MAX)
   check('🔴 500 을 다 쓰면 자리가 남아도 0', leftFor(200, BOOTSTRAP_DAILY_MAX) === 0)
-  check('🔴 절대 상한은 구조 상한 10이 아니라 운영 예산 기준 5 × 100이다',
+  check('🔴 절대 상한은 구조 상한이 아니라 운영 예산 기준 5 × 100이다',
     BOOTSTRAP_DAILY_MAX === 100 * BOOTSTRAP_SLOTS_PER_POST)
   check('🔴 운영 예산 기준 5 = 첫 댓글 1 + profile 산출 기준 추가 4',
     BOOTSTRAP_SLOTS_PER_POST
       === AUTO_PERSONA_COMMENTS_PER_POST_MAX + FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST)
-  check('🔴 구조 상한 10이 운영 예산 기준을 부풀리지 않는다',
-    PERSONA_COMMENTS_PER_POST_MAX === 10 && BOOTSTRAP_SLOTS_PER_POST === 5)
+  check('🔴 구조 상한(대화 계획의 가장 큰 크기)이 운영 예산 기준을 부풀리지 않는다',
+    PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP && BOOTSTRAP_SLOTS_PER_POST === 5)
 
   /**
    * 🔴 ③-b **오늘 발행 수를 두 번 빼지 않는다** (2026-09-11 회귀 잠금).
@@ -5223,14 +5224,14 @@ console.log('㊻ 구조 최대 10 · 첫 댓글·일반 planner 5 · 댓글 0개
     const five = plan([mkPost({ id: 'p', personaComments: 5, personaCodesOnPost: ['A', 'B', 'C', 'D', 'E'] })],
       personas(3), BOOTSTRAP_DAILY_MAX)
     check('🔴 Persona 댓글 5건 글은 일반 planner가 더 받지 않는다', five.items.length === 0)
-    check('🔴 사유는 POST_SLOTS_FULL — 구조 10 상한과 분리',
+    check('🔴 사유는 POST_SLOTS_FULL — 구조 상한과 분리',
       five.skipped.some((sk) => sk.blocks.some((b) => b.code === 'POST_SLOTS_FULL')))
     const nine = plan([mkPost({ id: 'p', personaComments: 9, personaCodesOnPost: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'] })],
       personas(3), BOOTSTRAP_DAILY_MAX)
     check('🔴 Persona 댓글 9건 글도 일반 planner는 1건을 더 받지 않는다', nine.items.length === 0)
-    const ten = plan([mkPost({ id: 'p', personaComments: 10, personaCodesOnPost: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'] })],
+    const ten = plan([mkPost({ id: 'p', personaComments: PERSONA_COMMENTS_PER_POST_MAX, personaCodesOnPost: Array.from({ length: PERSONA_COMMENTS_PER_POST_MAX }, (_, i) => `X${i}`) })],
       personas(3), BOOTSTRAP_DAILY_MAX)
-    check('🔴 Persona 댓글 10건 글은 막힌다', ten.items.length === 0)
+    check('🔴 Persona 댓글이 구조 상한인 글은 막힌다', ten.items.length === 0)
     check('🔴 사유를 POST_PERSONA_COMMENTS_FULL 로 말한다',
       ten.skipped.some((sk) => sk.blocks.some((b) => b.code === 'POST_PERSONA_COMMENTS_FULL')))
   }
@@ -5246,8 +5247,8 @@ console.log('㊻ 구조 최대 10 · 첫 댓글·일반 planner 5 · 댓글 0개
       postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false, modelConfirmed: true,
       ...over,
     })
-    check('🟢 적재: 9건인 글은 통과한다', enq({ personaCommentsOnPost: 9 }).ok)
-    check('🔴 적재: 10건인 글은 막힌다', !enq({ personaCommentsOnPost: 10 }).ok)
+    check('🟢 적재: 구조 상한 − 1건인 글은 통과한다', enq({ personaCommentsOnPost: PERSONA_COMMENTS_PER_POST_MAX - 1 }).ok)
+    check('🔴 적재: 구조 상한인 글은 막힌다', !enq({ personaCommentsOnPost: PERSONA_COMMENTS_PER_POST_MAX }).ok)
     check('🔴 적재: 같은 Persona 는 막힌다', !enq({ personaAlreadyOnPost: true }).ok)
     check('🔴 적재: 같은 Persona 여부를 모르면 막는다(fail-closed)',
       !enq({ personaAlreadyOnPost: null }).ok)
@@ -5262,8 +5263,8 @@ console.log('㊻ 구조 최대 10 · 첫 댓글·일반 planner 5 · 댓글 0개
         provenanceOk: true, provenanceReason: '근거 확인',
         ...over,
       })
-    check('🟢 발행: 9건인 글은 통과한다', tx({ personaCommentsOnPost: 9 }).ok)
-    check('🔴 발행: 10건인 글은 막힌다', !tx({ personaCommentsOnPost: 10 }).ok)
+    check('🟢 발행: 구조 상한 − 1건인 글은 통과한다', tx({ personaCommentsOnPost: PERSONA_COMMENTS_PER_POST_MAX - 1 }).ok)
+    check('🔴 발행: 구조 상한인 글은 막힌다', !tx({ personaCommentsOnPost: PERSONA_COMMENTS_PER_POST_MAX }).ok)
     check('🔴 발행: 같은 Persona 는 막힌다', !tx({ personaAlreadyOnPost: true }).ok)
     check('🟢 발행: 검증된 글쓴이 답글 경로만 반복 예외를 명시적으로 허용한다',
       tx({ personaAlreadyOnPost: true, personaRepeatAllowed: true }).ok)
