@@ -241,15 +241,25 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     out.push([`새 정책 "${p}" 이 제거한 옛 경로를 가진다`,
       cells.some((c) => (c[1] ?? '').startsWith(p) && (c[2] ?? '').length >= 8)])
   }
-  // ⑤-b 🔴 2026-10-11 창업자 결정의 뼈대 — 빠지면 실패한다
-  out.push(['canon §1.1 이 Dn 을 인증된 최대 용량 · 평상시 0..Dn · 증명일 정확 N · 자연 증거 승계로 정의한다',
-    ['### 1.1 Dn 은 인증된 최대 용량이다', '증명된 최대 용량', '`0..Dn`', '증명일에는', '자연 증거 승계',
-      '평상시의 부족분은 다음 날의 실패 증거가 아니다'].every((t) => d100Goal.includes(t))])
-  out.push(['canon §6 이 증명일 정확 N 과 평상일 자연 증거 승계를 분리한다',
-    d100Goal.includes('증명일에는 아래 PASS 조건을 정확한 `N`으로 적용한다')
-    && d100Goal.includes('현재 Dn의 자연 운영 PASS로 승계한다')
-    && d100Goal.includes('`N-1`은 FAIL, `N`은 PASS, `N+1`은 상한 위반이다')
-    && d100Goal.includes('실패 뒤 재시험은 증명일로만 하고')])
+  // ⑤-b 🔴 2026-10-11 · 2026-11-19 창업자 결정의 뼈대 — 빠지면 실패한다
+  const goalLiveEarly = activeTextOf(d100Goal)
+  out.push(['canon §1.1 이 Dn 을 인증된 최대 용량 · 평상시 0..Dn · 하루 판정(비율) · 올림 · 유지 · 내림으로 정의한다',
+    ['### 1.1 Dn 은 인증된 최대 용량이다', '증명된 최대 용량', '`0..Dn`', '**하루 판정**', '**올림**', '**유지**', '**내림**',
+      '평상시의 부족분은 다음 날의 실패 증거가 아니다', '`src/lib/ladder-table.ts`'].every((t) => sectionIn(d100Goal, '### 1.1 Dn 은 인증된 최대 용량이다', '\n## ').includes(t))])
+  out.push(['canon §6 이 하루 판정을 수 + 결의 비율 + 무결성으로 정하고 숫자를 다시 적지 않는다',
+    goalLiveEarly.includes('하루 판정은 수와 결의 비율 + 무결성이다')
+    && goalLiveEarly.includes('글 한 편의 누락이 하루를 무효로 만들지 않는다')
+    && goalLiveEarly.includes('한 건이어도 그대로 막는다')
+    && goalLiveEarly.includes('이 문서에 숫자를 다시 적지 않는다')
+    // 🔴 옛 전부-아니면-0 문장이 현재 정책 본문에 다시 나오면 실패한다
+    && !goalLiveEarly.includes('PASS 조건을 정확한 `N`으로 적용한다')
+    && !goalLiveEarly.includes('`N-1`은 FAIL')])
+  out.push(['canon §6 이 미달이어도 내리지 않고 · 내려가는 길을 brake 하나로 · 열린 단계를 CERTIFIED 로 잇는다',
+    goalLiveEarly.includes('하루 판정이 FAIL 또는 UNKNOWN 이어도 공개 단계를 내리지 않는다')
+    && goalLiveEarly.includes('내려가는 길은 brake 하나다')
+    && goalLiveEarly.includes('열린 단계는 결정 행의 구조화된 `CERTIFIED` 칸이 다음 날로 잇고')
+    && !goalLiveEarly.includes('READER_READY')
+    && !goalLiveEarly.includes('같은 단계의 증명일을 다시 잡는다')])
   out.push(['canon §3.4 가 preflight·proof 공용 bounded envelope와 proof 슬롯 경계를 고정한다',
     d100Goal.includes('정산 요청 20건 이상')
     && d100Goal.includes('정산 비율 95% 이상')
@@ -283,13 +293,13 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
    *    대체한 제한 복구는 §11 📜 표와 §11.1 📜 전환기 호환에만 남는다. 현재 정책 본문(📜 밖)에 다시 나오면 실패한다.
    */
   const goalLive = activeTextOf(d100Goal)
-  out.push(['canon 이 공급·READY 예측을 경고·계획 입력으로, hard gate 를 승인된 목록으로 정한다',
+  out.push(['canon 이 공급·READY 예측과 비용 추정을 경고·계획 입력으로, 올림 관문을 Persona·발행 구조로 정한다',
     ['공급·READY 예측은 경고·계획 입력이다', '단계 시험을 FAIL로 막지 않는다',
-      'hard gate는 대상 단계의 runtime scheduler/profile 지원·남은 슬롯의 물리 발행 용량·Persona·비용·',
-      'hard gate는 대상 단계의 runtime scheduler/profile 지원 ·',
-      '남은 운영 시간의 발행 슬롯이 목표 `N`편을 물리적으로 담는 발행 용량',
+      '대상 단계의 runtime scheduler/profile 지원 ·',
+      '발행 슬롯이 목표 `N`편을 물리적으로 담는 발행 용량',
+      '**공급 비용 추정**은 경고·계획 입력이며 관문을 FAIL로 만들지 않는다',
       '이 문서는 별도의 단계 승인 천장을 두지 않는다',
-      '평상일과 증명일은 같은 실행 경로를 쓴다', '실제 원천·READY 공급이 모자라 `N`에 못 미친 날은 결함이']
+      '모든 날은 같은 실행 경로를 쓴다', '실제 원천·READY 공급이 모자라 통과선에 못 미친 날은 결함이']
       .every((t) => goalLive.includes(t))])
   /**
    * 🔴 2026-11-06 교차 검토 — `StageDecision.capacity` 는 controller 가 계산한 다음 증명 준비 단계다.
@@ -420,8 +430,8 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     index.includes('## 현재 실행 runbook — 정책 투표권 없음')
     && sectionIn(index, '## 현재 실행 runbook', '\n## ').includes('`ALWAYS-ON-HOST.md`')
     && sectionIn(index, '## 현재 실행 runbook', '\n## ').includes('`launchd/README.md`')])
-  out.push(['D100 canon 이 상시 호스트를 모든 증명일의 선행조건으로 둔다',
-    d100Goal.includes('상시 호스트는 D100의 마지막 마일스톤이 아니라 모든 증명일의 선행조건이다')
+  out.push(['D100 canon 이 상시 호스트를 모든 운영일의 선행조건으로 둔다',
+    d100Goal.includes('상시 호스트는 D100의 마지막 마일스톤이 아니라 모든 운영일의 선행조건이다')
     && d100Goal.includes('운영 창에 잠들거나')])
   out.push(['상시 호스트 runbook 이 집 Mac 단일 owner 결정을 기록한다',
     alwaysOn.includes('집 Mac 한 대를 D100 9개 job의 유일한 owner로 쓴다')
@@ -562,20 +572,14 @@ check('D100 목표가 M0~M7을 날짜가 아니라 완료 증거로 정의한다
  * 🔴 2026-11-06 정정 — 하루는 create-only StageDecision 하나 · 공개 단계 하나 · 정확 N 증명 최대 한 번이다.
  *    PASS 확정 뒤 다음 단계는 다음 KST 운영일 첫 슬롯 전 결정으로만 연다. "같은 날 남은 슬롯" 시작은 현재 정책 본문에서 금지.
  */
-check('D100 목표가 PASS 확정 뒤 다음 KST 운영일에 다음 자동 시험을 연다 (임의 대기 없음)',
-  d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정으로 다음 단계를 시험한다')
-  && d100Goal.includes('**다음 KST 운영일**의 첫 슬롯 전 controller 결정이다')
-  && d100Goal.includes('KST 하루에는 create-only `StageDecision` 하나, 공개 단계 하나,')
+check('D100 목표가 연속 통과 뒤 다음 KST 운영일의 결정으로 한 칸 올린다 (임의 대기 없음)',
+  d100Goal.includes('**다음 KST 운영일**의 controller 결정으로 한 칸 올린다')
+  && d100Goal.includes('KST 하루에는 create-only `StageDecision` 하나, 공개 단계 하나다')
   && d100Goal.includes('임의의 달력 대기를 넣지 않는다')
   && d100Goal.includes('사람이 env나 stage를 바꾸지 않는다'))
 check('🔴 D100 목표 현재 정책 본문이 같은 날 다음 단계 시작을 말하지 않는다',
   !activeTextOf(d100Goal).includes('같은 날 남은 유효 슬롯으로')
   && !activeTextOf(d100Goal).includes('같은 날 남은 슬롯 또는'))
-/** 🔴 시간 근거는 슬롯이다 — 60분 첫 댓글은 마감이지 가장 이른 확인 시각이 아니다(즉시 달릴 수 있다) */
-check('🔴 D100 목표가 같은 날 불가의 시간 근거를 슬롯으로 적고 첫 댓글 마감을 확인 시각으로 쓰지 않는다',
-  activeTextOf(d100Goal).includes('정확 `N`번째 글은 그 단계의 마지막 슬롯에서야 생기므로')
-  && activeTextOf(d100Goal).includes('그 마지막 슬롯보다 늦은 예약 슬롯이 없다')
-  && !activeTextOf(d100Goal).includes('첫 댓글 확인 22:10'))
 check('🔴 D100 목표가 마지막 예약의 공급 lease busy·unknown 을 무결성 안전 HOLD 로 적는다(예측 경고가 아니다)',
   activeTextOf(d100Goal).includes('마지막 controller 예약까지 공급 lease가 busy·unknown이면 무결성 안전 HOLD다')
   && !activeTextOf(d100Goal).includes('공급 상태를 모르면 그 사실은 예측 경고'))
@@ -584,10 +588,10 @@ check('🔴 D100 목표가 마지막 예약의 공급 lease busy·unknown 을 �
  *    옛 판은 그 문구를 **강제**했다 — 검사가 폐기된 정책의 편에 서 있었다.
  *    지금은 증명일 준비도와 지속 준비도를 따로 정의하고, 둘 다 완성 글 며칠 치로 재지 않는다.
  */
-check('D100 목표가 증명일 준비도와 지속 준비도를 따로 정의한다',
-  /\*\*증명일 준비도\*\*:[^\n]*슬롯/.test(d100Goal)
+check('D100 목표가 올림 관문과 지속 준비도를 따로 정의한다',
+  /\*\*올림 관문\*\*:[\s\S]{0,200}슬롯/.test(d100Goal)
   && /\*\*지속 준비도\*\*:[^\n]*반복 관측/.test(d100Goal)
-  && d100Goal.includes('둘 다 완성 글을 며칠 치 쌓아 둔 양으로 증명하지 않는다'))
+  && d100Goal.includes('둘 다 완성 글을 며칠 치 쌓아 둔 양으로 재지 않는다'))
 check('D100 목표가 감사를 20% 표본 계약으로 고정한다',
   d100Goal.includes('ceil(자동 발행 N × 20%)')
   && d100Goal.includes('전수 감사를 새 선행조건으로 만들지 않는다'))
