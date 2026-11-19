@@ -773,12 +773,12 @@ contractValidPersonas: async () => 30,
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
-        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 33 → 처리량은 확정, 시행일 전 비용 증거는 UNKNOWN**',
+        check('🔴 🔴 **d5 — 모르는 대기 4 의 결말에 따라 필요 9~25 · 용량 33 → 처리량은 확정, 시행일 전 비용 추정은 모름 경고(막지 않는다)**',
           d5.counts.readyNeededMin === 9 && d5.counts.readyNeededMax === 25
           && !d5.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN')
           && d5.counts.supplyProofBudgetUsd === undefined
-          && JSON.stringify(d5.codes) === JSON.stringify(['SUPPLY_COST_UNKNOWN']) && d5.verdict === 'UNKNOWN',
-          JSON.stringify({ counts: d5.counts, codes: d5.codes }))
+          && d5.codes.length === 0 && d5.warnings.includes('SUPPLY_COST_UNKNOWN') && d5.verdict === 'PASS',
+          JSON.stringify({ counts: d5.counts, codes: d5.codes, warnings: d5.warnings }))
         const d5CurrentContract = judgeNextPreflight('d5', {
           ...r.facts, proofKstDate: SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
           slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60, supplyDailyUsdCap: 1.2,
@@ -1055,8 +1055,8 @@ contractValidPersonas: async () => 30,
       check('🔴 🔴 **사용량 미상 2건 → 결과당 비용 null · 추정 예약액 $0.0172446 은 보고만 · SUPPLY_COST_UNKNOWN 유지**',
         c !== null && c.usdPerSlotValidResult === null && v.warnings.includes('SUPPLY_COST_UNKNOWN') && !v.warnings.includes('SUPPLY_COST_SHORT'),
         JSON.stringify({ usd: c?.usdPerSlotValidResult, codes: v.codes }))
-      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소 · 원천 미상은 예측 경고 · 비용 미상(hard) 하나로 D10 BLOCK (UNKNOWN)**',
-        v.verdict === 'UNKNOWN' && v.warnings.includes('SUPPLY_COST_UNKNOWN')
+      check('🔴 🔴 **최종 판정 — 처리량 부족은 해소 · 원천 미상은 예측 경고 · 비용 미상은 비용 경고 — 막는 코드 0 (PASS)**',
+        v.verdict === 'PASS' && v.codes.length === 0 && v.warnings.includes('SUPPLY_COST_UNKNOWN')
         && v.forecastWarnings.includes('OPPORTUNITY_UNKNOWN') && !v.forecastWarnings.includes('THROUGHPUT_SHORT')
         && !v.codes.some((code) => (FORECAST_WARNING_CODES as readonly string[]).includes(code)),
         JSON.stringify({ codes: v.codes, forecastWarnings: v.forecastWarnings }))

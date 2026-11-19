@@ -307,7 +307,7 @@ const EXPECTED_D100_DB_COMMANDS = [
   'supply:cost-envelope-mutation',
   'ops:loop-db-check',
   'stage:evidence-db-check',
-  'stage:proof-day-db-check',
+  'stage:auto-count-db-check',
   'auto-ready:db-check',
   'auto-ready:evidence-db-check',
   'auto-ready:quality-db-check',

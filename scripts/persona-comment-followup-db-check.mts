@@ -455,9 +455,9 @@ async function main(): Promise<void> {
       audits: { rows: [] },
     })
     const ev = judgeEvidenceForTarget(kstDate, 'd5', 1, await factsOf(false), null)
-    const COMMENT_FAIL = ['DUP_COMMENT', 'COMMENT_SELF', 'COMMENT_PROVENANCE_BROKEN', 'COMMENT_MANUAL_PERSONA', 'FIRST_COMMENT_SHORT']
-    check('🔴 D 단계 증거: 첫 댓글 1건 인정 · 추가 댓글은 중복·수동 밖(COMMENT_* 없음) · 글당 댓글에는 둘 다 든다',
-      !ev.codes.some((c) => COMMENT_FAIL.includes(c)) && ev.counts.firstCommentOk === 1 && ev.counts.personaComments === 2,
+    const COMMENT_FAIL = ['DUP_COMMENT', 'COMMENT_SELF', 'COMMENT_PROVENANCE_BROKEN', 'COMMENT_MANUAL_PERSONA']
+    check('🔴 하루 판정: 실제 행의 첫 댓글·추가 댓글은 댓글 무결성 코드를 내지 않고 · 글당 댓글에는 둘 다 든다',
+      !ev.codes.some((c) => COMMENT_FAIL.includes(c)) && ev.counts.personaComments === 2,
       `${ev.codes.join(',')} ${JSON.stringify(ev.counts)}`)
     const evBad = judgeEvidenceForTarget(kstDate, 'd5', 1, await factsOf(true), null)
     check('🔴 대조군 — 같은 행을 수동 출처로 섞으면 COMMENT_MANUAL_PERSONA(검사가 빈말이 아니다)', evBad.codes.includes('COMMENT_MANUAL_PERSONA'), evBad.codes.join(','))

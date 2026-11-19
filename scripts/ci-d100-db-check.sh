@@ -50,7 +50,7 @@ npm run stage:preflight-window-mutation
 npm run supply:cost-envelope-mutation
 npm run ops:loop-db-check
 npm run stage:evidence-db-check
-npm run stage:proof-day-db-check
+npm run stage:auto-count-db-check
 npm run auto-ready:db-check
 npm run auto-ready:evidence-db-check
 npm run auto-ready:quality-db-check
