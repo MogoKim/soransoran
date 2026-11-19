@@ -111,7 +111,7 @@ import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
 import {
-  ATTEMPT_CONTRACT, planAttemptCapacity, planOpenDays, wipCountsBySpeaker,
+  ATTEMPT_CONTRACT, planOpenDays, planSeatWriters, wipCountsBySpeaker,
 } from '../src/lib/content-core/speaker-availability'
 /** 🔴 말투 근거가 선 화자 — 생성 러너와 **같은 함수**로 읽는다(파일까지 · DB 0) */
 import { loadVoice } from './lib/voice-runtime.mjs'
@@ -119,7 +119,7 @@ import { kstDateString } from '../src/lib/release-canary'
 import { paidSourcesFor } from '../src/lib/ready-fate'
 import { retryModeFor } from '../src/lib/content-core/generation-failure'
 import { readReadyCohort, recentDates } from './lib/stage-preflight-facts.mjs'
-import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
+import { availablePersonasAt, personaAvailableAt } from '../src/lib/supply-capacity-forecast'
 import { nextSlotAnchor } from '../src/lib/scale-profile'
 import type { ResolvedScale } from '../src/lib/scale-runtime'
 /** 🔴 재고 분류 정본 — 발행 러너와 **같은 조립 · 같은 판정**을 나눠 읽는다 */
@@ -308,39 +308,21 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *    적는 함수 안에만 있으면 read-only 로 확인할 방법이 없다 — 값을 돌려주는 함수를 따로 둔다.
  */
 /**
- * 🔴 **화자 여력 지평 = JIT 수요 지평 하나** (2026-10-11 Batch A2). 고정 7일 · capacity 눈금을 지웠다.
- *    지평의 날과 그날 자리 수는 `upcomingSlots`(오늘 발행기가 회수할 수 있는 기회 + 다음 첫 기회)에서 그대로 나온다 —
- *    수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 같은 눈금(release)이다.
- *
- * 🕘 (옛 판 · 2026-09-26) **공급은 capacity 로 준비하고, 발행은 release 로 제한한다**.
- *
- *    앞판은 지평의 하루하루를 **release** 프로필로 채웠다. release=d1 이면 7일에 자리가 7개뿐이고,
- *    사람 검토를 기다리는 기계 초안 8건이 그중 6자리를 차지해 **여력 있는 화자 1명** 이 남았다 —
- *    SEED 6건이 초안 시도 2건으로 줄었다(실측 2026-09-26). 발행이 d1 이어도 공급이 d1 로
- *    맞춰지면 d1 을 넘는 단계는 **재고가 영영 차지 않아** 준비도 판정을 받을 수 없다.
- *    🔴 이제 **capacity** 프로필로 센다. 발행 러너 · 슬롯 게이트는 그대로 release 다 — 여기서 건드리지 않는다.
- *    🔴 canary · window 는 **발행 허가**다. 공급 지평에는 쓰지 않는다 — release 천장은 capacity 를 넘지 않는다.
- *
- * 🔴 **WIP 는 공용 분류에서 받는다** (2026-09-26). 앞판은 여기서 selector 를 따로 불러
- *    `HUMAN_REVIEW_REQUIRED` 를 직접 세었다 — 발행 러너와 다른 조립(editDiff 없음 · 자동 READY 닫힘 가정)이었다.
- *    🔴 자동 적격 미도장 행만 **WIP 에 남는다**. 품질 경고 행은 격리하고 Persona 자리를 해제한다.
- *    🔴 **WIP 여부는 칸마다 정해져 있다**(`STOCK_BUCKET_META`) — TTL 만료 · 영구 배정 예외 · 깨진 복구 ·
- *       스스로 풀리지 않는 신선도 실패는 화자를 **영구 점유하지 않는다**. 시간성 유예(WEEKLY_CAP · TOO_SOON)는 점유한다.
- *    🔴 **옛 품질 계약의 기계 초안(`qualityContractMismatch`)도 점유하지 않는다** (2026-09-28) — 자동 경로가
- *       영영 없는 글이 지금 계약의 생산 자리를 막으면 계약을 올린 날 새 계약은 몇 자리로만 만든다.
- *       그 수는 따로 적는다(`wip.qualityContractMismatch` — WIP 합계에는 들어가지 않는다).
+ * 🔴 **화자 여력 지평 = JIT 수요 지평 하나.** 지평의 자리는 `jitCoverageOf`(오늘 발행기가 회수할 수 있는 기회 +
+ *    다음 첫 기회)에서 그대로 나온다 — 수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 release 눈금이다.
+ * 🔴 **생성 시도 여력은 "그 글이 나갈 날에 쓸 수 있는가"다**(`planSeatWriters`). 오늘 빈 자리를 채울 초안은
+ *    오늘 아직 안 쓴 사람에게만 간다. 쓸 사람이 있는 빈 자리(`seats.fillable`)가 이 회차의 수요다 —
+ *    수요 판정(`snapshot`)과 여력 파일이 **이 함수 하나**를 쓴다.
+ * 🔴 **WIP 는 공용 분류에서 받는다**(`personaWipIds` · `STOCK_BUCKET_META`). 시간성 유예(WEEKLY_CAP · TOO_SOON)는
+ *    화자를 점유하고, 스스로 풀리지 않는 행(원천 가치 소멸 · 옛 품질 계약 · 품질 격리)은 점유하지 않는다.
  */
-export async function buildSpeakerLoad(
-  prisma: PrismaClient, runId: string,
-  opts: {
-    env: Readonly<Record<string, string | undefined>>; now: Date; scale: ResolvedScale
-    /**
-     * 🔴 **하루 자리를 받을 수 있는 화자(말투 근거가 선 사람)** — PR2 KEEP. `null`·생략이면 전원(앞판과 같다).
-     *    정기 경로(`writeSpeakerLoad`)는 생성 러너와 같은 `loadVoice` 로 채운다.
-     */
-    slotEligible?: ReadonlySet<string> | null
-  },
-): Promise<SpeakerLoadFile & {
+type StockView = Awaited<ReturnType<typeof loadStockClassification>>
+type SpeakerLoadOpts = {
+  now: Date; scale: ResolvedScale
+  /** 🔴 말투 근거가 선 화자 — `null`·생략이면 전원. 정기 경로는 생성 러너와 같은 `loadVoice` 로 채운다 */
+  slotEligible?: ReadonlySet<string> | null
+}
+type SpeakerLoad = SpeakerLoadFile & {
   stageByDate: readonly { date: string; stage: string }[]
   planningStage: string
   releaseStage: string
@@ -353,13 +335,27 @@ export async function buildSpeakerLoad(
   }
   /** 🔴 원천 가치가 사라진 WIP(정본 판정 만료 사유) — 화자 칸을 막지 않는다 · 화자 미상 · 말투 필터 */
   slots: { releasedExpired: number; unattributed: number; voiceFiltered: boolean; slotEligibleCount: number | null }
-}> {
-  const { loaded, classification } = await loadStockClassification(prisma, opts.env, opts.now)
+  /** 🔴 빈 자리와 그날 쓸 수 있는 사람 — `fillable` 이 이 회차의 수요다 */
+  seats: { byDate: readonly { date: string; unfilled: number; writers: number; fill: number }[]; fillable: readonly Date[] }
+}
+
+/** 🔴 말투 근거가 선 화자 — 생성 러너가 후보로 쓰는 그 집합. 정본을 못 읽으면 좁히지 않는다(`null`) */
+export function voiceEligibleSet(at: Date): ReadonlySet<string> | null {
+  const voice = loadVoice(at)
+  return voice.blockAllCode === null && voice.candidates.length > 0
+    ? new Set(voice.candidates.map((c) => c.code)) : null
+}
+
+/** 🔴 이미 읽은 재고 분류에서 화자 여력을 만든다 — DB 는 배정 이력만 더 읽는다 */
+export async function speakerLoadOf(
+  prisma: PrismaClient, runId: string, view: StockView, opts: SpeakerLoadOpts,
+): Promise<SpeakerLoad> {
+  const { loaded, classification } = view
   const release = opts.scale.releaseProfile
-  /** 🔴 JIT 수요와 같은 지평 — 날짜별 자리 수. 그날 첫 슬롯 시각으로 화자 여력을 판정한다 */
-  const horizon = upcomingSlots({ now: opts.now, publishedToday: loaded.publishedToday, release })
+  /** 🔴 JIT 수요와 같은 지평 · 같은 짝짓기 — 덮인 자리와 빈 자리를 여기서 읽는다 */
+  const jit = jitCoverageOf({ loaded, resolved: { ...view.resolved, scale: opts.scale } }, opts.now)
   const seatsByDate = new Map<string, { at: Date; seats: number }>()
-  for (const at of horizon) {
+  for (const at of jit.horizon) {
     const k = kstDateString(at)
     const cur = seatsByDate.get(k)
     seatsByDate.set(k, cur === undefined ? { at, seats: 1 } : { at: cur.at, seats: cur.seats + 1 })
@@ -372,10 +368,7 @@ export async function buildSpeakerLoad(
     return (r.matchedPersonaId === null ? null : loaded.codeOfPersonaId.get(r.matchedPersonaId) ?? null)
       ?? draftSpeakerOf(r.gateResults)
   }
-  /**
-   * 🔴 **칸에서 뺄 행 — 원천 가치가 이미 사라진 WIP** (2026-09-30). 정본 `judgeSlotRelease` 가 지금 시각에
-   *    만료 사유(나이 · 증거 모름)를 낸 행은 자동으로는 영영 못 나간다 — 그 화자의 칸을 막지 않는다.
-   */
+  /** 🔴 칸에서 뺄 행 — 정본 `judgeSlotRelease` 가 지금 만료 사유를 낸 WIP 는 자동으로는 영영 못 나간다 */
   const expiresNow = (id: string): boolean => {
     const r = byId.get(id)
     if (r === undefined) return false
@@ -394,41 +387,34 @@ export async function buildSpeakerLoad(
     where: { matchedAt: { not: null } },
     select: { matchedAt: true, matchedPersona: { select: { code: true } } },
   })
-  const history = loaded.personas.map((p) => ({
-    code: String(p.code),
-    matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
-      .map((l) => l.matchedAt as Date),
-  }))
+  const matchedAtsOf = new Map<string, Date[]>()
+  for (const l of logs) {
+    const code = l.matchedPersona?.code
+    if (code === undefined || l.matchedAt === null) continue
+    matchedAtsOf.set(code, [...(matchedAtsOf.get(code) ?? []), l.matchedAt])
+  }
+  const history = loaded.personas.map((p) => ({ code: String(p.code), matchedAts: matchedAtsOf.get(String(p.code)) ?? [] }))
+  const caps = { postsPerWeek: release.postsPerWeek, minDaysBetween: release.minDaysBetween }
+  const canTakeSlot = eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }
   const days = [...seatsByDate.values()].map((d) => d.at)
   const horizonDays = days.length
-  /** 🔴 **정본 하나가 하루하루를 채워 본다.** 고른 날을 이력에 쌓아 다음 날 판정이 그 사람을 뺀다 */
+  /** 🔴 공개 자리 몫(`openDays`) — 시도 계약이 없는 여력 파일만 읽는 값이다. 고른 날을 이력에 쌓아 자리를 편다 */
   const plan = planOpenDays({
     days,
-    profileOf: (at) => ({
-      dailyTarget: seatsByDate.get(kstDateString(at))?.seats ?? 0,
-      postsPerWeek: release.postsPerWeek,
-      minDaysBetween: release.minDaysBetween,
-    }),
+    profileOf: (at) => ({ dailyTarget: seatsByDate.get(kstDateString(at))?.seats ?? 0, ...caps }),
     history,
-    availableAt: (h, at, caps) => availablePersonasAt(
-      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
+    availableAt: (h, at, c) => availablePersonasAt(
+      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, c),
     dateLabel: (at) => kstDateString(at),
-    // 🔴 말투 없는 화자는 기계 초안을 받지 못한다 — 하루 자리를 차지하지 않게 뺀다
-    ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
+    ...canTakeSlot,
   })
-  /**
-   * 🔴 **생성 시도 여력 — 공개 자리와 나눈다** (speaker-attempt-v1 · 2026-10-13 P0).
-   *    위 계획(`openDays`)은 공개 자리 몫이다 — 자리가 4개면 전원 합쳐 4. 생성은 수율만큼 넉넉히 시도해야 하므로
-   *    같은 지평 · 같은 cap · 같은 말투 필터로 **각자 독립 판정**하고 WIP 를 뺀 뒤 회차당 1 을 준다.
-   *    🔴 공개 자리 · release profile · 상한 · 간격은 그대로다 — 몇 건을 시도하든 나가는 수는 발행 러너가 정한다.
-   */
-  const attempt = planAttemptCapacity({
-    days, history,
-    availableAt: (h, at, caps) => availablePersonasAt(
-      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
-    caps: { postsPerWeek: release.postsPerWeek, minDaysBetween: release.minDaysBetween },
-    ...(eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }),
+  /** 🔴 생성 시도 여력 — 빈 자리의 날에 쓸 수 있는 사람만. 판정은 발행 정본(`personaAvailableAt`) 하나다 */
+  const seats = planSeatWriters({
+    horizon: jit.horizon, unfilled: jit.unfilled, history,
+    canWriteAt: (matchedAts, at) => personaAvailableAt({ code: '', matchedAts: [...matchedAts] }, at, caps),
     wipOf: (code) => wipBy.byCode.get(code) ?? 0,
+    dateLabel: (at) => kstDateString(at),
+    ...canTakeSlot,
   })
   const byCode: Record<string, { openDays: number; readyCount: number; attemptCapacity: number }> = {}
   for (const p of loaded.personas) {
@@ -436,14 +422,13 @@ export async function buildSpeakerLoad(
     byCode[code] = {
       openDays: plan.openDays.get(code) ?? 0,
       readyCount: wipBy.byCode.get(code) ?? 0,
-      attemptCapacity: attempt.get(code)?.attemptCapacity ?? 0,
+      attemptCapacity: seats.byCode.get(code)?.attemptCapacity ?? 0,
     }
   }
-  const releaseSeats = [...seatsByDate.values()].reduce((n, d) => n + d.seats, 0)
   return {
     // 🔴 회차 시각으로 적는다 — 자식이 같은 시각으로 검증한다
     writtenAt: opts.now.toISOString(), runId, horizonDays, byCode,
-    attemptContract: ATTEMPT_CONTRACT, releaseSeats,
+    attemptContract: ATTEMPT_CONTRACT, releaseSeats: jit.horizon.length,
     byDate: plan.byDate,
     /** 🔴 어느 눈금으로 셌는지 남긴다 — 지평은 지금 공개 단계(release)의 가까운 슬롯이다 */
     stageByDate: days.map((at) => ({ date: kstDateString(at), stage: opts.scale.releaseStage })),
@@ -461,21 +446,26 @@ export async function buildSpeakerLoad(
       releasedExpired: wipBy.released.length, unattributed: wipBy.unattributed,
       voiceFiltered: eligible !== null, slotEligibleCount: eligible === null ? null : eligible.size,
     },
+    seats: { byDate: seats.byDate, fillable: seats.fillable },
   }
+}
+
+/** 🔴 재고 분류를 읽어 화자 여력을 만든다 — 값을 돌려주므로 read-only 로 확인할 수 있다 */
+export async function buildSpeakerLoad(
+  prisma: PrismaClient, runId: string,
+  opts: SpeakerLoadOpts & { env: Readonly<Record<string, string | undefined>> },
+): Promise<SpeakerLoad> {
+  return speakerLoadOf(prisma, runId, await loadStockClassification(prisma, opts.env, opts.now), opts)
 }
 
 /** 🔴 값을 만들어 파일로 적는다 — 만드는 것은 위 함수 하나다 */
 export async function writeSpeakerLoad(
   prisma: PrismaClient, runId: string, scale: ResolvedScale,
-): Promise<Awaited<ReturnType<typeof buildSpeakerLoad>>> {
-  /**
-   * 🔴 말투 근거가 선 화자 — 생성 러너가 후보로 쓰는 그 집합(`loadVoice().candidates`). 정본을 못 읽으면 좁히지 않는다
-   *    (그 회차는 생성 러너가 provider 호출 전에 멈춘다).
-   */
-  const voice = loadVoice(RUN_AT)
-  const slotEligible = voice.blockAllCode === null && voice.candidates.length > 0
-    ? new Set(voice.candidates.map((c) => c.code)) : null
-  const payload = await buildSpeakerLoad(prisma, runId, { env: process.env, now: RUN_AT, scale, slotEligible })
+): Promise<SpeakerLoad> {
+  // 🔴 정본을 못 읽으면 좁히지 않는다 — 그 회차는 생성 러너가 provider 호출 전에 멈춘다
+  const payload = await buildSpeakerLoad(prisma, runId, {
+    env: process.env, now: RUN_AT, scale, slotEligible: voiceEligibleSet(RUN_AT),
+  })
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify(payload, null, 2))
   return payload
@@ -584,7 +574,13 @@ export type SupplySnapshot = {
    * 🔴 **JIT 수요 재료** — 다가오는 슬롯 수와 그 슬롯에 eligible 로 남을 READY 가 덮은 수(정본 판정 · 슬롯 시각).
    *    분류를 못 읽으면 `null` 이다(모름 → 파일 단계만).
    */
-  jit: { slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[]; unfilled: Date[] } | null
+  jit: {
+    slots: number; readyFilled: number; publishedToday: number; matched: string[]; horizon: Date[]; unfilled: Date[]
+    /** 🔴 빈 자리 중 **그날 쓸 수 있는 사람이 있는** 자리 — 이 회차가 사는 수요다(`speakerLoadOf` · 여력 파일과 같은 함수) */
+    fillable: Date[]
+    /** 날짜별 빈 자리 · 쓸 수 있는 사람 · 채울 수 — 사람이 읽는 근거 */
+    writersByDate: { date: string; unfilled: number; writers: number; fill: number }[]
+  } | null
   /**
    * 🔴 **결말 기준 원천 수율 구간** (2026-10-04 P0-2) — preflight 와 같은 판독(`readReadyCohort`)의 최근 3 KST 일.
    *    유료 묶음 크기(`paidSourcesFor`)가 상한을 쓴다. 모르면 `null` — 작은 회복 canary만 허용한다.
@@ -596,7 +592,11 @@ export type SupplySnapshot = {
 export async function snapshot(
   prisma: PrismaClient,
   /** 🔴 `dataDir` 없으면 결말 수율을 읽지 않는다(`sourceYield: null` — 모름 → 부족분만 산다) */
-  opts: { env: Readonly<Record<string, string | undefined>>; now: Date; dataDir?: string },
+  opts: {
+    env: Readonly<Record<string, string | undefined>>; now: Date; dataDir?: string
+    /** 말투 근거가 선 화자 — 여력 파일과 같은 집합을 넘긴다. 생략이면 전원 */
+    slotEligible?: ReadonlySet<string> | null
+  },
 ): Promise<SupplySnapshot> {
   const rows: QueueRow[] = await prisma.originalPostApprovalQueue.findMany({
     select: {
@@ -620,7 +620,13 @@ export async function snapshot(
     const view = await loadStockClassification(prisma, opts.env, opts.now)
     classification = view.classification
     // 🔴 관제(`supply:health`)와 같은 함수 — 수요를 두 곳에서 따로 세지 않는다
-    jit = { ...jitCoverageOf(view, opts.now), publishedToday: view.loaded.publishedToday }
+    const load = await speakerLoadOf(prisma, 'snapshot', view, {
+      now: opts.now, scale: view.resolved.scale, slotEligible: opts.slotEligible ?? null,
+    })
+    jit = {
+      ...jitCoverageOf(view, opts.now), publishedToday: view.loaded.publishedToday,
+      fillable: [...load.seats.fillable], writersByDate: [...load.seats.byDate],
+    }
   } catch (e) {
     classifyError = e instanceof Error ? e.message : String(e)
   }
@@ -695,7 +701,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
   for (const n of scale.notes) console.log(`     · ${n}`)
   console.log('  🔴 이 러너는 **수집하지 않는다** — 수집은 source 마다 독립 job 이 한다')
   console.log('  🔴 공급 수요 = 가까운 수요 지평(오늘 남은 공개 슬롯 + 다음 첫 공개 기회 한 칸) − 그 슬롯에 eligible 로 남을 READY (JIT)'
-    + ' · 700 · ×14 재고 목표 없음')
+    + ' · 그중 그날 쓸 수 있는 사람이 있는 자리만 산다')
   console.log('  순서 source 별 (얇은 변환 → 검수용 변환) → 공통 (판정 → 초안 → 보충)')
   console.log('  🔴 발행 0 — Post · persona 배정 · ActivityLog 를 만들지 않는다')
   console.log(`  스위치  ${PROCESS_KILL_SWITCH_ENV}=${killOpen ? 'true' : '없음'}\n`)
@@ -773,7 +779,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
   let before: Awaited<ReturnType<typeof snapshot>> | null = null
   if (SIM === null) {
     try {
-      before = await snapshot(prisma, { env: process.env, now, dataDir: DATA_DIR })
+      before = await snapshot(prisma, { env: process.env, now, dataDir: DATA_DIR, slotEligible: voiceEligibleSet(now) })
     } catch (e) {
       console.log(`\n③ 재고  🔴 읽지 못했다 — ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -782,9 +788,12 @@ async function main(proof: LeaseProof | null): Promise<number> {
    * 🔴 **공급 수요 — JIT** (2026-09-30). `--simulate-stock=N` 은 "다가오는 슬롯 중 eligible READY 가 덮은 수 = N" 모의다
    *    (dry-run 전용 · 슬롯 수는 지금 결정의 단계에서 센다).
    */
+  const simSlots = SIM === null ? 0 : upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile }).length
   const jitIn = SIM !== null
-    ? { slots: upcomingSlots({ now, publishedToday: 0, release: scale.releaseProfile }).length, readyFilled: SIM }
-    : before?.jit ?? null
+    // 🔴 모의는 DB 를 읽지 않는다 — 쓸 사람은 빈 자리만큼 있다고 본다(dry-run 전용)
+    ? { slots: simSlots, readyFilled: SIM, writable: Math.max(0, simSlots - SIM) }
+    : before?.jit == null ? null
+      : { slots: before.jit.slots, readyFilled: before.jit.readyFilled, writable: before.jit.fillable.length }
   const basePolicy = judgeJitDemand(jitIn)
   const policy = recoveryIntent === null
     ? basePolicy
@@ -813,6 +822,9 @@ async function main(proof: LeaseProof | null): Promise<number> {
     console.log(`   Post ${before.post}건`)
   }
   if (jitIn !== null) console.log(`   슬롯 ${jitIn.slots}개 · eligible READY 가 덮은 슬롯 ${jitIn.readyFilled}개`)
+  for (const d of before?.jit?.writersByDate ?? []) {
+    console.log(`   ▸ ${d.date} 빈 자리 ${d.unfilled}개 · 그날부터 쓸 수 있는 사람 ${d.writers}명 → 이 회차가 채울 자리 ${d.fill}개`)
+  }
   console.log(`   수요 ${policy.reason}`)
   if (policy.llm) {
     console.log(`   유료 원천 ${paid.sources}건 / 묶음 상한 ${WORKSET_LIMIT} — 근거 ${paid.basis}`
@@ -899,7 +911,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
     ...(runtimeSha === undefined ? {} : { runtimeSha }),
     startedAt: now.toISOString(),
     jit: {
-      slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, upTo: policy.upTo, reason: policy.reason,
+      slots: jitIn?.slots ?? null, readyFilled: jitIn?.readyFilled ?? null, writable: jitIn?.writable ?? null,
+      upTo: policy.upTo, reason: policy.reason,
       paidSources: policy.llm ? paid.sources : 0, paidBasis: paid.basis, sourceYieldHigh: before?.sourceYield?.high ?? null,
     },
     ...(tokenShadow === null ? {} : { runTokenShadow: shadowTagOf(tokenShadow) }),
@@ -933,6 +946,9 @@ async function main(proof: LeaseProof | null): Promise<number> {
     if (plan.stage === 'draft') {
       try {
         const load = await writeSpeakerLoad(prisma, runId, scale)
+        for (const d of load.seats.byDate) {
+          console.log(`   ▸ 화자 ${d.date} 빈 자리 ${d.unfilled}개 · 그날부터 쓸 수 있는 사람 ${d.writers}명 → 채울 자리 ${d.fill}개`)
+        }
         console.log(`   🟢 화자 여력 — 가까운 수요 지평 ${load.horizonDays}일(${load.planningStage} release 슬롯 · 오늘 남은 + 다음 첫 기회)`
           + ` · WIP ${load.wip.total}건 (자동 도장 대기 ${load.wip.autoReadyPending} · 발행 가능 ${load.wip.publishableNow})`
           + ` · 자동 품질 격리 ${load.wip.qualityQuarantine}건은 WIP 아님`
@@ -940,7 +956,8 @@ async function main(proof: LeaseProof | null): Promise<number> {
           + ` · 원천 가치 없음으로 칸 해제 ${load.slots.releasedExpired}건 · 화자 미상 ${load.slots.unattributed}건`
           + ` · 말투 ${load.slots.voiceFiltered ? `있는 ${load.slots.slotEligibleCount}명만 자리를 받는다` : '필터 없음(정본을 못 읽었다)'}`)
         console.log(`   🟢 공개 자리 ${load.releaseSeats ?? 0}개 (발행 상한 · cadence 불변) · 생성 시도 여력 `
-          + `${Object.values(load.byCode).filter((r) => (r.attemptCapacity ?? 0) > 0).length}명 (${load.attemptContract ?? '옛 계약'} — 실제 SEED 수만큼만 쓴다)`)
+          + `${Object.values(load.byCode).filter((r) => (r.attemptCapacity ?? 0) > 0).length}명 (${load.attemptContract ?? '옛 계약'}`
+          + ' — 이 회차가 채울 자리의 날에 쓸 수 있는 사람만 · 실제 SEED 수만큼만 쓴다)')
       } catch (e) {
         const why = e instanceof Error ? e.message : 'unknown'
         console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
@@ -1120,13 +1137,13 @@ async function main(proof: LeaseProof | null): Promise<number> {
     }
     opportunityRows = rows
     /**
-     * 🔴 **부족 슬롯** (2026-10-04 P0-2 보정) — 다가오는 슬롯 중 자동 READY 가 정본 짝짓기로 덮지 못한 슬롯.
+     * 🔴 **부족 슬롯** — 다가오는 슬롯 중 자동 READY 가 덮지 못했고 **그날 쓸 수 있는 사람이 있는** 슬롯(`jit.fillable`).
      *    원천은 **그 슬롯들 각각의 시각에** 생성 전 판정을 받는다 — 한 슬롯(`nextSlotAt`)으로 모두 판정하지 않는다.
      *    모의(`--simulate-stock`)는 DB 를 읽지 않으므로 다가오는 슬롯 전부를 부족 슬롯으로 본다(dry-run 전용).
      */
     const unfilledSlots: Date[] = SIM !== null
       ? upcomingSlots({ now: RUN_AT, publishedToday: 0, release: scale.releaseProfile })
-      : (before?.jit?.unfilled ?? [])
+      : (before?.jit?.fillable ?? [])
     /** 🔴 생성 가능 선별 — 부족 슬롯 중 하나라도 eligible 이면 그 슬롯의 판정, 아니면 첫 부족 슬롯의 판정(사유 기록) */
     const releaseOf = (r: WorksetRow): SlotReleaseVerdict => {
       const at = unfilledSlots.find((d) => preGenerationRelease(r, d, RUN_AT).verdict === 'eligible')

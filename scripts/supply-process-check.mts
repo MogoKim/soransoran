@@ -108,7 +108,7 @@ const FILES_AFTER_ADAPT = [
   '82cook-adapt-remonterrace-20260910-222000.raw-detail.jsonl',
 ]
 const pendingAfter = planPending(FILES_AFTER_ADAPT)
-const FULL_BUFFER = judgeJitDemand({ slots: 12, readyFilled: 0 })
+const FULL_BUFFER = judgeJitDemand({ slots: 12, readyFilled: 0, writable: 12 })
 
 // ─────────────────────────────────────────────────────────
 console.log('① 미처리 입력을 source 별로 가른다')
@@ -164,7 +164,7 @@ check('🔴 같은 runId 의 다른 카페가 서로를 막지 않는다', (() =
   check('🔴 두 산출물이 다 있으면 adapt 를 다시 계획하지 않는다',
     !adaptPlanned([THIN, D, R]))
   check('🔴 두 산출물이 다 있으면 공통 judge·draft·fill 이 선다', (() => {
-    const stages = planCommonPhase(planPending([THIN, D, R]), judgeJitDemand({ slots: 12, readyFilled: 0 }), GATE_READY).map((x) => x.stage)
+    const stages = planCommonPhase(planPending([THIN, D, R]), judgeJitDemand({ slots: 12, readyFilled: 0, writable: 12 }), GATE_READY).map((x) => x.stage)
     return stages.includes('judge') && stages.includes('draft') && stages.includes('fill')
   })())
 }
@@ -305,7 +305,7 @@ console.log('\n⑤ 미처리 입력이 없으면 정상 no-op 이다')
 console.log('\n⑥ 공급 수요(JIT) — 🔴 다가오는 슬롯 − eligible READY · 700 버퍼 없음 (2026-09-30)')
 // ─────────────────────────────────────────────────────────
 for (const [slots, filled] of [[4, 0], [4, 3], [23, 20]] as const) {
-  const p = judgeJitDemand({ slots, readyFilled: filled })
+  const p = judgeJitDemand({ slots, readyFilled: filled, writable: slots })
   check(`🟢 슬롯 ${slots} · READY ${filled} — 수요 ${slots - filled} · 모델 · 적재 둘 다`, p.llm && p.fill && p.upTo === slots - filled)
   const common = planCommonPhase(pendingAfter, p, GATE_READY)
   check(`🟢 수요 ${slots - filled} — 판정·초안·보충이 계획에 다 있다`, common.map((c) => c.stage).join(',') === 'judge,draft,fill')
@@ -313,7 +313,7 @@ for (const [slots, filled] of [[4, 0], [4, 3], [23, 20]] as const) {
     common.find((c) => c.stage === 'fill')!.args.includes(`--up-to=${slots - filled}`))
 }
 for (const [slots, filled] of [[4, 4], [0, 0], [3, 9]] as const) {
-  const p = judgeJitDemand({ slots, readyFilled: filled })
+  const p = judgeJitDemand({ slots, readyFilled: filled, writable: slots })
   check(`🟡 슬롯 ${slots} 을 READY ${filled} 가 덮는다 — 모델 0 · DB write 0`, !p.llm && !p.fill && p.upTo === 0)
   check(`🟢 그래도 파일 단계는 계획에 남는다 (수집물을 방치하지 않는다)`,
     planSourcePhase(pendingAll).length === 3 && planCommonPhase(pendingAfter, p, GATE_READY).length === 0)

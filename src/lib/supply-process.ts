@@ -220,15 +220,13 @@ export function hasWork(p: Pending): boolean {
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **유료 생성 수요 = 다가오는 슬롯 − 그 슬롯들에 eligible 로 남을 READY.**
+ * 🔴 **유료 생성 수요 = (다가오는 슬롯 − 그 슬롯들에 eligible 로 남을 READY) 중 그날 쓸 수 있는 사람이 있는 자리.**
  *
- *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots` · 2026-10-11 Batch A2) — 오늘 발행기가 회수할 수 있는 기회 +
- *    다음 첫 공개 기회 한 칸. 증명일 전체 슬롯은 공급 수요가 아니다(그 감당은 controller preflight 가 본다).
- *    READY 가 그 슬롯에 eligible 로 남는가는 정본 `judgeSlotRelease` 가 **그 슬롯 시각에** 본다 —
- *    Persona 는 그 슬롯에 실제로 풀리는 것만 센다(`readyOpportunitiesOf` · `matchOpportunitiesToSlots`).
- *
- *    🔴 **지운 옛 정본**: `judgeBuffer(700)`(형식 행 수로 700 버퍼를 채우던 적재 on/off) ·
- *       `STOCK_BANDS`(100/300/700) · capacity ×14 · ×5 · ×3 재고 눈금. 완성 글 재고를 쌓는 목표는 없다.
+ *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots`) — 오늘 발행기가 회수할 수 있는 기회 + 다음 첫 공개 기회 한 칸.
+ *    READY 가 그 슬롯에 eligible 로 남는가는 정본 `judgeSlotRelease` 가 **그 슬롯 시각에** 본다
+ *    (`readyOpportunitiesOf` · `matchOpportunitiesToSlots`).
+ *    🔴 **`writable`** — 빈 자리 중 그날 쓸 수 있는 사람이 있는 수(`planSeatWriters`). 쓸 사람이 없는 자리의 글은
+ *       사도 그날 못 나간다 — 그만큼 덜 산다.
  *    🔴 수요를 모르면(`null`) 파일 단계만 돈다 — 모르는 수로 모델도 DB 도 쓰지 않는다.
  *    🔴 수집 job 은 이 판정을 보지 않는다 — 저마다 자기 스케줄로 돈다.
  */
@@ -237,29 +235,38 @@ export type SupplyPolicy = {
   llm: boolean
   /** 적재 단계(fill)를 돌리는가 */
   fill: boolean
-  /** `--up-to` 로 넘길 상한 = 채우지 못한 슬롯 수 */
+  /** `--up-to` 로 넘길 상한 = 쓸 사람이 있는 빈 슬롯 수 */
   upTo: number
   reason: string
 }
 
-export function judgeJitDemand(input: { slots: number; readyFilled: number } | null): SupplyPolicy {
-  if (input === null || !Number.isInteger(input.slots) || input.slots < 0
-    || !Number.isInteger(input.readyFilled) || input.readyFilled < 0) {
+const count = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
+
+export function judgeJitDemand(input: { slots: number; readyFilled: number; writable: number } | null): SupplyPolicy {
+  if (input === null || !count(input.slots) || !count(input.readyFilled) || !count(input.writable)) {
     return {
       llm: false, fill: false, upTo: 0,
       reason: '🔴 다가오는 슬롯 수요를 읽지 못했다 — 파일 단계만 돈다 (모델 0 · DB write 0)',
     }
   }
-  const demand = Math.max(0, input.slots - input.readyFilled)
-  if (demand === 0) {
+  const unfilled = Math.max(0, input.slots - input.readyFilled)
+  if (unfilled === 0) {
     return {
       llm: false, fill: false, upTo: 0,
       reason: `다가오는 슬롯 ${input.slots}개를 eligible READY ${input.readyFilled}건이 덮는다 — 생성 0 (파일 단계만)`,
     }
   }
+  const demand = Math.min(unfilled, input.writable)
+  if (demand === 0) {
+    return {
+      llm: false, fill: false, upTo: 0,
+      reason: `다가오는 슬롯 ${input.slots}개 중 ${unfilled}개가 비었지만 그날 쓸 수 있는 사람이 없다 — 생성 0 (못 낼 글을 사지 않는다)`,
+    }
+  }
   return {
     llm: true, fill: true, upTo: demand,
-    reason: `다가오는 슬롯 ${input.slots}개 중 ${input.readyFilled}개만 eligible READY 로 덮인다 — 생성 수요 ${demand}건`,
+    reason: `다가오는 슬롯 ${input.slots}개 중 ${input.readyFilled}개만 eligible READY 로 덮인다 — 생성 수요 ${demand}건`
+      + (demand < unfilled ? ` (빈 자리 ${unfilled}개 중 그날 쓸 사람이 있는 자리만)` : ''),
   }
 }
 
@@ -736,6 +743,8 @@ export type ProcessRun = {
   /** 🔴 JIT 수요 — 다가오는 슬롯 · eligible READY 가 덮은 슬롯 · 생성 수요(`upTo`) */
   jit: {
     slots: number | null; readyFilled: number | null; upTo: number; reason: string
+    /** 빈 자리 중 그날 쓸 수 있는 사람이 있는 수 — 수요(`upTo`)가 빈 자리보다 작으면 이 값 때문이다. 옛 기록에는 없다 */
+    writable?: number | null
     /**
      * 🔴 **이번 회차 유료 원천 수와 그 근거** (2026-10-04 P0-2) — `paidSourcesFor`(부족분 · 결말 수율 상한).
      *    없으면 옛 기록(고정 묶음 상한)이다.

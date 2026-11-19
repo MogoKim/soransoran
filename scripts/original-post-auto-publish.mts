@@ -319,13 +319,8 @@ for (let attempt = 0; attempt <= stock.targets.length; attempt += 1) {
   const { picked, recovered, skipped, waiting } = plan
   if (skipped.length > 0) {
     console.log(`\n   ⏭️  이번에 나가지 않는 앞줄 ${skipped.length}건 (상태 그대로 · 다음 회차 재시도)`)
-    for (const sk of skipped) {
-      const a = assignOf.get(sk.id)
-      const why = a?.assigned != null ? '배정은 있으나 이번 회차는 복구가 먼저다'
-        : (a?.eligible.length ?? 0) > 0 ? `후보 ${a?.eligible.length}명이 모두 이번 배치에서 소진됐다`
-          : '생활사 조건에 맞는 persona 가 없다'
-      console.log(`      ${sk.id}  ${why}`)
-    }
+    const whyOf = new Map(plan.unassigned.map((u) => [u.id, u.detail]))
+    for (const sk of skipped) console.log(`      ${sk.id}  ${whyOf.get(sk.id) ?? '배정 없음'}`)
   }
   if (picked !== null) {
     console.log(`\n   🎯 이번에 나갈 1건  ${picked.id} → ${assignOf.get(picked.id)?.assigned ?? '?'}`
@@ -346,6 +341,7 @@ for (let attempt = 0; attempt <= stock.targets.length; attempt += 1) {
   const dayGuard = judgeDayGuard({
     publishedToday, dailyTarget: RELEASE_DAILY_CAP,
     publishable: picked === null ? 0 : plan.assignmentReady.length, hardDefects: defects.hardDefects,
+    waitingOnWriter: plan.unassigned.length,
   })
   const safetyRejects = rejected.filter((r) => r.code === 'SAFETY')
   if (safetyRejects.length > 0 && attempt === 0) {
@@ -356,15 +352,17 @@ for (let attempt = 0; attempt <= stock.targets.length; attempt += 1) {
   const gate = judgeApply({ targets: view.targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed, slot, dayGuard })
   if (!gate.ok) {
     console.log(`\n⑤ 발행하지 않는다 — ${gate.reason}`)
-    /** 🔴 슬롯이 도래했는데 채울 slot-valid 후보가 없다 — 원인 코드를 값으로 남긴다(관제 · 증거가 읽는다) */
+    /** 🔴 슬롯이 도래했는데 낼 글이 없다 — 보류 사유별 건수를 값으로 남긴다: 슬롯 자격 탈락 + 배정 불가(쓴 사람의 막힘 코드) */
     if (slot.run && !killed && publishedToday < RELEASE_DAILY_CAP && !dayGuard.halt && picked === null) {
       const byReason = new Map<string, number>()
       for (const h of prepared.held) byReason.set(h.hold, (byReason.get(h.hold) ?? 0) + 1)
+      for (const u of plan.unassigned) for (const c of u.codes) byReason.set(c, (byReason.get(c) ?? 0) + 1)
+      console.log(`   ▸ 낼 글이 없다 — 슬롯 자격 ${prepared.auto.length}편 중 배정 0 · 사유 ${[...byReason].map(([k, n]) => `${k} ${n}`).join(' · ') || '재고 0'}`)
       console.log(`SLOT_UNFILLED ${JSON.stringify({
         at: RUN_AT.toISOString(), stage: scale.releaseStage, due: catchUp.dueCount, publishedToday,
         eligible: prepared.auto.length, replaced: replaced.length, held: Object.fromEntries(byReason),
       })}`)
-      console.log('   🔴 오래된 글로 채우지 않는다 — 다음 공급(JIT)이 슬롯 시점 가치로 채운다')
+      console.log('   🔴 오래된 글로 채우지 않는다 — 다음 공급(JIT)이 그날 쓸 수 있는 사람의 글로 채운다')
     }
     if (!APPLY) console.log('   🟡 dry-run 입니다. DB write 0 · Post 0 · 실행하려면 --apply 와 --limit=1 을 둘 다 붙이세요.')
     console.log()

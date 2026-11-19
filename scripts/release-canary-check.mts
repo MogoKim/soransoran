@@ -50,11 +50,15 @@ console.log('① KST 날짜 · 남은 슬롯(보고용)')
 console.log('\n② 🔴 하루 보호장치 — 재고 부족과 결함을 같은 무게로 다루지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  const base = { publishedToday: 1, dailyTarget: 3, publishable: 2, hardDefects: [] as string[] }
+  const base = { publishedToday: 1, dailyTarget: 3, publishable: 2, waitingOnWriter: 0, hardDefects: [] as string[] }
   const ok = judgeDayGuard(base)
   check('🟢 남은 편수 · 낼 것이 있으면 더 낸다', ok.allow && !ok.halt)
   const empty = judgeDayGuard({ ...base, publishable: 0 })
   check('🟡 낼 것이 없으면 그만 낸다 — 전면 중단이 아니다', !empty.allow && !empty.halt && empty.reason.includes('낸 것은 그대로'))
+  check('문구는 사실대로 — 재고가 0 일 때만 "재고가 없어"', empty.reason.includes('재고가 없어'))
+  const stuck = judgeDayGuard({ ...base, publishable: 0, waitingOnWriter: 4 })
+  check('🔴 글은 있는데 쓴 사람이 못 쓰는 틱은 "재고가 없어"라고 찍지 않는다 — 건수와 원인을 말한다',
+    !stuck.allow && !stuck.halt && !stuck.reason.includes('재고가 없어') && stuck.reason.includes('낼 글 4편') && stuck.reason.includes('쓴 사람이 지금 못 써서'))
   const done = judgeDayGuard({ ...base, publishedToday: 3 })
   check('🟢 목표를 다 냈으면 더 내지 않는다', !done.allow && !done.halt)
   const bad = judgeDayGuard({ ...base, hardDefects: ['중복 발행 흔적'] })

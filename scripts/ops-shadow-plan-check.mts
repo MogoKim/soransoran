@@ -50,7 +50,7 @@ const T0: DayTally = tallyOf([])
 const ENV: OperatingEnvelope = operatingEnvelopeOf({ publishHardCapPerDay: 20, publishSlotsPerDay: 20, supplyDailyUsd: 1.2 })
 const obsOf = (o: Partial<DeficitObservation> = {}): DeficitObservation => ({
   at: '2026-11-11T03:00:00.000Z', kstDate: '2026-11-11',
-  jit: { slots: 10, readyFilled: 2 }, inFlightExpectedReady: 0, sourceYieldHigh: 0.2,
+  jit: { slots: 10, readyFilled: 2, writable: 10 }, inFlightExpectedReady: 0, sourceYieldHigh: 0.2,
   attemptableSpeakers: 10, freshSourceCandidates: 30,
   ledger: { ok: true, limits: LIMITS, tally: T0, settleHold: null, unresolved: [] },
   costPerPaidSourceUsd: 0.02, slotsDueSoFar: 4, supplyRunInProgress: false,
@@ -76,7 +76,7 @@ let same = 0
 const diffs: string[] = []
 for (const r of fx.runs) {
   // 🔴 운영은 진행 중 작업을 빼지 않았다 — 같은 입력(진행 0)이면 같은 수요 · 같은 유료 원천 수여야 한다
-  const p = planDeficit(ENV, obsOf({ jit: { slots: r.jit.slots, readyFilled: r.jit.readyFilled }, sourceYieldHigh: r.jit.sourceYieldHigh }))
+  const p = planDeficit(ENV, obsOf({ jit: { slots: r.jit.slots, readyFilled: r.jit.readyFilled, writable: r.jit.slots }, sourceYieldHigh: r.jit.sourceYieldHigh }))
   const ok = p.demand.upTo === r.jit.upTo
     && (r.jit.paidBasis === 'noDemand' ? p.paid.sources === 0 : p.paid.sources === r.jit.paidSources && p.paid.basis === r.jit.paidBasis)
   if (ok) same += 1
@@ -142,7 +142,7 @@ for (let i = 0; i < 4000; i += 1) {
   const settledUsd = rnd() * 2
   const open = rnd() * 0.3
   const o = obsOf({
-    jit: rnd() < 0.05 ? null : { slots: ri(40), readyFilled: ri(40) },
+    jit: rnd() < 0.05 ? null : { slots: ri(40), readyFilled: ri(40), writable: 40 },
     inFlightExpectedReady: rnd() < 0.1 ? null : ri(10),
     sourceYieldHigh: rnd() < 0.2 ? null : rnd(),
     attemptableSpeakers: rnd() < 0.1 ? null : ri(30),
@@ -192,7 +192,7 @@ check('🔴 회차 진행 중 · 상태 모름이면 0(동시 회차 없음)',
   planDeficit(ENV, obsOf({ supplyRunInProgress: true })).wouldRunSources === 0
   && planDeficit(ENV, obsOf({ supplyRunInProgress: null })).wouldRunSources === 0)
 check('진행 중 작업은 부족분에서 뺀다',
-  planDeficit(ENV, obsOf({ jit: { slots: 10, readyFilled: 2 }, inFlightExpectedReady: 8 })).deficitAfterInFlight === 0)
+  planDeficit(ENV, obsOf({ jit: { slots: 10, readyFilled: 2, writable: 10 }, inFlightExpectedReady: 8 })).deficitAfterInFlight === 0)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n③-b 신선 원천 — 선택 권위의 슬롯별 판정만 · 지난 슬롯은 세지 않는다')

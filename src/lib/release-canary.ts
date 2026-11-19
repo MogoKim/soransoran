@@ -43,6 +43,8 @@ export type DayGuardInput = {
   dailyTarget: number
   /** 지금 낼 수 있다고 본 수 */
   publishable: number
+  /** 슬롯 자격은 있는데 쓴 사람이 지금 못 써서(오늘 이미 씀 · 주간 상한 · 생활사) 못 내는 글 수 */
+  waitingOnWriter: number
   /** 🔴 전면 중단 사유 — 중복·정산·안전 */
   hardDefects: readonly string[]
 }
@@ -58,6 +60,7 @@ export type DayGuard = {
  * 🔴 **재고 부족과 결함을 같은 무게로 다루지 않는다.**
  *
  *    · 재고가 모자라 더 못 내는 것은 **그만 내는 것**이다 — 오늘 낸 것은 그대로 둔다
+ *      (글은 있는데 쓴 사람이 지금 못 쓰는 것도 같은 무게다 — 다만 문구는 사실대로 가른다)
  *    · 중복·정산·안전 결함은 **전면 중단**이다 — 원인을 사람이 볼 때까지 그날을 닫는다
  */
 export function judgeDayGuard(i: DayGuardInput): DayGuard {
@@ -71,8 +74,10 @@ export function judgeDayGuard(i: DayGuardInput): DayGuard {
   if (i.publishable <= 0) {
     return {
       allow: false, halt: false,
-      reason: `🟡 재고가 없어 더 내지 않는다 (오늘 ${i.publishedToday}/${i.dailyTarget}건)`
-        + ' — 낸 것은 그대로 둔다',
+      reason: (i.waitingOnWriter > 0
+        ? `🟡 낼 글 ${i.waitingOnWriter}편이 있지만 쓴 사람이 지금 못 써서 더 내지 않는다`
+        : '🟡 재고가 없어 더 내지 않는다')
+        + ` (오늘 ${i.publishedToday}/${i.dailyTarget}건) — 낸 것은 그대로 둔다`,
     }
   }
   return { allow: true, halt: false, reason: `더 낼 수 있다 — 남은 ${remain}건 · 낼 수 있는 것 ${i.publishable}건` }

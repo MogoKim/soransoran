@@ -59,6 +59,8 @@ npm run publish:heartbeat-db-check
 npm run supply:stock-parity-db-check
 npm run publish:lane-fairness-db-check
 npm run supply:wip-contract-db-check
+# 그 글이 나갈 날에 쓸 수 있는 사람에게만 초안 — 수요 · 여력 파일 · 발행 러너 로그(2026-11-19)
+npm run supply:seat-writers-db-check
 # ops shadow S1/S2 — 실제 CLI · 모든 모델 행 수 불변 · 감사 장부만 · 과거 주입 시각 · writer fail-closed(2026-11-11)
 npm run ops:shadow-plan-db-check
 npm run supply:draft-deferral-e2e-db-check

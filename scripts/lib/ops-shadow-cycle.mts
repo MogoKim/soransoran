@@ -170,7 +170,7 @@ export async function runShadowCycle(o: ShadowCycleOptions): Promise<ShadowCycle
       const slotsDueSoFar = profile.slots.filter((s) => s.hour * 60 + s.minute <= nowMinute).reduce((n, s) => n + s.count, 0)
       const observation = {
         at: now.toISOString(), kstDate,
-        jit: snap.jit === null ? null : { slots: snap.jit.slots, readyFilled: snap.jit.readyFilled },
+        jit: snap.jit === null ? null : { slots: snap.jit.slots, readyFilled: snap.jit.readyFilled, writable: snap.jit.fillable.length },
         inFlightExpectedReady: snap.classification === null ? null : snap.classification.counts.autoReadyPending,
         sourceYieldHigh: snap.sourceYield?.high ?? null,
         attemptableSpeakers,
