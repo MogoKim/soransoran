@@ -44,7 +44,6 @@ import {
   BOOTSTRAP_DAILY_MAX, BOOTSTRAP_SLOTS_PER_POST, countManagedPosts, judgeBootstrapBudget,
 } from '../src/lib/persona-comment-bootstrap-budget'
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
-import { FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST } from '../src/lib/persona-comment-followup'
 import { THREAD_SIZE_CAP } from '../src/lib/persona-thread-target'
 import {
   isGateEightColdStart, GATE_NAMES,
@@ -4897,9 +4896,6 @@ console.log('㊺ bootstrap 단계 — 아무도 없을 때 먼저 말을 건다'
   check('🔴 500 을 다 쓰면 자리가 남아도 0', leftFor(200, BOOTSTRAP_DAILY_MAX) === 0)
   check('🔴 절대 상한은 구조 상한이 아니라 운영 예산 기준 5 × 100이다',
     BOOTSTRAP_DAILY_MAX === 100 * BOOTSTRAP_SLOTS_PER_POST)
-  check('🔴 운영 예산 기준 5 = 첫 댓글 1 + profile 산출 기준 추가 4',
-    BOOTSTRAP_SLOTS_PER_POST
-      === AUTO_PERSONA_COMMENTS_PER_POST_MAX + FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST)
   check('🔴 구조 상한(대화 계획의 가장 큰 크기)이 운영 예산 기준을 부풀리지 않는다',
     PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP && BOOTSTRAP_SLOTS_PER_POST === 5)
 

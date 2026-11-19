@@ -667,9 +667,12 @@
         "profile": null
       },
       {
-        "name": "후보(승인자 없음)",
-        "runtimeStage": "canary",
-        "profile": "CANDIDATE"
+        "name": "승인자 없음",
+        "runtimeStage": "d10",
+        "patch": {
+          "approvedBy": null,
+          "approvedAt": null
+        }
       },
       {
         "name": "단계 불일치(d10 profile · 그날 d100)",

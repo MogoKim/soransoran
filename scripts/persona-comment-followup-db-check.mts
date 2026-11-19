@@ -911,7 +911,7 @@ async function main(): Promise<void> {
       ['대화 감사 FAIL', { conversationAudit: { verdict: 'FAIL', codes: ['FOLLOWUP_SELF'], counts: {} } }],
       ['대화 감사 판독 불가', { conversationAudit: undefined }],
       ['profile 없음', { profile: null }],
-      ['profile 후보(승인 없음)', { profile: F.FOLLOWUP_CANARY_PROFILE_CANDIDATE }],
+      ['profile 승인 없음', { profile: { ...PROFILE, approvedBy: null, approvedAt: null } }],
       ['그날 단계 모름', { runtimeStage: null }],
       ['장부 못 읽음', { ledger: { entries: null, capUsd: 0.2, headroom: 1.5 } }],
       ['공유 장부 잔량 0', { ledger: { entries: [], capUsd: 0, headroom: 1.5 } }],

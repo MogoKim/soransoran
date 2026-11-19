@@ -199,14 +199,8 @@ check('③ 공유 장부에서 첫 댓글 몫을 뺀 잔량 0.0025 → 2',
 check('③ 비용 값 NaN → 0', tick({ commentLedgerRemainingUsd: Number.NaN }).allowed === 0)
 check('③ 예약액 0 → 0', tick({ perCallReserveUsd: 0 }).allowed === 0)
 // ── profile 주입 · 손상 ──
-check('③ 🔴 canary 후보는 승인 전이라 쓰지 않는다',
-  !M.validateFollowupProfile(M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, 'canary').ok
-  && tick({ profile: M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, runtimeStage: 'canary' }).allowed === 0)
-check('③ 후보 숫자는 80건·$0.16 (상한이 아니라 후보값 · 2026-11-13 H1)',
-  M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyCount === 80 && M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyUsd === 0.16)
 for (const b of fx.profiles.broken) {
-  const profile = b.profile === 'CANDIDATE' ? M.FOLLOWUP_CANARY_PROFILE_CANDIDATE
-    : b.patch !== undefined ? { ...fx.profiles.approved, ...b.patch } : b.profile
+  const profile = b.patch !== undefined ? { ...fx.profiles.approved, ...b.patch } : b.profile
   const v = M.validateFollowupProfile(profile, b.runtimeStage)
   check(`③ 🔴 profile ${b.name} → 0건`, !v.ok && tick({ profile, runtimeStage: b.runtimeStage }).allowed === 0, v.ok ? '통과해 버렸다' : v.reason)
 }

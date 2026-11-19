@@ -8,9 +8,10 @@
  */
 import { readFileSync } from 'node:fs'
 
-import { deriveFollowupProfile, type FollowupMeasure } from '../src/lib/followup-profile-derive'
+import { COMMENT_SCALE_HEADROOM, deriveCommentScale, deriveFollowupProfile, type FollowupMeasure } from '../src/lib/followup-profile-derive'
+import { THREAD_TARGETS, threadMeanSizeAt } from '../src/lib/persona-thread-target'
 import {
-  FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST, FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
+  FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
 } from '../src/lib/persona-comment-followup'
 import { COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
 import { profileOf } from '../src/lib/scale-profile'
@@ -72,14 +73,13 @@ console.log('\n② 식 — 실측에서만 나온다')
   const d = derive(measure())
   check('정상 실측 → CANDIDATE', d.verdict === 'CANDIDATE' && d.candidate !== null, `${d.verdict} ${d.codes.join(',')}`)
   const c = d.candidate!
-  check('하루 건수 = D20 목표 × 운영 예산 기준 4(구조 상한 9와 분리)', c.dailyCount === D20_POSTS * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST && c.dailyCount === 80, String(c.dailyCount))
-  check('D10 profile 도 같은 운영 예산 기준(10 × 4 = 40)', D10_PROFILE.dailyCount === profileOf('d10').dailyTarget * FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST)
-  check('🔴 하루 USD = 하루 건수 × (정산 USD / 실제 발행 추가 댓글) — 버린 요청 비용 포함', c.dailyUsd === 0.24, String(c.dailyUsd))
+  const scale = deriveCommentScale({ dailyPosts: D20_POSTS, personas: { normal: 40, quiet: 0 }, runsPerDay: RUNS })
+  check('🔴 하루 건수 · 회차 · Persona 하루 = 정본 계산식(deriveCommentScale) 그대로', c.dailyCount === scale.followup.dailyCount
+    && c.runMax === scale.followup.runMax && c.perPersonaDailyMax === scale.followup.perPersonaDailyMax, JSON.stringify(scale.followup))
+  check('🔴 하루 USD = 하루 건수 × (정산 USD / 실제 발행 추가 댓글) — 버린 요청 비용 포함', Math.abs(c.dailyUsd - Math.ceil(c.dailyCount * 0.003 * 10_000) / 10_000) < 1e-12, String(c.dailyUsd))
   check('🔴 단가가 바뀌면 하루 USD 도 그만큼 — 상수가 아니다',
-    derive(measure({ followup: { settled: 12, settledUsd: 0.06, open: 0 } }), { cap: 1 }).candidate?.dailyUsd === 0.48)
-  check('회차 상한 = max(D10 값, ⌈하루 건수 / 하루 댓글 회차⌉)', c.runMax === Math.max(3, Math.ceil(80 / RUNS)), `${c.runMax} · 회차 ${RUNS}`)
-  check('Persona 하루 상한 = max(D10 값, ⌈하루 건수 / 계약 유효⌉)', c.perPersonaDailyMax === 3
-    && derive(measure(), { personas: 20 }).candidate?.perPersonaDailyMax === 4)
+    Math.abs((derive(measure({ followup: { settled: 12, settledUsd: 0.06, open: 0 } }), { cap: 9 }).candidate?.dailyUsd ?? 0) - 2 * c.dailyUsd) < 1e-9)
+  check('Persona 가 적으면 한 사람 상한이 오른다', (derive(measure(), { personas: 20 }).candidate?.perPersonaDailyMax ?? 0) > c.perPersonaDailyMax)
   check('🔴 단계는 d20 · 판은 같다', c.stage === 'd20' && c.v === FOLLOWUP_PROFILE_VERSION)
 }
 
@@ -127,6 +127,25 @@ console.log('\n④ 도구가 쓰지 않는다')
   check('🔴 후보 파일은 새 경로에만(덮어쓰기 0 · 0600)', /flag: 'wx'/.test(cli) && /mode: 0o600/.test(cli))
   check('🔴 preflight 는 controller 와 같은 판정 함수', /judgeNextPreflight\(TARGET, r\.facts, RUNNER_GRID\)/.test(cli) && /readPreflightFacts\(prisma/.test(cli))
   check('🔴 첫 댓글 분모는 정본 증거 firstCommentOk 에서만 온다', /acceptedFirstComments: typeof evidence\.counts\?\.firstCommentOk === 'number'/.test(cli))
+}
+
+console.log('\n⑤ 댓글 규모 계산식 — 편수 · 글당 목표 평균 · Persona 수에서 상한 전부')
+{
+  const C = threadMeanSizeAt(null)
+  const s30 = deriveCommentScale({ dailyPosts: 30, personas: { normal: 56, quiet: 4 }, runsPerDay: RUNS, usdPerCall: 0.0016, acceptRate: 0.72 })
+  check('글당 목표 평균은 대화 계획의 마지막 줄', s30.meanSize === C && C === THREAD_TARGETS[THREAD_TARGETS.length - 1]!.meanSize)
+  check('🔴 하루 댓글 = 편수 × 평균 · 추가 = 편수 × (평균 − 1)', s30.dailyComments === 30 * C && s30.followupComments === 30 * (C - 1))
+  check('🔴 한 사람 하루·주 상한으로 하루 댓글을 여유 있게 감당한다(조용한 Persona 는 절반)',
+    56 * s30.persona.dailyCap + 4 * s30.persona.quietDailyCap >= s30.dailyComments * COMMENT_SCALE_HEADROOM
+    && 56 * s30.persona.weeklyCap + 4 * s30.persona.quietWeeklyCap >= s30.dailyComments * 7 * COMMENT_SCALE_HEADROOM
+    && s30.persona.quietDailyCap < s30.persona.dailyCap, JSON.stringify(s30.persona))
+  check('🔴 추가 댓글 Persona 하루 상한이 Persona 하루 상한과 같다(두 겹이 따로 막지 않는다)', s30.followup.perPersonaDailyMax === s30.persona.dailyCap)
+  check('🔴 회차 상한 × 하루 회차 ≥ 추가 댓글 기대치의 두 배', s30.followup.runMax * RUNS >= s30.followupComments * 2, `${s30.followup.runMax} × ${RUNS}`)
+  check('🔴 하루 USD 는 실측(단가 · 적재율)이 있을 때만', s30.followup.dailyUsd !== null && s30.commentLedgerUsdExpected !== null
+    && deriveCommentScale({ dailyPosts: 30, personas: { normal: 56, quiet: 4 }, runsPerDay: RUNS }).followup.dailyUsd === null)
+  const up = deriveCommentScale({ dailyPosts: 30, personas: { normal: 56, quiet: 4 }, runsPerDay: RUNS, meanSize: C + 1 })
+  check('🔴 평균을 올리면 상한이 같이 오른다 — 숫자 한 칸', up.followup.dailyCount > s30.followup.dailyCount && up.persona.weeklyCap > s30.persona.weeklyCap)
+  console.log(`   D30 · 56+4명 · 평균 ${C}: ${JSON.stringify({ persona: s30.persona, followup: s30.followup, ledger: s30.commentLedgerUsdExpected })}`)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} 통과 · ${fail} 실패 — DB 0 · 파일 0`)

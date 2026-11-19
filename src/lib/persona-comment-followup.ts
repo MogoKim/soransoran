@@ -84,12 +84,6 @@ export const FOLLOWUP_TOTAL_PER_POST_MAX = PERSONA_COMMENTS_PER_POST_MAX
 /** 🔴 첫 댓글 뒤 추가 절대 상한 = 총량 상한 − 첫 댓글 1 */
 export const FOLLOWUP_EXTRA_PER_POST_MAX = FOLLOWUP_TOTAL_PER_POST_MAX - AUTO_PERSONA_COMMENTS_PER_POST_MAX
 
-/**
- * 🔴 profile 산출용 운영 예산 기준. 글당 구조 상한(9)과 분리한다.
- * 이 값은 모든 글에 4건을 채우라는 의무가 아니라 기존 Dn 비용 외피를 보존하는 산출 천장이다.
- */
-export const FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST = 4
-
 /** 직전 Persona 댓글에서 최소 이만큼 띄운다 — 자리마다의 간격은 계획(`persona-thread-plan`)이 정한다 */
 export const FOLLOWUP_MIN_GAP_MS = PLAN_MIN_GAP_MS
 /**
@@ -114,6 +108,7 @@ export const FOLLOWUP_CHAIN_MAX = PERSONA_REPLY_CHAIN_MAX
  *    D10 과 D100 의 하루 상한이 같을 수 없다. 그래서 상한을 여기 고정하지 않고, 호출부가 그날의
  *    런타임 단계 또는 모든 단계에 적용되는 **승인된 profile** 을 주입한다. 없거나 · 손상됐거나 · 단계가 다르거나 ·
  *    승인자가 없으면 그 회차는 **0건**(fail-closed)이다. 첫 댓글 예산은 profile 과 무관하게 먼저 뗀다.
+ *    profile 의 값은 `deriveCommentScale`(하루 편수 · 글당 목표 평균 · Persona 수)이 계산한 것을 옮겨 적는다.
  */
 export const FOLLOWUP_PROFILE_VERSION = 'followup-profile-v1'
 /** 기능을 Dn 단계와 묶지 않는 운영 공통 profile 표식. 단계 전용 profile도 계속 지원한다. */
@@ -135,23 +130,6 @@ export type FollowupProfile = {
   approvedBy: string
   approvedAt: string
 }
-
-/**
- * 🔴 **canary profile 후보 — 승인 전이라 그대로는 0건이다.** D100 영구 상한이 아니다.
- *    첫 운영 관측용 숫자 후보일 뿐이며, 창업자 승인(`approvedBy` · `approvedAt`)과 적용 단계를 채운
- *    profile 만 `validateFollowupProfile` 을 통과한다.
- */
-export const FOLLOWUP_CANARY_PROFILE_CANDIDATE: Readonly<Omit<FollowupProfile, 'approvedBy' | 'approvedAt'> & { approvedBy: null; approvedAt: null }> = Object.freeze({
-  v: FOLLOWUP_PROFILE_VERSION,
-  stage: 'canary',
-  // 🔴 2026-11-13 H1 — 40 · 0.08 에서 올렸다. 전체 댓글 장부 상한(`COMMENT_LOOP_DAILY_USD_DEFAULT` 0.20)은 그대로다
-  dailyCount: 80,
-  dailyUsd: 0.16,
-  runMax: 3,
-  perPersonaDailyMax: 3,
-  approvedBy: null,
-  approvedAt: null,
-})
 
 const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1
 
