@@ -664,7 +664,8 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     const secondStamp = { ...st, ordinal: 4, parentCommentId: 'c2', hook: 'question' }
     const second = pub({ post: freshForAuthor, candidatePersonaId: 'pA', dedupKey: M.followupKeyOf(FX_POST, 4),
       editDiff: M.followupEditDiffOf(secondStamp as FollowupModule.FollowupStamp) })
-    check('⑦ 🟢 글쓴이 두 번째 답글은 서로 다른 열린 대상이면 허용', second.ok && second.personaRepeatAllowed, second.blockers.join(' | '))
+    check('⑦ 🔴 계획이 글쓴이 자리가 아닌 순번(4번 = 글에 답)에 글쓴이 답글 행 → 막음(글쓴이는 대신 서지 않는다)',
+      M.followupSeatsOf(freshForAuthor, 4).seats.every((x) => x.speaker.kind !== 'author') && !second.ok, second.blockers.join(' | '))
   }
   {
     // 🔴 실회원 댓글에는 글쓴이도 자동 답글을 달지 않는다
@@ -810,7 +811,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const seatsAt = (f: FollowupModule.FollowupPostFacts, ordinal: number) => M.followupSeatsOf(f, ordinal).seats
   const shown = (f: FollowupModule.FollowupPostFacts, ordinal: number) =>
     seatsAt(f, ordinal).map((x) => `${x.target.kind === 'reply' ? x.target.commentId : 'post'}/${x.speaker.kind}`).join(',')
-  check('⑪ 🔴 2번 자리(계획: 글쓴이 답글) — 글쓴이 답글 · 새 사람의 답글 · 글에 답 순', shown(fxFacts([first]), 2) === 'c1/author,c1/other,post/other', shown(fxFacts([first]), 2))
+  check('⑪ 🔴 2번 자리(계획: 글쓴이 답글) — 글쓴이 답글 · 글에 답 · 새 사람의 답글 순', shown(fxFacts([first]), 2) === 'c1/author,post/other,c1/other', shown(fxFacts([first]), 2))
   const withMember = fxFacts([{ id: 'm1', atMin: 5, origin: 'MEMBER', member: 'u1' }, first])
   check('⑪ 🔴 실회원 댓글은 어떤 자리의 답글 대상도 아니다(글쓴이 포함)',
     seatsAt(withMember, 2).length > 0 && seatsAt(withMember, 2).every((x) => x.target.kind === 'post' || x.target.commentId === 'c1'), shown(withMember, 2))
@@ -827,15 +828,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑪ 🔴 글에 답하는 자리는 글쓴이·이미 단 Persona 를 빼고 고른다',
     g3 !== null && g3.target.kind === 'post' && M.pickFollowupPersona(g3, FX_POST, cands(['pA', 'pB', 'pZ']), 3).personaId === 'pZ')
   const repliedToAuthor = fxFacts([first, a1, { id: 'c2', atMin: 100, parent: 'a1', origin: 'PERSONA', persona: 'pC', provenance: 'followup' }])
-  check('⑪ 🔴 글쓴이 댓글에 달린 답에는 글쓴이 답글 자리로 선다 — 글쓴이를 "돌아온 사람"으로 한 번 더 세우지 않는다',
-    shown(repliedToAuthor, 4) === 'post/other,c2/author,c2/other', shown(repliedToAuthor, 4))
+  check('⑪ 🔴 글쓴이 댓글에 달린 답 — 글쓴이를 "돌아온 사람"으로 세우지 않고, 계획이 글에 답인 4번 자리를 글쓴이가 대신 서지도 않는다',
+    shown(repliedToAuthor, 4) === 'post/other,c2/other', shown(repliedToAuthor, 4))
   const twice = fxFacts([first, a1,
     { id: 'b2', atMin: 100, parent: 'a1', origin: 'PERSONA', persona: 'pB', provenance: 'followup' },
     { id: 'a2', atMin: 140, parent: 'b2', origin: 'PERSONA', persona: 'pA', provenance: 'followup' }])
   check('⑪ 🔴 한 사람은 한 글에 두 번까지 — 세 번째로 돌아오는 자리는 없다', shown(twice, 5) === 'post/other', shown(twice, 5))
   const later = fxFacts([first, a1, { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', provenance: 'followup' }])
-  check('⑪ 🟢 글쓴이가 한 번 답했어도 다른 사람의 새 댓글에는 다시 글쓴이 답글 자리가 선다',
-    shown(later, 4) === 'post/other,c2/author,a1/returning', shown(later, 4))
+  check('⑪ 🔴 막힌 자리의 대체는 새 사람·돌아온 사람뿐이다 — 답할 댓글이 열려 있어도 글쓴이는 계획 밖 자리에 서지 않는다',
+    shown(later, 4) === 'post/other,a1/returning', shown(later, 4))
   const authorAtMax = fxFacts([first, a1,
     { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', provenance: 'followup' },
     { id: 'a2', atMin: 140, parent: 'c2', origin: 'PERSONA', persona: 'pA', provenance: 'followup' },
@@ -1004,9 +1005,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const first: FxComment = { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', provenance: 'auto' }
   const v = M.judgeFollowupPost(fxFacts([first]), at)
   const go = v.verdict === 'GO' ? v : null
-  check('⑬ GO 는 지금 설 수 있는 자리를 전부 준다 — 글쓴이 답글 · 새 사람 답글 · 글에 답',
+  check('⑬ GO 는 지금 설 수 있는 자리를 전부 준다 — 글쓴이 답글(계획) · 글에 답 · 새 사람 답글',
     go !== null && go.seats.length === 3 && go.seats[0]?.speaker.kind === 'author' && go.seats[0]?.target.kind === 'reply'
-    && go.seats[2]?.target.kind === 'post' && go.seats[2]?.speaker.kind === 'other' && go.target === go.seats[0]?.target,
+    && go.seats[1]?.target.kind === 'post' && go.seats[1]?.speaker.kind === 'other'
+    && go.seats[2]?.target.kind === 'reply' && go.seats[2]?.speaker.kind === 'other' && go.target === go.seats[0]?.target,
     JSON.stringify(go?.seats.map((x) => `${x.target.kind}/${x.speaker.kind}`)))
   if (go !== null) {
     const cand = (ids: string[]): FollowupModule.FollowupPersonaCandidate[] => ids.map((personaId) => ({ personaId, eligible: true, followupsToday: 0 }))

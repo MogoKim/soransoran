@@ -92,6 +92,7 @@ const MUTATIONS: Mutation[] = [
   { name: '🔴 H1 후보 실회원 필터 제거', from: '|| p.realMember || ', to: '|| ' },
   { name: 'H1 후보 말투 능력 필터 제거', from: ' || !p.voiceCapable) return []', to: ') return []' },
   { name: '🔴 H1 후보 격리 필터 제거', from: 'if (followupIsolationReason(i.isolation, { postId: i.postId, personaCode: p.code }) !== null) return []', to: '' },
+  { name: '🔴 막힌 자리를 글쓴이가 대신 섬(글쓴이 답글 두세 번)', from: "(['post', 'reply'] as const)", to: "(['author', 'post', 'reply'] as const)" },
   { name: '🔴 H1 후보 이번 회차 사용 Persona 재선택', from: 'if (i.usedPersonaIds.has(p.personaId)) return []', to: '' },
   { name: '🔴 H1 예비 호출 무제한', from: 'return allowed * (1 + FOLLOWUP_SPARE_PER_SLOT)', to: 'return allowed * 100' },
   // ── 한 후보의 실패가 글을 멈추지 않는다 ──

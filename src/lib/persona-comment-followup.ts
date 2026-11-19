@@ -20,7 +20,7 @@
  *
  * 🔴 **누가 어디에 말할지는 글의 대화 계획이 정한다** (`persona-thread-plan`). 글 id 하나로 그 글의 Persona 댓글 수(2~10)와
  *    자리마다의 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해진다. 이 파일은 계획의 다음 자리가
- *    **지금 사실로 설 수 있는지**만 본다(`followupSeatsOf`). 계획이 정한 자리가 막히면 다른 종류의 자리로 넘어간다 —
+ *    **지금 사실로 설 수 있는지**만 본다(`followupSeatsOf`). 계획이 정한 자리가 막히면 새 사람의 자리로 넘어간다 —
  *    한 자리 · 한 사람의 실패가 글을 멈추지 않는다. 한 회차에 한 글에는 최대 한 건이다.
  *
  * 🔴 **실회원 대화가 먼저다.** 실회원 댓글이 있으면 추가량을 줄이고, 실회원 댓글에는 답하지 않는다
@@ -411,7 +411,7 @@ const rolesOf = (shape: ReactionType): ReactionType[] =>
     .filter((r) => COMMENT_REACTION_ROLES.includes(r))
 
 /**
- * 🔴 **이 순번에서 지금 설 수 있는 자리 — 계획이 정한 종류가 먼저, 나머지 종류가 그 뒤다.**
+ * 🔴 **이 순번에서 지금 설 수 있는 자리 — 계획이 정한 종류가 먼저, 그 뒤는 새 사람의 자리(글에 답 · 남의 댓글에 답)다.**
  *    생성 쪽(`judgeFollowupPost`)과 발행 트랜잭션(`judgeFollowupPublish`)이 **같은 함수**를 쓴다.
  *
  *    · 글에 답 — 이 글에 아직 없는 사람의 새 댓글. 언제나 설 수 있다
@@ -451,7 +451,9 @@ export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats:
     reply: (hook) => (back !== undefined ? replyTo(back.x, { kind: 'returning', personaId: back.who }, hook)
       : forNew === undefined ? null : replyTo(forNew, { kind: 'other' }, hook)),
   }
-  const order: PlanSeatKind[] = [slot.kind, ...(['author', 'reply', 'post'] as const).filter((k) => k !== slot.kind)]
+  // 🔴 막힌 자리는 새 사람이 먼저 대신한다(글에 답 → 남의 댓글에 답). 글쓴이는 계획이 준 자리에서만 선다 —
+  //    대체 순서에 글쓴이를 두면 사람이 없을 때마다 글쓴이가 서서 한 글에 글쓴이 답글이 두세 번 나온다
+  const order: PlanSeatKind[] = [slot.kind, ...(['post', 'reply'] as const).filter((k) => k !== slot.kind)]
   const seats = order.flatMap((k) => {
     const seat = seatOf[k](k === slot.kind ? slot.shape : 'other')
     return seat === null ? [] : [seat]
