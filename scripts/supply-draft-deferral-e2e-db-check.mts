@@ -183,8 +183,9 @@ async function main(): Promise<void> {
     await prisma.persona.create({ data: { code, userId: u.id, status: 'active' } })
   }
   /**
-   * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**(speaker-attempt-v1)이 있는 화자마다
-   *    자동 READY 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고 시도 여력도 0 이다.
+   * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**이 있는 화자마다
+   *    자동 READY 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고, 그 초안이 지평의 자리를
+   *    먼저 차지하므로(`firstWritableSeat`) 시도 여력도 0 이다.
    *    🔴 공개 자리만 보고 심으면(옛 계약) 자리가 없던 화자가 시도 여력을 받아 대기 경로가 시험되지 않는다.
    */
   const scale = resolveScale(process.env)
