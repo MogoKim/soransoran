@@ -224,13 +224,10 @@ for (const [cafe, site] of [['remonterrace', R], ['wgang', W]] as const) {
     const raw = readFileSync('scripts/micro-seed-collect-navercafe.mts', 'utf-8')
     return raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   })()
-  check('🔴 수집기에 --thin 경로가 있다', /THIN = argv\.includes\('--thin'\)/.test(collector))
-  check('🔴 --thin 이면 전문 JSONL 을 쓰지 않는다 — 지우는 것이 아니라 쓰지 않는다', (() => {
-    // writeJsonl(OUT, collected) 은 THIN 이 아닌 분기에만 있어야 한다
-    const thinBranch = /if \(collected\.length && THIN\)/.test(collector)
-    const elseBranch = /\} else if \(collected\.length\) \{[\s\S]{0,200}writeJsonl\(OUT, collected\)/.test(collector)
-    return thinBranch && elseBranch
-  })())
+  // 🔴 전문 상세 JSONL 경로는 지웠다(2026-11-19) — 수집기는 언제나 얇은 행만 쓴다
+  check('🔴 전문 JSONL 을 쓰는 길이 없다 — 지우는 것이 아니라 쓰지 않는다',
+    !/writeJsonl\(OUT, collected\)/.test(collector) && !/--thin/.test(collector.replace(/^\s*(\*|\/\/).*$/gm, ''))
+    && /if \(collected\.length > 0\) \{/.test(collector))
   check('🔴 --thin 경로가 마스킹 → 자르기 순서를 지킨다', (() => {
     const i = collector.indexOf('maskSensitive')
     const j = collector.indexOf('bodyHeadChars: BODY_HEAD_CHARS')

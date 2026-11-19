@@ -324,11 +324,11 @@ console.log('\n⑪ 이 필터가 하지 않는 것 — 🔴 발행·fetch·DB·S
     `${cookThin.safetyReasons} · ${JSON.stringify(back(cookThin))}`)
 
   // 🔴 세 생산 경로가 같은 helper 를 부른다 — 사유 객체를 문자열로 바꾸는 다른 길이 없다
-  const PRODUCERS = ['scripts/micro-seed-82cook-thin-detail.mts', 'scripts/micro-seed-collect-navercafe.mts', 'scripts/micro-seed-navercafe-thin.mts']
+  const PRODUCERS = ['scripts/micro-seed-collect-navercafe.mts', 'scripts/micro-seed-navercafe-thin.mts']
   const srcs = PRODUCERS.map((f) => codeOf(readFileSync(f, 'utf-8')))
-  check('🔴 82cook · remonterrace/wgang 수집기 · 네이버 thin — 셋 다 safetyReasonCodes(v.safety.reasons)',
+  check('🔴 네이버 수집기 · 네이버 thin — 둘 다 safetyReasonCodes(v.safety.reasons)',
     srcs.every((s) => (s.match(/safetyReasons: safetyReasonCodes\(v\.safety\.reasons\)/g) ?? []).length === 1))
-  check('🔴 셋 다 사유 객체를 String 으로 바꾸는 길이 없다',
+  check('🔴 둘 다 사유 객체를 String 으로 바꾸는 길이 없다',
     srcs.every((s) => !/reasons\.map\(\s*(\(x\)\s*=>\s*String\(x\)|String)\s*\)/.test(s)))
   const at = CODE.indexOf('export function safetyReasonCodes')
   check('🔴 helper 자체도 String(사유) 를 쓰지 않는다',
