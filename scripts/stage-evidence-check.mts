@@ -13,17 +13,18 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  judgeStageEvidence, trialPlanOf, evidenceReasonOf, evidencePlainLineOf, STAGE_EVIDENCE_CODES, personaCommentCapFor,
+  judgeStageEvidence, evidenceReasonOf, STAGE_EVIDENCE_CODES, INTEGRITY_CODES,
   commentProvenanceOf, AUTO_COMMENT_CLOCK_SKEW_MS, type CommentLinkFacts,
   personaCommentProvenanceOf, judgeConversationAudit, CONVERSATION_AUDIT_CODES,
   FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY,
   type StageEvidenceFacts, type EvidencePost, type EvidenceSideSignals, type StageEvidenceVerdict,
 } from '../src/lib/stage-evidence'
-import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
+import { AUTO_FIRST_COMMENT_WINDOW_MS } from '../src/lib/persona-comment-auto-lane'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
-import { THREAD_SIZE_CAP } from '../src/lib/persona-thread-target'
 import { AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
-import { decideStage, consumerEnvOf, qualitySignalOf, validateForToday, sustainedReleaseOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
+import { decideStage, consumerEnvOf, qualitySignalOf, validateForToday, openStageOf, type HealthSignal, type ControllerInputs } from '../src/lib/stage-controller'
+import { consecutivePassDays } from '../src/lib/stage-ladder'
+import { LADDER_RULE } from '../src/lib/ladder-table'
 import { nextStage } from '../src/lib/stage-decision-contract'
 import {
   validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate,
@@ -35,7 +36,7 @@ import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { judgeCost } from '../src/lib/ops-status'
 import {
-  recordedSupplyBudgetOf, relevantUsageUnknownCount, supplyProofCostObservationOf, tallyOf,
+  recordedSupplyBudgetOf, supplyProofCostObservationOf, tallyOf,
   type DayTally, type LedgerEntry,
 } from '../src/lib/llm-ledger'
 import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
@@ -53,8 +54,6 @@ import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
-import { autoProofNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
-import { markedStageEnv } from './lib/stage-decision-fixture'
 
 let pass = 0
 let fail = 0
@@ -65,29 +64,37 @@ const check = (name: string, ok: boolean, detail = ''): void => {
   }
 }
 
-// ── 날짜 — 운영 반례 그대로 ──
-const D = '2026-09-29'
-const TODAY = '2026-09-30'
-const NOW = new Date('2026-09-30T07:00:00+09:00')
+// ── 날짜 — 공급 비용 계약(envelope) 시행 뒤의 하루 ──
+const D = '2026-11-20'
+const TODAY = '2026-11-21'
+const NOW = new Date('2026-11-21T07:00:00+09:00')
 const AT = NOW.toISOString()
 const T0 = Date.parse(`${D}T09:30:00+09:00`)
 const HOUR = 3600_000
 const MIN = 60_000
 
 // ── ① 사실 fixture ──
+const defaultThread = (i: number): EvidencePost['personaComments'][number][] => [
+  { personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 5 * MIN, topLevel: true, provenance: 'auto' },
+  ...[1, 2, 3, 4, 5].map((k) => ({
+    personaId: `voice-${i}-${k}`, createdAtMs: T0 + i * 4 * HOUR + (k + 1) * 15 * MIN, topLevel: true, provenance: 'followup' as const,
+  })),
+]
 /** 🔴 기준선 — 자동 READY(AUTO_DECIDER) 로 무인 발행된 글 · 감사 표본은 첫 글 하나(정본 표본 ceil(3×0.2)=1) */
 const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
   postId: `p-${i}`, queueId: `q-${i}`,
   publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `author-${i}`,
   decider: 'auto', release: 'STAMPED_ELIGIBLE',
-  personaComments: [{
-    personaId: `commenter-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN,
-    topLevel: true, provenance: 'auto' as const,
-  }],
+  // 첫 댓글 5분 뒤 + 추가 댓글 5건(화자 5명) — 결의 통과선을 넉넉히 넘는 글
+  personaComments: defaultThread(i),
+  conversationComments: defaultThread(i).map((c, k) => ({
+    id: `dc-${i}-${k}`, personaId: c.personaId, parentId: null, commentOrigin: 'PERSONA', isDeleted: false,
+    createdAtMs: c.createdAtMs, reportedAtMs: null, provenance: c.provenance,
+  })),
   ...o,
 })
 /** 🔴 감사 표본 한 행 — 그날 자동 target(postId·queueId)에 속해야 표본으로 센다 */
-const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean }> = {}) => ({
+const sample = (i: number, o: Partial<{ postId: string; queueId: string; judged: boolean }> = {}) => ({
   postId: `p-${i}`, queueId: `q-${i}`, judged: true, ...o,
 })
 const JUDGED = sample(0)
@@ -98,7 +105,8 @@ const facts = (stage: RuntimeStage = 'd3', o: Partial<StageEvidenceFacts> = {}):
   kstDate: D, stage,
   decision: { kstDate: D, release: stage, decidedBy: DECISION_WRITER },
   posts: Array.from({ length: PROFILES[stage].dailyTarget }, (_, i) => post(i)),
-  orphanPublishLogs: 0, unloggedPublishes: 0,audits: CLEAN_AUDITS, ...o,
+  readAtMs: NOW.getTime() + 24 * HOUR,
+  orphanPublishLogs: 0, unloggedPublishes: 0, audits: CLEAN_AUDITS, ...o,
 })
 /** 🔴 비용은 정본 `judgeCost` 로 만든다 — health 를 손으로 적지 않는다 */
 const tally = (usd: number, overruns = 0): DayTally => ({ ...tallyOf([]), settledUsd: usd, overruns })
@@ -118,6 +126,8 @@ supplyCostEvidence: SUPPLY_COST_OK, ...o,
 const judge = (f: StageEvidenceFacts | null, s: EvidenceSideSignals | null = side(), stage: RuntimeStage = 'd3') =>
   judgeStageEvidence(D, stage, f, s)
 const has = (v: StageEvidenceVerdict, code: string): boolean => (v.codes as readonly string[]).includes(code)
+/** 무결성 코드만 — 글 한 편의 양(댓글 수)이 모자라 붙는 코드와 가른다 */
+const integ = (v: StageEvidenceVerdict): string[] => v.codes.filter((c) => (INTEGRITY_CODES as readonly string[]).includes(c))
 const failWith = (name: string, v: StageEvidenceVerdict, code: string): void =>
   check(name, v.verdict === 'FAIL' && has(v, code), `${v.verdict} ${v.codes.join(',')}`)
 
@@ -133,175 +143,104 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   failWith('🔴 결정 없음 → FAIL', judge(facts('d3', { decision: null })), 'DECISION_MISSING')
   failWith('🔴 사람이 쓴 결정(decidedBy≠controller) → FAIL', judge(facts('d3', {
     decision: { kstDate: D, release: 'd3', decidedBy: 'human' } })), 'DECISION_NOT_CONTROLLER')
-  const naturalHold = judge(facts('d3', {
-    decision: { kstDate: D, release: 'd3', decidedBy: DECISION_WRITER } }))
-  check('🟢 자연 HOLD 날도 자동 exact 3 · 나머지 증거 완전이면 D3 운영 PASS', naturalHold.verdict === 'PASS', naturalHold.codes.join(','))
-  failWith('🔴 자연 HOLD 날 2/3은 정상 평상 운영이지만 단계 PASS는 아니다', judge(facts('d3', {
-    posts: [post(0), post(1)], decision: { kstDate: D, release: 'd3', decidedBy: DECISION_WRITER } })), 'PUBLISH_NOT_AUTO_READY')
   failWith('🔴 결정 공개 단계 ≠ 판정 단계 → FAIL', judge(facts('d3', {
     decision: { kstDate: D, release: 'd1', decidedBy: DECISION_WRITER } })), 'DECISION_STAGE_MISMATCH')
 
-  // ② 발행 — 🔴 자동 READY 로 무인 발행된 글만 자동 target 이다(사람 승인 글은 0건)
-  failWith('🔴 자동 target 이 목표보다 적다(2/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1)] })), 'PUBLISH_NOT_AUTO_READY')
+  // ② 수 — 🔴 자동 READY 로 무인 발행된 글만 자동 target 이다(사람 승인 글은 0건). 통과선은 목표의 90%(올림)
+  failWith('🔴 자동 target 이 통과선보다 적다(2/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1)] })), 'PUBLISH_SHORT')
   failWith('🔴 dailyTarget 보다 많이 냈다(4/3) → FAIL', judge(facts('d3', { posts: [post(0), post(1), post(2), post(3)] })), 'PUBLISH_OVER')
   const manual = judge(facts('d3', { posts: [post(0), post(1, { unattended: false }), post(2)] }))
-  failWith('🔴 자동 READY 글이라도 무인 표식 없이(수동) 나갔으면 자동 target 이 아니다 → FAIL', manual, 'PUBLISH_NOT_AUTO_READY')
+  failWith('🔴 자동 READY 글이라도 무인 표식 없이(수동) 나갔으면 자동 target 이 아니다 → FAIL', manual, 'PUBLISH_SHORT')
   check('그때 counts — 자동 target 2', manual.counts.autoTargets === 2, JSON.stringify(manual.counts))
   const humanOnly = judge(facts('d3', { posts: [0, 1, 2].map((i) => post(i, { decider: 'human', personaComments: [] })), audits: { ...CLEAN_AUDITS, rows: [] } }))
-  failWith('🔴 🔴 **전부 사람 승인 글 3건 · 감사 0 → 승격 물량 0 · FAIL (앞판은 PASS 였다)**', humanOnly, 'PUBLISH_NOT_AUTO_READY')
-  // 코드 이름(PUBLISH_NOT_AUTO_READY)이 말하지 않는 사실 — 자동 공개 편수가 목표보다 적다 — 을 문장으로 낸다
-  check('🔴 편수 부족은 "자동 공개 2편 / 목표 3편 — 1편 부족"으로 읽힌다',
-    evidencePlainLineOf(judge(facts('d3', { posts: [post(0), post(1)] }))) === `${D} 자동 공개 2편 / 목표 3편 — 1편 부족`,
-    String(evidencePlainLineOf(judge(facts('d3', { posts: [post(0), post(1)] })))))
-  check('🔴 사람 승인 글이 섞였으면 그 편수를 따로 적는다 · PASS 인 날은 한 줄도 없다',
-    (evidencePlainLineOf(humanOnly) ?? '').endsWith('자동 공개 0편 / 목표 3편 — 3편 부족 (사람 승인 글 3편은 자동 물량으로 세지 않는다)')
-    && evidencePlainLineOf(judge(facts('d3'))) === null, String(evidencePlainLineOf(humanOnly)))
+  failWith('🔴 🔴 **전부 사람 승인 글 3건 · 감사 0 → 자동 물량 0 · FAIL**', humanOnly, 'PUBLISH_SHORT')
   check('그때 counts — 자동 target 0 · 사람 승인 3', humanOnly.counts.autoTargets === 0 && humanOnly.counts.humanApproved === 3, JSON.stringify(humanOnly.counts))
-  const mixed = judge(facts('d3', { posts: [post(0), post(1), post(2, { decider: 'human' })] }))
-  failWith('🔴 혼합(자동 2 · 사람 1) — 사람 글은 세지 않는다 → FAIL', mixed, 'PUBLISH_NOT_AUTO_READY')
-  const d5mixed = judgeStageEvidence(D, 'd5', facts('d5', { posts: [post(0), post(1), post(2), post(3, { decider: 'human' }), post(4, { decider: 'human' })] }), side())
-  failWith('🔴 D5 혼합(자동 3 · 사람 2) → FAIL', d5mixed, 'PUBLISH_NOT_AUTO_READY')
-  /**
-   * 🔴 **반례 ② — d10 증명일(TRIAL · RETEST)은 자동 정확히 10편** (2026-10-11 Batch A1).
-   *    9 · 11 · 사람 섞임은 FAIL. 평상일도 자연 exact N이면 같은 운영 증거로 인정한다.
-   */
+  failWith('🔴 혼합(자동 2 · 사람 1) — 사람 글은 세지 않는다 → FAIL', judge(facts('d3', { posts: [post(0), post(1), post(2, { decider: 'human' })] })), 'PUBLISH_SHORT')
   const d10Audits = { ...CLEAN_AUDITS, rows: [sample(0), sample(1)] }
   const d10Of = (posts: EvidencePost[]) => judgeStageEvidence(D, 'd10', facts('d10', { posts, audits: d10Audits }), side())
-  const ten = Array.from({ length: 10 }, (_, i) => post(i))
-  check('🟢 반례② D10 증명일 자동 정확히 10 → PASS', d10Of(ten).verdict === 'PASS', d10Of(ten).codes.join(','))
-  failWith('🔴 반례② D10 증명일 자동 9 → FAIL', d10Of(ten.slice(0, 9)), 'PUBLISH_NOT_AUTO_READY')
-  failWith('🔴 반례② D10 증명일 자동 11 → FAIL', d10Of([...ten, post(10)]), 'PUBLISH_OVER')
-  failWith('🔴 반례② D10 증명일 자동 9 + 사람 1 → FAIL', d10Of([...ten.slice(0, 9), post(9, { decider: 'human' })]), 'PUBLISH_NOT_AUTO_READY')
-  const retest10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
-    decision: { kstDate: D, release: 'd10', decidedBy: DECISION_WRITER } }), side())
-  check('🟢 반례② RETEST 도 TRIAL 상태다 — 같은 exact 10 판정', retest10.verdict === 'PASS')
-  const naturalPrepare10 = judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: d10Audits,
-    decision: { kstDate: D, release: 'd10', decidedBy: DECISION_WRITER } }), side())
-  check('🟢 반례② 평상일 PREPARE도 자동 exact 10이면 운영 PASS', naturalPrepare10.verdict === 'PASS', naturalPrepare10.codes.join(','))
-  failWith('🔴 반례② 평상일 PREPARE 4/10은 단계 PASS가 아니다', judgeStageEvidence(D, 'd10', facts('d10', { posts: ten.slice(0, 4), audits: d10Audits,
-    decision: { kstDate: D, release: 'd10', decidedBy: DECISION_WRITER } }), side()), 'PUBLISH_NOT_AUTO_READY')
+  const ten = Array.from({ length: 10 }, (_, i) => post(i, { publishedAtMs: T0 + i * HOUR,
+    personaComments: post(i).personaComments.map((c) => ({ ...c, createdAtMs: c.createdAtMs - i * 3 * HOUR })) }))
+  check('🟢 D10 자동 10 → PASS', d10Of(ten).verdict === 'PASS', d10Of(ten).codes.join(','))
+  check('🟢 D10 자동 9(목표의 90%) → PASS — 한 편 모자라도 하루가 무효가 되지 않는다', d10Of(ten.slice(0, 9)).verdict === 'PASS', d10Of(ten.slice(0, 9)).codes.join(','))
+  failWith('🔴 D10 자동 8 → FAIL', d10Of(ten.slice(0, 8)), 'PUBLISH_SHORT')
+  failWith('🔴 D10 자동 11 → FAIL(상한 초과)', d10Of([...ten, post(10)]), 'PUBLISH_OVER')
+  failWith('🔴 D10 자동 8 + 사람 1 → FAIL', d10Of([...ten.slice(0, 8), post(9, { decider: 'human' })]), 'PUBLISH_SHORT')
 
-  // ③ 첫 댓글
-  failWith('🔴 09:30 글 Persona 댓글 없음 → FAIL (09-29 반례)', judge(facts('d3', {
-    posts: [post(0, { personaComments: [] }), post(1), post(2)] })), 'COMMENT_MISSING')
-  const late = judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS + MIN, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] }))
-  failWith('🔴 60분 넘어 붙은 댓글(61분) → FAIL (LATE)', late, 'COMMENT_LATE')
-  check('경계 — 정확히 60분은 시한 안이다', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 + AUTO_FIRST_COMMENT_WINDOW_MS, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })).verdict === 'PASS')
-  // (b) 추가 댓글 계약 — 상한은 댓글 단계의 정본 상수다
-  check('상한 — bootstrap-auto 1 · review/organic 구조 상한(대화 계획의 가장 큰 크기) · shadow 0 (정본 상수 그대로)',
-    personaCommentCapFor('bootstrap-auto') === AUTO_PERSONA_COMMENTS_PER_POST_MAX && AUTO_PERSONA_COMMENTS_PER_POST_MAX === 1
-    && personaCommentCapFor('organic') === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP
-    && personaCommentCapFor('bootstrap-review') === PERSONA_COMMENTS_PER_POST_MAX && personaCommentCapFor('shadow') === 0)
+  // ③ 첫 댓글 — 비율(판정 창 = 대기 상한 + 처리 여유). d3·d10 처럼 작은 단계에서는 한 건 누락이 곧 미달이다
+  failWith('🔴 3편 중 1편에 Persona 댓글 없음 → FAIL', judge(facts('d3', {
+    posts: [post(0, { personaComments: [] }), post(1), post(2)] })), 'FIRST_COMMENT_SHORT')
+  const lateFirst = (afterMs: number): EvidencePost => post(0, { personaComments: [
+    { personaId: 'c0', createdAtMs: T0 + afterMs, topLevel: true, provenance: 'auto' as const }, ...post(0).personaComments.slice(1)] })
+  failWith('🔴 판정 창을 넘겨 붙은 첫 댓글 → 없는 것과 같다', judge(facts('d3', { posts: [lateFirst(LADDER_RULE.firstCommentWindowMs + 1), post(1), post(2)] })), 'FIRST_COMMENT_SHORT')
+  check('경계 — 정확히 창 끝은 창 안이다', judge(facts('d3', { posts: [lateFirst(LADDER_RULE.firstCommentWindowMs), post(1), post(2)] })).verdict === 'PASS')
+  failWith('🔴 발행 전 시각의 댓글은 창 안이 아니다', judge(facts('d3', { posts: [lateFirst(-MIN), post(1), post(2)] })), 'FIRST_COMMENT_SHORT')
+  failWith('🔴 대댓글만 있다 → 최상위 첫 댓글이 없다', judge(facts('d3', { posts: [post(0, {
+    personaComments: post(0).personaComments.map((c) => ({ ...c, topLevel: false })) }), post(1), post(2)] })), 'FIRST_COMMENT_SHORT')
   const withComments = (n: number, o: { same?: boolean; self?: boolean } = {}): EvidencePost => post(0, {
     personaComments: Array.from({ length: n }, (_, k) => ({
       personaId: o.self === true && k === n - 1 ? 'author-0' : o.same === true ? 'c-same' : `c${k}`,
       createdAtMs: T0 + (5 + k) * MIN, topLevel: true, provenance: 'auto' as const,
     })),
   })
-  const capFacts = (p0: EvidencePost, cap: number | null) => facts('d3', { posts: [p0, post(1), post(2)], commentCapPerPost: cap })
-  failWith('🔴 bootstrap-auto(상한 1) — 60분 안 두 Persona → 상한 초과 FAIL', judge(capFacts(withComments(2), 1)), 'COMMENT_OVER_CAP')
-  check('🔴 그때 첫 댓글 보장 자체는 충족으로 센다 — 실패 이유는 상한뿐', (() => {
-    const v = judge(capFacts(withComments(2), 1))
-    return v.codes.length === 1 && v.counts.firstCommentOk === 3
-  })())
-  for (const n of [2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-    const v = judge(capFacts(withComments(n), 10))
-    check(`🟢 장기 1~10(상한 10) — 60분 안 서로 다른 Persona ${n}건 → PASS`, v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
-  }
-  failWith('🔴 상한 10 — 11건 → 상한 초과 FAIL', judge(capFacts(withComments(11), 10)), 'COMMENT_OVER_CAP')
-  failWith('🔴 상한 10 — 같은 Persona 2건 → FAIL', judge(capFacts(withComments(2, { same: true }), 10)), 'DUP_COMMENT')
-  failWith('🔴 상한 10 — 자기 글 댓글 → FAIL', judge(capFacts(withComments(3, { self: true }), 10)), 'COMMENT_SELF')
-  const capUnknown = judge(capFacts(withComments(1), null))
-  check('⬚ 댓글 단계(상한)를 모른다 → UNKNOWN', capUnknown.verdict === 'UNKNOWN' && has(capUnknown, 'COMMENT_CAP_UNKNOWN'), capUnknown.codes.join(','))
-  failWith('🔴 글쓴 Persona 가 자기 글에 단 댓글은 세지 않고 FAIL', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'author-0', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })), 'COMMENT_SELF')
-  failWith('🔴 대댓글만 있다 → 최상위 첫 댓글이 없다', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: false, provenance: 'auto' as const }] }), post(1), post(2)] })), 'COMMENT_MISSING')
-  failWith('🔴 발행 전 시각의 댓글은 시한 안이 아니다', judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'c0', createdAtMs: T0 - MIN, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })), 'COMMENT_LATE')
+  const withP0 = (p0: EvidencePost) => facts('d3', { posts: [p0, post(1), post(2)] })
+  check('🟢 첫 댓글 레인에서 서로 다른 Persona 여러 건은 결함이 아니다 — 글당 댓글에 그대로 든다', judge(withP0(withComments(6))).verdict === 'PASS')
+  failWith('🔴 같은 Persona 2건 → FAIL', judge(withP0(withComments(6, { same: true }))), 'DUP_COMMENT')
+  failWith('🔴 자기 글 댓글 → FAIL', judge(withP0(withComments(6, { self: true }))), 'COMMENT_SELF')
   const humanNoComment = judge(facts('d3', { posts: [post(0), post(1), post(2), post(3, { decider: 'human', personaComments: [] })] }))
-  check('첫 댓글 보장은 자동 target 글만 본다 — 사람 승인 글의 댓글 0 은 COMMENT_MISSING 이 아니다(그 날은 편수 초과로 FAIL)',
-    !has(humanNoComment, 'COMMENT_MISSING') && has(humanNoComment, 'PUBLISH_OVER'), humanNoComment.codes.join(','))
-  failWith('🔴 추가 댓글 계약은 사람 승인 글에도 든다 — 같은 Persona 2건 → FAIL', judge(facts('d3', {
+  check('결은 자동 target 글만 본다 — 사람 승인 글의 댓글 0 은 첫 댓글 미달이 아니다(그 날은 편수 초과로 FAIL)',
+    !has(humanNoComment, 'FIRST_COMMENT_SHORT') && has(humanNoComment, 'PUBLISH_OVER'), humanNoComment.codes.join(','))
+  failWith('🔴 중복 계약은 사람 승인 글에도 든다 — 같은 Persona 2건 → FAIL', judge(facts('d3', {
     posts: [post(0), post(1), post(2), post(3, { decider: 'human', personaComments: [
       { personaId: 'c9', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const }, { personaId: 'c9', createdAtMs: T0 + 9 * MIN, topLevel: true, provenance: 'auto' as const }] })] })), 'DUP_COMMENT')
 
-  // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) = ceil(N×20%) · 전수 감사 아님
+  // ④ 감사 — 🔴 정본 표본 계약: 판정이 끝난 표본 ≥ auditTarget(자동 target N) = ceil(N×20%) · 전수 감사 아님
+  const unknownWith = (name: string, v: StageEvidenceVerdict, code: string): void =>
+    check(name, v.verdict === 'UNKNOWN' && has(v, code), `${v.verdict} ${v.codes.join(',')}`)
   const zero = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [] } }))
-  failWith('🔴 🔴 **자동 target 3 · 감사 표본 0 → COVERAGE_ZERO FAIL (selected 0 을 PASS 로 삼키지 않는다)**', zero, 'AUDIT_COVERAGE_ZERO')
+  unknownWith('🔴 🔴 **자동 target 3 · 감사 표본 0 → AUDIT_COVERAGE_SHORT (selected 0 을 PASS 로 삼키지 않는다)**', zero, 'AUDIT_COVERAGE_SHORT')
   check('그때 counts — 자동 target 3 · 기대 1 · 표본 0', zero.counts.autoTargets === 3 && zero.counts.auditExpected === 1 && zero.counts.auditSampled === 0, JSON.stringify(zero.counts))
-  const other = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(9)] } }))
-  failWith('🔴 표본이 그날 자동 target 집합 밖(다른 글) → OUTSIDE_TARGET', other, 'AUDIT_OUTSIDE_TARGET')
-  check('그 행은 표본으로 세지 않는다 → COVERAGE_ZERO 도 함께', has(other, 'AUDIT_COVERAGE_ZERO'))
-  const wrongQueue = judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { queueId: 'q-9' })] } }))
-  failWith('🔴 postId 는 맞는데 queueId 가 다르다 → OUTSIDE_TARGET', wrongQueue, 'AUDIT_OUTSIDE_TARGET')
-  const humanRow = judge(facts('d3', { posts: [post(0), post(1), post(2)], audits: { ...CLEAN_AUDITS, rows: [sample(0), sample(3)] } }))
-  failWith('🔴 사람 승인 글(자동 target 아님)의 감사 행은 표본이 아니다 → OUTSIDE_TARGET', humanRow, 'AUDIT_OUTSIDE_TARGET')
-  // 정본 표본 수 — N=3→1 · N=5→1 · N=10→2
+  unknownWith('🔴 표본이 그날 자동 target 집합 밖(다른 글)이면 표본으로 세지 않는다', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(9)] } })), 'AUDIT_COVERAGE_SHORT')
+  unknownWith('🔴 postId 는 맞는데 queueId 가 다르면 표본이 아니다', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { queueId: 'q-9' })] } })), 'AUDIT_COVERAGE_SHORT')
+  unknownWith('🔴 판정 전 표본은 세지 않는다', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false })] } })), 'AUDIT_COVERAGE_SHORT')
   check('expected 정본 — N=3→1 · N=5→1 · N=10→2 · N=0→0',
     judge(facts('d3')).counts.auditExpected === 1
     && judgeStageEvidence(D, 'd5', facts('d5'), side()).counts.auditExpected === 1
-    && judgeStageEvidence(D, 'd10', facts('d10'), side()).counts.auditExpected === 2
+    && d10Of(ten).counts.auditExpected === 2
     && humanOnly.counts.auditExpected === 0)
-  check('🟢 🔴 **전수 감사가 아니다 — D5 자동 5건 · 표본 1 → PASS**', judgeStageEvidence(D, 'd5', facts('d5'), side()).verdict === 'PASS')
-  const d10Posts = Array.from({ length: 10 }, (_, i) => post(i, { publishedAtMs: T0 + i * HOUR,
-    personaComments: [{ personaId: `c${i}`, createdAtMs: T0 + i * HOUR + 5 * MIN, topLevel: true, provenance: 'auto' as const }] }))
-  const d10 = (rows: ReturnType<typeof sample>[]) => judgeStageEvidence(D, 'd10', { ...facts('d10'), posts: d10Posts, audits: { ...CLEAN_AUDITS, rows } }, side())
-  failWith('🔴 D10 자동 10 · 기대 2 · 표본 1 → COVERAGE_SHORT FAIL', d10([sample(0)]), 'AUDIT_COVERAGE_SHORT')
-  failWith('🔴 같은 글의 감사 행 2개는 표본 1개다(중복 없이 센다) → SHORT', d10([sample(0), sample(0)]), 'AUDIT_COVERAGE_SHORT')
+  const d10 = (rows: ReturnType<typeof sample>[]) => judgeStageEvidence(D, 'd10', facts('d10', { posts: ten, audits: { ...CLEAN_AUDITS, rows } }), side())
+  unknownWith('🔴 D10 자동 10 · 기대 2 · 표본 1 → AUDIT_COVERAGE_SHORT', d10([sample(0)]), 'AUDIT_COVERAGE_SHORT')
+  unknownWith('🔴 같은 글의 감사 행 2개는 표본 1개다(중복 없이 센다)', d10([sample(0), sample(0)]), 'AUDIT_COVERAGE_SHORT')
   check('🟢 D10 표본 2(서로 다른 글) → PASS', d10([sample(0), sample(5)]).verdict === 'PASS', d10([sample(0), sample(5)]).codes.join(','))
   const unknownDecider = judge(facts('d3', { posts: [post(0), post(1, { decider: 'unknown' }), post(2)] }))
   check('🔴 결정자를 모르는 글(빈 값 · 확인 안 된 machine:*) → AUDIT_TARGET_UNKNOWN · 자동 target 에도 못 든다',
-    has(unknownDecider, 'AUDIT_TARGET_UNKNOWN') && has(unknownDecider, 'PUBLISH_NOT_AUTO_READY') && unknownDecider.verdict === 'FAIL', unknownDecider.codes.join(','))
-  failWith('🔴 표본 — 판정 전 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false })] } })), 'AUDIT_UNJUDGED')
-  failWith('🔴 표본 — 시한 초과 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, overdue: true })] } })), 'AUDIT_OVERDUE')
-  failWith('🔴 표본 — 재시도 가능 실패 → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { judged: false, retryable: true })] } })), 'AUDIT_RETRYABLE')
-  failWith('🔴 표본 — 결함 yes → FAIL', judge(facts('d3', { audits: { ...CLEAN_AUDITS, rows: [sample(0, { defectYes: true })] } })), 'AUDIT_DEFECT')
-  const oldGlobalShape = { rows: [JUDGED], globalUnresolvedDefects: 1, globalOverdue: 1, globalRetryable: 1, globalMissingPosts: 1 }
-  check('🟢 다른 날짜의 전역 상태는 증거일 PASS를 소급 오염시키지 않는다',
-    judge(facts('d3', { audits: oldGlobalShape as unknown as StageEvidenceFacts['audits'] })).verdict === 'PASS')
-  check('🔴 현재 전역 결함·재시도·시한·글 유실은 controller 실시간 품질 신호가 계속 막는다',
-    qualitySignalOf({ unresolvedDefects: 1, missingPosts: 1, retryableFailures: 1, overdueAudits: 1 }).health === 'bad')
+    has(unknownDecider, 'AUDIT_TARGET_UNKNOWN') && has(unknownDecider, 'PUBLISH_SHORT') && unknownDecider.verdict === 'FAIL', unknownDecider.codes.join(','))
+  check('🔴 감사 표본의 결함·재시도·시한·글 유실은 하루 판정이 아니라 controller 품질 신호가 막는다(같은 것을 두 번 막지 않는다)',
+    qualitySignalOf({ unresolvedDefects: 1, missingPosts: 1, retryableFailures: 1, overdueAudits: 1 }).health === 'bad'
+    && !(STAGE_EVIDENCE_CODES as readonly string[]).some((c) => /AUDIT_(DEFECT|OVERDUE|RETRYABLE|MISSING_POST)/.test(c)))
 
   // ⑤ 중복
   failWith('🔴 한 글을 가리키는 Queue 행이 1 이 아니다 → FAIL', judge(facts('d3', { posts: [post(0, { queueRows: 0 }), post(1), post(2)] })), 'DUP_QUEUE')
   failWith('🔴 한 글의 발행 기록이 둘 → FAIL', judge(facts('d3', { posts: [post(0, { publishLogs: 2 }), post(1), post(2)] })), 'DUP_PUBLISH_LOG')
   failWith('🔴 발행 기록 없는 Queue 발행 → FAIL', judge(facts('d3', { unloggedPublishes: 1 })), 'UNLOGGED_PUBLISH')
   failWith('🔴 글·Queue 없는 발행 기록 → FAIL', judge(facts('d3', { orphanPublishLogs: 1 })), 'PUBLISH_LOG_ORPHAN')
-  failWith('🔴 같은 Persona 가 한 글에 두 번 → FAIL', judge(facts('d3', { posts: [post(0, {
-    personaComments: [
-      { personaId: 'c0', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const },
-      { personaId: 'c0', createdAtMs: T0 + 3 * HOUR, topLevel: true, provenance: 'auto' as const }] }), post(1), post(2)] })), 'DUP_COMMENT')
 
-  // ⑥ 비용 · 러너
+  // ⑥ 비용 — 댓글·감사 장부. 공급은 아래 envelope 하나로 본다
   const over = judgeCost({ uses: true, tally: tally(0.05, 1), ledgerError: null, settleHold: null, capUsd: 1 })
   const ledgerErr = judgeCost({ uses: true, tally: null, ledgerError: '장부 3번째 줄이 JSON 이 아니다', settleHold: null, capUsd: 1 })
-  const exhausted = judgeCost({ uses: true, tally: tally(1.2), ledgerError: null, settleHold: null, capUsd: 1 })
   const noCap = judgeCost({ uses: true, tally: tally(0.01), ledgerError: null, settleHold: null, capUsd: null })
-  failWith('🔴 장부 초과(UNSETTLED_OVERRUN) → FAIL', judge(facts(), side({ cost: [{ lane: 'comment', name: '댓글 장부', health: over.health }] })), 'COST_BAD')
-  failWith('🔴 장부 읽기 오류(LEDGER_ERROR) → FAIL', judge(facts(), side({ cost: [{ lane: 'audit', name: '감사 장부', health: ledgerErr.health }] })), 'COST_BAD')
-  failWith('🔴 시행일 전 공급 하루 상한 소진 → FAIL', judge(facts(), side({ cost: [{ lane: 'supply', name: '공급 장부', health: exhausted.health }] })), 'COST_BAD')
-  const unk = judge(facts(), side({ cost: [{ lane: 'supply', name: '공급 장부', health: noCap.health }] }))
+  const lanes = (comment: typeof over.health, audit: typeof over.health): EvidenceSideSignals['cost'] => [
+    { lane: 'comment', name: '댓글 장부', health: comment }, { lane: 'audit', name: '감사 장부', health: audit }]
+  failWith('🔴 댓글 장부 초과(UNSETTLED_OVERRUN) → FAIL', judge(facts(), side({ cost: lanes(over.health, costOk.health) })), 'COST_BAD')
+  failWith('🔴 감사 장부 읽기 오류(LEDGER_ERROR) → FAIL', judge(facts(), side({ cost: lanes(costOk.health, ledgerErr.health) })), 'COST_BAD')
+  const unk = judge(facts(), side({ cost: lanes(noCap.health, costOk.health) }))
   check('⬚ 상한 없음(NO_BUDGET) → UNKNOWN (PASS 아님)', unk.verdict === 'UNKNOWN' && has(unk, 'COST_UNKNOWN'), unk.verdict)
-  failWith('🔴 러너 최근 회차 실패 → FAIL', judge(facts(), side({ errors: 'bad' })), 'RUNNER_BAD')
-  check('⬚ 러너 모름 → UNKNOWN', judge(facts(), side({ errors: 'unknown' })).verdict === 'UNKNOWN')
   check('⬚ 비용 칸이 비었다 → UNKNOWN', judge(facts(), side({ cost: [] })).verdict === 'UNKNOWN')
+  check('🔴 공급 회차의 성패는 하루 판정의 입력이 아니다 — 양은 수가 재고 당일 러너는 브레이크 오류 축이 본다',
+    !(STAGE_EVIDENCE_CODES as readonly string[]).some((c) => c.startsWith('RUNNER_')))
 
-  // ⑥-b 공급 비용 증거 — 옛 날짜는 옛 계약, 시행일부터 자연 proof 슬롯 envelope 하나를 쓴다.
+  // ⑥-b 공급 비용 증거 — 자연 회차 비용 envelope 하나를 쓴다
   {
     const base = facts()  // d3 PASS 기준선
-    const legacySide = (u: number) => side({ supplyCostEvidence: {
-      legacyUsageUnknownRequests: u,
-      wholeDayCriticalHealth: 'ok',
-      envelope: SUPPLY_COST_OK.envelope,
-    } })
-    const vZero = judge(base, legacySide(0))
-    check('🟢 옛 날짜 B-0 — 관련 usageUnknown 0 → PASS',
-      vZero.verdict === 'PASS' && vZero.counts.supplyUsageUnknown === 0, `${vZero.verdict} ${vZero.codes.join(',')}`)
-    failWith('🔴 옛 날짜 B-1 — usageUnknown 1은 소급 승격 없이 FAIL',
-      judge(base, legacySide(1)), 'SUPPLY_USAGE_UNKNOWN')
     const vNull = judge(base, side({ supplyCostEvidence: null }))
     check('⬚ 공급 장부를 못 읽었다 → UNKNOWN (COST_UNKNOWN)',
       vNull.verdict === 'UNKNOWN' && has(vNull, 'COST_UNKNOWN'), `${vNull.verdict} ${vNull.codes.join(',')}`)
@@ -320,44 +259,6 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       budgetCapUsd: 1.2, budgetSource: 'process-override',
       sourceKey: 'src-hash-A', supplyContract: SUPPLY_JIT_CONTRACT, ...o,
     })
-    const emp = relevantUsageUnknownCount([])
-    check('🟢 helper 반례 — 빈 장부 → 0', emp === 0)
-    // 1 usageUnknown · scheduled · proof day
-    check('🟢 helper 반례 — scheduled usageUnknown 1건 → 1', relevantUsageUnknownCount([base0({})]) === 1)
-    // manual 은 제외
-    check('🟢 helper 반례 — manual 손 실행 usageUnknown → 제외 (0)',
-      relevantUsageUnknownCount([base0({ runKind: 'manual', runSlot: null })]) === 0)
-    // countTokens(무료) 제외
-    check('🟢 helper 반례 — countTokens(무료 단계) usageUnknown → 제외 (0)',
-      relevantUsageUnknownCount([base0({ stage: 'countTokens' })]) === 0)
-    // settled 는 센지 않음(미상이 아니다)
-    check('🟢 helper 반례 — status=settled 는 세지 않는다 → 0',
-      relevantUsageUnknownCount([base0({ status: 'settled', settledUsd: 0.004, inputTokens: 100, outputTokens: 200 })]) === 0)
-    // blocked 도 센지 않음
-    check('🟢 helper 반례 — status=blocked 는 세지 않는다 → 0',
-      relevantUsageUnknownCount([base0({ status: 'blocked', blockCode: 'NO_PRICE' })]) === 0)
-    // runKind null · undefined 는 포함(fail-closed)
-    check('🟢 helper 반례 — runKind=null 은 관련으로 센다 (fail-closed) → 1',
-      relevantUsageUnknownCount([base0({ runKind: null })]) === 1)
-    check('🟢 helper 반례 — runKind 미기재(옛 줄) 는 관련으로 센다 (fail-closed) → 1',
-      relevantUsageUnknownCount([base0({ runKind: undefined })]) === 1)
-    /**
-     * 🔴 **반례 B-timeout+retry** — 같은 sourceKey 의 다른 attemptId 재시도가 뒤에 정산돼도
-     *    원 요청이 미상으로 남아 있는 한 그 1건은 센다. 10-16 14:15 Google draftGen 재현.
-     */
-    const SRC = 'src-hash-A'
-    const retryTimeoutSettled: readonly LedgerEntry[] = [
-      base0({ attemptId: 'a1', requestNo: 0, sourceKey: SRC, status: 'usageUnknown' }),
-      base0({ attemptId: 'a2', requestNo: 1, sourceKey: SRC, status: 'settled',
-        settledUsd: 0.0049, inputTokens: 100, outputTokens: 200, errorCode: null,
-        startedAt: `${PROOF}T14:40:00+09:00`, endedAt: `${PROOF}T14:40:12+09:00` }),
-    ]
-    check('🟢 반례 B-timeout+retry — 재시도가 정산돼도 원 요청 미상이면 여전히 1',
-      relevantUsageUnknownCount(retryTimeoutSettled) === 1)
-    const vRetry = judge(base, legacySide(relevantUsageUnknownCount(retryTimeoutSettled)))
-    check('🔴 반례 B-timeout+retry — stage-evidence 도 FAIL (SUPPLY_USAGE_UNKNOWN)',
-      vRetry.verdict === 'FAIL' && has(vRetry, 'SUPPLY_USAGE_UNKNOWN'), `${vRetry.verdict} ${vRetry.codes.join(',')}`)
-
     const EFFECTIVE = '2026-11-05'
     const ledgerRunIdAt = (at: string): string => `${supplyRunIdOf(new Date(at))}-d`
     const naturalShadow = (slot: string): NonNullable<LedgerEntry['runTokenShadow']> => ({
@@ -409,7 +310,6 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       && observation.ineligibleRequests === 0 && observation.recordedDailyCapUsd === 1.2,
       JSON.stringify(observation))
     const boundedSide = side({ supplyCostEvidence: {
-      legacyUsageUnknownRequests: 2,
       wholeDayCriticalHealth: 'ok',
       envelope: { ...observation, budgetUsd: 1 },
     } })
@@ -451,14 +351,12 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       `${missingAuditLane.verdict} ${missingAuditLane.codes.join(',')}`)
 
     const tooThin = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({ supplyCostEvidence: {
-      legacyUsageUnknownRequests: 1,
       wholeDayCriticalHealth: 'ok',
       envelope: { settledRequests: 18, usageUnknownRequests: 1, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.1, budgetUsd: 1 },
     } }))
     check('⬚ 새 계약 — 정산 표본 20 미만은 PASS가 아니라 UNKNOWN',
       tooThin.verdict === 'UNKNOWN' && has(tooThin, 'COST_UNKNOWN'), `${tooThin.verdict} ${tooThin.codes.join(',')}`)
     const tooRisky = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({ supplyCostEvidence: {
-      legacyUsageUnknownRequests: 1,
       wholeDayCriticalHealth: 'ok',
       envelope: { settledRequests: 20, usageUnknownRequests: 1, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.01, budgetUsd: 1 },
     } }))
@@ -868,9 +766,7 @@ const validated = (o: Record<string, unknown>): ValidatedStageDecision => {
 }
 /** 🔴 09-29 운영 행 그대로의 모양 — TRIAL d3 · 기반 d1 · 근거 칸 없음(표식 이전 행) */
 const PREV_TRIAL_D3 = validated({ release: 'd3', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV2, target: 'd3' } })
-const PREV_TRIAL_D5 = validated({ release: 'd5', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV2, target: 'd5', basis: 'PASS' } })
 const PREV_HOLD_D3 = validated({ release: 'd3', state: 'HOLD' })
-const PREV_HOLD_D1 = validated({ release: 'd1', state: 'HOLD' })
 const PASS3 = judge(facts('d3'))
 const PASS5 = judgeStageEvidence(D, 'd5', facts('d5'), side())
 const FAIL3 = judge(facts('d3', { posts: [post(0, { personaComments: [] }), post(1), post(2)] }))
@@ -912,12 +808,12 @@ console.log('\n①-c 🔴 자동 첫 댓글 출처 — Comment ↔ Queue(무인 
   for (const [name, f] of broken) check(`🔴 반례⑩ ${name} → broken`, commentProvenanceOf(f) === 'broken', commentProvenanceOf(f))
   // 판정 본체 — 증거 칸
   const withProv = (prov: 'auto' | 'none' | 'broken') => judge(facts('d3', { posts: [post(0, {
-    personaComments: [{ personaId: 'commenter-0', createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: prov }] }), post(1), post(2)] }))
+    personaComments: [{ personaId: 'commenter-0', createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: prov }] }), post(1), post(2)] }))
   const viaAuto = withProv('auto')
-  check('🟢 반례⑨ 60분 안 연결된 자동 댓글 → 첫 댓글 1건으로 센다 · PASS', viaAuto.verdict === 'PASS' && viaAuto.counts.firstCommentOk === 3)
+  check('🟢 반례⑨ 창 안 연결된 자동 댓글 → 첫 댓글 1건으로 센다 · 무결성 코드 없음', integ(viaAuto).length === 0 && viaAuto.counts.firstCommentOk === 3, viaAuto.codes.join(','))
   const viaManual = withProv('none')
-  failWith('🔴 반례⑧ 수동 Persona 댓글만 있는 자동 target 글 → 증거 0 · COMMENT_MISSING', viaManual, 'COMMENT_MISSING')
-  check('그때 counts — 첫 댓글 2(나머지 두 글) · 수동 Persona 1', viaManual.counts.firstCommentOk === 2 && viaManual.counts.manualPersonaComments === 1,
+  failWith('🔴 반례⑧ 수동 Persona 댓글만 있는 자동 target 글 → 첫 댓글 증거 0 · 사람 손(COMMENT_MANUAL_PERSONA)', viaManual, 'COMMENT_MANUAL_PERSONA')
+  check('그때 counts — 첫 댓글 2(나머지 두 글) · 수동 Persona 1', viaManual.counts.firstCommentOk === 2 && viaManual.counts.manualPersonaOnTargets === 1 && has(viaManual, 'FIRST_COMMENT_SHORT'),
     JSON.stringify(viaManual.counts))
   failWith('🔴 반례⑩ 출처가 깨진 댓글 → COMMENT_PROVENANCE_BROKEN FAIL', withProv('broken'), 'COMMENT_PROVENANCE_BROKEN')
   const brokenOnHuman = judge(facts('d3', { posts: [post(0), post(1), post(2), ] .map((p, i) => i === 0 ? { ...p, personaComments: [...p.personaComments,
@@ -979,7 +875,7 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
   }
   const first: ThreadComment = {
     id: 'first-0', personaId: 'commenter-0', parentId: null,
-    createdAtMs: T0 + 12 * MIN, topLevel: true, provenance: 'auto' as const,
+    createdAtMs: T0 + 5 * MIN, topLevel: true, provenance: 'auto' as const,
   }
   const fu = (k: number, o: Partial<ThreadComment> = {}): ThreadComment =>
     ({
@@ -991,70 +887,64 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     isDeleted: c.isDeleted ?? false, createdAtMs: c.createdAtMs, reportedAtMs: c.reportedAtMs ?? null,
     provenance: c.provenance,
   }))
-  const withThread = (cs: readonly ThreadComment[], cap: number | null = personaCommentCapFor('bootstrap-auto')) =>
+  const withThread = (cs: readonly ThreadComment[]) =>
     judge(facts('d3', {posts: [post(0, {
       personaComments: cs,
       conversationComments: conversationOf(cs),
     }), post(1), post(2)] }))
-  check('🔴 상한은 그대로 1 이다(bootstrap-auto) — 1→5 로 바꾸지 않았다', personaCommentCapFor('bootstrap-auto') === 1)
 
   const four = withThread([first, fu(1), fu(2), fu(3), fu(4)])
-  check('🟢 bootstrap-auto(상한 1) — 자동 첫 댓글 1 + 추가 4 → PASS (COMMENT_OVER_CAP 아님)', four.verdict === 'PASS', `${four.verdict} ${four.codes.join(',')}`)
-  check('그때 counts — 첫 댓글 3(글마다 1) · 추가 4 · 수동 0', four.counts.firstCommentOk === 3 && four.counts.followupComments === 4
-    && four.counts.manualPersonaComments === 0, JSON.stringify(four.counts))
+  check('🟢 자동 첫 댓글 1 + 추가 4 → 무결성 코드 없음', integ(four).length === 0, `${four.verdict} ${four.codes.join(',')}`)
+  check('그때 counts — 첫 댓글 3(글마다 1) · 글당 댓글에는 첫 댓글과 추가 댓글이 함께 든다(5 + 6 + 6) · 수동 0', four.counts.firstCommentOk === 3 && four.counts.personaComments === 17
+    && four.counts.manualPersonaOnTargets === 0, JSON.stringify(four.counts))
   check('그때 대화 감사 PASS · 이유 줄에 CONVERSATION 없음', four.conversation?.verdict === 'PASS' && !evidenceReasonOf(four).includes('CONVERSATION'),
     JSON.stringify(four.conversation))
   for (const n of [0, 1, 2, 3]) {
     const v = withThread([first, ...Array.from({ length: n }, (_, k) => fu(k + 1))])
-    check(`🟢 첫 댓글 1 + 추가 ${n} → PASS`, v.verdict === 'PASS' && v.conversation?.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+    check(`🟢 첫 댓글 1 + 추가 ${n} → 무결성 코드 없음 · 대화 감사 PASS`, integ(v).length === 0 && v.conversation?.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
-  failWith('🔴 추가 표식 없는 두 번째 자동 댓글은 여전히 상한 초과 (상한을 넓힌 것이 아니다)',
-    withThread([first, { ...first, personaId: 'c-2', createdAtMs: T0 + 20 * MIN }]), 'COMMENT_OVER_CAP')
-  failWith('🔴 수동 Persona 댓글은 여전히 상한에 든다 — 첫 댓글 + 수동 1 + 추가 2 → 상한 초과',
-    withThread([first, { ...first, personaId: 'm-1', provenance: 'none' }, fu(1), fu(2)]), 'COMMENT_OVER_CAP')
+  failWith('🔴 수동 Persona 댓글은 추가 댓글이 있어도 그대로 막힌다 — 첫 댓글 + 수동 1 + 추가 2',
+    withThread([first, { ...first, personaId: 'm-1', provenance: 'none' }, fu(1), fu(2)]), 'COMMENT_MANUAL_PERSONA')
   const manualNotEvidence = withThread([{ ...first, provenance: 'none' }, fu(1)])
-  failWith('🔴 수동 Persona 댓글은 자동 증거가 아니다 — 수동 + 추가만 있는 글 → COMMENT_MISSING', manualNotEvidence, 'COMMENT_MISSING')
-  check('그때 counts — 수동 1 · 추가 1 · 첫 댓글 2', manualNotEvidence.counts.manualPersonaComments === 1
-    && manualNotEvidence.counts.followupComments === 1 && manualNotEvidence.counts.firstCommentOk === 2, JSON.stringify(manualNotEvidence.counts))
+  failWith('🔴 수동 Persona 댓글은 자동 증거가 아니다 — 수동 + 추가만 있는 글 → 첫 댓글 미달', manualNotEvidence, 'FIRST_COMMENT_SHORT')
+  check('그때 counts — 수동 1 · 첫 댓글 2 · 글당 댓글의 분자에는 추가 1건만(1 + 6 + 6)', manualNotEvidence.counts.manualPersonaOnTargets === 1
+    && manualNotEvidence.counts.personaComments === 13 && manualNotEvidence.counts.firstCommentOk === 2, JSON.stringify(manualNotEvidence.counts))
   const fuOnly = withThread([fu(1, { createdAtMs: T0 + 5 * MIN, topLevel: true })])
-  failWith('🔴 60분 안 최상위라도 추가 댓글은 첫 댓글 증거가 아니다 → COMMENT_MISSING', fuOnly, 'COMMENT_MISSING')
+  failWith('🔴 창 안 최상위라도 추가 댓글은 첫 댓글 증거가 아니다 → 첫 댓글 미달', fuOnly, 'FIRST_COMMENT_SHORT')
   check('그때 대화 감사 FAIL — FOLLOWUP_WITHOUT_FIRST', fuOnly.conversation?.verdict === 'FAIL'
     && fuOnly.conversation.codes.includes('FOLLOWUP_WITHOUT_FIRST'), JSON.stringify(fuOnly.conversation))
 
   const fuBrokenThread = withThread([first, fu(1), fu(2, { provenance: 'followup-broken' })])
-  check('🔴 추가 댓글 출처가 깨짐 → 단계 증거는 PASS 그대로 · 첫 댓글 3 (소급해서 지우지 않는다)',
-    fuBrokenThread.verdict === 'PASS' && fuBrokenThread.counts.firstCommentOk === 3 && !has(fuBrokenThread, 'COMMENT_PROVENANCE_BROKEN'),
+  check('🔴 추가 댓글 출처가 깨짐 → 하루 판정도 FAIL(글당 댓글·타인 3명의 근거가 깨졌다) · 첫 댓글 3 은 그대로',
+    fuBrokenThread.verdict === 'FAIL' && fuBrokenThread.counts.firstCommentOk === 3 && has(fuBrokenThread, 'COMMENT_PROVENANCE_BROKEN'),
     `${fuBrokenThread.verdict} ${fuBrokenThread.codes.join(',')}`)
   check('🔴 그때 대화 감사 FAIL — FOLLOWUP_PROVENANCE_BROKEN · 깨짐 1',
     fuBrokenThread.conversation?.verdict === 'FAIL' && fuBrokenThread.conversation.codes.includes('FOLLOWUP_PROVENANCE_BROKEN')
     && fuBrokenThread.conversation.counts.followupBroken === 1, JSON.stringify(fuBrokenThread.conversation))
   const rr = evidenceReasonOf(fuBrokenThread)
-  check('🔴 이유 줄에 대화 감사 FAIL 이 따로 남는다 — 단계 PASS 와 섞이지 않게', rr.startsWith(`EVIDENCE ${D} d3 PASS`)
+  check('🔴 이유 줄에 대화 감사 FAIL 이 따로 남는다 — 단계 코드와 섞이지 않게', rr.startsWith(`EVIDENCE ${D} d3 FAIL [COMMENT_PROVENANCE_BROKEN`)
     && rr.endsWith('CONVERSATION FAIL [FOLLOWUP_PROVENANCE_BROKEN]') && !/fu-|commenter-/.test(rr), rr)
   failWith('🔴 첫 댓글 축 broken 은 추가 댓글이 있어도 단계 FAIL',
-    withThread([first, { ...first, personaId: 'x', provenance: 'broken' }, fu(1)], 5), 'COMMENT_PROVENANCE_BROKEN')
+    withThread([first, { ...first, personaId: 'x', provenance: 'broken' }, fu(1)]), 'COMMENT_PROVENANCE_BROKEN')
 
   // 🔴 글쓴이 아닌 사람은 한 글에 두 번까지 — 두 번째는 자기 댓글에 달린 답에 다는 답글이다(새 댓글을 또 달지 않는다)
   const comeBack = withThread([first, fu(1, { personaId: 'author-0' }), fu(2, { personaId: 'commenter-0' })])
-  check('🟢 댓글 쓴 사람이 글쓴이 답에 한 번 더 답한다 → 대화 감사 PASS · 단계 증거 PASS 그대로(첫 댓글 3 · 수동 0)',
-    comeBack.verdict === 'PASS' && comeBack.conversation?.verdict === 'PASS' && comeBack.counts.firstCommentOk === 3
-    && comeBack.counts.manualPersonaComments === 0 && comeBack.counts.followupComments === 2,
+  check('🟢 댓글 쓴 사람이 글쓴이 답에 한 번 더 답한다 → 대화 감사 PASS · 무결성 코드 없음(첫 댓글 3 · 수동 0)',
+    integ(comeBack).length === 0 && comeBack.conversation?.verdict === 'PASS' && comeBack.counts.firstCommentOk === 3
+    && comeBack.counts.manualPersonaOnTargets === 0,
     `${comeBack.verdict} ${comeBack.codes.join(',')} ${JSON.stringify(comeBack.conversation)}`)
-  check('🔴 대화 규칙이 바뀌어도 단계 증거는 추가 댓글을 세지 않는다 — 추가 댓글만 다른 두 스레드의 단계 판정이 같다',
-    JSON.stringify({ ...comeBack, conversation: null, counts: { ...comeBack.counts, followupComments: 0 } })
-    === JSON.stringify({ ...withThread([first]), conversation: null, counts: { ...withThread([first]).counts, followupComments: 0 } }))
   const dupFirst = withThread([first, fu(1, { personaId: 'commenter-0', parentId: null, topLevel: true })])
   check('🔴 첫 댓글 Persona 가 새 댓글을 또 단다 → 단계 DUP_COMMENT 아님 · 대화 감사 FOLLOWUP_DUP_PERSONA',
-    dupFirst.verdict === 'PASS' && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
+    !has(dupFirst, 'DUP_COMMENT') && dupFirst.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true, JSON.stringify(dupFirst.conversation))
   const dupFu = withThread([first, fu(1), fu(2), fu(3, { personaId: 'fu-1' }), fu(4), fu(5, { personaId: 'fu-1' })])
   check('🔴 같은 Persona 가 세 번 말한다 → 대화 감사 FOLLOWUP_DUP_PERSONA', dupFu.conversation?.codes.includes('FOLLOWUP_DUP_PERSONA') === true)
   // 🔴 (2026-11-04) 글쓴이는 자기 글의 서로 다른 Persona 발화에 답글로 최대 세 번 답할 수 있다.
   const authorReply = withThread([first, fu(1, { personaId: 'author-0' })])
   check('🟢 글쓴이 답글 한 번(최상위 아님) → 대화 감사 PASS · 단계 COMMENT_SELF 아님',
-    authorReply.verdict === 'PASS' && authorReply.conversation?.verdict === 'PASS', JSON.stringify(authorReply.conversation))
+    !has(authorReply, 'COMMENT_SELF') && authorReply.conversation?.verdict === 'PASS', JSON.stringify(authorReply.conversation))
   const self = withThread([first, fu(1, { personaId: 'author-0', parentId: null, topLevel: true })])
   check('🔴 글쓴이의 최상위 추가 댓글(자기 글) → 단계 COMMENT_SELF 아님 · 대화 감사 FOLLOWUP_SELF',
-    self.verdict === 'PASS' && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
+    !has(self, 'COMMENT_SELF') && self.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(self.conversation))
   const authorConversation = (n: number): ThreadComment[] => [
     first,
     ...Array.from({ length: n }, (_, i) => fu(20 + i, {
@@ -1077,9 +967,9 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
   check('🔴 삭제된 글쓴이 답글도 과거 턴이다 — 4회를 3회로 축소하지 않음',
     deletedAuthorStillCounts.codes.includes('FOLLOWUP_SELF'), JSON.stringify(deletedAuthorStillCounts))
   const over = withThread([first, ...Array.from({ length: PERSONA_COMMENTS_PER_POST_MAX }, (_, i) => fu(i + 1, { personaId: `fu-${i + 1}` }))])
-  check('🔴 첫 댓글 1 + 추가가 구조 상한을 넘김 → 대화 감사 FOLLOWUP_OVER_TOTAL · 단계는 PASS',
-    over.verdict === 'PASS' && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
-  const early = withThread([first, fu(1, { createdAtMs: T0 + 6 * MIN })])
+  check('🔴 첫 댓글 1 + 추가가 구조 상한을 넘김 → 대화 감사 FOLLOWUP_OVER_TOTAL · 하루 판정의 무결성 코드는 아니다',
+    integ(over).length === 0 && over.conversation?.codes.includes('FOLLOWUP_OVER_TOTAL') === true, JSON.stringify(over.conversation))
+  const early = withThread([first, fu(1, { createdAtMs: T0 + 4 * MIN })])
   check('🔴 첫 댓글보다 앞선 추가 댓글 → FOLLOWUP_WITHOUT_FIRST', early.conversation?.codes.includes('FOLLOWUP_WITHOUT_FIRST') === true)
   const depth6 = withThread([first, ...Array.from({ length: 5 }, (_, i) => fu(i + 1))])
   check('🟢 루트 포함 사슬 깊이 6 → 대화 감사 PASS', depth6.conversation?.verdict === 'PASS', JSON.stringify(depth6.conversation))
@@ -1126,28 +1016,25 @@ console.log('\n①-d 🔴 추가 댓글(followup) — 첫 댓글 증거와 분�
     selfTarget.conversation?.codes.includes('FOLLOWUP_SELF') === true, JSON.stringify(selfTarget.conversation))
   check('대화 감사 코드는 단계 코드 목록 밖이다', CONVERSATION_AUDIT_CODES.every((c) => !(STAGE_EVIDENCE_CODES as readonly string[]).includes(c)))
   check('⬚ 사실을 못 읽었으면 대화 감사도 없다', judge(null).conversation === undefined)
-  check('🟢 추가 댓글이 없는 날 → 대화 감사 PASS(이어지지 않는 글이 정상)', judge(facts()).conversation?.verdict === 'PASS')
+  check('🟢 기준선(서로 다른 화자의 추가 댓글) → 대화 감사 PASS', judge(facts()).conversation?.verdict === 'PASS', JSON.stringify(judge(facts()).conversation))
+  check('🟢 추가 댓글이 없는 글 → 대화 감사 PASS(이어지지 않는 글이 정상)', judgeConversationAudit([post(0, { personaComments: [first], conversationComments: conversationOf([first]) })]).verdict === 'PASS')
   check('대화 감사는 단계 판정 함수와 같은 결과다(직접 호출)', judgeConversationAudit([post(0, {
     personaComments: [first, fu(1)], conversationComments: conversationOf([first, fu(1)]),
   })]).verdict === 'PASS')
 }
 
-console.log('\n② 시험 계획 — 날짜가 아니라 증거로')
+console.log('\n② 연속 통과 — 날짜가 아니라 그날 판정으로 센다')
 {
-  const p = (prev: ValidatedStageDecision, ev: StageEvidenceVerdict | null) => {
-    const x = trialPlanOf(prev, ev)
-    return x === null ? 'none' : `${x.base}→${x.target}:${x.basis}`
-  }
-  check('🟢 D3 PASS → 다음 날 d5 시험 (기반 d3)', p(PREV_TRIAL_D3, PASS3) === 'd3→d5:PASS', p(PREV_TRIAL_D3, PASS3))
-  check('🔴 D3 FAIL → 다음 날 d3 재시험 (기반 d1)', p(PREV_TRIAL_D3, FAIL3) === 'd1→d3:RETEST', p(PREV_TRIAL_D3, FAIL3))
-  check('🔴 🔴 **증거 없음(날짜만) → d5 로 오르지 않는다 · d3 재시험**', p(PREV_TRIAL_D3, null) === 'd1→d3:RETEST', p(PREV_TRIAL_D3, null))
-  check('⬚ 모름 → 머문다(d3 재시험)', p(PREV_TRIAL_D3, judge(null)) === 'd1→d3:RETEST')
-  check('🟢 D5 PASS → d10 시험 (기반 d5)', p(PREV_TRIAL_D5, PASS5) === 'd5→d10:PASS', p(PREV_TRIAL_D5, PASS5))
-  check('🔴 D5 FAIL → d5 재시험 (기반 d3)', p(PREV_TRIAL_D5, null) === 'd3→d5:RETEST')
-  check('🔴 다른 날짜의 PASS 로 오르지 않는다', p(PREV_TRIAL_D3, { ...PASS3, kstDate: '2026-09-27' }) === 'd1→d3:RETEST')
-  check('🔴 다른 단계의 PASS(D5 PASS 를 D3 날에) 로 오르지 않는다', p(PREV_TRIAL_D3, { ...PASS5 }) === 'd1→d3:RETEST')
-  check('🔴 증거 없는 d3 유지 날(HOLD) → 시험 없음(지금 단계를 지킨다)', p(PREV_HOLD_D3, null) === 'none')
-  check('바닥(d1) 유지 날 → d3 시험(FLOOR — 증명할 아래 칸이 없다)', p(PREV_HOLD_D1, null) === 'd1→d3:FLOOR')
+  const n = (open: RuntimeStage, days: readonly ([ValidatedStageDecision, StageEvidenceVerdict | null] | null)[]) =>
+    consecutivePassDays(TODAY, open, days.map((d) => (d === null ? null : { decision: d[0], evidence: d[1] })))
+  check('🟢 전날 d3 PASS → 1일', n('d3', [[PREV_TRIAL_D3, PASS3]]) === 1)
+  check('🔴 전날 d3 FAIL → 0일', n('d3', [[PREV_TRIAL_D3, FAIL3]]) === 0)
+  check('🔴 🔴 **판정 없음(날짜만) → 0일**', n('d3', [[PREV_TRIAL_D3, null]]) === 0)
+  check('⬚ 모름 → 0일', n('d3', [[PREV_TRIAL_D3, judge(null)]]) === 0)
+  check('🔴 다른 날짜의 PASS 는 세지 않는다', n('d3', [[PREV_TRIAL_D3, { ...PASS3, kstDate: '2026-09-27' }]]) === 0)
+  check('🔴 다른 단계의 PASS(D5 PASS 를 D3 날에)는 세지 않는다', n('d3', [[PREV_TRIAL_D3, { ...PASS5 }]]) === 0)
+  check('🔴 그날 공개가 열린 단계가 아니면 세지 않는다(d3 날의 PASS 는 d5 의 연속이 아니다)', n('d5', [[PREV_TRIAL_D3, PASS3]]) === 0)
+  check('🔴 전날 행이 빠지면 그 앞날은 세지 않는다', n('d3', [null, [PREV_TRIAL_D3, PASS3]]) === 0)
 }
 
 // ── controller 끝까지 — 정본 조립(다음 칸 preflight · 운영 신호) ──
@@ -1172,107 +1059,86 @@ const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}) => judge
 const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
-/** 🔴 controller 스크립트와 같은 조립 — 시험 대상은 `trialPlanOf` 가 정하고, 그 대상의 preflight 를 넘긴다 */
-/** 🔴 controller 와 같다 — 계획이 있으면 그 대상, 없으면 지속 단계의 다음 칸 preflight(현재 단계 재인증 여부 · 2026-10-11 Batch A1) */
+/** 이틀 전 행 — 같은 단계 유지 · 그날 판정 PASS. 연속 통과의 둘째 날로 쓴다 */
+const dayBeforeOf = (stage: RuntimeStage): { decision: ValidatedStageDecision; evidence: StageEvidenceVerdict } => {
+  const v = validateStoredDecision({ row: row({ release: stage, state: 'PREPARE', capacity: nextStage(stage) ?? stage }, PREV2), expectKstDate: PREV2 })
+  if (!v.ok) throw new Error(`이틀 전 fixture 가 깨졌다 — ${v.reason}`)
+  return { decision: v.decision, evidence: judgeStageEvidence(PREV2, stage, { ...facts(stage), kstDate: PREV2, decision: { kstDate: PREV2, release: stage, decidedBy: DECISION_WRITER } }, side()) }
+}
+/** controller 스크립트와 같은 조립 — 올라갈 칸(열린 단계의 다음 칸)의 preflight 를 넘긴다 */
 const run = (prev: ValidatedStageDecision, ev: StageEvidenceVerdict | null, o: Partial<ControllerInputs> = {}) => {
-  const plan = trialPlanOf(prev, ev)
-  const up = nextStage(sustainedReleaseOf(prev, ev))
-  const target = plan !== null ? plan.target : up
+  const up = nextStage(openStageOf(prev))
   return decideStage({
     kstDate: TODAY, decidedAt: AT, previousDecision: prev, previousEvidence: ev,
-    nextPreflight: target === null ? null : preflightFor(target), publishedToday: 0, signals: OK_SIGNALS, ...o,
+    nextPreflight: up === null ? null : preflightFor(up), publishedToday: 0, signals: OK_SIGNALS, ...o,
   })
 }
 
-console.log('\n③ controller 끝까지 — 09-29 운영 반례')
+console.log('\n③ controller 끝까지 — 미달이어도 내리지 않고 · 이틀 연속이면 올린다')
 {
   check('fixture 기준선 — 넉넉한 사실이면 d3 · d5 · d10 preflight 가 정본 판정으로 PASS',
     (['d3', 'd5', 'd10'] as const).every((s) => preflightFor(s).verdict === 'PASS'),
     (['d3', 'd5', 'd10'] as const).map((s) => `${s}:${preflightFor(s).verdict}[${preflightFor(s).codes.join(',')}]`).join(' '))
-  const retest = run(PREV_TRIAL_D3, FAIL3)
-  const d = retest.decision
-  const t = d.transition
-  check('🔴 🔴 **09-29 D3 FAIL → 09-30 07:00 결정은 TRIAL d3 (재시험) · d5 아님**',
-    d.state === 'TRIAL' && d.release === 'd3' && t !== null && t.kind === 'TRIAL' && t.trialBase === 'd1' && t.basis === 'RETEST',
-    `${d.state} ${d.release} ${JSON.stringify(t)} · ${d.reasons.join(' | ')}`)
-  check('재시험 결정은 정본 validator 를 통과한다', validateForToday(d).ok)
-  check('지속 단계는 d1 그대로다(하루를 비우지 않는다)', retest.sustained === 'd1')
+  check('fixture 기준선 — 이틀 전 d3 날은 PASS 다', dayBeforeOf('d3').evidence.verdict === 'PASS', dayBeforeOf('d3').evidence.codes.join(','))
+  const afterFail = run(PREV_TRIAL_D3, FAIL3)
+  const d = afterFail.decision
+  check('🔴 🔴 **올린 날(d3)이 미달이어도 다음 날 공개는 d3 다 — d1 로 되돌리지 않는다**',
+    d.state === 'PREPARE' && d.release === 'd3' && d.transition === null && afterFail.sustained === 'd3' && afterFail.brake === 'none',
+    `${d.state} ${d.release} ${JSON.stringify(d.transition)} · ${d.reasons.join(' | ')}`)
+  check('그 결정은 정본 validator 를 통과한다', validateForToday(d).ok)
   const env = consumerEnvOf({ ok: true, decision: (validateForToday(d) as { ok: true; decision: ValidatedStageDecision }).decision })
-  check('🔴 러너 env — 공개 d3 (결정 그대로 · canary 없음) + 증명일 d3',
-    env.SORAN_RELEASE_STAGE === 'd3' && env[PROOF_STAGE_ENV] === 'd3' && !Object.keys(env).some((k) => /CANARY|WINDOW/.test(k)), JSON.stringify(env))
-  check('reasons 에 증거 판정(코드)이 남는다', d.reasons.some((r) => r.startsWith(`EVIDENCE ${D} d3 FAIL [`) && r.includes('COMMENT_MISSING')))
+  check('🔴 러너 env — 공개 d3 (결정 그대로) · 단계 칸 둘과 표식뿐',
+    env.SORAN_RELEASE_STAGE === 'd3' && Object.keys(env).length === 3 && !Object.keys(env).some((k) => /CANARY|WINDOW|PROOF/.test(k)), JSON.stringify(env))
+  check('reasons 에 하루 판정(코드)이 남는다', d.reasons.some((r) => r.startsWith(`EVIDENCE ${D} d3 FAIL [`) && r.includes('FIRST_COMMENT_SHORT')))
 
-  const promote = run(PREV_TRIAL_D3, PASS3).decision
-  check('🟢 09-29 가 PASS 였다면 → TRIAL d5 (기반 d3 · PASS)',
-    promote.state === 'TRIAL' && promote.release === 'd5' && promote.transition?.kind === 'TRIAL'
-    && promote.transition.trialBase === 'd3' && promote.transition.basis === 'PASS', `${promote.state} ${promote.release}`)
-  check('그 결정도 validator 를 통과한다', validateForToday(promote).ok)
+  const oneDay = run(PREV_TRIAL_D3, PASS3)
+  check('🔴 하루 통과로는 올리지 않는다(연속 1일)', oneDay.decision.release === 'd3' && oneDay.passDays === 1 && oneDay.decision.state !== 'TRIAL')
+  const promote = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3') })
+  check('🟢 d3 이틀 연속 통과 → 올림 d5 (기반 d3 · PASS)',
+    promote.decision.state === 'TRIAL' && promote.decision.release === 'd5' && promote.decision.transition?.kind === 'TRIAL'
+    && promote.decision.transition.trialBase === 'd3' && promote.decision.transition.basis === 'PASS' && promote.passDays === 2,
+    `${promote.decision.state} ${promote.decision.release} ${promote.passDays}`)
+  check('그 결정도 validator 를 통과한다', validateForToday(promote.decision).ok)
+  const noEv = run(PREV_HOLD_D3, null, { dayBefore: dayBeforeOf('d3') }).decision
+  check('🔴 전날 판정이 없으면 올리지 않는다', noEv.release === 'd3' && noEv.state !== 'TRIAL')
 
-  const noEv = run(PREV_TRIAL_D3, null).decision
-  check('🔴 증거 없음 → TRIAL d3 재시험', noEv.state === 'TRIAL' && noEv.release === 'd3')
-
-  /** 🔴 계획과 다른 단계의 초록 preflight(d5)를 끼워 넣어도 열리지 않는다 */
-  const forged = decideStage({
-    kstDate: TODAY, decidedAt: AT, previousDecision: PREV_TRIAL_D3, previousEvidence: FAIL3,
-    nextPreflight: preflightFor('d5'), publishedToday: 0, signals: OK_SIGNALS,
-  }).decision
-  check('🔴 🔴 **d5 초록 preflight 를 끼워 넣어도(계획은 d3 재시험) d5 가 열리지 않는다**',
-    forged.release !== 'd5' && forged.state !== 'TRIAL' && forged.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'),
+  const forged = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3'), nextPreflight: preflightFor('d10') }).decision
+  check('🔴 🔴 **다른 단계(d10)의 초록 preflight 를 끼워 넣어도 두 칸을 뛰지 않는다**',
+    forged.release === 'd3' && forged.state !== 'TRIAL' && forged.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'),
     `${forged.state} ${forged.release} ${forged.blocks.map((b) => b.code).join(',')}`)
   check('그 결정도 저장 가능한 모양이다', validateForToday(forged).ok)
 
-  const noEvidenceForged = decideStage({
-    kstDate: TODAY, decidedAt: AT, previousDecision: PREV_TRIAL_D3,
-    nextPreflight: preflightFor('d5'), publishedToday: 0, signals: OK_SIGNALS,
-  }).decision
-  check('🔴 previousEvidence 를 아예 안 넘기면(옛 호출) d5 가 열리지 않는다', noEvidenceForged.release !== 'd5')
-
-  const d5retest = run(PREV_TRIAL_D5, judgeStageEvidence(D, 'd5', facts('d5', { posts: [] }), side())).decision
-  check('🔴 D5 FAIL → TRIAL d5 재시험 (기반 d3 · RETEST)', d5retest.state === 'TRIAL' && d5retest.release === 'd5'
-    && d5retest.transition?.kind === 'TRIAL' && d5retest.transition.trialBase === 'd3' && d5retest.transition.basis === 'RETEST')
-  check('그 결정도 validator 를 통과한다', validateForToday(d5retest).ok)
-  const d10 = run(PREV_TRIAL_D5, PASS5).decision
-  check('🟢 D5 PASS → TRIAL d10', d10.state === 'TRIAL' && d10.release === 'd10' && validateForToday(d10).ok, `${d10.state} ${d10.release}`)
-
-  const hold3 = run(PREV_HOLD_D3, null)
-  check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS → d3 재인증(REPROVE = 현재 단계 RETEST · 내리지 않는다)',
-    hold3.decision.release === 'd3' && hold3.decision.state === 'REPROVE', `${hold3.decision.state} ${hold3.decision.release}`)
-  /** 🔴 PR1b(2026-11-06): 기회 부족은 이제 막지 않는 예측 경고다 — "막힘"은 실제 hard gate(Persona 부족)로 만든다 */
-  const hold3Blocked = run(PREV_HOLD_D3, null, { nextPreflight: preflightFor('d5', { contractValidPersonas: 1 }) })
-  check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (매일 REPROVE 없음 · 0..3)',
-    hold3Blocked.decision.release === 'd3' && hold3Blocked.decision.state === 'PREPARE',
-    `${hold3Blocked.decision.state} ${hold3Blocked.decision.release}`)
-
-  const braked = run(PREV_TRIAL_D3, FAIL3, { signals: [{ axis: 'quality', health: 'bad', reasons: ['확정 결함 1건'] }, OK_SIGNALS[1]!, OK_SIGNALS[2]!] })
-  check('기존 브레이크는 그대로 — 나쁜 신호면 재시험도 없다(감속)', braked.brake === 'slowdown' && braked.decision.state !== 'TRIAL')
-  const unknownSig = run(PREV_TRIAL_D3, PASS3, { signals: [OK_SIGNALS[0]!, { axis: 'cost', health: 'unknown', reasons: [] }, OK_SIGNALS[2]!] })
-  check('기존 브레이크는 그대로 — 모르는 신호면 PASS 여도 시험을 되돌린다(증명된 d3 를 지킨다)',
+  const braked = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3'), signals: [{ axis: 'quality', health: 'bad', reasons: ['확정 결함 1건'] }, OK_SIGNALS[1]!, OK_SIGNALS[2]!] })
+  check('브레이크 — 나쁜 신호면 이틀 통과여도 올리지 않고 오늘만 한 칸 낮춘다(열린 단계는 행에 남는다)',
+    braked.brake === 'slowdown' && braked.decision.release === 'd1' && braked.sustained === 'd3'
+    && braked.decision.transition?.kind === 'CERTIFIED' && braked.decision.transition.certified === 'd3' && validateForToday(braked.decision).ok,
+    JSON.stringify(braked.decision.transition))
+  const unknownSig = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3'), signals: [OK_SIGNALS[0]!, { axis: 'cost', health: 'unknown', reasons: [] }, OK_SIGNALS[2]!] })
+  check('브레이크 — 모르는 신호면 이틀 통과여도 올림을 보류한다(d3 를 지킨다)',
     unknownSig.brake === 'holdUnknown' && unknownSig.decision.release === 'd3' && unknownSig.decision.state !== 'TRIAL',
     `${unknownSig.decision.state} ${unknownSig.decision.release}`)
-  /** 🔴 계약 유효 Persona 를 읽지 못한 경우 — preflight UNKNOWN → 시험이 열리지 않는다 (운영 실측 0 은 FAIL — stage-scheduler S2b) */
-  const noPersona = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { contractValidPersonas: null }) }).decision
-  check('🔴 🔴 **계약 유효 Persona 를 모르면(null) PASS 여도 d5 를 열지 않는다 — PERSONA_UNKNOWN**',
+  const noPersona = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3'), nextPreflight: preflightFor('d5', { contractValidPersonas: null }) }).decision
+  check('🔴 🔴 **계약 유효 Persona 를 모르면(null) 이틀 통과여도 d5 로 올리지 않는다 — PERSONA_UNKNOWN**',
     noPersona.release === 'd3' && noPersona.state !== 'TRIAL' && noPersona.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN')
     && noPersona.reasons.some((r) => r.includes('PERSONA_UNKNOWN')), `${noPersona.state} ${noPersona.release}`)
-  const shortOpp = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { slotValidOpportunities: 2 }) }).decision
-  /** 🔴 PR1b(2026-11-06 · canon §3.1·§3.2): 기회 예측은 시험을 막지 않고 v6 `supply.forecastWarnings` 로 남는다 */
-  check('🟢 slot-valid 기회가 d5 목표(5)보다 적어도 시험은 열리고 OPPORTUNITY_SHORT 는 예측 경고로 남는다',
+  const shortOpp = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3'), nextPreflight: preflightFor('d5', { slotValidOpportunities: 2 }) }).decision
+  check('🟢 slot-valid 기회가 d5 목표(5)보다 적어도 올리고 OPPORTUNITY_SHORT 는 예측 경고로 남는다',
     shortOpp.state === 'TRIAL' && shortOpp.release === 'd5' && !shortOpp.blocks.some((b) => b.code === 'PREFLIGHT_FAIL')
     && shortOpp.supply !== null && 'forecastWarnings' in shortOpp.supply
     && shortOpp.supply.forecastWarnings.includes('OPPORTUNITY_SHORT'),
     `${shortOpp.state} ${shortOpp.release} ${JSON.stringify(shortOpp.supply)}`)
-  const shortPersona = run(PREV_TRIAL_D3, PASS3, { nextPreflight: preflightFor('d5', { contractValidPersonas: 2 }) }).decision
-  check('🔴 계약 유효 Persona 가 d5 목표(5)보다 적으면 여전히 PREFLIGHT_FAIL (hard gate)',
+  const shortPersona = run(PREV_HOLD_D3, PASS3, { dayBefore: dayBeforeOf('d3'), nextPreflight: preflightFor('d5', { contractValidPersonas: 2 }) }).decision
+  check('🔴 계약 유효 Persona 가 하한보다 적으면 PREFLIGHT_FAIL',
     shortPersona.release === 'd3' && shortPersona.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
     `${shortPersona.state} ${shortPersona.release} ${shortPersona.blocks.map((b) => b.code).join(',')}`)
-  /** 🔴 계약 경계 — 옛 판(v4) 전날 결정은 PASS 여도 근거가 아니다 */
+  /** 🔴 계약 경계 — 옛 판(v4) 전날 결정은 단계의 근거가 아니다 */
   const legacyPrev = validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL', contractVersion: 'stage-decision-v4',
     transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV2, target: 'd3' } }), expectKstDate: PREV })
   if (!legacyPrev.ok) throw new Error(`v4 fixture 가 깨졌다 — ${legacyPrev.reason}`)
   const fromLegacy = run(legacyPrev.decision, PASS3)
-  check('🔴 🔴 **v4 전날 TRIAL d3 + PASS → 지속 d1 · 계획 FLOOR d1→d3 (d5 로 오르지 않는다)**',
-    fromLegacy.sustained === 'd1' && fromLegacy.decision.release === 'd3' && fromLegacy.decision.transition?.kind === 'TRIAL'
-    && fromLegacy.decision.transition.basis === 'FLOOR', `${fromLegacy.sustained} ${fromLegacy.decision.state} ${fromLegacy.decision.release}`)
+  check('🔴 🔴 **v4 전날 d3 + PASS → 열린 단계 d1 · 올리지 않는다**',
+    fromLegacy.sustained === 'd1' && fromLegacy.decision.release === 'd1' && fromLegacy.decision.state !== 'TRIAL',
+    `${fromLegacy.sustained} ${fromLegacy.decision.state} ${fromLegacy.decision.release}`)
 }
 
 console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는 점프는 거절')
@@ -1294,25 +1160,8 @@ console.log('\n④ 저장 validator — 재시험 모양은 받고 근거 없는
   check('검증된 값에 근거 칸이 남는다', v.ok && v.decision.transition?.kind === 'TRIAL' && v.decision.transition.basis === 'RETEST')
 }
 
-  console.log('\n⑤ 단계 증명일 — 자동 target 증거 부족분 관측 (순수)')
+console.log('\n⑤ 후보 순서 — lane·복구 상태는 순서를 바꾸지 않는다')
 {
-  const envP = markedStageEnv({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }, TODAY)
-  const pd = proofDayOf(envP, NOW)
-  check('증명일 — 오늘 · d3 · 목표 3', pd !== null && pd.stage === 'd3' && pd.target === 3)
-  check('🔴 날짜가 다르면 증명일이 아니다', proofDayOf({ ...envP, [PROOF_DATE_ENV]: D }, NOW) === null)
-  check('🔴 칸이 비면 증명일이 아니다(비시험일)', proofDayOf({}, NOW) === null && proofDayOf({ [PROOF_STAGE_ENV]: 'd3' }, NOW) === null)
-  check('🔴 🔴 **표식 없이 손으로 적은 두 칸은 증명일이 아니다 (consumer 경유만)**',
-    proofDayOf({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY }, NOW) === null)
-  check('필요 수 = 목표 − 오늘 자동 target (음수 없음)', autoProofNeeded(pd, 0) === 3 && autoProofNeeded(pd, 2) === 1
-    && autoProofNeeded(pd, 5) === 0 && autoProofNeeded(null, 0) === 0)
-  // consumer — 증명일 칸의 출처
-  const trialEnv = consumerEnvOf({ ok: true, decision: validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL',
-    transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV, target: 'd3', basis: 'RETEST' } }, TODAY), expectKstDate: TODAY }).ok
-    ? (validateStoredDecision({ row: row({ release: 'd3', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV, target: 'd3', basis: 'RETEST' } }, TODAY), expectKstDate: TODAY }) as { ok: true; decision: ValidatedStageDecision }).decision
-    : PREV_HOLD_D1 })
-  check('🟢 TRIAL(RETEST) → 증명일 d3 · 오늘', trialEnv[PROOF_STAGE_ENV] === 'd3' && trialEnv[PROOF_DATE_ENV] === TODAY, JSON.stringify(trialEnv))
-  const holdEnv = consumerEnvOf({ ok: true, decision: PREV_HOLD_D3 })
-  check('🔴 HOLD 결정 → 증명일 빈 값', holdEnv[PROOF_STAGE_ENV] === '' && holdEnv[PROOF_DATE_ENV] === '')
   // 순서 — lane·복구 상태는 신선도/결정적 열쇠 순서를 바꾸지 않는다
   const cand = (id: string, recovery: boolean): QueueCandidate => ({
     queueId: id, title: `${id} 산책`, body: `${id} 동네를 걸었어요. 다들 요즘 뭐 하세요?`, gateVerdict: 'PASS', createdAt: 0,
