@@ -32,8 +32,9 @@ import { dirname, join } from 'node:path'
 import {
   backoffMs, canRequest, canRetry, classifyFailure, newGuardState,
   recordFailure, recordRequest, recordSuccess, rollBudgetDay,
-  type FailureClass, type GuardState, type SourceId,
+  type BlockedBy, type FailureClass, type GuardState, type SourceId,
 } from '../../src/lib/collect-guard'
+import { dailyRequestsOf, SOURCE_IDS } from '../../src/lib/collect-sources'
 
 /**
  * 🔴 상태·잠금이 놓이는 뿌리. **운영 기본값은 바뀌지 않는다.**
@@ -520,7 +521,21 @@ export function saveGuard(state: GuardState): void {
   }
 }
 
-export type Reservation = { ok: true; state: GuardState } | { ok: false; reason: string }
+export type Reservation = { ok: true; state: GuardState } | { ok: false; reason: string; blockedBy: BlockedBy | null }
+
+/**
+ * 🔴 **오늘 수집 계정이 쓴 요청 합 — 모든 원천.** 다른 원천의 상태는 잠그지 않고 읽는다 —
+ *    원천은 한 job 이 차례로 돌아 동시에 쓰지 않는다. 못 읽은 원천은 상한까지 쓴 것으로 본다(fail-closed).
+ */
+export function accountUsedToday(now: Date, known: Partial<Record<SourceId, GuardState>> = {}): number {
+  let used = 0
+  for (const id of SOURCE_IDS) {
+    const st = known[id]
+    if (st !== undefined) { used += st.requestsToday; continue }
+    try { used += readGuard(id, now).requestsToday } catch { used += dailyRequestsOf(id) }
+  }
+  return used
+}
 
 /**
  * 🔴 **예약 — 읽고·판단하고·기록하는 것을 잠금 안에서 한 번에 한다.**
@@ -529,8 +544,8 @@ export type Reservation = { ok: true; state: GuardState } | { ok: false; reason:
 export async function reserveRequest(source: SourceId, now: Date): Promise<Reservation> {
   return withGuardLock(source, () => {
     const state = readGuard(source, now)
-    const gate = canRequest(state, now.getTime())
-    if (!gate.ok) return { ok: false as const, reason: gate.reason }
+    const gate = canRequest(state, now.getTime(), { accountUsedToday: accountUsedToday(now, { [source]: state }) })
+    if (!gate.ok) return { ok: false as const, reason: gate.reason, blockedBy: gate.blockedBy }
     // 🔴 여기서 예산을 쓰고 half-open 이면 "시험 중" 을 함께 박는다
     const next = recordRequest(state, now.getTime())
     saveGuard(next)
@@ -651,7 +666,7 @@ export async function guardedNavigate(input: {
 }): Promise<{ response: NavigationResponse; state: GuardState }> {
   const reserved = await reserveRequest(input.source, input.now())
   if (!reserved.ok) {
-    throw new Error(`수집 보호장치가 막았다 — ${reserved.reason} (${input.url})`)
+    throw new GuardedNavigationError(`수집 보호장치가 막았다 — ${reserved.reason} (${input.url})`, reserved.blockedBy ?? 'OTHER')
   }
   let response: NavigationResponse = null
   try {
@@ -659,14 +674,22 @@ export async function guardedNavigate(input: {
   } catch (e) {
     const cls = classifyNavigation({ error: e }) ?? 'OTHER'
     await settleRequest(input.source, input.now(), { ok: false, cls })
-    throw e
+    throw new GuardedNavigationError(e instanceof Error ? e.message : String(e), cls)
   }
   const cls = classifyNavigation({ status: response === null ? null : response.status() })
   const state = cls === null
     ? await settleRequest(input.source, input.now(), { ok: true })
     : await settleRequest(input.source, input.now(), { ok: false, cls })
   if (cls !== null) {
-    throw new Error(`${input.url} → HTTP ${response?.status()} (${cls}) — 차단기 상태를 남겼다`)
+    throw new GuardedNavigationError(`${input.url} → HTTP ${response?.status()} (${cls}) — 차단기 상태를 남겼다`, cls)
   }
   return { response, state }
+}
+
+/**
+ * 🔴 **막힌 이유를 글자가 아니라 값으로 넘긴다.** 회차 기록이 403 · 429 를 `OTHER` 로 뭉개던 것은
+ *    예외 글자를 정규식으로 다시 읽었기 때문이다. 보호장치가 이미 분류한 값을 그대로 싣는다.
+ */
+export class GuardedNavigationError extends Error {
+  constructor(message: string, readonly blockedBy: BlockedBy) { super(message) }
 }

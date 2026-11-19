@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 // 🔴 슬롯 시각은 PROFILES 가 정본이다 — 여기서 적지 않는다
 import { PROFILES, minuteOfDay } from '../src/lib/scale-profile'
 
-import { THIN_82COOK_SLOTS } from '../src/lib/collect-schedule'
+import { COLLECT_SLOTS } from '../src/lib/collect-sources'
 
 import {
   FORBIDDEN_BODY_KEYS, buildReport, judgePublish, judgeSource, judgeSupply,
@@ -597,21 +597,13 @@ check('🔴 [10] 화면과 --json 이 같은 report 를 쓴다 — 두 번 계�
 })())
 
 /**
- * 82cook 슬롯 — 🔴 **배열이다.** 첫 슬롯 하나만 보면 "다음 실행" 을 내일로 잡아 헛기다린다.
- *
- * 🔴 보는 대상은 **공급 레인의 얇은 상세 job**(`supply-collect-82cook-thin`, 4회/day)이다.
- *    `82cook-thin-*` 파일을 만드는 것이 그 job 이고, 관제가 신선도를 묻는 것도 그 파일이다.
- *    Raw Vault 레인의 `raw-collect-82cook`(10회/day)은 다른 레인이다.
+ * 수집 슬롯 — 🔴 **배열이다.** 첫 슬롯 하나만 보면 "다음 실행" 을 내일로 잡아 헛기다린다.
+ *    시각은 관제에 베껴 적지 않는다 — 바퀴 표(`COLLECT_SLOTS`)에서 파생한다.
  */
-check('🔴 82cook 슬롯을 배열로 계산한다 — 첫 슬롯 하나만 보면 헛기다린다', (() => {
+check('🔴 수집 슬롯을 배열로 계산한다 — 첫 슬롯 하나만 보면 헛기다린다', (() => {
   const runner = readFileSync('scripts/supply-health.mts', 'utf-8')
-  /**
-   * 🔴 **시각을 관제에 베껴 적지 않는다** (2026-09-11). 정본은 `collect-schedule` 하나다 —
-   *    두 벌이면 일정을 고칠 때 한쪽만 바뀌고, 관제가 오지 않는 슬롯을 기다린다.
-   */
-  return /slots: THIN_82COOK_SLOTS\.map\(/.test(runner)
-    && THIN_82COOK_SLOTS.length >= 4
-    && /logName: 'supply-collect-82cook-thin'/.test(runner)
+  return /slots: COLLECT_SLOTS\.map\(/.test(runner)
+    && COLLECT_SLOTS.length >= 4
     && /nextScheduled\(slots: readonly \[number, number\]\[\]/.test(runner)
 })())
 // 🔴 전문 유출은 디스크 전체를 본다
@@ -723,9 +715,7 @@ console.log('\n⑬ 🔴 관제는 사실을 따로 갖지 않는다')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
 
   check('🔴 ① 슬롯을 손으로 적지 않는다 — 정본에서 파생한다',
-    /planSlots\('navercafe:remonterrace'/.test(code)
-    && /planSlots\('navercafe:wgang'/.test(code)
-    && !/slots: \[\[\d/.test(code))
+    /COLLECT_SLOTS\.map\(/.test(code) && !/slots: \[\[\d/.test(code))
   check('🔴 ② 등록 여부를 상수로 적지 않는다 — plist 를 실제로 본다',
     !/onDemand/.test(code) && /jobRegisteredAt\(labelOf\(s\.logName\)\)/.test(code))
   check('🔴 ③ 그 레인 자신의 job 을 본다 — 다른 job 의 plist 로 묻지 않는다',

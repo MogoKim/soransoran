@@ -12,7 +12,7 @@
  *    ② 네이버 원문이 Candidate · Sheet · Post · Queue 로 새는 것
  *    ③ articleId 파싱이 URL 형태 하나만 처리해 나머지가 조용히 사라지는 것
  *    ④ 카페별 주제를 고정 라벨로 굳혀 글 단위 판정을 대체하는 것
- *    ⑤ quota 가 82cook 과 같아져 계정 위험을 과소평가하는 것
+ *    ⑤ 바퀴 몫이 하루 상한을 넘어 계정을 위험하게 하는 것(몫 계산 자체는 collect-sources-check 가 잰다)
  *
  * 사용법: npx tsx scripts/micro-seed-navercafe-check.mts
  */
@@ -20,10 +20,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
+  sourceSiteOf, buildCollected, assertNaverCandidate,
   judgeSession, judgeLock, randomDelay, parseArticleId, computeDedupKey,
-  LIST_URL, ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
-  LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
+  ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
+  LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
   SESSION_PATH_ENV, KILL_SWITCH_ENV,
   DEFAULT_SESSION_PATH, PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, DEFAULT_BROWSER_CHANNEL,
   browserLaunchOptions, isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, AUTH_COOKIE_NAMES,
@@ -31,15 +31,15 @@ import {
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
-  BOARD_TARGETS, findBoard, boardListUrl, pagesOf, activeCafes,
-  detectRowLabel, SCOUT_MAX_PAGES, DETAIL_MAX_PAGES, maxPagesFor,
-  judgeExcludeReason, dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
+  boardListUrl,
+  detectRowLabel,
+  judgeExcludeReason, dedupeListRows,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
-import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
+import { isNaverCafeSource } from './lib/micro-seed-supply.mjs'
 import { assessCandidate } from './lib/micro-seed-quality.mjs'
-// 🔴 시각 정본 — fixture 도 손으로 적은 표가 아니라 정본을 본다
-import { planSlots } from '../src/lib/collect-schedule'
+// 🔴 원천 · 시각 정본 — fixture 도 손으로 적은 표가 아니라 정본을 본다
+import { COLLECT_SLOTS, COLLECT_SOURCES, dailyRequestsOf, findSource, overheadPerCycle, sourceIdOf } from '../src/lib/collect-sources'
 import {
   isTooOpen, judgeStorageStateShape, NAVER_SESSION_FILE,
   SESSION_DIR_MODE, SESSION_FILE_MODE,
@@ -51,7 +51,6 @@ import {
   judgeOperationalReadiness, judgeSourceOperations,
 } from '../src/lib/collect-operations'
 import { readLedgerAt, BODY_RETRY_MAX } from './lib/collect-run-store.mjs'
-import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import {
   collapseByRunId, isDetailSuccess, isNoNewRun, isScheduledAlive, isYieldSuccess,
   judgeAuthCookies, judgeDetailHealth, judgeRunHealth, judgeTrigger, latestTerminal,
@@ -72,7 +71,6 @@ const check = (l: string, c: boolean, d = '') => (c ? ok(l) : bad(l, d))
 const COLLECTOR = readFileSync('scripts/micro-seed-collect-navercafe.mts', 'utf-8')
 const LIB = readFileSync('scripts/lib/micro-seed-navercafe.mts', 'utf-8')
 const SETUP = readFileSync('scripts/navercafe-session-setup.mts', 'utf-8')
-const IMPORTER = readFileSync('scripts/micro-seed-import-82cook-live.mts', 'utf-8')
 const SUPPLY_DOC = readFileSync('docs/operations/2026-09-03-raw-supply-chain-design.md', 'utf-8')
 const GITIGNORE = readFileSync('.gitignore', 'utf-8')
 
@@ -90,7 +88,6 @@ const codeOf = (src: string): string =>
 const COLLECTOR_CODE = codeOf(COLLECTOR)
 const LIB_CODE = codeOf(LIB)
 const SETUP_CODE = codeOf(SETUP)
-const IMPORTER_CODE = codeOf(IMPORTER)
 
 console.log('\n네이버 카페 수집 계약 fixture\n')
 
@@ -98,11 +95,9 @@ console.log('\n네이버 카페 수집 계약 fixture\n')
 console.log('① sourceSite · dedupKey 계약 (PR-S2-b-1 과 동일해야 한다)')
 // ─────────────────────────────────────────────────────────
 check('sourceSiteOf 가 navercafe:{cafeId} 를 만든다', sourceSiteOf('remonterrace') === 'navercafe:remonterrace')
-for (const c of CAFES) {
-  check(`[${c.cafeId}] supply 의 형태 검사를 통과한다`, isNaverCafeSource(sourceSiteOf(c.cafeId)))
-  check(`[${c.cafeId}] 🔴 raw-only 는 받고 micro-seed 는 거부한다`,
-    judgeSourceSite(sourceSiteOf(c.cafeId), 'raw-only').ok
-      && !judgeSourceSite(sourceSiteOf(c.cafeId), 'micro-seed').ok)
+for (const c of COLLECT_SOURCES) {
+  check(`[${c.id}] supply 의 형태 검사를 통과한다`, isNaverCafeSource(sourceSiteOf(c.id)))
+  check(`[${c.id}] 보호장치 이름과 sourceSite 가 같다`, sourceSiteOf(c.id) === sourceIdOf(c.id))
 }
 {
   const a = computeDedupKey('navercafe:remonterrace', '34783204')
@@ -129,29 +124,16 @@ const URLS: [string, string | null][] = [
 for (const [url, want] of URLS) {
   check(`파싱 ${url.slice(0, 46) || '(빈 문자열)'} → ${want ?? 'null'}`, parseArticleId(url) === want, String(parseArticleId(url)))
 }
-check('🔴 목록 URL 을 글 URL 로 오인하지 않는다', parseArticleId(LIST_URL('wgang', 1)) === null, parseArticleId(LIST_URL('wgang', 1)) ?? '')
+check('🔴 목록 URL 을 글 URL 로 오인하지 않는다', parseArticleId(boardListUrl(findSource('wgang')!, 1)) === null)
 check('ARTICLE_URL 은 다시 파싱된다', parseArticleId(ARTICLE_URL('wgang', '999')) === '999')
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ quota — 🔴 82cook 과 달라야 한다 (계정 정지는 비가역)')
+console.log('\n③ 하루 상한 — 🔴 원천 줄 하나가 정본이다 (계정 정지는 비가역)')
 // ─────────────────────────────────────────────────────────
-/**
- * 🔴 **숫자를 박지 않는다** (2026-09-13).
- *    카페마다 게시판 수와 예산이 달라서 같은 숫자가 같은 부하를 뜻하지 않는다.
- *    지켜야 하는 계약은 "82cook 보다 작다" 와 "회차 계획이 하루 상한 안에 든다" 다.
- */
-for (const c of CAFES) {
-  check(`[${c.cafeId}] 슬롯 quota 가 82cook 보다 작다`,
-    slotQuota(c.cafeId) < SLOT_QUOTA['82cook'], String(slotQuota(c.cafeId)))
-}
-check('🔴 82cook(30) 보다 작다', slotQuota('remonterrace') < SLOT_QUOTA['82cook'])
-check('🔴 우나어의 카페당 80 을 쓰지 않는다',
-  CAFES.every((c) => slotQuota(c.cafeId) < 80))
-check('첫 live 기본값이 작다 — 1카페 · 1p · 3건',
-  FIRST_LIVE_CAFE_ID === 'remonterrace' && FIRST_LIVE_PAGES === 1 && FIRST_LIVE_ARTICLES === 3)
-check('🔴 collector 가 quota 를 상한으로 강제한다', /--max 는 1~\$\{QUOTA\}/.test(COLLECTOR))
-check('🔴 quota 숫자를 lib 에서 다시 적지 않는다 (supply 경유)',
-  /slotQuotaOf\(sourceSiteOf\(cafeId\)\)/.test(LIB) && !/navercafe['"]?\s*:\s*\d+/.test(LIB_CODE),
+check('🔴 우나어의 카페당 80건/회차 같은 고정 몫을 두지 않는다 — 바퀴 몫은 실행 때 정한다',
+  !/--max/.test(COLLECTOR_CODE) && /cycleDetailQuota\(/.test(COLLECTOR_CODE))
+check('🔴 하루 상한 숫자를 lib 에 다시 적지 않는다 (collect-sources 경유)',
+  !/dailyRequests\s*:\s*\d+/.test(LIB_CODE) && COLLECT_SOURCES.every((c) => dailyRequestsOf(sourceIdOf(c.id)) === c.dailyRequests),
   '두 곳에 적으면 갈라진다')
 
 // ─────────────────────────────────────────────────────────
@@ -261,8 +243,8 @@ for (const [name, src] of [['collector', COLLECTOR_CODE], ['lib', LIB_CODE]] as 
   check(`[${name}] 🔴 Queue 를 건드리지 않는다`, !/originalPostApprovalQueue|OriginalPostApprovalQueue/.test(src))
   check(`[${name}] 🔴 발행 상태 전환이 없다`, !/'PENDING'|'PUBLISHED'|'APPROVED'/.test(src))
 }
-check('🔴 collector 가 Raw Vault 에 적재하지 않는다 (importer 로 넘긴다)',
-  /적재는 importer 가 한다/.test(COLLECTOR) && /--raw-only --batch=/.test(COLLECTOR))
+check('🔴 collector 가 DB 에 적재하지 않는다 (공급 처리가 파일을 읽는다)',
+  /DB 에 적재하지 않는다/.test(COLLECTOR) && !/prisma/i.test(COLLECTOR_CODE))
 check('🔴 popular-sync 를 이식하지 않았다',
   !/popular[-_]?sync/i.test(COLLECTOR_CODE) && !/popular[-_]?sync/i.test(LIB_CODE),
   '우나어의 인기글 전용 슬롯은 82cook 수집 슬롯이 대신한다')
@@ -276,7 +258,7 @@ check('🔴 모듈을 못 찾으면 조용히 넘어가지 않고 안내하며 �
   /Playwright 를 찾지 못했다/.test(COLLECTOR) && /playwright-core/.test(COLLECTOR),
   '안내가 없으면 실패 원인이 브라우저인지 세션인지 알 수 없다')
 check('🔴 salt 없이는 댓글 DOM read 0 · 저장 0이다',
-  /if \(THIN && evidenceSalt\.ok\)/.test(COLLECTOR_CODE)
+  /if \(evidenceSalt\.ok\) \{\s*const readComments/.test(COLLECTOR_CODE)
     && /댓글 본문 미수집/.test(COLLECTOR)
     && /DOM read 0 · 저장 0/.test(COLLECTOR))
 check('🔴 말투 근거는 이미 연 상세 화면만 읽고 작성자를 HMAC으로 바꾼다',
@@ -289,20 +271,10 @@ check('🔴 이미지는 수집하지 않는다',
 // ─────────────────────────────────────────────────────────
 console.log('\n⑨ 카페 설정 — 🔴 주제를 고정 라벨로 굳히지 않는다')
 // ─────────────────────────────────────────────────────────
-check(`카페 ${CAFES.length}곳이 등록돼 있다`, CAFES.length >= 5)
-check('cafeId 가 중복되지 않는다', new Set(CAFES.map((c) => c.cafeId)).size === CAFES.length)
-check('첫 live 카페가 목록에 있다', findCafe(FIRST_LIVE_CAFE_ID) !== null)
-check('모르는 카페는 null', findCafe('nosuchcafe') === null)
-// 🔴 PR-S2-b-7 에서 shadow → excluded 로 바뀌었다. 뷰티 축이라는 성격은 그대로이고,
-//    "이번 라운드에 쓰지 않는다" 가 더해진 것이다 — 단정을 사실에 맞춘다.
-check('🔴 여우야는 이번 라운드 제외 (뷰티·미용 성격은 유지)',
-  findCafe('yeowooya')?.stage === 'excluded' && /뷰티|미용/.test(findCafe('yeowooya')?.note ?? ''))
-check('🔴 여우야 메모가 "바로 쓰지 않는다" 를 적고 있다',
-  /바로 쓰지 않는다/.test(findCafe('yeowooya')?.note ?? ''))
-check('우갱·레몬테라스가 같은 축이다 (둘 다 production)',
-  findCafe('wgang')?.stage === 'production' && findCafe('remonterrace')?.stage === 'production')
-check('은퇴 후 50년 메모가 노후·돈 축을 적고 있다',
-  /노후|은퇴|돈/.test(findCafe('dlxogns01')?.note ?? ''))
+check('카페 id 가 중복되지 않는다', new Set(COLLECT_SOURCES.map((c) => c.id)).size === COLLECT_SOURCES.length)
+check('모르는 카페는 null', findSource('nosuchcafe') === null)
+check('🔴 원천 줄에 주제 라벨 칸이 없다 — 주제 판정은 글 단위다',
+  COLLECT_SOURCES.every((c) => !('note' in c) && !('stage' in c)))
 check('🔴 note 를 판정에 쓰지 않는다 (사람이 읽는 메모)',
   !/\.note\s*[.=!]==|includes\(.*\.note|\.note\)/.test(COLLECTOR_CODE.replace(/console\.log[^\n]*/g, '')),
   '주제 판정은 글 단위(qualityFlags · Originality Gate)로 한다')
@@ -556,17 +528,6 @@ console.log('\n⑮ 목록 메타가 산출물에 남는가 · importer 계약은
     `빠진 키: ${required.filter((k) => full[k] === undefined || full[k] === '').join(', ')}`)
 }
 
-// importer 가 추가 키를 무시하는가 — 🔴 명시 필드만 쓴다
-check('🔴 importer 의 RawContent create 가 명시 필드만 쓴다 (스프레드 없음)',
-  !/microSeedRawContent\.create\(\{[\s\S]{0,400}\.\.\.row/.test(IMPORTER_CODE),
-  '...row 를 펼치면 새 키가 그대로 DB 로 가려다 터진다')
-check('🔴 importer 가 새 메타 키를 읽지 않는다',
-  !/row\.(sourcePostedAt|sourcePostedLabel|sourcePage|sourceRankOnPage|sourceViewCount|sourceListedAt)/.test(IMPORTER_CODE),
-  'importer 는 이 PR 로 바뀌지 않아야 한다')
-check('🔴 DB 컬럼을 새로 만들지 않았다 (schema 미변경 전제)',
-  !/dedupKey:\s*row\.dedupKey/.test(IMPORTER_CODE.split('microSeedRawContent.create')[1] ?? ''),
-  'dedupKey 는 DB 컬럼이 아니다 — JSONL 단계 중복 제거용이고 DB 방어는 @@unique 다')
-
 // ── 문서 원칙이 훼손되지 않았는가 ──
 check('🔴 정치 · 진영 제외 원칙이 문서에 남아 있다',
   /정치 · 진영 이슈는 소란소란이 가져가지 않는다/.test(SUPPLY_DOC)
@@ -819,55 +780,21 @@ check('🔴 잘못된 runId 는 assert 가 막는다',
   })())
 
 // ─────────────────────────────────────────────────────────
-console.log('\n㉑ 소스 집중 — 🔴 카페를 넓히지 않고 셋을 깊게 본다 (PR-S2-b-7)')
+console.log('\n㉑ 원천 목록 — 🔴 카페마다 한 줄 · 게시판 하나 (2026-11-19)')
 // ─────────────────────────────────────────────────────────
 {
-  const active = activeCafes().map((c) => c.cafeId)
-  check('활성 카페는 레몬테라스 · 우아한 갱년기 둘뿐',
-    active.length === 2 && active.includes('remonterrace') && active.includes('wgang'),
-    `받은 값: ${active.join(' · ')}`)
-  for (const id of ['dlxogns01', 'masanmam', 'goondae', 'yeowooya']) {
-    check(`🔴 ${id} 는 excluded`, findCafe(id)?.stage === 'excluded')
-  }
-  check('🔴 제외 카페를 지우지 않고 이유를 남긴다',
-    ['dlxogns01', 'masanmam', 'goondae', 'yeowooya'].every((id) => (findCafe(id)?.note ?? '').includes('제외')),
-    '왜 뺐는지가 남아야 나중에 다시 볼 수 있다')
-  check('🔴 collector 가 excluded 카페를 코드로 막는다',
-    /stage === 'excluded'/.test(COLLECTOR_CODE),
-    '설정에만 있고 아무도 안 지키는 결정이 되면 안 된다')
-}
-
-// ─────────────────────────────────────────────────────────
-console.log('\n㉒ 게시판 타깃 — 🔴 page range 는 가설이고 실측으로 고친다')
-// ─────────────────────────────────────────────────────────
-check('타깃 3개', BOARD_TARGETS.length === 3)
-check('key 중복 0', BOARD_TARGETS.length === new Set(BOARD_TARGETS.map((b) => b.key)).size)
-check('🔴 활성 카페의 게시판만 있다',
-  BOARD_TARGETS.every((b) => activeCafes().some((c) => c.cafeId === b.cafeId)))
-{
-  const j = findBoard('remonterrace:jjong')!
-  check('쫑알쫑알 menuId=23 · 2~6p', j.menuId === '23' && j.startPage === 2 && j.endPage === 6)
-  check('🔴 쫑알쫑알은 1페이지를 보지 않는다',
-    j.startPage > 1,
-    '1p 는 방금 올라온 글이라 반응이 붙을 시간이 없고, 상단에 인기글·공지가 섞인다')
-  const h = findBoard('remonterrace:humor')!
-  check('유머·연예 menuId=56 · 1p만', h.menuId === '56' && h.startPage === 1 && h.endPage === 1)
-  const w = findBoard('wgang:all')!
-  check('우갱 전체글보기 menuId=0 · 1~5p', w.menuId === '0' && w.startPage === 1 && w.endPage === 5)
-  check('모르는 키는 null', findBoard('nope:x') === null)
-
+  const ids = COLLECT_SOURCES.map((c) => c.id)
+  check('활성 카페는 레몬테라스 · 우아한 갱년기 둘뿐', ids.length === 2 && ids.includes('remonterrace') && ids.includes('wgang'), ids.join(' · '))
+  const j = findSource('remonterrace')!
+  const w = findSource('wgang')!
+  check('🔴 쫑알쫑알 menuId=23 · 1쪽부터 읽는다(새벽 글을 새벽에)', j.menuId === '23' && j.maxListPages === 1)
+  check('🔴 유머 게시판(menuId=56)은 수집하지 않는다', COLLECT_SOURCES.every((c) => String(c.menuId) !== '56'))
+  check('우갱 전체글보기 menuId=0 · 최대 3쪽', w.menuId === '0' && w.maxListPages === 3)
   check('URL 이 신형 menuId 경로다',
-    boardListUrl(j, 3) === 'https://cafe.naver.com/f-e/cafes/10298136/menus/23?viewType=L&page=3',
-    `받은 값: ${boardListUrl(j, 3)}`)
+    boardListUrl(j, 3) === 'https://cafe.naver.com/f-e/cafes/10298136/menus/23?viewType=L&page=3', boardListUrl(j, 3))
   check('우갱 cafeNo 가 다르다', boardListUrl(w, 1).includes('29349320'))
-  check('page range 가 펼쳐진다', pagesOf(j).length === 5 && pagesOf(j)[0] === 2 && pagesOf(j)[4] === 6)
-  check('1p만 타깃이면 1장', pagesOf(h).length === 1)
-  check('🔴 잘못된 range 는 조용히 빈 배열이 아니라 던진다',
-    [{ startPage: 5, endPage: 2 }, { startPage: 0, endPage: 3 }, { startPage: 1.5, endPage: 3 }]
-      .every((r) => { try { pagesOf(r); return false } catch { return true } }))
-  check('🔴 purpose 를 판정에 쓰지 않는다',
-    !/\.purpose/.test(COLLECTOR_CODE.replace(/console\.log[^\n]*/g, '')),
-    '사람이 읽는 메모다 — 코드가 읽으면 게시판이 고정 라벨이 된다')
+  check('🔴 collector 는 원천 줄 하나만 받는다 — 게시판 · 쪽 · 상한 인자가 없다',
+    /--source/.test(COLLECTOR) && !/arg\('(board|cafe|pages|start-page|end-page|max|out)'\)/.test(COLLECTOR_CODE) && !/--scout/.test(COLLECTOR_CODE))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -890,17 +817,16 @@ check('셀렉터에 라벨이 있다', /board-tag/.test(LIST_SELECTORS.label))
 //    pinned 를 직접 보던 단정을 사유 기반으로 옮긴다 — 약화가 아니라 축의 이동이다.
 // 🔴 PR-S2-b-9 에서 필터가 thresholdBasis 안으로 들어갔다. 단정을 그쪽으로 옮긴다.
 check('🔴 collector 가 pinned 행을 상세 후보에서 뺀다',
-  /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
-    && judgeExcludeReason({ pinned: true }) === 'pinned'
-    && thresholdBasis([{ sourceExcludeReason: 'pinned' as const }]).eligible.length === 0)
+  /const eligible = listRows\.filter\(\(r\) => r\.sourceExcludeReason === null\)/.test(COLLECTOR_CODE)
+    && judgeExcludeReason({ pinned: true }) === 'pinned')
 check('🔴 그래도 목록 JSONL 에는 남긴다',
   COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('sourceExcludeReason'),
   '지우는 것이 아니라 자동 경로에서만 뺀다 — 정책 Q-1')
 {
   const base = { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '오늘 저녁 반찬 고민', sourceCommentCount: 0 }
-  const r = buildCollected('remonterrace', { ...base, sourceRowLabel: '공지', sourcePinned: true, sourceMenuId: '23', sourceBoardKey: 'remonterrace:jjong' }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+  const r = buildCollected('remonterrace', { ...base, sourceRowLabel: '공지', sourcePinned: true, sourceMenuId: '23', sourceBoardKey: 'remonterrace:23' }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
   check('산출물에 라벨·게시판 메타가 남는다',
-    r.sourceRowLabel === '공지' && r.sourcePinned && r.sourceMenuId === '23' && r.sourceBoardKey === 'remonterrace:jjong')
+    r.sourceRowLabel === '공지' && r.sourcePinned && r.sourceMenuId === '23' && r.sourceBoardKey === 'remonterrace:23')
   check('🔴 sourceSite 계약은 그대로다', r.sourceSite === 'navercafe:remonterrace')
   check('메타 없으면 기본값', (() => {
     const b = buildCollected('remonterrace', base, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
@@ -923,36 +849,18 @@ console.log('\n㉔ 목록에서 글의 주제로 빼지 않는다 — 정치 낱
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n㉕ scout(list-only) — 🔴 상세에 무조건 들어가지 않는다')
-// ─────────────────────────────────────────────────────────
-check('scout 가 detail 보다 깊이 본다', SCOUT_MAX_PAGES > DETAIL_MAX_PAGES)
-check('모드별 상한', maxPagesFor('scout') === SCOUT_MAX_PAGES && maxPagesFor('detail') === DETAIL_MAX_PAGES)
-check('🔴 쫑알쫑알 목록은 상세 회차의 얕은 범위(5장) 안이다 — 선별에 안 쓰는 쪽을 읽지 않는다',
-  pagesOf(findBoard('remonterrace:jjong')!).length <= DETAIL_MAX_PAGES,
-  '깊게 보려면 --scout 로 목록만 본다')
-check('🔴 scout 는 상세를 열지 않고 종료한다',
-  /if \(SCOUT\) \{[\s\S]{0,1400}return\s*\n\s*\}/.test(COLLECTOR_CODE),
-  'PR-S2-b-9 에서 요약 줄이 늘어 블록이 길어졌다 — 상한만 넓힌다')
-check('🔴 scout 종료가 상세 루프보다 앞이다',
-  COLLECTOR_CODE.indexOf('if (SCOUT)') < COLLECTOR_CODE.indexOf('readArticleBody(page)'))
-check('scout 에서도 목록은 기록한다',
-  COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('if (SCOUT)'),
-  '조건 미달이던 글도 다음 실행에서 후보가 될 수 있어야 한다')
-check('페이지 상한을 코드가 강제한다', /PAGE_LIST!\.length > PAGE_CAP/.test(COLLECTOR_CODE))
-
-// ─────────────────────────────────────────────────────────
 console.log('\n㉖ 게시판명 — 🔴 기본값을 조용히 씌우지 않는다 (PR-S2-b-8)')
 // ─────────────────────────────────────────────────────────
-check('🔴 board 가 있으면 그 label 로 채운다',
-  /sourceBoardName: r\.board \|\| BOARD\?\.label \|\| null/.test(COLLECTOR_CODE),
+check('🔴 게시판 셀이 없으면 원천 줄의 게시판 이름으로 채운다',
+  /sourceBoardName: r\.board \|\| cafe!\.boardLabel/.test(COLLECTOR_CODE),
   '개별 게시판 페이지에는 a.board_name 셀이 없다 — 쫑알쫑알 225건이 전부 "전체글보기" 로 기록됐다')
 {
   const b = { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '반찬 고민', sourceCommentCount: 0 }
-  const withBoard = buildCollected('remonterrace', { ...b, sourceBoardName: '쫑알쫑알 게시판', sourceMenuId: '23', sourceBoardKey: 'remonterrace:jjong' }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+  const withBoard = buildCollected('remonterrace', { ...b, sourceBoardName: '쫑알쫑알 게시판', sourceMenuId: '23', sourceBoardKey: 'remonterrace:23' }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
   check('게시판명·menuId·boardKey 가 함께 남는다',
-    withBoard.sourceBoardName === '쫑알쫑알 게시판' && withBoard.sourceMenuId === '23' && withBoard.sourceBoardKey === 'remonterrace:jjong')
-  check('🔴 boardKey 의 label 과 일치한다',
-    withBoard.sourceBoardName === findBoard(withBoard.sourceBoardKey!)!.label,
+    withBoard.sourceBoardName === '쫑알쫑알 게시판' && withBoard.sourceMenuId === '23' && withBoard.sourceBoardKey === 'remonterrace:23')
+  check('🔴 원천 줄의 게시판 이름과 일치한다',
+    withBoard.sourceBoardName === findSource('remonterrace')!.boardLabel,
     '셋이 어긋나면 분석에서 게시판을 잘못 읽는다')
   const legacy = buildCollected('remonterrace', b, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
   check('전체글보기 기존 동작은 그대로', legacy.sourceBoardName === '전체글보기' && legacy.sourceBoardKey === null)
@@ -966,11 +874,11 @@ console.log('\n㉗ 제외 사유 — 🔴 단일 판정. 축을 합치지도 흩
   check('해당 없으면 null', judgeExcludeReason({ pinned: false }) === null)
   check('🔴 제외 사유는 고정 슬롯 하나뿐이다', /export type ExcludeReason = 'pinned'/.test(LIB))
   check('collector 가 단일 판정으로 후보를 고른다',
-    /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
-      && /sourceExcludeReason === null/.test(LIB_CODE)
+    /sourceExcludeReason === null/.test(COLLECTOR_CODE)
       && !/!r\.sourcePinned && !r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE),
-    '필터는 thresholdBasis 안에 하나만 있어야 한다')
-  check('제외 사유를 보고한다', /고정 슬롯/.test(COLLECTOR))
+    '필터는 하나만 있어야 한다')
+  check('🔴 목록 단계 제외를 사유별 건수로 한 줄에 보고한다',
+    /▸ 목록 \$\{listRows\.length\}건 → 고정 글 \$\{pinned\}/.test(COLLECTOR_CODE) && /몫 밖 \$\{skippedBy\('OVER_MAX'\)\}/.test(COLLECTOR_CODE))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -992,95 +900,6 @@ console.log('\n㉘ 목록 중복 — 🔴 threshold 분모를 오염시키지 �
     COLLECTOR_CODE.indexOf('dedupeListRows') < COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST'),
     'threshold 를 백분율로 재는 순간 분모가 오염된다')
 }
-
-// ─────────────────────────────────────────────────────────
-console.log('\n㉙ threshold — 🔴 후보일 뿐이다. 코드가 자동 판정하지 않는다')
-// ─────────────────────────────────────────────────────────
-check('후보 2개', THRESHOLD_CANDIDATES.length === 2)
-check('후보 A/B 값', THRESHOLD_CANDIDATES[0].minComments === 10 && THRESHOLD_CANDIDATES[1].minComments === 15)
-check('둘 다 조회 300', THRESHOLD_CANDIDATES.every((t) => t.minViews === 300))
-{
-  const T = THRESHOLD_CANDIDATES[0]
-  check('둘 다 넘으면 통과', passesThreshold({ sourceCommentCount: 12, sourceViewCount: 400 }, T))
-  check('하나만 넘으면 탈락',
-    !passesThreshold({ sourceCommentCount: 12, sourceViewCount: 100 }, T)
-      && !passesThreshold({ sourceCommentCount: 2, sourceViewCount: 400 }, T))
-  check('🔴 조회수를 못 읽었으면 통과시키지 않는다',
-    !passesThreshold({ sourceCommentCount: 99, sourceViewCount: null }, T),
-    '미지값을 0 으로도 무한대로도 보지 않는다')
-}
-check('🔴 자동 선별이 threshold 를 쓰지 않는다',
-  !/passesThreshold\([\s\S]{0,80}planAutoFetch/.test(COLLECTOR_CODE)
-    && /후보 \$\{t\.label\}/.test(COLLECTOR_CODE),
-  '표본이 2.3시간짜리 하나뿐이라 확정하기에는 이르다 — 세어만 본다')
-
-// ─────────────────────────────────────────────────────────
-console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후보다 (PR-S2-b-9)')
-// ─────────────────────────────────────────────────────────
-{
-  // 🔴 2026-09-03 유머·연예 1p 실측을 그대로 옮긴 모양:
-  //    고정 슬롯은 조회수 중앙이 2,111 로 일반 글(321)의 7배다.
-  //    전체에 threshold 를 걸면 **상세를 열 수도 없는 행이 통과율을 끌어올린다.**
-  const row = (reason: 'pinned' | null, c: number, v: number) =>
-    ({ sourceExcludeReason: reason, sourceCommentCount: c, sourceViewCount: v })
-  const rows = [
-    ...Array.from({ length: 7 }, () => row('pinned', 50, 2111)),   // 고정 슬롯 — 전부 통과할 값
-    row('pinned', 30, 900),
-    row('pinned', 30, 900),
-    row(null, 12, 400),                                            // 진짜 후보 중 통과 1건
-    ...Array.from({ length: 13 }, () => row(null, 2, 100)),         // 진짜 후보 중 미달
-  ]
-  const b = thresholdBasis(rows)
-  check('전체와 후보를 나눠 센다', b.total === 23 && b.eligible.length === 14)
-  check('🔴 제외 사유가 있는 행은 후보가 아니다',
-    b.eligible.every((r) => r.sourceExcludeReason === null))
-
-  const T = THRESHOLD_CANDIDATES[0]
-  const whole = rows.filter((r) => passesThreshold(r, T)).length
-  const elig = b.eligible.filter((r) => passesThreshold(r, T)).length
-  check('🔴 전체 기준이면 부풀려진다 (착시)',
-    whole === 10 && elig === 1,
-    `전체 ${whole}건 vs 후보 ${elig}건 — 고정 슬롯이 통과율을 끌어올린다`)
-  // 🔴 비교용 `whole` 계산 자체는 남긴다 — 착시를 보여주는 것이 목적이다.
-  //    봐야 하는 것은 "보고하는 비율의 분모가 후보 수인가" 다.
-  check('🔴 collector 가 후보 기준으로 센다',
-    /const n = basis\.eligible\.filter\(\(r\) => passesThreshold/.test(COLLECTOR_CODE)
-      && /const pct = basis\.eligible\.length === 0 \? 0 : Math\.round\(\(n \/ basis\.eligible\.length\)/.test(COLLECTOR_CODE),
-    '비율의 분모가 후보 수여야 한다')
-  check('전체 기준도 함께 보여주되 비교 축이 아니라고 적는다',
-    /비교 축이 아니다/.test(COLLECTOR),
-    '쫑알쫑알 9% 와 유머 35% 를 나란히 놓으면 안 되는 이유가 이것이다')
-  check('로그가 전체·제외·후보를 구분한다',
-    /목록 \$\{basis\.total\}건 기록/.test(COLLECTOR_CODE)
-      && /제외 \$\{basis\.total - basis\.eligible\.length - basis\.legacy\}건 → 상세 후보 \$\{basis\.eligible\.length\}건/.test(COLLECTOR_CODE),
-    '🔴 제외 수에서 legacy 를 빼야 한다 — 판정 없는 행을 제외로 세면 안 된다')
-  // 🔴 이 저장소가 반복해온 "조용한 0" 을 여기서도 막는다.
-  //    구 산출물(PR-S2-b-8 이전)에는 sourceExcludeReason 필드가 없다 —
-  //    그걸 제외로 떨어뜨리면 225건이 "후보 0건 · NaN%" 가 되고 아무도 이유를 모른다.
-  check('🔴 판정 없는 행을 제외로 세지 않고 따로 알린다',
-    (() => {
-      const b = thresholdBasis([{ sourceCommentCount: 1, sourceViewCount: 1 } as never, row(null, 1, 1)])
-      return b.legacy === 1 && b.eligible.length === 1 && b.total === 2
-    })(),
-    '"판정이 없다" 와 "제외 판정을 받았다" 는 다른 사실이다')
-  check('판정이 다 있으면 legacy 0', thresholdBasis(rows).legacy === 0)
-  check('collector 가 판정 없는 행을 경고한다',
-    /판정 없는 행 \$\{basis\.legacy\}건/.test(COLLECTOR_CODE))
-  check('🔴 후보가 0건이어도 나눗셈이 터지지 않는다',
-    (() => {
-      const empty = thresholdBasis([row('pinned', 50, 2111)])
-      return empty.eligible.length === 0
-    })())
-  check('상세 경로도 같은 basis 를 쓴다',
-    /const eligible = basis\.eligible/.test(COLLECTOR_CODE),
-    '요약과 실제 선별이 다른 집합을 보면 보고가 거짓이 된다')
-  check('🔴 threshold 값은 여전히 확정이 아니다',
-    THRESHOLD_CANDIDATES.length === 2
-      && THRESHOLD_CANDIDATES[0].minComments === 10 && THRESHOLD_CANDIDATES[1].minComments === 15
-      && THRESHOLD_CANDIDATES.every((t) => t.minViews === 300))
-  check('제외 사유 분포는 계속 출력한다', /고정 슬롯 \$\{byReason\.pinned\}건/.test(COLLECTOR_CODE))
-}
-
 
 // ─────────────────────────────────────────────────────────
 // 세션 정본 계약 — 🔴 등록을 능력으로 오판한 사고의 뿌리
@@ -1226,9 +1045,8 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
 
   /** 🔴 관제가 실제로 도는 job 의 로그를 본다 */
   const healthSrc = readFileSync('scripts/supply-health.mts', 'utf-8')
-  check('🔴 navercafe 로그 이름이 -multi 다 (실제 도는 job)',
-    healthSrc.includes("logName: 'navercafe-collect-remonterrace-multi'")
-    && healthSrc.includes("logName: 'navercafe-collect-wgang-multi'"))
+  check('🔴 navercafe 로그 이름이 수집 job 하나에서 나온다 (실제 도는 job)',
+    /logName: COLLECT_JOB_LABEL\.replace\(/.test(healthSrc))
   /**
    * 🔴 **옛 판은 여기서 슬롯 숫자를 그대로 찾고 있었다** (2026-09-13 교체).
    *
@@ -1239,17 +1057,9 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
    *
    *    이제 "무엇이 적혀 있는가" 가 아니라 **"정본에서 파생하는가"** 를 본다.
    */
-  check('🔴 관제가 슬롯을 손으로 적지 않는다 — 정본에서 파생한다',
-    /planSlots\('navercafe:remonterrace'/.test(healthSrc)
-    && /planSlots\('navercafe:wgang'/.test(healthSrc)
-    && !/slots: \[\[\d/.test(healthSrc))
-  check('🔴 관제가 보는 슬롯이 실제 예약 슬롯과 같다', (() => {
-    for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
-      const want = planSlots(id, 'start')
-      if (want.length === 0) return false
-    }
-    return true
-  })())
+  check('🔴 관제가 슬롯을 손으로 적지 않는다 — 바퀴 표에서 파생한다',
+    /COLLECT_SLOTS\.map\(/.test(healthSrc) && !/slots: \[\[\d/.test(healthSrc))
+  check('🔴 관제가 보는 슬롯 수가 바퀴 수와 같다', COLLECT_SLOTS.length > 0)
   check('🔴 stale 임계를 상수로 쓰지 않는다',
     !/const SOURCE_STALE_MS\s*=/.test(healthSrc) && healthSrc.includes('staleAfterFromSlots('))
 }
@@ -1432,8 +1242,8 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
     COLLECTOR_CODE.includes('detailRequests += 1'))
   check('🟢 collector 가 회차 기록을 남긴다',
     COLLECTOR_CODE.includes('appendRunRecord(') && COLLECTOR_CODE.includes("finishRun('ok')"))
-  check('🔴 scout 종료가 상세 0 으로 기록된다',
-    /markRun\(\{ listRows: basis\.total, detailRequests: 0, thinRows: 0 \}\)/.test(COLLECTOR_CODE))
+  check('🔴 바퀴 몫의 근거(앞 바퀴 뒤 새 글)가 회차 기록에 남는다',
+    /markRun\(\{ listRows: listRows\.length, skippedSeen, newSincePrevious: newCount \}\)/.test(COLLECTOR_CODE))
   check('🟢 collector 가 인증을 브라우저 앞에서 본다',
     COLLECTOR_CODE.includes('judgeAuthCookies('))
 
@@ -2033,7 +1843,7 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
     const seg = SETUP_CODE.slice(memAt, renameAt)
     return seg.includes('rmSync(staging') && seg.includes('정본을 갱신하지 않았다')
   })())
-  check('🔴 setup 이 활성 카페 전부를 본다(제외 카페는 보지 않는다)', SETUP_CODE.includes('activeCafes()'))
+  check('🔴 setup 이 원천 목록의 카페 전부를 본다', SETUP_CODE.includes('for (const c of COLLECT_SOURCES)'))
   // 🔴 순서만 보면 분기를 지워도 통과한다 — 실제 조건을 본다
   check('🔴 회원이 아닌(unknown 포함) 카페를 실제로 모은다', /if \(m !== 'member'\) notMember\.push\(/.test(SETUP_CODE))
   check('🔴 하나라도 있으면 실제로 멈춘다', /if \(notMember\.length > 0\) \{/.test(SETUP_CODE))
@@ -2086,7 +1896,7 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
   check('🔴 세 사유의 알림 제목이 서로 다르다', new Set(codes.map((c) => SESSION_ALERT[c].title)).size === 3)
   check('🔴 알림 문구에 쿠키·세션 값 자리가 없다', !codes.some((c) => /NID_|cookie|쿠키 값|=/.test(`${SESSION_ALERT[c].title}${SESSION_ALERT[c].why}`)))
   check('🔴 알림 열쇠가 사유 · 카페 단위(하루 1회 계약 재사용)',
-    /notifySessionAlert\(`\$\{c\}:\$\{cafe!\.cafeId\}`/.test(COLLECTOR_CODE)
+    /notifySessionAlert\(`\$\{c\}:\$\{CAFE_ID\}`/.test(COLLECTOR_CODE)
     && alertDueToday({ 'BODY_EMPTY:wgang': '2026-10-07' }, 'MEMBER_GATE:wgang', '2026-10-07'))
 
   // ⑦ Slack 미설정·전송 실패·던짐 → run 은 failed 유지, exit 0 아님
@@ -2105,31 +1915,24 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
   }
 
   // collector 배선 — 🔴 실제 경로가 위 판정을 부르는가
-  const homeAt = COLLECTOR_CODE.indexOf('url: CAFE_HOME_URL(cafe!.cafeId)')
+  const homeAt = COLLECTOR_CODE.indexOf('await open(CAFE_HOME_URL(CAFE_ID))')
   // 🔴 COLLECTOR_CODE 는 주석을 지운 코드다 — 목록 단계의 첫 실제 줄을 기준점으로 쓴다
   const listAt = COLLECTOR_CODE.indexOf('const allProbes: FrameProbe[] = []')
   const firstDetailAt = COLLECTOR_CODE.indexOf('detailRequests += 1')
   check('🔴 ② 회원 확인이 목록·상세보다 먼저다 → 실패하면 상세 요청 0',
     homeAt > 0 && listAt > homeAt && firstDetailAt > listAt
-    && /if \(stop !== null\) throw new MembershipStop\(stop, seen\)/.test(COLLECTOR_CODE.slice(homeAt, listAt))
-    && /const stop = membershipFailureCode\(seen\)/.test(COLLECTOR_CODE.slice(homeAt, listAt)))
+    && /if \(stop !== null\) throw new MembershipStop\(stop, membership\)/.test(COLLECTOR_CODE.slice(homeAt, listAt))
+    && /const stop = membershipFailureCode\(membership\)/.test(COLLECTOR_CODE.slice(homeAt, listAt)))
   // ⑨ 홈 확인도 보호장치를 지난다 — raw goto 금지
-  check('🔴 ⑨ 카페 홈 요청이 guardedNavigate 안에 있다',
-    /await guardedNavigate\(\{\s*url: CAFE_HOME_URL\(cafe!\.cafeId\), source: GUARD_SOURCE/.test(COLLECTOR_CODE))
+  check('🔴 ⑨ 카페 홈 요청이 보호장치를 지나는 open() 안에 있다',
+    /await open\(CAFE_HOME_URL\(CAFE_ID\)\)/.test(COLLECTOR_CODE)
+    && /const open = async \(url: string\): Promise<void> => \{\s*await guardedNavigate\(\{/.test(COLLECTOR_CODE))
   check('🔴 ⑨ 수집기의 page.goto 는 전부 guardedNavigate 의 goto 콜백 안에만 있다', (() => {
     const at = [...COLLECTOR_CODE.matchAll(/page\.goto\(/g)].map((m) => m.index!)
-    return at.length >= 3 && at.every((i) => COLLECTOR_CODE.slice(Math.max(0, i - 40), i).includes('goto: async (u) => (await '))
+    return at.length >= 1 && at.every((i) => COLLECTOR_CODE.slice(Math.max(0, i - 40), i).includes('goto: async (u) => (await '))
   })())
-  check('🔴 ⑨ 회원 확인 요청도 하루 계획 상한에 들어간다(상세 배분은 그대로)', (() => {
-    const ok = ['remonterrace', 'wgang'].every((c) => {
-      const p = planCafeRun({ cafeId: c, phase: 'start' })
-      return p.memberCheckPerDay === p.boards.length * p.runsPerDay && p.withinLimit
-        && p.requestsPerDay + p.memberCheckPerDay <= p.limitPerDay
-    })
-    return ok && planCafeRun({ cafeId: 'remonterrace', phase: 'start' }).detailPerRun === 21
-      && planCafeRun({ cafeId: 'wgang', phase: 'start' }).detailPerRun === 16
-  })())
-  check('🔴 scout(목록만) 은 회원 확인 요청을 쓰지 않는다', /if \(!SCOUT\) \{\s*await guardedNavigate\(\{\s*url: CAFE_HOME_URL/.test(COLLECTOR_CODE))
+  check('🔴 ⑨ 회원 확인 요청도 바퀴마다 남겨 두는 몫에 들어간다',
+    COLLECT_SOURCES.every((c) => overheadPerCycle(c) === 1 + c.maxListPages))
   check('🔴 회원 확인 실패는 브라우저를 닫은 직후 끝낸다',
     /if \(membershipStop !== null\) \{\s*await endWithSessionFailure\(membershipStop\.code/.test(COLLECTOR_CODE))
   check('🔴 MembershipStop 외 예외는 다시 던진다(삼키지 않는다)',

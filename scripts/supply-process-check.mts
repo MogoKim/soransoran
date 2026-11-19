@@ -38,9 +38,7 @@ import {
 } from '../src/lib/supply-queue-snapshot'
 import { sourceKeyOf } from '../src/lib/source-identity'
 
-import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
-import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
-import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, thin82cookCapPerRun } from '../src/lib/collect-schedule'
+import { COLLECT_JOB_LABEL } from '../src/lib/collect-sources'
 /** 🔴 운영 job 정본 — 여기에 label 을 다시 적지 않는다 */
 import { RETIRED_JOBS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 /** 🔴 적재 재시도 · 이월 (2026-09-27) — 새 npm 명령 · 새 step 없이 이 검사가 함께 돈다 */
@@ -448,15 +446,11 @@ console.log('\n⑧ 수집 job 은 처리기 상태 때문에 막히지 않는다
   }
   const collectors = templates.filter((f) => /collect/.test(f))
   check('🔴 수집 job 이 처리기를 부르지 않는다 — 서로를 소유하지 않는다',
-    collectors.length >= 3 && collectors.every((f) => !argsOf(f).includes('supply-process')))
+    collectors.length >= 1 && collectors.every((f) => !argsOf(f).includes('supply-process')))
   check('🔴 처리 job 이 수집기를 부르지 않는다', (() => {
     const f = 'com.soransoran.supply-process.plist.template'
     return templates.includes(f)
       && !/collect|navercafe-run|thin-detail/.test(argsOf(f))
-  })())
-  check('🟢 82cook 얇은 상세가 독립 job 으로 있다', (() => {
-    const f = 'com.soransoran.supply-collect-82cook-thin.plist.template'
-    return templates.includes(f) && argsOf(f).includes('micro-seed-82cook-thin-detail.mts')
   })())
   check('🟢 처리 job 이 하루 4회 이상이다', (() => {
     const t = readFileSync(join(DIR, 'com.soransoran.supply-process.plist.template'), 'utf-8')
@@ -466,48 +460,20 @@ console.log('\n⑧ 수집 job 은 처리기 상태 때문에 막히지 않는다
   check('🔴 옛 autopilot 템플릿이 없다',
     !existsSync(join(DIR, 'com.soransoran.supply-autopilot.plist.template')))
 
-  /**
-   * 🔴 **3-source 운영 정본은 job 다섯이다** (2026-09-11).
-   *
-   *    82cook 은 **두 job** 이 필요하다 — `raw-collect-82cook` 이 목록을 만들고,
-   *    `supply-collect-82cook-thin` 이 그 목록을 소비해 얇은 상세를 연다.
-   *    thin 은 목록을 스스로 만들지 않는다. raw 가 없으면 **열 대상이 0** 이다.
-   *    앞선 판은 82cook 을 "선택 사항" 으로 두었고, 그러면 네이버 둘로만 공급이 돈다.
-   */
-  check('🔴 예약 job 이 다섯이다 — 수집 넷 + 처리 하나', RUNTIME_JOBS.length === 5)
-  for (const l of [
-    'com.soransoran.navercafe-collect-remonterrace-multi',
-    'com.soransoran.navercafe-collect-wgang-multi',
-    'com.soransoran.raw-collect-82cook',
-    'com.soransoran.supply-collect-82cook-thin',
-    'com.soransoran.supply-process',
-  ]) {
+  /** 🔴 **예약 job 은 수집 하나 + 처리 하나다** — 수집 job 하나가 바퀴마다 원천 목록을 차례로 돈다 */
+  check('🔴 예약 job 이 둘이다 — 수집 하나 + 처리 하나', RUNTIME_JOBS.length === 2)
+  for (const l of [COLLECT_JOB_LABEL, 'com.soransoran.supply-process']) {
     check(`🔴 ${l} 가 예약 job 이다`, RUNTIME_JOBS.includes(l))
     check(`🔴 ${l} 템플릿이 저장소에 있다`, templates.includes(`${l}.plist.template`))
   }
-  check('🔴 Raw Vault 적재(raw-import)는 공급 예약 job 이 아니다',
-    !RUNTIME_JOBS.includes('com.soransoran.raw-import'))
-
-  /**
-   * 🔴 **네이버 두 job 은 계획된 게시판·페이지·회차를 실제로 쓴다.**
-   *    옛 one-page runner(`micro-seed-collect-navercafe.mts --pages=1 --max=10`)가
-   *    남아 있으면 실패해야 한다 — 그 인자로 도는 한 `BOARD_TARGETS` 는 열리지 않는다.
-   */
-  for (const cafe of ['remonterrace', 'wgang']) {
-    const a = argsOf(`com.soransoran.navercafe-collect-${cafe}-multi.plist.template`)
-    check(`🟢 [${cafe}] 새 runner 를 부른다`, a.includes('micro-seed-navercafe-run.mts'))
-    check(`🔴 [${cafe}] 옛 one-page runner 를 부르지 않는다`,
-      !a.includes('micro-seed-collect-navercafe.mts'))
-    check(`🔴 [${cafe}] --pages·--max 를 손으로 적지 않는다`,
-      !a.includes('--pages=') && !a.includes('--max='))
-    check(`🟢 [${cafe}] 계획 phase 를 넘긴다`, a.includes('--phase=start'))
+  check('🔴 카페별 옛 수집 job 은 퇴역 목록에 있다 — 남으면 같은 카페를 두 번 연다',
+    ['com.soransoran.navercafe-collect-remonterrace-multi', 'com.soransoran.navercafe-collect-wgang-multi'].every((l) => RETIRED_JOBS.includes(l)))
+  {
+    const a = argsOf(`${COLLECT_JOB_LABEL}.plist.template`)
+    check('🟢 수집 job 이 원천을 차례로 도는 runner 를 부른다', a.includes('micro-seed-navercafe-run.mts'))
+    check('🔴 수집 job 이 수집기를 직접 부르지 않는다', !a.includes('micro-seed-collect-navercafe.mts'))
+    check('🔴 --cafe·--pages·--max 를 손으로 적지 않는다', !/--(cafe|pages|max)=/.test(a))
   }
-  check('🟢 82cook raw 가 목록을 만든다 — thin 이 소비할 입력이다',
-    argsOf('com.soransoran.raw-collect-82cook.plist.template').includes('--list'))
-  check('🟢 82cook thin 이 목록을 소비한다', (() => {
-    const a = argsOf('com.soransoran.supply-collect-82cook-thin.plist.template')
-    return a.includes('micro-seed-82cook-thin-detail.mts') && a.includes(`--cap=${thin82cookCapPerRun()}`)
-  })())
 
   /** 🔴 퇴역 job 은 예약 job 과 겹치지 않는다 — 겹치면 올리면서 내리게 된다 */
   check('🔴 예약 job 과 퇴역 job 이 겹치지 않는다',
@@ -517,53 +483,12 @@ console.log('\n⑧ 수집 job 은 처리기 상태 때문에 막히지 않는다
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑨ 계획된 게시판·페이지·회차가 실제 인자로 나간다')
-// ─────────────────────────────────────────────────────────
-{
-  const rem = planCafeRun({ cafeId: 'remonterrace' })
-  check('🟢 remonterrace 계획에 jjong 과 humor 가 둘 다 있다',
-    rem.boards.map((b) => b.key).join(',') === 'remonterrace:jjong,remonterrace:humor')
-  const jjong = rem.boards.find((b) => b.key === 'remonterrace:jjong')!
-  const jT = BOARD_TARGETS.find((b) => b.key === 'remonterrace:jjong')!
-  check('🟢 jjong 페이지 범위가 BOARD_TARGETS 와 같다',
-    jjong.startPage === jT.startPage && jjong.endPage === jT.endPage
-    && jjong.pages === pagesOf(jT).length)
-  const humor = rem.boards.find((b) => b.key === 'remonterrace:humor')!
-  check('🟢 humor 가 1p 다', humor.startPage === 1 && humor.endPage === 1)
-  check('🟢 remonterrace 회차가 RUNS_PER_DAY 와 같다',
-    rem.runsPerDay === RUNS_PER_DAY['navercafe:remonterrace'].start)
-
-  const wg = planCafeRun({ cafeId: 'wgang' })
-  const all = wg.boards.find((b) => b.key === 'wgang:all')!
-  const wT = BOARD_TARGETS.find((b) => b.key === 'wgang:all')!
-  check('🟢 wgang:all 페이지 범위가 BOARD_TARGETS 와 같다',
-    all.startPage === wT.startPage && all.endPage === wT.endPage && all.pages === pagesOf(wT).length)
-  check('🟢 wgang 회차가 RUNS_PER_DAY 와 같다',
-    wg.runsPerDay === RUNS_PER_DAY['navercafe:wgang'].start)
-
-  /** 🔴 **`--pages=1` 로 끝나면 실패다** — 계획이 인자에 닿는지 값으로 본다 */
-  const args = rem.boards.map((b) => collectArgsFor(b, { live: true, thin: true }).join(' '))
-  check('🔴 인자가 --board 를 쓴다', args.every((a) => a.includes('--board=')))
-  check('🔴 인자에 --pages 를 손으로 적지 않는다', args.every((a) => !a.includes('--pages')))
-  for (const p of [rem, wg]) {
-    check(`🔴 ${p.cafeId} 하루 요청이 상한 안이다`,
-      p.withinLimit && p.requestsPerDay <= MAX_REQUESTS_PER_DAY[p.source])
-  }
-  /** 🔴 82cook 은 raw 수집이 이미 먹은 몫을 빼고 남은 것만 쓴다 */
-  const raw82 = 33 * RUNS_PER_DAY['82cook'].start
-  check('🔴 82cook 얇은 상세 회차가 하루 상한 안이다',
-    raw82 + thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY <= MAX_REQUESTS_PER_DAY['82cook'])
-  check('🔴 82cook 얇은 상세 몫이 0 이 아니다 — 0 이면 82cook 공급이 조용히 없다',
-    thin82cookCapPerRun() > 0 && THIN_82COOK_RUNS_PER_DAY >= 1)
-}
-
-// ─────────────────────────────────────────────────────────
 console.log('\n⑩ 옛 운영 경로가 남아 있지 않다')
 // ─────────────────────────────────────────────────────────
 {
   /** 🔴 **운영 경로**를 본다. 역사 문서에 "폐기된 과거 구조" 로 남는 것은 허용한다 */
   const LIVE_PATHS = [
-    'package.json', '.github/workflows/supply-collect.yml', '.github/workflows/visibility-guard.yml',
+    'package.json', '.github/workflows/visibility-guard.yml',
     'docs/operations/launchd/README.md',
   ]
   for (const f of LIVE_PATHS) {
@@ -578,11 +503,8 @@ console.log('\n⑩ 옛 운영 경로가 남아 있지 않다')
    */
   const SUPPLY_LIVE = [
     'src/lib/supply-process.ts', 'scripts/supply-process.mts',
-    '.github/workflows/supply-collect.yml',
     'docs/operations/launchd/com.soransoran.supply-process.plist.template',
-    'docs/operations/launchd/com.soransoran.supply-collect-82cook-thin.plist.template',
-    'docs/operations/launchd/com.soransoran.navercafe-collect-remonterrace-multi.plist.template',
-    'docs/operations/launchd/com.soransoran.navercafe-collect-wgang-multi.plist.template',
+    `docs/operations/launchd/${COLLECT_JOB_LABEL}.plist.template`,
   ]
   for (const f of SUPPLY_LIVE) {
     const t = readFileSync(f, 'utf-8')

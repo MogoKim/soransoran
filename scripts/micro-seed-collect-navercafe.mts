@@ -8,13 +8,9 @@
  *    네이버 쿠키를 Secrets 에 올리는 순간 계정이 위험해지고, 계정 정지는 되돌릴 수 없다.
  *    82cook 은 로그인이 없어 GHA 후보지만 네이버는 아니다.
  *
- * 🔴 **여기가 종점이다.** Raw Vault 에 적재하지 않는다.
- *    prisma 를 import 하지 않고 Sheet 를 부르지 않는다. 산출물은 로컬 JSONL 뿐이다.
- *    적재는 importer 가 `--raw-only --batch=N` 으로 따로 한다 —
- *    수집과 적재를 파일로 나눈 것이 이 레일의 설계다.
- *
- * 🔴 **네이버는 raw-only 전용이다.** Micro Seed Sheet 레인으로 가는 경로가 없다.
- *    importer 의 judgeSourceSite 가 `navercafe:*` 를 micro-seed 레인에서 거부한다(PR-S2-b-1).
+ * 🔴 **여기가 종점이다.** DB 에 적재하지 않는다.
+ *    prisma 를 import 하지 않고 Sheet 를 부르지 않는다. 산출물은 로컬 JSONL 뿐이고,
+ *    공급 처리(supply-process)가 그 파일을 읽는다 — 수집과 적재를 파일로 나눈 것이 이 레일의 설계다.
  *
  * 🔴 **댓글 본문은 보조 Persona 말투 근거로만, salt 게이트 뒤에서만 남긴다.**
  *    `SORAN_VOICE_EVIDENCE_SALT` 가 없으면 댓글 DOM 을 읽지도 않는다. salt 가 있으면 이미 연
@@ -24,6 +20,10 @@
  *
  * 🔴 **사람 속도로 읽는다.** randomDelay(base, 0.8, 1.5) — 82cook 의 고정 2초와 다르다.
  *    이것은 자연화이지 우회가 아니다. UA 위장 · IP 로테이션 · robots 무시는 하지 않는다.
+ *
+ * 🔴 **원천 한 줄을 돈다.** 카페 · 게시판 · 하루 요청 수는 `src/lib/collect-sources.ts` 의 그 줄이고,
+ *    이 바퀴에서 열 본문 수는 실행 때 정한다(`cycleDetailQuota` — 남은 예산 · 앞 바퀴 뒤 새 글).
+ *    바퀴 시각은 `cycle-schedule.ts` 가 정하고, 원천을 차례로 부르는 것은 `micro-seed-navercafe-run.mts` 다.
  *
  * ⚠️ **브라우저는 `--live` 일 때만 뜬다.**
  *    dry-run · fixture · typecheck 는 브라우저 없이 전부 돈다.
@@ -36,15 +36,14 @@
  *   kill switch      SORAN_NAVERCAFE_COLLECT_ENABLED=true 가 아니면 --live 가 무시된다
  *   전용 세션        SORAN_NAVERCAFE_SESSION_PATH · 🔴 우나어 세션 재사용은 코드가 막는다
  *   락파일           /tmp/soransoran-navercafe.lock · TTL 30분 > 실행 timeout 15분
- *   quota            슬롯당 10건 (82cook 30 과 다르다 — 계정 정지는 비가역)
+ *   하루 상한        카페마다 · 수집 계정 전체(`ACCOUNT_DAILY_REQUESTS`) — 보호장치가 요청마다 본다
  *
  * 사용법
- *   npx tsx scripts/micro-seed-collect-navercafe.mts                      계획만
- *   npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=wgang --pages=1 --max=3
- *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
+ *   npx tsx scripts/micro-seed-collect-navercafe.mts --source=wgang           계획만
+ *   npx tsx scripts/micro-seed-collect-navercafe.mts --source=wgang --live    🔴 실제 수집
  */
 import {
-  appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync,
 } from 'node:fs'
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
@@ -55,29 +54,31 @@ import { keepAfterClassify, outPathOf, thinRowFromCollected } from '../src/lib/m
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import {
-  CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate, ARTICLE_BODY_SELECTORS, pickArticleBody,
-  judgeSession, judgeLock, randomDelay, parseArticleId, judgeStorageStateShape,
-  LIST_URL, ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
+  sourceSiteOf, buildCollected, assertNaverCandidate, ARTICLE_BODY_SELECTORS, pickArticleBody,
+  judgeSession, randomDelay, parseArticleId, judgeStorageStateShape,
+  ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
   LOCK_PATH, LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
-  SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
+  SESSION_PATH_ENV, KILL_SWITCH_ENV,
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions, normalizeCount,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease, type FrameProbe,
   runCollectorTerminationCleanup, type CollectorTerminationSignal,
-  LIST_SELECTORS, runIdOf, runOutputPath,
-  BOARD_TARGETS, findBoard, boardListUrl, pagesOf, maxPagesFor,
-  detectRowLabel, activeCafes,
-  dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
+  LIST_SELECTORS, runIdOf, runOutputPath, boardListUrl, isLoginWallUrl,
+  detectRowLabel, dedupeListRows,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import type { SessionShape } from '../src/lib/naver-session-canon'
 import {
-  judgeAuthCookies, judgeTrigger,
+  BLOCK_ALERT, collapseByRunId, failureCodeOf, judgeAuthCookies, judgeTrigger,
   type CollectFailureCode, type CollectRunRecord,
 } from '../src/lib/collect-run-record'
 import {
-  appendDetailLedger, appendRunRecord, readDetailLedger, readSeenArticleIds,
+  appendDetailLedger, appendRunRecord, readDetailLedger, readRunRecords, readSeenArticleIds,
   BODY_RETRY_MAX, RUN_RECORD_DIR,
 } from './lib/collect-run-store.mjs'
+import {
+  ACCOUNT_DAILY_REQUESTS, COLLECT_SOURCES, cycleDetailQuota, cyclesAfterMinute, expectedLaterNew, findSource,
+  isNewSince, kstMinuteOf, listMarkOf, overheadPerCycle, postedAfterOf, readNextPage, sourceIdOf, type ListMark,
+} from '../src/lib/collect-sources'
 import {
   alertDueToday, isMemberGateText, judgeSessionExpiry, SESSION_EXPIRY_WARN_DAYS, SESSION_REISSUE_COMMAND,
   CAFE_HOME_URL, SESSION_ALERT, concludeFailedRun, judgeCafeMembership, judgeCollectTerminal, membershipFailureCode,
@@ -89,12 +90,14 @@ import {
   captureVoiceEvidence, evidenceRowProblems, readEvidenceSalt, voiceEvidenceDataDir, voiceEvidencePathOf,
   type CapturedComment, type VoiceEvidenceRow,
 } from './lib/voice-evidence-capture.mjs'
-import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
+import { planAutoFetch, AUTO_SKIP_LIST_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { articleIdHashOf, postedWindowOfKstDay } from '../src/lib/source-slot-release'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
-import { guardedNavigate, readGuard, type NavigationResponse } from './lib/collect-guard-store.mjs'
-import { budgetOf, describeGuard, type SourceId } from '../src/lib/collect-guard'
+import {
+  accountUsedToday, guardedNavigate, GuardedNavigationError, readGuard, type NavigationResponse,
+} from './lib/collect-guard-store.mjs'
+import { budgetOf, describeGuard } from '../src/lib/collect-guard'
 import { validateStageRecoveryReceiptIdentityEnv } from './lib/stage-recovery-intent.mjs'
 import { writeStageRecoverySourceReceipt } from './lib/stage-recovery-source-receipt.mjs'
 
@@ -104,48 +107,8 @@ const arg = (n: string): string | undefined => {
   return hit ? hit.slice(n.length + 3) : undefined
 }
 const LIVE = argv.includes('--live')
-/**
- * 🔴 **scout = 목록만 본다. 상세를 열지 않는다** (PR-S2-b-7).
- *
- *    상세에 무조건 들어가지 않는 것이 이 레일의 원칙이다. 먼저 목록에서
- *    제목·댓글수·조회수·시각·라벨을 보고, 조건을 넘은 글만 상세 후보가 된다.
- *    scout 는 요청이 목록뿐이라 detail quota 와 별개로 더 깊이 볼 수 있다.
- */
-const SCOUT = argv.includes('--scout')
-/**
- * 🔴 **전문을 디스크에 남기지 않는다** (§4-AV ②).
- *
- * `--thin` 이면 상세 JSONL(`rawBody` 전문 포함)을 **쓰지 않고**, 메모리 안에서
- * 마스킹 → 300자 → 분류를 끝낸 `*.thin-detail.jsonl` 만 남긴다.
- * 전문이 파일로 존재하는 시간이 0 이 된다 — 지웠다가 아니라 **쓰지 않는다.**
- *
- * 정기 수집(launchd)은 이 모드로 돈다. `--thin` 없이 도는 것은 사람이
- * Raw Vault 적재용 원본이 필요할 때뿐이고, 그때는 화면이 그렇다고 말한다.
- */
-const THIN = argv.includes('--thin')
-const BOARD_KEY = arg('board')?.trim() ?? null
-const BOARD = BOARD_KEY ? findBoard(BOARD_KEY) : null
-if (BOARD_KEY && !BOARD) {
-  console.error(`\n🛑 모르는 게시판: ${BOARD_KEY}\n   가능한 값: ${BOARD_TARGETS.map((b) => b.key).join(' · ')}\n`)
-  process.exit(1)
-}
-const CAFE_ID = (BOARD?.cafeId ?? arg('cafe') ?? FIRST_LIVE_CAFE_ID).trim()
-// 🔴 page range 는 board 기본값 → 인자 순으로 덮는다. --pages 는 하위호환.
-const START_PAGE = Number(arg('start-page') ?? String(BOARD?.startPage ?? 1))
-const END_PAGE = Number(
-  arg('end-page') ?? String(BOARD ? BOARD.endPage : Number(arg('pages') ?? String(FIRST_LIVE_PAGES))),
-)
-const MAX = Number(arg('max') ?? String(FIRST_LIVE_ARTICLES))
-/**
- * 🔴 **출력 경로는 실행 시각이 정해진 뒤에 만든다** (PR-S2-b-6).
- *
- *    앞 코드는 카페마다 고정 파일명이었고 writeJsonl 이 append 라,
- *    첫 live(22건)와 두 번째 live(22건)가 한 파일에 44행으로 섞였다.
- *    null 비율을 재다가 실제로 한 번 잘못 읽었다 — 분석이 성립하려면 실행이 갈려야 한다.
- *
- *    `--out` 을 주면 그것을 쓴다(수동 실행·재현용). 주지 않으면 실행별 파일이다.
- */
-const OUT_OVERRIDE = arg('out') ?? null
+/** 🔴 원천 한 줄 — `collect-sources` 의 id. 정기 수집은 runner 가 차례로 넘긴다 */
+const SOURCE_ARG = (arg('source') ?? '').trim()
 
 /**
  * 🔴 **회차마다 구조적 기록을 남긴다** (2026-09-10).
@@ -273,7 +236,7 @@ class MembershipStop extends Error {
 async function endWithSessionFailure(code: SessionFailureCode, detail: string): Promise<never> {
   await concludeFailedRun(code, {
     finish: (c) => finishRun('failed', c),
-    notify: (c) => notifySessionAlert(`${c}:${cafe!.cafeId}`, {
+    notify: (c) => notifySessionAlert(`${c}:${CAFE_ID}`, {
       severity: SESSION_ALERT[c].severity,
       title: `${SESSION_ALERT[c].title} · ${cafe!.label}`,
       reason: `${SESSION_ALERT[c].why} — ${detail}`,
@@ -288,58 +251,13 @@ async function endWithSessionFailure(code: SessionFailureCode, detail: string): 
   return process.exit(1)
 }
 
-const cafe = findCafe(CAFE_ID)
+const cafe = findSource(SOURCE_ARG)
 if (cafe === null) {
-  fail(`모르는 카페: ${CAFE_ID}\n   알려진 카페: ${CAFES.map((c) => c.cafeId).join(' · ')}`)
+  fail(`모르는 원천: ${SOURCE_ARG === '' ? '(없음)' : SOURCE_ARG} — --source=<${COLLECT_SOURCES.map((c) => c.id).join(' | ')}>`)
 }
-/**
- * 🔴 **보호장치 source** — `SOURCE_FACTS` 의 id 와 같은 문자열이어야 한다.
- *    `sourceSiteOf` 가 `navercafe:<cafeId>` 를 준다. 모르는 값이면 아래에서 막힌다.
- */
-const GUARD_SOURCE = sourceSiteOf(cafe!.cafeId) as SourceId
-
-// 🔴 이번 라운드에서 빠진 카페는 여기서 막는다. 선택과 집중이 코드로 강제돼야
-//    "설정에만 있고 아무도 안 지키는 결정" 이 되지 않는다 (PR-S2-b-7).
-if (cafe!.stage === 'excluded') {
-  fail(
-    `${CAFE_ID} 는 이번 라운드 수집 대상이 아니다 — ${cafe!.note}\n` +
-      `   지금 쓰는 카페: ${activeCafes().map((c) => c.cafeId).join(' · ')}`,
-  )
-}
-
-const QUOTA = slotQuota(CAFE_ID)
-/**
- * 🔴 **승인된 게시판 범위가 곧 페이지 상한이다** (2026-09-11).
- *
- *    옛 판은 `detail` 모드를 언제나 `DETAIL_MAX_PAGES`(5)장으로 잘랐다. 그런데
- *    그때 `BOARD_TARGETS` 의 `remonterrace:jjong` 은 15장이었다 —
- *    그 게시판을 계획대로 열면 `fail()` 로 죽는다. 계획은 코드에 있고 실행은 막혀 있었다.
- *
- *    `--board=` 로 **승인된 범위**를 지목했으면 그 범위가 상한이다. 무제한이 아니다 —
- *    범위는 `BOARD_TARGETS` 가 정하고, 하루 총량은 `MAX_REQUESTS_PER_DAY` 가 막는다
- *    (`navercafe-run-plan` 이 그 예산 안에서 회차·상세를 나눈다).
- *
- * 🔴 board 없이 부르는 옛 경로(`--cafe`/`--pages`)는 그대로 얕게 유지한다 —
- *    그쪽은 임시 확인용이고 예산 계산을 거치지 않는다.
- */
-const PAGE_CAP = BOARD !== null
-  ? pagesOf(BOARD).length
-  : maxPagesFor(SCOUT ? 'scout' : 'detail')
-let PAGE_LIST: number[]
-try {
-  PAGE_LIST = pagesOf({ startPage: START_PAGE, endPage: END_PAGE })
-} catch (e) {
-  fail(`page range 가 잘못됐다 — ${e instanceof Error ? e.message : String(e)}`)
-}
-if (PAGE_LIST!.length > PAGE_CAP) {
-  fail(
-    `페이지가 ${PAGE_LIST!.length}장이다 — ${SCOUT ? 'scout' : 'detail'} 모드 상한 ${PAGE_CAP}장을 넘는다.\n` +
-      '   🔴 상세를 여는 실행은 얕게 유지한다. 깊게 보려면 --scout 로 목록만 본다.',
-  )
-}
-if (!SCOUT && (!Number.isInteger(MAX) || MAX < 1 || MAX > QUOTA)) {
-  fail(`--max 는 1~${QUOTA} 이다 — ${CAFE_ID} 의 슬롯 quota (받은 값: ${arg('max') ?? '없음'})`)
-}
+/** 🔴 보호장치 · 회차 기록 · 원장이 같은 이름을 쓴다 */
+const GUARD_SOURCE = sourceIdOf(cafe!.id)
+const CAFE_ID: string = cafe!.id
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -369,51 +287,32 @@ async function main() {
   const sessionPath = process.env[SESSION_PATH_ENV] ?? null
 
   console.log('\n네이버 카페 Raw 수집 — 🔴 로컬 전용')
-  console.log(`  카페   ${cafe!.cafeId} (${cafe!.label}) · stage=${cafe!.stage}`)
-  console.log(`  메모   ${cafe!.note}`)
-  console.log('         🔴 메모는 경향일 뿐 고정 라벨이 아니다 — 주제 판정은 글 단위로 한다')
-  console.log(`  소스   ${sourceSiteOf(cafe!.cafeId)}`)
+  console.log(`  원천   ${CAFE_ID} (${cafe!.label}) · ${cafe!.boardLabel} (menuId=${cafe!.menuId}) · ${GUARD_SOURCE}`)
   // 🔴 보호장치 상태를 **먼저** 말한다 — 막혀 있으면 계획을 읽기 전에 알아야 한다
   {
     const g = readGuard(GUARD_SOURCE, new Date())
     console.log(`  보호장치 ${describeGuard(g, Date.now())} · 남은 예산 ${budgetOf(g).remaining}건`
-      + ' (403·429·TCP 차단기 분리 · 82cook 과 같은 계약)')
+      + ` · 계정 전체 ${accountUsedToday(new Date())}/${ACCOUNT_DAILY_REQUESTS} (403·429·TCP 차단기 분리)`)
   }
-  console.log(`  게시판 ${BOARD ? `${BOARD.label} (menuId=${BOARD.menuId}) · ${BOARD.purpose}` : '전체글보기 (기본)'}`)
-  console.log(
-    SCOUT
-      ? `  계획   🔍 scout — 목록 ${START_PAGE}~${END_PAGE}p (${PAGE_LIST!.length}장) · 🔴 상세를 열지 않는다`
-      : `  계획   목록 ${START_PAGE}~${END_PAGE}p (${PAGE_LIST!.length}장) · 상세 최대 ${MAX}건 (quota ${QUOTA})`,
-  )
+  console.log(`  계획   목록 1~${cafe!.maxListPages}쪽(쪽이 전부 새 글이면 다음 쪽) · 본문 수는 목록을 본 뒤 정한다(남은 예산 · 앞 바퀴 뒤 새 글)`)
   console.log(`  간격   목록 ${DELAY_LIST_MS}ms · 상세 ${DELAY_ARTICLE_MS}ms · 🔴 ±jitter (사람 속도)`)
   console.log(`  kill switch ${KILL_SWITCH_ENV}=${enabled ? 'ON' : 'OFF'} · --live ${LIVE ? '있음' : '없음'}`)
   console.log(`  세션   ${SESSION_PATH_ENV} ${sessionPath === null ? '🔴 없음' : '설정됨'}`)
   console.log('')
-  console.log('  🔴 DB write 없음 · Sheet 접근 없음 · Candidate 없음 · Post 없음 · Queue 없음')
+  console.log('  🔴 DB write 없음 · Sheet 접근 없음 · Candidate 없음 · Post 없음 · Queue 없음 · 전문 저장 없음(앞 300자)')
   {
     const salt = readEvidenceSalt(process.env)
     console.log(salt.ok
-      ? `  🟢 댓글 말투 근거 ON (--thin 전용 · 작성자 HMAC · salt 지문 ${salt.saltId})`
+      ? `  🟢 댓글 말투 근거 ON (작성자 HMAC · salt 지문 ${salt.saltId})`
       : `  🔴 댓글 본문 미수집 (${salt.code} · DOM read 0 · 저장 0)`)
   }
-  console.log('  🔴 이미지 미수집 · 적재는 importer 가 따로 한다')
-  console.log(`  ① 목록 단계 제외 : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
-  // 🔴 정기 수집(--thin)은 이 플래그로 보류하지 않는다 — 막는 사유는 판정의 넷이다. 전문 적재(비정기) 경로에만 닿는다
-  if (!THIN) console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (전문 적재 시점)`)
+  console.log(`  ① 목록 단계 제외 : 고정 글 · 이미 연 글 · ${AUTO_SKIP_LIST_FLAGS.join(' · ')} · 바퀴 몫 밖`)
   console.log('')
-
-  if (cafe!.stage === 'shadow') {
-    console.log('  🟡 shadow 소스다 — 수집은 하되 Original Post 재료로 바로 쓰지 않는다\n')
-  }
 
   // ── dry-run 종점 ────────────────────────────────────
   const live = LIVE && enabled
   if (!live) {
-    const urls = PAGE_LIST!.map((p) => (BOARD ? boardListUrl(BOARD, p) : LIST_URL(cafe!.cafeId, p)))
-    console.log(`  대상 목록 URL (${urls.length}장):`)
-    // 🔴 전부 찍지 않는다. 16장을 다 찍으면 정작 봐야 할 경고가 스크롤 밖으로 밀린다
-    for (const u of urls.slice(0, 4)) console.log(`     ${u}`)
-    if (urls.length > 4) console.log(`     … 외 ${urls.length - 4}장`)
+    console.log(`  첫 목록 URL: ${boardListUrl(cafe!, 1)}`)
     console.log('\n  🔍 dry-run 종료. 브라우저 0 · 네트워크 0 · 파일 쓰기 0.')
     if (LIVE && !enabled) console.log(`     (--live 를 줬지만 ${KILL_SWITCH_ENV} 가 true 가 아니라 무시했다)`)
     console.log('')
@@ -436,7 +335,7 @@ async function main() {
     runId: runIdOf(OPEN_ISO),
     source: sourceSiteOf(CAFE_ID),
     trigger: RUN_TRIGGER,
-    mode: SCOUT ? 'scout' : 'detail',
+    mode: 'detail',
     status: 'started',
     startedAt: OPEN_ISO,
     endedAt: null,
@@ -491,6 +390,21 @@ async function main() {
   for (const [id, e] of ledgerEntries) {
     if (e.outcome === 'body_failed' && e.attempts < BODY_RETRY_MAX) continue
     doneIds.add(id)
+  }
+
+  /** 🔴 앞 바퀴 목록의 표식 — 이 바퀴의 "새 글" 과 날짜만 아는 글의 하한이 여기서 나온다 */
+  const prevMark = readPreviousMark()
+  /**
+   * 🔴 **남은 예산이 회원 확인 · 목록 · 본문 1건도 안 되면 요청 0 으로 끝낸다.** 열어 놓고 중간에
+   *    보호장치에 막히면 그 회차는 실패로 남고, 다음 바퀴의 목록 몫까지 먹는다.
+   */
+  {
+    const left = Math.min(cafe!.dailyRequests - readGuard(GUARD_SOURCE, now).requestsToday,
+      ACCOUNT_DAILY_REQUESTS - accountUsedToday(now))
+    if (left < overheadPerCycle(cafe!) + 1) {
+      console.log(`  ▸ 요청 0 — 남은 하루 예산 ${Math.max(0, left)}건이 이 바퀴 최소(회원 확인 · 목록 ${overheadPerCycle(cafe!)} + 본문 1)보다 적다`)
+      return
+    }
   }
 
   // 🔴 세션 판정을 브라우저보다 **먼저** 한다. 우나어 세션 재사용은 파일이 실제로
@@ -592,13 +506,10 @@ async function main() {
   const listedAtIso = new Date().toISOString()
   // 🔴 회차 id 는 위에서 이미 못 박았다 — 기록과 산출물이 같은 id 를 쓴다
   const RUN_ID = runRecord!.runId
-  const OUT = OUT_OVERRIDE ?? runOutputPath(CAFE_ID, RUN_ID, 'detail')
-  const OUT_LIST = OUT_OVERRIDE
-    ? OUT_OVERRIDE.replace(/\.jsonl$/, '.list.jsonl')
-    : runOutputPath(CAFE_ID, RUN_ID, 'list')
+  const OUT_LIST = runOutputPath(CAFE_ID, RUN_ID, 'list')
+  const OUT_DIR = dirname(OUT_LIST)
 
   console.log(`  🔴 실제 수집 · run ${RUN_ID}`)
-  console.log(`     상세 ${OUT}`)
   console.log(`     목록 ${OUT_LIST}\n`)
   const started = Date.now()
   const collected: CollectedCandidate[] = []
@@ -616,6 +527,17 @@ async function main() {
     browser = await chromium.launch(launchOpts)
     const context = await browser.newContext({ storageState: sessionPath!, locale: 'ko-KR' })
     const page = await context.newPage()
+    /**
+     * 🔴 **요청 하나 = 보호장치 하나 + 로그인 화면 확인.** 글 대신 네이버 로그인 화면(nid.naver.com)으로
+     *    넘어가면 그 뒤 요청은 전부 같은 화면이다 — 차단으로 기록하고 멈춘다.
+     */
+    const open = async (url: string): Promise<void> => {
+      await guardedNavigate({
+        url, source: GUARD_SOURCE, now: () => new Date(),
+        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
+      })
+      if (isLoginWallUrl(page.url())) throw new LoginWallStop(url)
+    }
 
     /**
      * ── ⓪ 카페 회원 확인 (2026-10-07) ──
@@ -623,150 +545,111 @@ async function main() {
      *    카페 홈을 **보호장치를 지나** 정확히 1회 연다(요청 예산·차단기·간격에 들어간다).
      *    회원이 아니거나 확인할 수 없으면 목록·상세를 열지 않는다 — 요청을 쓰지 않고 실패로 끝낸다.
      */
-    if (!SCOUT) {
-      await guardedNavigate({
-        url: CAFE_HOME_URL(cafe!.cafeId), source: GUARD_SOURCE, now: () => new Date(),
-        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
-      })
-      await sleep(randomDelay(DELAY_LIST_MS))
-      const seen = judgeCafeMembership(await readPageText(page))
-      const stop = membershipFailureCode(seen)
-      console.log(`  회원   ${stop === null ? '🟢 카페 회원' : `🔴 ${seen === 'nonMember' ? '회원 아님(카페 가입하기)' : '확인 불가'}`}`)
-      if (stop !== null) throw new MembershipStop(stop, seen)
-    }
+    await open(CAFE_HOME_URL(CAFE_ID))
+    await sleep(randomDelay(DELAY_LIST_MS))
+    const membership = judgeCafeMembership(await readPageText(page))
+    const stop = membershipFailureCode(membership)
+    console.log(`  회원   ${stop === null ? '🟢 카페 회원' : `🔴 ${membership === 'nonMember' ? '회원 아님(카페 가입하기)' : '확인 불가'}`}`)
+    if (stop !== null) throw new MembershipStop(stop, membership)
 
-    // ── ① 목록 ──
+    // ── ① 목록 — 1쪽부터, 그 쪽이 전부 새 글이면 다음 쪽(최대 `maxListPages`) ──
     const items: NaverListItem[] = []
     const allProbes: FrameProbe[] = []
-    for (const [idx, p] of PAGE_LIST!.entries()) {
+    for (let p = 1; ; p += 1) {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
-      // 🔴 board 가 있으면 신형 menuId URL, 없으면 기존 전체글보기 URL (하위호환)
-      const url = BOARD ? boardListUrl(BOARD, p) : LIST_URL(cafe!.cafeId, p)
-      // 🔴 82cook 과 **같은 보호장치**를 지난다 — Playwright 라고 예외를 두지 않는다
-      await guardedNavigate({
-        url, source: GUARD_SOURCE, now: () => new Date(),
-        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
-      })
+      await open(boardListUrl(cafe!, p))
       await sleep(randomDelay(DELAY_LIST_MS))
-      const read = await readList(page, cafe!.cafeId, p)
+      const read = await readList(page, CAFE_ID, p)
       items.push(...read.items)
       allProbes.push(...read.probes)
       console.log(`  목록 ${p}p → 누적 ${items.length}건`)
       // 🔴 0건일 때는 프레임별로 무슨 일이 있었는지 즉시 보여준다.
       //    한 줄짜리 "0건" 만 보고는 다음에 무엇을 고칠지 정할 수 없다.
       if (read.items.length === 0) for (const line of summarizeProbes(read.probes)) console.log(`     · ${line}`)
-      if (idx < PAGE_LIST!.length - 1) await sleep(randomDelay(DELAY_LIST_MS))
+      if (!readNextPage({ pageRows: read.items, mark: prevMark, page: p, maxPages: cafe!.maxListPages })) break
+      await sleep(randomDelay(DELAY_LIST_MS))
     }
     if (items.length === 0) {
       const d = diagnoseEmptyList(allProbes)
       throw new Error(`목록이 비었다 [${d.code}] — ${d.detail}`)
     }
 
-    // ── ② 자동 선별 (목록 단계 제외) ──
-    // listedAtIso 는 실행 시작 시점에 못 박았다 (runId 와 같은 시각).
+    // ── ② 고르기 ──
     // 🔴 목록을 **본** 시각과 상세를 여는 시각은 다르다 — time lag 조사가 그 차이를 쓴다.
-    const rawRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', listedAtIso, listedAtIso))
+    //    날짜만 보이는 새 글에는 앞 목록을 읽은 시각을 하한으로 붙인다(`postedAfterOf`).
+    const bounded = items.map((i) => ({
+      ...i, sourcePostedAfter: postedAfterOf(buildCollected(CAFE_ID, i, '', listedAtIso, listedAtIso), prevMark),
+    }))
+    const rawRows = bounded.map((i) => buildCollected(CAFE_ID, i, '', listedAtIso, listedAtIso))
 
-    // 🔴 크롤 중 새 글이 올라오면 같은 글이 두 페이지에 걸린다 (실측: 225건 중 1건).
-    //    threshold 를 백분율로 재는 순간 분모가 오염되므로 **분석 전에** 지운다.
+    // 🔴 크롤 중 새 글이 올라오면 같은 글이 두 페이지에 걸린다 (실측: 225건 중 1건) — 세기 전에 지운다
     const dedup = dedupeListRows(rawRows)
     if (dedup.duplicates > 0) {
       console.log(`  ♻️ 페이지 간 중복 ${dedup.duplicates}건 제거 (${dedup.duplicateIds.slice(0, 5).join(' · ')})`)
-      console.log('     🔴 크롤 중 새 글이 올라와 밀린 것이다 — 먼저 본 위치를 남긴다')
     }
     const listRows = dedup.rows
     writeJsonl(OUT_LIST, listRows)
 
-    // 🔴 자동 상세 fetch 에서 빼는 이유는 **하나의 판정**이 정한다 (judgeExcludeReason).
-    //    축이 갈라져 있으면 "어느 쪽이 최종 차단인가" 를 코드만 보고 답할 수 없다.
-    //    **파일에서 지우는 것이 아니다** — 목록 JSONL 에는 전부 남는다.
-    const byReason = { pinned: 0 }
-    for (const r of listRows) if (r.sourceExcludeReason) byReason[r.sourceExcludeReason] += 1
-    if (byReason.pinned) console.log(`  📌 고정 슬롯 ${byReason.pinned}건 — 상세 대상 제외 (공지·필독·추천)`)
-
-    // 🔴 threshold 는 **제외 후 후보**에 건다 (PR-S2-b-9).
-    //    전체 목록에 걸면 상세를 열 수도 없는 고정 슬롯이 통과율을 끌어올린다 —
-    //    유머·연예 1p 실측에서 전체 35% vs 후보 7% 로 갈렸다.
-    const basis = thresholdBasis(listRows)
-
-    if (SCOUT) {
-      // ── 🔍 scout 종료 — 상세를 열지 않는다 ──
-      // 🔴 scout 는 상세를 열지 않는다 — 예약 경로의 성공 증거가 되지 못한다
-      markRun({ listRows: basis.total, detailRequests: 0, thinRows: 0 })
-      finishRun('ok')
-      console.log(`\n  🔍 scout 종료 — 목록 ${basis.total}건 기록. 상세 요청 0.`)
-      console.log('     🔴 이 회차는 상세를 열지 않았다 — 예약 수집 성공 증거가 아니다.')
-      console.log(`     제외 ${basis.total - basis.eligible.length - basis.legacy}건 → 상세 후보 ${basis.eligible.length}건`)
-      // 🔴 이 실행에서는 0 이어야 한다. 0 이 아니면 buildCollected 를 안 거친 행이 섞인 것이다
-      if (basis.legacy > 0) console.log(`     ⚠️ 판정 없는 행 ${basis.legacy}건 — 제외가 아니라 "판정 자체가 없다"`)
-      // 🔴 후보값으로 세어만 본다. 코드가 이 값으로 자동 판정하지 않는다
-      for (const t of THRESHOLD_CANDIDATES) {
-        const n = basis.eligible.filter((r) => passesThreshold(r, t)).length
-        const pct = basis.eligible.length === 0 ? 0 : Math.round((n / basis.eligible.length) * 100)
-        const whole = listRows.filter((r) => passesThreshold(r, t)).length
-        console.log(
-          `     후보 ${t.label} (댓글>=${t.minComments} AND 조회>=${t.minViews}) → ` +
-            `${n}/${basis.eligible.length}건 (${pct}%)  · 전체 기준이면 ${whole}건 — 🔴 비교 축이 아니다`,
-        )
-      }
-      console.log(`     → ${OUT_LIST}`)
-      console.log(`\n  🔴 상세 JSONL 을 만들지 않았다. threshold 를 정하기 전에는 상세를 열지 않는다.`)
-      console.log(`     (${kstString(now)} KST · run ${RUN_ID})\n`)
-      return
-    }
-
-    const eligible = basis.eligible
+    // 🔴 고정 글은 자동 상세 대상이 아니다(`judgeExcludeReason`). 목록 JSONL 에는 전부 남는다
+    const eligible = listRows.filter((r) => r.sourceExcludeReason === null)
+    const pinned = listRows.length - eligible.length
     /**
-     * 🔴 **이미 본 글은 상세를 열지 않는다** (2026-09-10 정정).
-     *
-     *    옛 판은 `alreadyInVault: false` 를 **고정**으로 넘겼다. 그래서 같은 글을
-     *    회차마다 다시 열었고, `thinRows` 합은 늘었지만 **새 공급은 0** 이었다.
-     *    관측 처리량이 실제보다 부풀고, 대상 카페에는 같은 요청이 반복됐다.
-     *
-     *    collector 는 DB 를 import 하지 않는다(계약 유지). 정본 경로와 기존 thin
-     *    산출물에서 `sourceArticleId` 를 모아 요청 **전에** 거른다.
+     * 🔴 **앞 바퀴 뒤 새 글** — 앞 목록의 가장 큰 번호보다 큰 글. 앞 목록이 없으면(첫 회차)
+     *    아직 안 연 글을 전부 새 글로 본다. 이 수가 이 바퀴 몫의 상한이자 비율의 근거다.
      */
+    const newCount = prevMark === null
+      ? eligible.filter((r) => !doneIds.has(r.sourceArticleId)).length
+      : eligible.filter((r) => isNewSince(r, prevMark)).length
+    const nowAt = new Date()
+    const nowMinute = kstMinuteOf(nowAt)
+    const used = readGuard(GUARD_SOURCE, nowAt).requestsToday
+    const q = cycleDetailQuota({
+      dailyLimit: cafe!.dailyRequests, usedToday: used,
+      accountLimit: ACCOUNT_DAILY_REQUESTS, accountUsedToday: accountUsedToday(nowAt),
+      cyclesAfter: cyclesAfterMinute(nowMinute), overheadPerCycle: overheadPerCycle(cafe!),
+      newCount, expectedLater: expectedLaterNew(yesterdayNew(nowAt), nowMinute),
+    })
+    console.log(`  ▸ 바퀴 몫 ${q.quota}건 — ${q.reason} (오늘 사용 ${used}/${cafe!.dailyRequests} · 남은 바퀴 몫 ${q.reserve})`)
+
     const skippedSeen = eligible.filter((r) => doneIds.has(r.sourceArticleId)).length
     const plan = planAutoFetch(
       eligible.map((r) => ({
         sourceArticleId: r.sourceArticleId,
         score: selectionScore({ stage: r.qualitySignals.stage, flags: r.qualityFlags, signals: r.qualitySignals } as QualityAssessment),
         flags: r.qualityFlags,
-        // 🔴 같은 점수 안에서만 최신이 먼저 — 날짜만 알면 그날 00:00(가장 이른 끝)이다(Batch D1)
-        postedFrom: r.sourcePostedAt ?? postedWindowOfKstDay(r.sourcePostedDay)?.from ?? null,
+        // 🔴 최신이 먼저 — 날짜만 알면 하한(앞 목록 시각)과 그날 00:00 중 늦은 쪽이다
+        postedFrom: r.sourcePostedAt ?? latestIso(r.sourcePostedAfter, postedWindowOfKstDay(r.sourcePostedDay)?.from ?? null),
         alreadyInVault: doneIds.has(r.sourceArticleId),
       })),
-      { max: MAX },
+      { max: q.quota },
     )
-    markRun({ listRows: listRows.length, skippedSeen })
-    console.log(`  이미 본 글 ${skippedSeen}건 — 상세를 열지 않는다`
-      + ` (thin ${seen.size}건 · 원장 ${ledgerEntries.size}건 기억)`)
-    console.log(`\n  자동 선별 ${plan.picked.length}건 · 제외 ${plan.skipped.length}건 (후보 ${eligible.length}/${listRows.length})`)
-    console.log('  🔴 제외는 파일에서 지운 것이 아니다 — 목록 JSONL 에 전부 남아 있다\n')
+    markRun({ listRows: listRows.length, skippedSeen, newSincePrevious: newCount })
+    const skippedBy = (reason: string): number => plan.skipped.filter((x) => x.reason === reason).length
+    console.log(`  ▸ 목록 ${listRows.length}건 → 고정 글 ${pinned} · 이미 연 글 ${skippedBy('ALREADY_IN_VAULT')}`
+      + ` · 한자 제목 ${skippedBy('SKIP_FLAG')} · 몫 밖 ${skippedBy('OVER_MAX')} → 본문 ${plan.picked.length}건`
+      + ` (새 글 ${newCount}${prevMark === null ? ' · 앞 목록 없음' : ''})`)
 
     // ── ③ 상세 ──
     let detailRequests = 0
     /** 🔴 **연 것과 읽은 것은 다르다** — 셀렉터가 터지면 열어도 0 이다 */
     let bodyRows = 0
-    const known = new Map(items.map((i) => [i.sourceArticleId, i]))
+    const known = new Map(bounded.map((i) => [i.sourceArticleId, i]))
     for (const [idx, id] of plan.picked.entries()) {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
       if (idx > 0) await sleep(randomDelay(DELAY_ARTICLE_MS))
-      // 🔴 상세를 **실제로 연 횟수**를 센다 — scout 와 구별하는 유일한 값이다
+      // 🔴 상세를 **실제로 연 횟수**를 센다
       detailRequests += 1
       markRun({ detailRequests })
-      await guardedNavigate({
-        url: ARTICLE_URL(cafe!.cafeId, id), source: GUARD_SOURCE, now: () => new Date(),
-        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
-      })
+      await open(ARTICLE_URL(CAFE_ID, id))
       await sleep(randomDelay(DELAY_ARTICLE_MS))
       const read = await readArticleBody(page)
       const body = read.body
       if (!body) {
-        // 🔴 본문 실패도 조회는 끝났다 — 재시도 횟수와 함께 남긴다
+        // 🔴 본문 실패도 조회는 끝났다 — 재시도 횟수 · 사유와 함께 남긴다
         recordDetail({
           articleId: id, outcome: 'body_failed', at: new Date().toISOString(),
           runId: RUN_ID, attempts: (ledgerEntries.get(id)?.attempts ?? 0) + 1,
+          reasons: [read.errors.length > 0 ? 'BODY_SELECTOR_ERROR' : 'BODY_EMPTY'],
         })
         console.log(
           read.errors.length
@@ -786,25 +669,20 @@ async function main() {
         console.log(`  🛑 ${id} — 본문 대신 카페 가입 안내가 나왔다. 이 세션은 ${cafe!.label} 회원이 아니다 — 상세 요청을 멈춘다`)
         break
       }
-      const row = buildCollected(cafe!.cafeId, known.get(id)!, body, new Date().toISOString(), listedAtIso)
+      const row = buildCollected(CAFE_ID, known.get(id)!, body, new Date().toISOString(), listedAtIso)
       assertNaverCandidate(row)
       bodyRows += 1
       markRun({ bodyRows })
       /**
        * 🔴 **여기서 `kept` 를 확정하지 않는다** (2026-09-10 정정).
-       *
-       *    본문을 읽었을 뿐 아직 분류도 저장도 하지 않았다.
-       *    여기서 `kept` 를 적으면, thin 저장이 실패했을 때
-       *    **원장에는 있고 산출물은 없는** 영구 유실이 된다 —
-       *    그 글은 다시 열리지 않으므로 영영 공급되지 않는다.
-       *
-       *    분류 뒤(`dropped`)와 저장 뒤(`kept`)에 나눠 적는다.
-      */
+       *    본문을 읽었을 뿐 아직 분류도 저장도 하지 않았다. 여기서 적으면 thin 저장이 실패했을 때
+       *    **원장에는 있고 산출물은 없는** 영구 유실이 된다. 분류 뒤(`dropped`)와 저장 뒤(`kept`)에 나눠 적는다.
+       */
       collected.push(row)
-      if (THIN && evidenceSalt.ok) {
+      if (evidenceSalt.ok) {
         const readComments = await readArticleComments(page)
         const captured = captureVoiceEvidence({
-          source: sourceSiteOf(cafe!.cafeId), articleId: id, comments: readComments.comments,
+          source: sourceSiteOf(CAFE_ID), articleId: id, comments: readComments.comments,
           runId: RUN_ID, now: new Date(),
         }, evidenceSalt)
         evidenceSeen += captured.seen
@@ -842,7 +720,7 @@ async function main() {
     await endWithSessionFailure(membershipStop.code, `카페 홈 판정 ${membershipStop.seen} · 상세 요청 0`)
   }
 
-  if (collected.length && THIN) {
+  if (collected.length > 0) {
     // 🔴 **전문을 쓰지 않는다.** 메모리에서 곧바로 얇은 행을 만든다.
     //    crash 나 부분 실패로 중간에 죽어도 전문 파일은 애초에 생기지 않는다 —
     //    수집 루프는 메모리에만 쌓고, 파일 write 는 이 지점 한 번뿐이기 때문이다.
@@ -860,10 +738,12 @@ async function main() {
       })
       const axis = String(v.axis)
       const safetyVerdict = String(v.safety.verdict)
-      // 🔴 drop · hardExclude 는 얇은 사본조차 만들지 않는다
-      if (!keepAfterClassify({ axis, safetyVerdict }).keep) {
+      // 🔴 drop · hardExclude 는 얇은 사본조차 만들지 않는다 — 판정이 낸 사유는 원장에 남긴다
+      const keep = keepAfterClassify({ axis, safetyVerdict })
+      if (!keep.keep) {
         droppedThin += 1
-        for (const code of safetyReasonCodes(v.safety.reasons)) dropReasons.set(code, (dropReasons.get(code) ?? 0) + 1)
+        const reasons = [keep.code ?? 'DROP', ...safetyReasonCodes(v.safety.reasons)]
+        for (const code of reasons.slice(1)) dropReasons.set(code, (dropReasons.get(code) ?? 0) + 1)
         /**
          * 🔴 **걸러진 글도 조회는 끝났다.** 여기 남기지 않으면 thin 이 없으므로
          *    다음 회차가 같은 글을 다시 연다 — 요청은 쓰이고 산출은 0 이다.
@@ -872,7 +752,7 @@ async function main() {
         if (dropId !== '') {
           recordDetail({
             articleId: dropId, outcome: 'dropped', at: new Date().toISOString(),
-            runId: RUN_ID, attempts: (ledgerEntries.get(dropId)?.attempts ?? 0) + 1,
+            runId: RUN_ID, attempts: (ledgerEntries.get(dropId)?.attempts ?? 0) + 1, reasons,
           })
         }
         continue
@@ -896,7 +776,7 @@ async function main() {
       if (bad.length > 0) throw new Error(`저장 계약 위반: ${bad.join(' · ')}`)
       thinRows.push(row)
     }
-    const thinPath = outPathOf(dirname(OUT), CAFE_ID, RUN_ID)
+    const thinPath = outPathOf(OUT_DIR, CAFE_ID, RUN_ID)
     /**
      * 🔴 **저장이 끝난 뒤에만 `kept` 를 확정한다.**
      *    저장이 실패하면 원장에 아무것도 남지 않고, 다음 회차가 그 글을 다시 연다 —
@@ -968,19 +848,8 @@ async function main() {
     if (droppedThin > 0) {
       console.log(`  ▸ 버림 ${droppedThin}건 — 얇은 사본도 만들지 않았다 · 사유 ${[...dropReasons].map(([c, n]) => `${c} ${n}`).join(' · ')}`)
     }
-    console.log('  다음: micro-seed:82cook-thin-adapt 가 검수용으로 바꾼다')
-  } else if (collected.length) {
-    // 🔴 보류 대상도 파일에 남긴다 (Q-1). 보류는 **적재 단계**가 한다
-    writeJsonl(OUT, collected)
-    console.log(`\n  → ${OUT} (${collected.length}건 · run ${RUN_ID})`)
-    console.log('  🟡 이 파일에는 **본문 전문**이 들어 있다 — Raw Vault 적재용이다.')
-    console.log('     정기 수집은 --thin 으로 돌려 전문을 남기지 않는다.')
-    const held = collected.filter((r) => judgeAutoHold({ sourceArticleId: r.sourceArticleId, flags: r.qualityFlags }).hold)
-    console.log(held.length ? `  🟡 자동 적재 보류 예정 ${held.length}건 (상세 플래그)` : '  🟢 자동 적재 보류 예정 0건')
+    console.log(`  다음: 공급 처리(supply-process)가 이 파일을 읽는다 (${kstString(now)} KST)\n`)
   }
-  console.log(`\n  🔴 Raw Vault 에 적재하지 않았다. 적재는 importer 가 한다:`)
-  console.log(`     npx tsx scripts/micro-seed-import-82cook-live.mts --raw-only --batch=10 --input=${OUT}`)
-  console.log(`     (--apply 를 붙여야 실제로 적재된다 · ${kstString(now)} KST)\n`)
 
   /**
    * 🔴 **연 것과 읽은 것은 다르다 — 종료 판정 하나** (`judgeCollectTerminal`).
@@ -1000,6 +869,45 @@ async function main() {
   }
 }
 
+/** 🔴 글 대신 네이버 로그인 화면이 열렸다 — 차단으로 기록한다(`LOGIN_WALL`) */
+class LoginWallStop extends Error {
+  constructor(readonly url: string) { super(`로그인 화면으로 넘어갔다 (${url})`) }
+}
+
+/**
+ * 🔴 **앞 바퀴 목록의 표식** — 이 카페 · 이 게시판의 가장 최근 목록 파일에서.
+ *    파일 이름의 회차 시각이 정렬 순서다. 다른 게시판 줄(옛 유머 게시판)은 세지 않는다. 못 읽으면 다음 파일을 본다.
+ */
+function readPreviousMark(): ListMark | null {
+  let names: string[] = []
+  try { names = readdirSync(DATA_DIR) } catch { return null }
+  const re = new RegExp(`^navercafe-${CAFE_ID}-\\d{8}-\\d{6}\\.list\\.jsonl$`)
+  for (const name of names.filter((n) => re.test(n)).sort().reverse().slice(0, 20)) {
+    try {
+      const rows = readFileSync(join(DATA_DIR, name), 'utf-8').split('\n').filter((l) => l.trim() !== '')
+        .map((l) => JSON.parse(l) as { sourceArticleId?: unknown; sourcePinned?: unknown; sourceMenuId?: unknown; sourceListedAt?: unknown })
+        .filter((r) => r.sourceMenuId === cafe!.menuId && typeof r.sourceArticleId === 'string')
+      const listedAt = typeof rows[0]?.sourceListedAt === 'string' ? rows[0].sourceListedAt : ''
+      const mark = listMarkOf(rows.map((r) => ({ sourceArticleId: r.sourceArticleId as string, sourcePinned: r.sourcePinned === true })), listedAt)
+      if (mark !== null) return mark
+    } catch { /* 깨진 파일은 건너뛴다 — 다음 파일을 본다 */ }
+  }
+  return null
+}
+
+/** 🔴 어제(KST) 예약 바퀴들이 실제로 본 새 글 — 오늘 남은 바퀴의 예상(`expectedLaterNew`) 재료 */
+function yesterdayNew(at: Date): { minute: number; newSincePrevious: number }[] {
+  const day = (d: Date): string => new Date(d.getTime() + 9 * 3_600_000).toISOString().slice(0, 10)
+  const yesterday = day(new Date(at.getTime() - 86_400_000))
+  return collapseByRunId(readRunRecords(GUARD_SOURCE))
+    .filter((r) => r.trigger === 'schedule' && r.status === 'ok' && typeof r.newSincePrevious === 'number'
+      && day(new Date(r.startedAt)) === yesterday)
+    .map((r) => ({ minute: kstMinuteOf(new Date(r.startedAt)), newSincePrevious: r.newSincePrevious as number }))
+}
+
+const latestIso = (a: string | null, b: string | null): string | null =>
+  a === null ? b : b === null ? a : Date.parse(a) >= Date.parse(b) ? a : b
+
 // ─────────────────────────────────────────────────────────
 // DOM 읽기 — 🔴 셀렉터는 실측으로 확정한다
 // ─────────────────────────────────────────────────────────
@@ -1016,6 +924,8 @@ type ListProbe = { linkHits: number; rows: ListProbeRow[] }
 
 type NaverPage = {
   goto: (url: string, o: object) => Promise<unknown>
+  /** 지금 화면의 주소 — 로그인 화면으로 넘어갔는지 본다 */
+  url: () => string
   // 🔴 arg 를 받는 오버로드가 필요하다. 셀렉터를 콜백 **밖에서** 넘겨야
   //    콜백 안에 이름 있는 상수를 만들지 않을 수 있다 (esbuild __name 회피).
   $$eval: {
@@ -1138,14 +1048,14 @@ async function readList(
           sourceViewCount: normalizeCount(r.views),
           // 🔴 개별 게시판 페이지에는 a.board_name 셀이 없다. 그때는 타깃의 label 을 쓴다 —
           //    앞 코드는 기본값 '전체글보기' 로 떨어져 쫑알쫑알 225건이 전부 잘못 기록됐다.
-          sourceBoardName: r.board || BOARD?.label || null,
+          sourceBoardName: r.board || cafe!.boardLabel,
           sourcePage: pageNo,
           sourceRankOnPage: items.length + 1,
           // ── PR-S2-b-7 ──
           sourceRowLabel: label.label ?? label.unknown,
           sourcePinned: label.pinned,
-          sourceMenuId: BOARD?.menuId ?? null,
-          sourceBoardKey: BOARD?.key ?? null,
+          sourceMenuId: cafe!.menuId,
+          sourceBoardKey: `${CAFE_ID}:${cafe!.menuId}`,
         })
         // 🔴 모르는 라벨은 조용히 넘기지 않는다. 네이버가 문구를 바꾸면 여기서 드러난다
         if (label.unknown !== null) unknownLabels.add(label.unknown)
@@ -1250,14 +1160,19 @@ main()
     }
     releaseOwnLock()
   })
-  .catch((e) => {
+  .catch(async (e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e)
-    // 🔴 원인별로 코드를 남긴다 — "세션" 한 낱말로 뭉개지 않는다
-    const code = /셀렉터|selector|목록이 비었다/i.test(msg) ? 'SELECTOR'
-      : /net::|ECONN|timeout|타임아웃|네트워크/i.test(msg) ? 'NETWORK'
-        : 'OTHER'
+    // 🔴 원인별로 코드를 남긴다 — 보호장치가 분류한 값(403 · 429)과 로그인 화면은 글자가 아니라 값으로 온다
+    const code = failureCodeOf({
+      blockedBy: e instanceof GuardedNavigationError ? e.blockedBy : null,
+      loginWall: e instanceof LoginWallStop, message: msg,
+    })
     finishRun('failed', code)
+    const alert = BLOCK_ALERT[code]
+    if (alert !== undefined) {
+      await notifySessionAlert(`${code}:${CAFE_ID}`, { severity: 'BLOCKED', title: `${alert.title} · ${cafe!.label}`, reason: `${alert.why} — ${msg}` })
+    }
     releaseOwnLock()
-    console.error(`\n❌ ${msg}\n`)
+    console.error(`\n❌ [${code}] ${msg}\n`)
     process.exit(1)
   })

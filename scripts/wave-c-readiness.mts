@@ -33,29 +33,19 @@ import { judgeSourceOperations } from '../src/lib/collect-operations'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { RUN_FILE_RE } from '../src/lib/supply-process'
-import { SUPPLY_PROCESS_SLOTS, planSlots } from '../src/lib/collect-schedule'
+import { SUPPLY_PROCESS_SLOTS } from '../src/lib/collect-schedule'
+import { COLLECT_SLOTS, COLLECT_SOURCES, detailCeilingPerDay, sourceIdOf } from '../src/lib/collect-sources'
 
 const WANT_PLAN = process.argv.includes('--plan')
-/** 🔴 Wave B 계약 — 두 카페 모두 하루 4회다 */
-const NAVER_EXPECTED: Readonly<Record<string, number>> = {
-  'navercafe:remonterrace': 4,
-  'navercafe:wgang': 4,
-}
-const LOG_DIR = join(homedir(), 'Library', 'Logs', 'soransoran')
-/** 🔴 슬롯 수 × 회차당 상한 — **설정된** 능력이다. 관측이 아니다 */
-const CONFIGURED_PER_DAY: Readonly<Record<string, number>> = {
-  'navercafe:remonterrace': 40,
-  'navercafe:wgang': 40,
-}
-const LOG_OF: Readonly<Record<string, string>> = {
-  'navercafe:remonterrace': 'navercafe-collect-remonterrace-multi.log',
-  'navercafe:wgang': 'navercafe-collect-wgang-multi.log',
-}
-/** 🔴 예정 슬롯 — 정본(`collect-schedule`)에서 온다. 증거는 이 시각들에 하나씩 붙어야 한다 */
-const SLOTS_OF: Readonly<Record<string, { hour: number; minute: number }[]>> = {
-  'navercafe:remonterrace': planSlots('navercafe:remonterrace', 'start'),
-  'navercafe:wgang': planSlots('navercafe:wgang', 'start'),
-}
+/** 🔴 원천마다 하루 바퀴 수 — 수집 job 하나가 바퀴 표대로 돈다 */
+const NAVER_EXPECTED: Readonly<Record<string, number>> =
+  Object.fromEntries(COLLECT_SOURCES.map((s) => [sourceIdOf(s.id), COLLECT_SLOTS.length]))
+/** 🔴 하루 본문 상한 — **설정된** 능력이다. 관측이 아니다 */
+const CONFIGURED_PER_DAY: Readonly<Record<string, number>> =
+  Object.fromEntries(COLLECT_SOURCES.map((s) => [sourceIdOf(s.id), detailCeilingPerDay(s)]))
+/** 🔴 예정 슬롯 — 바퀴 표에서 온다. 증거는 이 시각들에 하나씩 붙어야 한다 */
+const SLOTS_OF: Readonly<Record<string, readonly { hour: number; minute: number }[]>> =
+  Object.fromEntries(COLLECT_SOURCES.map((s) => [sourceIdOf(s.id), COLLECT_SLOTS]))
 /** 🔴 공급 처리(supply-process)의 예약 슬롯 — 정본은 `collect-schedule` 하나다 */
 const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] = SUPPLY_PROCESS_SLOTS
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')

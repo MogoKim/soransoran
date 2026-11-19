@@ -34,6 +34,10 @@ export type FindingCode =
   /** 🔴 상세를 열었지만 본문 0건 — `DETAIL_BODY_EMPTY`(최신 회차 산출 관측)와 달리 회차 자체가 실패로 끝났다 */
   | 'RUN_BODY_EMPTY'
   | 'RUN_SELECTOR'
+  /** 🔴 차단 — 403 · 429 · 로그인 화면. 예전에는 전부 `RUN_OTHER` 였다 */
+  | 'RUN_HTTP_403'
+  | 'RUN_HTTP_429'
+  | 'RUN_LOGIN_WALL'
   | 'RUN_NETWORK'
   | 'RUN_OTHER'
   | 'RUN_NO_NEW'

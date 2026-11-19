@@ -29,10 +29,10 @@ import { compareSupplyRank, preGenerationRelease, type SupplyRankKey } from '../
 import { thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
 import { toDetailRecord, toRawDetailRecord } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { sourceEvidenceOf, type Candidate } from '../src/lib/micro-seed-supply-autofill'
-import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY } from '../src/lib/collect-schedule'
-import { buildCollected, parsePostedLabel, postedDayOfLabel, BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
-import { planAutoFetch, SLOT_QUOTA, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
-import { planCafeRun } from './lib/navercafe-run-plan.mjs'
+import { buildCollected, parsePostedLabel, postedDayOfLabel } from './lib/micro-seed-navercafe.mjs'
+import { planAutoFetch, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
+import { COLLECT_SOURCES, findSource } from '../src/lib/collect-sources'
+import { CYCLES } from '../src/lib/cycle-schedule'
 import { evidenceMaterialFor, postedOfListRow, readListObservations, type ListObservationIndex } from './lib/source-list-observations.mjs'
 import { worksetRows } from './supply-process.mjs'
 
@@ -415,29 +415,15 @@ console.log('\n⑥ 수집 상세 선별 — 신선도 1순위 (2026-10-19 창업
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑦ 레몬테라스 1p 제외 · 2~6p · jjong 20 + humor 1 · 요청량 · 회차 불변')
+console.log('\n⑦ 원천 목록 — 쫑알 1쪽부터 · 유머 게시판 없음 · 하루 상한 150 · 13바퀴')
 // ─────────────────────────────────────────────────────────
 {
-  const jjong = BOARD_TARGETS.find((b) => b.key === 'remonterrace:jjong')!
-  const humor = BOARD_TARGETS.find((b) => b.key === 'remonterrace:humor')!
-  const wgang = BOARD_TARGETS.find((b) => b.key === 'wgang:all')!
-  check('🔴 jjong 2~6p · 1p 를 읽지 않는다', jjong.startPage === 2 && jjong.endPage === 6 && !pagesOf(jjong).includes(1) && pagesOf(jjong).length === 5)
-  check('humor 1p 하나', humor.startPage === 1 && humor.endPage === 1)
-  check('wgang 1~5p 그대로', wgang.startPage === 1 && wgang.endPage === 5)
-  const rt = planCafeRun({ cafeId: 'remonterrace' })
-  const wg = planCafeRun({ cafeId: 'wgang' })
-  const d = (p: typeof rt, k: string): number | undefined => p.boards.find((b) => b.key === k)?.detailMax
-  check('🔴 회차 상세 jjong 20 + humor 1', d(rt, 'remonterrace:jjong') === 20 && d(rt, 'remonterrace:humor') === 1 && rt.detailPerRun === 21,
-    `${String(d(rt, 'remonterrace:jjong'))} + ${String(d(rt, 'remonterrace:humor'))}`)
-  check('🔴 레몬테라스 하루 요청 145 ≤ 150(목록을 줄이기 전과 같다) · 목록 6/회차 · 5회차', rt.requestsPerDay + rt.memberCheckPerDay === 145 && rt.listPerRun === 6 && rt.runsPerDay === 5 && rt.withinLimit)
-  // 쫑알 목록 한 쪽은 15행이다(운영 로그 "목록 2p → 누적 15건"). 새 글이 한 건도 없는 채 연속 3회차가 돌아도
-  // 세 번째 회차에 안 본 글이 상세 몫만큼 남아야 목록을 줄인 것이 상세를 굶기지 않는다.
-  check('🔴 쫑알 목록 범위가 연속 3회차의 상세 몫을 채운다', pagesOf(jjong).length * 15 - 2 * (d(rt, 'remonterrace:jjong') ?? 0) >= (d(rt, 'remonterrace:jjong') ?? 0))
-  check('🔴 wgang 하루 요청 110 ≤ 150 · 상세 16/회차 · 5회차', wg.requestsPerDay + wg.memberCheckPerDay === 110 && wg.detailPerRun === 16 && wg.runsPerDay === 5 && wg.withinLimit)
-  check('🔴 일 상한 · 회차 · 슬롯 quota 상수 불변',
-    MAX_REQUESTS_PER_DAY['navercafe:remonterrace'] === 150 && MAX_REQUESTS_PER_DAY['navercafe:wgang'] === 150
-      && RUNS_PER_DAY['navercafe:remonterrace']?.start === 5 && RUNS_PER_DAY['navercafe:wgang']?.start === 5
-      && SLOT_QUOTA.navercafe === 10)
+  const jjong = findSource('remonterrace')!
+  const wgang = findSource('wgang')!
+  check('🔴 쫑알은 1쪽(가장 새 글)부터 읽는다', jjong.menuId === '23' && jjong.maxListPages >= 1)
+  check('🔴 유머 게시판을 읽지 않는다', COLLECT_SOURCES.every((c) => String(c.menuId) !== '56'))
+  check('wgang 전체글보기 · 최대 3쪽', wgang.menuId === '0' && wgang.maxListPages === 3)
+  check('🔴 카페 하루 상한 150 그대로 · 바퀴 13회', COLLECT_SOURCES.every((c) => c.dailyRequests === 150) && CYCLES.length === 13)
 }
 
 // ─────────────────────────────────────────────────────────

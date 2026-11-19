@@ -16,14 +16,13 @@
  */
 
 import { derive, type ScaleProfile } from './scale-profile'
+import { CYCLES } from './cycle-schedule'
 import {
-  RUNS_PER_DAY, SOURCE_FACTS, evidenceAdjustedDetailPerDay, evidenceAdjustedDetailPerDayOf,
-  factsOf, configuredDetailCeilingPerDay, thin82cookCapPerRun, verifySchedule, THIN_82COOK_RUNS_PER_DAY,
-  type Phase, type SourceId,
-} from './collect-schedule'
+  COLLECT_JOB_LABEL, COLLECT_SOURCES, detailCeilingPerDay, sourceIdOf, type SourceId,
+} from './collect-sources'
 import { BREAKER, FAILURE_CLASSES, breakerOf, budgetOf, type GuardState } from './collect-guard'
 import {
-  JOB_LABELS, currentCapacity, inventoryMismatches, preparedCapacity, runsPlannedMulti,
+  currentCapacity, inventoryMismatches, preparedCapacity, runsPlannedSchedule,
   type InventoryMismatch, type ObservedJob,
 } from './collect-inventory'
 
@@ -106,72 +105,22 @@ export const LLM_CALLS = { perJudge: 1, perDraft: 1 } as const
 
 export type SourcePlan = {
   id: string
-  /** launchd 템플릿 파일명 (fixture 가 이 파일을 읽어 아래 값을 대조한다) */
+  /** launchd 템플릿 파일명 */
   template: string
-  /**
-   * 한 회차가 여는 최대 상세 건수.
-   * 🔴 82cook 은 템플릿 인자(`--auto-max`)에서 온다.
-   * 🔴 네이버 두 카페는 인자에 없다 — runner 가 `BOARD_TARGETS` 와 하루 요청 상한에서
-   *    역산한 회차당 상세 몫이다(fixture 가 `planCafeRun` 과 대조한다).
-   */
+  /** 🔴 한 바퀴의 평균 본문 몫 — 바퀴마다 실제 몫은 실행 때 정한다(`cycleDetailQuota`) */
   maxPerRun: number
-  /** 템플릿에 적힌 하루 회차 수 (StartCalendarInterval 슬롯 수) */
+  /** 하루 바퀴 수 (StartCalendarInterval 슬롯 수) */
   runsPerDay: number
-  /** 🔴 **launchctl 에 실제로 올라와 있는가** — 2026-09-11 `launchctl list` 실측 */
   loaded: boolean
   note: string
 }
 
-/**
- * 🔴 확정 수집원 셋 — **D100 공급 경로에 실제로 들어가는 job 만 적는다.**
- *
- * 🔴 **82cook 항목이 가리키는 job 을 바꿨다** (2026-09-13 정정).
- *
- *    옛 판은 `raw-collect-82cook`(목록 job)을 가리키며 `maxPerRun: 30` 이라고 적었다.
- *    그 30 은 목록 job 의 `--auto-max=30` 이었고, 그것이 여는 본문은
- *    `.microseed-data/82cook.jsonl` 로 떨어진다 — D100 처리기는 그 파일을 읽지 않는다.
- *    즉 **공급에 한 건도 들어가지 않는 수를 82cook 의 상세 능력으로 세고 있었다.**
- *    실제로 D100 상세를 여는 것은 `supply-collect-82cook-thin` 이고 회차당 17건이다.
- *
- * 🔴 `loaded` 는 실측값이다 — 세 job 모두 2026-09-11 에 등록돼 돌고 있다.
- *    (옛 판은 82cook 을 `false` 로 두고 있었다. 등록한 날 이 메모가 낡았다.)
- *
- * 🔴 **네이버 두 카페의 정본은 `-multi` job 이다** (2026-09-11 실측).
- *    1회판 job 과 그 템플릿은 없다 — 옛 하루 1회 운영은 역사이지 현재가 아니다.
- */
-export const SOURCES: readonly SourcePlan[] = [
-  {
-    id: '82cook', template: 'com.soransoran.supply-collect-82cook-thin.plist.template',
-    // 🔴 회차·상한의 정본은 `collect-schedule` 이다 — 여기 숫자를 다시 적지 않는다
-    maxPerRun: thin82cookCapPerRun(), runsPerDay: THIN_82COOK_RUNS_PER_DAY, loaded: true,
-    note: 'launchd 얇은 상세 5회/day (07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST)'
-      + ' · 🔴 목록 job(raw-collect-82cook)은 목록만 만든다 — 상세를 열지 않는다',
-  },
-  {
-    id: 'navercafe:remonterrace',
-    template: 'com.soransoran.navercafe-collect-remonterrace-multi.plist.template',
-    /**
-     * 🔴 **회차당 상세는 runner 가 역산한다** — 쫑알 목록을 2~6쪽으로 줄이고
-     *    아낀 목록 요청을 상세로 옮겼다(하루 요청 145 그대로).
-     *    fixture 가 `planCafeRun().detailPerRun` 과 이 값을 대조한다.
-     */
-    maxPerRun: 21, runsPerDay: RUNS_PER_DAY['navercafe:remonterrace'].start, loaded: true,
-    note: 'launchd -multi 5회/day (00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST)'
-      + ' · 회차당 상세 21건(jjong 20 + humor 1)',
-  },
-  {
-    id: 'navercafe:wgang',
-    template: 'com.soransoran.navercafe-collect-wgang-multi.plist.template',
-    /**
-     * 🔴 **10 → 16** (2026-09-13). 게시판이 하나뿐이라 회차당 10건에 눌려 있었다.
-     *    2026-10-31에는 D20 target-date 재료를 07:00 전에 확보하도록 5회로 늘렸다.
-     *    (5+16)×5 + member 5 = 110/150 — 예산 안이고 차단기·세션 처리는 그대로다.
-     *    fixture 가 `planCafeRun` 과 대조한다.
-     */
-    maxPerRun: 16, runsPerDay: RUNS_PER_DAY['navercafe:wgang'].start, loaded: true,
-    note: 'launchd -multi 5회/day (01:30 · 03:30 · 04:30 · 11:30 · 20:30 KST) · 회차당 상세 16건(all)',
-  },
-]
+/** 🔴 원천 목록 그대로 — 숫자는 `collect-sources` · `cycle-schedule` 에서 계산한다 */
+export const SOURCES: readonly SourcePlan[] = COLLECT_SOURCES.map((s) => ({
+  id: sourceIdOf(s.id), template: `${COLLECT_JOB_LABEL}.plist.template`,
+  maxPerRun: Math.ceil(detailCeilingPerDay(s) / CYCLES.length), runsPerDay: CYCLES.length, loaded: true,
+  note: `수집 job 하나가 바퀴 ${CYCLES.length}회 · ${s.boardLabel} · 하루 ${s.dailyRequests}건 · 본문 상한 ${detailCeilingPerDay(s)}/day`,
+}))
 
 /**
  * 🔴 **원천 하나가 큐 한 줄이 되지 않는다.** 몇 배를 열어야 하는가.
@@ -183,38 +132,6 @@ export const SOURCES: readonly SourcePlan[] = [
 export function detailPerQueueItem(): number {
   const rate = YIELD.detailToJudge * YIELD.judgePass * YIELD.draftPass
   return rate > 0 ? Math.ceil(1 / rate) : 0
-}
-
-/**
- * 🔴 **`supplyCapacity()` 를 없앴다** (2026-09-08).
- *
- *    이 파일에는 능력 계산이 **두 벌** 있었다.
- *      · 관측 기반 `currentCapacity(observed)` = 20/day  (collect-inventory)
- *      · 정적 `SOURCES[].loaded` 기반 `supplyCapacity()` = 60/day  (여기)
- *    `findBottlenecks` 는 뒤엣것을 썼다 — 아무도 등록하지 않은 job 과
- *    조건부로만 도는 몫이 **지금 열리는 능력**으로 세어졌다.
- *
- *    이제 current 의 정본은 **관측 하나뿐**이다(`collect-inventory.currentCapacity`).
- *    `SOURCES[].loaded` 는 문서용 메모로만 남기고 판정에 쓰지 않는다.
- */
-
-/**
- * 🔴 **82cook 얇은 상세 job 의 몫** (2026-09-11).
- *
- *    2026-09-11 이전에는 이 몫이 중앙 러너 안의 **조건부 수집**이었다 — 재고가 목표에
- *    못 미칠 때만 열렸다. 그래서 "재고가 찼을 때는 0인 능력" 이 상시 능력으로 세어졌고,
- *    화면은 초록인데 실제 신규는 며칠씩 0 이었다.
- *
- *    지금은 **예약 job** 이다. 조건이 없으므로 따로 셀 이유도 없다 —
- *    `currentCapacity` 가 보는 관측에 그대로 들어간다. 이 함수는 그 job 하나만 본다.
- */
-export const THIN_82COOK_JOB = 'com.soransoran.supply-collect-82cook-thin'
-
-export function thin82cookDetailPerDay(observed: readonly ObservedJob[]): number {
-  const hit = observed.find((o) => o.loaded && o.label === THIN_82COOK_JOB)
-  if (hit === undefined) return 0
-  // 🔴 회차 수는 **실제 슬롯 수**다 — 계획한 수가 아니라 올라와 있는 수를 센다
-  return thin82cookCapPerRun() * hit.slots.length * factsOf('82cook').detailSuccessRate.value
 }
 
 // ─────────────────────────────────────────────────────────
@@ -396,11 +313,11 @@ export function findBottlenecks(plan: SupplyPlan, limits?: {
         + ` (${plan.detailPerDay}/${Math.round(collectCapacity)})`,
     })
   }
-  if (registered < SOURCE_FACTS.length) {
+  if (registered < COLLECT_SOURCES.length) {
     const missing = cur.perSource.filter((s) => !s.registered).map((s) => s.id)
     out.push({
       stage: 'source', severity: 'WARN',
-      detail: `수집원 ${registered}/${SOURCE_FACTS.length} 등록 — 미등록: ${missing.join(', ')}`,
+      detail: `수집원 ${registered}/${COLLECT_SOURCES.length} 등록 — 미등록: ${missing.join(', ')}`,
     })
   }
   // 🔴 통과율에 가정이 섞였으면 그것도 병목이다 — 숫자가 아니라 근거가 없다
@@ -410,7 +327,7 @@ export function findBottlenecks(plan: SupplyPlan, limits?: {
       detail: `통과율 실측 없음: ${plan.assumedStages.join(', ')} — 이 숫자로 READY 라고 말하지 않는다`,
     })
   }
-  const perSource = Math.ceil(plan.detailPerDay / SOURCE_FACTS.length)
+  const perSource = Math.ceil(plan.detailPerDay / COLLECT_SOURCES.length)
   if (perSource > 200) {
     out.push({ stage: 'source', severity: 'WARN', detail: `수집원당 하루 ${perSource}건 — 세션·robots 부담` })
   }
@@ -438,10 +355,10 @@ export type SourceReadiness = {
   reasons: string[]
   /** 🔴 **설정된** 하루 상세 처리량 (슬롯 × 상한). `current` 가 아니다 */
   configuredPerDay: number
-  /** 🔴 다회 계획대로 올렸을 때 (템플릿 · 계획) */
+  /** 🔴 바퀴 표대로 올렸을 때 (템플릿 · 계획) */
   preparedPerDay: number
-  /** 계획한 다회 job 이 실제로 올라와 있는가 */
-  multiRegistered: boolean
+  /** 수집 job 이 바퀴 표대로 올라와 있는가 */
+  scheduleRegistered: boolean
   /** 지금 올라와 있는 job 의 label — 없으면 null */
   currentLabel: string | null
 }
@@ -460,26 +377,20 @@ export type SourceReadiness = {
  */
 export function sourceReadiness(input: {
   id: SourceId
-  phase: Phase
   nowMs: number
   guard: GuardState | null
   observed: readonly ObservedJob[]
 }): SourceReadiness {
-  const { id, phase, nowMs, guard } = input
-  const f = factsOf(id)
+  const { id, nowMs, guard } = input
   const reasons: string[] = []
 
-  for (const p of verifySchedule(id, phase)) reasons.push(`계획: ${p}`)
-  if (f.newPerHourFloor === null) reasons.push('신규 유입 실측이 없다 — 얼마나 자주 봐야 놓치지 않는지 모른다')
-
-  // 🔴 ③ 등록 상태 — **관측이 정본이다.** 정적 loaded 플래그를 쓰지 않는다
+  // 🔴 등록 상태 — **관측이 정본이다.** 정적 loaded 플래그를 쓰지 않는다
   const cur = currentCapacity(input.observed).perSource.find((x) => x.id === id)!
-  const multiOk = runsPlannedMulti(input.observed, id, phase)
-  if (!multiOk) {
+  const scheduled = runsPlannedSchedule(input.observed)
+  if (!scheduled) {
     reasons.push(cur.registered
-      ? `계획한 다회 job(${JOB_LABELS[id].multi} · ${RUNS_PER_DAY[id][phase]}회)이 아니다`
-        + ` — 지금은 ${cur.label} ${cur.runsPerDay}회`
-      : `${JOB_LABELS[id].multi} 미등록 — 템플릿만 있고 돌지 않는다`)
+      ? `수집 job(${COLLECT_JOB_LABEL})이 바퀴 ${CYCLES.length}회가 아니다 — 지금은 ${cur.runsPerDay}회`
+      : `${COLLECT_JOB_LABEL} 미등록 — 템플릿만 있고 돌지 않는다`)
   }
 
   if (guard === null) {
@@ -494,19 +405,18 @@ export function sourceReadiness(input: {
       }
     }
   }
-  const prep = preparedCapacity(phase).perSource.find((x) => x.id === id)!
+  const prep = preparedCapacity().perSource.find((x) => x.id === id)!
   return {
     id, status: reasons.length === 0 ? 'READY' : 'BLOCKED', reasons,
     configuredPerDay: cur.effectivePerDay,
     preparedPerDay: prep.effectivePerDay,
-    multiRegistered: multiOk,
+    scheduleRegistered: scheduled,
     currentLabel: cur.label,
   }
 }
 
 export type CollectReadiness = {
   status: ReadinessStatus
-  phase: Phase
   /** 필요한 하루 상세 건수 (역산값) */
   requiredPerDay: number
   /** 여유까지 갖추려면 있어야 하는 능력 */
@@ -519,7 +429,7 @@ export type CollectReadiness = {
    *    등록은 능력이 아니다. 실제 산출은 회차 기록의 `observed` 가 답한다.
    */
   configuredPerDay: number
-  /** 🔴 다회 계획대로 올렸을 때 */
+  /** 🔴 바퀴 표대로 올렸을 때 */
   preparedPerDay: number
   /** 이론 최대 — 🔴 판정에 쓰지 않는다. 둘의 차이를 보여주려고 적는다 */
   theoreticalPerDay: number
@@ -539,19 +449,18 @@ export type CollectReadiness = {
  *    둘을 한 숫자로 합치면 "템플릿을 만들었으니 능력이 늘었다" 가 된다.
  */
 export function collectReadiness(input: {
-  phase: Phase
   plan: SupplyPlan
   nowMs: number
   observed: readonly ObservedJob[]
   guards?: Partial<Record<SourceId, GuardState>>
 }): CollectReadiness {
   const guards = input.guards ?? {}
-  const perSource = SOURCE_FACTS.map((f) => sourceReadiness({
-    id: f.id, phase: input.phase, nowMs: input.nowMs,
-    guard: guards[f.id] ?? null, observed: input.observed,
+  const perSource = COLLECT_SOURCES.map((c) => sourceReadiness({
+    id: sourceIdOf(c.id), nowMs: input.nowMs,
+    guard: guards[sourceIdOf(c.id)] ?? null, observed: input.observed,
   }))
   const cur = currentCapacity(input.observed)
-  const prep = preparedCapacity(input.phase)
+  const prep = preparedCapacity()
   const required = input.plan.detailPerDay
   const withMargin = requiredCapacityWithMargin(required)
   const reasons: string[] = []
@@ -576,13 +485,12 @@ export function collectReadiness(input: {
   }
   return {
     status: reasons.length === 0 ? 'READY' : 'BLOCKED',
-    phase: input.phase,
     requiredPerDay: required,
     requiredWithMargin: withMargin,
     configuredPerDay: cur.effectivePerDay,
     preparedPerDay: prep.effectivePerDay,
-    theoreticalPerDay: configuredDetailCeilingPerDay(input.phase),
-    mismatches: inventoryMismatches(input.observed, input.phase),
+    theoreticalPerDay: prep.theoreticalPerDay,
+    mismatches: inventoryMismatches(input.observed),
     perSource, reasons,
   }
 }

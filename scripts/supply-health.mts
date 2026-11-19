@@ -39,10 +39,9 @@ import { probeSupplyLease } from './lib/supply-lease.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { describeScale } from '../src/lib/scale-runtime'
 import { minuteOfDay, slotLabel } from '../src/lib/scale-profile'
-import { SOURCE_FACTS, THIN_82COOK_SLOTS, planSlots, type SourceId, type Phase } from '../src/lib/collect-schedule'
-
-/** 🔴 지금 운영 중인 단계. 시각 정본이 단계별 표를 갖고 있으므로 어느 단계인지 한 번만 적는다 */
-const COLLECT_PHASE: Phase = 'start'
+import {
+  COLLECT_JOB_LABEL, COLLECT_SLOTS, COLLECT_SOURCES, detailCeilingPerDay, SOURCE_IDS, sourceIdOf, type SourceId,
+} from '../src/lib/collect-sources'
 
 /** 🔴 예약이 올라와 있지 않아 판정에서 뺀 레인 — **조용히 빼지 않고 화면에 적는다** */
 const NOT_REGISTERED: SourceId[] = []
@@ -68,11 +67,9 @@ import { lockAnomaly } from './lib/collect-lock.mjs'
 import { LOCK_PATH, LOCK_MAX_AGE_MS } from './lib/micro-seed-navercafe.mjs'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 
-/** 🔴 슬롯 × 회차당 상한 — **설정값**이다. `current` 가 아니다 */
-const CONFIGURED_PER_DAY: Readonly<Record<string, number>> = {
-  'navercafe:remonterrace': 40,
-  'navercafe:wgang': 40,
-}
+/** 🔴 하루 본문 상한 — **설정값**이다. `current` 가 아니다 */
+const CONFIGURED_PER_DAY: Readonly<Record<string, number>> =
+  Object.fromEntries(COLLECT_SOURCES.map((s) => [sourceIdOf(s.id), detailCeilingPerDay(s)]))
 const MANIFEST_FILE = join(
   homedir(), 'Library', 'Application Support', 'soransoran', 'runtime-manifest.json',
 )
@@ -88,47 +85,16 @@ const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?
 const SUPPLY_STALE_MS = 30 * 60 * 60 * 1000
 
 /**
- * 확정 수집원 셋 — 🔴 §4-AV 와 같은 목록이다.
- *
- * 🔴 **슬롯은 배열이다.** 첫 슬롯 하나만 보면 "다음 실행" 을 내일로 잡아 헛기다린다.
- *
- * 🔴 **슬롯을 여기 적지 않는다** (2026-09-13 정정).
- *
- *    옛 판은 네이버 두 카페의 슬롯을 손으로 적어 두고 있었다 —
- *    `remonterrace [[4,20],[10,20],[16,20],[22,20]]` · `wgang [[2,50],[8,50],[14,50],[20,50]]`.
- *    이 문제 뒤 슬롯 정본은 `collect-schedule.ts` 한 곳으로 모았다. 현재 D20 target-date
- *    계약은 `remonterrace 00:30·02:30·05:30·13:30·21:30`(5회) ·
- *    `wgang 01:30·03:30·04:30·11:30·20:30`(5회)다.
- *    그래서 관제는 "돌아야 할 시각" 을 틀리게 알고 있었고,
- *    2026-09-11~12 24시간 관측에서 82cook 6회 실패를 화면이 잡지 못했다.
- *
- *    시각 정본은 `collect-schedule.ts` 의 `SLOTS` 하나다. 여기서는 파생만 한다.
- *
- * 🔴 **`onDemand` 는 실측이다** (2026-09-13 정정).
- *    옛 판은 82cook 얇은 상세를 "아직 등록 안 됨" 으로 못박아 두고 stale 판정에서
- *    통째로 건너뛰었다(`continue`). 그 job 은 2026-09-11 에 등록돼 5회/day 로 돌고 있다.
- *    등록 여부를 상수로 적으면 등록한 날 관제가 눈을 감는다 —
- *    **plist 존재를 실제로 본다.**
+ * 수집원 — 🔴 원천 목록(`collect-sources`)과 바퀴 표(`cycle-schedule`)에서 만든다. 여기 시각을 적지 않는다.
+ *    수집 job 은 하나이고(로그도 하나) 카페마다 산출물 이름이 다르다.
  */
 const SOURCES: {
   id: SourceId; filePrefix: string; logName: string; slots: [number, number][]
-}[] = [
-  {
-    id: '82cook', filePrefix: '82cook-thin-', logName: 'supply-collect-82cook-thin',
-    // 🔴 목록 슬롯의 40분 뒤 — 정본이 그렇게 파생시킨다
-    slots: THIN_82COOK_SLOTS.map((x) => [x.hour, x.minute] as [number, number]),
-  },
-  {
-    id: 'navercafe:remonterrace', filePrefix: 'navercafe-thin-remonterrace-',
-    logName: 'navercafe-collect-remonterrace-multi',
-    slots: planSlots('navercafe:remonterrace', COLLECT_PHASE).map((x) => [x.hour, x.minute] as [number, number]),
-  },
-  {
-    id: 'navercafe:wgang', filePrefix: 'navercafe-thin-wgang-',
-    logName: 'navercafe-collect-wgang-multi',
-    slots: planSlots('navercafe:wgang', COLLECT_PHASE).map((x) => [x.hour, x.minute] as [number, number]),
-  },
-]
+}[] = COLLECT_SOURCES.map((c) => ({
+  id: sourceIdOf(c.id), filePrefix: `navercafe-thin-${c.id}-`,
+  logName: COLLECT_JOB_LABEL.replace(/^com\.soransoran\./, ''),
+  slots: COLLECT_SLOTS.map((x) => [x.hour, x.minute] as [number, number]),
+}))
 
 function dataFiles(): string[] {
   return existsSync(DATA_DIR) ? readdirSync(DATA_DIR) : []
@@ -538,12 +504,12 @@ async function main(): Promise<void> {
   const collect = (() => {
     const guards: Partial<Record<SourceId, GuardState>> = {}
     const snapshots: ReturnType<typeof guardSnapshot>[] = []
-    for (const f of SOURCE_FACTS) {
-      const path = guardPath(f.id)
+    for (const id of SOURCE_IDS) {
+      const path = guardPath(id)
       if (!existsSync(path)) continue
       try {
         const st = rollBudgetDay(JSON.parse(readFileSync(path, 'utf-8')) as GuardState, kstDayOf(now))
-        guards[f.id] = st
+        guards[id] = st
         snapshots.push(guardSnapshot(st, now.getTime()))
       } catch {
         // 🔴 읽지 못한 상태를 "정상" 으로 세지 않는다 — 아래 준비도가 보호장치 없음으로 잡는다
@@ -558,15 +524,13 @@ async function main(): Promise<void> {
      */
     const { observed, problem: observeProblem } = observeJobsSafe()
     // 🔴 한 번만 센다 — 같은 판정을 두 번 부르면 두 값이 갈릴 자리가 생긴다
-    const startReadiness = collectReadiness({
-      phase: 'start', plan, nowMs: now.getTime(), observed, guards,
-    })
+    const startReadiness = collectReadiness({ plan, nowMs: now.getTime(), observed, guards })
     const cur = currentCapacity(observed)
-    const prep = preparedCapacity('start')
+    const prep = preparedCapacity()
     return {
       internalDailyTarget: plan.queuePerDay,
       guards: snapshots,
-      guardsMissing: SOURCE_FACTS.filter((f) => guards[f.id] === undefined).map((f) => f.id),
+      guardsMissing: SOURCE_IDS.filter((id) => guards[id] === undefined),
       observeProblem,
       // 🔴 셋을 **따로** 낸다. 합치면 "템플릿을 만들었으니 능력이 늘었다" 가 된다
       capacity: {
@@ -574,10 +538,9 @@ async function main(): Promise<void> {
         preparedPerDay: prep.effectivePerDay,
         requiredPerDay: plan.detailPerDay,
         perSource: cur.perSource,
-        summary: describeInventory(observed, 'start'),
+        summary: describeInventory(observed),
       },
       start: startReadiness,
-      stable: collectReadiness({ phase: 'stable', plan, nowMs: now.getTime(), observed, guards }),
       /**
        * 🔴 **등록만으로 READY 를 내지 않는다.**
        *    설정 준비도(job 이 올라와 있는가)와 운영 준비도(그 job 이 실제로 도는가)를
@@ -677,17 +640,17 @@ async function main(): Promise<void> {
     + ` · 필요 ${collect.capacity.requiredPerDay}건/day`)
   for (const s2 of collect.capacity.perSource) {
     console.log(`      ${s2.registered ? '🟢' : '⚪'} ${s2.id}  ${s2.label ?? '미등록'}`
-      + ` · ${s2.runsPerDay}회/day(${s2.kind ?? '—'}) → ${Math.round(s2.effectivePerDay)}건`)
+      + ` · ${s2.runsPerDay}회/day → ${Math.round(s2.effectivePerDay)}건`)
   }
   for (const m of collect.start.mismatches) console.log(`   🔴 ${m.code} — ${m.detail}`)
-  for (const phase of [collect.start, collect.stable]) {
-    console.log(`   [${phase.phase}] ${phase.status === 'READY' ? '🟢 READY' : '🔴 BLOCKED'}`
+  for (const phase of [collect.start]) {
+    console.log(`   [준비도] ${phase.status === 'READY' ? '🟢 READY' : '🔴 BLOCKED'}`
       + ` — 설정 ${Math.round(phase.configuredPerDay)} · 준비 ${Math.round(phase.preparedPerDay)}`
       + ` · 필요 ${phase.requiredPerDay} · 여유 기준 ${phase.requiredWithMargin}`
       + ` (이론 ${phase.theoreticalPerDay})`)
     for (const r of phase.reasons) console.log(`      🔴 ${r}`)
   }
-  console.log('   🔴 이론 최대가 아니라 성공률을 곱한 유효 처리량으로 판정한다')
+  console.log('   🔴 설정된 상한이다 — 실제 산출은 회차 기록(observed)이 답한다')
   console.log('   🔴 템플릿이 있다는 것은 "준비" 다. "현재" 는 launchctl 에 올라온 것만 센다')
 
   // ── ④-c 🔴 공개 판정 — **러너와 같은 목록을 센다** ──

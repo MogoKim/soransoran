@@ -27,7 +27,8 @@ import {
 import { scanArtifacts, readJsonArtifacts } from './lib/d100-artifact-scan.mjs'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { isDetailSuccess } from '../src/lib/collect-run-record'
-import { SOURCE_FACTS } from '../src/lib/collect-schedule'
+import { COLLECT_SOURCES, detailCeilingPerDay, sourceIdOf } from '../src/lib/collect-sources'
+import { CYCLES } from '../src/lib/cycle-schedule'
 import { readWorkset } from '../src/lib/supply-workset'
 import { prismaStockRepo } from './lib/d100-operational-stock.mjs'
 import { readStockFunnel } from './lib/d100-stock-reader.mjs'
@@ -94,10 +95,7 @@ type CafeRow = {
   lastAdaptAtMs: number | null
 }
 
-const CAFES = [
-  { cafe: 'wgang', source: 'navercafe:wgang', job: 'com.soransoran.navercafe-collect-wgang-multi' },
-  { cafe: 'remonterrace', source: 'navercafe:remonterrace', job: 'com.soransoran.navercafe-collect-remonterrace-multi' },
-] as const
+const CAFES = COLLECT_SOURCES.map((s) => ({ cafe: s.id, source: sourceIdOf(s.id), row: s }))
 
 const cafeRows: CafeRow[] = CAFES.map((c) => {
   const runs = readRunRecords(c.source).filter((r) => {
@@ -108,7 +106,6 @@ const cafeRows: CafeRow[] = CAFES.map((c) => {
   const list = scanArtifacts({ prefix: `navercafe-${c.cafe}-`, suffix: '.list.jsonl', sinceMs: SINCE.getTime() })
   const thin = scanArtifacts({ prefix: `navercafe-thin-${c.cafe}-`, suffix: '.thin-detail.jsonl', sinceMs: SINCE.getTime() })
   const adapt = scanArtifacts({ prefix: `82cook-adapt-${c.cafe}-`, suffix: '.detail.jsonl', sinceMs: SINCE.getTime() })
-  const facts = SOURCE_FACTS.find((f) => f.id === c.source)
   const sum = (f: (r: typeof runs[number]) => number): number => runs.reduce((n, r) => n + f(r), 0)
   return {
     cafe: c.cafe,
@@ -119,7 +116,8 @@ const cafeRows: CafeRow[] = CAFES.map((c) => {
     skippedSeen: sum((r) => r.skippedSeen ?? 0),
     repeated: sum((r) => r.repeatedRows ?? 0),
     successRuns: ok.length, failedRuns: runs.filter((r) => r.status === 'failed').length,
-    configuredDetailPerRun: facts?.detailPerRun ?? null,
+    // 🔴 바퀴마다 실제 몫은 실행 때 정한다 — 여기는 하루 본문 상한의 바퀴 평균이다
+    configuredDetailPerRun: Math.ceil(detailCeilingPerDay(c.row) / CYCLES.length),
     adaptLines: adapt.lines,
     lastListAtMs: list.lastAtMs, lastThinAtMs: thin.lastAtMs, lastAdaptAtMs: adapt.lastAtMs,
   }

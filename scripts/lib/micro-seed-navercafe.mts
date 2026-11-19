@@ -20,9 +20,8 @@
  *       UA 위장 · IP 로테이션 · 캡차 우회 · robots 무시는 하지 않는다.
  *       하는 것은 "사람이 실제로 읽는 속도" 뿐이다.
  *
- * 🔴 **실패 비용이 다르다.** 82cook 이 막히면 IP 이고 네트워크를 바꾸면 회복된다
- *    (2026-09-03 실측). 네이버가 막히면 **계정**이고 그건 되돌릴 수 없다.
- *    그래서 quota 가 82cook 30 대 네이버 10 이다.
+ * 🔴 **막히면 계정이다.** 되돌릴 수 없다 — 그래서 하루 요청 상한(`collect-sources`)과 사람 속도를 지킨다.
+ * 🔴 카페 · 게시판 · 하루 요청 수는 `src/lib/collect-sources.ts` 한 곳에 있다. 여기 다시 적지 않는다.
  */
 import {
   isTooOpen, judgeSessionLocation, NAVER_SESSION_FILE, SESSION_FILE_MODE,
@@ -30,102 +29,8 @@ import {
 } from '../../src/lib/naver-session-canon'
 import { createHash } from 'node:crypto'
 import { assessCandidate, type QualityAssessment } from './micro-seed-quality.mjs'
-import { NAVERCAFE_PREFIX, isNaverCafeSource, slotQuotaOf } from './micro-seed-supply.mjs'
-
-// ─────────────────────────────────────────────────────────
-// 카페 설정
-// ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 `excluded` 는 "나쁜 카페" 가 아니라 **이번 라운드에 쓰지 않는다** 는 뜻이다 (PR-S2-b-7).
- *    카페 수를 늘리는 대신 좋은 소스 셋을 깊게 이해하기로 했다 — 창업자 결정.
- */
-export type CafeStage = 'production' | 'core' | 'shadow' | 'excluded'
-
-export type CafeConfig = {
-  /** 네이버 카페 URL 의 영문 ID — `cafe.naver.com/{cafeId}` */
-  cafeId: string
-  /** 사람이 읽는 이름. 🔴 판정에 쓰지 않는다 */
-  label: string
-  /**
-   * 🔴 `stage` 는 **얼마나 조심할 것인가**이지 주제가 아니다.
-   *    shadow 는 수집은 하되 Original Post 재료로 바로 쓰지 않는다.
-   */
-  stage: CafeStage
-  /**
-   * 🔴 **경향 메모일 뿐 고정 라벨이 아니다.**
-   *    코드가 이 값을 읽어 판정하지 않는다 — 사람이 카페를 고를 때 보는 메모다.
-   *    주제·소재 판정은 **글 단위**로 한다(qualityFlags · Originality Gate).
-   *    "이 카페는 갱년기 카페" 로 굳히면 그 카페의 다른 글을 잘못 읽고,
-   *    다른 카페의 갱년기 글을 놓친다.
-   */
-  note: string
-}
-
-/**
- * 수집 대상 카페.
- *
- * 🔴 우나어 `agents/cafe/config.ts` 의 **게시판 목록(menuId 57개)을 가져오지 않았다.**
- *    우리는 전체글보기 한 곳만 읽는다 — 게시판을 훑는 것은 요청 수를 몇 배로 늘린다.
- *
- * 🔴 `popular-sync` 를 이식하지 않는다. 우나어는 인기글 전용 슬롯을 3회/day 돌렸지만
- *    소란소란은 그 개념을 **82cook 수집 슬롯**이 대신한다(설계 §4-A).
- */
-export const CAFES: readonly CafeConfig[] = [
-  {
-    cafeId: 'remonterrace',
-    label: '레몬테라스',
-    stage: 'production',
-    note: '4050 여성 핵심 생활권. 갱년기·몸 변화·가정·가족·생활이 섞인다',
-  },
-  {
-    cafeId: 'wgang',
-    label: '우아한 갱년기',
-    stage: 'production',
-    note: '4050 여성 핵심 생활권. 레몬테라스와 같은 축이며 주제가 겹친다',
-  },
-  // ── 🔴 아래는 이번 라운드에서 쓰지 않는다 (PR-S2-b-7 · 창업자 결정) ──
-  //    "나쁜 소스" 라서가 아니라 **선택과 집중**이다. 카페를 넓히면 각 소스를
-  //    얕게밖에 이해하지 못하고, 그 상태로 늘린 수집량은 품질이 따라오지 않는다.
-  //    기록을 지우지 않는 이유: 왜 뺐는지가 남아야 나중에 다시 볼 수 있다.
-  {
-    cafeId: 'dlxogns01',
-    label: '은퇴 후 50년',
-    stage: 'excluded',
-    note: '노후·은퇴·돈·건강 축. 🔴 이번 라운드 제외 — 집중 대상 3소스 밖',
-  },
-  {
-    cafeId: 'masanmam',
-    label: '줌마렐라',
-    stage: 'excluded',
-    note: '타겟층 일상·가족 보강. 🔴 이번 라운드 제외',
-  },
-  {
-    cafeId: 'goondae',
-    label: '군대카페',
-    stage: 'excluded',
-    note: '타겟층 일상·가족 보강. 🔴 이번 라운드 제외',
-  },
-  {
-    cafeId: 'yeowooya',
-    label: '여우야',
-    stage: 'excluded',
-    note: '뷰티·피부·미용·성형 관심사. 🔴 이번 라운드 제외 — 의료·광고 위험이 크고 '
-      + 'public 발행 재료로 바로 쓰지 않는다. 필요해지면 shadow 로 되살린다',
-  },
-]
-
-/** 이번 라운드에 실제로 수집하는 카페 */
-export function activeCafes(): CafeConfig[] {
-  return CAFES.filter((c) => c.stage !== 'excluded')
-}
-
-export function findCafe(cafeId: string): CafeConfig | null {
-  return CAFES.find((c) => c.cafeId === cafeId) ?? null
-}
-
-/** 🔴 첫 live 는 여기서 시작한다. Raw Vault 에 이미 이 카페 행이 하나 있어 계약이 검증돼 있다 */
-export const FIRST_LIVE_CAFE_ID = 'remonterrace'
+import { NAVERCAFE_PREFIX, isNaverCafeSource } from './micro-seed-supply.mjs'
+import type { CollectSourceRow } from '../../src/lib/collect-sources'
 
 // ─────────────────────────────────────────────────────────
 // sourceSite · URL · articleId
@@ -135,10 +40,6 @@ export const FIRST_LIVE_CAFE_ID = 'remonterrace'
 export function sourceSiteOf(cafeId: string): string {
   return `${NAVERCAFE_PREFIX}${cafeId}`
 }
-
-/** 전체글보기 목록 — 🔴 게시판을 훑지 않는다 */
-export const LIST_URL = (cafeId: string, page: number) =>
-  `https://cafe.naver.com/${cafeId}?iframe_url=/ArticleList.nhn%3Fsearch.menuid=0%26search.page=${page}`
 
 export const ARTICLE_URL = (cafeId: string, articleId: string) =>
   `https://cafe.naver.com/${cafeId}/${articleId}`
@@ -193,22 +94,6 @@ export function randomDelay(baseMs: number, minFactor = 0.8, maxFactor = 1.5, ra
 /** 목록 페이지 간 · 상세 글 간 기준 간격 (ms). 🔴 82cook(2000 고정)보다 느리다 */
 export const DELAY_LIST_MS = 4000
 export const DELAY_ARTICLE_MS = 3000
-
-// ─────────────────────────────────────────────────────────
-// quota
-// ─────────────────────────────────────────────────────────
-
-/**
- * 한 슬롯에서 여는 상세 수. 🔴 supply 의 소스별 quota 를 그대로 따른다 —
- * 여기서 숫자를 다시 적으면 두 값이 갈라진다.
- */
-export function slotQuota(cafeId: string): number {
-  return slotQuotaOf(sourceSiteOf(cafeId))
-}
-
-/** 🔴 첫 live 기본값 — 1카페 · 목록 1p · 상세 3건. 사람이 눈으로 볼 수 있는 양이다 */
-export const FIRST_LIVE_PAGES = 1
-export const FIRST_LIVE_ARTICLES = 3
 
 // ─────────────────────────────────────────────────────────
 // 세션 · 락 판정 (🔴 순수 함수)
@@ -399,8 +284,10 @@ export type NaverListItem = {
   sourcePinned?: boolean
   /** 어느 게시판을 긁었나 (menuId). 🔴 sourceSite 계약은 건드리지 않는다 */
   sourceMenuId?: string | null
-  /** 게시판 타깃 키 (`remonterrace:jjong`) */
+  /** 어느 원천 줄을 긁었나 — `<cafeId>:<menuId>` */
   sourceBoardKey?: string | null
+  /** 🔴 날짜만 보이는 글이 앞 바퀴 뒤에 쓴 글이면 앞 목록을 읽은 시각(`postedAfterOf`) — 게시 시각의 하한이다 */
+  sourcePostedAfter?: string | null
 }
 
 export type CollectedCandidate = {
@@ -429,6 +316,11 @@ export type CollectedCandidate = {
    *    `sourcePostedAt` 과 함께 채워지지 않는다.
    */
   sourcePostedDay: string | null
+  /**
+   * 🔴 **게시 시각의 하한** — 날짜만 아는 글이 앞 바퀴 목록보다 큰 번호면 그 목록을 읽은 시각(`postedAfterOf`).
+   *    시각을 지어내지 않는다: `sourcePostedAt` 은 그대로 null 이고, 이 칸은 관측의 경계일 뿐이다.
+   */
+  sourcePostedAfter: string | null
   sourcePage: number | null
   sourceRankOnPage: number | null
   sourceViewCount: number | null
@@ -452,6 +344,7 @@ export type CollectedCandidate = {
   /** 🔴 공지·필독·추천. 자동 상세 fetch 대상이 아니다 */
   sourcePinned: boolean
   sourceMenuId: string | null
+  /** 어느 원천 줄을 긁었나 — `<cafeId>:<menuId>` */
   sourceBoardKey: string | null
   /** 🔴 자동 상세 fetch 후보에서 **왜** 빠졌는가 — 지금은 고정 슬롯(공지·필독·추천) 하나다 */
   sourceExcludeReason: ExcludeReason | null
@@ -606,6 +499,7 @@ export function buildCollected(
     sourcePostedAt: parsePostedLabel(item.sourcePostedLabel, Number.isNaN(listedAt.getTime()) ? new Date(capturedAtIso) : listedAt),
     // 🔴 날짜만 보이는 라벨 — 같은 기준 시각으로 날짜만 남긴다(시각을 지어내지 않는다)
     sourcePostedDay: postedDayOfLabel(item.sourcePostedLabel, Number.isNaN(listedAt.getTime()) ? new Date(capturedAtIso) : listedAt),
+    sourcePostedAfter: item.sourcePostedAfter ?? null,
     sourcePage: item.sourcePage ?? null,
     sourceRankOnPage: item.sourceRankOnPage ?? null,
     sourceViewCount: item.sourceViewCount ?? null,
@@ -651,6 +545,11 @@ export function assertNaverCandidate(row: CollectedCandidate): void {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(row.sourcePostedDay)) throw new Error(`sourcePostedDay 형식이 아니다: ${JSON.stringify(row.sourcePostedDay)}`)
     if (row.sourcePostedAt !== null) throw new Error('sourcePostedDay 와 sourcePostedAt 이 함께 있다 — 날짜만 아는 시각을 지어냈다')
     if (row.sourcePostedLabel === null) throw new Error('sourcePostedDay 가 있는데 원문 라벨이 없다 — 근거 없는 날짜다')
+  }
+  // 🔴 하한은 날짜만 아는 글에만 — 시각을 아는 글에 붙으면 두 근거가 다툰다
+  if (row.sourcePostedAfter !== null) {
+    if (Number.isNaN(Date.parse(row.sourcePostedAfter))) throw new Error(`sourcePostedAfter 가 ISO 가 아니다: ${JSON.stringify(row.sourcePostedAfter)}`)
+    if (row.sourcePostedDay === null) throw new Error('sourcePostedAfter 는 날짜만 아는 글에만 붙는다')
   }
   for (const [k, v] of [['sourcePage', row.sourcePage], ['sourceRankOnPage', row.sourceRankOnPage], ['sourceViewCount', row.sourceViewCount]] as const) {
     if (v !== null && (!Number.isFinite(v) || v < 0)) throw new Error(`${k} 가 음수이거나 숫자가 아니다: ${JSON.stringify(v)}`)
@@ -952,117 +851,21 @@ export function runOutputPath(cafeId: string, runId: string, kind: 'detail' | 'l
   return `./.microseed-data/navercafe-${cafeId}-${runId}${suffix}.jsonl`
 }
 
-// ─────────────────────────────────────────────────────────
-// 게시판 단위 수집 계약 (PR-S2-b-7)
-// ─────────────────────────────────────────────────────────
-
 /**
- * 🔴 **전체글보기 하나만 보던 것을 게시판 단위로 바꾼다.**
- *
- *    2026-09-03 실측: 레몬테라스 전체글보기는 **시간당 약 225건**이 올라온다.
- *    24시간 전 글에 닿으려면 245페이지가 필요하다 — page depth 전략은 산술적으로 불가능하다.
- *    대신 **게시판을 좁히면 속도가 떨어지고**, 같은 페이지 수로 더 긴 시간을 덮는다.
- *
- * 🔴 여기 적힌 page range 는 **가설이다.** list-only 스카우팅으로 실측한 뒤 고친다.
+ * 🔴 **로그인 화면인가** — 글 · 목록을 열었는데 네이버 로그인(nid.naver.com)으로 넘어갔다.
+ *    세션이 풀린 것이고 그 뒤 요청은 전부 같은 화면이다. 주소 말고 화면 글자로 짐작하지 않는다.
  */
-export type BoardTarget = {
-  /** 명령줄에서 부르는 키 — `--board=remonterrace:jjong` */
-  key: string
-  cafeId: string
-  /** 신형 URL 이 쓰는 숫자 카페 ID */
-  cafeNo: string
-  /** 게시판 menuId. `0` 은 전체글보기 */
-  menuId: string
-  label: string
-  /** 🔴 가설이다. 실측 뒤 고친다 */
-  startPage: number
-  endPage: number
-  /** 사람이 읽는 목적 메모. 🔴 판정에 쓰지 않는다 */
-  purpose: string
-  /**
-   * 이 게시판이 한 회차에 여는 상세의 고정 상한. 없으면 카페 몫(`CAFE_SLOT_QUOTA`)을 쓴다.
-   * 글감 수율이 낮은 보조 게시판이 주 게시판의 상세 몫을 먹지 않게 한다.
-   */
-  detailCap?: number
+export function isLoginWallUrl(url: string): boolean {
+  try { return new URL(url).hostname === 'nid.naver.com' } catch { return false }
 }
 
-export const BOARD_TARGETS: readonly BoardTarget[] = [
-  {
-    key: 'remonterrace:jjong',
-    cafeId: 'remonterrace',
-    cafeNo: '10298136',
-    menuId: '23',
-    label: '쫑알쫑알 게시판',
-    // 🔴 1페이지를 뺀다. 상단에 인기글·공지 슬롯이 섞인다.
-    // 🔴 2~6쪽(약 75행)만 읽는다. 상세는 게시 최신순으로 회차당 20건을 열므로 그 뒤 쪽은
-    //    선별에 쓰이지 않는다. 75행이면 새 글이 한 건도 없는 새벽 연속 3회차에도
-    //    안 본 글이 20건 넘게 남는다(75 − 20×2 = 35). 아낀 목록 요청은 상세로 간다.
-    startPage: 2,
-    endPage: 6,
-    purpose: '생활 · 가정 · 관계 · 일상 핵심 Raw',
-  },
-  {
-    key: 'remonterrace:humor',
-    cafeId: 'remonterrace',
-    cafeNo: '10298136',
-    menuId: '56',
-    label: '유머,연예,가십',
-    startPage: 1,
-    endPage: 1,
-    purpose: '유머 · 연예 · 셀럽',
-    // 🔴 회차당 1건. 이 게시판은 상세 대비 글감 수율이 낮다 — 쫑알의 상세 몫을 나눠 주지 않는다
-    detailCap: 1,
-  },
-  {
-    key: 'wgang:all',
-    cafeId: 'wgang',
-    cafeNo: '29349320',
-    menuId: '0',
-    label: '전체글보기',
-    startPage: 1,
-    endPage: 5,
-    purpose: '갱년기 · 몸 · 마음 · 가족 · 중년 생활 Raw',
-  },
-]
+// ─────────────────────────────────────────────────────────
+// 게시판 목록 주소
+// ─────────────────────────────────────────────────────────
 
-export function findBoard(key: string): BoardTarget | null {
-  return BOARD_TARGETS.find((b) => b.key === key) ?? null
-}
-
-/** 🔴 신형 URL. 구형 `iframe_url=` 형태와 달리 menuId 를 경로로 받는다 */
-export function boardListUrl(t: BoardTarget, page: number): string {
+/** 🔴 신형 URL — menuId 를 경로로 받는다. 카페 · 게시판은 `collect-sources` 의 한 줄이다 */
+export function boardListUrl(t: Pick<CollectSourceRow, 'cafeNo' | 'menuId'>, page: number): string {
   return `https://cafe.naver.com/f-e/cafes/${t.cafeNo}/menus/${t.menuId}?viewType=L&page=${page}`
-}
-
-/** 대상 페이지 목록. 🔴 start > end 면 빈 배열이 아니라 던진다 — 조용한 0건을 만들지 않는다 */
-export function pagesOf(t: { startPage: number; endPage: number }): number[] {
-  if (!Number.isInteger(t.startPage) || !Number.isInteger(t.endPage)) throw new Error('page range 가 정수가 아니다')
-  if (t.startPage < 1) throw new Error(`startPage 가 1 미만이다: ${t.startPage}`)
-  if (t.endPage < t.startPage) throw new Error(`endPage(${t.endPage}) 가 startPage(${t.startPage}) 보다 작다`)
-  return Array.from({ length: t.endPage - t.startPage + 1 }, (_, i) => t.startPage + i)
-}
-
-// ─────────────────────────────────────────────────────────
-// 목록 스카우팅 (list-only) — PR-S2-b-7
-// ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **상세에 무조건 들어가지 않는다.**
- *
- *    먼저 목록에서 제목 · 댓글수 · 조회수 · 작성시각 · 게시판 · page · rank · 라벨을 본다.
- *    조건을 넘은 글만 상세 fetch 후보가 된다. Raw Vault 는 창고가 아니다.
- *
- * 🔴 **이번 실행에서 미달이어도 끝이 아니다.** 다음 실행에서 댓글·조회수가 올라
- *    조건을 넘으면 그때 후보가 된다 — 그래서 목록 기록을 전부 남긴다.
- *
- * scout 모드는 상세를 전혀 열지 않으므로 요청이 목록뿐이다.
- * 그래서 detail quota 와 **별개로** 더 많은 페이지를 볼 수 있다.
- */
-export const SCOUT_MAX_PAGES = 20
-export const DETAIL_MAX_PAGES = 5
-
-export function maxPagesFor(mode: 'scout' | 'detail'): number {
-  return mode === 'scout' ? SCOUT_MAX_PAGES : DETAIL_MAX_PAGES
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1147,66 +950,4 @@ export function dedupeListRows<T extends { sourceSite: string; sourceArticleId: 
     seen.set(key, r)
   }
   return { rows: [...seen.values()], duplicates: dupes.length, duplicateIds: [...new Set(dupes)] }
-}
-
-// ─────────────────────────────────────────────────────────
-// threshold 후보 (🔴 확정값이 아니다 · PR-S2-b-8)
-// ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **후보일 뿐이다. 코드가 이 값으로 자동 판정하지 않는다.**
- *
- *    2026-09-03 쫑알쫑알 2~16p 225건 **1회 표본**에서 나온 분위수다.
- *    표본이 2.3시간짜리 하나뿐이라 확정하기에는 이르다 —
- *    시간차 재방문으로 여러 회차를 모은 뒤 정한다.
- *
- * ```
- *   댓글 p50=5  p80=12  p90=18       조회 p50=101  p80=250  p90=368
- *   댓글>=10 AND 조회>=300  → 21/225 (9%)
- *   댓글>=15 AND 조회>=300  → 18/225 (8%)
- * ```
- */
-export const THRESHOLD_CANDIDATES = [
-  { label: 'A', minComments: 10, minViews: 300, observedRate: 0.09 },
-  { label: 'B', minComments: 15, minViews: 300, observedRate: 0.08 },
-] as const
-
-export function passesThreshold(
-  row: { sourceCommentCount: number; sourceViewCount: number | null },
-  t: { minComments: number; minViews: number },
-): boolean {
-  // 🔴 조회수를 못 읽었으면 통과시키지 않는다. 미지값을 0 으로도 무한대로도 보지 않는다
-  if (row.sourceViewCount === null) return false
-  return row.sourceCommentCount >= t.minComments && row.sourceViewCount >= t.minViews
-}
-
-/**
- * threshold 를 **어느 집합에 적용할 것인가** (PR-S2-b-9).
- *
- * 🔴 **전체 목록이 아니라 "제외 후 후보" 다.**
- *
- *    2026-09-03 유머·연예 1p 실측에서 착시가 드러났다:
- * ```
- *    전체 23건 기준   후보 A 8건 (35%)
- *    후보 14건 기준   후보 A 1건       ← 실제
- * ```
- *    차이를 만든 것은 고정 슬롯 8건이다. 공지·필독은 조회수 중앙이 2,111 로
- *    일반 글(321)의 7배라, 전체에 threshold 를 걸면 **상세를 열 수도 없는 행이
- *    통과율을 끌어올린다.** 그 숫자로 기준을 정하면 threshold 가 너무 높아진다.
- *
- * 🔴 게시판끼리 비교할 때도 같은 축이어야 한다 —
- *    쫑알쫑알 9% 와 유머 35% 를 나란히 놓으면 안 되는 이유가 이것이다.
- */
-export function thresholdBasis<T extends { sourceExcludeReason?: ExcludeReason | null }>(
-  rows: readonly T[],
-): { total: number; eligible: T[]; legacy: number } {
-  // 🔴 **필드가 없는 행(PR-S2-b-8 이전 산출물)을 조용히 제외로 떨어뜨리지 않는다.**
-  //    실제로 그렇게 만들었더니 쫑알쫑알 225건이 "후보 0건 · NaN%" 로 나왔다.
-  //    "판정이 없다" 와 "제외 판정을 받았다" 는 다른 사실이다 — 세어서 알린다.
-  const legacy = rows.filter((r) => !('sourceExcludeReason' in r) || r.sourceExcludeReason === undefined).length
-  return {
-    total: rows.length,
-    eligible: rows.filter((r) => r.sourceExcludeReason === null),
-    legacy,
-  }
 }

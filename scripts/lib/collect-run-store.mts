@@ -101,6 +101,11 @@ export type DetailLedgerEntry = {
   runId: string
   /** 본문 실패 재시도 횟수 — 🔴 무한 반복 상한을 둔다 */
   attempts: number
+  /**
+   * 🔴 **버린 사유 코드** — 판정이 이미 낸 값을 그대로 남긴다(`DROP` · `HARD_EXCLUDE` + 안전 사유 · `BODY_EMPTY` …).
+   *    사유 없이 사라진 글은 다시 볼 수 없다(14일 241건이 그랬다). 옛 줄에는 없다 — 읽을 때 "사유 없음" 이다.
+   */
+  reasons?: readonly string[]
 }
 
 /** 🔴 본문 실패는 재시도 가능하되 이 횟수를 넘기면 더 열지 않는다 */
@@ -159,12 +164,17 @@ export function readLedgerAt(p: string): LedgerRead {
       || j.attempts < 1 || j.attempts > 1_000) {
       return { ok: false, reason: `원장 ${total}번째 줄의 attempts 가 범위를 벗어났다 (${String(j.attempts)})` }
     }
+    // 🔴 사유 칸은 옛 줄에 없다 — 없으면 없는 대로 읽고, 있는데 모양이 틀리면 멈춘다
+    if (j.reasons !== undefined && (!Array.isArray(j.reasons) || !j.reasons.every((r) => typeof r === 'string' && r !== ''))) {
+      return { ok: false, reason: `원장 ${total}번째 줄의 reasons 가 문자열 목록이 아니다` }
+    }
     entries.set(j.articleId, {
       articleId: j.articleId,
       outcome: j.outcome as DetailOutcome,
       at: j.at,
       runId: j.runId,
       attempts: j.attempts,
+      ...(j.reasons === undefined ? {} : { reasons: [...j.reasons] }),
     })
   }
   return { ok: true, entries }

@@ -1,40 +1,16 @@
 /**
- * Raw 공급망 규칙 — 🔴 순수 함수. DB · 네트워크 · 파일 없음
+ * 네이버 카페 원천 규칙 — 🔴 순수 함수. DB · 네트워크 · 파일 없음
  *
- * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md
- *       docs/operations/2026-09-03-controlled-activity-automation-strategy.md §7
- *       docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §6-9-F · §12-2
- *
- * 🔴 **왜 이 파일이 따로 있나**
- *    "몇 건을 열어도 되는가" 와 "어떤 write 가 일어나는가" 는 규칙이지 절차가 아니다.
- *    스크립트 안에 두면 DB 를 붙이지 않고는 검증할 수 없다 — micro-seed-quality 와 같은 이유로
- *    DB · 파일 · 네트워크 없는 파일로 떼어 fixture 가 직접 부른다(import 는 순수 모듈 `political-flags` 와
- *    원천 순위 정본 `source-slot-release` 둘 — 둘 다 DB · 파일 · 네트워크 없음).
- *
- * 🔴 **두 레인은 상한이 다르다**
- *    Micro Seed 레인은 Sheet 승인 게이트를 통과해야 발행된다. 그 게이트는 사람이 읽는 화면이라
- *    한 번에 50행이 꽂히면 게이트로서 기능하지 않는다 → 여전히 1건이다.
- *    Original Post 레인은 Raw 를 **재료로만** 쓰고 승인은 별도 대기열에서 받는다 →
- *    Raw 적재는 배치로 연다. **같은 importer 지만 여는 문이 다르다.**
+ * 🔴 **왜 이 파일이 따로 있나** — "어떤 글의 본문을 열 것인가" 는 규칙이지 절차가 아니다.
+ *    스크립트 안에 두면 브라우저 없이는 검증할 수 없다. fixture 가 직접 부른다
+ *    (import 는 원천 순위 정본 `source-slot-release` 하나 — DB · 파일 · 네트워크 없음).
+ * 🔴 한 바퀴에 몇 건을 여는지는 여기 없다 — 실행 때 `collect-sources.cycleDetailQuota` 가 정한다.
  */
 import { sortBySourceRank } from '../../src/lib/source-slot-release'
 
 // ─────────────────────────────────────────────────────────
 // sourceSite 계약 (PR-S2-b-1)
 // ─────────────────────────────────────────────────────────
-
-/**
- * 🔴 **82cook 과 네이버 카페는 양대 주요 Raw 공급망이다.** 하나가 보조가 아니다.
- *
- *   82cook       짧고 당일성 있는 4050·5060 커뮤니티 언어 · 자유게시판형 소재
- *   navercafe    깊은 생활 맥락 · 다양한 실제 고민
- *
- * 한쪽이 막히면 공급이 0이 된다 — 2026-09-03 82cook 접속 실패로 30건 슬롯이
- * 전면 중단됐다. 소스 이중화는 처리량이 아니라 **가용성**의 문제다.
- */
-
-/** Micro Seed Sheet 레인이 받는 유일한 소스. 🔴 여기는 넓히지 않는다 (§레인 분리) */
-export const SHEET_LANE_SOURCE_SITE = '82cook'
 
 /**
  * 네이버 카페 sourceSite 형태 — `navercafe:{cafeId}`.
@@ -69,105 +45,9 @@ export function cafeIdOf(sourceSite: string): string | null {
   return sourceSite.slice(NAVERCAFE_PREFIX.length)
 }
 
-export type SourceVerdict = { ok: true } | { ok: false; reason: string }
-
-/**
- * 이 레인이 이 소스를 받아도 되는가.
- *
- * 🔴 **레인마다 받는 소스가 다르다.**
- *
- *   raw-only     82cook · navercafe:*     Original Post 재료. 승인은 별도 대기열
- *   micro-seed   🔴 82cook 만              Sheet 승인 게이트를 거쳐 **원문 그대로** 발행된다
- *
- * 🔴 네이버를 Sheet 레인에 넣지 않는 이유는 품질이 아니라 **레인의 성격**이다.
- *    Micro Seed 는 원문을 그대로 쓰고 영구 noindex 를 받는다(헌법 §10-5).
- *    네이버 카페 글은 로그인 영역의 글이라 그 레인에 올리는 것은 다른 판단이고,
- *    그 판단을 이 PR 이 대신 내리지 않는다.
- *
- * 🔴 dry-run 은 어느 소스든 **읽고 보여준다** — 판정을 사람이 볼 수 있어야 한다.
- *    막는 것은 실제 적재 모드다.
- */
-export function judgeSourceSite(sourceSite: string, mode: SupplyMode): SourceVerdict {
-  const known = sourceSite === SHEET_LANE_SOURCE_SITE || isNaverCafeSource(sourceSite)
-  if (!known) {
-    return {
-      ok: false,
-      reason:
-        `알 수 없는 sourceSite: ${JSON.stringify(sourceSite)} — ` +
-        `'${SHEET_LANE_SOURCE_SITE}' 또는 '${NAVERCAFE_PREFIX}{cafeId}' 만 받는다`,
-    }
-  }
-  if (mode === 'micro-seed' && sourceSite !== SHEET_LANE_SOURCE_SITE) {
-    return {
-      ok: false,
-      reason:
-        `Micro Seed 레인은 '${SHEET_LANE_SOURCE_SITE}' 만 받는다 (받은 값 ${JSON.stringify(sourceSite)}). ` +
-        '네이버는 raw-only 전용이다 — --raw-only --batch=N 을 쓴다',
-    }
-  }
-  return { ok: true }
-}
-
-/**
- * 소스별 한 슬롯 수집 상한.
- *
- * 🔴 네이버가 훨씬 작다. **실패 비용이 다르기 때문이다.**
- *    82cook 이 막히면 IP 문제이고 네트워크를 바꾸면 회복된다(2026-09-03 실측).
- *    네이버가 막히면 **계정**이고, 그건 되돌릴 수 없다.
- *
- * 🔴 한 소스를 세게 긁지 않는다. 여러 카페·시간대에 얇게 분산한다.
- */
-export const SLOT_QUOTA: Record<string, number> = {
-  '82cook': 30,
-  /** 🔴 네이버 카페 기본값 — 슬롯당 10건. 우나어의 카페당 80건과 의도적으로 다르다 */
-  navercafe: 10,
-}
-
-/**
- * 🔴 **카페마다 다른 상한** — 주 게시판 하나가 한 회차에 여는 상세의 천장.
- *
- * 🔴 **막는 장치를 푸는 것이 아니라 카페별로 재는 것이다.**
- *    요청 간격 · 일 요청 상한 · 403/429 차단기 · 세션 처리는 그대로다.
- *    바뀌는 것은 "한 회차에 몇 건을 여는가" 하나이고, 그 수는
- *    그 카페의 **자기 하루 상한 안에서** 정해진다(`planCafeRun`).
- *
- * 🔴 값을 여기 영구히 박지 않는다 — 예산이 바뀌면 다시 잰다.
- *    fixture 는 "상한 안에 드는가" 를 보지 "16이 맞는가" 를 보지 않는다.
- */
-export const CAFE_SLOT_QUOTA: Record<string, number> = {
-  /**
-   * 쫑알 2~6쪽(목록 5) + 유머 1쪽(목록 1 · 상세 1) · 회차 5회.
-   * (목록 6 + 상세 21) × 5 + 회원 확인 10 = 145/150 — 목록 15쪽을 읽던 때의 하루 요청 수와 같다.
-   * 목록 요청 50건을 상세로 옮긴 값이다(쫑알 상세 10 → 20). 더 올리려면 하루 요청이 늘어난다.
-   */
-  remonterrace: 20,
-  /** 전체글 1~5쪽 · 회차 5회. (목록 5 + 상세 16) × 5 + 회원 확인 5 = 110/150 */
-  wgang: 16,
-}
-
-/** 이 소스의 한 슬롯 상한. 모르는 소스는 가장 보수적인 값을 준다 */
-export function slotQuotaOf(sourceSite: string): number {
-  if (sourceSite === SHEET_LANE_SOURCE_SITE) return SLOT_QUOTA['82cook']
-  if (isNaverCafeSource(sourceSite)) {
-    const cafe = sourceSite.replace(/^navercafe:/, '')
-    return CAFE_SLOT_QUOTA[cafe] ?? SLOT_QUOTA.navercafe
-  }
-  return Math.min(...Object.values(SLOT_QUOTA))
-}
-
 // ─────────────────────────────────────────────────────────
 // 자동 선별 (collect --auto)
 // ─────────────────────────────────────────────────────────
-
-/**
- * 한 실행에서 상세를 여는 최대 건수.
- *
- * 🔴 30 인 이유 — 요청 간격이 2초 고정이라 30건이면 상세만 60초다.
- *    목록 페이지까지 더하면 한 실행이 약 1분 30초 안에 끝난다.
- *    이보다 크게 잡으면 한 번의 실수가 그만큼 크게 나가고, 락파일 TTL 설계도 같이 늘어난다.
- *    300건/day 는 이 값을 키워서가 아니라 **실행 횟수(하루 10회 슬롯)** 로 채운다.
- */
-export const AUTO_FETCH_MAX = 30
 
 /**
  * 🔴 자동 제외는 **두 단계**다. 한 목록에 섞어 두면 작동하지 않는 가드가 생긴다.
@@ -197,22 +77,9 @@ export const AUTO_FETCH_MAX = 30
  *    증명하지 못하면 실패한다(구조 가드).
  *
  * 🔴 거부가 아니라 **자동으로 열지 않는 것**이다.
- *    목록 JSONL 에는 전부 남고, 사람이 `--fetch=<id>` 로 지정하면 언제든 열린다.
- *    자동 경로에는 넘길 눈이 없기 때문에 그 경로만 좁힌다.
+ *    목록 JSONL 에는 전부 남는다. 자동 경로에는 넘길 눈이 없기 때문에 그 경로만 좁힌다.
  */
 export const AUTO_SKIP_LIST_FLAGS = ['hanjaLanguageFit'] as const
-
-/**
- * ② 상세 단계 자동 보류 — 본문을 읽은 **뒤**, Raw Vault 자동 적재 **전**에 뺀다.
- *
- * 🔴 상세 JSONL 에서 지우지 않는다. 원자료는 보존하고 **자동 적재 대상에서만** 뺀다.
- *    사람이 `--sourceArticleId=<id>` 로 지목하면 적재된다 — 그것이 사람의 판단이다.
- *
- * 🔴 Raw Vault 저장 정책과 Originality Gate 정책을 혼동하지 않는다.
- *    Vault 저장은 발행이 아니다. 다만 **자동 원료 공급**에서는 더 보수적으로 간다 —
- *    자동으로 들어온 원문은 자동으로 생성기의 재료가 되고, 그 경로에 사람이 없다.
- */
-export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely'] as const
 
 /**
  * 🔴 **`AUTO_MIN_SCORE` 는 삭제했다** (2026-09-11).
@@ -254,13 +121,13 @@ const postedMsOf = (r: AutoFetchInput): number | null => {
  * 목록에서 상세를 열 후보를 고른다.
  *
  * 🔴 순서가 규칙이다. 이미 있는 것을 **가장 먼저** 걸러낸다 —
- *    Vault 에 있는 글을 다시 여는 것은 82cook 에 부하만 주고 얻는 것이 없다.
+ *    이미 연 글을 다시 여는 것은 카페에 부하만 주고 얻는 것이 없다.
  */
 export function planAutoFetch(
   rows: readonly AutoFetchInput[],
-  opts: { max?: number } = {},
+  opts: { max: number },
 ): AutoFetchPlan {
-  const max = opts.max ?? AUTO_FETCH_MAX
+  const max = opts.max
   const picked: string[] = []
   const skipped: AutoFetchPlan['skipped'] = []
 
@@ -275,7 +142,7 @@ export function planAutoFetch(
     }
     const hit = r.flags.filter((f) => (AUTO_SKIP_LIST_FLAGS as readonly string[]).includes(f))
     if (hit.length > 0) {
-      skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'SKIP_FLAG', detail: `자동 제외 플래그 ${hit.join('·')} — 지정(--fetch)하면 열린다` })
+      skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'SKIP_FLAG', detail: `자동 제외 플래그 ${hit.join('·')}` })
       continue
     }
     /**
@@ -293,180 +160,11 @@ export function planAutoFetch(
      *    위의 `ALREADY_IN_VAULT`(중복)와 `SKIP_FLAG`(언어 핏) 둘뿐이다.
      */
     if (picked.length >= max) {
-      skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'OVER_MAX', detail: `한 실행 상한 ${max}건을 넘었다 — 다음 실행에서 열린다` })
+      skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'OVER_MAX', detail: `이 바퀴 몫 ${max}건 밖 — 다음 바퀴에서 열린다` })
       continue
     }
     picked.push(r.sourceArticleId)
   }
 
   return { picked, skipped }
-}
-
-// ─────────────────────────────────────────────────────────
-// 상세 단계 자동 보류 (import --raw-only)
-// ─────────────────────────────────────────────────────────
-
-export type AutoHoldInput = {
-  sourceArticleId: string
-  /** 상세까지 매겨진 플래그 */
-  flags: readonly string[]
-  /** 🔴 사람이 `--sourceArticleId` 로 지목했는가. 지목했으면 보류하지 않는다 */
-  humanDesignated?: boolean
-}
-
-export type AutoHoldVerdict =
-  | { hold: false }
-  | { hold: true; flags: string[]; detail: string }
-
-/**
- * 자동 적재를 보류할 것인가.
- *
- * 🔴 **사람이 지목한 것은 보류하지 않는다.** `--sourceArticleId=<id>` 는
- *    "이 글을 넣겠다" 는 명시적 판단이고, 그 판단을 코드가 뒤집지 않는다.
- *    자동 경로에만 사람이 없다 — 좁히는 것도 그 경로만이다.
- *
- * 🔴 보류는 삭제가 아니다. 상세 JSONL 의 원자료는 그대로 남는다.
- */
-export function judgeAutoHold(input: AutoHoldInput): AutoHoldVerdict {
-  if (input.humanDesignated === true) return { hold: false }
-  const hit = input.flags.filter((f) => (AUTO_HOLD_DETAIL_FLAGS as readonly string[]).includes(f))
-  if (hit.length === 0) return { hold: false }
-  return {
-    hold: true,
-    flags: [...hit],
-    detail: `자동 보류 ${hit.join('·')} — 원자료는 남는다. 넣으려면 --sourceArticleId 로 지목한다`,
-  }
-}
-
-// ─────────────────────────────────────────────────────────
-// 적재 모드 (import --raw-only / --batch)
-// ─────────────────────────────────────────────────────────
-
-/** Micro Seed 레인 적재 상한. 🔴 Sheet 승인 게이트가 사람이 읽는 화면이라 배치를 열지 않는다 */
-export const SHEET_LANE_LIMIT = 1
-
-/**
- * Raw-only 적재 한 실행 상한.
- *
- * 🔴 50 인 이유 — 한 번의 잘못된 실행이 되돌려야 할 양이다.
- *    RawContent 는 Post 도 Sheet 행도 만들지 않아 되돌리기가 DELETE 하나지만,
- *    그래도 "한 번에 300건" 은 실수의 크기를 300 으로 만든다.
- *    300/day 는 이 값이 아니라 **슬롯 수**로 채운다.
- */
-export const RAW_ONLY_BATCH_MAX = 50
-
-export type SupplyMode = 'dry-run' | 'micro-seed' | 'raw-only'
-
-export type SupplyModeInput = {
-  apply: boolean
-  /** --limit=N (Micro Seed 레인) */
-  limit: number | null
-  /** --raw-only */
-  rawOnly: boolean
-  /** --batch=N (raw-only 레인) */
-  batch: number | null
-}
-
-export type SupplyWrites = {
-  rawContent: boolean
-  candidate: boolean
-  sheet: boolean
-}
-
-export type SupplyModePlan = {
-  mode: SupplyMode
-  /** 이 실행이 실제로 적재할 최대 건수. dry-run 이면 0 */
-  take: number
-  writes: SupplyWrites
-  /** 왜 dry-run 인지 · 왜 거부인지 */
-  notes: string[]
-  /** 🔴 인자 조합 자체가 잘못된 경우. 부르는 쪽은 종료해야 한다 */
-  fatal: string | null
-}
-
-const NO_WRITES: SupplyWrites = { rawContent: false, candidate: false, sheet: false }
-
-/**
- * 인자 조합 → 적재 모드.
- *
- * 🔴 **두 스위치 원칙을 깨지 않는다.** `--apply` 하나로는 아무것도 쓰이지 않는다.
- *    Micro Seed 레인은 `--apply --limit=1`, raw-only 레인은 `--apply --raw-only --batch=N` 이다.
- *    크론이나 오타로 도는 일이 없어야 한다는 원래 이유(§6-9-F)가 그대로 유지된다.
- *
- * 🔴 **섞으면 거부한다.** `--raw-only --limit=1` 이나 `--batch` 단독은 fatal 이다 —
- *    "어느 레인으로 들어가는지" 가 모호한 명령을 통과시키면
- *    Sheet 에 50행이 꽂히는 사고가 오타 하나로 난다.
- */
-export function planSupplyMode(input: SupplyModeInput): SupplyModePlan {
-  const notes: string[] = []
-
-  // ── 인자 조합 검증 — 모호한 명령을 통과시키지 않는다 ──
-  if (input.batch !== null && !input.rawOnly) {
-    return {
-      mode: 'dry-run', take: 0, writes: NO_WRITES, notes,
-      fatal: '--batch 는 --raw-only 와 함께만 쓴다. Micro Seed 레인(Sheet 승인 게이트)은 배치를 열지 않는다',
-    }
-  }
-  if (input.rawOnly && input.limit !== null) {
-    return {
-      mode: 'dry-run', take: 0, writes: NO_WRITES, notes,
-      fatal: '--raw-only 에는 --limit 대신 --batch 를 쓴다. 두 레인의 상한을 같은 이름으로 부르지 않는다',
-    }
-  }
-  if (input.batch !== null && (!Number.isInteger(input.batch) || input.batch < 1 || input.batch > RAW_ONLY_BATCH_MAX)) {
-    return {
-      mode: 'dry-run', take: 0, writes: NO_WRITES, notes,
-      fatal: `--batch 는 1~${RAW_ONLY_BATCH_MAX} 의 정수다 (받은 값: ${String(input.batch)})`,
-    }
-  }
-
-  // ── raw-only 레인 ──
-  if (input.rawOnly) {
-    if (!input.apply || input.batch === null) {
-      notes.push(`raw-only 실제 적재에는 --apply 와 --batch=N(1~${RAW_ONLY_BATCH_MAX}) 이 둘 다 필요하다`)
-      return { mode: 'dry-run', take: 0, writes: NO_WRITES, notes, fatal: null }
-    }
-    notes.push('🔴 RawContent 만 만든다 — Candidate 없음 · Sheet write 없음 · 발행 경로 없음')
-    return {
-      mode: 'raw-only',
-      take: input.batch,
-      writes: { rawContent: true, candidate: false, sheet: false },
-      notes,
-      fatal: null,
-    }
-  }
-
-  // ── Micro Seed 레인 (기존 동작 그대로) ──
-  if (!input.apply || input.limit !== SHEET_LANE_LIMIT) {
-    notes.push(`Micro Seed 레인 실제 적재에는 --apply 와 --limit=${SHEET_LANE_LIMIT} 이 둘 다 필요하다`)
-    if (input.apply && input.limit !== null && input.limit !== SHEET_LANE_LIMIT) {
-      notes.push(`🔴 --limit=${input.limit} 은 허용하지 않는다. Sheet 승인 게이트는 한 번에 ${SHEET_LANE_LIMIT}건이다`)
-    }
-    return { mode: 'dry-run', take: 0, writes: NO_WRITES, notes, fatal: null }
-  }
-  notes.push('RawContent + Candidate(HOLD) + Sheet 행 1개를 만든다')
-  return {
-    mode: 'micro-seed',
-    take: SHEET_LANE_LIMIT,
-    writes: { rawContent: true, candidate: true, sheet: true },
-    notes,
-    fatal: null,
-  }
-}
-
-/**
- * 🔴 어떤 모드에서도 발행 경로가 열리지 않는다는 불변식.
- *    개발/검증용 — 깨지면 true 를 반환한다.
- */
-export function violatesSupplyInvariant(plan: SupplyModePlan): boolean {
-  // Sheet 를 쓰면서 Candidate 를 안 만들거나, 그 반대는 성립하지 않는다
-  if (plan.writes.sheet !== plan.writes.candidate) return true
-  // Candidate 를 만들면서 RawContent 를 안 만들 수 없다
-  if (plan.writes.candidate && !plan.writes.rawContent) return true
-  // dry-run 인데 무엇이든 쓰면 안 된다
-  if (plan.mode === 'dry-run' && (plan.writes.rawContent || plan.writes.candidate || plan.writes.sheet)) return true
-  // take 와 mode 가 어긋나면 안 된다
-  if (plan.mode === 'dry-run' && plan.take !== 0) return true
-  if (plan.mode !== 'dry-run' && plan.take < 1) return true
-  return false
 }

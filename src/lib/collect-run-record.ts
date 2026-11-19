@@ -50,7 +50,13 @@ export type CollectFailureCode =
   | 'LOCK_STALE'
   /** Playwright·브라우저 등 실행 의존성을 못 갖췄다 */
   | 'RUNTIME_DEPENDENCY'
-  /** 네트워크·차단 */
+  /** 🔴 카페가 403 을 줬다 — 우리를 알아보고 막았다. 차단기는 사람이 풀 때까지 닫혀 있다 */
+  | 'HTTP_403'
+  /** 🔴 카페가 429 를 줬다 — 속도 제한. 차단기가 1시간 닫힌다 */
+  | 'HTTP_429'
+  /** 🔴 이동한 화면이 네이버 로그인 화면이었다(nid.naver.com) — 세션이 풀렸다 */
+  | 'LOGIN_WALL'
+  /** 연결이 안 됐다 · 응답이 늦었다(TCP · timeout) */
   | 'NETWORK'
   | 'OTHER'
 
@@ -92,6 +98,34 @@ export type CollectRunRecord = {
    *    새로 들어온 공급은 1 건이다. 재고를 이 값으로 센다.
    */
   newUniqueThinRows: number
+  /**
+   * 🔴 **앞 바퀴 뒤 새 글 수** — 목록에서 앞 회차 목록의 가장 큰 글 번호보다 큰 글.
+   *    다음 날 같은 바퀴의 몫을 정하는 근거다(`expectedLaterNew`). 옛 기록에는 없다 — 모르면 없는 것이다.
+   */
+  newSincePrevious?: number | null
+}
+
+/**
+ * 🔴 **수집이 끝난 사유를 값으로 정한다** — 예외 글자를 다시 읽지 않는다.
+ *    `blockedBy` 는 보호장치가 분류한 값(`GuardedNavigationError`)이다. 로그인 화면은 수집기가 주소로 판정한다.
+ *    🔴 캡차는 판정하지 않는다 — 네이버 캡차 화면의 표식을 실측한 적이 없다. 그 화면은 회원 확인 불가 ·
+ *       목록 0건 · 본문 0건 중 하나로 잡힌다(추정으로 코드를 붙이지 않는다).
+ */
+export function failureCodeOf(input: { blockedBy?: string | null; loginWall?: boolean; message: string }): CollectFailureCode {
+  if (input.loginWall === true) return 'LOGIN_WALL'
+  if (input.blockedBy === 'FORBIDDEN') return 'HTTP_403'
+  if (input.blockedBy === 'RATE_LIMIT') return 'HTTP_429'
+  if (input.blockedBy === 'NETWORK') return 'NETWORK'
+  if (/셀렉터|selector|목록이 비었다/i.test(input.message)) return 'SELECTOR'
+  if (/net::|ECONN|timeout|타임아웃|네트워크/i.test(input.message)) return 'NETWORK'
+  return 'OTHER'
+}
+
+/** 🔴 사람을 바로 불러야 하는 실패 — 차단 · 로그인 화면. 같은 알림은 하루 한 번이다 */
+export const BLOCK_ALERT: Readonly<Partial<Record<CollectFailureCode, { title: string; why: string }>>> = {
+  HTTP_403: { title: '네이버 카페 수집 차단 — 403', why: '카페가 403 으로 막았다. 차단기는 사람이 풀 때까지 닫혀 있다(collect:guard-clear)' },
+  HTTP_429: { title: '네이버 카페 수집 속도 제한 — 429', why: '카페가 429 를 줬다. 차단기가 1시간 닫힌다 — 계속되면 하루 요청 수를 줄인다' },
+  LOGIN_WALL: { title: '네이버 카페 수집 중단 — 로그인 화면', why: '글 대신 네이버 로그인 화면이 열렸다 — 세션을 다시 발급한다' },
 }
 
 /**
@@ -299,7 +333,10 @@ export function judgeRunHealth(
       reason: '실행 의존성을 갖추지 못했다(브라우저·모듈) — 배포·설치 문제다',
     },
     SELECTOR: { level: 'CRITICAL', reason: '목록·본문 셀렉터가 맞지 않는다 — 사이트 구조가 바뀌었을 수 있다' },
-    NETWORK: { level: 'WARNING', reason: '네트워크·차단으로 끝났다' },
+    HTTP_403: { level: 'CRITICAL', reason: '카페가 403 으로 막았다 — 🔴 사람이 확인하고 차단기를 푼다(collect:guard-clear)' },
+    HTTP_429: { level: 'WARNING', reason: '카페가 429(속도 제한)를 줬다 — 차단기가 1시간 닫힌다' },
+    LOGIN_WALL: { level: 'CRITICAL', reason: '글 대신 네이버 로그인 화면이 열렸다 — 세션을 다시 발급한다' },
+    NETWORK: { level: 'WARNING', reason: '연결이 안 됐거나 응답이 늦었다(TCP · timeout)' },
     OTHER: { level: 'WARNING', reason: '최신 회차가 실패로 끝났다' },
   }
   const m = map[code as CollectFailureCode] ?? map.OTHER
