@@ -21,7 +21,7 @@
 import { PrismaClient } from '@prisma/client'
 import { readFileSync, existsSync } from 'node:fs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { checkIdentifyingDetail } from './lib/persona-gate-234.mjs'
+import { checkIdentifyingDetail } from './lib/persona-gate-identifying-detail.mjs'
 import { checkCommentCandidate, type CandidateInput } from './lib/persona-comment-candidate.mjs'
 
 const INPUT = 'tmp/persona-identity-fill.json'

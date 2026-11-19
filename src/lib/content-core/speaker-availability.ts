@@ -239,76 +239,120 @@ export function wipCountsBySpeaker(input: {
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 생성 시도 여력 — 공개 자리와 나눈다 (speaker-attempt-v1 · 2026-10-13 P0)
+// 🔴 생성 시도 여력 — 그 글이 나갈 날에 쓸 수 있는 사람에게만 (speaker-attempt-v2)
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **무엇이 틀렸나** (2026-10-13 12:15 회차 실측).
+ * 🔴 **막는 사고.** 앞판(v1)은 "지평 안 하루라도 쓸 수 있으면 시도 여력 1" 이었다. 지평은 오늘 남은 자리 +
+ *    내일 첫 자리라서 **오늘 이미 쓴 사람도** 내일 한 칸 때문에 초안을 받았다. 그 글은 오늘 못 나가고
+ *    (낼 글이 있는데 못 낸 틱의 98%가 이 원인) 다음 날 그 사람의 유일한 글이 된다.
  *
- *    화자 여력(`openDays`)은 가까운 수요 지평의 **공개 자리 수**로 채운 값이다 — 자리가 4개면
- *    전원 합쳐 4. 그런데 원천은 수율(결말 상한 0.16)만큼 넉넉히 사서 **실제 SEED 10건**이 왔다.
- *    그 결과 주간 상한 · 최소 간격을 통과한 화자가 27명인데도 4명(WIP 1 차감 → 3명)만 후보가 되고
- *    판정 비용을 낸 원천 7건이 부르기 전에 멈췄다. **"후보 수 ≤ 공개 자리 수"** 는 원천 하나가
- *    반드시 글 하나가 된다는 가정이다. 그 가정은 수율이 1 일 때만 맞다.
- *
- * 🔴 **나눈 것.**
- *    · 공개 자리(`releaseSeats`) — 그대로다. 발행 슬롯 · release profile · 주간 상한 · 최소 간격 ·
- *      stage 증거는 이 파일이 건드리지 않는다. 시도가 10건 성공해도 나가는 수는 발행 러너가 정한다.
- *    · 생성 시도 여력(`attemptCapacity`) — **같은 지평 안에서 실제로 발행 자격이 있는 날**이 있는
- *      화자에게, WIP 를 뺀 뒤 **회차당 1**. 자리를 나눠 갖지 않는다 — 각자 독립으로 판정한다.
- *
- * 🔴 **하지 않는 것.**
- *    · 자격 없는 화자를 넣지 않는다 — 지평 안 어느 자리에서도 상한·간격에 걸리면 0 이다
- *    · 한 회차에 한 사람에게 두 원천을 주지 않는다 — 사람이 모자라면 원천을 보류한다
- *    · 공개 자리 수(`dailyTarget`)를 키워 흉내 내지 않는다 — 그 값은 발행 목표의 뜻이다
+ * 🔴 **규칙 하나.** 초안은 **그 초안이 채울 공개 자리의 시각에 쓸 수 있는 사람**에게만 간다.
+ *    쓸 사람이 모자라면 그만큼 덜 산다 — 못 낼 글을 사지 않는다.
+ *    공개 상한 · 간격은 발행 정본(`canWriteAt` 주입)이 판정한다 — 여기서 규칙을 다시 적지 않는다.
  */
-export const ATTEMPT_CONTRACT = 'speaker-attempt-v1'
+export const ATTEMPT_CONTRACT = 'speaker-attempt-v2'
 /** 🔴 한 회차에 한 화자가 받는 생성 시도 상한 — 사람이 모자라도 늘리지 않는다 */
 export const ATTEMPTS_PER_SPEAKER_PER_RUN = 1
 
-export type AttemptCapacityRow = {
-  /** 지평 안에서 이 화자가 **혼자 판정해** 발행 자격이 있는 날 수 — 자리 나눔 없음 */
-  eligibleDays: number
-  /** 🔴 이 회차 생성 시도 여력 — `min(1, max(0, eligibleDays − WIP))` */
-  attemptCapacity: number
+/** 발행 정본의 판정 — 이 이력의 사람이 `at` 에 글 한 편을 낼 수 있는가 */
+export type CanWriteAt = (matchedAts: readonly Date[], at: Date) => boolean
+
+/**
+ * 🔴 **이 사람이 새 글 한 편을 낼 수 있는 가장 이른 자리 — 판정은 여기 하나다.**
+ *    자리(시각)는 인자로 받는다: 오늘 남은 자리 · 내일 첫 자리 · (만료 구조에서는) 만료 시각 하나.
+ *    이미 들고 있는 미공개 글(`wip`)이 이른 자리부터 먼저 앉는다 — 그 자리는 이력에 쌓여
+ *    같은 날 두 번째 글과 주간 상한을 정본이 막는다. 낼 수 있는 자리가 없으면 `null`.
+ */
+export function firstWritableSeat(input: {
+  seats: readonly Date[]
+  matchedAts: readonly Date[]
+  wip: number
+  canWriteAt: CanWriteAt
+}): Date | null {
+  const hist = [...input.matchedAts]
+  let wip = Math.max(0, Math.floor(input.wip))
+  for (const at of [...input.seats].sort((a, b) => a.getTime() - b.getTime())) {
+    if (!input.canWriteAt(hist, at)) continue
+    if (wip === 0) return at
+    wip -= 1
+    hist.push(at)
+  }
+  return null
 }
 
-export function planAttemptCapacity(input: {
-  /** 공개 자리와 **같은** 지평의 날 (그날 첫 자리 시각) */
-  days: readonly Date[]
-  /** 🔴 실제 이력 — 계획한 자리를 쌓지 않는다(자리를 나눠 갖지 않으므로) */
-  history: readonly { code: string; matchedAts: readonly Date[] }[]
-  /** 🔴 발행 정본이 판정한다 — 공개 자리 계획과 같은 함수 · 같은 cap */
-  availableAt: (
-    hist: readonly { code: string; matchedAts: readonly Date[] }[],
-    at: Date,
-    caps: { postsPerWeek: number; minDaysBetween: number },
-  ) => string[]
-  caps: { postsPerWeek: number; minDaysBetween: number }
-  /** 말투 근거가 선 화자 — 주지 않으면 전원 (공개 자리 계획과 같은 주입) */
-  canTakeSlot?: (code: string) => boolean
-  /** 🔴 화자별 WIP — 공개 자리 계획과 **같은 값**을 뺀다 */
-  wipOf: (code: string) => number
-}): ReadonlyMap<string, AttemptCapacityRow> {
-  const canTake = input.canTakeSlot ?? ((): boolean => true)
-  const eligibleDays = new Map<string, number>()
-  for (const at of input.days) {
-    for (const code of input.availableAt(input.history, at, input.caps)) {
-      if (!canTake(code)) continue
-      eligibleDays.set(code, (eligibleDays.get(code) ?? 0) + 1)
-    }
-  }
-  const out = new Map<string, AttemptCapacityRow>()
-  for (const h of input.history) {
-    const days = eligibleDays.get(h.code) ?? 0
-    const left = Math.max(0, days - Math.max(0, input.wipOf(h.code)))
-    out.set(h.code, { eligibleDays: days, attemptCapacity: Math.min(ATTEMPTS_PER_SPEAKER_PER_RUN, left) })
-  }
-  return out
+export type SeatWriterPlan = {
+  /** 화자별 — 새 글을 낼 수 있는 가장 이른 자리 · 이 회차 생성 시도 여력(0 또는 1) */
+  byCode: ReadonlyMap<string, { seatAt: Date | null; attemptCapacity: number }>
+  /** 날짜별 산수 — 빈 자리 · 그날이 가장 이른 자리인 사람 · 이 회차가 채울 수 */
+  byDate: readonly { date: string; unfilled: number; writers: number; fill: number }[]
+  /** 🔴 쓸 사람이 있는 빈 자리 — 이 회차의 수요다(이른 자리부터) */
+  fillable: readonly Date[]
 }
 
 /**
- * 🔴 **생성 러너가 원천에 화자를 주는 유일한 입구** (speaker-attempt-v1 · 전체 후보 풀 · 2026-10-14).
+ * 🔴 **빈 자리마다 그날 쓸 수 있는 사람을 센다.**
+ *    · 회차는 **쓸 사람이 있는 가장 이른 날**의 자리를 채운다. 그날까지 쓸 수 있는 사람만 시도 여력 1 을 받는다.
+ *    · 그 사람들이 남으면 뒷날 자리도 채운다(오늘 쓸 수 있는 사람은 내일도 쓸 수 있다).
+ *    · 뒷날에만 쓸 수 있는 사람은 이 회차에 받지 않는다 — 한 풀에 섞이면 오늘 자리 초안이 그들에게 간다.
+ *      뒷날 자리는 그날이 가장 이른 날이 되는 회차(저녁 회차)가 채운다.
+ */
+export function planSeatWriters(input: {
+  /** 지평의 공개 자리 전부(이미 덮인 자리 포함) — 들고 있는 글이 먼저 앉는 자리 */
+  horizon: readonly Date[]
+  /** 그중 아직 덮이지 않은 자리 — 이 회차가 채울 자리 */
+  unfilled: readonly Date[]
+  history: readonly { code: string; matchedAts: readonly Date[] }[]
+  canWriteAt: CanWriteAt
+  /** 화자가 들고 있는 미공개 글 수 */
+  wipOf: (code: string) => number
+  /** 말투 근거가 선 화자 — 주지 않으면 전원 */
+  canTakeSlot?: (code: string) => boolean
+  /** KST 날짜 문자열(YYYY-MM-DD) */
+  dateLabel: (at: Date) => string
+}): SeatWriterPlan {
+  const canTake = input.canTakeSlot ?? ((): boolean => true)
+  const dates = [...new Set([...input.horizon].sort((a, b) => a.getTime() - b.getTime()).map(input.dateLabel))]
+  const seatOf = new Map<string, Date | null>()
+  for (const h of input.history) {
+    seatOf.set(h.code, canTake(h.code)
+      ? firstWritableSeat({ seats: input.horizon, matchedAts: h.matchedAts, wip: input.wipOf(h.code), canWriteAt: input.canWriteAt })
+      : null)
+  }
+  const unfilledOn = (date: string): Date[] => input.unfilled
+    .filter((d) => input.dateLabel(d) === date).sort((a, b) => a.getTime() - b.getTime())
+  const writersOn = (date: string): string[] => [...seatOf]
+    .filter(([, at]) => at !== null && input.dateLabel(at) === date).map(([code]) => code)
+
+  const pool = new Set<string>()
+  let left = 0
+  let started = false
+  const fillable: Date[] = []
+  const byDate = dates.map((date) => {
+    const open = unfilledOn(date)
+    const writers = writersOn(date)
+    if (!started) {
+      // 🔴 아직 채울 날을 못 정했다 — 여기까지 쓸 수 있는 사람이 풀이다
+      for (const c of writers) pool.add(c)
+      if (open.length > 0 && pool.size > 0) { started = true; left = pool.size }
+    }
+    const fill = started ? Math.min(open.length, left) : 0
+    left -= fill
+    fillable.push(...open.slice(0, fill))
+    return { date, unfilled: open.length, writers: writers.length, fill }
+  })
+  const byCode = new Map<string, { seatAt: Date | null; attemptCapacity: number }>()
+  for (const h of input.history) {
+    byCode.set(h.code, {
+      seatAt: seatOf.get(h.code) ?? null,
+      attemptCapacity: started && pool.has(h.code) ? ATTEMPTS_PER_SPEAKER_PER_RUN : 0,
+    })
+  }
+  return { byCode, byDate, fillable }
+}
+
+/**
+ * 🔴 **생성 러너가 원천에 화자를 주는 유일한 입구** (전체 후보 풀 · 2026-10-14).
  *
  * 🔴 **무엇이 틀렸나** (2026-10-14 12:15 회차 실측). 앞판(`planSpeakerAttempts`)은 판독 결과를 알기 **전에**
  *    시도 가능한 27명을 원천 10개에 stride 로 **겹치지 않게 미리 나눴다** — 원천마다 2~3명이었다.

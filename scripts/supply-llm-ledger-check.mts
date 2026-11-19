@@ -470,7 +470,7 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       '82cook-adapt-20260911-010000.detail.jsonl',
       '82cook-adapt-20260911-010000.raw-detail.jsonl',
     ])
-    const stages = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0 }), {
+    const stages = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0, writable: 12 }), {
       kind: 'ready', snapshotPath: '/tmp/s.json', runId: 'RUN-XYZ',
     })
     const judge = stages.find((x) => x.stage === 'judge')
@@ -481,7 +481,7 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       judge !== undefined && draft !== undefined
       && judge.args.filter((a) => a.startsWith('--run-id=')).join()
         === draft.args.filter((a) => a.startsWith('--run-id=')).join())
-    const held = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0 }), {
+    const held = planCommonPhase(pend, judgeJitDemand({ slots: 12, readyFilled: 0, writable: 12 }), {
       kind: 'hold', reason: '큐를 못 읽었다', runId: 'RUN-XYZ',
     })
     check('🔴 생성을 보류해도 판정은 회차 id 를 받는다 — 보류가 상한을 풀지 않는다',

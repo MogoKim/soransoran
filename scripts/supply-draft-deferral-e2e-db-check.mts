@@ -183,8 +183,9 @@ async function main(): Promise<void> {
     await prisma.persona.create({ data: { code, userId: u.id, status: 'active' } })
   }
   /**
-   * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**(speaker-attempt-v1)이 있는 화자마다
-   *    자동 READY 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고 시도 여력도 0 이다.
+   * 🔴 **여력 0 을 만든다** — 공개 자리를 받았거나 **생성 시도 여력**이 있는 화자마다
+   *    자동 READY 대기 기계 초안 1건(WIP)을 둔다. 그러면 전원 `열린날 − WIP = 0` 이고, 그 초안이 지평의 자리를
+   *    먼저 차지하므로(`firstWritableSeat`) 시도 여력도 0 이다.
    *    🔴 공개 자리만 보고 심으면(옛 계약) 자리가 없던 화자가 시도 여력을 받아 대기 경로가 시험되지 않는다.
    */
   const scale = resolveScale(process.env)
@@ -308,6 +309,11 @@ async function main(): Promise<void> {
   check('🔴 화면이 초안 실패가 아니라 여력 대기라고 적는다',
     /Persona 여력 대기로 미룬 원천 3건 — AI 를 부르지 않았다 · 초안 실패 아님/.test(res.out))
 
+  /**
+   * 🔴 ⑤⑥ 은 부모 러너가 실제로 묶음을 고르는지 본다 — 쓸 사람이 있어야 수요가 선다(`planSeatWriters`).
+   *    ②에서 전원에게 심은 대기 초안을 걷는다. 두면 쓸 사람 0 → 수요 0 → 러너가 묶음을 고르지 않는다.
+   */
+  await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'dd-' } } })
   await worksetAxisRunner(prisma, codes)
   await duplicateSourceRunner(prisma)
 
@@ -335,7 +341,8 @@ async function worksetAxisRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>, codes: readonly string[],
 ): Promise<void> {
   console.log('\n⑤ 🔴 🔴 부모 러너(main --live)가 JIT 선택으로 묶음을 고른다 — raw 0 · 형제 제외 · 격리 DB 큐 · 가짜 provider')
-  const { PROVEN_LANES, SEED_AXIS, RAW_AXIS } = await import('../src/lib/micro-seed-auto-judge')
+  const { PROVEN_LANES, SEED_AXIS } = await import('../src/lib/micro-seed-auto-judge')
+  const { STORED_RAW_AXIS: RAW_AXIS } = await import('../src/lib/supply-workset')
   const T2 = realpathSync(mkdtempSync(join(tmpdir(), 'soran-wsaxis-cwd-')))
   for (const x of ['scripts', 'src', 'package.json', 'tsconfig.json']) cpSync(join(REPO, x), join(T2, x), { recursive: true })
   mkdirSync(join(T2, 'docs', 'operations'), { recursive: true })

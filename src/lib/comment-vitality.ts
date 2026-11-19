@@ -1,7 +1,7 @@
 /**
  * 댓글 생동감(vitality) 판독 — 🔴 순수 함수 · 읽기 전용 · 할당량 아님 (canon §5)
  *
- * 🔴 **무엇을 재는가.** 글당 평균 댓글 수는 결과로만 보고한다 — 대화 계획의 크기(2~10 · 평균 약 4.5)는 계획의 성질이지
+ * 🔴 **무엇을 재는가.** 글당 평균 댓글 수는 결과로만 보고한다 — 대화 계획의 크기(`persona-thread-target` 의 목표 평균에서 나온 분포)는 계획의 성질이지
  *    PASS 기준이 아니다. "죽은 서비스" 인상을 직접 가리키는 지표를 잰다:
  *      · 24시간 고립률     공개 뒤 24시간 안에 살아 있는 댓글이 1건 이하인 글의 비율(24시간이 지난 글만 분모)
  *      · 실회원 참여 글 비율 실회원(`MEMBER`) 댓글이 1건 이상인 글의 비율 — North Star 에 가장 가까운 칸
@@ -10,7 +10,7 @@
  * 🔴 **판정 의미.** 분포·비율에는 목표 문턱을 두지 않는다(결과값). verdict 는 **불변식**만 본다:
  *      FAIL     같은 글에 글쓴이가 아닌 같은 Persona 가 세 번 이상 말했거나 새 댓글을 두 번 달았다
  *               (`otherPersonaTurnsExceed` — 대화 감사와 같은 판정) · 글쓴이 Persona 답글이 상한 초과 ·
- *               Persona 댓글이 글당 구조 상한(10) 초과
+ *               Persona 댓글이 글당 구조 상한(`PERSONA_COMMENTS_PER_POST_MAX`) 초과
  *      UNKNOWN  분모 0 · 댓글 출처/시각을 읽지 못한 글이 있음(부분 데이터) — 그 칸은 `null`
  *      PASS     불변식 위반 0 이고 모든 글을 읽었다 — 🔴 "대화가 충분하다" 는 뜻이 아니다
  *
@@ -108,7 +108,7 @@ export function judgeCommentVitality(posts: readonly VitalityPost[], nowMs: numb
     }
     if (duplicated) dup += 1
     if (authorReplies > PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX) authorOver += 1
-    // 총 구조 상한 10 — 첫 댓글 1 + 선택 0~9(글쓴이 답글 포함) · canon §5
+    // 총 구조 상한(`PERSONA_COMMENTS_PER_POST_MAX`) — 첫 댓글 1 + 추가(글쓴이 답글 포함) · canon §5
     if (persona.length > PERSONA_COMMENTS_PER_POST_MAX) personaOver += 1
     // 고립 — 24시간이 지난 글만. 그 창 안에 살아 있는 댓글이 1건 이하면 고립
     const publishedAt = p.publishedAtMs as number

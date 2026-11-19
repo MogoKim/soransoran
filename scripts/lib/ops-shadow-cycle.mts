@@ -88,7 +88,7 @@ export async function runShadowCycle(o: ShadowCycleOptions): Promise<ShadowCycle
   const { limitsFromEnv } = await import('./supply-llm-call.mjs')
   const { fillDbConnection, readEnvKeys } = await import('./ops-signals.mjs')
   const { PREFLIGHT_ENV_KEYS } = await import('./stage-preflight-facts.mjs')
-  const { snapshot } = await import('../supply-process.mjs')
+  const { snapshot, voiceEligibleSet } = await import('../supply-process.mjs')
 
   if (!fillDbConnection()) throw new Error('DATABASE_URL 이 없다')
   const env: Record<string, string | undefined> = { ...process.env, ...readEnvKeys(PREFLIGHT_ENV_KEYS).values }
@@ -127,7 +127,8 @@ export async function runShadowCycle(o: ShadowCycleOptions): Promise<ShadowCycle
     let recorded: ShadowObservedRecord['observation'] = null
     let deficit: ShadowObservedRecord['deficit'] = null
     {
-      const snap = await snapshot(db, { env, now, dataDir })
+      // 🔴 운영 회차와 같은 말투 집합으로 쓸 사람을 센다
+      const snap = await snapshot(db, { env, now, dataDir, slotEligible: voiceEligibleSet(now) })
       const openRead = readOpenReservations(ledgerDir)
       const split = classifyReservations({
         open: openRead.ok ? openRead.list : [], now, sessionId: 'ops-shadow', pid: process.pid, pidAlive,
@@ -170,7 +171,7 @@ export async function runShadowCycle(o: ShadowCycleOptions): Promise<ShadowCycle
       const slotsDueSoFar = profile.slots.filter((s) => s.hour * 60 + s.minute <= nowMinute).reduce((n, s) => n + s.count, 0)
       const observation = {
         at: now.toISOString(), kstDate,
-        jit: snap.jit === null ? null : { slots: snap.jit.slots, readyFilled: snap.jit.readyFilled },
+        jit: snap.jit === null ? null : { slots: snap.jit.slots, readyFilled: snap.jit.readyFilled, writable: snap.jit.fillable.length },
         inFlightExpectedReady: snap.classification === null ? null : snap.classification.counts.autoReadyPending,
         sourceYieldHigh: snap.sourceYield?.high ?? null,
         attemptableSpeakers,

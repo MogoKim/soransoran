@@ -14,19 +14,21 @@
  * 🔴 반환값에 원문 조각을 담지 않는다.
  *    후보 텍스트 자체는 호출부가 이미 갖고 있고, 판정 결과에는 코드·개수만 남는다.
  *
- * 🔴 반환 gates 는 입력과 무관하게 **항상 ①~⑨ 각 1개씩 9개**다.
+ * 🔴 반환 gates 는 입력과 무관하게 **항상 `GATE_ORDER` 의 관문 각 1개씩 7개**다.
  *    관문 하나가 근거를 여럿 가질 수는 있어도 관문 수는 늘지 않는다 —
  *    분모가 후보마다 달라지면 통과율 집계가 성립하지 않는다. orderGates 가 강제한다.
+ *    번호는 저장된 판정·로그와 이어지게 그대로 둔다(②·④는 없는 번호다 — 아래).
  *      ① 20자 유출        assertNoSourceLeak 재사용
- *      ② 고유 표현        checkUniqueExpression — 코퍼스 빈도 조회를 인자로 받는다
  *      ③ 식별 디테일      checkIdentifyingDetail — 단일 허용 · 결합이 위험
- *      ④ 구조 과복제      checkStructureCopy — ① 은 문자열, ④ 는 전개 순서
  *      ⑤ 금지 호칭 + §5 조언 제한  🔴 근거는 둘이지만 관문은 하나다
  *      ⑥-A 닉네임 혼입    author/회원 닉네임이 본문에 섞였는가
  *      ⑦ Persona Consistency  checkPersonaConsistency + 금지 역할 — 근거 둘, 관문 하나
  *      ⑧ Voice Fingerprint    checkVoiceFingerprint — 구조 · 반복 · seed 재사용
  *      ⑨ 출처 marker      checkSourceMarker
- *    🔴 아홉 관문의 판정부가 전부 있다. 그러나 대조 집합이 없으면 돌지 않는다 —
+ *    🔴 ②(고유 표현)·④(전개 순서)는 두지 않는다. 대조 대상이 카페 원문이 아니라 **우리 사이트에 이미 공개된
+ *       글·댓글**이라, 윗글의 낱말을 받아 말하는 대화를 막았다. 통째 복사는 ① 이, 스레드 안 같은 말은
+ *       `judgeFollowupText` 가 본다.
+ *    🔴 대조 집합이 없으면 돌지 않는 관문이 있다 —
  *       ⑦ 은 identity·No-Go 가, ⑧ 은 대조 발화·seedRef 가 있어야 본다.
  *       (§5 가족 경유 진술과 구조화 나열은 대조 집합 없이도 확정적으로 잡힌다)
  *    🔴 "돌지 않았다" 를 pass 로 보고하지 않는다 — notRun 으로 분리한다.
@@ -35,17 +37,14 @@ import { assertNoSourceLeak, M3_LEAK_RUN_MIN } from './voice-m3-contract.mjs'
 import { checkForbiddenAddress } from './persona-gate-forbidden-address.mjs'
 import { checkSourceMarker } from './persona-gate-source-marker.mjs'
 import { classifyReaction, type ReactionType } from './voice-comment-signals.mjs'
-import {
-  checkUniqueExpression, checkIdentifyingDetail, checkStructureCopy,
-  type FrequencyLookup,
-} from './persona-gate-234.mjs'
+import { checkIdentifyingDetail } from './persona-gate-identifying-detail.mjs'
 import { judgeExperienceGrounding, type EverydayFacts } from '../../src/lib/persona-experience-grounding'
 import {
   checkPersonaConsistency, checkVoiceFingerprint,
   type PersonaIdentityFacts, type FingerprintThresholds,
 } from './persona-gate-78.mjs'
 
-export type GateCode = '①' | '②' | '③' | '④' | '⑤' | '⑥' | '⑦' | '⑧' | '⑨'
+export type GateCode = '①' | '③' | '⑤' | '⑥' | '⑦' | '⑧' | '⑨'
 export type GateOutcome = 'pass' | 'review' | 'regenerate' | 'reject' | 'notRun'
 
 export type GateResult = {
@@ -62,7 +61,6 @@ export type AiToneTag =
   | 'OVER_EMPATHY'       // 과도한 공감
   | 'NO_LIFE_MARKS'      // 생활감 부족
   | 'IDENTITY_CONFLICT'  // 정체성 모순
-  | 'STRUCTURE_COPY'     // 원문 구조 과복제
   | 'SEED_TOO_CLOSE'     // 원문 댓글과 유사
   | 'ADVICE_RISK'        // 조언 위험
   | 'SOURCE_TRACE'       // 외부 커뮤니티 흔적
@@ -95,11 +93,6 @@ export type CandidateInput = {
   text: string
   /** ① 대조용 source 텍스트 (원문 본문 · 원댓글) */
   sourceTexts: readonly string[]
-  /**
-   * ② 고유 표현 대조 대상 — 주지 않으면 `sourceTexts` 전체다.
-   * 글쓴이가 자기 글에 답할 때는 자기 글(제목 · 본문)을 뺀 것이 온다: 자기 글의 낱말을 다시 쓰는 것은 베끼기가 아니다.
-   */
-  uniqueExpressionSources?: readonly string[]
   /** ⑥-A 대조용 — 회원 표시명 · 크롤 author 원문 (있으면) */
   knownNames?: readonly string[]
   /** 페르소나가 맡지 않는 역할 — forbiddenReactionRoles */
@@ -108,13 +101,6 @@ export type CandidateInput = {
   adviceForbidden?: boolean
   /** 출처가 카페 운영/공지 문맥인가 — ⑨ 로 넘긴다 */
   sourceIsCafeOperational?: boolean
-  /**
-   * ② 코퍼스 빈도 조회. 🔴 없으면 ② 는 notRun 이다 — pass 로 세지 않는다.
-   *    댓글 생성물에는 **댓글 코퍼스**를 붙여야 한다(§3-②).
-   */
-  frequencyLookup?: FrequencyLookup
-  /** ② 로그용 — 어느 코퍼스로 쟀는지 */
-  corpusName?: string
   /**
    * ⑦ 설정 대조. 🔴 없으면 설정 모순은 notRun 이다 —
    *    다만 §5 가족 경유 진술은 설정 없이도 확정적으로 잡는다.
@@ -138,10 +124,10 @@ const SEVERITY: Record<GateOutcome, number> = {
 /** 🔴 근거가 둘일 때 더 엄격한 쪽을 남긴다 — pass < review < regenerate < reject */
 const stricter = (a: GateOutcome, b: GateOutcome): GateOutcome => (SEVERITY[a] >= SEVERITY[b] ? a : b)
 
-const GATE_ORDER: readonly GateCode[] = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
+export const GATE_ORDER: readonly GateCode[] = ['①', '③', '⑤', '⑥', '⑦', '⑧', '⑨']
 
 /**
- * 🔴 9관문은 입력과 무관하게 항상 ①~⑨ 각 1개씩이다.
+ * 🔴 관문은 입력과 무관하게 항상 `GATE_ORDER` 각 1개씩이다.
  *    관문이 빠지면 "돌지 않은 것" 이 집계에서 사라지고,
  *    중복되면 같은 관문이 두 번 세어져 통과율이 왜곡된다.
  *    호출부가 아니라 판정부가 막는다 — 이건 반환값의 계약이다.
@@ -295,7 +281,7 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   // ── ⑤ 금지 호칭 + §5 조언 제한 — 🔴 근거는 둘, 관문은 하나다 ──
   //    호칭 위반과 조언 위반은 이유가 다르지만 둘 다 Gate ⑤ 다.
   //    각각 push 하면 후보에 따라 gates 가 9개가 되기도 10개가 되기도 한다 —
-  //    관문 수가 입력에 따라 흔들리면 "9관문 중 몇 종" 이라는 집계 자체가 성립하지 않는다.
+  //    관문 수가 입력에 따라 흔들리면 "관문 중 몇 종" 이라는 집계 자체가 성립하지 않는다.
   //    🔴 둘 다 걸리면 더 엄격한 쪽을 남긴다 (pass < review < regenerate < reject)
   //      단정형("~하셔야 합니다")   regenerate — 판단을 내려주고 있다
   //      그 외 조언 신호            review     — 사람이 본다
@@ -323,37 +309,11 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   })
   if (reactionType === 'empathy' && text.length < 15) tags.push('OVER_EMPATHY')
 
-  // ── ② 고유 표현 / 특이 조어 ──
-  //    🔴 코퍼스 빈도 조회가 없으면 판정이 성립하지 않는다. notRun 이다.
-  if (input.frequencyLookup === undefined) {
-    gates.push({ gate: '②', outcome: 'notRun', detail: '코퍼스 빈도 조회 없음' })
-  } else if (!hasSource) {
-    gates.push({ gate: '②', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
-  } else {
-    // 🔴 따로 받은 대조 대상이 비어 있으면 전체로 돌아간다 — 대조 없이 통과시키지 않는다
-    const narrowed = (input.uniqueExpressionSources ?? []).filter((t) => t.trim() !== '')
-    const two = checkUniqueExpression(
-      text, narrowed.length > 0 ? narrowed : input.sourceTexts, input.frequencyLookup, input.corpusName ?? 'comment',
-    )
-    gates.push({ gate: '②', outcome: two.status, detail: two.detail })
-    if (two.status !== 'pass') tags.push('SEED_TOO_CLOSE')
-  }
-
   // ── ③ 식별 디테일 — 🔴 단일은 허용, 결합이 위험하다 ──
   const three = checkIdentifyingDetail(text)
   gates.push({ gate: '③', outcome: three.status, detail: three.detail })
 
-  // ── ④ 구조 과복제 — 🔴 ① 과 역할이 다르다 ──
-  //    ① 은 문자열, ④ 는 전개 순서. 표현이 전부 달라도 ④ 는 걸릴 수 있다
-  if (!hasSource) {
-    gates.push({ gate: '④', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
-  } else {
-    const four = checkStructureCopy(text, input.sourceTexts)
-    gates.push({ gate: '④', outcome: four.status, detail: four.detail })
-    if (four.status !== 'pass') tags.push('STRUCTURE_COPY')
-  }
-
-  // 🔴 집계보다 먼저 관문 수를 확정한다 — 9개가 아니면 여기서 멈춘다
+  // 🔴 집계보다 먼저 관문 수를 확정한다 — `GATE_ORDER` 와 다르면 여기서 멈춘다
   const ordered = orderGates(gates)
   const ran = ordered.filter((g) => g.outcome !== 'notRun')
   const worst = ran.reduce<Exclude<GateOutcome, 'notRun'>>(
@@ -367,8 +327,7 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
     reactionType,
     status: worst,
     gates: ordered,
-    // 🔴 중복 제거 — ① 과 ② 가 같은 태그를 붙일 수 있다.
-    //    운영자 화면에서 같은 태그가 두 번 보이면 근거가 둘인지 버그인지 알 수 없다
+    // 🔴 중복 제거 — 운영자 화면에서 같은 태그가 두 번 보이면 근거가 둘인지 버그인지 알 수 없다
     aiToneTags: [...new Set(tags)],
     sourceLeak: leaked,
     charLength: [...text].length,

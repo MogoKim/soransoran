@@ -1,17 +1,17 @@
 /**
- * 무인 Persona 댓글 루프 **오케스트레이터** — 🔴 대상 선정 → 생성 → 9관문 → PENDING → 발행을 한 회차로 잇는다
+ * 무인 Persona 댓글 루프 **오케스트레이터** — 🔴 대상 선정 → 생성 → 댓글 관문 → PENDING → 발행을 한 회차로 잇는다
  *
  * 🔴 **왜 생겼나** (2026-09-28 · Track B).
  *
- *    부품은 전부 있었다 — `materializeTargets`(대상) · `runEnqueuePipeline`(생성·9관문·적재) ·
+ *    부품은 전부 있었다 — `materializeTargets`(대상) · `runEnqueuePipeline`(생성·댓글 관문·적재) ·
  *    `publishCandidateTx`(발행). 그런데 **예약으로 이어 주는 자리가 없었다.**
  *    runner 는 사람이 승인한 행만 발행했고, 후보를 만드는 명령(`persona:comment-queue`)은
  *    사람이 손으로 돌려야 했다. 그래서 공개 Persona 댓글은 0/day 였다.
  *
  * 🔴 **새 판정을 만들지 않는다.** 이 파일이 하는 일은 순서뿐이다.
  *      · 대상 선정 · Persona-first 입력 · Gate 입력 — `materializeTargets` (Queue CLI 와 같은 함수)
- *      · 개인정보 판정 · provider · 9관문 · 적재 계약 — `runEnqueuePipeline` · `planEnqueue`
- *      · 9관문 판정 — `checkCommentCandidate` (완화 없음)
+ *      · 개인정보 판정 · provider · 댓글 관문 · 적재 계약 — `runEnqueuePipeline` · `planEnqueue`
+ *      · 댓글 관문 판정 — `checkCommentCandidate` (완화 없음)
  *      · 발행 · 재검사 — `publishCandidateTx({ autoLane: true })` (Serializable · 재검사 전부)
  *      · 비용 — `SupplyLlmSession` 장부 (댓글 전용 디렉터리 · 하루 상한)
  *    무인 레인이 더하는 규칙 넷(60분 · 글당 1건 · 자기 글 · 단계/주체/상태)은
@@ -170,7 +170,7 @@ export type CommentGenerate = (args: {
 }) => Promise<{ ok: boolean; text: string | null; errorCode: string | null }>
 
 /**
- * 🔴 **9관문은 `checkCommentCandidate` 정본 그대로다.** Queue CLI 와 같은 모양으로 감싼다 —
+ * 🔴 **댓글 관문은 `checkCommentCandidate` 정본 그대로다.** Queue CLI 와 같은 모양으로 감싼다 —
  *    bootstrap 여부는 호출자 주장이 아니라 Gate 모양으로 판정한다.
  *    판정부 결함(관문 수 불일치 throw)은 **그 후보만** 막는다 — 빈 gates 는 `planEnqueue` 가 거절한다.
  */
@@ -375,7 +375,7 @@ const emptyReport = (outcome: CommentLoopOutcome, stage: string, reason: string)
  *    ① 단계가 bootstrap-auto 가 아니면 아무것도 하지 않는다(provider 0 · write 0)
  *    ② 모델이 확정되지 않았으면 아무것도 하지 않는다
  *    ③ 발행 sweep — 앞 회차가 남긴 PENDING 을 먼저 낸다(창 밖이면 닫는다)
- *    ④ 오늘 예산이 남았으면 60분 창 안의 새 글마다 **한 대상만** 만들고 9관문을 거쳐 PENDING 적재
+ *    ④ 오늘 예산이 남았으면 60분 창 안의 새 글마다 **한 대상만** 만들고 댓글 관문을 거쳐 PENDING 적재
  *    ⑤ 발행 sweep — 방금 적재한 것을 낸다
  *
  * 🔴 ③ 을 ④ 앞에 두는 이유 — 적재만 되고 발행되지 못한 행이 있으면 그 글에는 **이미 후보가 있다.**

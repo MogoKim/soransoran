@@ -41,7 +41,7 @@ import {
   PACE_MIN_MS, PACE_MAX_MS, runIdOf, seenArticleIds as seenDetailIds,
 } from './micro-seed-detail-fetch.mjs'
 import {
-  RAW_LANE, RAW_AXIS, NOT_PUBLISH_NOTE, BODY_HEAD_CHARS,
+  RAW_LANE, NOT_PUBLISH_NOTE, BODY_HEAD_CHARS,
   digestBody, selectRawTargets, prescreen, blockedBeforeRead,
   type RawCandidate,
 } from './lib/micro-seed-raw-originality.mjs'
@@ -341,10 +341,9 @@ async function main(): Promise<void> {
   writeFileSync(jsonlPath, out.map((r) => JSON.stringify(r)).join('\n') + (out.length ? '\n' : ''), 'utf-8')
   writeFileSync(tsvPath, toTsv(out), 'utf-8')
 
-  console.log('\n③ 축 분포 — 🔴 lane 이 originalRaw 라고 축이 rawOriginality 가 되지는 않는다')
-  const axes: DetailAxis[] = ['rawOriginality', 'shortRawNoindex', 'seedOriginality', 'hold', 'drop', 'access']
+  console.log('\n③ 축 분포 — 🟡 분류는 길이로 가르지 않는다. 새 사본에는 raw 축이 없다')
+  const axes: DetailAxis[] = ['seedOriginality', 'hold', 'drop', 'access']
   for (const a of axes) console.log(`   ${pad(AXIS_LABEL[a], 20)} ${out.filter((r) => r.axis === a).length}건`)
-  console.log(`\n   ${RAW_AXIS} ${out.filter((r) => r.axis === RAW_AXIS).length}건이 검수 화면 대상이다 (§4-AF ⑥ · T3)`)
   console.log(`   요청 ${requests}건 · pacing ${PACE_MIN_MS}~${PACE_MAX_MS}ms`)
   console.log(`   ✅ ${jsonlPath}`)
   console.log(`   ✅ ${tsvPath}`)

@@ -2,9 +2,9 @@
 /**
  * 🔴 **무인 댓글 루프 — 격리 Postgres 실행 검사** (2026-09-28 · Track B)
  *
- *   실제 경로 그대로 돈다: `runCommentLoop` → `materializeTargets`(실제 DB source) → 9관문 정본
+ *   실제 경로 그대로 돈다: `runCommentLoop` → `materializeTargets`(실제 DB source) → 관문 정본
  *   (`checkCommentCandidate`) → PENDING 적재 → `publishCandidateTx({ autoLane: true })`(Serializable).
- *   가짜는 두 곳뿐이다 — **생성 텍스트**(네트워크 0)와 **② 코퍼스 빈도**(운영 자산 대신 고정 조회).
+ *   가짜는 한 곳뿐이다 — **생성 텍스트**(네트워크 0).
  *   모델 확정 정본 · artifact · reference manifest 는 **임시 HOME 아래에 실제 모양으로** 만든다 —
  *   provenance 대조가 운영과 같은 함수로 돈다.
  *
@@ -176,10 +176,9 @@ function fakeGenerate(textFor: (postTitle: string) => string | Error = () => GOO
     calls: () => n,
   }
 }
-/** 🔴 실제 DB source — ② 코퍼스만 고정 조회(운영 자산 대신) */
+/** 🔴 실제 DB source 그대로 */
 function source(): TargetSource {
-  const base = makeDbTargetSource({ prisma, windowStart: new Date(Date.now() - 7 * 86_400_000) })
-  return { ...base, frequency: async () => ({ corpus: { lookup: () => 7, size: 1000, corpusName: 'comment' }, reason: 'fixture corpus' }) }
+  return makeDbTargetSource({ prisma, windowStart: new Date(Date.now() - 7 * 86_400_000) })
 }
 /**
  * 🔴 **Persona 답글 감시** — 시나리오마다 wipe 하므로 끝에서 한 번 세면 앞 시나리오의 답글을 못 본다.
@@ -307,7 +306,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **planner 를 우회해도 트랜잭션이 3건 글을 막는다**', row.status === 'EXPIRED' && (await personaComments(busy)).length === 0)
   }
 
-  console.log('\n⑥ 9관문 실패 · 예외는 그 한 건만 — 다음 글은 계속')
+  console.log('\n⑥ 관문 실패 · 예외는 그 한 건만 — 다음 글은 계속')
   {
     await wipe()
     const a = await persona('P01'); await persona('P02'); await persona('P03')
@@ -317,7 +316,7 @@ async function main(): Promise<void> {
     const f = fakeGenerate((title) => title === t1.title ? t1.content : title === t3 ? new Error('network') : GOOD)
     const r = await loop(f.gen)
     const steps = r.outcomes.map((o) => o.step)
-    check('🔴 원문 복제 글 → 9관문에서 막혀 적재·발행 0', (await personaComments(p1)).length === 0
+    check('🔴 원문 복제 글 → 관문에서 막혀 적재·발행 0', (await personaComments(p1)).length === 0
       && (await prisma.personaApprovalQueue.count({ where: { targetPostId: p1 } })) === 0, JSON.stringify(steps))
     check('🔴 provider 예외 글 → 그 글만 실패', (await personaComments(p3)).length === 0 && steps.includes('PROVIDER_FAILED'))
     check('🟢 나머지 글은 계속 — 정확히 1건', (await personaComments(p2)).length === 1, JSON.stringify(r.outcomes.map((o) => `${o.step}:${o.reason}`)))
@@ -542,7 +541,7 @@ async function main(): Promise<void> {
     const aLocked = a.r.outcomes.find((o) => o.personaCode === 'P14' && o.postId === lonely)
     const aLine = a.r.lines.find((l) => l.includes('P14 → 글')) ?? ''
     check('🔴 A — planner 가 이력이 가장 적은 잠긴 P14 를 먼저 고른다', a.sent[0]?.code === 'P14', `${JSON.stringify(a.sent)} · ${a.r.generationSkipped ?? ''} · ${a.r.lines.slice(0, 6).join(' / ')}`)
-    check('🔴 A — 우세 3-gram 을 다시 쓴 후보는 실제 9관문에서 ⑧ 후보 원인으로 막힌다',
+    check('🔴 A — 우세 3-gram 을 다시 쓴 후보는 실제 관문에서 ⑧ 후보 원인으로 막힌다',
       aLocked?.step === 'ENQUEUE_BLOCKED' && aLine.includes('⑧ 후보 원인'), aLine)
     check('🔴 A — 이 글 댓글 0 · Queue 0', (await personaComments(lonely)).length === 0
       && (await prisma.personaApprovalQueue.count({ where: { targetPostId: lonely } })) === 0)

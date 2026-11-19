@@ -17,15 +17,11 @@ import {
 } from '../src/lib/micro-seed-auto-draft'
 import { measureOriginality, judgeCopy, COPY_RUN_WORDS } from '../src/lib/draft-originality'
 import { parseAgeBand, judgeSelfAgeConflict } from '../src/lib/persona-self-age'
-import {
-  judgeCrisisSignal, judgeMedicalDecisionRequest, judgeHealthEfficacyClaim,
-  judgeSafetySignals, SAFETY_SIGNAL_CODES,
-} from '../src/lib/micro-seed-safety-signals'
-import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
+import { judgeCrisisSignal, SAFETY_SIGNAL_CODES } from '../src/lib/micro-seed-safety-signals'
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   callBudgetOf, CallBudget, HARM_BANS, MAX_ORIGINALITY_RETRIES,
-  CALL_ALLOWANCE_PER_SOURCE, HARM_PROMPT, V2_CALL_CAP, V2_LEDGER_STAGE,
+  CALL_ALLOWANCE_PER_SOURCE, V2_CALL_CAP, V2_LEDGER_STAGE,
 } from './micro-seed-auto-draft.mjs'
 import {
   readSourceProfile, readClosingIntent, readTitleIntent, endsNaturallyAsQuestion,
@@ -159,7 +155,7 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
 console.log('\n② 🔴 AUTO_SEED 만 초안화한다')
 {
   check('🟢 AUTO_SEED 는 통과', p().decision === 'AUTO_ADOPT')
-  for (const d of ['AUTO_HOLD', 'AUTO_DROP', 'AUTO_RAW', '']) {
+  for (const d of ['AUTO_HOLD', 'AUTO_DROP', '']) {
     check(`🔴 ${d || '(빈값)'} 은 초안화하지 않는다`, p({
       judgement: { sourceArticleId: 's1', decision: d, semanticRisks: [] },
     }).decision === 'AUTO_DROP')

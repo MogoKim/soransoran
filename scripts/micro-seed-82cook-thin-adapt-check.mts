@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import {
   toDetailRecord, toRawDetailRecord, statsOf, violatesAdapt, accessOf,
   DETAIL_KEYS, RAW_DETAIL_KEYS, FORBIDDEN_KEYS,
-  SOURCE_AXIS, RAW_AXIS, SRN_AXIS,
+  SOURCE_AXIS,
   DEFAULT_IMAGE_COUNT, DEFAULT_LENGTH_BASIS, ADAPT_PREFIX,
   type ThinRow,
 } from '../src/lib/micro-seed-82cook-thin-adapt'
@@ -106,23 +106,19 @@ console.log('\n④ 🔴 drop · hardExclude 는 어느 화면에도 오르지 �
 {
   const rows = [
     ok({ sourceArticleId: 'a1', axis: SOURCE_AXIS }),
-    ok({ sourceArticleId: 'a2', axis: RAW_AXIS }),
-    ok({ sourceArticleId: 'a3', axis: SRN_AXIS }),
     ok({ sourceArticleId: 'a4', axis: 'drop', safetyVerdict: 'hardExclude' }),
     ok({ sourceArticleId: 'a5', axis: SOURCE_AXIS, safetyVerdict: 'hardExclude' }),
     ok({ sourceArticleId: 'a6', axis: SOURCE_AXIS, bodyLength: 0 }),
   ]
   const s = statsOf(rows)
   check('소스 후보 1건', s.sourceCandidates === 1)
-  check('raw 후보 1건', s.rawCandidates === 1)
-  check(`${SRN_AXIS} 는 따로 센다 — 발행 후보화하지 않는다`, s.srn === 1)
   check('🔴 drop·hardExclude 2건이 후보에서 빠진다', s.dropped === 2)
   check('🔴 safety 가 pass 가 아니면 축이 맞아도 안 오른다',
     !rows.filter((r) => r.sourceArticleId === 'a5')
-      .every(() => statsOf([rows[4]!]).sourceCandidates === 1))
-  check('🔴 읽지 못한 글도 안 오른다', statsOf([rows[5]!]).sourceCandidates === 0)
+      .every(() => statsOf([rows[2]!]).sourceCandidates === 1))
+  check('🔴 읽지 못한 글도 안 오른다', statsOf([rows[3]!]).sourceCandidates === 0)
   check('읽지 못한 것을 따로 센다', s.unreadable === 1)
-  check('전체 수는 그대로', s.total === 6)
+  check('전체 수는 그대로', s.total === 4)
 }
 
 console.log('\n⑤ 🔴 하지 않는 것 — 스캔')

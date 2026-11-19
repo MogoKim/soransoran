@@ -15,7 +15,7 @@
  */
 import {
   planSpeakerAvailability, remainingCapacity, planOpenDays,
-  planAttemptCapacity, createAttemptPool, ATTEMPT_CONTRACT, type AttemptPool,
+  planSeatWriters, firstWritableSeat, createAttemptPool, ATTEMPT_CONTRACT, type AttemptPool,
 } from '../src/lib/content-core/speaker-availability'
 import {
   readSpeakerLoad, draftSpeakerOf,
@@ -26,7 +26,7 @@ import {
 } from '../src/lib/content-core/speaker'
 import type { EvidenceSpan } from '../src/lib/content-core/evidence'
 import { PROFILES } from '../src/lib/scale-profile'
-import { availablePersonasAt, type PersonaHistory } from '../src/lib/supply-capacity-forecast'
+import { availablePersonasAt, personaAvailableAt, type PersonaHistory } from '../src/lib/supply-capacity-forecast'
 import { judgeSlotRelease, matchOpportunitiesToSlots, type SlotOpportunity } from '../src/lib/source-slot-release'
 import { slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
@@ -499,7 +499,7 @@ console.log('\n⑪ 🔴 🔴 재고는 **낼 수 있는 글**만 센다 — lega
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 (speaker-attempt-v1 · 2026-10-13 12:15 재현)')
+console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 (2026-10-13 12:15 재현)')
 // ─────────────────────────────────────────────────────────
 {
   /**
@@ -524,9 +524,14 @@ console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 
   const avail = (h: readonly { code: string; matchedAts: readonly Date[] }[], at: Date, c: { postsPerWeek: number; minDaysBetween: number }): string[] =>
     availablePersonasAt(h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, c)
   const before = JSON.stringify(history)
-  const attempt = planAttemptCapacity({
-    days: [T1, T2], history, availableAt: avail, caps: CAPS5, wipOf: (c) => wip.get(c) ?? 0,
-  })
+  const kstDay = (at: Date): string => new Date(at.getTime() + 9 * HOUR).toISOString().slice(0, 10)
+  const canWrite5 = (matchedAts: readonly Date[], at: Date): boolean =>
+    personaAvailableAt({ code: '', matchedAts: [...matchedAts] }, at, CAPS5)
+  const HORIZON = [T1, T1, T1, T2]
+  // 🔴 그날 재현의 인원(27명)을 그대로 쓴다 — WIP 가 사람을 뒷날로 미는 것은 ⑬ 이 따로 잰다
+  const attempt = planSeatWriters({
+    horizon: HORIZON, unfilled: HORIZON, history, canWriteAt: canWrite5, wipOf: () => 0, dateLabel: kstDay,
+  }).byCode
   const attemptRows = codes.map((code) => ({ code, attemptCapacity: attempt.get(code)?.attemptCapacity ?? 0 }))
   const seedKeys = (n: number): string[] => Array.from({ length: n }, (_, i) => `seed-${String(i + 1).padStart(2, '0')}`)
 
@@ -544,7 +549,7 @@ console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 
     oldContract.eligible.length === 3 && oldContract.slots.filter((sl) => sl.codes.length === 0).length === 7,
     `${oldContract.eligible.join(',')}`)
   check('자격 화자 27명 — 상한에 걸린 3명은 시도 여력 0',
-    [...attempt.values()].filter((r) => r.eligibleDays > 0).length === 27
+    [...attempt.values()].filter((r) => r.seatAt !== null).length === 27
     && ['P21', 'P22', 'P23'].every((c) => attempt.get(c)?.attemptCapacity === 0))
 
   /**
@@ -722,20 +727,17 @@ console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 
   check('🔴 🔴 **시도 여력 값이 2 로 들어와도 한 사람 한 원천 — 인원 3 → 유료 경로 상한 3**',
     overfed.attemptSupply === 3 && overfed.attemptLimit === 3)
 
-  const wipOnly = planAttemptCapacity({
-    days: [T1], history: [{ code: 'P01', matchedAts: [] }, { code: 'P02', matchedAts: [] }],
-    availableAt: avail, caps: CAPS5, wipOf: (c) => (c === 'P01' ? 1 : 0),
+  const noHorizon = planSeatWriters({
+    horizon: [], unfilled: [], history, canWriteAt: canWrite5, wipOf: () => 0, dateLabel: kstDay,
   })
-  check('🔴 WIP 는 계속 뺀다 — 자격 1일 · WIP 1 이면 시도 0',
-    wipOnly.get('P01')?.attemptCapacity === 0 && wipOnly.get('P02')?.attemptCapacity === 1)
-  const noHorizon = planAttemptCapacity({ days: [], history, availableAt: avail, caps: CAPS5, wipOf: () => 0 })
   check('🔴 지평에 공개 자리가 없으면 시도 여력도 없다 — 지평 밖 날로 앞당기지 않는다',
-    [...noHorizon.values()].every((r) => r.attemptCapacity === 0))
-  const voiceOnly = planAttemptCapacity({
-    days: [T1, T2], history, availableAt: avail, caps: CAPS5, wipOf: () => 0, canTakeSlot: (c) => c === 'P05',
+    [...noHorizon.byCode.values()].every((r) => r.attemptCapacity === 0) && noHorizon.fillable.length === 0)
+  const voiceOnly = planSeatWriters({
+    horizon: HORIZON, unfilled: HORIZON, history, canWriteAt: canWrite5, wipOf: () => 0, dateLabel: kstDay,
+    canTakeSlot: (c) => c === 'P05',
   })
   check('🔴 말투 근거 없는 화자는 시도 여력 0 — 자격 없는 사람을 끼우지 않는다',
-    [...voiceOnly.entries()].every(([c, r]) => r.attemptCapacity === (c === 'P05' ? 1 : 0)))
+    [...voiceOnly.byCode.entries()].every(([c, r]) => r.attemptCapacity === (c === 'P05' ? 1 : 0)))
 
   // 파일 계약 — 시도 계약이 있을 때만 시도 여력을 준다
   const now = new Date()
@@ -771,14 +773,78 @@ console.log('\n⑫ 🔴 🔴 생성 시도 여력은 공개 자리와 다르다 
       && /if \(attemptPool !== null && chosenCode !== ''\) \{\n\s*try \{ attemptPool\.markChosen\(chosenCode\) \}/.test(draftSrc),
       `${iTake} ${iRun} ${iMark} ${iDraftNull}`)
   }
-  check('🔴 🔴 **공개 자리는 공개 슬롯 수 그대로 — 시도 수로 키우지 않는다**',
-    /dailyTarget: seatsByDate\.get\(kstDateString\(at\)\)\?\.seats \?\? 0,/.test(supplySrc)
-    && /const releaseSeats = \[\.\.\.seatsByDate\.values\(\)\]\.reduce\(\(n, d\) => n \+ d\.seats, 0\)/.test(supplySrc))
-  check('🔴 🔴 **공급 러너가 같은 지평 · 같은 WIP 로 시도 여력을 적는다**',
-    /planAttemptCapacity\(\{\s*days, history,/.test(supplySrc)
-    && /wipOf: \(code\) => wipBy\.byCode\.get\(code\) \?\? 0/.test(supplySrc)
-    && /attemptCapacity: attempt\.get\(code\)\?\.attemptCapacity \?\? 0/.test(supplySrc)
-    && /attemptContract: ATTEMPT_CONTRACT, releaseSeats,/.test(supplySrc))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 🔴 그 글이 나갈 날에 쓸 수 있는 사람에게만 초안을 준다')
+// ─────────────────────────────────────────────────────────
+{
+  const HOUR = 3_600_000
+  const CAPS = { postsPerWeek: PROFILES.d10.postsPerWeek, minDaysBetween: PROFILES.d10.minDaysBetween }
+  const kstDay = (at: Date): string => new Date(at.getTime() + 9 * HOUR).toISOString().slice(0, 10)
+  const canWrite = (matchedAts: readonly Date[], at: Date): boolean =>
+    personaAvailableAt({ code: '', matchedAts: [...matchedAts] }, at, CAPS)
+  const kst = (day: string, hm: string): Date => new Date(`${day}T${hm}:00+09:00`)
+  const TODAY = '2026-11-18'
+  const TOMORROW = '2026-11-19'
+  /** 오늘 17:15 회차 — 오늘 남은 자리 4개(17:40 · 18:20 · 19:10 · 19:50) + 내일 첫 자리 08:00 */
+  const today = ['17:40', '18:20', '19:10', '19:50'].map((hm) => kst(TODAY, hm))
+  const tomorrow = kst(TOMORROW, '08:00')
+  const wroteToday = [kst(TODAY, '09:20')]
+  const weekFull = [1, 2, 3, 4, 5].map((d) => new Date(kst(TODAY, '10:00').getTime() - d * 24 * HOUR))
+  const history = [
+    { code: 'A1', matchedAts: [] as Date[] },           // 오늘 쓸 수 있다
+    { code: 'A2', matchedAts: [] as Date[] },           // 오늘 쓸 수 있다
+    { code: 'B1', matchedAts: wroteToday },             // 오늘 이미 썼다 — 내일부터
+    { code: 'B2', matchedAts: wroteToday },             // 오늘 이미 썼다 — 내일부터
+    { code: 'W1', matchedAts: [] as Date[] },           // 미공개 글 1편을 들고 있다 — 그 글이 오늘 자리를 쓴다
+    { code: 'X1', matchedAts: weekFull },               // 주간 상한 — 지평 안에 쓸 날이 없다
+  ]
+  const wipOf = (c: string): number => (c === 'W1' ? 1 : 0)
+  const seat = (code: string, seats: readonly Date[]): Date | null => {
+    const h = history.find((x) => x.code === code)!
+    return firstWritableSeat({ seats, matchedAts: h.matchedAts, wip: wipOf(code), canWriteAt: canWrite })
+  }
+  const all = [...today, tomorrow]
+  check('🔴 한 함수 — 오늘 안 쓴 사람의 가장 이른 자리는 오늘 · 오늘 쓴 사람은 내일 · 주간 상한이면 없음',
+    kstDay(seat('A1', all)!) === TODAY && kstDay(seat('B1', all)!) === TOMORROW && seat('X1', all) === null)
+  check('🔴 들고 있는 글이 이른 자리를 먼저 쓴다 — 그 사람의 새 글은 내일',
+    kstDay(seat('W1', all)!) === TOMORROW)
+  check('🔴 자리를 인자로 받는다 — 마감 시각 하나만 주면 "그때까지 쓸 수 있는가"가 된다',
+    seat('A1', [today[0]!]) !== null && seat('B1', [today[0]!]) === null && seat('W1', [today[0]!]) === null)
+
+  const day = planSeatWriters({ horizon: all, unfilled: all, history, canWriteAt: canWrite, wipOf, dateLabel: kstDay })
+  const poolOf = (p: typeof day): string[] => [...p.byCode].filter(([, r]) => r.attemptCapacity > 0).map(([c]) => c).sort()
+  check('🔴 🔴 **오늘 이미 쓴 사람은 오늘 자리 초안을 받지 않는다** — 풀은 오늘 쓸 수 있는 2명뿐',
+    JSON.stringify(poolOf(day)) === JSON.stringify(['A1', 'A2']), poolOf(day).join(','))
+  check('🔴 🔴 **쓸 사람이 모자라면 수요가 그만큼 준다** — 빈 자리 5개 중 2개만 산다(오늘 자리 · 이른 순)',
+    day.fillable.length === 2 && day.fillable.every((d) => kstDay(d) === TODAY)
+    && day.fillable[0]!.getTime() === today[0]!.getTime(), String(day.fillable.length))
+  check('날짜별 산수 — 오늘 빈 자리 4 · 쓸 사람 2 · 채움 2 / 내일 빈 자리 1 · 그날부터 3명 · 채움 0(저녁 회차 몫)',
+    JSON.stringify(day.byDate) === JSON.stringify([
+      { date: TODAY, unfilled: 4, writers: 2, fill: 2 }, { date: TOMORROW, unfilled: 1, writers: 3, fill: 0 },
+    ]), JSON.stringify(day.byDate))
+
+  const roomy = planSeatWriters({
+    horizon: [today[0]!, tomorrow], unfilled: [today[0]!, tomorrow], history, canWriteAt: canWrite, wipOf, dateLabel: kstDay,
+  })
+  check('오늘 쓸 사람이 남으면 내일 자리도 그 사람들이 채운다 — 오늘 1 + 내일 1 · 풀은 여전히 오늘 쓸 수 있는 사람',
+    roomy.fillable.length === 2 && JSON.stringify(poolOf(roomy)) === JSON.stringify(['A1', 'A2']))
+
+  const evening = planSeatWriters({ horizon: [tomorrow], unfilled: [tomorrow], history, canWriteAt: canWrite, wipOf, dateLabel: kstDay })
+  check('🔴 🔴 **내일 자리는 내일 쓸 수 있는 사람에게** — 저녁 회차: 오늘 쓴 사람도 받고, 내일 자리로 쓰는 중인 사람(W1)은 빠진다',
+    JSON.stringify(poolOf(evening)) === JSON.stringify(['A1', 'A2', 'B1', 'B2']) && evening.fillable.length === 1,
+    poolOf(evening).join(','))
+
+  const noneToday = planSeatWriters({
+    horizon: all, unfilled: all, history: history.filter((h) => !h.code.startsWith('A')), canWriteAt: canWrite, wipOf, dateLabel: kstDay,
+  })
+  check('오늘 쓸 사람이 0명이면 오늘 자리는 사지 않는다 — 내일 자리 1개만 · 내일 쓸 수 있는 사람이 받는다',
+    noneToday.fillable.length === 1 && kstDay(noneToday.fillable[0]!) === TOMORROW
+    && JSON.stringify(poolOf(noneToday)) === JSON.stringify(['B1', 'B2', 'W1']), poolOf(noneToday).join(','))
+
+  const covered = planSeatWriters({ horizon: all, unfilled: [], history, canWriteAt: canWrite, wipOf, dateLabel: kstDay })
+  check('빈 자리가 없으면 수요 0 · 시도 여력 0', covered.fillable.length === 0 && poolOf(covered).length === 0)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

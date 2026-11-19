@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import {
   classifyAccess, classifyDetail, measureLength, AXIS_LABEL,
-  SHORT_RAW_MAX, RAW_MIN_BODY, type DetailAxis,
+  type DetailAxis,
 } from './lib/micro-seed-detail-classify.mjs'
 import { TSV_COLUMNS, ALLOWED_CAPS, DEFAULT_CAP, PACE_MIN_MS, PACE_MAX_MS, DETAIL_KILL_SWITCH_ENV } from './micro-seed-detail-fetch.mjs'
 
@@ -71,45 +71,41 @@ for (const a of ['deletedOrExpired', 'permissionDenied', 'renderFailed', 'select
   check(`   Drop·Hold 로 뭉개지 않는다`, v.axis !== 'drop' && v.axis !== 'hold')
 }
 
-console.log('\n③ 위험은 길이보다 먼저다 — 짧다고 통과시키지 않는다')
+console.log('\n③ 결정적 안전 판정 — 의료·광고 낱말로는 막지 않는다')
 check('🔴 사회·정치 화제 제목이라는 이유로는 drop 하지 않는다 — 정치 낱말 사전은 지웠다',
   D({ title: '대선 후보 토론 보셨어요', body: '어떻게 보셨나요 궁금해요' }).axis !== 'drop')
-check('🔴 의료 단정 + 40자 → hold (Short Raw 아님)',
-  D({ title: '도수치료 어떤가요', body: '도수치료 받아볼까 고민중이에요 추천 부탁' }).axis === 'hold')
+check('🔴 의료 낱말(도수치료 · 처방 · 수술)이 있어도 글감이다 — 위험한 의료 지시는 모델 판정이 본다',
+  D({ title: '도수치료 어떤가요', body: '도수치료 받아볼까 고민중이에요 추천 부탁' }).axis === 'seedOriginality'
+  && D({ title: '갱년기 호르몬제 처방 받았어요', body: '수술 받고 나서 처방 받은 약 먹는 중인데 다들 어떠세요' }).axis === 'seedOriginality')
+check('🔴 광고 낱말(공구 · 입금 · 계좌 · 문의 주세요)이 있어도 글감이다 — 광고는 모델 판정이 본다',
+  D({ title: '공구로 산 냄비 후기', body: '입금하고 일주일 기다렸는데 계좌 이체가 번거로웠어요 문의 주세요 하길래' }).axis === 'seedOriginality')
+check('🔴 실제 번호가 적힌 글은 버린다 — 연락처 · 식별번호',
+  D({ title: '연락 주세요', body: '010-1234-5678 로 연락 주세요 기다릴게요' }).axis === 'drop'
+  && D({ title: '확인 부탁', body: '주민번호 800101-2345678 이거 맞나요' }).axis === 'drop')
 check('🔴 이미지 의존 + 짧은 본문 → drop',
   D({ title: '이 글씨체 뭔지 아는 분', body: '이거 뭐죠', imageCount: 2 }).axis === 'drop')
 
-console.log('\n④ 100자 미만 → Short Raw Noindex **후보**')
+console.log('\n④ 길이로 가르지 않는다 — 짧은 글도 긴 사연도 글감이다')
 {
   const v = D({ title: '전기세 얼마 나와요', body: '40만원 넘은거 실환가요 에어컨 거실만 트는데' })
-  check(`🟡 ${v.measuredLength}자 → shortRawNoindex`, v.axis === 'shortRawNoindex', `실제 ${v.axis}`)
-  check('🔴 발행 전 사람 확인이 필요하다고 적는다', v.reason.includes('발행 전 사람 확인'))
-  check(`🔴 기준값이 ${SHORT_RAW_MAX} 이다`, SHORT_RAW_MAX === 100)
+  check(`🟢 ${v.measuredLength}자(100자 미만) → seedOriginality`, v.axis === 'seedOriginality', `실제 ${v.axis}`)
   check('🟢 길이 기준을 기록한다', v.lengthBasis === 'body')
   const t = D({ title: '전기세 얼마 나와요', body: '40만원 넘은거 실환가요 에어컨 거실만 트는데', lengthBasis: 'titleBody' })
   check('🟡 titleBody 기준이면 길이가 더 크다', t.measuredLength > v.measuredLength)
   check('🔴 어느 기준으로 쟀는지 남는다', t.lengthBasis === 'titleBody')
+  const long = '남편이 서운하다고 해서 며칠째 답답합니다 '.repeat(20)
+  const w = D({ title: '남편 때문에 답답해요', body: long, boardName: '쫑알쫑알' })
+  check(`🟢 ${w.measuredLength}자(400자 이상) + 사연 축 → seedOriginality`, w.axis === 'seedOriginality', `실제 ${w.axis} · 축 ${w.assetAxes.join('/')}`)
 }
 check('🔴 띄어쓰기를 포함해 센다', measureLength('', 'a b c', 'body') === 5)
 check('🔴 제목+본문 기준은 둘을 합친다', measureLength('가나', '다라', 'titleBody') === 5)
-
-console.log('\n⑤ 400자 이상 + 사연 축 → Raw Originality')
-{
-  // 🔴 축은 **제목**에서 본다 (목록 단계 신호와 같은 기준). '시어머니' 는 어휘에 없다 — '남편' 을 쓴다
-  const long = '남편이 서운하다고 해서 며칠째 답답합니다 '.repeat(20)
-  const v = D({ title: '남편 때문에 답답해요', body: long, boardName: '쫑알쫑알' })
-  check(`🔵 ${v.measuredLength}자 + 축 → rawOriginality`, v.axis === 'rawOriginality', `실제 ${v.axis} · 축 ${v.assetAxes.join('/')}`)
-  check(`🔴 기준값이 ${RAW_MIN_BODY} 이다`, RAW_MIN_BODY === 400)
-  const noAxis = D({ title: '오늘 날씨 얘기', body: '가나다라마바사 '.repeat(60) })
-  check('🟢 400자여도 사연 축이 없으면 seedOriginality', noAxis.axis === 'seedOriginality', `실제 ${noAxis.axis}`)
-}
 
 console.log('\n⑥ 나머지는 Seed Originality')
 check('🟢 100~399자 → seedOriginality',
   D({ title: '영어학원 어학원이 나을까요', body: '초2 둘째가 지금 일반영어학원 다니는중인데 '.repeat(6) }).axis === 'seedOriginality')
 
 console.log('\n⑦ 6축이 전부 있다')
-for (const a of ['shortRawNoindex', 'seedOriginality', 'rawOriginality', 'hold', 'drop', 'access'] as DetailAxis[]) {
+for (const a of ['seedOriginality', 'hold', 'drop', 'access'] as DetailAxis[]) {
   check(`🟢 축 ${AXIS_LABEL[a]}`, typeof AXIS_LABEL[a] === 'string' && AXIS_LABEL[a].length > 0)
 }
 

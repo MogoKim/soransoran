@@ -1,5 +1,5 @@
 /**
- * 글당 Persona **추가 댓글**(첫 댓글 뒤 0~9건) 판정 — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
+ * 글당 Persona **추가 댓글**(첫 댓글 뒤 — 몇 건인지는 글의 대화 계획) 판정 — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
  *
  * 🔴 **왜 생겼나** (2026-10-13 · D100 canon §5 "첫 댓글에서 선택적 다중 턴으로").
  *
@@ -18,9 +18,9 @@
  *
  * 🔴 **기본 OFF.** `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값일 때만 켜진다. 모르는 값은 OFF.
  *
- * 🔴 **누가 어디에 말할지는 글의 대화 계획이 정한다** (`persona-thread-plan`). 글 id 하나로 그 글의 Persona 댓글 수(2~10)와
+ * 🔴 **누가 어디에 말할지는 글의 대화 계획이 정한다** (`persona-thread-plan`). 글 id 하나로 그 글의 Persona 댓글 수(목표 평균에서 나온 분포 — `persona-thread-target`)와
  *    자리마다의 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해진다. 이 파일은 계획의 다음 자리가
- *    **지금 사실로 설 수 있는지**만 본다(`followupSeatsOf`). 계획이 정한 자리가 막히면 다른 종류의 자리로 넘어간다 —
+ *    **지금 사실로 설 수 있는지**만 본다(`followupSeatsOf`). 계획이 정한 자리가 막히면 새 사람의 자리로 넘어간다 —
  *    한 자리 · 한 사람의 실패가 글을 멈추지 않는다. 한 회차에 한 글에는 최대 한 건이다.
  *
  * 🔴 **실회원 대화가 먼저다.** 실회원 댓글이 있으면 추가량을 줄이고, 실회원 댓글에는 답하지 않는다
@@ -29,7 +29,7 @@
  * 🔴 **사람** — 글쓴이는 자기 글에 답글로만 말한다(글당 3번까지). 다른 사람은 한 글에 두 번까지다 — 새 댓글 한 번,
  *    그리고 자기 댓글에 답이 달렸을 때 그 답에 한 번 더. 생성 쪽과 발행 트랜잭션이 같은 함수(`followupSeatsOf`)로 본다.
  *
- * 🔴 여기서 막는 것은 **이 레인이 더하는 축**뿐이다. 9관문 · 생활사 · No-Go · 모델 확정 · provenance ·
+ * 🔴 여기서 막는 것은 **이 레인이 더하는 축**뿐이다. 댓글 관문 · 생활사 · No-Go · 모델 확정 · provenance ·
  *    트랜잭션 재검사는 기존 경로가 그대로 본다. 이 파일은 그 위에 더할 뿐 하나도 빼지 않는다.
  */
 
@@ -50,7 +50,9 @@ import {
   PERSONA_OTHER_TURNS_PER_POST_MAX,
   PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
-import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, unitOf, type PlanLength, type PlanSeatKind } from './persona-thread-plan'
+import {
+  PLAN_MIN_GAP_MS, THREAD_DEADLINE_MS, planSlotAt, threadPlanOf, unitOf, type PlanLength, type PlanSeatKind,
+} from './persona-thread-plan'
 import type { PersonaCommentProvenance } from './stage-evidence'
 import type { DecisionStageEnv } from './scale-runtime'
 import { RUNTIME_STAGES, isRuntimeStage, type RuntimeStage } from './scale-profile'
@@ -77,21 +79,18 @@ export function readFollowupSwitch(env: Readonly<Record<string, string | undefin
 // 🔴 수량 · 시간 정본 — 새 숫자는 여기에만 있다
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 글당 Persona 댓글 총량 절대 상한 = 10 */
+/** 🔴 글당 Persona 댓글 총량 절대 상한 — 대화 계획의 가장 큰 크기(`PERSONA_COMMENTS_PER_POST_MAX`) */
 export const FOLLOWUP_TOTAL_PER_POST_MAX = PERSONA_COMMENTS_PER_POST_MAX
-/** 🔴 첫 댓글 뒤 추가 절대 상한 = 10 − 첫 댓글 1 = 9 */
+/** 🔴 첫 댓글 뒤 추가 절대 상한 = 총량 상한 − 첫 댓글 1 */
 export const FOLLOWUP_EXTRA_PER_POST_MAX = FOLLOWUP_TOTAL_PER_POST_MAX - AUTO_PERSONA_COMMENTS_PER_POST_MAX
-
-/**
- * 🔴 profile 산출용 운영 예산 기준. 글당 구조 상한(9)과 분리한다.
- * 이 값은 모든 글에 4건을 채우라는 의무가 아니라 기존 Dn 비용 외피를 보존하는 산출 천장이다.
- */
-export const FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST = 4
 
 /** 직전 Persona 댓글에서 최소 이만큼 띄운다 — 자리마다의 간격은 계획(`persona-thread-plan`)이 정한다 */
 export const FOLLOWUP_MIN_GAP_MS = PLAN_MIN_GAP_MS
-/** 🔴 공개 후 이 시간이 지난 글에는 잇지 않는다 — 식은 글에 늦게 붙이는 것은 대화가 아니다 */
-export const FOLLOWUP_POST_AGE_MAX_MS = 24 * 3_600_000
+/**
+ * 🔴 **대화 마감** — 공개 후 이 시간이 지난 글에는 새 자리를 열지 않는다(`THREAD_DEADLINE_MS` 하나에서 읽는다).
+ *    계획의 간격이 이 마감에서 역산되므로 계획은 마감 안에 끝난다. 생성 · 발행 트랜잭션 · 시도 기억 창이 같은 값이다.
+ */
+export const FOLLOWUP_POST_AGE_MAX_MS = THREAD_DEADLINE_MS
 
 /** 실회원 댓글이 1~2건이면 추가 상한을 이만큼으로 줄인다 */
 export const FOLLOWUP_EXTRA_WITH_MEMBERS_MAX = 1
@@ -109,6 +108,7 @@ export const FOLLOWUP_CHAIN_MAX = PERSONA_REPLY_CHAIN_MAX
  *    D10 과 D100 의 하루 상한이 같을 수 없다. 그래서 상한을 여기 고정하지 않고, 호출부가 그날의
  *    런타임 단계 또는 모든 단계에 적용되는 **승인된 profile** 을 주입한다. 없거나 · 손상됐거나 · 단계가 다르거나 ·
  *    승인자가 없으면 그 회차는 **0건**(fail-closed)이다. 첫 댓글 예산은 profile 과 무관하게 먼저 뗀다.
+ *    profile 의 값은 `deriveCommentScale`(하루 편수 · 글당 목표 평균 · Persona 수)이 계산한 것을 옮겨 적는다.
  */
 export const FOLLOWUP_PROFILE_VERSION = 'followup-profile-v1'
 /** 기능을 Dn 단계와 묶지 않는 운영 공통 profile 표식. 단계 전용 profile도 계속 지원한다. */
@@ -130,23 +130,6 @@ export type FollowupProfile = {
   approvedBy: string
   approvedAt: string
 }
-
-/**
- * 🔴 **canary profile 후보 — 승인 전이라 그대로는 0건이다.** D100 영구 상한이 아니다.
- *    첫 운영 관측용 숫자 후보일 뿐이며, 창업자 승인(`approvedBy` · `approvedAt`)과 적용 단계를 채운
- *    profile 만 `validateFollowupProfile` 을 통과한다.
- */
-export const FOLLOWUP_CANARY_PROFILE_CANDIDATE: Readonly<Omit<FollowupProfile, 'approvedBy' | 'approvedAt'> & { approvedBy: null; approvedAt: null }> = Object.freeze({
-  v: FOLLOWUP_PROFILE_VERSION,
-  stage: 'canary',
-  // 🔴 2026-11-13 H1 — 40 · 0.08 에서 올렸다. 전체 댓글 장부 상한(`COMMENT_LOOP_DAILY_USD_DEFAULT` 0.20)은 그대로다
-  dailyCount: 80,
-  dailyUsd: 0.16,
-  runMax: 3,
-  perPersonaDailyMax: 3,
-  approvedBy: null,
-  approvedAt: null,
-})
 
 const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1
 
@@ -309,12 +292,10 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
     return stop('자동 출처 첫 댓글이 없다 — 추가 댓글은 첫 댓글을 대신하지 않는다')
   }
 
-  // ── 총량 · 실회원 상한 — 수량은 미해결 거리가 정하고 여기서는 넘지 못할 선만 본다 ──
+  // ── 계획 크기 · 실회원 상한 ──
+  // 🔴 구조 상한(`FOLLOWUP_TOTAL_PER_POST_MAX`)은 계획 크기의 최댓값이라 계획 크기가 먼저 막는다 — 따로 보지 않는다
   const personaCount = livePersona.length
-  if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
-    return stop(`Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한`)
-  }
-  const planSize = threadPlanOf(f.postId).size
+  const planSize = threadPlanOf(f.postId, f.publishedAtMs).size
   if (personaCount >= planSize) return stop(`Persona 댓글 ${personaCount}건 — 이 글의 대화 계획 ${planSize}건을 다 채웠다`)
   const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
   // ── 실회원 우선 ──
@@ -330,9 +311,9 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   if (latest !== undefined && (latest.commentOrigin === 'MEMBER' || latest.commentOrigin === 'GUEST')) {
     return stop('마지막 말이 실회원이다 — Persona 가 끼어들지 않는다(실회원 대화 우선)')
   }
-  // ── 현재성 ──
+  // ── 마감 ──
   if (nowMs - f.publishedAtMs > FOLLOWUP_POST_AGE_MAX_MS) {
-    return stop(`공개 ${Math.floor((nowMs - f.publishedAtMs) / 3_600_000)}시간 — 식은 글에 잇지 않는다`)
+    return stop(`공개 ${Math.floor((nowMs - f.publishedAtMs) / 3_600_000)}시간 — 대화 마감(${FOLLOWUP_POST_AGE_MAX_MS / 3_600_000}시간)이 지났다`)
   }
   const onPost = new Set<string>()
   for (const c of f.comments) if (c.commentOrigin === 'PERSONA' && c.personaId !== null) onPost.add(c.personaId)
@@ -349,7 +330,7 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
  * 🔴 **이 글에 지금 한 건 더 이어도 되는가.**
  *
  *    BLOCK — 사실을 못 읽었거나 모순이다(fail-closed). 그 글만 뺀다.
- *    STOP  — 이 글의 대화는 끝났다(상한 · 실회원 우선 · 식음 · 미해결 거리 없음).
+ *    STOP  — 이 글의 대화는 끝났다(계획을 다 채움 · 상한 · 실회원 우선 · 대화 마감).
  *    WAIT  — 아직 이르다(시간차). `notBeforeMs` 이후 다시 본다.
  *    GO    — 순번 · 멱등 열쇠 · 대상 · 제외 Persona · 역할 후보를 준다. Persona 를 고르지는 않는다.
  */
@@ -411,7 +392,7 @@ const rolesOf = (shape: ReactionType): ReactionType[] =>
     .filter((r) => COMMENT_REACTION_ROLES.includes(r))
 
 /**
- * 🔴 **이 순번에서 지금 설 수 있는 자리 — 계획이 정한 종류가 먼저, 나머지 종류가 그 뒤다.**
+ * 🔴 **이 순번에서 지금 설 수 있는 자리 — 계획이 정한 종류가 먼저, 그 뒤는 새 사람의 자리(글에 답 · 남의 댓글에 답)다.**
  *    생성 쪽(`judgeFollowupPost`)과 발행 트랜잭션(`judgeFollowupPublish`)이 **같은 함수**를 쓴다.
  *
  *    · 글에 답 — 이 글에 아직 없는 사람의 새 댓글. 언제나 설 수 있다
@@ -421,7 +402,7 @@ const rolesOf = (shape: ReactionType): ReactionType[] =>
  *    답 대상은 Persona 댓글뿐이고 한 댓글에는 답이 하나만 달린다(`replyTargetOpen`).
  */
 export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats: FollowupSeat[]; length: PlanLength; gapMs: number } {
-  const slot = planSlotAt(threadPlanOf(f.postId), ordinal)
+  const slot = planSlotAt(threadPlanOf(f.postId, f.publishedAtMs), ordinal)
   if (slot === null) return { seats: [], length: 'normal', gapMs: FOLLOWUP_MIN_GAP_MS }
   const author = f.authorPersonaId ?? null
   const consumed = consumedOf(f)
@@ -451,7 +432,9 @@ export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats:
     reply: (hook) => (back !== undefined ? replyTo(back.x, { kind: 'returning', personaId: back.who }, hook)
       : forNew === undefined ? null : replyTo(forNew, { kind: 'other' }, hook)),
   }
-  const order: PlanSeatKind[] = [slot.kind, ...(['author', 'reply', 'post'] as const).filter((k) => k !== slot.kind)]
+  // 🔴 막힌 자리는 새 사람이 먼저 대신한다(글에 답 → 남의 댓글에 답). 글쓴이는 계획이 준 자리에서만 선다 —
+  //    대체 순서에 글쓴이를 두면 사람이 없을 때마다 글쓴이가 서서 한 글에 글쓴이 답글이 두세 번 나온다
+  const order: PlanSeatKind[] = [slot.kind, ...(['post', 'reply'] as const).filter((k) => k !== slot.kind)]
   const seats = order.flatMap((k) => {
     const seat = seatOf[k](k === slot.kind ? slot.shape : 'other')
     return seat === null ? [] : [seat]
@@ -673,7 +656,7 @@ export function followupSpentRoleKeys(entries: readonly AttemptEntry[], nowMs: n
 
 /**
  * 🔴 **추가 댓글 시도 기억 lane.** 기억은 시도한 KST 날의 자정까지다 — 영구 차단 목록을 만들지 않는다.
- *    시도는 공개 후 `FOLLOWUP_POST_AGE_MAX_MS` 안에서만 일어난다(식은 글 규칙과 같은 범위).
+ *    시도는 공개 후 `FOLLOWUP_POST_AGE_MAX_MS`(대화 마감) 안에서만 일어난다.
  *    · 같은 조합 재시작 — 적재로 끝난 조합(다음 자리의 새 시도)과 `FU_TRANSIENT` 만 새 시작으로 바꾼다
  *    · 마지막 방어선 — 오늘 격리된 Persona · 글이면 시작 기록을 받지 않는다. 글 × Persona 는 여기서 막지 않는다 —
  *      글쓴이가 자기 글에서 역할을 바꿔 다시 서는 길이고(`withoutAuthorOwnPost`), 같은 조합은 열쇠 중복으로 이미 거절된다
@@ -697,11 +680,22 @@ export const FOLLOWUP_ATTEMPT_LANE: AttemptLane = Object.freeze({
 /**
  * 🔴 **같은 회차 재선정.** 자리(`allowed`)마다 예비 호출을 이만큼 더 허락한다 — 앞 Persona 가 실패하면 같은 글에서
  *    다음 정상 Persona 를 다시 고른다. 🔴 적재 상한은 `allowed` 그대로이고, 호출 상한(`providerCallBudget`)은 이 수와
- *    비용 잔량 건수 중 작은 쪽이다 — 하루 USD · 공유 장부 상한(첫 댓글 몫 포함)을 넘는 호출은 없다.
+ *    비용 잔량 건수 중 작은 쪽이다 — 하루 USD · 공유 장부 하루 상한(첫 댓글 몫 포함)을 넘는 호출은 없다.
  */
 export const FOLLOWUP_SPARE_PER_SLOT = 1
 export function followupPlanCap(allowed: number): number {
   return allowed * (1 + FOLLOWUP_SPARE_PER_SLOT)
+}
+/**
+ * 🔴 **추가 댓글은 자기 장부 회차를 쓴다** — 첫 댓글과 회차 유료 요청 상한을 나눠 쓰지 않는다.
+ *    한 회차 id 를 같이 쓰면 첫 댓글이 쓴 요청만큼 추가 댓글 몫이 줄어 profile 의 회차 상한을 구조상 못 채우고,
+ *    장부가 `RUN_CAP` 으로 막아 회차가 멈춘다. 하루 USD 상한은 같은 장부(같은 날 파일)라 그대로 공용이다.
+ */
+export const followupLedgerRunIdOf = (firstCommentRunId: string): string => `${firstCommentRunId}-fu`
+/** 🔴 추가 댓글 장부 회차의 유료 요청 상한 = 승인 profile 회차 상한의 호출 몫(`followupPlanCap`). profile 이 없으면 0 */
+export function followupRunRequestCap(profile: unknown, runtimeStage: string | null): number {
+  const prof = validateFollowupProfile(profile, runtimeStage)
+  return prof.ok ? followupPlanCap(prof.profile.runMax) : 0
 }
 /** 🔴 한 회차에 한 글에서 provider 를 부르는 최대 횟수 — 한 글이 회차 예산을 다 먹지 않는다 */
 export const FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK = 1 + FOLLOWUP_SPARE_PER_SLOT
@@ -1028,7 +1022,7 @@ export function verifyStamp(raw: unknown, expect: { postId: string; dedupKey: st
   const s = raw as Partial<FollowupStamp>
   if (s.v !== FOLLOWUP_STAMP_VERSION) return { ok: false, reason: `도장 판이 ${String(s.v)} 다` }
   if (s.postId !== expect.postId) return { ok: false, reason: '도장의 글과 대상 글이 다르다' }
-  // 순번은 구조 상한이 아니라 삭제 이력을 포함한 사건 순서다. live 상한 10은 followupBaseOf가 따로 지킨다.
+  // 순번은 구조 상한이 아니라 삭제 이력을 포함한 사건 순서다. live 구조 상한은 followupBaseOf가 따로 지킨다.
   if (!isCount(s.ordinal) || s.ordinal < 2) return { ok: false, reason: '도장 순번이 범위 밖이다' }
   if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey) return { ok: false, reason: '도장 순번과 멱등 열쇠가 다르다' }
   if (s.parentCommentId !== null && (typeof s.parentCommentId !== 'string' || s.parentCommentId === '')) {
@@ -1119,7 +1113,7 @@ export type FollowupPublishFacts = {
 
 /**
  * 🔴 **추가 댓글 발행 직전 재판정.** 하나라도 어긋나면 발행하지 않는다.
- *    기존 재검사(9관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)는
+ *    기존 재검사(댓글 관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)는
  *    호출부(`publishCandidateTx`)가 **그대로** 돌린다 — 이 판정은 그 위에 더할 뿐이다.
  */
 export type FollowupPublishVerdict = {

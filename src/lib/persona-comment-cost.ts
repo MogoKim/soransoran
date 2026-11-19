@@ -206,7 +206,7 @@ export type AbsoluteQuality =
 
 /**
  * 🔴 **Gate 통과는 사람 품질 통과가 아니다.**
- *    9관문은 안전·유출·설정 모순을 본다. "사람이 쓴 것처럼 읽히는가" 는 보지 않는다.
+ *    댓글 관문은 안전·유출·설정 모순을 본다. "사람이 쓴 것처럼 읽히는가" 는 보지 않는다.
  *    `20260909-181515` 는 gateStatus 가 전부 `pass` 였고 사람 판정은 전부 미달이었다.
  */
 export function judgeAbsoluteQuality(v: ModelVerdict): AbsoluteQuality {

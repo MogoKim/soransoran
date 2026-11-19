@@ -89,7 +89,7 @@ console.log('\n① 반례 — 슬롯 5 · slot-valid READY 5 → 수요 0 · 유
 {
   const ready = Array.from({ length: 5 }, (_, i) => readyOpp(`r${i}`, gate(fresh - i * 60_000)))
   const filled = matchOpportunitiesToSlots(SLOTS, ready).filled
-  const policy = judgeJitDemand({ slots: SLOTS.length, readyFilled: filled })
+  const policy = judgeJitDemand({ slots: SLOTS.length, readyFilled: filled, writable: SLOTS.length })
   const paid = paidSourcesFor({ deficit: policy.upTo, yieldHigh: 0.1, cap: 10 })
   check('🔴 eligible READY 5 가 슬롯 5 를 덮는다 → 모델 단계 없음 · 적재 없음 · 유료 원천 0',
     filled === 5 && !policy.llm && !policy.fill && policy.upTo === 0 && paid.sources === 0 && paid.basis === 'noDemand',
@@ -108,8 +108,8 @@ console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는
   })
   const human = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`h${i}`, 'founder'))), late)
   const auto = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`a${i}`, AUTO_DECIDER))), late)
-  const dh = judgeJitDemand(human)
-  const da = judgeJitDemand(auto)
+  const dh = judgeJitDemand({ ...human, writable: human.unfilled.length })
+  const da = judgeJitDemand({ ...auto, writable: auto.unfilled.length })
   check('🔴 🔴 **사람 READY 5 · 자동 0 → 부족 1(다음 첫 기회) — 사람 글이 자동 공급을 줄이지 않는다**',
     human.slots === 1 && human.readyFilled === 0 && dh.upTo === 1 && human.unfilled.length === 1, JSON.stringify({ human: { ...human, horizon: undefined }, dh }))
   check('🔴 🔴 **자동 READY 5 → 다음 첫 기회를 덮는다 · 부족 0 · 유료 0 (남는 READY 로 수요를 부풀리지 않는다)**',
@@ -119,7 +119,7 @@ console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는
 console.log('\n② 반례 — 슬롯 5 · 유효 READY 3 → 부족 2 만')
 {
   const ready = Array.from({ length: 3 }, (_, i) => readyOpp(`r${i}`, gate(fresh - i * 60_000)))
-  const policy = judgeJitDemand({ slots: SLOTS.length, readyFilled: matchOpportunitiesToSlots(SLOTS, ready).filled })
+  const policy = judgeJitDemand({ slots: SLOTS.length, readyFilled: matchOpportunitiesToSlots(SLOTS, ready).filled, writable: SLOTS.length })
   check('🔴 수요 = 5 − 3 = 2 · 적재 상한 2', policy.llm && policy.upTo === 2 && fillUpToOf(policy.upTo, 10) === 2, JSON.stringify(policy))
   check('🔴 수율을 모르면 작은 회복 canary — 부족 2 × 원천 3 = 유료 원천 6',
     JSON.stringify(paidSourcesFor({ deficit: 2, yieldHigh: null, cap: 10 })) === JSON.stringify({ sources: 6, basis: 'boundedRecovery' }))
@@ -140,7 +140,7 @@ console.log('\n③ 반례 — 지금은 유효하지만 예정 슬롯 전에 만
   const nowV = judgeSlotRelease({ gateResults: g, slotAt: NOW, now: NOW, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'x' })
   const filled = matchOpportunitiesToSlots(SLOTS, [readyOpp('soon', g)]).filled
   check('🔴 지금(07:00)은 eligible · 첫 슬롯(09:00)에서는 72h 초과 → 커버리지 0 · 수요 5',
-    nowV.verdict === 'eligible' && filled === 0 && judgeJitDemand({ slots: 5, readyFilled: filled }).upTo === 5)
+    nowV.verdict === 'eligible' && filled === 0 && judgeJitDemand({ slots: 5, readyFilled: filled, writable: 5 }).upTo === 5)
   const f = pendingFateOf({ gateResults: g, matched: false, horizon: SLOTS, now: NOW, tieBreak: 'soon' })
   check('🔴 그 대기 READY 는 손실 확정(SOURCE_TOO_OLD_AT_SLOT) — 구제하지 않는다',
     f.fate === 'lost' && f.reason === 'SOURCE_TOO_OLD_AT_SLOT', JSON.stringify(f))
@@ -835,7 +835,7 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /if \(policy\.llm\) \{\s*(?:\/\/[^\n]*\n\s*)?const retryMode = retryModeFor\(\{ paidBasis: paid\.basis \}\)\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
     && !/assignSourceSlots|intendedSlotOf/.test(runner))
   check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
-    /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)
+    /: \(before\?\.jit\?\.fillable \?\? \[\]\)/.test(runner)
     // 🔴 (2026-10-10 P0-B1) 슬롯별 판정 · 배정 슬롯 재판정은 JIT 선택 안에 있다(정본 `preGenerationRelease`)
     && /const valid = slots\.map\(\(d\) => preGenerationRelease\(r, d, jit\.now\)\.verdict === 'eligible'\)/.test(strip('src/lib/supply-workset.ts'))
     && /ageAtSlotH: preGenerationRelease\(c\.r, d, jit\.now\)\.rank\.ageAtSlotH \?\? 0/.test(strip('src/lib/supply-workset.ts'))

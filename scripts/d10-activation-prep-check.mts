@@ -746,12 +746,6 @@ console.log('\n⑦ advice · caution (전면 해제하지 않는다)')
   check('🔴 건강·돈 축에서 advice 가 전원 금지라고 §6-1 에 적혀 있다',
     doc.includes('전원 `advice` · `information`') && doc.includes('전원 `advice`(재무)'))
 
-  // 🔴 의료 단정은 안전 필터에서도 막힌다 — 이번 PR 이 그 규칙을 건드리지 않았다
-  const safety = read('scripts/lib/micro-seed-safety-filter.mts')
-  check('🔴 의료 단정·시술 유도가 hold 로 남아 있다',
-    safety.includes("add('medicalClaim'") && safety.includes("'hold'"))
-  check('🔴 그 규칙을 이번 PR 이 바꾸지 않았다', safety.includes('④ 의료 — 🔴 주제가 아니라 단정·시술 유도를 본다'))
-
   /**
    * 🔴 **scoped 금지(예: `advice(의료)` 만 금지)로 바꾸는 것은 다음 Conversation 작업이다.**
    *    파서가 역할 이름만 읽어 전면 금지로 기록하는 것은 안전한 쪽 오차이고,

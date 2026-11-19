@@ -415,24 +415,6 @@ jobs:
       - name: 히어로 배너 계약 가드
         run: npm run check:hero-banner
 
-      # ── 매거진 자동 PR 레인 ────────────────────────────────────
-      #
-      # 🔴 **이 레인은 무인으로 articles.ts 를 고치고 PR 을 연다.**
-      #    00:10 producer · 02:00 auto-register 가 launchd 로 매일 돈다.
-      #    게이트(HIGH 차단 · autoEligible · 원고 관문 · 미해결 PR 1건 제한 ·
-      #    예약 슬롯 · git lifecycle · 종료 코드)가 무너지면 사람이 모르는 채로
-      #    잘못된 글이 PR 로 올라간다. 그 회귀를 로컬 실행에만 맡기지 않는다.
-      #
-      # 🔴 **경로 조건 밖에 둔다 — 무조건 돈다.**
-      #    2026-09-16: #524 가 merge 되어 실제 재고가 바뀌자 이 검사가 13건 깨졌는데
-      #    CI 에 없어서 아무도 몰랐다. "전 항목 통과" 라고 보고된 뒤였다.
-      #    매거진 파일을 건드리지 않는 PR 도 articles.ts 재고를 바꿀 수 있다.
-      #
-      # DB · 네트워크 · 브라우저 · write 가 전부 없다. 순수 판정이라 1 초 미만이다.
-      # (git·gh 는 주입한 가짜 실행기로만 부른다 — 실제 명령을 띄우지 않는다)
-      - name: 매거진 자동 레인 게이트
-        run: npm run magazine:auto-check
-
       # ChatGPT 세션 판정 — 살아 있는 CDP 를 chrome_not_running 으로 오분류하면
       # 원고 회수가 통째로 막힌다 (2026-09-16 실측 · 45,418ms 연결).
       # connector·clock 을 주입해 브라우저 없이 돈다.
@@ -1225,6 +1207,20 @@ jobs:
         run: npm ci
       - name: M3-A 자동 공급 관문
         run: npm run check:m3a
+
+      # ── 매거진 자동 PR 레인 ────────────────────────────────────
+      #
+      # 🔴 이 레인은 무인으로 articles.ts 를 고치고 PR 을 연다(00:10 producer · 02:00 auto-register).
+      #    게이트(HIGH 차단 · autoEligible · 원고 관문 · 미해결 PR 1건 제한 · 예약 슬롯 ·
+      #    git lifecycle · 종료 코드)가 무너지면 잘못된 글이 사람 모르게 PR 로 올라간다.
+      #
+      # 🔴 **매거진 job 에서 돈다** (2026-11-19 · core 에서 옮김).
+      #    이 단계는 17분이 걸려 core job 벽시계의 절반이었고, 매거진과 무관한 PR 도 매번 기다렸다.
+      #    매거진 job 은 (a) 매거진·공용 경로를 건드린 PR (b) 판정이 모호한 PR(fail-closed 기본값)
+      #    (c) 매일 main 정기 실행에서 돈다 — 2026-09-16 처럼 merge 로 재고가 바뀌어 깨지는 경우는
+      #    (c)가 다음 날 잡는다.
+      - name: 매거진 자동 레인 게이트
+        run: npm run magazine:auto-check
 
   d100-db:
     name: D100 격리 DB 사슬

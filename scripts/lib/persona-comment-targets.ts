@@ -10,9 +10,9 @@
  *      · plan 쪽은 생활사 축 8개를 identity 에서 읽어 넘겼고,
  *        queue 쪽은 `noGoTopics` 하나만 넘겼다 — 같은 planner 를 부르는데
  *        입력이 달라서 **다른 대상**이 나왔다.
- *      · plan 쪽은 회원 표시명·코퍼스를 실제로 읽었고,
+ *      · plan 쪽은 회원 표시명을 실제로 읽었고,
  *        queue 쪽은 `knownNames: []`·`seedUseCount: 1` 을 **손으로 적어** 넘겼다.
- *        그래서 Queue 경로의 ②·⑥·⑧ 은 돌지 않은 채로 9관문이 채워졌다.
+ *        그래서 Queue 경로의 ⑥·⑧ 은 돌지 않은 채로 관문 개수만 채워졌다.
  *      · plan 쪽은 열린 Queue 를 `targetPostId` 로, queue 쪽은 `dedupKey` 로 봤다.
  *
  *    한 벌로 만들면 이런 어긋남이 생길 자리가 없다. 고칠 곳도 한 곳이다.
@@ -84,26 +84,6 @@ export type SourcePersona = BuildPersona & {
   recentRoles: RoleHistory | null
 }
 
-/** ② 코퍼스 — 🔴 원문은 담지 않는다. 조회 함수와 규모만 넘긴다 */
-export type FrequencyCorpus = {
-  lookup: CandidateInput['frequencyLookup']
-  size: number
-  corpusName: string
-}
-
-/**
- * 🔴 **코퍼스를 못 읽었으면 그 사유를 함께 돌려준다** (2026-09-11).
- *
- *    `FrequencyCorpus | null` 만으로는 "자산이 없다" 와 "digest 가 어긋났다" 와
- *    "모양이 깨졌다" 가 전부 같은 `null` 로 보인다. 운영자는 ② 가 왜 안 도는지를
- *    로그에서 알 수 없고, 그러면 원인을 찾는 대신 검사를 끄게 된다.
- */
-export type FrequencyRead = {
-  corpus: FrequencyCorpus | null
-  /** 사람이 읽는 한 줄 — 🔴 원문은 담지 않는다 */
-  reason: string
-}
-
 /**
  * 🔴 **읽기를 주입받는다.** 각 메서드는 "못 읽었다" 를 값으로 돌려준다 —
  *    throw 로 흘리지 않는다. 못 읽은 것을 0·[] 로 보정하지도 않는다.
@@ -123,8 +103,6 @@ export type TargetSource = {
   recentRoleCounts: () => Promise<Record<string, number> | null>
   /** ⑥-A 회원 표시명 — 🔴 못 읽으면 `undefined`. `[]` 는 "없었다" 라 다른 뜻이다 */
   knownNames: () => Promise<readonly string[] | undefined>
-  /** ② 댓글 코퍼스 — 🔴 못 읽으면 `corpus: null` 과 **사유**를 함께 준다 */
-  frequency: () => Promise<FrequencyRead>
   /** ⑧ seed 재사용 횟수 — 🔴 못 세면 `null` */
   seedUseCount: (personaCode: string) => Promise<number | null>
 }
@@ -148,7 +126,6 @@ export function sourceTextsOf(input: CommentInput): string[] {
 export type GateContext = {
   sourceTexts: readonly string[]
   knownNames: readonly string[] | undefined
-  frequency: FrequencyCorpus | null
   priorTexts: readonly string[]
   seedUseCount: number | null
   /** 🔴 반응 역할 정본에서 파생한다 — 고정 false 를 적어 넣지 않는다 */
@@ -167,9 +144,6 @@ export function gateInputOf(ctx: GateContext, input: CommentInput, text: string)
     text,
     sourceTexts: ctx.sourceTexts,
     ...(ctx.knownNames === undefined ? {} : { knownNames: ctx.knownNames }),
-    ...(ctx.frequency === null
-      ? {}
-      : { frequencyLookup: ctx.frequency.lookup, corpusName: ctx.frequency.corpusName }),
     priorTexts: ctx.priorTexts,
     ...(ctx.seedUseCount === null ? {} : { seedUseCount: ctx.seedUseCount }),
     adviceForbidden: ctx.adviceForbidden,
@@ -307,15 +281,13 @@ export async function materializeTargets(args: {
   const commentDigestChars = args.commentDigestChars ?? 60
   const windowStartMs = args.nowMs - args.windowMs
 
-  const [posts, personas, openKeys, recentRoleCounts, knownNames, frequencyRead] = await Promise.all([
+  const [posts, personas, openKeys, recentRoleCounts, knownNames] = await Promise.all([
     args.source.posts(),
     args.source.personas(),
     args.source.openDedupKeys(),
     args.source.recentRoleCounts(),
     args.source.knownNames(),
-    args.source.frequency(),
   ])
-  const frequency = frequencyRead.corpus
 
   const openDedupKeys = new Set(openKeys)
   /** 🔴 planner 는 "이 글에 열린 것이 있나" 를 묻는다 — 조합 열쇠에서 글 id 를 뽑는다 */
@@ -343,8 +315,6 @@ export async function materializeTargets(args: {
 
   const gaps: string[] = []
   if (knownNames === undefined) gaps.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
-  // 🔴 사유를 그대로 실어 보낸다 — "읽지 못했다" 만으로는 무엇을 고쳐야 할지 알 수 없다
-  if (frequencyRead.corpus === null) gaps.push(`frequencyLookup (② 댓글 코퍼스) — ${frequencyRead.reason}`)
 
   /**
    * 🔴 **조회 실패를 정상 0건으로 읽지 않는다.**
@@ -541,7 +511,6 @@ export async function materializeTargets(args: {
       // 🔴 provider 로 나갈 조각 그대로다
       sourceTexts: sourceTextsOf(built.input),
       knownNames,
-      frequency,
       priorTexts: recentTexts,
       seedUseCount,
       // 🔴 반응 역할 정본에서 파생한다 — advice·caution 전면 금지가 지금 정본이다
