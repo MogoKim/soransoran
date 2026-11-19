@@ -108,8 +108,8 @@ console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는
   })
   const human = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`h${i}`, 'founder'))), late)
   const auto = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`a${i}`, AUTO_DECIDER))), late)
-  const dh = judgeJitDemand(human)
-  const da = judgeJitDemand(auto)
+  const dh = judgeJitDemand({ ...human, writable: human.unfilled.length })
+  const da = judgeJitDemand({ ...auto, writable: auto.unfilled.length })
   check('🔴 🔴 **사람 READY 5 · 자동 0 → 부족 1(다음 첫 기회) — 사람 글이 자동 공급을 줄이지 않는다**',
     human.slots === 1 && human.readyFilled === 0 && dh.upTo === 1 && human.unfilled.length === 1, JSON.stringify({ human: { ...human, horizon: undefined }, dh }))
   check('🔴 🔴 **자동 READY 5 → 다음 첫 기회를 덮는다 · 부족 0 · 유료 0 (남는 READY 로 수요를 부풀리지 않는다)**',
@@ -835,7 +835,7 @@ console.log('\n⑨ 배선 · 발행 시점 재검사 (소스 잠금)')
     /if \(policy\.llm\) \{\s*(?:\/\/[^\n]*\n\s*)?const retryMode = retryModeFor\(\{ paidBasis: paid\.basis \}\)\s*const plan = selectWorkset\(\{\s*\.\.\.eligibilityInput, attempted: prior\.attempted,\s*jit: \{ slots: unfilledSlots/.test(runner)
     && !/assignSourceSlots|intendedSlotOf/.test(runner))
   check('🔴 🔴 원천은 부족 슬롯 각각의 시각에 판정 — 배정 슬롯에서 다시 판정 · nextSlotAt 하나로 모두 판정하지 않는다',
-    /: \(before\?\.jit\?\.unfilled \?\? \[\]\)/.test(runner)
+    /: \(before\?\.jit\?\.fillable \?\? \[\]\)/.test(runner)
     // 🔴 (2026-10-10 P0-B1) 슬롯별 판정 · 배정 슬롯 재판정은 JIT 선택 안에 있다(정본 `preGenerationRelease`)
     && /const valid = slots\.map\(\(d\) => preGenerationRelease\(r, d, jit\.now\)\.verdict === 'eligible'\)/.test(strip('src/lib/supply-workset.ts'))
     && /ageAtSlotH: preGenerationRelease\(c\.r, d, jit\.now\)\.rank\.ageAtSlotH \?\? 0/.test(strip('src/lib/supply-workset.ts'))

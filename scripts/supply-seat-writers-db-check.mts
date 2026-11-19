@@ -159,7 +159,7 @@ async function main(): Promise<void> {
   await draft('P05', 'machine:auto-draft-v5', NOON)
 
   const poolOf = (load: Awaited<ReturnType<typeof buildSpeakerLoad>>): string[] =>
-    Object.entries(load.byCode).filter(([, r]) => r.attemptCapacity > 0).map(([c]) => c).sort()
+    Object.entries(load.byCode).filter(([, r]) => (r.attemptCapacity ?? 0) > 0).map(([c]) => c).sort()
 
   // ─────────────────────────────────────────────────────────
   console.log('① 낮 회차(17:15) — 오늘 빈 자리 4개 + 내일 첫 자리 1개')

@@ -331,7 +331,7 @@ check('🔴 🔴 **700 버퍼 · STOCK_BANDS 를 실행 경로(공급 러너 · 
 check('🔴 🔴 **공급 러너가 수요를 정본 JIT 함수로 만든다(관제와 같은 함수)**', (() => {
   const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
   const code = runner.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
-  return /jit = \{ \.\.\.jitCoverageOf\(view, opts\.now\)/.test(code)
+  return /jit = \{\s*\.\.\.jitCoverageOf\(view, opts\.now\)/.test(code)
     && /const basePolicy = judgeJitDemand\(jitIn\)/.test(code)
     && (code.match(/judgeJitDemand\(/g) ?? []).length === 1
     && /const policy = recoveryIntent === null\s*\? basePolicy\s*: recoveryJitDemand\(basePolicy, recoveryIntent\.deficit, jitIn !== null\)/.test(code)

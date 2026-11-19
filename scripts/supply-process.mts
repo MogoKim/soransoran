@@ -120,7 +120,7 @@ import { paidSourcesFor } from '../src/lib/ready-fate'
 import { retryModeFor } from '../src/lib/content-core/generation-failure'
 import { readReadyCohort, recentDates } from './lib/stage-preflight-facts.mjs'
 import { availablePersonasAt, personaAvailableAt } from '../src/lib/supply-capacity-forecast'
-import { nextSlotAnchor } from '../src/lib/scale-profile'
+import { nextSlotAnchor, releaseCapsOf } from '../src/lib/scale-profile'
 import type { ResolvedScale } from '../src/lib/scale-runtime'
 /** 🔴 재고 분류 정본 — 발행 러너와 **같은 조립 · 같은 판정**을 나눠 읽는다 */
 import {
@@ -394,7 +394,8 @@ export async function speakerLoadOf(
     matchedAtsOf.set(code, [...(matchedAtsOf.get(code) ?? []), l.matchedAt])
   }
   const history = loaded.personas.map((p) => ({ code: String(p.code), matchedAts: matchedAtsOf.get(String(p.code)) ?? [] }))
-  const caps = { postsPerWeek: release.postsPerWeek, minDaysBetween: release.minDaysBetween }
+  // 🔴 상한·간격은 발행 러너 · 수요 짝짓기와 같은 함수(`releaseCapsOf`)에서 읽는다
+  const caps = releaseCapsOf(release)
   const canTakeSlot = eligible === null ? {} : { canTakeSlot: (code: string) => eligible.has(code) }
   const days = [...seatsByDate.values()].map((d) => d.at)
   const horizonDays = days.length

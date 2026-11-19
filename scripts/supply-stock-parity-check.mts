@@ -320,8 +320,8 @@ console.log('\n④ 소비자 연결 — 공용 분류를 실제로 부른다 · 
   const code = (t: string): string => t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*\*)/.test(l)).join('\n')
   check('🔴 공급 러너 snapshot 이 공용 분류를 부른다',
     /const view = await loadStockClassification\(prisma, opts\.env, opts\.now\)\s*\n\s*classification = view\.classification/.test(proc))
-  check('🔴 🔴 반례⑦ 공급 러너 화자 여력이 공용 분류와 **JIT 수요와 같은 지평**(upcomingSlots · release)을 쓴다',
-    /const horizon = upcomingSlots\(\{ now: opts\.now, publishedToday: loaded\.publishedToday, release \}\)/.test(proc)
+  check('🔴 🔴 반례⑦ 공급 러너 화자 여력이 공용 분류와 **JIT 수요와 같은 지평**(jitCoverageOf · release)을 쓴다',
+    /jitCoverageOf\(\{ loaded, resolved: \{ \.\.\.view\.resolved, scale: opts\.scale \} \}, opts\.now\)/.test(proc)
     && /classification\.personaWipIds/.test(proc)
     && /dailyTarget: seatsByDate\.get\(kstDateString\(at\)\)\?\.seats \?\? 0/.test(proc))
   check('🔴 🔴 반례⑦ 고정 7일 지평 · capacity 공급 눈금이 돌아오지 않았다',
