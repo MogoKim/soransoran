@@ -6,7 +6,7 @@
  *      `readStageEvidenceFacts` → `judgeStageEvidence` 가 PASS 를 낸다
  *   ② 행 하나씩 비틀면(댓글 없음 · 61분 · 지운 댓글 · 자기 글 댓글 · 감사 미판정/시한 초과 · 결함 yes · 표본 0 ·
  *      표본이 자동 target 밖 · 발행 기록 중복 · 같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · 사람 승인만/혼합 ·
- *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 구조 상한 10에서 10건 PASS · 11건 FAIL
+ *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 구조 상한(`personaCommentCapFor('organic')`)까지 PASS · 상한 + 1 FAIL
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
  *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → 계획 d3 재시험 · 전날 PASS → 계획 d5 · DB write 0
  *      🔴 (2026-09-30) 실제 진입점의 preflight 는 Persona 4상태 정본을 읽는다(2026-11-13부터 `readPersonaCapacity` 한 판독 —
@@ -340,7 +340,7 @@ try {
     const s2 = await seedDay()
     await secondPersonaComment(s2)
     const v = await verdictOf(d2, personaCommentCapFor('organic'))
-    check('🟢 구조 상한 10 — 같은 두 댓글은 PASS (60분 안 2건은 실패가 아니다)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+    check('🟢 구조 상한 안 — 같은 두 댓글은 PASS (60분 안 2건은 실패가 아니다)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
 
   console.log('\n④-c 🔴 추가 댓글 실제 행 — 첫 댓글 증거와 분리 (2026-10-13 · PR #704 E1)')
@@ -508,20 +508,22 @@ try {
     await wipe()
     const d5 = await storeDecision(TRIAL_D3)
     const s5 = await seedDay()
-    for (let k = 0; k < 9; k += 1) {
+    const CAP = personaCommentCapFor('organic')
+    // 첫 댓글 1건(seedDay)에 서로 다른 Persona 를 더해 정확히 상한까지 채운다
+    for (let k = 0; k < CAP - 1; k += 1) {
       const o = await persona(`M${k}-${seq}`)
       const u = (await prisma.persona.findUniqueOrThrow({ where: { id: o }, select: { userId: true } })).userId
       await autoComment({ data: { content: `저도요 ${k}`, source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u,
         personaId: o, createdAt: new Date(SLOTS[0]!.getTime() + (20 + k) * MIN) } })
     }
     const v10 = await verdictOf(d5, personaCommentCapFor('organic'))
-    check('🟢 구조 상한 10 — 한 글에 서로 다른 Persona 10건(첫 1 + 추가 9) → PASS', v10.verdict === 'PASS', `${v10.verdict} ${v10.codes.join(',')}`)
-    const o11 = await persona(`M11-${seq}`)
+    check(`🟢 구조 상한 ${CAP} — 한 글에 서로 다른 Persona ${CAP}건(첫 1 + 추가 ${CAP - 1}) → PASS`, v10.verdict === 'PASS', `${v10.verdict} ${v10.codes.join(',')}`)
+    const o11 = await persona(`Mover-${seq}`)
     const u11 = (await prisma.persona.findUniqueOrThrow({ where: { id: o11 }, select: { userId: true } })).userId
-    await autoComment({ data: { content: '열한 번째', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u11,
+    await autoComment({ data: { content: '상한 다음 한 건', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u11,
       personaId: o11, createdAt: new Date(SLOTS[0]!.getTime() + 40 * MIN) } })
     const v11 = await verdictOf(d5, personaCommentCapFor('organic'))
-    check('🔴 구조 상한 10 — 11건 → COMMENT_OVER_CAP', v11.verdict === 'FAIL' && has(v11, 'COMMENT_OVER_CAP'), `${v11.verdict} ${v11.codes.join(',')}`)
+    check(`🔴 구조 상한 ${CAP} — ${CAP + 1}건 → COMMENT_OVER_CAP`, v11.verdict === 'FAIL' && has(v11, 'COMMENT_OVER_CAP'), `${v11.verdict} ${v11.codes.join(',')}`)
   }
   await counter('🔴 같은 Persona 가 한 글에 두 번 → DUP_COMMENT', 'DUP_COMMENT', async (s) => {
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: s.commenters[0]! }, select: { userId: true } })).userId

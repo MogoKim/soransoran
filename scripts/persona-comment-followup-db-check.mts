@@ -172,17 +172,22 @@ const kstDayStartMs = (nowMs: number): number => {
 const managedCreatedAtMs = (nowMs: number, minutesAgo: number): number =>
   Math.max(nowMs - minutesAgo * MIN, kstDayStartMs(nowMs) + 1)
 /**
- * 🔴 글 id 가 그 글의 대화 계획을 정한다. 시험 글은 계획이 가장 크고(10건) 2번 자리가 글쓴이 답글인 id 로 만든다 —
- *    그래야 "첫 댓글 뒤 글쓴이 답글" · "상한 10 도달" 시나리오가 실행마다 같은 모양으로 돈다.
+ * 🔴 글 id 가 그 글의 대화 계획을 정한다(`threadPlanOf` — 운영과 같은 함수). 시나리오가 필요로 하는 모양의 계획이 나올 때까지
+ *    id 를 바꿔 가며 **찾는다** — 계획을 손으로 만들지 않는다(실제가 못 하는 모양을 fixture 가 만들지 않게).
+ *    기본: 계획 10건 · 2번 자리가 글쓴이 답글("첫 댓글 뒤 글쓴이 답글" 시나리오가 실행마다 같은 모양으로 돈다).
  */
-function bigPlanPostId(n: number): string {
-  for (let k = 0; ; k += 1) {
+type PlanShape = (plan: ReturnType<typeof threadPlanOf>) => boolean
+const DEFAULT_SHAPE: PlanShape = (plan) => plan.size === 10 && plan.slots[0]?.kind === 'author'
+function planPostId(n: number, shape: PlanShape): string {
+  for (let k = 0; k < 2_000_000; k += 1) {
     const id = `fu-db-${n}-${k}`
-    const plan = threadPlanOf(id)
-    if (plan.size === 10 && plan.slots[0]?.kind === 'author') return id
+    if (shape(threadPlanOf(id))) return id
   }
+  throw new Error('원하는 모양의 대화 계획을 찾지 못했다 — 시나리오가 실제 계획이 낼 수 없는 모양을 요구한다')
 }
-async function post(author: P, minutesAgo: number): Promise<string> {
+/** n번째 자리(순번 n)의 종류 */
+const kindAt = (plan: ReturnType<typeof threadPlanOf>, ordinal: number): string | undefined => plan.slots[ordinal - 2]?.kind
+async function post(author: P, minutesAgo: number, shape: PlanShape = DEFAULT_SHAPE): Promise<string> {
   seq += 1
   const now = Date.now()
   const publishedAt = now - minutesAgo * MIN
@@ -192,7 +197,7 @@ async function post(author: P, minutesAgo: number): Promise<string> {
   const createdAt = managedCreatedAtMs(now, minutesAgo)
   const p = await prisma.post.create({
     data: {
-      id: bigPlanPostId(seq),
+      id: planPostId(seq, shape),
       boardType: 'FREE', title: `요즘 밤마다 잠이 안 와요 ${seq}`, status: 'PUBLISHED', source: 'SYSTEM',
       content: `새벽 세 시만 되면 눈이 떠져서 다시 잠들기가 어렵네요. 다들 이런 밤 어떻게 보내세요? (${seq})`,
       authorId: author.userId, personaId: author.id, publishAt: new Date(publishedAt),
@@ -476,13 +481,18 @@ async function main(): Promise<void> {
     check('🟢 대조 — 같은 상태에서 seed 를 다 세면 추가 댓글 유료 호출이 난다', f2.calls() > 0 && r2.providerCalls > 0, JSON.stringify(r2.lines))
   }
 
-  console.log('\n④ 글당 총 1~10 — 상한 10 · 일반 Persona 1회 · 글쓴이 답글 최대 3회')
+  console.log('\n④ 계획 10건을 마감 안에 다 채운다 — 넘지 않음 · 일반 Persona 두 번까지 · 글쓴이 답글 최대 3회')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
     const a = await persona('P01'); const b = await persona('P02')
     for (let i = 3; i <= 12; i += 1) await persona(`P${String(i).padStart(2, '0')}`)
-    const pid = await post(a, 90); await autoFirst(b, pid, 80)
-    // 🔴 서로 다른 도입·내용의 질문이 계속 생겨도 구조 상한 10에서 멈춰야 한다
+    // 🔴 회차마다 20분씩 늙힌다. 자리마다 다음 회차까지 기다리는 몫(20분)을 더해도 마감 안에 끝나는 계획이어야
+    //    "계획을 다 채운다"를 잴 수 있다 — 간격이 마감에서 역산되므로 크기 10 계획은 모두 여기에 든다(고르지 않아도 된다)
+    const STEP = 20
+    const fits: PlanShape = (plan) => DEFAULT_SHAPE(plan)
+      && 20 * MIN + plan.slots.reduce((t, x) => t + x.gapMs + STEP * MIN, 0) < F.FOLLOWUP_POST_AGE_MAX_MS
+    const pid = await post(a, 20, fits); await autoFirst(b, pid, 15)
+    // 🔴 서로 다른 도입·내용의 질문이 계속 생겨도 계획 크기(10)에서 멈춰야 한다
     const asks = [
       '잠이 깨는 시간이 길어지면 마음도 지치지요. 오늘 밤은 조금 나아지셨을까요?',
       '새벽 공기가 유난히 무겁게 느껴질 때가 있더라고요. 지금은 괜찮으신가요?',
@@ -499,7 +509,6 @@ async function main(): Promise<void> {
     ]
     const g = fakeGen(asks)
     const roundLines: string[] = []
-    // 🔴 뒤 자리일수록 간격이 길다(최대 90분) — 75분씩 늙히면 한 번 쉬는 회차가 있어 넉넉히 돈다
     for (let round = 0; round < 24; round += 1) {
       const report = await phase(g.gen)
       roundLines.push(
@@ -507,7 +516,7 @@ async function main(): Promise<void> {
         + `:before=${report.sweepBefore?.lines.join(' / ') ?? ''}`
         + `:after=${report.sweepAfter?.lines.join(' / ') ?? ''}`,
       )
-      await ageAll(pid, 75)
+      await ageAll(pid, STEP)
     }
     const cs = await personaRows(pid)
     const queueRows = await prisma.personaApprovalQueue.findMany({
@@ -517,10 +526,10 @@ async function main(): Promise<void> {
     })
     const authorRows = cs.filter((c) => c.personaId === a.id)
     const nonAuthorIds = cs.filter((c) => c.personaId !== a.id).map((c) => c.personaId)
-    // 🔴 질문이 계속 이어지는 대화 — 상한까지 실제로 닿아야 "10을 넘지 않는다"가 빈말이 아니다
+    // 🔴 질문이 계속 이어지는 대화 — 계획 크기까지 실제로 닿아야 "넘지 않는다"가 빈말이 아니다
     check(
-      '🔴 Persona 댓글 정확히 10(상한 도달) · 넘지 않음 · 추가 9',
-      cs.length === 10,
+      '🔴 Persona 댓글 정확히 10(이 글의 계획) · 넘지 않음 · 추가 9 · 대화 마감 안',
+      cs.length === threadPlanOf(pid).size && cs.length === 10,
       `${cs.length} · queues=${JSON.stringify(queueRows)} · ${roundLines.join(' || ')}`,
     )
     const nonAuthorRows = cs.filter((c) => c.personaId !== a.id)
@@ -566,7 +575,9 @@ async function main(): Promise<void> {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
     const a = await persona('P01'); const b = await persona('P02'); const c = await persona('P03'); const d = await persona('P04'); const e = await persona('P05'); const f = await persona('P06')
     // 🔴 실회원 댓글은 첫 댓글보다 **앞에** 둔다 — 뒤에 두면 모든 반례가 "마지막 말 실회원" 하나로 막혀 의도한 사유를 못 본다
-    const pid = await post(a, 200); const mem = await member(pid, 190); const first = await autoFirst(b, pid, 180)
+    // 🔴 지운 댓글이 순번 2를 먹으므로 기준선(글쓴이 답글)은 순번 3이다 — 순번 3이 글쓴이 자리인 계획을 찾는다.
+    //    글쓴이는 계획이 준 자리에서만 선다(대신 서지 않는다). 순번 2·3 이 둘 다 글쓴이인 계획은 없다("세 번째 댓글 안에 글에 답")
+    const pid = await post(a, 200, (plan) => kindAt(plan, 3) === 'author'); const mem = await member(pid, 190); const first = await autoFirst(b, pid, 180)
     const other = await post(a, 200); const otherFirst = await autoFirst(b, other, 180)
     const live = async () => (await personaRows(pid)).filter((x) => !x.isDeleted).length
     const blockedFor = async (qid: string, expect: string): Promise<{ ok: boolean; detail: string }> => {
@@ -636,8 +647,11 @@ async function main(): Promise<void> {
     check('🟢 기준선 — 같은 행을 정상 조건에서 내면 발행된다(위 반례가 다른 이유로 막힌 것이 아니다)', ok.kind === 'published' && (await live()) === 2, JSON.stringify(ok))
     // 🔴 실회원이 있는 위 글은 추가 1건이 정본 상한이다. 글쓴이 두 번째 답글의 원자성은
     //    실회원 없는 별도 글에서 실제 followup 출처 사슬을 만든 뒤 검증한다.
-    const dialogPid = await post(f, 200)
-    const dialogFirst = await autoFirst(b, dialogPid, 180)
+    // 🔴 글쓴이 자리가 순번 2 · 4 · 6 이고 8 은 글쓴이 자리가 아닌 계획을 찾는다(글쓴이 자리 3개 = 크기 11 이상).
+    //    공개 60분 전 + 75분씩 다섯 번 늙혀도 대화 마감(8시간) 안이다
+    const dialogPid = await post(f, 60, (plan) => kindAt(plan, 2) === 'author' && kindAt(plan, 4) === 'author'
+      && kindAt(plan, 6) === 'author' && kindAt(plan, 8) !== undefined && kindAt(plan, 8) !== 'author')
+    const dialogFirst = await autoFirst(b, dialogPid, 50)
     const authorQ1 = await injectFollowup(
       f,
       dialogPid,
@@ -742,10 +756,13 @@ async function main(): Promise<void> {
       8,
       '걱정해주셔서 고마워요. 다음에 또 이야기 드릴게요.',
     )
+    // 🔴 profile 의 Persona 하루 상한(3)이 먼저 막으면 글쓴이 자리 규칙을 재지 못한다 — 이 판정에서만 넉넉히 둔다
+    writeProfile({ ...PROFILE, perPersonaDailyMax: 9 })
     const authorFourthResult = await publishCandidateTx(prisma, { id: authorFourthQueue, now: new Date(), followupLane: true })
+    writeProfile(PROFILE)
     check('🔴 글쓴이 4번째 답글 → planner 우회 PENDING 이어도 transaction 차단 · write 0',
       authorFourthResult.kind === 'blocked'
-      // 글쓴이가 세 번 답한 뒤에는 그 댓글에 글쓴이가 설 자리가 없다
+      // 순번 8 은 글쓴이 자리가 아니다 — 글쓴이가 그 댓글에 설 자리가 없다(대신 서지 않는다)
       && authorFourthResult.blocks.some((x) => x.message.includes('자리가 아니다'))
       && (await personaRows(dialogPid)).filter((x) => x.personaId === f.id).length === 3,
       JSON.stringify(authorFourthResult))

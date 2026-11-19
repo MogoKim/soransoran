@@ -748,7 +748,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       ROUND_OFFSETS_MIN.every((m) => m * MIN <= WINDOW_MS) && ROUND_OFFSETS_MIN.every((m, i) => i === 0 || m - ROUND_OFFSETS_MIN[i - 1]! === 20))
     check('🔴 재현 모양 유지 — 이 글의 호출 기회 5 → 3 → 2 (호출 수를 잃지 않고 새 조합으로 채운다)',
       perRound.join(',') === '5,3,2', `호출 ${perRound.join(',')}`)
-    check('🔴 구조 상한 10이 첫 댓글 한 글의 provider 기회를 운영 예산 기준 5보다 크게 만들지 않는다',
+    check('🔴 구조 상한이 첫 댓글 한 글의 provider 기회를 운영 예산 기준 5보다 크게 만들지 않는다',
       perRound[0] !== undefined && perRound[0] <= BOOTSTRAP_SLOTS_PER_POST,
       `첫 회차 ${perRound[0] ?? '없음'} · 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST}`)
     check('🔴 🔴 같은 글 60분 window — provider 로 보낸 post×Persona×role 조합 반복 0 (이전 회차 실패를 기억한다)',

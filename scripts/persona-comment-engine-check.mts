@@ -292,7 +292,7 @@ console.log('③ 댓글 분산 planner')
     const cases: [string, PlannerPost, string][] = [
       ['HIDDEN 은 제외', post({ id: 'h', status: 'HIDDEN' }), 'POST_NOT_PUBLISHED'],
       ['DELETED 는 제외', post({ id: 'd', status: 'DELETED' }), 'POST_NOT_PUBLISHED'],
-      // 🔴 글당 1건 계약은 폐기했다 — 구조 상한 10건이 차야 막힌다
+      // 🔴 글당 1건 계약은 폐기했다 — 구조 상한이 차야 막힌다
       ['Persona 댓글이 구조 상한이면 제외', post({ id: 'p', personaComments: PERSONA_COMMENTS_PER_POST_MAX }), 'POST_PERSONA_COMMENTS_FULL'],
       [`회원 댓글 ${MEMBER_COMMENT_LIMIT}건 이상이면 끼어들지 않는다`, post({ id: 'm', memberComments: MEMBER_COMMENT_LIMIT }), 'POST_MEMBER_COMMENTS_FULL'],
       // 🔴 열린 대기열은 글을 빼는 것이 아니라 **자리를 먹는다**. 10자리가 다 차야 막힌다
