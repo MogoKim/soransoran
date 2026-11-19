@@ -18,11 +18,10 @@ import {
 import { measureOriginality, judgeCopy, COPY_RUN_WORDS } from '../src/lib/draft-originality'
 import { parseAgeBand, judgeSelfAgeConflict } from '../src/lib/persona-self-age'
 import { judgeCrisisSignal, SAFETY_SIGNAL_CODES } from '../src/lib/micro-seed-safety-signals'
-import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   callBudgetOf, CallBudget, HARM_BANS, MAX_ORIGINALITY_RETRIES,
-  CALL_ALLOWANCE_PER_SOURCE, HARM_PROMPT, V2_CALL_CAP, V2_LEDGER_STAGE,
+  CALL_ALLOWANCE_PER_SOURCE, V2_CALL_CAP, V2_LEDGER_STAGE,
 } from './micro-seed-auto-draft.mjs'
 import {
   readSourceProfile, readClosingIntent, readTitleIntent, endsNaturallyAsQuestion,

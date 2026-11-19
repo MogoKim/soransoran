@@ -9,7 +9,7 @@
     "src/lib/content-core/pipeline.ts": "2e0fda1f2b705b13a3aa7016ea6cfdf380c164ca0529b0607f1f9d1580efb84d",
     "src/lib/content-core/evidence.ts": "d27479f1ab3e8490add3e6c6351f4a5c36016b314863173c6604cf6d0dc50558",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
-    "src/lib/micro-seed-auto-draft.ts": "808e7263f27d1943840a99518c4df35c483d33e02d159708f94bd6214a791a5e",
+    "src/lib/micro-seed-auto-draft.ts": "28cc4da6a68ed424fda043aa11ccc9cf7acc15fed16ab2f9845d073c3230f678",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
     "src/lib/supply-schedule-contract.ts": "a75d28635e2f90d854d88b879f7a619b75a59384868d72120a29731e517136a4",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
@@ -40,6 +40,7 @@
     "changedFiles": [
       "src/lib/quality-contract.ts",
       "src/lib/content-core/pipeline.ts",
+      "src/lib/micro-seed-auto-draft.ts",
       "scripts/lib/content-core-prompts.mts"
     ]
   }

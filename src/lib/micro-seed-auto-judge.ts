@@ -104,8 +104,6 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
   // 🔴 2026-09-16 — 정본 §4 위기 신호 · §5 조언 제한을 코드로 세운 축
   crisisSignal: '자해·자살 위기 신호 — 재생성하지 않고 사람이 본다 (정본 §4)',
-  medicalDecisionRequest: '치료·기기·약물의 부작용·교체·중단·계속 사용 판단을 요청한다',
-  healthEfficacyClaim: '건강 효능 주장 — 전언형이어도 통과시키지 않는다',
 }
 
 /**
@@ -182,7 +180,7 @@ export const JUDGE_DROP: readonly JudgeRisk[] = ['targetedHarassmentOrThreat', '
 
 /**
  * 🔴 **초안 검수(생성 쪽)의 위해 축 이름** — 원천 판정은 이 목록을 쓰지 않는다(`JUDGE_RISKS`).
- *    생성 쪽 품질 계약이 `SEMANTIC_DROP` · `DRAFT_HARM_AXES` 값을 그대로 읽으므로 값은 그 계약과 함께만 바꾼다.
+ *    생성 쪽 품질 계약이 `SEMANTIC_DROP` 값을 그대로 읽으므로 값은 그 계약과 함께만 바꾼다.
  */
 export const SEMANTIC_RISKS = [
   'identifiablePrivatePerson',
@@ -191,8 +189,6 @@ export const SEMANTIC_RISKS = [
   'dangerousMedicalInstruction',
   'politicalCampaigning',
   'crisisSignal',
-  'medicalDecisionRequest',
-  'healthEfficacyClaim',
 ] as const
 export type SemanticRisk = (typeof SEMANTIC_RISKS)[number]
 
@@ -201,17 +197,6 @@ export const SEMANTIC_DROP: readonly SemanticRisk[] = [
   'identifiablePrivatePerson', 'unverifiedDefamation',
   'targetedHarassmentOrThreat', 'dangerousMedicalInstruction',
   'politicalCampaigning',
-] as const
-
-/**
- * 🔴 **초안 검수에서 묻는 위해 축** (2026-09-16).
- *
- *    버리는 축(`SEMANTIC_DROP`)에 **안전 신호 축 3종**을 더한 것이다.
- *    목록을 새로 만들지 않는다 — 두 정본을 이어 붙이기만 한다.
- *    🔴 DROP 인지 HOLD 인지는 여기서 정하지 않는다. `SEMANTIC_DROP` 소속 여부가 정한다.
- */
-export const DRAFT_HARM_AXES: readonly SemanticRisk[] = [
-  ...SEMANTIC_DROP, 'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
 ] as const
 
 /** 🔴 이 아래면 통과시키지 않는다 — 모델이 스스로 흔들린다고 말한 것이다 */

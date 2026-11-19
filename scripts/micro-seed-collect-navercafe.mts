@@ -398,7 +398,8 @@ async function main() {
   }
   console.log('  🔴 이미지 미수집 · 적재는 importer 가 따로 한다')
   console.log(`  ① 목록 단계 제외 : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
-  console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (적재 시점)`)
+  // 🔴 정기 수집(--thin)은 이 플래그로 보류하지 않는다 — 막는 사유는 판정의 넷이다. 전문 적재(비정기) 경로에만 닿는다
+  if (!THIN) console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (전문 적재 시점)`)
   console.log('')
 
   if (cafe!.stage === 'shadow') {
