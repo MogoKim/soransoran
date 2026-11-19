@@ -25,7 +25,7 @@ import { HANJA_LANGUAGE_FIT } from './cjk-ideograph'
 import { isMemberGateText } from './naver-member-gate'
 
 /** 🔴 사람 값과 절대 겹치지 않는 이름 */
-export const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const
+export const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_HOLD', 'AUTO_DROP'] as const
 export type AutoDecision = (typeof AUTO_DECISIONS)[number]
 
 /** 🔴 사람이 쓰는 값 — 기계가 이 값을 내면 안 된다. fixture 가 검사한다 */
@@ -46,38 +46,38 @@ export const RULE_VERSION = 'auto-judge-v4'
  *
  * 🔴 `RULE_VERSION` 은 올리지 않는다. 발행 경계(`readAutoJudgeFromGateResults`)가 그 값으로 큐 행을 현재/옛 판으로
  *    가르므로, 올리면 이미 적재된 READY 가 모르는 판이 되어 발행이 멈춘다.
+ *
+ * 🔴 **v5** — 가입인사 · 자기소개 양식 글을 자유게시판(FREE)으로 보낸다. 통과는 `AUTO_SEED` 하나다(길이로 가르던 `AUTO_RAW` 삭제).
  */
-export const PROMPT_VERSION = 'semantic-shadow-v4'
+export const PROMPT_VERSION = 'semantic-shadow-v5'
 
 /** 🔴 이 값으로 기록한다. 사람 것과 한 글자도 겹치지 않는다 */
 export const AUTO_PROVENANCE = 'machine-shadow'
 
 export type ReasonCode =
-  | 'axisSeed' | 'axisRaw'
-  | 'notEligibleAxis' | 'accessNotOk' | 'safetyNotPass'
+  | 'axisSeed'
+  | 'accessNotOk' | 'safetyNotPass'
   | 'noArticleId' | 'noBodyLength'
-  | 'personalIdentity' | 'medicalClaim' | 'promotion'
+  | 'personalIdentity'
   | 'hostility' | 'visualDependent' | 'noticeSlot' | 'volatile'
   | 'unknownReason' | 'hardExclude' | 'dropAxis'
   | 'laneNotProven' | 'assetHealth'
-  | 'medicalOrAd' | 'noTitle' | 'noBodyHead' | 'bodyHeadTooLong'
+  | 'noTitle' | 'noBodyHead' | 'bodyHeadTooLong'
   | 'semanticUnavailable' | 'lowConfidence' | 'semanticDrop' | 'semanticHold' | 'semanticFailed'
   | 'unexplainedModelDrop'
   /** 🔴 실제 한자 문자 — 언어 핏(정치 아님 · P0-3 최종) */
   | 'hanjaLanguageFit'
   | SemanticRisk
+  | JudgeRisk
 
 export const REASON_LABEL: Record<ReasonCode, string> = {
-  axisSeed: '축이 seedOriginality 다',
-  axisRaw: '축이 rawOriginality 다',
-  notEligibleAxis: '통과 축이 아니다 (seedOriginality · rawOriginality 만)',
+  axisSeed: '판정을 통과했다 — 글감이다',
   accessNotOk: '읽지 못한 글이다',
   safetyNotPass: 'safety 가 pass 가 아니다',
   noArticleId: '글 id 가 없다',
   noBodyLength: '본문 길이가 없다',
-  personalIdentity: '🔴 실명 · 개인정보',
-  medicalClaim: '🔴 의료 처방 · 효능 단정',
-  promotion: '🔴 광고 · 홍보',
+  personalIdentity: '🔴 연락처 · 식별번호',
+  promotion: '🔴 광고 · 홍보 · 판매 글 (모델 판정)',
   hostility: '🔴 욕설 · 혐오 · 분쟁',
   visualDependent: '이미지 의존',
   noticeSlot: '공지 · 고정 슬롯',
@@ -87,7 +87,6 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   dropAxis: '축이 drop 이다',
   laneNotProven: '사람이 통과시킨 적 없는 lane 이다',
   assetHealth: '몸·건강 소재다 — 진단·처방으로 흐를 수 있다 (§4-J)',
-  medicalOrAd: '의료 또는 광고성 플래그 — 🔴 둘 중 어느 쪽인지는 이 신호로 알 수 없다',
   noTitle: '제목이 없다 — 의미를 볼 수 없다',
   noBodyHead: '본문 머리가 없다 — 의미를 볼 수 없다',
   bodyHeadTooLong: '🔴 bodyHead 가 300자를 넘는다 — 전문이 섞였을 수 있다',
@@ -111,10 +110,11 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
 
 /**
  * 🔴 **통과를 막는 사유.** 하나라도 있으면 AUTO_PASS 가 아니다.
- *    정치·실명·의료·광고·적대는 `AUTO_DROP` 으로 확실히 버린다.
+ *    연락처·식별번호 · 집단 비하어 · 한자는 `AUTO_DROP` 으로 확실히 버린다.
+ *    의료 · 광고는 여기 없다 — 낱말로 막지 않고 모델 판정(`JUDGE_RISKS`)이 본다.
  */
 export const HARD_BLOCK: readonly ReasonCode[] = [
-  'personalIdentity', 'medicalClaim', 'promotion', 'hostility',
+  'personalIdentity', 'hostility',
   'hardExclude', 'dropAxis',
   'semanticDrop',
   'identifiablePrivatePerson', 'unverifiedDefamation',
@@ -130,7 +130,7 @@ export const HOLD_REASONS: readonly ReasonCode[] = [
   'visualDependent', 'noticeSlot', 'volatile', 'unknownReason',
   'accessNotOk', 'safetyNotPass', 'noBodyLength',
   'laneNotProven', 'assetHealth',
-  'medicalOrAd', 'noTitle', 'noBodyHead', 'bodyHeadTooLong',
+  'noTitle', 'noBodyHead', 'bodyHeadTooLong',
   'semanticUnavailable', 'lowConfidence', 'semanticHold', 'semanticFailed',
   'unexplainedModelDrop',
 ] as const
@@ -172,7 +172,7 @@ export const HOLD_ASSET_AXES: readonly string[] = [] as const
  *      crisisSignal                 자해 · 자살 암시 — 버리지 않고 사람에게 넘긴다(HOLD)
  *      targetedHarassmentOrThreat   사람을 해치라는 선동 · 협박 · 특정인 괴롭힘 — 버린다
  *      dangerousMedicalInstruction  약을 끊어라 · 용량을 바꿔라 같은 위험한 의료 지시 — 버린다
- *      promotion                    광고 · 홍보 · 판매 글 — 버린다(결정적 판정의 `promotion` 과 같은 이름)
+ *      promotion                    광고 · 홍보 · 판매 글 — 버린다
  *    여기 없는 이름을 모델이 적어도 막는 사유가 아니다.
  */
 export const JUDGE_RISKS = ['crisisSignal', 'targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'promotion'] as const
@@ -217,18 +217,17 @@ export const DRAFT_HARM_AXES: readonly SemanticRisk[] = [
 /** 🔴 이 아래면 통과시키지 않는다 — 모델이 스스로 흔들린다고 말한 것이다 */
 export const MIN_CONFIDENCE = 0.7
 
-/** 🔴 우리가 아는 safety 사유 코드 — 여기 없는 것이 오면 `unknownReason` 이다 */
+/**
+ * 🔴 우리가 아는 safety 사유 코드 — 수집 필터(`safetyFilter`)가 지금 내는 것 전부다. 여기 없는 것이 오면 `unknownReason` 이다.
+ *    의료 · 광고 낱말 사유는 필터에서 지웠다 — 옛 사본에 남은 그 이름은 모르는 사유(HOLD)로 읽는다.
+ */
 export const KNOWN_SAFETY_CODES: readonly string[] = [
-  'noticeSlot', 'personalIdentity', 'medicalClaim',
-  'promotion', 'hostility', 'visualDependent', 'access', 'volatile',
-  // 🔴 2026-09-16 추가 — 여기 없으면 `unknownReason` 으로 잡힌다
-  'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
-  // 🔴 2026-10-04 P0-3 최종 — 언어 핏(정치 아님)
-  'hanjaLanguageFit',
+  'noticeSlot', 'personalIdentity', 'hostility', 'visualDependent', 'access', 'volatile',
+  'crisisSignal', 'hanjaLanguageFit',
 ] as const
 
+/** 글감 축 값 — 수집 분류(`classifyDetail`)가 읽을 수 있고 안전한 글에 적는 이름. 길이로 가르지 않는다 */
 export const SEED_AXIS = 'seedOriginality'
-export const RAW_AXIS = 'rawOriginality'
 
 export type JudgeInput = {
   /** 🔴 원천 사이트 — (사이트, id) 가 원천이다(`source-identity`). 없으면 병합 · 묶음에서 빠진다 */
@@ -301,9 +300,8 @@ export function normalizeJudgeRow(
 }
 
 /**
- * 🔴 **원천 하나로 합친다.** `detail` 이 먼저, `raw-detail` 은 축이 `rawOriginality`
- *    일 때만 덮어쓴다 — 그 축이 더 최신 판정을 들고 있다.
- *    🔴 그 조건이 없으면 raw 행이 정상 detail 행을 지워 버린다.
+ * 🔴 **원천 하나로 합친다.** `detail` 이 먼저고, `raw-detail` 은 `detail` 에 없는 원천만 채운다 —
+ *    덮어쓰면 raw 행이 정상 detail 행을 지워 버린다.
  */
 export function mergeJudgeRows(
   entries: readonly { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[],
@@ -322,7 +320,7 @@ export function mergeJudgeRows(
     const v = normalizeJudgeRow(e.row, 'raw-detail')
     const key = v === null ? null : sourceIdentityOf(v.sourceSite, v.sourceArticleId)
     if (v === null || key === null) continue
-    if (!byKey.has(key) || S(v.axis) === RAW_AXIS) byKey.set(key, v)
+    if (!byKey.has(key)) byKey.set(key, v)
   }
   return [...byKey.values()]
 }
@@ -396,11 +394,7 @@ export function readFlags(flags: readonly string[]): ReasonCode[] {
   const out: ReasonCode[] = []
   for (const f of flags) {
     if (f === HANJA_LANGUAGE_FIT) out.push('hanjaLanguageFit')
-    // 🔴 `medicalOrAdLikely` 는 이름 그대로 **의료 또는 광고**다. 둘을 가르는 정보가
-    //    이 플래그에 없는데 v1 이 `medicalClaim` 으로 단정했다 — 사유를 왜곡한 것이다.
-    //    이제 별도 코드로 남기고, 의료인지 광고인지는 semantic judge 가 본다.
-    else if (f === 'medicalOrAdLikely') out.push('medicalOrAd')
-    // 그 외 플래그(clickbaitTitle 등)는 통과를 막지 않는다 — 사람도 그걸로 버리지 않는다
+    // 그 외 플래그(의료·광고 낱말 · clickbaitTitle 등)는 통과를 막지 않는다 — 의료·광고는 모델 판정이 본다
   }
   return out
 }
@@ -494,8 +488,6 @@ export function preSemanticGate(input: JudgeInput): ReasonCode[] {
   if (S(input.access) !== 'ok') codes.push('accessNotOk')
   if (S(input.safetyVerdict) !== 'pass') codes.push('safetyNotPass')
   if (!(Number(input.bodyLength ?? 0) > 0)) codes.push('noBodyLength')
-  const axis = S(input.axis)
-  if (axis !== SEED_AXIS && axis !== RAW_AXIS) codes.push('notEligibleAxis')
   if (S(input.title) === '') codes.push('noTitle')
   const head = S(input.bodyHead)
   if (head === '') codes.push('noBodyHead')
@@ -592,12 +584,8 @@ export function judgeOne(
     return { ...base, decision: 'AUTO_HOLD', reasonCodes: dedupe([...risks, 'lowConfidence']) }
   }
 
-  // 🔴 위험 0 · 확신 충분 · 모델도 통과라 했다. 축은 우리가 정한다 — 모델에게 축을 묻지 않고,
-  //    모델이 통과로 답한 낱말(SEED · RAW)이 우리 축과 달라도 그것으로 원천을 막지 않는다
-  const axis = S(input.axis)
-  return axis === SEED_AXIS
-    ? { ...base, decision: 'AUTO_SEED', reasonCodes: ['axisSeed'] }
-    : { ...base, decision: 'AUTO_RAW', reasonCodes: ['axisRaw'] }
+  // 🔴 위험 0 · 확신 충분 · 모델도 통과라 했다 — 길이와 무관하게 글감이다
+  return { ...base, decision: 'AUTO_SEED', reasonCodes: ['axisSeed'] }
 }
 
 function dedupe(xs: readonly ReasonCode[]): ReasonCode[] {
@@ -607,7 +595,6 @@ function dedupe(xs: readonly ReasonCode[]): ReasonCode[] {
 export type Summary = {
   total: number
   AUTO_SEED: number
-  AUTO_RAW: number
   AUTO_HOLD: number
   AUTO_DROP: number
   /** 사유별 건수 — 왜 그렇게 됐는지 */
@@ -620,7 +607,6 @@ export function summarize(js: readonly Judgement[]): Summary {
   return {
     total: js.length,
     AUTO_SEED: js.filter((j) => j.decision === 'AUTO_SEED').length,
-    AUTO_RAW: js.filter((j) => j.decision === 'AUTO_RAW').length,
     AUTO_HOLD: js.filter((j) => j.decision === 'AUTO_HOLD').length,
     AUTO_DROP: js.filter((j) => j.decision === 'AUTO_DROP').length,
     byReason,
@@ -645,7 +631,7 @@ export function checkRegression(rows: readonly RegressionRow[]): {
   conservative: RegressionRow[]
   agree: RegressionRow[]
 } {
-  const passed = (d: AutoDecision): boolean => d === 'AUTO_SEED' || d === 'AUTO_RAW'
+  const passed = (d: AutoDecision): boolean => d === 'AUTO_SEED'
   const humanKept = (d: string): boolean => ['SEED', 'RAW', 'ADOPT', 'SAVE'].includes(d)
   return {
     // 🔴 사람이 안 고른 것을 기계가 통과시켰다 — 이것이 0이어야 한다

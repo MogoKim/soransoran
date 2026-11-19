@@ -13,7 +13,6 @@ import {
   NOT_PUBLISH_NOTE, maskSensitive, digestBody, selectRawTargets, prescreen,
   blockedBeforeRead, rawDecisions, heldForReread, type RawCandidate,
 } from './lib/micro-seed-raw-originality.mjs'
-import { RAW_MIN_BODY as CLASSIFY_MIN } from './lib/micro-seed-detail-classify.mjs'
 import {
   RAW_DETAIL_COLUMNS, RAW_DETAIL_KILL_SWITCH_ENV, ALLOWED_CAPS, DEFAULT_CAP,
   seenRawIds, seenAll, toTsv, isInsideDataDir, assertOutputPath, type RawDetailRow,
@@ -41,7 +40,6 @@ console.log('\n② lane 과 axis 를 섞지 않는다')
 check(`lane 은 목록 단계의 ${RAW_LANE}`, RAW_LANE === 'originalRaw')
 check(`axis 는 상세 판정의 ${RAW_AXIS}`, RAW_AXIS === 'rawOriginality')
 check('🔴 둘은 다른 값이다', String(RAW_LANE) !== String(RAW_AXIS))
-check('🔴 400자 기준이 detail-classify 와 같다', RAW_MIN_BODY === CLASSIFY_MIN)
 
 console.log('\n③ 본문 — 전문을 저장하지 않는다')
 const long = `${'가'.repeat(500)}\n\n두 번째 문단`
@@ -134,7 +132,7 @@ check('cap 은 10 또는 20 만', ALLOWED_CAPS.join(',') === '10,20' && DEFAULT_
 {
   const row: RawDetailRow = {
     sourceArticleId: 'a', sourceSite: 's', url: 'u', title: 't', score: 1, lane: RAW_LANE,
-    accessStatus: 'ok', bodyLength: 900, bodyHead: '앞부분', axis: RAW_AXIS,
+    accessStatus: 'ok', bodyLength: 900, bodyHead: '앞부분', axis: 'seedOriginality',
     safetyVerdict: 'pass', safetyReasons: '', imageCount: 0, commentCount: 0,
     runId: 'r', fetchedAt: 'f',
   }

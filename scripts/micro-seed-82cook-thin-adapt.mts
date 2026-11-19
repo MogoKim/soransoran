@@ -29,7 +29,7 @@ import { pathToFileURL } from 'node:url'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import {
   toDetailRecord, toRawDetailRecord, statsOf, violatesAdapt, accessOf,
-  DETAIL_KEYS, RAW_DETAIL_KEYS, SOURCE_AXIS, RAW_AXIS, SRN_AXIS,
+  DETAIL_KEYS, RAW_DETAIL_KEYS, SOURCE_AXIS,
   DATA_DIR_NAME, ADAPT_PREFIX, DETAIL_SUFFIX, RAW_DETAIL_SUFFIX,
   completedAdaptKeys, partialAdaptKeys, parseJsonl, resolveThinInput,
   type ThinRow,
@@ -174,9 +174,7 @@ function main(): void {
     const mark = p.already ? '  🟡 이미 사본이 있다'
       : (half.has(p.runId) ? '  🟠 사본이 한쪽만 있다 — 다시 만든다' : '')
     console.log(`   · ${p.from}  ${s.total}행${mark}`)
-    console.log(`       ${SOURCE_AXIS} ${s.sourceCandidates}건 · ${RAW_AXIS} ${s.rawCandidates}건`
-      + `  → 검수 화면 후보`)
-    console.log(`       ${SRN_AXIS} ${s.srn}건 — 🔴 별도 경로다. 발행 후보화하지 않는다`)
+    console.log(`       글감 후보(${SOURCE_AXIS}) ${s.sourceCandidates}건`)
     console.log(`       🔴 어느 화면에도 안 오름: drop·hardExclude ${s.dropped}건`
       + ` · 읽지 못함 ${s.unreadable}건`)
   }

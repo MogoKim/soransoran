@@ -171,10 +171,8 @@ export const RAW_DETAIL_KEYS: readonly string[] = [
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
 ] as const
 
-/** 화면이 후보로 올리는 축 */
+/** 글감 축 — 분류는 길이로 가르지 않아 읽을 수 있고 안전한 글은 전부 이 축이다 */
 export const SOURCE_AXIS = 'seedOriginality'
-export const RAW_AXIS = 'rawOriginality'
-export const SRN_AXIS = 'shortRawNoindex'
 
 /**
  * 🔴 **없는 값을 지어내지 않는다.** thin 이 안 재는 것은 정직하게 기본값을 둔다.
@@ -298,12 +296,8 @@ function sourceTimesOf(r: ThinRow): {
 
 export type AdaptStats = {
   total: number
-  /** 소스 검수에 후보로 뜰 것 */
+  /** 글감 후보 */
   sourceCandidates: number
-  /** raw-review 에 후보로 뜰 것 */
-  rawCandidates: number
-  /** SRN 경로 — 🔴 별도 집계만 한다. 발행 후보화하지 않는다 */
-  srn: number
   /** 🔴 어느 화면에도 안 뜨는 것 */
   dropped: number
   /** 읽지 못한 것 */
@@ -322,8 +316,6 @@ export function statsOf(rows: readonly ThinRow[]): AdaptStats {
   return {
     total: rows.length,
     sourceCandidates: rows.filter((r) => eligible(r, SOURCE_AXIS)).length,
-    rawCandidates: rows.filter((r) => eligible(r, RAW_AXIS)).length,
-    srn: rows.filter((r) => eligible(r, SRN_AXIS)).length,
     dropped: rows.filter((r) =>
       S(r.axis) === 'drop' || S(r.safetyVerdict) === 'hardExclude').length,
     unreadable: rows.filter((r) => accessOf(r) !== 'ok').length,

@@ -28,7 +28,7 @@ import { loadScoutRows, SCOUT_DATA_DIR } from './lib/micro-seed-scout-load.mjs'
 import { scoreRows, type ScoredRow } from './lib/micro-seed-scout-score.mjs'
 import { isSeedInboxLane, verdictOf } from './micro-seed-seed-inbox-dry-run.mjs'
 import {
-  classifyAccess, classifyDetail, AXIS_LABEL, SHORT_RAW_MAX, RAW_MIN_BODY,
+  classifyAccess, classifyDetail, AXIS_LABEL,
   type AccessSignals, type AccessStatus, type DetailAxis, type LengthBasis,
 } from './lib/micro-seed-detail-classify.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
@@ -262,8 +262,6 @@ async function main(): Promise<void> {
         commentCount: comments.length, safetyVerdict: v.safety.verdict,
         safetyReasons: v.safety.reasons.map((x) => x.code).join('/'),
         assetAxes: v.assetAxes.join('/'), reason: v.reason, title: s.row.originalTitle,
-        // 🔴 SRN 축에만 본문을 남긴다 — 그 축은 100자 미만이라 분량이 제한된다
-        ...(v.axis === 'shortRawNoindex' ? { body } : {}),
       })
       console.log(`   ${pad(i + 1, 3)} ${pad(AXIS_LABEL[v.axis], 18)} ${pad(access, 17)} ${s.row.sourceArticleId} · 본문 ${v.measuredLength}자 · 댓글 ${comments.length}`)
       await new Promise((r) => setTimeout(r, PACE_MIN_MS + Math.random() * (PACE_MAX_MS - PACE_MIN_MS)))
@@ -280,8 +278,8 @@ async function main(): Promise<void> {
   writeFileSync(jsonlPath, out.map((r) => JSON.stringify(r)).join('\n') + (out.length ? '\n' : ''), 'utf-8')
   writeFileSync(tsvPath, [TSV_COLUMNS.join('\t'), ...out.map((r) => TSV_COLUMNS.map((c) => cell((r as unknown as Record<string, unknown>)[c])).join('\t'))].join('\n') + '\n', 'utf-8')
 
-  console.log('\n③ 6축 분포')
-  const axes: DetailAxis[] = ['shortRawNoindex', 'seedOriginality', 'rawOriginality', 'hold', 'drop', 'access']
+  console.log('\n③ 축 분포')
+  const axes: DetailAxis[] = ['seedOriginality', 'hold', 'drop', 'access']
   for (const a of axes) console.log(`   ${pad(AXIS_LABEL[a], 20)} ${out.filter((r) => r.axis === a).length}건`)
   console.log(`\n   요청 ${requests}건 · pacing ${PACE_MIN_MS}~${PACE_MAX_MS}ms`)
   console.log(`   ✅ ${jsonlPath}`)
@@ -296,5 +294,3 @@ async function main(): Promise<void> {
 /** 🔴 CLI 로 직접 실행할 때만 돈다 — import 만으로 브라우저를 열지 않는다 */
 const isDirectRun = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isDirectRun) void main()
-
-export { SHORT_RAW_MAX, RAW_MIN_BODY }
