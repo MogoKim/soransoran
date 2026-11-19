@@ -3,8 +3,8 @@
  *
  * 🔴 **무엇을 하나.** 운영 사다리(`stage-ladder.planStageDecision`)에 들어가는 계산만 준다. 상태 기계는 하나다.
  *      · 슬롯 파생(`deriveSlots`) — 운영 창 안 · heartbeat 격자 위 · 60분 안 댓글 회차 3번 이상
- *      · 다음 단계 preflight(`judgeNextPreflight`) — **D3 부터 D100 까지 같은 한 함수** (숫자는 기존 profile)
- *      · 시험 관문(`trialBlocks`) — preflight PASS + 첫 슬롯 전(LATE_START 아님)
+ *      · 올라갈 칸의 관문(`judgeNextPreflight`) — **D3 부터 D100 까지 같은 한 함수**. 막는 것은 발행 구조와 Persona 하한뿐이다
+ *      · 올림 관문(`preflightBlocks`) — 그 관문이 PASS 인가
  *
  * 🔴 **이 파일이 대신한 옛 정본 (실행 경로에서 지웠다 · 2026-09-30)**
  *      · `resolveCeiling`(env `SORAN_CAPACITY_STAGE` 사람 천장) — 천장은 이제 비용 preflight 가 정한다
@@ -12,11 +12,10 @@
  *      · `STOCK_SHORT` = "다음 단계 하루치 **완성 글**이 미리 있어야 연다" — 완성 글 재고 게이트
  *      · Persona 를 **활성 행 수**로 보던 입력(정본: active rows are not capacity)
  *
- * 🔴 **전이 규칙** — 날짜로 기다리지 않는다 · 사람이 env 를 고치지 않는다.
- *    다음 단계 시험은 지금 단계의 완전한 자동 운영 PASS 뒤, 이 preflight 가 PASS 일 때만 열린다.
- *    막는 `codes`(hard gate)의 FAIL · UNKNOWN 은 **어느 하나라도** 열지 않는다(같은 단계 재증명).
- *    🔴 예외(PR1b · 2026-11-06 · canon §3.1·§3.2): 공급·READY **예측** 5코드(`FORECAST_WARNING_CODES`)는 막는
- *    `codes` 가 아니라 `forecastWarnings` 로 가고, 지연 관측 부재(`LATENCY_UNKNOWN`)는 `warnings` 로 간다 — 둘 다 판정을 바꾸지 않는다.
+ * 🔴 **막는 것과 알리는 것.** 막는 `codes` 는 "올려도 그 편수를 낼 수 없는" 구조 결함뿐이다(슬롯 · Persona).
+ *    추정 비용은 막지 않는다 — 하루 지출은 장부가 요청마다 천장으로 막고, 장부 결함은 브레이크 비용 축이 잡는다.
+ *    편수 × 추정 단가로 미리 닫던 관문은 단가가 흔들릴 때마다 단계를 닫았다(14일에 5번 · 그동안 천장 소진 0회).
+ *    공급·READY 예측 5코드는 `forecastWarnings`, 공급 비용 추정은 `warnings` 로 남아 사람이 읽는 줄에 찍힌다.
  *
  * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자 · 댓글 예약표 · 비용 · 기회 사실은 호출부가 주입한다.
  */
@@ -26,11 +25,9 @@ import {
   type RuntimeStage, type ScaleProfile, type Slot,
 } from './scale-profile'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
-import { AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX } from './persona-comment-auto-lane'
-import { auditTarget } from './auto-ready-v2'
-import { PERSONA_CANARY_FLOOR } from './d100-capacity'
+import { AUTO_FIRST_COMMENT_WINDOW_MINUTES } from './persona-comment-auto-lane'
+import { ladderRowOf } from './ladder-table'
 import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
-import type { Health } from './ops-status'
 import {
   FORECAST_WARNING_CODES, type ForecastSupplySignal, type ForecastWarningCode, type StageBlock,
 } from './stage-decision-contract'
@@ -79,14 +76,12 @@ export function genericDailyTarget(s: GenericStage): number {
  *    · `perRunMax`        한 회차 최대 발행(`PER_RUN_MAX`)
  *    · `commentSlots`     댓글 러너 예약표(`COMMENT_RUNNER_SLOTS`)
  *    · `attempts`         60분 안 첫 댓글 시도 횟수(`FIRST_COMMENT_ATTEMPTS`)
- *    · `commentRunRequestCap` 댓글 한 회차 유료 요청 상한(`COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT`)
  */
 export type RunnerGrid = {
   gridMinutes: number
   perRunMax: number
   commentSlots: readonly { hour: number; minute: number }[]
   attempts: number
-  commentRunRequestCap: number
 }
 
 /** 🔴 발행 분 `m` 뒤 60분 안(초과 없음)에 도는 댓글 회차 수와 첫 대기 */
@@ -190,39 +185,26 @@ export function verifyGenericProfile(p: ScaleProfile, grid: RunnerGrid): string[
 
 /**
  * 🔴 preflight 코드 어휘. 원천 기회·처리량·READY 필요량 **예측 5코드**(`FORECAST_WARNING_CODES`)는 계산은 여기서 하지만
- *    판정을 막지 않는다 — 판정 직전에 `forecastWarnings` 로 분리된다(canon §3.1 · 2026-11-06). 나머지가 hard gate 다.
+ *    판정을 막지 않는다 — 판정 직전에 `forecastWarnings` 로 분리된다. 나머지가 막는 코드다(슬롯 구조 · Persona 하한).
+ *    `PERSONA_ACTIVE_*` — reserve 만 늘리면 `PERSONA_SHORT` 는 풀려도 러너는 옛 active 인원으로 돈다. 그래서 표가 정한
+ *    단계(`ladder-table` 의 `activeFloor`)는 실제 투입 인원도 하한을 넘어야 연다.
  */
 export const PREFLIGHT_CODES = [
   'SLOTS_INFEASIBLE', 'PUBLISH_CAPACITY_SHORT',
   'OPPORTUNITY_SHORT', 'OPPORTUNITY_UNKNOWN',
   'THROUGHPUT_SHORT', 'THROUGHPUT_UNKNOWN', 'READY_REQUIREMENT_UNKNOWN',
   'PERSONA_SHORT', 'PERSONA_UNKNOWN',
-  /**
-   * 🔴 **D30 이상 — 실제로 투입되는 계약 유효 Persona** (2026-11-13 창업자 결정 · canon §4).
-   *    공급 화자 여력·발행·추가 댓글은 DB `active` 만 쓴다. reserve 만 늘리면 `PERSONA_SHORT` 는 풀려도
-   *    runner 는 옛 active 인원으로 돈다(숫자만 통과하는 죽은 게이트). 그래서 D30 이상은 stage-active 도 하한을 넘어야 연다.
-   */
   'PERSONA_ACTIVE_SHORT', 'PERSONA_ACTIVE_UNKNOWN',
-  'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT',
-  'AUDIT_COST_SHORT', 'AUDIT_COST_UNKNOWN',
-  'SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOWN',
-  'RUNNER_BAD', 'RUNNER_UNKNOWN',
 ] as const
 export type PreflightCode = (typeof PREFLIGHT_CODES)[number]
-const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = [
-  'PERSONA_UNKNOWN', 'PERSONA_ACTIVE_UNKNOWN', 'COMMENT_COST_UNKNOWN', 'AUDIT_COST_UNKNOWN', 'SUPPLY_COST_UNKNOWN', 'RUNNER_UNKNOWN',
-]
+const PREFLIGHT_UNKNOWN: readonly PreflightCode[] = ['PERSONA_UNKNOWN', 'PERSONA_ACTIVE_UNKNOWN']
+
+/** 실제 투입 인원(stage-active)도 하한을 넘어야 하는 단계인가 — 표(`ladder-table`)가 정한다 */
+export const requiresStageActiveFloor = (s: GenericStage): boolean => ladderRowOf(s)?.activeFloor === true
 
 /**
- * 🔴 **stage-active 하한을 함께 보는 시험 대상 단계** (2026-11-13 · canon §4).
- *    D1~D20 은 넣지 않는다 — 이미 인증된 단계의 판정·역사 증거를 소급해 바꾸지 않는다.
- */
-export const STAGE_ACTIVE_FLOOR_STAGES: readonly GenericStage[] = ['d30', 'd50', 'd100']
-export const requiresStageActiveFloor = (s: GenericStage): boolean => STAGE_ACTIVE_FLOOR_STAGES.includes(s)
-
-/**
- * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다. hard gate 사실을 하나라도 모르면 열지 않고,
- *    공급·READY 예측 사실(기회·처리량·필요 READY)을 모르면 막지 않는 `forecastWarnings` 로 남는다(지어내 초록으로 만들지 않는다).
+ * 🔴 **preflight 사실** — 모르면 `null`. 모르는 것은 초록이 아니다. 막는 사실(Persona)을 모르면 열지 않고,
+ *    예측 사실(기회·처리량·필요 READY · 공급 비용)을 모르면 막지 않는 경고로 남는다(지어내 초록으로 만들지 않는다).
  */
 export type PreflightFacts = {
   /** 다음 시험이 실제로 열릴 KST 날짜 — 날짜별 비용 계약 선택에 쓴다. 모르면 열지 않는다. */
@@ -270,21 +252,11 @@ export type PreflightFacts = {
   /**
    * 🔴 **계약 유효이면서 DB `active` 인 Persona 수**(4상태 정본의 `stage-active`) — Persona 레인이 같은 판독으로 넣는다.
    *    active 행 수가 아니다 — active 인데 계약을 통과하지 못한 사람은 세지 않는다.
-   *    D30 이상 시험에서만 본다(`STAGE_ACTIVE_FLOOR_STAGES`). 생략(`undefined`)·읽기 실패(`null`)는 모름이다.
+   *    표의 `activeFloor` 단계에서만 본다. 생략(`undefined`)·읽기 실패(`null`)는 모름이다.
    */
   stageActivePersonas?: number | null
-  /** 댓글 1건 정산 단가(USD) — 장부 실측(최근 3일) */
-  commentUsdPerRequest: number | null
-  /** 댓글 레인 하루 상한(USD) — 정본 기본 $0.20 · D20 승인 최대 $0.50 */
-  commentDailyUsdCap: number | null
-  /** 감사 1건 정산 단가(USD) — 장부 실측(최근 3일) */
-  auditUsdPerCall: number | null
-  /** 감사 레인 하루 상한(USD) — 감사 레인 env 판독기(`auditLimitsFromEnv`) 값 */
-  auditDailyUsdCap: number | null
   /** 공급 하루 상한(USD) — env 값을 그 증명일의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 값 */
   supplyDailyUsdCap: number | null
-  /** 🔴 발행 · 공급 러너 최근 회차(`errorSignalOf`) — 모르면 null */
-  runnerHealth: Health | null
   /**
    * 🔴 **비용 단가 표본의 승계 후보** — 창 안에 다른 품질 계약 회차가 있을 때만 준다(없으면 `null`·생략).
    *    판정은 현재 계약 결과 편수가 최소 표본(`supplyCostMinResultSampleOf`)에 못 미칠 때만 이것을 쓴다.
@@ -343,12 +315,13 @@ export type ReadyCohortFact = {
   } | null
 }
 /**
- * 🔴 **막지 않는 관측 경고** — 판정에 들어가지 않고 결정 로그·readiness 에만 남는다. v6 `supply` 에도 들어가지 않는다.
- *    · `SUPPLY_COST_TRIAL_RISK` — 비용 envelope 가 bounded(미상 소수 · 위험액이 예산 안)
- *    · `LATENCY_UNKNOWN` — 직전 증명 창의 원문→공개 지연 표본이 없거나 읽지 못했다. 이미 공개된 글의 사후 관측일 뿐
- *      판정 엔진이 아니다(canon §9). 원천 자격은 발행 tx 의 `judgeSlotRelease`, 도장은 단계 증거가 따로 막는다
+ * 🔴 **막지 않는 공급 비용 경고** — 판정에 들어가지 않는다. 결정 로그의 사람이 읽는 줄(`preflightPlainLinesOf`)에 반드시 찍힌다.
+ *    v6 `supply` 에는 들어가지 않는다(rollback reader 가 닫힌 예측 5코드만 받는다).
+ *    · `SUPPLY_COST_SHORT`      편수 × 추정 단가가 하루 예산을 넘는다(또는 예약액을 넘은 요청이 표본에 있다)
+ *    · `SUPPLY_COST_UNKNOWN`    표본이 모자라거나 미정산·미연결이라 추정할 수 없다
+ *    · `SUPPLY_COST_TRIAL_RISK` 미상 소수가 있지만 위험액이 예산 안이다(bounded)
  */
-export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_TRIAL_RISK', 'LATENCY_UNKNOWN'] as const
+export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOWN', 'SUPPLY_COST_TRIAL_RISK'] as const
 export type PreflightWarningCode = (typeof PREFLIGHT_WARNING_CODES)[number]
 
 /**
@@ -385,11 +358,11 @@ export function judgeAgainst(r: Replenishment, fits: (need: number) => boolean):
 export type PreflightVerdict = {
   stage: GenericStage
   verdict: EvidenceVerdictKind
-  /** 🔴 막는 코드 — hard gate 뿐이다. 예측 5코드는 여기 오지 않는다 */
+  /** 🔴 막는 코드 — 슬롯 구조와 Persona 하한뿐이다. 예측 5코드와 비용 추정은 여기 오지 않는다 */
   codes: readonly PreflightCode[]
   /** 🔴 원천 기회·처리량·READY 필요량 예측 — 판정을 막지 않는다. v6 결정 행에 남는 유일한 경고다(`forecastSupplyOf`) */
   forecastWarnings: readonly ForecastWarningCode[]
-  /** 🔴 막지 않는 관측 경고 — 결정 행에 넣지 않는다 */
+  /** 🔴 막지 않는 공급 비용 경고 — 결정 행에 넣지 않는다 */
   warnings: readonly PreflightWarningCode[]
   counts: Readonly<Record<string, number>>
   /**
@@ -401,7 +374,7 @@ export type PreflightVerdict = {
 
 /**
  * 🔴 **v6 결정 행의 `supply` 투영 — 하나뿐이다.** preflight 를 평가하지 않았으면 `null`, 평가했으면 정확히
- *    `{forecastWarnings}` 다(빈 배열 = 경고 없음). `warnings`(비용 시험 위험 · 지연 관측)는 넣지 않는다 —
+ *    `{forecastWarnings}` 다(빈 배열 = 경고 없음). `warnings`(공급 비용 추정)는 넣지 않는다 —
  *    rollback reader 가 닫힌 5코드만 받는다.
  */
 export function forecastSupplyOf(pf: PreflightVerdict | null): ForecastSupplySignal | null {
@@ -422,8 +395,8 @@ export function preflightLogLine(target: string, pf: PreflightVerdict): string {
 }
 
 /**
- * 🔴 **사람이 읽는 preflight 한 줄들** — 코드 이름이 말하지 못하는 사실을 숫자로 적는다. 판정에는 쓰지 않는다.
- *    `SUPPLY_COST_SHORT`·`SUPPLY_COST_UNKNOWN` 은 "예산 초과"와 "표본 부족"을 이름만으로 가를 수 없어 여기서 가른다.
+ * 🔴 **사람이 읽는 공급 비용 경고 줄** — 경고 코드마다 한 줄을 반드시 낸다. 판정에는 쓰지 않는다.
+ *    이 줄들은 단계를 막지 않는다 — 실제 지출은 장부가 요청마다 하루 천장으로 막는다.
  */
 export function preflightPlainLinesOf(pf: PreflightVerdict): string[] {
   const out: string[] = []
@@ -435,17 +408,20 @@ export function preflightPlainLinesOf(pf: PreflightVerdict): string[] {
   if (pf.costCohort !== 'current') {
     out.push(`공급 비용 단가는 현재 품질 계약 표본이 모자라 최근 72시간의 모든 판 표본을 합쳐 냈다 — ${pf.costCohort} · 결과 ${results ?? '?'}편`)
   }
-  if (pf.codes.includes('SUPPLY_COST_UNKNOWN') && sampleShort) {
-    out.push(`비용 표본이 글 ${results}편뿐이라 판단 불가 — 최소 ${min}편이 있어야 한다(예산 초과가 아니다)`)
-  } else if (pf.codes.includes('SUPPLY_COST_UNKNOWN')) {
-    out.push('공급 비용을 확정하지 못했다 — 미정산·미연결 요청이 있거나 장부를 읽지 못했다(예산 초과가 아니다)')
+  if (pf.warnings.includes('SUPPLY_COST_UNKNOWN')) {
+    out.push(sampleShort
+      ? `비용 경고(막지 않음) — 표본이 글 ${results}편뿐이라 추정할 수 없다(최소 ${min}편)`
+      : '비용 경고(막지 않음) — 공급 비용을 추정하지 못했다(미정산·미연결 요청이 있거나 장부를 읽지 못했다)')
   }
-  if (pf.codes.includes('SUPPLY_COST_SHORT')) {
+  if (pf.warnings.includes('SUPPLY_COST_SHORT')) {
     const need = c.supplyDailyUsdNeeded
     const budget = c.supplyProofBudgetUsd
     out.push(need !== undefined && budget !== undefined && c.usdPerSlotValidResult !== undefined && need > budget
-      ? `공급 비용이 예산을 넘는다 — 글 1편당 $${c.usdPerSlotValidResult.toFixed(4)} × ${c.target}편 = ${usd(need)} > 하루 예산 ${usd(budget)} (표본 ${results ?? '?'}편)`
-      : '공급 비용 결함 — 실제 정산액이 예약액을 넘은 요청이 있다')
+      ? `비용 경고(막지 않음) — 추정 공급 비용이 예산을 넘는다: 글 1편당 $${c.usdPerSlotValidResult.toFixed(4)} × ${c.target}편 = ${usd(need)} > 하루 예산 ${usd(budget)} (표본 ${results ?? '?'}편). 실제 지출은 장부의 하루 천장이 막는다`
+      : '비용 경고(막지 않음) — 표본에 실제 정산액이 예약액을 넘은 요청이 있다(장부 결함은 브레이크 비용 축이 본다)')
+  }
+  if (pf.warnings.includes('SUPPLY_COST_TRIAL_RISK')) {
+    out.push('비용 경고(막지 않음) — 미상 사용량이 조금 있다. 위험액은 하루 예산 안이다')
   }
   return out
 }
@@ -473,15 +449,11 @@ export function readyCapacityOf(
 }
 
 /**
- * 🔴 **다음 단계 preflight — D3~D100 같은 구조.** 막는 `codes` 에 FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면
- *    UNKNOWN. 둘 다 시험을 열지 않는다. 공급·READY 예측 5코드는 같은 산술로 계산하되 `forecastWarnings` 로만 내고,
- *    `LATENCY_UNKNOWN` 은 `warnings` 로 낸다 — 판정(verdict)에는 들지 않는다(PR1b · canon §3.1·§3.2). 숫자는 기존 정본뿐이다:
- *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`)
- *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간 · 고정 할증 없음) · Persona canary 하한 `PERSONA_CANARY_FLOOR`
- *      · 공급 용량 — 회차당 묶음(`SUPPLY_WORKSET_PER_RUN`) × 당일 증명 회차(`SUPPLY_PROOF_RUNS_PER_DAY`)
- *        (21:15·22:15는 당일 마지막 발행 기회 전에 끝나지 않아 같은 날 처리량 증명에서는 제외)
- *      · 비용 상한 — 호출부가 각 레인 정본 판독기로 읽은 값(공급은 그 날짜 계약의 승인 천장으로 누른다)
- *    🔴 지연은 **관측됐는가**만 본다 — 행마다의 나이 상한은 `judgeSlotRelease` 가 이미 지킨다(두 번째 문턱을 만들지 않는다).
+ * 🔴 **올라갈 칸의 관문 — D3~D100 같은 구조.** 막는 `codes` 에 FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면
+ *    UNKNOWN. 둘 다 올리지 않는다. 예측 5코드는 `forecastWarnings`, 공급 비용 추정은 `warnings` 로만 낸다 — 판정에 들지 않는다.
+ *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`) · Persona 하한 — `ladder-table`
+ *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간) · 공급 용량 — 회차당 묶음 × 당일 증명 회차
+ *    지연(원천 게시→공개)은 counts 에 찍기만 한다 — 수집→공개는 하루 판정(`stage-evidence`)이 잰다.
  */
 export function judgeNextPreflight(
   stage: GenericStage,
@@ -548,43 +520,23 @@ export function judgeNextPreflight(
       if (t === 'unknown') requirementUnknown = true
     }
   }
-  // 지연 — 관측됐는가
-  if (facts.latencyP50H === null || facts.latencyP90H === null) warnings.add('LATENCY_UNKNOWN')
-  else { counts.latencyP50H = facts.latencyP50H; counts.latencyP90H = facts.latencyP90H }
-  // Persona — 계약 유효 reserve 가 canary 하한 이상인가(행 수로 대체하지 않는다)
-  const floor = stage === 'd1' ? 1 : PERSONA_CANARY_FLOOR[stage]
+  if (facts.latencyP50H !== null && facts.latencyP90H !== null) {
+    counts.latencyP50H = facts.latencyP50H
+    counts.latencyP90H = facts.latencyP90H
+  }
+  // Persona — 계약 유효 reserve 가 표의 하한 이상인가(행 수로 대체하지 않는다). 표에 없는 단계는 열 수 없다
+  const floor = ladderRowOf(stage)?.personaFloor ?? Number.POSITIVE_INFINITY
   counts.personaFloor = floor
   if (facts.contractValidPersonas === null) codes.add('PERSONA_UNKNOWN')
   else { counts.personas = facts.contractValidPersonas; if (facts.contractValidPersonas < floor) codes.add('PERSONA_SHORT') }
-  /**
-   * 🔴 D30 이상 — 같은 하한을 **실제 투입 인원**(stage-active)도 넘어야 한다 (2026-11-13 · canon §4).
-   *    stage-active 는 계약 유효의 부분집합이다 — 더 크면 두 판독이 어긋난 것이라 모름으로 닫는다.
-   *    D1~D20 은 보지 않는다(이미 열린 단계의 판정과 역사 판정을 바꾸지 않는다).
-   */
+  // 같은 하한을 실제 투입 인원(stage-active)도 넘어야 한다. stage-active 는 계약 유효의 부분집합이다 —
+  // 더 크면 두 판독이 어긋난 것이라 모름으로 닫는다
   if (requiresStageActiveFloor(stage)) {
     const active = facts.stageActivePersonas
     if (active === undefined || active === null || !isCount(active)
       || (facts.contractValidPersonas !== null && active > facts.contractValidPersonas)) codes.add('PERSONA_ACTIVE_UNKNOWN')
     else { counts.personasActive = active; if (active < floor) codes.add('PERSONA_ACTIVE_SHORT') }
   }
-  // 댓글 — 자동 글마다 첫 댓글 1건(무인 레인 상한) · 하루 비용 상한 · 러너 회차 용량
-  const firstComments = n * AUTO_PERSONA_COMMENTS_PER_POST_MAX
-  counts.firstComments = firstComments
-  if (facts.commentUsdPerRequest === null || !(facts.commentUsdPerRequest > 0) || facts.commentDailyUsdCap === null) {
-    codes.add('COMMENT_COST_UNKNOWN')
-  } else {
-    const affordable = Math.floor(facts.commentDailyUsdCap / facts.commentUsdPerRequest)
-    counts.commentAffordable = affordable
-    if (affordable < firstComments) codes.add('COMMENT_COST_SHORT')
-  }
-  const runnerCap = grid.commentSlots.length * grid.commentRunRequestCap
-  counts.commentRunnerCapacity = runnerCap
-  if (runnerCap < firstComments) codes.add('COMMENT_RUNNER_SHORT')
-  // 감사 — 정본 표본 수(20%) × 단가 ≤ 감사 하루 상한
-  const audits = auditTarget(n)
-  counts.auditExpected = audits
-  if (facts.auditUsdPerCall === null || facts.auditDailyUsdCap === null) codes.add('AUDIT_COST_UNKNOWN')
-  else if (audits * facts.auditUsdPerCall > facts.auditDailyUsdCap) codes.add('AUDIT_COST_SHORT')
   /**
    * 공급 — 하루 필요 비용 = 목표 슬롯 수 × slot-valid 결과 1건당 전 비용 ≤ 공급 하루 상한(안전장치 · 소비 목표 아님).
    *   🔴 결과당 비용에는 손실 비용이 이미 들어 있다 — 손실률(필요 READY 구간)을 다시 곱하지 않는다.
@@ -619,7 +571,7 @@ export function judgeNextPreflight(
       counts.supplyTrialRiskUsdNeeded = n * trial.riskUsdPerSlotValidResult
     }
   }
-  if (facts.supplyDailyUsdCap === null) codes.add('SUPPLY_COST_UNKNOWN')
+  if (facts.supplyDailyUsdCap === null) warnings.add('SUPPLY_COST_UNKNOWN')
   else {
     const proofBudget = facts.proofKstDate === null
       ? null
@@ -640,17 +592,14 @@ export function judgeNextPreflight(
       budgetUsd: proofBudget,
       resultSample: { results: costResults, minimum: costSampleMin },
     })
-    if (envelope === null || envelope.kind === 'unknown') codes.add('SUPPLY_COST_UNKNOWN')
-    else if (envelope.kind === 'bad') codes.add('SUPPLY_COST_SHORT')
+    if (envelope === null || envelope.kind === 'unknown') warnings.add('SUPPLY_COST_UNKNOWN')
+    else if (envelope.kind === 'bad') warnings.add('SUPPLY_COST_SHORT')
     else if (envelope.kind === 'bounded') warnings.add('SUPPLY_COST_TRIAL_RISK')
   }
   if (requirementUnknown) codes.add('READY_REQUIREMENT_UNKNOWN')
-  // 러너 건강
-  if (facts.runnerHealth === null || facts.runnerHealth === 'unknown') codes.add('RUNNER_UNKNOWN')
-  else if (facts.runnerHealth === 'bad') codes.add('RUNNER_BAD')
   /**
    * 🔴 **분리는 여기 한 곳이다** (2026-11-06 · canon §3.1). 예측 5코드는 막는 코드에서 빼 `forecastWarnings` 로 보낸다 —
-   *    판정·`trialBlocks`·제한 복구 계획은 막는 코드만 본다. 계산·counts 는 그대로 남아 계획 입력으로 쓰인다.
+   *    판정·`preflightBlocks`·제한 복구 계획은 막는 코드만 본다. 계산·counts 는 그대로 남아 계획 입력으로 쓰인다.
    */
   const isForecast = (c: PreflightCode): c is ForecastWarningCode => (FORECAST_WARNING_CODES as readonly string[]).includes(c)
   const ordered = PREFLIGHT_CODES.filter((c) => codes.has(c) && !isForecast(c))
@@ -665,16 +614,8 @@ export function judgeNextPreflight(
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 시험 관문 — 운영 사다리가 부른다 (모든 단계)
+// 🔴 올림 관문 — 운영 사다리가 부른다 (모든 단계)
 // ─────────────────────────────────────────────────────────
-
-/** 🔴 그 KST 날짜의 그 프로필 첫 슬롯(UTC Date) */
-export function firstSlotOn(kstDate: string, p: ScaleProfile): Date | null {
-  const first = [...p.slots].map(minuteOfDay).sort((a, b) => a - b)[0]
-  if (first === undefined) return null
-  const mid = kstMidnight(new Date(`${kstDate}T12:00:00+09:00`))
-  return new Date(mid.getTime() + first * 60_000)
-}
 
 /** 🔴 그 KST 날짜의 그 프로필 슬롯 시각 전부(UTC Date · 오름차순) — 증명일 기회 짝짓기 · JIT 수요가 쓴다 */
 export function slotTimesOn(kstDate: string, p: ScaleProfile): Date[] {
@@ -687,41 +628,21 @@ export function slotTimesOn(kstDate: string, p: ScaleProfile): Date[] {
 }
 
 /**
- * 🔴 **시험을 막는 이유들** — 비었으면 열 수 있다. **모든 시험 대상이 같은 관문이다**(D3 도 D50 도).
- *    · preflight 가 없거나 · 다른 단계 것이거나 · PASS 가 아니면 막는다(`PREFLIGHT_FAIL`·`PREFLIGHT_UNKNOWN`)
- *    · 그 단계 오늘 첫 슬롯이 controller 실행보다 먼저면 막는다(`LATE_START`) — 조각 하루로 시험하지 않는다.
+ * 🔴 **올림을 막는 이유들** — 비었으면 올릴 수 있다. 모든 단계가 같은 관문이다(D3 도 D50 도).
+ *    관문 판정이 없거나 · 다른 단계 것이거나 · PASS 가 아니면 막는다(`PREFLIGHT_FAIL`·`PREFLIGHT_UNKNOWN`).
  */
-export function trialBlocks(i: {
-  target: RuntimeStage; kstDate: string; runAt: string; preflight: PreflightVerdict | null
-}): StageBlock[] {
-  const out: StageBlock[] = []
+export function preflightBlocks(i: { target: RuntimeStage; preflight: PreflightVerdict | null }): StageBlock[] {
   const pf = i.preflight
   if (pf === null) {
-    out.push({ code: 'PREFLIGHT_UNKNOWN', reason: `${i.target} preflight 를 받지 못했다 — 시험을 열지 않는다` })
-  } else if (pf.stage !== i.target) {
-    out.push({ code: 'PREFLIGHT_UNKNOWN', reason: `preflight 대상 ${pf.stage} ≠ 시험 대상 ${i.target} — 다른 단계의 초록으로 열지 않는다` })
-  } else if (pf.verdict !== 'PASS') {
-    out.push({
+    return [{ code: 'PREFLIGHT_UNKNOWN', reason: `${i.target} 관문 판정을 받지 못했다 — 올리지 않는다` }]
+  }
+  if (pf.stage !== i.target) {
+    return [{ code: 'PREFLIGHT_UNKNOWN', reason: `관문 대상 ${pf.stage} ≠ 올라갈 칸 ${i.target} — 다른 단계의 초록으로 올리지 않는다` }]
+  }
+  if (pf.verdict !== 'PASS') {
+    return [{
       code: pf.verdict === 'FAIL' ? 'PREFLIGHT_FAIL' : 'PREFLIGHT_UNKNOWN',
       reason: `${i.target} preflight ${pf.verdict} [${pf.codes.join(',')}]`,
-    })
-  }
-  out.push(...lateStartBlocks(i))
-  return out
-}
-
-/**
- * 🔴 **그 단계 오늘 첫 슬롯이 결정 시각보다 앞이면 막는다**(`LATE_START`) — 조각 하루로 증명하지 않는다.
- *    시험(`trialBlocks`)과 현재 단계 재인증(사다리 REPROVE)이 같은 함수를 쓴다.
- */
-export function lateStartBlocks(i: { target: RuntimeStage; kstDate: string; runAt: string }): StageBlock[] {
-  const opens = firstSlotOn(i.kstDate, profileOf(i.target))
-  const runMs = Date.parse(i.runAt)
-  if (opens === null || !Number.isFinite(runMs) || runMs > opens.getTime()) {
-    return [{
-      code: 'LATE_START',
-      reason: `${i.target} 의 ${i.kstDate} 첫 슬롯(${opens === null ? '없음' : opens.toISOString()})이 결정 시각보다 앞이다`
-        + ' — 조각 하루로 증명하지 않는다',
     }]
   }
   return []

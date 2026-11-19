@@ -10,7 +10,9 @@
  *             🔴 첫 댓글 증거는 **출처 연결**(`commentProvenanceOf`)이 `auto` 인 것만 (2026-10-11 Batch A3):
  *                Queue(`publishedCommentId`) · ActivityLog(`kind=comment` · `targetId`)를 Comment id 로 대조한다
  *             🔴 추가 댓글 표식만 있는 댓글은 `followup*` 로 따로 분류한다(`personaCommentProvenanceOf` · 2026-10-13)
- *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조). 다른 날의 현재 전역 상태는 controller 품질 신호가 본다
+ *    · 감사   그날 고른 감사 + 그날 글의 감사(postId·queueId 로 표본 소속 대조) — 판정이 끝났는가만 읽는다.
+ *             결함·시한·재시도는 controller 품질 신호가 같은 표를 직접 본다
+ *    · 수집   Queue `gateResults` 의 원문 증거 `capturedAt` — 수집에서 공개까지 걸린 시간의 출발점
  *    · 도장   Queue `gateResults.release` — 발행 트랜잭션이 같은 트랜잭션에서 남긴 source-slot-v1 도장(조항 ⑦).
  *             🔴 도장 시각이 **그 글의 발행 기록 시각과 정확히 같아야** 증명이다(`publishEventAtOf` · `releaseStampCheck`)
  *    · 공개 시각 🔴 발행 기록(`PersonaActivityLog.createdAt` — 상한 정본과 같은 칸)이다. Post 시각을 쓰지 않는다
@@ -25,13 +27,10 @@ import type { PrismaClient } from '@prisma/client'
 import type { RuntimeStage } from './scale-profile'
 import { isCalendarDate, type ValidatedStageDecision } from './stage-decision-contract'
 import { UNATTENDED_PUBLISH_DECIDED_BY } from './original-post-publish-tx'
-import { RETRYABLE_NOTE_PREFIX, AUDIT_OVERDUE_MS } from './auto-ready-audit-store'
 import { AUTO_DECIDER } from './auto-ready-v2'
-import { judgeDefectResolution } from './auto-ready-defect-resolution'
-import { currentQualityContract } from './quality-contract'
 import { machineReviewedByHuman } from './original-post-auto-publish'
 import { personaCommentProvenanceOf, type EvidencePost, type PostDecider, type StageEvidenceFacts } from './stage-evidence'
-import { publishEventAtOf, releaseStampStatusOf } from './source-slot-release'
+import { publishEventAtOf, readSourceEvidence, releaseStampStatusOf } from './source-slot-release'
 
 /**
  * 🔴 **Queue 결정자 → 사후 감사 대상 여부.**
@@ -59,10 +58,8 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   stage: RuntimeStage
   /** 🔴 D 의 **검증된** 결정 — 없거나 검증에 떨어졌으면 null */
   decision: ValidatedStageDecision | null
-  /** 시한 초과 감사를 세는 시각 — 판정하는 지금 */
+  /** 사실을 읽는 시각 — 이 시각까지 창이 닫힌 글만 결의 분모에 든다 */
   now: Date
-  /** 🔴 그 댓글 단계의 글당 Persona 댓글 상한(`personaCommentCapFor`) — 부르는 쪽이 정본 env 에서 읽는다. 모르면 null */
-  commentCapPerPost: number | null
 }): Promise<StageEvidenceFacts> {
   const day = kstDayBounds(i.kstDate)
   if (day === null) throw new Error('STAGE_EVIDENCE_BAD_DATE')
@@ -79,7 +76,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   })
   const queue = targetIds.length === 0 ? [] : await db.originalPostApprovalQueue.findMany({
     where: { createdPostId: { in: targetIds } },
-    // 🔴 `gateResults` 는 도장(`release`) 한 칸만 읽는다 — 원문 · 본문은 여기 없다
+    // 🔴 `gateResults` 는 도장(`release`)과 수집 시각만 읽는다 — 원문 · 본문은 여기 없다
     select: { id: true, createdPostId: true, status: true, decidedBy: true, gateResults: true },
   })
   /**
@@ -95,11 +92,15 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   const logsOf = (postId: string): typeof logs => logs.filter((l) => l.targetId === postId)
   const deciderOfPost = new Map<string, PostDecider>()
   const queueIdOfPost = new Map<string, string>()
+  const capturedAtOfPost = new Map<string, number>()
   for (const q of queue) {
     if (q.status !== 'PUBLISHED') continue
     queueOf.set(q.createdPostId!, (queueOf.get(q.createdPostId!) ?? 0) + 1)
     deciderOfPost.set(q.createdPostId!, deciderOf(q.decidedBy))
     queueIdOfPost.set(q.createdPostId!, q.id)
+    const source = readSourceEvidence(q.gateResults)
+    const capturedAt = source.ok && source.record.capturedAt !== null ? Date.parse(source.record.capturedAt) : Number.NaN
+    if (Number.isFinite(capturedAt)) capturedAtOfPost.set(q.createdPostId!, capturedAt)
     // 🔴 도장 시각 = 그 글의 발행 기록 시각이어야 한다 — 같은 트랜잭션의 같은 사건
     releaseOfPost.set(q.createdPostId!, releaseStampStatusOf(q.gateResults, publishEventAtOf(allLogs.filter((l) => l.targetId === q.createdPostId))))
   }
@@ -148,14 +149,8 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
 
   const audits = await db.autoReadyAudit.findMany({
     where: { OR: [{ selectedAt: inDay }, ...(targetIds.length === 0 ? [] : [{ postId: { in: targetIds } }])] },
+    select: { postId: true, queueId: true, defect: true },
   })
-  const defectQueueIds = audits.filter((a) => a.defect === 'yes').map((a) => a.queueId)
-  const defectQueues = defectQueueIds.length === 0 ? [] : await db.originalPostApprovalQueue.findMany({
-    where: { id: { in: defectQueueIds } },
-    select: { id: true, createdPostId: true, draftTitle: true, draftBody: true, gateResults: true, editDiff: true },
-  })
-  const defectQueueById = new Map(defectQueues.map((q) => [q.id, q]))
-  const qualityContract = currentQualityContract()
 
   const evidencePosts: EvidencePost[] = posts.map((p) => {
     const mine = logsOf(p.id)
@@ -164,6 +159,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
       queueId: queueIdOfPost.get(p.id) ?? null,
       // 🔴 공개 시각 = 발행 기록 시각(가장 이른 줄 — 중복은 DUP_PUBLISH_LOG 가 따로 잡는다). posts 는 logs 에서 왔으므로 mine ≥ 1
       publishedAtMs: Math.min(...mine.map((l) => l.createdAt.getTime())),
+      capturedAtMs: capturedAtOfPost.get(p.id) ?? null,
       // 🔴 발행 기록이 여럿이면 전부 표식이 있어야 무인이다 — 중복은 아래 DUP_PUBLISH_LOG 가 따로 잡는다
       unattended: mine.length > 0 && mine.every((l) => l.decidedBy === UNATTENDED_PUBLISH_DECIDED_BY),
       queueRows: queueOf.get(p.id) ?? 0,
@@ -200,24 +196,14 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   return {
     kstDate: i.kstDate, stage: i.stage,
     decision: i.decision === null ? null : {
-      kstDate: i.decision.kstDate, state: i.decision.state, release: i.decision.release, decidedBy: i.decision.decidedBy,
+      kstDate: i.decision.kstDate, release: i.decision.release, decidedBy: i.decision.decidedBy,
     },
+    readAtMs: i.now.getTime(),
     posts: evidencePosts,
     orphanPublishLogs,
     unloggedPublishes,
-    commentCapPerPost: i.commentCapPerPost,
     audits: {
-      // 🔴 행마다 — 규칙은 정본 카운트와 같다(`retryableFailureCount` · `overdueAuditCount`)
-      rows: audits.map((a) => ({
-        postId: a.postId,
-        queueId: a.queueId,
-        judged: a.defect !== null,
-        // 원래 yes 행은 감사 이력에 남긴다. 단계 증거는 정본 해소 판정을 통과하지 못한 현재 결함만 막는다.
-        defectYes: a.defect === 'yes'
-          && !judgeDefectResolution(a, defectQueueById.get(a.queueId) ?? null, qualityContract).resolved,
-        retryable: a.defect === null && (a.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX),
-        overdue: a.defect === null && a.selectedAt.getTime() < i.now.getTime() - AUDIT_OVERDUE_MS,
-      })),
+      rows: audits.map((a) => ({ postId: a.postId, queueId: a.queueId, judged: a.defect !== null })),
     },
   }
 }

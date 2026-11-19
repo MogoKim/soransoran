@@ -22,6 +22,7 @@
 import {
   PROFILES, RUNTIME_STAGES, isRuntimeStage, profileOf, type ReleaseStage, type RuntimeStage,
 } from './scale-profile'
+import { ladderRowOf } from './ladder-table'
 
 export const D100_STAGES = ['d3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as const
 export type D100Stage = (typeof D100_STAGES)[number]
@@ -164,9 +165,10 @@ export function schedulerSupportOf(stage: D100Stage): SchedulerSupport {
  *    지속 목표는 **지금** 보고한다(없는 프로필을 이유로 숫자를 숨기지 않는다).
  * 🔴 D100 지속 목표는 "300명 이상" 이다 — 여기 적는 300 은 **하한**이다.
  */
-export const PERSONA_CANARY_FLOOR: Readonly<Record<D100Stage, number>> = {
-  d3: 24, d5: 24, d10: 30, d20: 40, d30: 60, d50: 100, d100: 180,
-}
+export const PERSONA_CANARY_FLOOR: Readonly<Record<D100Stage, number>> = Object.fromEntries(
+  // 🔴 숫자는 사다리 표(`ladder-table`) 한 곳에 있다 — 여기 다시 적지 않는다
+  D100_STAGES.map((stage) => [stage, ladderRowOf(stage)?.personaFloor ?? Number.POSITIVE_INFINITY]),
+) as Record<D100Stage, number>
 
 export const PERSONA_SUSTAINED_TARGET: Readonly<Record<D100Stage, number>> = {
   d3: 24, d5: 24, d10: 30, d20: 60, d30: 90, d50: 150, d100: 300,

@@ -172,7 +172,7 @@ try {
     loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
     autoOpen: { open: false, reasons: [] }, proofSlots: slotTimesOn('2026-10-20', profileOf('d5')),
     caps: releaseCapsOf(profileOf('d5')), evidenceDate: '2026-10-19', env: {}, dataDir: dir, now,
-    runnerHealth: 'ok', contractValidPersonas: async () => 30,
+    contractValidPersonas: async () => 30,
   })
   const before = await prisma.originalPostApprovalQueue.count()
   const r = await facts(NOW)
@@ -182,11 +182,10 @@ try {
     r.detail.worksetSources === 21, String(r.detail.worksetSources))
   check('🔴 06:15 회차 READY 3건이 cohort 에 들고 같은 회차를 주장한 스냅샷 이후 큐 행은 빠진다',
     r.detail.readyCount === 3 && c !== null && c.sources === 21 && c.published === 3, JSON.stringify({ readyCount: r.detail.readyCount, c }))
-  check('🔴 전날 증명 — 지연 조회 창 = [10-17 00:00, 10-20 00:00) · 댓글/감사 단가 날짜에 오늘(10-20)이 없다',
+  check('🔴 전날 증명 — 지연 조회 창 = [10-17 00:00, 10-20 00:00)',
     latencyWindows.length === 1 && iso(latencyWindows[0]!.gte) === iso(kst('2026-10-17T00:00:00'))
-    && iso(latencyWindows[0]!.lt) === iso(kst('2026-10-20T00:00:00'))
-    && JSON.stringify(r.detail.unitCostDates) === JSON.stringify(['2026-10-17', '2026-10-18', '2026-10-19']),
-    JSON.stringify({ latencyWindows, unit: r.detail.unitCostDates }))
+    && iso(latencyWindows[0]!.lt) === iso(kst('2026-10-20T00:00:00')),
+    JSON.stringify({ latencyWindows }))
   check('🔴 보고된 창 — 용량 [now − 72h, now) · 증명 [10-17 00:00, 10-20 00:00)',
     JSON.stringify(r.detail.capacityWindow) === JSON.stringify({ from: iso(kst('2026-10-17T07:00:00')), to: iso(NOW) })
     && JSON.stringify(r.detail.proofWindow) === JSON.stringify({ from: iso(kst('2026-10-17T00:00:00')), to: iso(kst('2026-10-20T00:00:00')) }),

@@ -25,12 +25,11 @@ import {
   type FollowupPostVerdict,
 } from '../../src/lib/persona-comment-followup'
 import {
-  FOLLOWUP_LANE_DECIDED_BY, judgeConversationAudit, personaCommentCapFor, personaCommentProvenanceOf,
+  FOLLOWUP_LANE_DECIDED_BY, judgeConversationAudit, personaCommentProvenanceOf,
 } from '../../src/lib/stage-evidence'
 import { readStageEvidenceFacts } from '../../src/lib/stage-evidence-repo'
 import { kstDateString } from '../../src/lib/release-canary'
 import { decisionStageEnv } from '../../src/lib/scale-runtime'
-import { readCommentStage } from '../../src/lib/persona-comment-stage'
 import { isAutoLaneCandidatePost } from '../../src/lib/persona-comment-auto-lane'
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import { judgePostAuthor, type ModelSelection } from '../../src/lib/persona-comment-release'
@@ -194,7 +193,6 @@ export async function readFollowupContext(i: {
   const stage = followupStageOf(decisionStageEnv(i.env), i.now).stage
   const conversationAudit = stage === null ? undefined : await readStageEvidenceFacts(i.prisma, {
     kstDate, stage, decision: null, now: i.now,
-    commentCapPerPost: personaCommentCapFor(readCommentStage(i.env).stage),
   }).then((f) => judgeConversationAudit(f.posts)).catch(() => undefined)
   return { profile: readFollowupProfileRaw(i.env, i.readText), runtimeStage: stage, conversationAudit }
 }

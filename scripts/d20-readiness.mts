@@ -23,19 +23,17 @@ import { PrismaClient } from '@prisma/client'
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { kstDateString } from '../src/lib/release-canary'
 import { isCalendarDate, previousKstDate } from '../src/lib/stage-decision-contract'
-import { errorSignalOf } from '../src/lib/stage-controller'
 import { auditAwareGate } from '../src/lib/auto-ready-audit-store'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
-import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
+import { AUTO_PERSONA_COMMENTS_PER_POST_MAX, commentLoopLimitsFromEnv } from '../src/lib/persona-comment-auto-lane'
 import {
   FOLLOWUP_KEY_PREFIX, FOLLOWUP_PROFILE_ENV, readFollowupProfileRaw, validateFollowupProfile,
 } from '../src/lib/persona-comment-followup'
 import { deriveFollowupProfile, type FollowupMeasure } from '../src/lib/followup-profile-derive'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
-import { observeJob, publishFailing, readProcessRuns, supplyFailing, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
-import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord } from './lib/publish-run-record.mjs'
+import { observeJob, SUPPLY_DATA_DIR } from './lib/runner-health.mjs'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import { readPreflightFacts, preflightCostSummaryOf, PREFLIGHT_ENV_KEYS, RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import type { CostAttribution } from '../src/lib/ready-fate'
@@ -67,16 +65,6 @@ const PROFILE_OUT = arg('profile-out')
 if (!isCalendarDate(DATE)) fail(`달력에 없는 날짜 — ${DATE}`)
 if (D10_DATE !== null && !isCalendarDate(D10_DATE)) fail(`달력에 없는 날짜 — ${D10_DATE}`)
 const TARGET = 'd20' as const
-
-/** 🔴 controller 의 `observeErrors` 와 같은 관측 — launchctl 조회만(read-only) */
-function runnerHealth(): ReturnType<typeof errorSignalOf> {
-  const pub = observeJob('com.soransoran.original-post-runner')
-  const sup = observeJob('com.soransoran.supply-process')
-  return errorSignalOf([
-    { label: pub.label, loaded: pub.state === 'loaded', failing: publishFailing(pub, readPublishRunRecord(), NOW, PUBLISH_RUN_MAX_AGE_MS) },
-    { label: sup.label, loaded: sup.state === 'loaded', failing: supplyFailing(sup, readProcessRuns().runs) },
-  ])
-}
 
 /** 🔴 그날 댓글 장부의 한 레인 — 정산 줄 · 정산 합 · 열린 예약(reserved · usageUnknown). 못 읽으면 null */
 function laneOf(entries: readonly LedgerEntry[] | null, stage: LedgerEntry['stage']): { settled: number; settledUsd: number; open: number } | null {
@@ -113,14 +101,13 @@ try {
 
   // ── ② D20 preflight — controller 와 같은 조립 ──
   const evidenceDate = previousKstDate(DATE) ?? fail('전날을 계산하지 못했다')
-  const health = runnerHealth()
   const pe = readEnvKeys(PREFLIGHT_ENV_KEYS)
   const autoOpen = await auditAwareGate(prisma, pe.values, NOW)
   const stock = await loadPublishableStock(prisma, NOW, { autoReadyOpen: autoOpen.open })
   const prof = profileOf(TARGET)
   const r = await readPreflightFacts(prisma, {
     loaded: stock, autoOpen, proofSlots: slotTimesOn(DATE, prof), caps: releaseCapsOf(prof), evidenceDate,
-    env: pe.values, dataDir: SUPPLY_DATA_DIR, now: NOW, runnerHealth: health.health,
+    env: pe.values, dataDir: SUPPLY_DATA_DIR, now: NOW,
     contractValidPersonas: async () => personas,
   })
   const pf = judgeNextPreflight(TARGET, r.facts, RUNNER_GRID)
@@ -172,7 +159,7 @@ try {
   const derived = deriveFollowupProfile({
     measure, targetStage: TARGET, targetDailyPosts: prof.dailyTarget,
     commentRunsPerDay: RUNNER_GRID.commentSlots.length, contractValidPersonas: personas,
-    commentDailyUsdCap: r.facts.commentDailyUsdCap,
+    commentDailyUsdCap: commentLoopLimitsFromEnv(pe.values).limits.dailyUsd,
   })
   out.followup = { installedD20: installedD20.ok, installedReason: installedD20.ok ? null : installedD20.reason, derive: derived }
   if (PROFILE_OUT !== null) {
