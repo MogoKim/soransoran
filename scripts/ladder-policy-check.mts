@@ -40,6 +40,8 @@ type PostShape = {
   firstAfterMs?: number | null
   /** 첫 댓글 뒤에 붙는 추가 댓글의 화자(글쓴이 아닌 Persona 번호) */
   followupVoices?: readonly number[]
+  /** 글쓴이가 자기 글에 단 답글 수(추가 댓글 출처) */
+  authorReplies?: number
   capturedBeforeMs?: number | null
   provenance?: 'auto' | 'broken'
   followupBroken?: boolean
@@ -60,6 +62,9 @@ function postsOf(kstDate: string, shapes: readonly PostShape[]): EvidencePost[] 
       personaId: `c${i}-${v}`, createdAtMs: publishedAtMs + (20 + k * 15) * MIN, topLevel: false,
       provenance: s.followupBroken === true && k === 0 ? 'followup-broken' : 'followup',
     }))
+    for (let k = 0; k < (s.authorReplies ?? 0); k += 1) {
+      comments.push({ personaId: `a${i}`, createdAtMs: publishedAtMs + (25 + k * 15) * MIN, topLevel: false, provenance: 'followup' })
+    }
     if (s.manual === true) comments.push({ personaId: `c${i}-m`, createdAtMs: publishedAtMs + 30 * MIN, topLevel: true, provenance: 'none' })
     return {
       postId: `${kstDate}-p${i}`, queueId: `${kstDate}-q${i}`, publishedAtMs,
@@ -147,6 +152,11 @@ const voicesShort = judgeDay(D, 'd30', [...many(Math.ceil(N30 * ratio) - 1), ...
 check('타인 3명 이상인 글이 표의 비율 이상 → PASS', voicesOk.verdict === 'PASS', JSON.stringify(voicesOk.codes))
 check('한 편 모자라면 FAIL THREE_VOICES_SHORT (댓글 수는 같다 — 평균이 아니라 화자를 센다)',
   voicesShort.verdict === 'FAIL' && has(voicesShort, 'THREE_VOICES_SHORT') && !has(voicesShort, 'COMMENT_DEPTH_SHORT'), JSON.stringify(voicesShort.codes))
+// 글쓴이 자신은 "타인"이 아니다 — 다른 화자 둘 + 글쓴이 답글로는 세 명이 되지 않는다
+const authorTalk: PostShape = { followupVoices: [2, 2, 2, 2], authorReplies: 1 }
+const voicesAuthor = judgeDay(D, 'd30', [...many(Math.ceil(N30 * ratio) - 1), ...many(N30 - Math.ceil(N30 * ratio) + 1, authorTalk)])
+check('글쓴이 답글은 타인으로 세지 않는다 — 다른 화자 둘 + 글쓴이면 THREE_VOICES_SHORT',
+  voicesAuthor.verdict === 'FAIL' && has(voicesAuthor, 'THREE_VOICES_SHORT') && !has(voicesAuthor, 'COMMENT_DEPTH_SHORT'), JSON.stringify(voicesAuthor.codes))
 check('d50 은 표의 더 높은 비율을 쓴다', ladderRowOf('d50')!.threeVoicesRatio > ratio)
 
 console.log('\n⑤ 결 ④ 수집→공개 — 재고 찍되, gate 가 꺼져 있는 동안 막지 않는다')

@@ -917,7 +917,9 @@ console.log('\n⑩ 품질 계약 판이 바뀐 직후의 비용 표본 — 최�
     versions: ['quality-v26', 'quality-v27'], results: 64, usdPerSlotValidResult: 0.0487, trialCost: trialOf(1700), ...o,
   })
   const judge = (f: PreflightFacts) => judgeNextPreflight('d30', f, RUNNER_GRID)
-  const costCodes = (v: ReturnType<typeof judge>): string => v.codes.filter((c) => c.startsWith('SUPPLY_COST')).join(',')
+  // 비용 추정은 경고 칸에 든다(2026-11-19) — 막는 코드(`codes`)에는 없어야 한다
+  const costCodes = (v: ReturnType<typeof judge>): string => (v.codes.some((c) => c.startsWith('SUPPLY_COST')) ? 'BLOCKS:' : '')
+    + v.warnings.filter((c) => c.startsWith('SUPPLY_COST')).join(',')
 
   const alone = judge(d30Facts())
   check('🔴 🔴 **11-18 07:00 재현 — 창 안에 다른 판 표본이 없으면 SUPPLY_COST_SHORT 가 아니라 SUPPLY_COST_UNKNOWN**',
@@ -950,23 +952,23 @@ console.log('\n⑩ 품질 계약 판이 바뀐 직후의 비용 표본 — 최�
   check('🔴 합쳐도 최소 표본에 못 미치면 모름(SUPPLY_COST_UNKNOWN)',
     costCodes(bothShort) === 'SUPPLY_COST_UNKNOWN' && bothShort.costCohort === 'window72h(quality-v26+quality-v27)', costCodes(bothShort))
   const carriedOver = judge(d30Facts({ supplyCostCarryover: carryOf({ usdPerSlotValidResult: 0.0625 }) }))
-  check('🔴 합친 표본이 충분하고 예산을 넘으면 FAIL(SUPPLY_COST_SHORT) — 승계가 예산 관문을 열어 주지 않는다',
+  check('🔴 합친 표본이 충분하고 예산을 넘으면 경고(SUPPLY_COST_SHORT) — 승계가 초과를 지우지 않는다',
     costCodes(carriedOver) === 'SUPPLY_COST_SHORT', costCodes(carriedOver))
   const carriedUnknown = judge(d30Facts({ supplyCostCarryover: carryOf({ usdPerSlotValidResult: null, trialCost: null }) }))
   check('🔴 합친 표본의 단가를 모르면(미정산·미연결) 모름', costCodes(carriedUnknown) === 'SUPPLY_COST_UNKNOWN', costCodes(carriedUnknown))
 
   // 사람이 읽는 한 줄 — 같은 코드 이름 아래의 "표본 부족"과 "예산 초과"를 문장으로 가른다
-  check('🔴 표본 부족은 "글 1편뿐이라 판단 불가 · 예산 초과가 아니다"로 읽힌다',
-    preflightPlainLinesOf(alone).join(' | ') === '비용 표본이 글 1편뿐이라 판단 불가 — 최소 10편이 있어야 한다(예산 초과가 아니다)',
+  check('🔴 표본 부족은 "글 1편뿐이라 추정할 수 없다" 경고로 읽힌다 — 막지 않는다',
+    preflightPlainLinesOf(alone).join(' | ') === '비용 경고(막지 않음) — 표본이 글 1편뿐이라 추정할 수 없다(최소 10편)',
     preflightPlainLinesOf(alone).join(' | '))
   check('🔴 예산 초과는 단가 × 편수 > 예산 숫자로 읽힌다',
-    preflightPlainLinesOf(noRescue).join(' | ') === '공급 비용이 예산을 넘는다 — 글 1편당 $0.0700 × 30편 = $2.10 > 하루 예산 $1.80 (표본 10편)',
+    preflightPlainLinesOf(noRescue).join(' | ') === '비용 경고(막지 않음) — 추정 공급 비용이 예산을 넘는다: 글 1편당 $0.0700 × 30편 = $2.10 > 하루 예산 $1.80 (표본 10편). 실제 지출은 장부의 하루 천장이 막는다',
     preflightPlainLinesOf(noRescue).join(' | '))
   check('🔴 승계가 쓰였으면 그 사실이 문장으로 찍힌다 · 문제없는 날은 한 줄도 없다',
     preflightPlainLinesOf(carried).join(' | ') === '공급 비용 단가는 현재 품질 계약 표본이 모자라 최근 72시간의 모든 판 표본을 합쳐 냈다 — window72h(quality-v26+quality-v27) · 결과 64편'
     && preflightPlainLinesOf(noCarry).length === 0, preflightPlainLinesOf(carried).join(' | '))
-  check('🔴 controller 가 판정 줄 앞에 이 문장들을 찍는다',
-    /for \(const line of preflightPlainLinesOf\(nextPreflight\)\) log\(`   ▸ \$\{line\}`\)\n\s+log\(preflightLogLine\(target, nextPreflight\)\)/
+  check('🔴 controller 가 판정 줄과 함께 이 문장들을 찍는다',
+    /log\(preflightLogLine\(target, nextPreflight\)\)\n\s+for \(const line of preflightPlainLinesOf\(nextPreflight\)\) log\(`   ▸ \$\{line\}`\)/
       .test(readFileSync('scripts/stage-controller.mts', 'utf-8')))
 
   // 합칠 판 — 72시간 창 안 묶음 파일의 현재가 아닌 계약 전부(창이 범위를 묶는다)

@@ -258,7 +258,7 @@ console.log('\n⑧ deferred 가 증명일 안에 안 풀림 · ⑨ Persona voice
 // ─────────────────────────────────────────────────────────
 console.log('\n⑩ 계약 변경 전 PASS 가 승급을 여는 시도')
 {
-  // 🔴 (2026-10-01 · C9) 증명일 자동 글은 서로 다른 Persona 가 쓴다(canon §6-3 · PERSONA_REPEAT) — 글마다 다른 글쓴이
+  // 발행 배정은 같은 사람에게 하루 두 편을 주지 않는다(`hardFilter` TOO_SOON) — fixture 도 글마다 다른 글쓴이
   let author = 0
   // 공급 비용 계약(envelope) 시행 뒤의 날짜 — 그 전 날짜는 비용을 판정할 근거가 없어 모름이다
   const EVIDENCE_DAY = '2026-11-20'
