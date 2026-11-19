@@ -223,7 +223,7 @@ export const COMMENT_LOOP_BUDGET_ENV = {
 export const COMMENT_LOOP_DAILY_USD_MAX = 0.5
 /** env 가 없을 때의 기본값 — 🔴 D10까지 쓰던 $0.20을 유지한다. D20은 실측 뒤 env를 명시해야 한다 */
 export const COMMENT_LOOP_DAILY_USD_DEFAULT = 0.2
-/** 한 회차 유료 요청 상한 기본값 — 20회/day 슬롯 × 이 값이 하루 요청의 천장이다 */
+/** **첫 댓글** 한 회차 유료 요청 상한 기본값. 추가 댓글은 자기 장부 회차와 자기 상한(profile)을 쓴다(`followupRunRequestCap`) */
 export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 6
 /** 예약 여유 배수 기본값 — 공급·감사 운영값과 같다 */
 export const COMMENT_LOOP_HEADROOM_DEFAULT = 1.5

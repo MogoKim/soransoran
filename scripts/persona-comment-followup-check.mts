@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 
 import type * as FollowupModule from '../src/lib/persona-comment-followup'
 import type { ReactionType } from '../src/lib/persona-reaction-roles'
+import { runPaidCountOf } from '../src/lib/llm-ledger'
 import type { AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
 import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, type ThreadPlan } from '../src/lib/persona-thread-plan'
 import {
@@ -994,6 +995,23 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   })
   check('⑫ 🔴 쌍 격리는 다른 글의 그 Persona 를 막지 않는다', otherPost.length === 1)
 
+  {
+    // 🔴 첫 댓글 몫과 추가 댓글 몫 분리 — 첫 댓글이 회차 유료 요청을 다 써도 추가 댓글의 회차 상한은 줄지 않는다
+    const firstRun = 'comment-loop-20261119080700'
+    const fuRun = M.followupLedgerRunIdOf(firstRun)
+    const paid = (runId: string, n: number) => Array.from({ length: n }, (_, k) => ({
+      id: `${runId}-${k}`, runId, at: new Date(T0).toISOString(), stage: 'commentGen', model: 'm', status: 'settled', reservedUsd: 0.002, settledUsd: 0.0016,
+    })) as unknown as Parameters<typeof runPaidCountOf>[0]
+    const ledger = [...paid(firstRun, 6)]
+    const PROFILE = fx.profiles.approved as FollowupModule.FollowupProfile
+    const cap = M.followupRunRequestCap(PROFILE, 'd10')
+    const tickFull = tick({})
+    check('⑫ 🔴 추가 댓글은 자기 장부 회차를 쓴다 — 첫 댓글이 6건을 쓴 회차에도 추가 댓글 회차 사용량은 0 에서 시작한다',
+      fuRun !== firstRun && runPaidCountOf(ledger, firstRun) === 6 && runPaidCountOf(ledger, fuRun) === 0)
+    check('⑫ 🔴 추가 댓글 장부 회차 상한 = profile 회차 상한의 호출 몫 — 회차 판정이 허락한 호출을 장부가 RUN_CAP 으로 막지 않는다',
+      cap === M.followupPlanCap(PROFILE.runMax) && tickFull.providerCallBudget <= cap && tickFull.allowed === PROFILE.runMax, `${cap} · ${tickFull.detail}`)
+    check('⑫ 🔴 profile 이 없거나 단계가 다르면 추가 댓글 장부 회차 상한 0', M.followupRunRequestCap(null, 'd10') === 0 && M.followupRunRequestCap(PROFILE, null) === 0)
+  }
   check('⑫ 호출 상한 — followupPlanCap(allowed) = allowed × 2 · 글당 회차 시도 2',
     M.followupPlanCap(0) === 0 && M.followupPlanCap(3) === 6 && M.FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK === 2)
 }

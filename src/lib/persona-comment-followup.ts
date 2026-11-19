@@ -699,11 +699,22 @@ export const FOLLOWUP_ATTEMPT_LANE: AttemptLane = Object.freeze({
 /**
  * 🔴 **같은 회차 재선정.** 자리(`allowed`)마다 예비 호출을 이만큼 더 허락한다 — 앞 Persona 가 실패하면 같은 글에서
  *    다음 정상 Persona 를 다시 고른다. 🔴 적재 상한은 `allowed` 그대로이고, 호출 상한(`providerCallBudget`)은 이 수와
- *    비용 잔량 건수 중 작은 쪽이다 — 하루 USD · 공유 장부 상한(첫 댓글 몫 포함)을 넘는 호출은 없다.
+ *    비용 잔량 건수 중 작은 쪽이다 — 하루 USD · 공유 장부 하루 상한(첫 댓글 몫 포함)을 넘는 호출은 없다.
  */
 export const FOLLOWUP_SPARE_PER_SLOT = 1
 export function followupPlanCap(allowed: number): number {
   return allowed * (1 + FOLLOWUP_SPARE_PER_SLOT)
+}
+/**
+ * 🔴 **추가 댓글은 자기 장부 회차를 쓴다** — 첫 댓글과 회차 유료 요청 상한을 나눠 쓰지 않는다.
+ *    한 회차 id 를 같이 쓰면 첫 댓글이 쓴 요청만큼 추가 댓글 몫이 줄어 profile 의 회차 상한을 구조상 못 채우고,
+ *    장부가 `RUN_CAP` 으로 막아 회차가 멈춘다. 하루 USD 상한은 같은 장부(같은 날 파일)라 그대로 공용이다.
+ */
+export const followupLedgerRunIdOf = (firstCommentRunId: string): string => `${firstCommentRunId}-fu`
+/** 🔴 추가 댓글 장부 회차의 유료 요청 상한 = 승인 profile 회차 상한의 호출 몫(`followupPlanCap`). profile 이 없으면 0 */
+export function followupRunRequestCap(profile: unknown, runtimeStage: string | null): number {
+  const prof = validateFollowupProfile(profile, runtimeStage)
+  return prof.ok ? followupPlanCap(prof.profile.runMax) : 0
 }
 /** 🔴 한 회차에 한 글에서 provider 를 부르는 최대 횟수 — 한 글이 회차 예산을 다 먹지 않는다 */
 export const FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK = 1 + FOLLOWUP_SPARE_PER_SLOT

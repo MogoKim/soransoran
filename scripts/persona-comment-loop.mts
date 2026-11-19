@@ -33,6 +33,7 @@ import { AUTO_COMMENT_THINKING_LEVEL, commentLoopLimitsFromEnv } from '../src/li
 import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-lease.mjs'
 import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
 import { followupEligibleFor, readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
+import { followupLedgerRunIdOf, followupRunRequestCap } from '../src/lib/persona-comment-followup'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { attemptStoreInLease, followupAttemptStoreInLease } from './lib/persona-comment-attempt-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -122,13 +123,14 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
       try { return readCostSignals(now, process.env as Record<string, string>).commentLedger } catch { return null }
     })()
     const gate = generationGateOf({ missingEnv: missing, ledger })
-    const session = new SupplyLlmSession({
-      runId: `comment-loop-${now.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}${pass === 0 ? '' : `-f${pass}`}`,
-      limits: budget.limits,
-      dir: commentLoopLedgerDir(),
-    })
+    // 🔴 첫 댓글과 추가 댓글은 장부 회차가 다르다 — 회차 유료 요청 상한을 서로 먹지 않는다(하루 USD 는 같은 장부라 공용)
+    const runId = `comment-loop-${now.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}${pass === 0 ? '' : `-f${pass}`}`
+    const session = new SupplyLlmSession({ runId, limits: budget.limits, dir: commentLoopLedgerDir() })
+    let followupSession: SupplyLlmSession | null = null
 
-    const makeGenerate = (personaCodes: readonly string[], stage: 'commentGen' | 'commentFollowupGen' = 'commentGen'): CommentGenerate => {
+    const makeGenerate = (
+      personaCodes: readonly string[], stage: 'commentGen' | 'commentFollowupGen' = 'commentGen', via: SupplyLlmSession = session,
+    ): CommentGenerate => {
       // 🔴 말투 근거 — Queue CLI 와 같은 규칙: 자산이 있으면 강제, 없으면 buildPrompt 가 판단한다
       const reference = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes })
       return async ({ model, input, recentTexts }) => {
@@ -136,7 +138,7 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
           { requireReference: reference.byCode.size > 0 })
         if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
         // 🔴 장부를 지나서만 부른다 — 계산 → 예약 → 요청 → 정산
-        const res = await session.call({
+        const res = await via.call({
           stage,
           model: model as ProviderModel,
           systemPrompt: prompt.prompt.systemPrompt,
@@ -159,9 +161,14 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
     const followupPhase = !followupOn ? undefined : async () => {
       const fctx = await readFollowupContext({ prisma, now, env: process.env, readText: (path) => readFileSync(path, 'utf-8') })
       const ledgerRead = readLedgerToday(commentLoopLedgerDir(), now)
+      const fuSession = new SupplyLlmSession({
+        runId: followupLedgerRunIdOf(runId), dir: commentLoopLedgerDir(),
+        limits: { ...budget.limits, runRequestCap: followupRunRequestCap(fctx.profile, fctx.runtimeStage) },
+      })
+      followupSession = fuSession
       return runFollowupPhase({
         prisma, now, env: process.env, source, canon,
-        makeGenerate: (codes) => makeGenerate(codes, 'commentFollowupGen'),
+        makeGenerate: (codes) => makeGenerate(codes, 'commentFollowupGen', fuSession),
         generation: gate,
         ledger: { entries: ledgerRead.entries, capUsd: budget.limits.dailyUsd, headroom: budget.limits.headroomMultiplier },
         // 🔴 추가 댓글 실패 격리(KST 하루) — 같은 lease 디렉터리의 다른 파일. 첫 댓글 시도 기억을 쓰지 않는다
@@ -190,8 +197,13 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
     console.log(`  추가 댓글  ${fu === null ? (followupOn ? '예외' : '단계 없음(OFF · 정기 회차 아님 · dry-run)') : `${fu.outcome} — ${fu.reason}`}`)
     for (const l of fu?.lines ?? []) console.log(`  ${l}`)
     for (const sw of [fu?.sweepBefore ?? null, fu?.sweepAfter ?? null]) for (const l of sw?.lines ?? []) console.log(`     ${l}`)
-    const t = session.tally
-    console.log(`  비용  유료 ${t.paid}회 · 막힘 ${t.blocked}회 · 예약 $${t.reservedUsd.toFixed(6)} · 정산 $${t.settledUsd.toFixed(6)}`
+    const ft = (followupSession as SupplyLlmSession | null)?.tally ?? null
+    const t = ft === null ? session.tally : {
+      paid: session.tally.paid + ft.paid, blocked: session.tally.blocked + ft.blocked,
+      reservedUsd: session.tally.reservedUsd + ft.reservedUsd, settledUsd: session.tally.settledUsd + ft.settledUsd,
+      usageUnknown: session.tally.usageUnknown + ft.usageUnknown, settleHeld: session.tally.settleHeld + ft.settleHeld,
+    }
+    console.log(`  비용  유료 ${t.paid}회(첫 댓글 ${session.tally.paid} · 추가 ${ft?.paid ?? 0}) · 막힘 ${t.blocked}회 · 예약 $${t.reservedUsd.toFixed(6)} · 정산 $${t.settledUsd.toFixed(6)}`
       + `${t.usageUnknown > 0 ? ` · 🔴 사용량 미상 ${t.usageUnknown}` : ''}${t.settleHeld > 0 ? ` · 🔴 정산 보류 ${t.settleHeld}` : ''}`)
     // 🔴 한 줄 요약 — launchd 로그를 grep 하는 자리
     console.log(`COMMENT_LOOP pass=${pass} outcome=${report.outcome} targets=${report.targets} providerCalls=${report.providerCalls}`
