@@ -20,7 +20,7 @@ import { LAST_SLOT_SCHEDULED_ENV } from './lib/fake-scheduled-slot-env.mjs'
 
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import {
-  SEED_AXIS, RAW_AXIS, inputHashOf, mergeJudgeRows, PROMPT_VERSION, PROVEN_LANES, RULE_VERSION,
+  SEED_AXIS, inputHashOf, mergeJudgeRows, PROMPT_VERSION, PROVEN_LANES, RULE_VERSION,
 } from '../src/lib/micro-seed-auto-judge'
 import { JUDGE_MODEL } from './micro-seed-auto-judge.mjs'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
@@ -28,6 +28,7 @@ import {
   EMPTY_HUMAN_DECISIONS, EMPTY_SOURCE_KEYS, attemptedOutcomes, concludedSourceKeys, selectionLaneOf, judgeStageBudget, latestOutcomes, selectWorkset as selectWorksetCore,
   sourceKeyOf, sourceOfKey,
   preGenerationRelease, worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
+  STORED_RAW_AXIS,
 } from '../src/lib/supply-workset'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
@@ -761,14 +762,14 @@ console.log('\n⑦ 🔴 🔴 묻기 전에 HOLD 인 원천에는 유료 요청�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 끝이다')
+console.log('\n⑧ 🔴 🔴 옛 사본의 raw 축 — 판정을 통과하면 길이와 무관하게 글감(AUTO_SEED)이다')
 // ─────────────────────────────────────────────────────────
 {
   const w4 = makeWorld()
-  /** 🔴 원문 그대로 레인의 축이어야 판정기가 AUTO_RAW 를 낸다 — 축은 우리가 정한다 */
+  /** 🔴 분류는 이제 raw 축을 만들지 않는다 — 그 전에 저장된 사본(`STORED_RAW_AXIS`)이 판정을 지나면 seed 와 같은 결론이어야 한다 */
   writeAdaptPair(w4.dd, [
-    { id: 'raw1', comments: 30, posted: '2026-09-19T00:00:00Z', axis: RAW_AXIS, lane: 'originalRaw' },
-    { id: 'raw2', comments: 20, posted: '2026-09-18T00:00:00Z', axis: RAW_AXIS, lane: 'originalRaw' },
+    { id: 'raw1', comments: 30, posted: '2026-09-19T00:00:00Z', axis: STORED_RAW_AXIS, lane: 'originalRaw' },
+    { id: 'raw2', comments: 20, posted: '2026-09-18T00:00:00Z', axis: STORED_RAW_AXIS, lane: 'originalRaw' },
   ])
   const rows4 = rowsOf(w4.dd)
   const hash4 = new Map(rows4.map((r) => [KY(r.sourceArticleId), inputHashOf(r.input)]))
@@ -795,7 +796,7 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
   writeFileSync(log, '', 'utf-8')
   const r = runStage({
     script: 'scripts/micro-seed-auto-judge.mts', world: w4, cap: '5', bodyLog: log,
-    judgeDecision: 'AUTO_RAW',
+    judgeDecision: 'AUTO_SEED',
     args: ['--call', '--apply', `--run-id=${tag}`,
       `--ledger-run-id=${ledgerRunIdOf(tag, 'judge')}`,
       `--workset=.microseed-data/${worksetFileName(tag)}`,
@@ -804,42 +805,13 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
   const shadow = readFileSync(join(w4.dd, `auto-judge-${tag}.shadow.jsonl`), 'utf-8')
     .split('\n').filter((l) => l.trim() !== '')
     .map((l) => JSON.parse(l) as { sourceArticleId: string; decision: string })
-  check('🔴 🔴 **판정 러너가 실제로 AUTO_RAW 를 냈다 — 묶음의 1 건만**',
-    r.code === 0 && shadow.length === 1 && shadow.every((x) => x.decision === 'AUTO_RAW'),
+  check('🔴 🔴 **판정 러너가 옛 raw 축 원천에 AUTO_SEED 를 냈다 — 묶음의 1 건만**',
+    r.code === 0 && shadow.length === 1 && shadow.every((x) => x.decision === 'AUTO_SEED'),
     `code=${r.code} · ${shadow.map((x) => x.decision).join(',')}\n${r.out.slice(-400)}`)
 
   const states = [...latestOutcomes(out4()).values()].map((o) => o.state)
-  check('🔴 🔴 **AUTO_RAW 는 unknown 이 아니라 rawLane 이다**',
-    states.length === 1 && states.every((x) => x === 'rawLane'), states.join(','))
-  const next = selectWorkset({
-    rows: rows4, humanDecided: EMPTY_HUMAN_DECISIONS, queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS, carriedOver: EMPTY_SOURCE_KEYS,
-    concluded: concludedSourceKeys(out4()), attempted: attemptedOutcomes(out4()),
-    limit: 5, runId: `${tag}-2`, takenAt: new Date(),
-  })
-  // 🔴 판정이 끝난 raw1 은 빠지고, 기다리던 raw2 가 그 raw 자리를 받는다 — raw 는 굶지 않는다
-  check('🔴 🔴 **다음 회차에 다시 올라오지 않는다 — 다음 raw 가 차례를 받는다**',
-    next.workset.sources.map(sid).join(',') === 'raw2' && next.dropped.terminal === 1,
-    `${next.workset.sources.map(sid).join(',')} · 제외 ${next.dropped.terminal}`)
-
-  // 🔴 생성 러너가 AUTO_RAW 를 초안 대상으로 집지 않는다 — 유료 호출 0
-  const snap = join(w4.dd, queueSnapshotFileName(tag))
-  writeFileSync(snap, `${JSON.stringify(buildQueueSnapshot({
-    runId: tag, takenAt: new Date(), rows: [],
-  }), null, 2)}\n`, 'utf-8')
-  const dLog = join(w4.root, 'raw-draft.log')
-  writeFileSync(dLog, '', 'utf-8')
-  const d = runStage({
-    script: 'scripts/micro-seed-auto-draft.mts', world: w4, cap: '15', bodyLog: dLog,
-    args: ['--call', '--apply', `--run-id=${tag}`,
-      `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`,
-      `--queue-snapshot=.microseed-data/${queueSnapshotFileName(tag)}`, '--require-queue-snapshot',
-      `--input=.microseed-data/auto-judge-${tag}.shadow.jsonl`],
-  })
-  const dPaid = readFileSync(dLog, 'utf-8').split('\n').filter((l) => l.trim() !== '').length
-  check('🔴 🔴 **AUTO_RAW 는 draft 슬롯을 쓰지 않는다 — 유료 호출 0**',
-    dPaid === 0, `${dPaid}회 · code=${d.code}\n${d.out.slice(-300)}`)
-  check('🔴 후보 파일도 만들지 않는다',
-    readdirSync(w4.dd).filter((f) => /\.candidates\.json$/.test(f)).length === 0)
+  check('🔴 🔴 **그 결론은 seeded 다 — 길이로 다른 레인에 보내지 않는다**',
+    states.length === 1 && states.every((x) => x === 'seeded'), states.join(','))
 }
 
 // ─────────────────────────────────────────────────────────

@@ -76,10 +76,6 @@ check('🟢 cap 을 지킨다', planCafeThin({
 // ── ③ 분류 후 채택 ──
 check('🟢 seedOriginality 는 저장한다',
   keepAfterClassify({ axis: 'seedOriginality', safetyVerdict: 'pass' }).keep)
-check('🟢 rawOriginality 는 저장한다',
-  keepAfterClassify({ axis: 'rawOriginality', safetyVerdict: 'pass' }).keep)
-check('🟢 shortRawNoindex 는 저장한다 — 사람 검수 레일로 간다',
-  keepAfterClassify({ axis: 'shortRawNoindex', safetyVerdict: 'pass' }).keep)
 check('🔴 drop 은 파일에 남기지 않는다', (() => {
   const k = keepAfterClassify({ axis: 'drop', safetyVerdict: 'pass' })
   return !k.keep && k.code === 'DROP'
@@ -163,8 +159,8 @@ check('🔴 DB write 가 있으면 잡는다 — 적재는 importer 의 일이�
 check('🔴 계획보다 많이 쓰면 잡는다',
   !verifyThinRun({ planned: 2, written: 3, networkRequests: 0, dbWrites: 0 }).ok)
 check('🟢 축별 집계가 맞는다', (() => {
-  const st = statsOf([{ axis: 'seedOriginality' }, { axis: 'seedOriginality' }, { axis: 'rawOriginality' }])
-  return st.total === 3 && st.byAxis.seedOriginality === 2 && st.byAxis.rawOriginality === 1
+  const st = statsOf([{ axis: 'seedOriginality' }, { axis: 'seedOriginality' }, { axis: 'hold' }])
+  return st.total === 3 && st.byAxis.seedOriginality === 2 && st.byAxis.hold === 1
 })())
 
 // ══════════════════════════════════════════════════════════════════

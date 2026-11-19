@@ -22,7 +22,8 @@ import {
   type SupplySelectionTrace, type TraceCandidate,
 } from '../src/lib/supply-selection-trace'
 import { articleIdHashOf } from '../src/lib/source-slot-release'
-import { mergeJudgeRows, PROVEN_LANES, RAW_AXIS, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
+import { mergeJudgeRows, PROVEN_LANES, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
+import { STORED_RAW_AXIS as RAW_AXIS } from '../src/lib/supply-workset'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { currentQualityContract } from '../src/lib/quality-contract'
 

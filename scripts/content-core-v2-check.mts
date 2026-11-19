@@ -1083,7 +1083,7 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
   check('🔴 🔴 **계획 요청이 cardValue 를 더는 요구하지 않는다**',
     !buildSpeakerPlanSystemPrompt().includes('cardValue'))
   check('🔴 판 번호가 새 계약을 담는다',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6'
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p7'
     && SPEAKER_PLAN_VERSION === 'speaker-plan-v8'
     && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
@@ -1276,7 +1276,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p15'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p16'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
@@ -2789,7 +2789,7 @@ console.log('\n🔴 🔴 **계약 판을 올렸다 — 옛 cache/artifact 가 �
    *    캐시가 새 계약의 결론으로 재사용된다.
    */
   check('🔴 🔴 **판이 실제로 올라갔다 — p6 · v7 (2026-10-12 Persona 중립 판독)**',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p6' && SPEAKER_PLAN_VERSION === 'speaker-plan-v8',
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p7' && SPEAKER_PLAN_VERSION === 'speaker-plan-v8',
     `${SPEAKER_PLAN_PROMPT_VERSION} · ${SPEAKER_PLAN_VERSION}`)
 
   const BASE_C = {

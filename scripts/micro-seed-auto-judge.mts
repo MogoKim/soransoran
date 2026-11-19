@@ -26,7 +26,7 @@ import {
   judgeOne, summarize, checkRegression, violatesProvenance, parseSemantic, inputHashOf,
   mergeJudgeRows,
   hardGate, holdBeforeAsking, HARD_BLOCK, BODY_HEAD_MAX,
-  REASON_LABEL, RULE_VERSION, PROMPT_VERSION, AUTO_PROVENANCE, SEED_AXIS, RAW_AXIS, SKIPPED,
+  REASON_LABEL, RULE_VERSION, PROMPT_VERSION, AUTO_PROVENANCE, SKIPPED,
   type Judgement, type JudgeInput, type RegressionRow, type SemanticOutcome, type SemanticStatus,
 } from '../src/lib/micro-seed-auto-judge'
 // 🔴 기존 LLM 경로를 그대로 쓴다. 새 HTTP 클라이언트도 새 SDK 도 만들지 않는다
@@ -215,6 +215,7 @@ export const SYSTEM_PROMPT = [
   '- FREE: 그 밖의 모든 글. **단순 언급**(truly incidental mention)은 FREE 다 — 갱년기 낱말이 지나가듯 한 번 나와도 중심이 아니면 FREE',
   '    예: "주말에 전시회 갔다왔는데 (갱년기 때문에 땀이 좀 났지만) 오랜만에 좋았어요" (중심은 전시회)',
   '    예: 요리·절약·여행·연예·가족 갈등 등',
+  '    🔴 **가입인사 · 자기소개 · 등업 양식 글은 FREE 다** — 양식에 갱년기 문항이 있어도 중심은 인사다. 막지 않는다(AUTO_SEED).',
   '🔴 **출처 사이트로 추론하지 않는다** — remonterrace 라고 자동 MENOPAUSE 가 아니고 wgang 이라고 자동 FREE 가 아니다. 글의 중심이 무엇인가만 본다.',
   '',
   '🔴 **판정(decision)** — 셋 중 하나다. 글의 길이·형식·종류는 묻지 않는다(그것은 우리가 정한다).',
@@ -527,7 +528,6 @@ async function main(): Promise<void> {
 
   console.log('\n③ 판정')
   console.log(`   🟢 AUTO_SEED  ${s.AUTO_SEED}건`)
-  console.log(`   🟢 AUTO_RAW   ${s.AUTO_RAW}건`)
   console.log(`   🟡 AUTO_HOLD  ${s.AUTO_HOLD}건  — 실패가 아니라 자동 격리다`)
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
 
@@ -624,4 +624,3 @@ async function main(): Promise<void> {
 const isDirectRun = process.argv[1] !== undefined
   && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isDirectRun) await main()
-export { SEED_AXIS }

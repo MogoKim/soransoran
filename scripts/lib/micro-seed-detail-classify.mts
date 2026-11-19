@@ -1,9 +1,8 @@
 /**
  * 상세 읽기 결과 판정 — 🔴 **순수 함수. 네트워크·DB·Sheet·LLM 없음**
  *
- * 정본: §4-U(6축) · §4-V(실측) · §4-W(자동 fetch 기준) · §4-Y(100자)
- *
- * 🔴 **이 모듈은 발행하지 않는다.** 읽은 결과를 6축으로 나눌 뿐이다.
+ * 🔴 **이 모듈은 발행하지 않는다.** 읽은 결과를 네 갈래(글감 · 보류 · 버림 · 못 읽음)로 나눌 뿐이다.
+ * 🔴 **길이로 가르지 않는다.** 짧은 글도 긴 사연도 글감이다 — 무엇을 막을지는 판정이 본다.
  *    수집(브라우저)은 `micro-seed-detail-fetch.mts` 가 하고, 여기는 판정만 한다 —
  *    그래야 fixture 가 **네트워크 없이** 판정을 검증할 수 있다.
  */
@@ -18,34 +17,22 @@ export type AccessStatus =
   | 'renderFailed'
   | 'selectorFailed'
 
-/** §4-U ⑥ 6축 */
+/** 읽은 글이 가는 네 갈래 — 글감(`seedOriginality`) · 안전 보류 · 버림 · 못 읽음 */
 export type DetailAxis =
-  | 'shortRawNoindex'
   | 'seedOriginality'
-  | 'rawOriginality'
   | 'hold'
   | 'drop'
   | 'access'
 
 export const AXIS_LABEL: Record<DetailAxis, string> = {
-  shortRawNoindex: 'Short Raw Noindex',
   seedOriginality: 'Seed Originality',
-  rawOriginality: 'Raw Originality',
   hold: 'Hold',
   drop: 'Drop',
   access: 'Access',
 }
 
-/**
- * 🔴 **100자 기준은 아직 확정되지 않았다** (§4-Y ④).
- *    본문만 볼지 제목+본문을 볼지 결정 전이라, **어느 쪽으로 쟀는지 기록**한다.
- *    기본값은 `body` 다 — 원문 인용 범위와 일치하기 때문이다.
- */
+/** 본문 길이를 무엇으로 쟀는지 — 사본의 `bodyLength` 를 다시 읽을 때 쓴다. 판정에는 쓰지 않는다 */
 export type LengthBasis = 'body' | 'titleBody'
-export const SHORT_RAW_MAX = 100
-
-/** 🔵 Raw 힌트: 본문 400자 이상 + 사연 축 (§4-V ①·③ 실측 419·491·697자) */
-export const RAW_MIN_BODY = 400
 
 /** 🔴 접근 신호. 브라우저가 관측한 사실만 담는다 — 판정은 여기서 한다 */
 export type AccessSignals = {
@@ -116,21 +103,18 @@ export type DetailVerdict = {
 /** 🔴 사연 축 — §4-X·§4-V 와 같은 목록을 쓴다 */
 const ASSET_TOPICS: readonly string[] = ['가족', '자녀·교육', '돈·노후', '몸·건강', '관계·마음', '일']
 
-/** 🔴 띄어쓰기를 포함해서 센다 (§4-Y ④). 연속 공백만 하나로 접는다 */
+/** 🔴 띄어쓰기를 포함해서 센다. 연속 공백만 하나로 접는다 */
 export function measureLength(title: string, body: string, basis: LengthBasis): number {
   const norm = (s: string): string => s.replace(/\s+/g, ' ').trim()
   return basis === 'titleBody' ? [...`${norm(title)} ${norm(body)}`.trim()].length : [...norm(body)].length
 }
 
 /**
- * 상세를 읽은 뒤 6축으로 나눈다.
+ * 상세를 읽은 뒤 네 갈래로 나눈다.
  *
- * 🔴 순서가 중요하다.
  *    ① Access — 못 읽었으면 그것으로 끝이다. Drop·Hold 로 뭉개지 않는다.
- *    ② 안전·브랜드 — 위험은 길이보다 먼저다. 짧다고 통과시키지 않는다 (§4-Y ⑤).
- *    ③ 길이 — 100자 미만이면 Short Raw Noindex **후보**다. 확정이 아니다.
- *    ④ 사연 — 400자 이상 + 사연 축이면 Raw Originality.
- *    ⑤ 나머지는 Seed Originality.
+ *    ② 안전 — 결정적으로 버리거나 보류할 것(`safetyFilter`).
+ *    ③ 나머지는 길이와 무관하게 전부 글감이다.
  */
 export function classifyDetail(input: DetailInput): DetailVerdict {
   const basis: LengthBasis = input.lengthBasis ?? 'body'
@@ -153,31 +137,13 @@ export function classifyDetail(input: DetailInput): DetailVerdict {
   if (input.access !== 'ok') {
     return { ...base, axis: 'access', reason: `읽지 못함(${input.access})` }
   }
-  // ② 🔴 위험은 길이보다 먼저다
+  // ② 결정적 안전 판정
   if (safety.verdict === 'hardExclude' || safety.verdict === 'drop') {
     return { ...base, axis: 'drop', reason: `안전·브랜드: ${safety.summary}` }
   }
   if (safety.verdict === 'hold') {
     return { ...base, axis: 'hold', reason: `안전·브랜드: ${safety.summary}` }
   }
-  // ③ 🟡 100자 미만 — **후보**다. 발행은 사람이 승인한다 (§4-Y ②)
-  if (measured > 0 && measured < SHORT_RAW_MAX) {
-    return {
-      ...base,
-      axis: 'shortRawNoindex',
-      reason: `본문 ${measured}자(${basis}) — 100자 미만 · 🔴 발행 전 사람 확인 필요`,
-    }
-  }
-  // ④ 🔵 긴 사연
-  if (measured >= RAW_MIN_BODY && assetAxes.length > 0) {
-    return { ...base, axis: 'rawOriginality', reason: `본문 ${measured}자 · 사연 축(${assetAxes.join('/')})` }
-  }
-  // ⑤ 🟢 나머지
-  return {
-    ...base,
-    axis: 'seedOriginality',
-    reason: measured >= RAW_MIN_BODY
-      ? `본문 ${measured}자지만 사연 축이 없다 — 소재로 쓴다`
-      : `본문 ${measured}자 — 우리 말투로 확장한다`,
-  }
+  // ③ 나머지는 전부 글감이다 — 길이는 기록만 한다
+  return { ...base, axis: 'seedOriginality', reason: `본문 ${measured}자` }
 }

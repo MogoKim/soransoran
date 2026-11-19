@@ -401,7 +401,6 @@ console.log('\n⑤ 선택 자리 표 — 상태 × 단계 × 처리')
     ['지난 결과 없음', undefined, 'fresh'],
     ['판정 seeded(생성 전 · 여력 대기)', P('judge', 'seeded'), 'fresh'],
     ['판정 terminal(AUTO_HOLD·DROP)', P('judge', 'terminal'), 'excluded'],
-    ['판정 rawLane', P('judge', 'rawLane'), 'excluded'],
     ['판정 retryable(판정 미완)', P('judge', 'retryable'), 'retry'],
     ['판정 unknown', P('judge', 'unknown'), 'retry'],
     ['생성 candidate(채택)', P('draft', 'candidate', 'terminal'), 'excluded'],

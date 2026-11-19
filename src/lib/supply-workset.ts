@@ -1,5 +1,5 @@
 import {
-  AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking, RAW_AXIS,
+  AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking,
   type AutoDecision, type JudgeInput,
 } from './micro-seed-auto-judge'
 import {
@@ -260,7 +260,7 @@ export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
   slotIneligible: '🔴 예정 슬롯에서 원천 가치가 없다 (원문 나이 ≥ 72h) — 유료 생성 0',
   slotUnknown: '🔴 원천 증거를 모른다 (게시 시각 · 반응 · 원천 상대 표본 없음) — 유료 생성 0',
   slotUnassigned: '🔴 부족 슬롯에 연결되지 않거나 이번 유료 상한 밖이다 — 유료 생성 0',
-  rawNotAutoConsumed: '🔴 원문 그대로(raw) 축 — 자동 소비자가 없다(AUTO_RAW 는 사람 검토 레인으로만 간다) · 자동 유료 묶음 0',
+  rawNotAutoConsumed: '🔴 옛 사본의 원문 그대로(raw) 축 — 자동 소비자가 없다 · 자동 유료 묶음 0',
 }
 
 export type Workset = {
@@ -301,18 +301,15 @@ export type WorksetPlan = {
 // ─────────────────────────────────────────────────────────
 // 🔴 **축별 자리** (2026-09-28)
 //
-//   생성 레인은 판정이 `AUTO_SEED` 를 준 원천만 읽는다(`micro-seed-auto-draft` 의 입력).
-//   `rawOriginality` 축 원천은 판정을 통과해도 `AUTO_RAW`(다른 레인)다 — **이 레인에서 초안이 0 이다.**
-//
-//   실측(2026-09-21~27, 39회차 195자리): raw 85자리 → AUTO_RAW 23 · HOLD 62(그중 axisMismatch 61)
-//   · 초안 0 · 채택 0. seed 110자리 → AUTO_SEED 90 · 초안 50 · 채택 33.
-//   댓글 수만 보고 고르니 raw 가 43% 자리를 먹었고, 마지막 두 회차는 5자리 중 3자리가 raw 였다.
-//
-//   🔴 **raw 를 영구 제외하지 않는다.** raw 레인의 판정도 이 회차가 내는 결론이고,
-//      제외하면 raw 원천은 영영 판정되지 않는다. 대신 **자리를 제한한다.**
+//   🟡 **옛 사본 전용이다.** 수집 분류는 이제 길이로 가르지 않아 새 사본에는 raw 축이 없다(전부 seed).
+//      아래 자리 규칙은 그 전에 저장된 사본(`axis: rawOriginality` · 공급 창 72시간 안)에만 닿는다.
+//      선택 trace 형식이 축 칸을 적으므로, 이 장치는 trace 판을 올리는 변경에서 함께 지운다.
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 원천의 축 — 판정기 정본(`RAW_AXIS`) 하나로 가른다 */
+/** 옛 사본에 남은 raw 축 값 — 지금 분류(`classifyDetail`)는 이 값을 만들지 않는다 */
+export const STORED_RAW_AXIS = 'rawOriginality'
+
+/** 🔴 원천의 축 */
 export const WORKSET_AXES = ['seed', 'raw'] as const
 export type WorksetAxis = (typeof WORKSET_AXES)[number]
 
@@ -328,17 +325,13 @@ export type WorksetAxis = (typeof WORKSET_AXES)[number]
  */
 export const WORKSET_RAW_SLOT_EVERY = 5
 
-/**
- * 🔴 **축 판정은 정본 값 하나로.** `rawOriginality` 만 raw 다.
- *    묶음에 들어오는 원천은 `holdBeforeAsking`(→ `preSemanticGate`)을 통과했으므로
- *    축이 `seedOriginality` 아니면 `rawOriginality` 둘 중 하나다 — 그 밖의 값은 여기 오지 않는다.
- */
+/** 🔴 옛 사본의 `rawOriginality` 만 raw 다 — 그 밖은 길이와 무관하게 전부 seed(글감)다 */
 export const worksetAxisOf = (r: WorksetRow): WorksetAxis =>
-  S(r.input.axis) === RAW_AXIS ? 'raw' : 'seed'
+  S(r.input.axis) === STORED_RAW_AXIS ? 'raw' : 'seed'
 
 /**
  * 🔴 **자동 유료 공급이 소비할 수 있는 원천인가 — 정본 하나** (2026-10-10 P0-B1 · 마스터 결정).
- *    지금 계약: seed 축만 true. raw 축은 판정이 AUTO_RAW 로 보내도 사람 검토 레인으로만 가서 자동 초안 · 자동 READY 가 없다.
+ *    지금 계약: seed 축만 true. 옛 사본의 raw 축은 자동 초안 · 자동 READY 가 없다.
  *    🔴 JIT 선택(`selectJitWorkset`)과 stage-neutral 원천 기회 inventory가 **이 함수 하나**를 부른다 —
  *       축 비교를 두 곳에 다시 적지 않는다. raw 자료 · 수집 · 사람 검토 경로는 그대로다.
  */
@@ -383,22 +376,18 @@ export function worksetAxisQuota(
  *
  * `seeded`    판정이 통과시켰다 — 생성으로 간다
  * `terminal`  이 원천은 끝났다 — 다음 회차에서 뺀다
- * `rawLane`   판정이 **다른 레인(원문 그대로)** 으로 보냈다 — 이 생성 레인에서는 끝이다
  * `retryable` 끝나지 않았다(판정 미완 · 생성 transient · speakerBound · unattempted) — 처리(`retryClass`)에 따라
  *             신규 자리(unattempted) 또는 재선정 자리(신규가 남긴 자리 · 근거 지문당 한 번)에 선다 (2026-11-10 retry-authority-v7)
  * `candidate` 초안이 채택됐다 — 유료로 다시 만들지 않는다(결론 집합). 적재 못 한 후보는 이월이 같은 후보를 다시 적재한다
  * `unknown`   읽지 못했다 — 결론은 아니지만 돈을 쓴 시도일 수 있다. 재선정 자리 · 근거 지문당 상한에 함께 센다
  */
 export const OUTCOME_STATES = [
-  'seeded', 'terminal', 'rawLane', 'retryable', 'candidate', 'unknown',
+  'seeded', 'terminal', 'retryable', 'candidate', 'unknown',
 ] as const
 export type OutcomeState = (typeof OUTCOME_STATES)[number]
 
-/**
- * 🔴 **이 생성 레인에서 끝난 상태.** 다음 회차 선택에서 뺀다 —
- *    `terminal` 은 결론이고, `rawLane` 은 애초에 이 레인의 일이 아니다.
- */
-export const CONCLUDED_STATES = ['terminal', 'rawLane'] as const satisfies readonly OutcomeState[]
+/** 🔴 **이 생성 레인에서 끝난 상태.** 다음 회차 선택에서 뺀다 */
+export const CONCLUDED_STATES = ['terminal'] as const satisfies readonly OutcomeState[]
 
 /** 🔴 단계 순위 — **같은 시각이면 생성이 판정보다 뒤다** */
 export const STAGE_RANK = Object.freeze({ judge: 0, draft: 1 } as const)
@@ -558,16 +547,13 @@ export function parseInstantMs(raw: unknown): number | null {
 }
 
 /**
- * 🔴 **판정 결과 네 가지를 빠짐없이 처리한다.** 정본 목록(`AUTO_DECISIONS`)을
- *    그대로 쓰고 `switch` 로 받는다 — 정본에 다섯 번째가 생기면 **컴파일이 깨진다**.
- *    앞판은 목록을 여기서 다시 적으면서 `AUTO_RAW` 를 빠뜨렸고, 그래서 정상 판정이
- *    `unknown` 으로 새어 회차마다 다시 올라왔다(2026-09-20 실측).
+ * 🔴 **판정 결과를 빠짐없이 처리한다.** 정본 목록(`AUTO_DECISIONS`)을
+ *    그대로 쓰고 `switch` 로 받는다 — 정본에 값이 하나 더 생기면 **컴파일이 깨진다**.
+ *    목록을 여기서 다시 적다 하나를 빠뜨리면 정상 판정이 `unknown` 으로 새어 회차마다 다시 올라온다.
  */
 function seededState(decision: AutoDecision): OutcomeState {
   switch (decision) {
     case 'AUTO_SEED': return 'seeded'
-    // 🔴 원문 그대로 레인으로 갔다 — Content Core 생성 대상이 아니다. 여기서 끝이다
-    case 'AUTO_RAW': return 'rawLane'
     case 'AUTO_HOLD': return 'terminal'
     case 'AUTO_DROP': return 'terminal'
     default: {
@@ -870,7 +856,7 @@ export function attributeRuns(
 /**
  * 🔴 **다음 회차에서 뺄 원천 — 결론 집합의 정본 하나** (2026-11-10 retry-authority-v7). 공급 선택 · 생성 러너의
  *    회차 안 재계획(`personasForAttempt`) · 기회 inventory 가 모두 이 함수를 쓴다.
- *      · 최신 상태가 `terminal` · `rawLane`(이 레인의 일이 아니다)
+ *      · 최신 상태가 `terminal`
  *      · 최신 상태가 `candidate` — 채택 초안을 유료로 다시 만들지 않는다. 적재 못 한 후보는 이월(`planCarryOver`)이
  *        같은 후보 파일을 다시 적재한다(재생성 0 · e2e ⑦). 앞판(2026-09-28)은 여기서 빼지 않아 채택 원천을 다시 샀다
  *      · 같은 근거 지문의 끝나지 않은 생성 시도(transient · speakerBound · unknown)가 상한(첫 시도 + 1)을 넘었다
@@ -941,8 +927,8 @@ export type SelectionLane = 'fresh' | 'retry' | 'excluded'
 export function selectionLaneOf(prior: PriorOutcome | undefined): SelectionLane {
   if (prior === undefined) return 'fresh'
   switch (prior.state) {
-    // 🔴 결론 · 다른 레인 · 이미 채택된 초안 — 유료로 다시 사지 않는다
-    case 'terminal': case 'rawLane': case 'candidate': return 'excluded'
+    // 🔴 결론 · 이미 채택된 초안 — 유료로 다시 사지 않는다
+    case 'terminal': case 'candidate': return 'excluded'
     // 🔴 판정만 통과하고 생성은 사지 않았다(여력 대기 등) — 신규와 같은 자리
     case 'seeded': return 'fresh'
     // 🔴 나가지 않은 요청(예산·상한 차단)은 시도가 아니다 — 신규와 같은 자리. 그 밖의 retryable 은 transient 다
