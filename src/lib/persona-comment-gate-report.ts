@@ -1,16 +1,14 @@
 /**
- * 9관문 **완전성 판정** — 🔴 순수 함수. DB · 네트워크 없음
+ * 댓글 관문 **완전성 판정** — 🔴 순수 함수. DB · 네트워크 없음
  *
- * 🔴 **"9개 결과가 있다" 와 "9개가 실제로 돌았다" 는 다르다.**
+ * 🔴 **"관문마다 결과가 있다" 와 "관문이 실제로 돌았다" 는 다르다.**
  *
- *    `checkCommentCandidate` 는 입력과 무관하게 항상 ①~⑨ 각 1개를 돌려준다.
- *    그래서 `gates.length === 9` 는 아무것도 보장하지 않는다 —
- *    코퍼스가 없으면 ② 가 `notRun`, identity 가 없으면 ⑦ 이 `notRun` 인 채로
- *    9개가 채워진다. 그 상태에서 `status` 만 보면 **"9관문 통과"** 로 읽힌다.
+ *    `checkCommentCandidate` 는 입력과 무관하게 항상 관문마다 1개를 돌려준다.
+ *    그래서 결과 개수는 아무것도 보장하지 않는다 — identity 가 없으면 ⑦ 이 `notRun` 인 채로
+ *    개수가 채워진다. 그 상태에서 `status` 만 보면 **"관문 통과"** 로 읽힌다.
  *
- *    실제로 첫 shadow 판이 그랬다. `toGateInput` 이 `knownNames` · `frequencyLookup` ·
- *    `identity` · `noGoTopics` · `priorTexts` 를 하나도 넘기지 않아
- *    여러 관문이 돌지 않은 채 `pass` 로 집계됐다.
+ *    실제로 첫 shadow 판이 그랬다. `toGateInput` 이 `knownNames` · `identity` · `noGoTopics` ·
+ *    `priorTexts` 를 하나도 넘기지 않아 여러 관문이 돌지 않은 채 `pass` 로 집계됐다.
  *
  * 🔴 그래서 **돌지 않은 관문을 세는 것**이 이 파일의 일이다.
  *    공개 Queue 에 갈 수 있는 후보는 필수 관문 `notRun` 이 0 이어야 한다.
@@ -20,7 +18,13 @@ import {
   DEFAULT_FINGERPRINT_THRESHOLDS, gateEightCanRun, REQUIRED_PRIOR_TEXTS,
 } from './persona-fingerprint-thresholds'
 
-export const GATE_CODES = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'] as const
+/** 번호는 저장된 판정·로그와 이어지게 그대로 둔다 — ②·④는 없는 번호다(`RETIRED_GATE_CODES`) */
+export const GATE_CODES = ['①', '③', '⑤', '⑥', '⑦', '⑧', '⑨'] as const
+/**
+ * 🔴 지운 관문(② 고유 표현 · ④ 전개 순서). 지우기 전에 적재된 Queue 행의 `gateResults` 에는 이 줄이 남아 있다 —
+ *    읽을 때 버린다. 안 버리면 배포를 걸친 PENDING 행이 "형식 깨짐"으로 닫혀 그 글의 댓글 한 건을 잃는다.
+ */
+const RETIRED_GATE_CODES: ReadonlySet<string> = new Set(['②', '④'])
 export type GateCode = (typeof GATE_CODES)[number]
 
 export type GateOutcome = 'pass' | 'review' | 'regenerate' | 'reject' | 'notRun'
@@ -32,9 +36,9 @@ export type GateLine = { gate: string; outcome: string; detail?: string }
  *
  *    ⑨(카페 운영 문맥)는 출처가 카페일 때만 의미가 있으므로 여기 넣지 않는다 —
  *    다만 그 값을 **명시적으로 넘겼는지**는 호출부가 책임진다.
- *    나머지 여덟은 입력만 갖추면 항상 돌 수 있고, 돌지 않았다면 입력이 빠진 것이다.
+ *    나머지는 입력만 갖추면 항상 돌 수 있고, 돌지 않았다면 입력이 빠진 것이다.
  */
-export const REQUIRED_GATES: readonly GateCode[] = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧']
+export const REQUIRED_GATES: readonly GateCode[] = ['①', '③', '⑤', '⑥', '⑦', '⑧']
 
 /**
  * 🔴 **관문 이름** — 번호만 찍으면 무엇이 막았는지 사람이 알 수 없다.
@@ -42,9 +46,7 @@ export const REQUIRED_GATES: readonly GateCode[] = ['①', '②', '③', '④', 
  */
 export const GATE_NAMES: Readonly<Record<GateCode, string>> = Object.freeze({
   '①': '원문 연속 유출',
-  '②': '고유 표현 · 특이 조어',
   '③': '식별 디테일 결합',
-  '④': '구조 과복제',
   '⑤': '금지 호칭 · 조언 제한',
   '⑥': '닉네임 혼입',
   '⑦': 'Persona 설정 모순 · 금지 역할',
@@ -53,7 +55,7 @@ export const GATE_NAMES: Readonly<Record<GateCode, string>> = Object.freeze({
 })
 
 export type GateReport = {
-  /** 9개 결과가 빠짐없이 왔는가 — 반환값의 형식 계약 */
+  /** 관문마다 결과가 빠짐없이 왔는가 — 반환값의 형식 계약 */
   shaped: boolean
   /** 실제로 돌아간 관문 수 (notRun 이 아닌 것) */
   ran: number
@@ -68,12 +70,12 @@ export type GateReport = {
    *
    *    `checkCommentCandidate.status` 가 말하는 것이 이것이다.
    *    돌지 않은 관문은 이 판정에 들어가지 않으므로, 이것만 보고
-   *    "9관문 통과" 라고 부르면 **보지 않은 것을 통과로 세는 것**이 된다.
+   *    "관문 통과" 라고 부르면 **보지 않은 것을 통과로 세는 것**이 된다.
    */
   statusPass: boolean
   /**
    * 🔴 **필수 관문이 하나도 빠짐없이 돌았고, 그 전부가 pass 인가.**
-   *    "9관문 통과" 라고 부를 수 있는 것은 이것뿐이다.
+   *    "관문 통과" 라고 부를 수 있는 것은 이것뿐이다.
    */
   fullGatePass: boolean
   /** 공개 Queue 에 적재해도 되는가 — `fullGatePass` 여야 한다 */
@@ -104,6 +106,7 @@ export function judgeGateReport(input: {
   })
   const byCode = new Map<string, string>()
   for (const g of input.gates) {
+    if (RETIRED_GATE_CODES.has(g.gate)) continue
     // 🔴 같은 관문이 두 번 오면 더 엄격한 쪽이 아니라 **형식 위반**으로 본다
     if (byCode.has(g.gate)) return empty(`관문 ${g.gate} 이 두 번 왔다 — 반환값 형식이 깨졌다(fail-closed)`)
     byCode.set(g.gate, g.outcome)
@@ -111,7 +114,7 @@ export function judgeGateReport(input: {
   const shaped = GATE_CODES.every((c) => byCode.has(c)) && byCode.size === GATE_CODES.length
   if (!shaped) {
     const missing = GATE_CODES.filter((c) => !byCode.has(c))
-    return { ...empty(`9개 결과가 오지 않았다 — 빠진 관문 ${missing.join('')}(fail-closed)`), notRun: [...missing] }
+    return { ...empty(`관문 ${GATE_CODES.length}개 결과가 오지 않았다 — 빠진 관문 ${missing.join('')}(fail-closed)`), notRun: [...missing] }
   }
 
   const notRun = GATE_CODES.filter((c) => byCode.get(c) === 'notRun')
@@ -119,7 +122,7 @@ export function judgeGateReport(input: {
   const passed = GATE_CODES.filter((c) => byCode.get(c) === 'pass').length
   const missingRequired = required.filter((c) => byCode.get(c) === 'notRun')
   const statusPass = input.status === 'pass'
-  // 🔴 "9관문 통과" 는 **필수 관문이 다 돌았을 때만** 말할 수 있다
+  // 🔴 "관문 통과" 는 **필수 관문이 다 돌았을 때만** 말할 수 있다
   const fullGatePass = missingRequired.length === 0
     && required.every((c) => byCode.get(c) === 'pass')
   const queueEligible = fullGatePass && statusPass
@@ -128,7 +131,7 @@ export function judgeGateReport(input: {
     shaped: true, ran, notRun: [...notRun], missingRequired: [...missingRequired], passed,
     statusPass, fullGatePass, queueEligible,
     reason: missingRequired.length > 0
-      ? `필수 관문 ${missingRequired.join('')} 이 돌지 않았다 — 9관문 통과가 아니다`
+      ? `필수 관문 ${missingRequired.join('')} 이 돌지 않았다 — 관문 통과가 아니다`
       : fullGatePass
         ? `필수 관문 ${required.length}개가 모두 돌았고 전부 pass 다`
         : '필수 관문은 다 돌았지만 pass 가 아닌 것이 있다',
@@ -261,7 +264,7 @@ export function judgeBootstrapEligible(f: BootstrapFacts): BootstrapVerdict {
   const blockers: string[] = []
   const r = f.report
 
-  if (!r.shaped) blockers.push('9관문 결과 형식이 깨졌다')
+  if (!r.shaped) blockers.push('관문 결과 형식이 깨졌다')
   // 🔴 ⑧ 하나만 빠진 경우가 아니면 bootstrap 이 아니다
   if (!(r.missingRequired.length === 1 && r.missingRequired[0] === '⑧')) {
     blockers.push(
@@ -329,8 +332,6 @@ export function bootstrapPhaseOver(priorTextCount: number): boolean {
  */
 export function judgeGateInputs(input: {
   knownNames: readonly string[] | undefined
-  hasFrequencyLookup: boolean
-  corpusName: string | undefined
   identity: unknown
   noGoTopics: readonly string[] | undefined
   noGoExpressions: readonly string[] | undefined
@@ -355,10 +356,6 @@ export function judgeGateInputs(input: {
   if (input.sourceTexts.every((t) => t.trim() === '')) {
     missing.push('sourceTexts (① 유출 대조가 성립하지 않는다)')
     willNotRun.push('①')
-  }
-  if (!input.hasFrequencyLookup || input.corpusName === undefined) {
-    missing.push('frequencyLookup·corpusName (② 코퍼스 빈도)')
-    willNotRun.push('②')
   }
   // 🔴 `undefined` 만 잡는다. `[]` 는 "조회했는데 없었다" 라 정상이다
   if (input.knownNames === undefined) {

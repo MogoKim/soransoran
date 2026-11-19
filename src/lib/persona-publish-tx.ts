@@ -164,7 +164,7 @@ export async function publishCandidateTx(
      *    옮긴다 — 승인과 발행 사이의 틈을 만들지 않는다(틈이 있으면 APPROVED 로 남은 행을
      *    나중에 누가 60분 뒤에 발행할 수 있다).
      *
-     *    🔴 기존 재검사(9관문 · 실회원 댓글 3건 · 같은 Persona · kill switch · 일일 상한 ·
+     *    🔴 기존 재검사(댓글 관문 · 실회원 댓글 3건 · 같은 Persona · kill switch · 일일 상한 ·
      *       provenance · 생활사 · cap)는 **하나도 빠지지 않고** 그대로 돈다. 그 위에
      *       `judgeAutoLane`(60분 · 글당 1건 · 자기 글 · 단계·주체·상태)이 더해진다.
      *    🔴 `manual-admin` 과 함께 쓸 수 없다 — 사람 발행은 이 레인이 아니다.
@@ -503,7 +503,7 @@ export async function publishCandidateTx(
         memberCommentsOnPost,
         // 🔴 **총 상한**을 넘긴다. 남은 수량은 트랜잭션이 사용량으로 다시 뺀다.
         // 🔴 첫 댓글과 추가 댓글은 서로 다른 글당 예산이다. 추가 댓글에 bootstrap 예산(글당 5)을
-        // 다시 적용하면 구조 상한 10이어도 오늘 다섯 번째 Persona 댓글에서 영구 정지한다.
+        // 다시 적용하면 구조 상한이 더 커도 다섯 번째 Persona 댓글에서 영구 정지한다.
         // profile 잔량을 공통 재검사의 총 상한 모양으로 변환하되, 두 레인이 공유하는 하루 절대 상한 500은 유지한다.
         allowanceCap: followupLane
           ? (followupDailyRemaining === null

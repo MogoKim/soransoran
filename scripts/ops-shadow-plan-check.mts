@@ -249,8 +249,8 @@ const out21 = dailyOutcomeOf(env20, planBig, { posts: Array.from({ length: 21 },
 check('🔴 자동 발행 21 > 봉투 상한 20 → overCap(계획·의도와 무관)', out21.overCap === true && out21.publishHardCap === 20 && out21.authorityVerdict === null)
 const planP = dailyOperatingPlanOf(env20, '2026-11-12', { kstDate: '2026-11-12', state: 'TRIAL', releaseDailyTarget: 20 })
 const outP = dailyOutcomeOf(env20, planP, { posts: Array.from({ length: 20 }, () => post(PERSONA_COMMENTS_PER_POST_MAX + 1)), tally: null })
-check('🔴 정확 N 측정 · 글당 Persona 댓글 11 > 상한 10 감지(상한은 정본 10 그대로)',
-  planP.dayKind === 'proof' && outP.exactNMet === true && outP.conversationCapRespected === false && env20.conversationHardCapPerPost === 10)
+check('🔴 정확 N 측정 · 글당 Persona 댓글이 구조 상한 + 1 → 감지(상한은 정본 상수 그대로)',
+  planP.dayKind === 'proof' && outP.exactNMet === true && outP.conversationCapRespected === false && env20.conversationHardCapPerPost === PERSONA_COMMENTS_PER_POST_MAX)
 check('결정을 못 읽으면 unknown · 상한은 그대로 봉투', dailyOperatingPlanOf(env20, '2026-11-12', null).dayKind === 'unknown'
   && dailyOperatingPlanOf(env20, '2026-11-12', null).publishCap === 20)
 /** 완전한 run token tag — 정본 판독기(`parseRunTokenShadowTag`) 모양 그대로 */

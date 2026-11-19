@@ -25,8 +25,12 @@ import { fileURLToPath } from 'node:url'
 
 import type * as FollowupModule from '../src/lib/persona-comment-followup'
 import type { ReactionType } from '../src/lib/persona-reaction-roles'
+import { runPaidCountOf } from '../src/lib/llm-ledger'
 import type { AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
 import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, type ThreadPlan } from '../src/lib/persona-thread-plan'
+import {
+  PLAN_RUNNER_TICK_MS, THREAD_DEADLINE_MS, THREAD_SIZE_CAP, THREAD_SIZE_MIN, THREAD_TARGETS, threadMeanSizeAt,
+} from '../src/lib/persona-thread-target'
 import {
   FOLLOWUP_LANE_ACTIVITY_DECIDED_BY, FOLLOWUP_LANE_DECIDED_BY, commentProvenanceOf, judgeConversationAudit,
   personaCommentCapFor, personaCommentProvenanceOf, type CommentLinkFacts, type EvidencePost,
@@ -43,9 +47,9 @@ import type { CommentInput } from '../src/lib/persona-comment-input'
 import { decisionStageEnv } from '../src/lib/scale-runtime'
 import { kstDateString } from '../src/lib/release-canary'
 import { followupEligibleFor } from './lib/persona-comment-followup-run.mjs'
-import { COMMENT_CONSUMER_BY, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
+import { COMMENT_CONSUMER_BY, COMMENT_RUNNER_MAX_GAP_MINUTES, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
 import { DECISION_CONSUMERS } from '../src/lib/stage-decision-store'
-import { PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX } from '../src/lib/persona-target-rules'
+import { PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const modulePath = process.env.FOLLOWUP_MODULE ?? join(here, '../src/lib/persona-comment-followup.ts')
@@ -62,7 +66,7 @@ const MIN = 60_000
 const T0 = Date.parse('2026-10-13T00:00:00Z')
 
 // 🔴 글 id 가 그 글의 대화 계획을 정한다. 시나리오는 계획이 큰 고정 id 하나로 돈다 —
-//    계획 10건 · 2번 글쓴이 답글 · 3~5번 글에 답 · 6~7번 글쓴이 답글 (⑭ 가 이 모양을 잠근다)
+//    계획 10건 · 2번 글쓴이 답글 · 3~5번 글에 답 · 6번 글쓴이 답글 · 7~8번 글에 답 · 9~10번 다른 사람 답글 (⑭ 가 이 모양을 잠근다)
 const FX_POST = 'post-fx-100'
 
 type FxComment = {
@@ -100,10 +104,12 @@ for (const v of ['1', 'true', 'ON', 'On', 'yes', 'enabled', ' on2']) {
   check(`① ${JSON.stringify(v)} → OFF`, M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: v }).enabled === false)
 }
 check('① 정확히 on → ON', M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: 'on' }).enabled === true)
-check('① 구조 상한 = 첫 댓글 1 + 선택적 추가 0~9 = 총 10',
-  M.FOLLOWUP_EXTRA_PER_POST_MAX === 9 && M.FOLLOWUP_TOTAL_PER_POST_MAX === 10)
-check('① 운영 profile 산출 기준은 추가 4로 동결(구조 상한과 비용 envelope 분리)',
-  M.FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST === 4)
+check('① 구조 상한 = 대화 계획의 가장 큰 크기(목표 평균의 두 배) · 추가 = 그 − 첫 댓글 1',
+  M.FOLLOWUP_TOTAL_PER_POST_MAX === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP
+  && THREAD_SIZE_CAP === Math.max(...THREAD_TARGETS.map((t) => Math.ceil(t.meanSize * 2)))
+  && M.FOLLOWUP_EXTRA_PER_POST_MAX === THREAD_SIZE_CAP - 1, `상한 ${THREAD_SIZE_CAP}`)
+check('① 🔴 대화 마감 = 계획 마감 하나(생성 · 발행 · 시도 기억이 같은 값)',
+  M.FOLLOWUP_POST_AGE_MAX_MS === THREAD_DEADLINE_MS && M.FOLLOWUP_ATTEMPT_LANE.attemptWindowMs === THREAD_DEADLINE_MS)
 {
   const p = M.partitionFollowupSourceContexts([
     { postId: 'good-1', operational: true, reason: '운영 문맥' },
@@ -158,10 +164,11 @@ for (const s of fx.scenarios) {
   check('② 🔴 삭제 이력을 포함한 다음 순번은 4 — live 순번 3 재사용 금지',
     v.verdict === 'GO' && v.ordinal === 4 && v.key === M.followupKeyOf(FX_POST, 4),
     v.verdict === 'GO' ? `ordinal=${v.ordinal}` : `${v.verdict} · ${v.reason}`)
-  check('② 🔴 사건 순번 11도 유효 — 구조 상한 10과 멱등 순번을 섞지 않는다',
+  const beyond = M.FOLLOWUP_TOTAL_PER_POST_MAX + 1
+  check(`② 🔴 사건 순번 ${beyond}도 유효 — 구조 상한과 멱등 순번을 섞지 않는다`,
     M.verifyStamp(
-      { v: M.FOLLOWUP_STAMP_VERSION, postId: FX_POST, ordinal: 11, parentCommentId: first.id, hook: 'question' },
-      { postId: FX_POST, dedupKey: M.followupKeyOf(FX_POST, 11) },
+      { v: M.FOLLOWUP_STAMP_VERSION, postId: FX_POST, ordinal: beyond, parentCommentId: first.id, hook: 'question' },
+      { postId: FX_POST, dedupKey: M.followupKeyOf(FX_POST, beyond) },
     ).ok)
 }
 
@@ -192,14 +199,8 @@ check('③ 공유 장부에서 첫 댓글 몫을 뺀 잔량 0.0025 → 2',
 check('③ 비용 값 NaN → 0', tick({ commentLedgerRemainingUsd: Number.NaN }).allowed === 0)
 check('③ 예약액 0 → 0', tick({ perCallReserveUsd: 0 }).allowed === 0)
 // ── profile 주입 · 손상 ──
-check('③ 🔴 canary 후보는 승인 전이라 쓰지 않는다',
-  !M.validateFollowupProfile(M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, 'canary').ok
-  && tick({ profile: M.FOLLOWUP_CANARY_PROFILE_CANDIDATE, runtimeStage: 'canary' }).allowed === 0)
-check('③ 후보 숫자는 80건·$0.16 (상한이 아니라 후보값 · 2026-11-13 H1)',
-  M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyCount === 80 && M.FOLLOWUP_CANARY_PROFILE_CANDIDATE.dailyUsd === 0.16)
 for (const b of fx.profiles.broken) {
-  const profile = b.profile === 'CANDIDATE' ? M.FOLLOWUP_CANARY_PROFILE_CANDIDATE
-    : b.patch !== undefined ? { ...fx.profiles.approved, ...b.patch } : b.profile
+  const profile = b.patch !== undefined ? { ...fx.profiles.approved, ...b.patch } : b.profile
   const v = M.validateFollowupProfile(profile, b.runtimeStage)
   check(`③ 🔴 profile ${b.name} → 0건`, !v.ok && tick({ profile, runtimeStage: b.runtimeStage }).allowed === 0, v.ok ? '통과해 버렸다' : v.reason)
 }
@@ -664,7 +665,8 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     const secondStamp = { ...st, ordinal: 4, parentCommentId: 'c2', hook: 'question' }
     const second = pub({ post: freshForAuthor, candidatePersonaId: 'pA', dedupKey: M.followupKeyOf(FX_POST, 4),
       editDiff: M.followupEditDiffOf(secondStamp as FollowupModule.FollowupStamp) })
-    check('⑦ 🟢 글쓴이 두 번째 답글은 서로 다른 열린 대상이면 허용', second.ok && second.personaRepeatAllowed, second.blockers.join(' | '))
+    check('⑦ 🔴 계획이 글쓴이 자리가 아닌 순번(4번 = 글에 답)에 글쓴이 답글 행 → 막음(글쓴이는 대신 서지 않는다)',
+      M.followupSeatsOf(freshForAuthor, 4).seats.every((x) => x.speaker.kind !== 'author') && !second.ok, second.blockers.join(' | '))
   }
   {
     // 🔴 실회원 댓글에는 글쓴이도 자동 답글을 달지 않는다
@@ -795,28 +797,22 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const authorPrompt = toPromptPost({ ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput).content
   check('⑪ 글쓴이 답글 입력에만 "당신이 쓴 글" 줄이 붙는다',
     authorPrompt.includes('[이 글은 당신이 쓴 글입니다') && !toPromptPost(promptInput).content.includes('당신이 쓴 글'))
-  // 🔴 글쓴이 답글의 관문 입력 — 자기 글은 ② 대조에서 빠지고 ⑦ 근거가 된다. 남의 글에 다는 댓글은 그대로다
+  // 🔴 글쓴이 답글의 관문 입력 — 자기 글이 ⑦ 근거가 된다. 남의 글에 다는 댓글은 그 글을 자기 근거로 삼지 않는다
   const authorInput = { ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput
   const gateSrc = [authorInput.post.title, authorInput.post.bodyDigest, ...authorInput.post.existingCommentDigests]
   const authorGate = toGateInput({ input: authorInput, text: '새벽 세 시만 되면 눈이 떠져서 그냥 일어나 있어요', sourceTexts: gateSrc })
   const otherGate = toGateInput({ input: promptInput, text: '저도 그래요', sourceTexts: gateSrc })
-  check('⑪ 🔴 글쓴이 답글 — ② 대조 대상에서 자기 글(제목·본문)이 빠지고 윗댓글은 남는다',
-    authorGate.uniqueExpressionSources !== undefined
-      && authorInput.post.existingCommentDigests.every((d) => authorGate.uniqueExpressionSources!.includes(d))
-      && !authorGate.uniqueExpressionSources.includes(authorInput.post.title)
-      && !authorGate.uniqueExpressionSources.includes(authorInput.post.bodyDigest),
-    JSON.stringify(authorGate.uniqueExpressionSources))
   check('⑪ 🔴 글쓴이 답글 — ① 유출 대조(sourceTexts)는 줄지 않는다', authorGate.sourceTexts.length === gateSrc.length)
   check('⑪ 🔴 글쓴이 답글 — 자기 글이 자기 말의 근거에 실린다',
     (authorGate.personaGrounding ?? '').includes(authorInput.post.bodyDigest) && (authorGate.personaGrounding ?? '').includes(authorInput.post.title))
-  check('⑪ 🔴 남의 글에 다는 댓글 — ② 대조 대상을 줄이지 않고, 그 글을 자기 근거로 삼지 않는다',
-    otherGate.uniqueExpressionSources === undefined && !(otherGate.personaGrounding ?? '').includes(promptInput.post.bodyDigest))
+  check('⑪ 🔴 남의 글에 다는 댓글 — 그 글(제목·본문)을 자기 근거로 삼지 않는다',
+    !(otherGate.personaGrounding ?? '').includes(promptInput.post.bodyDigest) && !(otherGate.personaGrounding ?? '').includes(promptInput.post.title))
 
   // 2 · 자리 — 계획이 정한 종류가 먼저, 나머지 종류가 뒤다(한 자리가 막혀도 넘어갈 곳이 있다)
   const seatsAt = (f: FollowupModule.FollowupPostFacts, ordinal: number) => M.followupSeatsOf(f, ordinal).seats
   const shown = (f: FollowupModule.FollowupPostFacts, ordinal: number) =>
     seatsAt(f, ordinal).map((x) => `${x.target.kind === 'reply' ? x.target.commentId : 'post'}/${x.speaker.kind}`).join(',')
-  check('⑪ 🔴 2번 자리(계획: 글쓴이 답글) — 글쓴이 답글 · 새 사람의 답글 · 글에 답 순', shown(fxFacts([first]), 2) === 'c1/author,c1/other,post/other', shown(fxFacts([first]), 2))
+  check('⑪ 🔴 2번 자리(계획: 글쓴이 답글) — 글쓴이 답글 · 글에 답 · 새 사람의 답글 순', shown(fxFacts([first]), 2) === 'c1/author,post/other,c1/other', shown(fxFacts([first]), 2))
   const withMember = fxFacts([{ id: 'm1', atMin: 5, origin: 'MEMBER', member: 'u1' }, first])
   check('⑪ 🔴 실회원 댓글은 어떤 자리의 답글 대상도 아니다(글쓴이 포함)',
     seatsAt(withMember, 2).length > 0 && seatsAt(withMember, 2).every((x) => x.target.kind === 'post' || x.target.commentId === 'c1'), shown(withMember, 2))
@@ -833,15 +829,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑪ 🔴 글에 답하는 자리는 글쓴이·이미 단 Persona 를 빼고 고른다',
     g3 !== null && g3.target.kind === 'post' && M.pickFollowupPersona(g3, FX_POST, cands(['pA', 'pB', 'pZ']), 3).personaId === 'pZ')
   const repliedToAuthor = fxFacts([first, a1, { id: 'c2', atMin: 100, parent: 'a1', origin: 'PERSONA', persona: 'pC', provenance: 'followup' }])
-  check('⑪ 🔴 글쓴이 댓글에 달린 답에는 글쓴이 답글 자리로 선다 — 글쓴이를 "돌아온 사람"으로 한 번 더 세우지 않는다',
-    shown(repliedToAuthor, 4) === 'post/other,c2/author,c2/other', shown(repliedToAuthor, 4))
+  check('⑪ 🔴 글쓴이 댓글에 달린 답 — 글쓴이를 "돌아온 사람"으로 세우지 않고, 계획이 글에 답인 4번 자리를 글쓴이가 대신 서지도 않는다',
+    shown(repliedToAuthor, 4) === 'post/other,c2/other', shown(repliedToAuthor, 4))
   const twice = fxFacts([first, a1,
     { id: 'b2', atMin: 100, parent: 'a1', origin: 'PERSONA', persona: 'pB', provenance: 'followup' },
     { id: 'a2', atMin: 140, parent: 'b2', origin: 'PERSONA', persona: 'pA', provenance: 'followup' }])
   check('⑪ 🔴 한 사람은 한 글에 두 번까지 — 세 번째로 돌아오는 자리는 없다', shown(twice, 5) === 'post/other', shown(twice, 5))
   const later = fxFacts([first, a1, { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', provenance: 'followup' }])
-  check('⑪ 🟢 글쓴이가 한 번 답했어도 다른 사람의 새 댓글에는 다시 글쓴이 답글 자리가 선다',
-    shown(later, 4) === 'post/other,c2/author,a1/returning', shown(later, 4))
+  check('⑪ 🔴 막힌 자리의 대체는 새 사람·돌아온 사람뿐이다 — 답할 댓글이 열려 있어도 글쓴이는 계획 밖 자리에 서지 않는다',
+    shown(later, 4) === 'post/other,a1/returning', shown(later, 4))
   const authorAtMax = fxFacts([first, a1,
     { id: 'c2', atMin: 100, origin: 'PERSONA', persona: 'pC', provenance: 'followup' },
     { id: 'a2', atMin: 140, parent: 'c2', origin: 'PERSONA', persona: 'pA', provenance: 'followup' },
@@ -869,7 +865,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     { id: 'c9', atMin: 380, parent: 'c8', origin: 'PERSONA', persona: 'pJ', provenance: 'followup' },
   ])
   const v6 = M.judgeFollowupPost(full, T0 + 500 * MIN)
-  check('⑪ 🔴 글쓴이 답글 포함 Persona 10건 → STOP(글당 10 상한)', v6.verdict === 'STOP' && v6.reason.includes('상한'), `${v6.verdict} · ${v6.reason}`)
+  check('⑪ 🔴 글쓴이 답글 포함 Persona 10건 → STOP(이 글의 계획 10건)', v6.verdict === 'STOP' && v6.reason.includes('대화 계획 10건'), `${v6.verdict} · ${v6.reason}`)
 }
 
 // ═════════ ⑫ H1 — 실패 분류 · 최소 범위 격리 · KST 자정 · 같은 회차 재선정 후보 ═════════
@@ -878,10 +874,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const cases: [string, Parameters<typeof C>[0], ReturnType<typeof C>][] = [
     ['⑧ regenerate → Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:regenerate'] }, 'FU_PERSONA_DAY'],
     ['⑦ 설정 모순 · 근거 없는 경험 → 글 × Persona(본문 탓 — 그 사람을 하루 빼지 않는다)', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:regenerate'] }, 'FU_COMBO_DAY'],
-    ['⑦:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:notRun', '②:regenerate'] }, 'FU_COMBO_DAY'],
+    ['⑦:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:notRun', '③:regenerate'] }, 'FU_COMBO_DAY'],
     ['⑧:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:notRun', '③:reject'] }, 'FU_COMBO_DAY'],
-    ['🔴 신규 Persona 의 ② 탈락(⑧ 미실행 꼬리표) → 글 × Persona — 꼬리표가 아니라 막은 관문이 정한다',
-      { step: 'ENQUEUE_BLOCKED', failedGates: ['②:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
+    ['🔴 신규 Persona 의 ③ 탈락(⑧ 미실행 꼬리표) → 글 × Persona — 꼬리표가 아니라 막은 관문이 정한다',
+      { step: 'ENQUEUE_BLOCKED', failedGates: ['③:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
     ['🔴 신규 Persona 의 ⑦ 탈락(⑧ 미실행 꼬리표) → 글 × Persona',
       { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
     ['BOOTSTRAP_NEEDS_HUMAN 꼬리표 + 글 쪽 실패 → 글', { step: 'ENQUEUE_BLOCKED', blockCodes: ['BOOTSTRAP_NEEDS_HUMAN', 'POST_NOT_PUBLISHED'] }, 'FU_POST_DAY'],
@@ -999,6 +995,23 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   })
   check('⑫ 🔴 쌍 격리는 다른 글의 그 Persona 를 막지 않는다', otherPost.length === 1)
 
+  {
+    // 🔴 첫 댓글 몫과 추가 댓글 몫 분리 — 첫 댓글이 회차 유료 요청을 다 써도 추가 댓글의 회차 상한은 줄지 않는다
+    const firstRun = 'comment-loop-20261119080700'
+    const fuRun = M.followupLedgerRunIdOf(firstRun)
+    const paid = (runId: string, n: number) => Array.from({ length: n }, (_, k) => ({
+      id: `${runId}-${k}`, runId, at: new Date(T0).toISOString(), stage: 'commentGen', model: 'm', status: 'settled', reservedUsd: 0.002, settledUsd: 0.0016,
+    })) as unknown as Parameters<typeof runPaidCountOf>[0]
+    const ledger = [...paid(firstRun, 6)]
+    const PROFILE = fx.profiles.approved as FollowupModule.FollowupProfile
+    const cap = M.followupRunRequestCap(PROFILE, 'd10')
+    const tickFull = tick({})
+    check('⑫ 🔴 추가 댓글은 자기 장부 회차를 쓴다 — 첫 댓글이 6건을 쓴 회차에도 추가 댓글 회차 사용량은 0 에서 시작한다',
+      fuRun !== firstRun && runPaidCountOf(ledger, firstRun) === 6 && runPaidCountOf(ledger, fuRun) === 0)
+    check('⑫ 🔴 추가 댓글 장부 회차 상한 = profile 회차 상한의 호출 몫 — 회차 판정이 허락한 호출을 장부가 RUN_CAP 으로 막지 않는다',
+      cap === M.followupPlanCap(PROFILE.runMax) && tickFull.providerCallBudget <= cap && tickFull.allowed === PROFILE.runMax, `${cap} · ${tickFull.detail}`)
+    check('⑫ 🔴 profile 이 없거나 단계가 다르면 추가 댓글 장부 회차 상한 0', M.followupRunRequestCap(null, 'd10') === 0 && M.followupRunRequestCap(PROFILE, null) === 0)
+  }
   check('⑫ 호출 상한 — followupPlanCap(allowed) = allowed × 2 · 글당 회차 시도 2',
     M.followupPlanCap(0) === 0 && M.followupPlanCap(3) === 6 && M.FOLLOWUP_ATTEMPTS_PER_POST_PER_TICK === 2)
 }
@@ -1010,9 +1023,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const first: FxComment = { id: 'c1', atMin: 10, origin: 'PERSONA', persona: 'pB', provenance: 'auto' }
   const v = M.judgeFollowupPost(fxFacts([first]), at)
   const go = v.verdict === 'GO' ? v : null
-  check('⑬ GO 는 지금 설 수 있는 자리를 전부 준다 — 글쓴이 답글 · 새 사람 답글 · 글에 답',
+  check('⑬ GO 는 지금 설 수 있는 자리를 전부 준다 — 글쓴이 답글(계획) · 글에 답 · 새 사람 답글',
     go !== null && go.seats.length === 3 && go.seats[0]?.speaker.kind === 'author' && go.seats[0]?.target.kind === 'reply'
-    && go.seats[2]?.target.kind === 'post' && go.seats[2]?.speaker.kind === 'other' && go.target === go.seats[0]?.target,
+    && go.seats[1]?.target.kind === 'post' && go.seats[1]?.speaker.kind === 'other'
+    && go.seats[2]?.target.kind === 'reply' && go.seats[2]?.speaker.kind === 'other' && go.target === go.seats[0]?.target,
     JSON.stringify(go?.seats.map((x) => `${x.target.kind}/${x.speaker.kind}`)))
   if (go !== null) {
     const cand = (ids: string[]): FollowupModule.FollowupPersonaCandidate[] => ids.map((personaId) => ({ personaId, eligible: true, followupsToday: 0 }))
@@ -1103,12 +1117,29 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 {
   const ids = Array.from({ length: 3000 }, (_, i) => `plan-post-${i}`)
   const plans = ids.map((id) => threadPlanOf(id))
-  const share = (n: number) => plans.filter((p) => p.size === n).length / plans.length
   const mean = plans.reduce((s, p) => s + p.size, 0) / plans.length
-  check('⑭ 🔴 크기 — 2~10 · 평균 4.5 안팎 · 분포가 정본 표를 따른다',
-    plans.every((p) => p.size >= 2 && p.size <= 10 && p.slots.length === p.size - 1) && mean > 4.3 && mean < 4.7
-    && Math.abs(share(4) - 0.25) < 0.03 && Math.abs(share(2) - 0.10) < 0.03 && Math.abs(share(10) - 0.02) < 0.015,
-    `평균 ${mean.toFixed(2)} · 2개 ${share(2).toFixed(3)} · 4개 ${share(4).toFixed(3)} · 10개 ${share(10).toFixed(3)}`)
+  const target = threadMeanSizeAt(null)
+  check('⑭ 🔴 크기 — 평균이 목표 평균(`THREAD_TARGETS`)이고, 범위는 하한~평균의 두 배 · 양 끝까지 실제로 나온다',
+    plans.every((p) => p.size >= THREAD_SIZE_MIN && p.size <= Math.ceil(target * 2) && p.slots.length === p.size - 1)
+    && Math.abs(mean - target) < 0.1 && plans.some((p) => p.size === THREAD_SIZE_MIN) && plans.some((p) => p.size >= Math.ceil(target * 2) - 1),
+    `평균 ${mean.toFixed(2)} · 목표 ${target} · 최대 ${Math.max(...plans.map((p) => p.size))}`)
+  check('⑭ 🔴 공개 시각의 줄을 쓴다 — 첫 줄보다 이른 글은 첫 줄 · 모르면 마지막 줄',
+    threadMeanSizeAt(0) === THREAD_TARGETS[0]!.meanSize && threadMeanSizeAt(null) === THREAD_TARGETS[THREAD_TARGETS.length - 1]!.meanSize
+    && JSON.stringify(threadPlanOf('plan-post-1', Date.parse(THREAD_TARGETS[0]!.since))) === JSON.stringify(threadPlanOf('plan-post-1', 0)))
+  check('⑭ 🔴 계획의 틱 여유가 실제 댓글 러너 간격과 같다', PLAN_RUNNER_TICK_MS === COMMENT_RUNNER_MAX_GAP_MINUTES * MIN,
+    `${PLAN_RUNNER_TICK_MS / MIN} · ${COMMENT_RUNNER_MAX_GAP_MINUTES}`)
+  // 🔴 가장 나쁜 경우 — 첫 댓글 +9분 · 자리마다 간격 + 다음 틱까지 한 틱을 기다려도 마감 안에 끝난다
+  const worst = (p: ThreadPlan) => 9 * MIN + p.slots.reduce((s, x) => s + x.gapMs + PLAN_RUNNER_TICK_MS, 0)
+  check('⑭ 🔴 간격은 마감에서 역산 — 어느 계획이든 마감 안에 끝난다 · 10분 이상',
+    plans.every((p) => worst(p) <= THREAD_DEADLINE_MS && p.slots.every((x) => x.gapMs >= PLAN_MIN_GAP_MS)),
+    `가장 긴 계획 ${Math.round(Math.max(...plans.map(worst)) / MIN)}분`)
+  const avgGap = (n: number) => {
+    const xs = plans.filter((p) => p.size === n).flatMap((p) => p.slots.map((x) => x.gapMs))
+    return xs.reduce((a, b) => a + b, 0) / xs.length
+  }
+  check('⑭ 🔴 큰 대화일수록 빨리 돈다 — 평균 간격이 크기와 함께 줄어든다',
+    avgGap(4) > avgGap(6) && avgGap(6) > avgGap(8) && avgGap(8) > avgGap(10),
+    [4, 6, 8, 10].map((n) => `${n}개 ${Math.round(avgGap(n) / MIN)}분`).join(' · '))
   check('⑭ 결정적 — 같은 글은 언제 세워도 같은 계획', JSON.stringify(threadPlanOf('plan-post-7')) === JSON.stringify(plans[7]))
   const count = (p: ThreadPlan, k: string) => p.slots.filter((x) => x.kind === k).length
   check('⑭ 🔴 4개 이상인 글은 새 사람의 댓글이 2개 이상(글쓴이 아닌 사람 3명 이상) · 글쓴이 답글은 1~3',
@@ -1120,8 +1151,6 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const lenShare = (l: string) => all.filter((x) => x.length === l).length / all.length
   check('⑭ 길이 — 한 줄 30% · 한두 문장 50% · 서너 문장 20%',
     Math.abs(lenShare('short') - 0.3) < 0.03 && Math.abs(lenShare('normal') - 0.5) < 0.03 && Math.abs(lenShare('long') - 0.2) < 0.03)
-  check('⑭ 🔴 간격 — 10분 이상 90분 이하 · 뒤 자리일수록 길다(바닥이 올라간다)',
-    all.every((x) => x.gapMs >= PLAN_MIN_GAP_MS && x.gapMs <= 90 * MIN && x.gapMs >= Math.min(60, 10 * (x.ordinal - 1)) * MIN))
   check('⑭ 모양은 배정 가능한 역할뿐 · 자리 종류는 셋뿐',
     all.every((x) => ['other', 'empathy', 'question', 'experience'].includes(x.shape) && ['post', 'author', 'reply'].includes(x.kind)))
   // 🔴 이미 댓글이 달린 글 — 살아 있는 Persona 댓글을 채운 자리로 세어 남은 자리만 잇는다(배포 전 글에도 같다)
@@ -1140,6 +1169,28 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     planSlotAt(big, 1) === null && planSlotAt(big, 2) === big.slots[0] && planSlotAt(big, 99) === big.slots[3])
 }
 
+// ═════════ ⑭-2 계획이 넘어서지 못하는 구조 선 — 사슬 깊이 · 글쓴이 답글 3회 ═════════
+{
+  const P = (id: string, atMin: number, persona: string, parent?: string, deleted?: boolean): FxComment =>
+    ({ id, atMin, origin: 'PERSONA', persona, provenance: id === 'c1' ? 'auto' : 'followup', ...(parent === undefined ? {} : { parent }), ...(deleted ? { deleted } : {}) })
+  // 'plan-x-14' — 7번 자리가 글쓴이 답글이다. 답할 수 있는 댓글은 사슬 6단 끝(c6)뿐
+  const chain = ['pB', 'pC', 'pD', 'pE', 'pF', 'pG'].map((p, i) => P(`c${i + 1}`, 10 + i * 30, p, i === 0 ? undefined : `c${i}`))
+  const deep = M.judgeFollowupPost(factsOf('plan-x-14', { post: {}, comments: chain }), T0 + 300 * MIN)
+  check('⑭-2 🔴 글쓴이 자리라도 사슬 6단 끝에는 답하지 않는다 → 새 사람의 글에 답',
+    threadPlanOf('plan-x-14').slots[5]?.kind === 'author' && deep.verdict === 'GO' && deep.ordinal === 7 && deep.target.kind === 'post',
+    deep.verdict === 'GO' ? `${deep.ordinal} ${deep.target.kind}` : `${deep.verdict} · ${deep.reason}`)
+  // 'plan-x-393' — 계획 11건 · 마지막 자리가 글쓴이. 글쓴이가 이미 세 번 답했고 지운 댓글로 순번(12)이 계획을 넘었다
+  const author3 = [
+    P('c1', 10, 'pB'), P('c2', 30, 'pC', 'c1'), P('a1', 50, 'pA', 'c2'), P('c3', 70, 'pD'), P('a2', 90, 'pA', 'c3'),
+    P('c4', 110, 'pE'), P('a3', 130, 'pA', 'c4'), P('c5', 150, 'pF'), P('c6', 170, 'pG', undefined, true), P('c7', 190, 'pH'), P('c8', 210, 'pI'),
+  ]
+  const fourth = M.judgeFollowupPost(factsOf('plan-x-393', { post: {}, comments: author3 }), T0 + 300 * MIN)
+  check('⑭-2 🔴 순번이 계획을 넘어 마지막(글쓴이) 자리를 다시 써도 네 번째 글쓴이 답글은 없다 → 새 사람',
+    threadPlanOf('plan-x-393').size === 11 && threadPlanOf('plan-x-393').slots[9]?.kind === 'author'
+    && fourth.verdict === 'GO' && fourth.ordinal === 12 && fourth.speaker.kind === 'other',
+    fourth.verdict === 'GO' ? `${fourth.ordinal} ${fourth.speaker.kind}` : `${fourth.verdict} · ${fourth.reason}`)
+}
+
 // ═════════ ⑮ 자리의 입력 — 길이 · 자기 사실 · 일상 경험. 첫 댓글 프롬프트는 한 글자도 바뀌지 않는다 ═════════
 {
   const persona = { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] }
@@ -1151,7 +1202,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     shaOf({ reactionType: 'other' }) === 'ea9f95f7cd19' && shaOf({ reactionType: 'experience' }) === '72a2ce655183'
     && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '47e61a85835f',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
-  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true }
+  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
   check('⑮ 🔴 자리 — 길이를 정해 주고, 자기 사실과 가벼운 일상 경험을 말하게 한다("들려줄 이야기가 없다"가 아니다)',
     text.includes('**한 줄**') && text.includes('- 자녀 2명 (고등학생)') && text.includes('가벼운 일상 경험')
@@ -1161,6 +1212,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && !JSON.stringify(built({ reactionType: 'experience', seat: { ...seat, menopauseExperienced: true } })).includes('갱년기를 직접 겪은 것처럼'))
   check('⑮ 🔴 답글 자리만 — 앞 댓글을 되받지 않게 한다(메아리 방지)',
     text.includes('되받아 쓰지 않습니다') && !JSON.stringify(built({ reactionType: 'other', seat: { ...seat, reply: false } })).includes('되받아 쓰지 않습니다'))
+  // 🔴 글쓴이가 자기 글에 답하는 자리 — 관문이 자기 글을 근거로 보는 것과 같은 말을 프롬프트가 한다
+  const own = JSON.stringify(built({ reactionType: 'experience', seat: { ...seat, ownPost: true } }))
+  check('⑮ 🔴 글쓴이 답글 — 이 글이 자기 글이라고 알리고, "당신에 대한 사실"에 이 글을 넣고, 전해 듣는 말투를 막는다',
+    own.includes('당신이 직접 쓴 글') && own.includes(`지금 답하는 이 글(「${post.title}」)은 내가 쓴 글이다`) && own.includes('남에게 들은 말투로 옮기지 않습니다'))
+  check('⑮ 🔴 글쓴이 답글 — 남의 글에나 맞는 지시("한 조각도 그대로 쓰지 않는다" · "주변에서 봤다" · "윗글에 직접 반응")는 받지 않는다',
+    !own.includes('한 조각도 그대로 쓰지 않습니다') && !own.includes('주변에서 봤다') && !own.includes('윗글에 직접 반응')
+    && own.includes('이 글에 쓴 것 밖으로'))
+  check('⑮ 🔴 남의 글에 다는 자리 — 자기 글 절이 붙지 않고 옮기지 않기 지시는 그대로다',
+    !text.includes('당신이 직접 쓴 글') && !text.includes('내가 쓴 글이다') && text.includes('한 조각도 그대로 쓰지 않습니다') && text.includes('주변에서 봤다'))
   const lengths = (['short', 'normal', 'long'] as const).map((length) => JSON.stringify(built({ reactionType: 'other', seat: { ...seat, length } })))
   check('⑮ 길이 세 등급이 서로 다른 지시로 나간다', lengths[0]!.includes('한 줄') && lengths[1]!.includes('한두 문장') && lengths[2]!.includes('서너 문장') && new Set(lengths).size === 3)
   const facts = selfFactsOf({

@@ -14,20 +14,15 @@ import type { PrismaClient } from '@prisma/client'
 import { pickPostVisibility, POST_VISIBILITY_SELECT } from '../../src/lib/post-visibility'
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import { RECENT_WINDOW_DAYS, roleHistoryOf } from '../../src/lib/persona-reserve'
-import type { FrequencyCorpus, FrequencyRead, TargetSource } from './persona-comment-targets'
-import { loadCanonCorpusTexts, referenceSeedShareCount, stableAssignment } from './persona-reference-store.mjs'
+import type { TargetSource } from './persona-comment-targets'
+import { referenceSeedShareCount, stableAssignment } from './persona-reference-store.mjs'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
-
-/** 🔴 코퍼스는 회차마다 한 번만 읽는다 — 대상마다 다시 열면 같은 파일을 반복해서 연다 */
-let corpusOnce: FrequencyRead | null = null
 
 export function makeDbTargetSource(args: {
   prisma: PrismaClient
   windowStart: Date
   /** 🔴 역할 이력 창의 기준 시각 — 생략하면 지금. 창 길이는 계약과 같은 `RECENT_WINDOW_DAYS` 다 */
   now?: Date
-  /** ② 코퍼스를 읽을 것인가 — 🔴 inspect 회차도 읽는다. "돌 수 있는가" 를 알아야 하기 때문이다 */
-  readCorpus?: boolean
   /**
    * ⑧ seed 재사용을 셀 고정 배정 — 🔴 시험용 주입. 운영은 생성 경로와 **같은** `stableAssignment` 를 읽는다
    *    (묶음을 다시 나누지 않는다 — 나누면 생성과 판정이 다른 묶음을 본다).
@@ -164,14 +159,6 @@ export function makeDbTargetSource(args: {
       } catch { return undefined }
     },
 
-    frequency: async () => {
-      if (args.readCorpus === false) {
-        return { corpus: null, reason: '이 회차는 코퍼스를 읽지 않기로 했다(readCorpus=false)' }
-      }
-      corpusOnce ??= readCanonCorpus()
-      return corpusOnce
-    },
-
     /**
      * ⑧ seed 재사용 횟수 — 🔴 이 persona 의 voice seed 가 몇 번 쓰였나.
      *    발화(Comment)와 적재된 후보(Queue)를 함께 센다. 못 세면 `null` 이다.
@@ -181,44 +168,4 @@ export function makeDbTargetSource(args: {
       try { return referenceSeedShareCount(referenceByCode(), personaCode) } catch { return null }
     },
   }
-}
-
-/**
- * ② 댓글 코퍼스 — 🔴 **소란소란 익명 정본 자산에서 읽는다** (2026-09-11).
- *
- * 🔴 **왜 우나어가 아닌가.** 옛 판은 우나어 read-only 의 `CafePost.topComments` 를 읽었다.
- *    남의 서비스 DB 하나가 우리 댓글 레인의 생사를 쥐고 있었고,
- *    2026-09-10 네이버 카페 데이터 폐기 이후 그 표는 근거가 되지 못한다.
- *
- * 🔴 **왜 자기 Comment 표가 아닌가.** 지금 우리 댓글은 한 자릿수다. 얇은 코퍼스에서는
- *    `고생하셨어요` 같은 흔한 말도 빈도 0 이라 `rare` 로 잡혀 전부 regenerate 가 된다.
- *    그렇다고 "쌓일 때까지 기다린다" 는 규제를 두면 초기에는 영영 돌지 않는다 —
- *    **기다릴 필요가 없다.** 이미 정제를 마친 익명 정본이 그 자리에 있다
- *    (`persona-reference/corpus.json`, 작성자 729명 대조 · 잔존 0건).
- *
- * 🔴 **자산 부재·digest 불일치는 사유와 함께 표면화한다.** 새 규제를 만들지 않는다 —
- *    기존 fail-closed(② notRun · 유료 호출 차단) 그대로이고, 다른 것은
- *    "왜 못 읽었는지" 가 로그에 남는다는 점뿐이다.
- *
- * 🔴 원문을 Git·DB 로 복사하지 않는다. 메모리에만 올려 빈도 조회에만 쓴다.
- * 🔴 `speakerId` 는 받지도 않는다 — 빈도 판정에 화자는 들어가지 않는다.
- */
-function readCanonCorpus(): FrequencyRead {
-  const canon = loadCanonCorpusTexts()
-  if (!canon.ok) return { corpus: null, reason: `${canon.code} — ${canon.reason}` }
-  // 🔴 공백을 지운 형태로만 들고 있는다. n-gram 조회가 그 형태를 본다
-  const bodies = canon.texts.map((t) => t.replace(/\s+/gu, '')).filter((b) => b !== '')
-  if (bodies.length === 0) {
-    return { corpus: null, reason: 'ASSET_EMPTY — 정본 자산에 쓸 수 있는 본문이 없다' }
-  }
-  const corpus: FrequencyCorpus = {
-    size: bodies.length,
-    corpusName: 'comment',
-    lookup: (ngram: string): number => {
-      let n = 0
-      for (const b of bodies) if (b.includes(ngram)) { n += 1; if (n > 6) break }
-      return n
-    },
-  }
-  return { corpus, reason: canon.reason }
 }

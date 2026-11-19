@@ -55,7 +55,7 @@ export type EnqueueFacts = {
   reactionRole: string
   /** 후보 본문 */
   text: string
-  /** 9관문 결과 그대로 */
+  /** 댓글 관문 결과 그대로 */
   gates: readonly GateLine[]
   /** `checkCommentCandidate.status` */
   gateStatus: string
@@ -174,7 +174,7 @@ export function planEnqueue(f: EnqueueFacts): EnqueuePlan {
     } else {
       blocks.push({
         code: 'GATE_NOT_FULL_PASS',
-        message: `9관문을 전부 통과하지 못했다 (${report.reason})`,
+        message: `댓글 관문을 전부 통과하지 못했다 (${report.reason})`,
       })
     }
   }
@@ -229,7 +229,7 @@ export function planEnqueue(f: EnqueueFacts): EnqueuePlan {
     gates: f.gates,
     blocks,
     summary: ok
-      ? `${ENQUEUE_STATUS} 로 적재 — ${bootstrapReal ? '🔴 사람 승인 전용(bootstrap)' : '9관문 통과'}`
+      ? `${ENQUEUE_STATUS} 로 적재 — ${bootstrapReal ? '🔴 사람 승인 전용(bootstrap)' : '댓글 관문 통과'}`
       : `🔴 적재하지 않는다 — ${blocking[0]!.message}`,
   }
 }

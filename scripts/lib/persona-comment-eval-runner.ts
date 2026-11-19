@@ -56,7 +56,7 @@ export type EvalJudged = {
    *    🔴 합성 입력의 생성물이므로 실회원 정보가 아니다.
    */
   text: string | null
-  /** 9관문 전체 결과 — notRun 을 pass 로 세지 않기 위해 그대로 남긴다 */
+  /** 댓글 관문 전체 결과 — notRun 을 pass 로 세지 않기 위해 그대로 남긴다 */
   gateLines: readonly { gate: string; outcome: string }[]
   /** 필수 관문 중 돌지 않은 것 */
   missingRequired: readonly string[]
@@ -65,7 +65,7 @@ export type EvalJudged = {
    *    이것만 보고 "Gate 통과" 로 세면 **보지 않은 관문을 통과로 세는 것**이 된다.
    */
   statusPass: boolean
-  /** 🔴 필수 관문이 전부 돌았고 전부 pass 인가 — "9관문 통과" 는 이것뿐이다 */
+  /** 🔴 필수 관문이 전부 돌았고 전부 pass 인가 — "댓글 관문 통과" 는 이것뿐이다 */
   fullGatePass: boolean
   /** ⑧ 만 대조 표본이 없어 사람 승인 Queue 로 갈 수 있는가 */
   bootstrapReviewEligible: boolean
@@ -97,7 +97,7 @@ export type EvalModelResult = {
    *    이름이 모호하면 세는 사람이 무엇을 세는지 모른다.
    */
   statusPassCount: number
-  /** 🔴 필수 관문이 전부 돌았고 전부 pass 인 건수 — 진짜 "9관문 통과" */
+  /** 🔴 필수 관문이 전부 돌았고 전부 pass 인 건수 — 진짜 "댓글 관문 통과" */
   fullGatePassCount: number
   /** ⑧ 만 못 돈 건수 — 사람 승인 Queue 후보 */
   bootstrapCount: number

@@ -3,7 +3,7 @@
  *
  * 🔴 **왜 따로 두는가** (2026-09-28 · Track B).
  *
- *    댓글 경로에는 대상 선정 · 생성 · 9관문 · PENDING 적재 · 발행 트랜잭션이 전부 있었지만
+ *    댓글 경로에는 대상 선정 · 생성 · 댓글 관문 · PENDING 적재 · 발행 트랜잭션이 전부 있었지만
  *    **하나로 이어 주는 예약 진입점**이 없었다. runner 는 사람이 승인한 행만 발행했고,
  *    후보는 아무도 만들지 않았다 — 그래서 공개 Persona 댓글은 0/day 였다.
  *
@@ -13,7 +13,7 @@
  *      ③ 글을 쓴 Persona 는 **자기 글에** 달지 않는다 — 대화가 아니라 연출이다
  *      ④ 사람이 누르지 않은 발행은 **이 단계 · 자동 주체 · PENDING** 에서만 연다
  *
- * 🔴 **기존 규칙을 대신하지 않는다.** 9관문 · 실회원 댓글 3건 · 같은 Persona 두 번 ·
+ * 🔴 **기존 규칙을 대신하지 않는다.** 댓글 관문 · 실회원 댓글 3건 · 같은 Persona 두 번 ·
  *    kill switch · 일일 상한 · provenance · 생활사는 `recheckBeforePublish` · `planPublish` 가
  *    **같은 트랜잭션 안에서** 그대로 본다. 이 파일은 그 위에 넷을 더할 뿐 하나도 빼지 않는다.
  */
@@ -187,7 +187,7 @@ export function isAutoLaneCandidatePost(p: AutoLanePostFacts, nowMs: number): bo
 
 /**
  * 🔴 **글마다 첫 대상 하나만 남긴다.** planner 는 라운드로빈으로 한 글에 둘째 자리를
- *    채울 수 있다(구조 상한 10). 이 레인은 글당 1건이므로 둘째부터는 만들지도 부르지도 않는다.
+ *    채울 수 있다(구조 상한 `PERSONA_COMMENTS_PER_POST_MAX`). 이 레인은 글당 1건이므로 둘째부터는 만들지도 부르지도 않는다.
  */
 export function firstPerPost<T>(items: readonly T[], postIdOf: (t: T) => string): T[] {
   const seen = new Set<string>()
@@ -223,7 +223,7 @@ export const COMMENT_LOOP_BUDGET_ENV = {
 export const COMMENT_LOOP_DAILY_USD_MAX = 0.5
 /** env 가 없을 때의 기본값 — 🔴 D10까지 쓰던 $0.20을 유지한다. D20은 실측 뒤 env를 명시해야 한다 */
 export const COMMENT_LOOP_DAILY_USD_DEFAULT = 0.2
-/** 한 회차 유료 요청 상한 기본값 — 20회/day 슬롯 × 이 값이 하루 요청의 천장이다 */
+/** **첫 댓글** 한 회차 유료 요청 상한 기본값. 추가 댓글은 자기 장부 회차와 자기 상한(profile)을 쓴다(`followupRunRequestCap`) */
 export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 6
 /** 예약 여유 배수 기본값 — 공급·감사 운영값과 같다 */
 export const COMMENT_LOOP_HEADROOM_DEFAULT = 1.5

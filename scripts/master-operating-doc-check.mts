@@ -351,16 +351,15 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
   out.push(['canon §5 가 자동 runner provenance 댓글만 자동 증명에 센다',
     d100Goal.includes('자동 증명에는 자동 runner provenance 가 있는 댓글만 센다')
     && d100Goal.includes('bounded recovery')])
-  out.push(['canon §5 가 첫 댓글 1 + 추가 댓글·답글 0~9와 실제 스레드 행을 고정한다',
-    d100Goal.includes('합계 `1..10`건')
-    && d100Goal.includes('추가 댓글·답글 0~9건')
+  out.push(['canon §5 가 첫 댓글 1 + 추가 댓글·답글(구조 상한 = 코드 값)과 실제 스레드 행을 고정한다',
+    d100Goal.includes(`합계 \`1..${PERSONA_COMMENTS_PER_POST_MAX}\`건`)
     && d100Goal.includes('부모 댓글을 가리키는 실제 스레드 행')
-    && d100Goal.includes('모든 글을 10건으로')
+    && d100Goal.includes('모든 글을 상한으로 채우지 않는다')
     && d100Goal.includes('답글로 최대 3회')])
-  out.push(['canon §5.2 가 글마다의 대화 계획(2~10건 · 자리 종류 셋 · 간격 10~90분)과 글쓴이 아닌 사람 두 번까지를 적는다',
-    ['### 5.2 대화 계획', '2~10건으로 정한다', '평균은 약 4.5건', '자리 종류는 셋이다', '10~90분',
+  out.push(['canon §5.2 가 글마다의 대화 계획(목표 평균 · 마감에서 역산한 간격 · 자리 종류 셋)과 글쓴이 아닌 사람 두 번까지를 적는다',
+    ['### 5.2 대화 계획', '**글당 목표 평균**', '**대화 마감**', '줄을 **덧붙인다**', '자리 종류는 셋이다', '대화 마감에서 역산한다',
       '글쓴이 아닌 Persona 는 한 글에 두 번까지 말한다', '새 댓글을 두 번 달지 않는다', '한 댓글에는 답이 하나만 달린다',
-      '한 후보의 실패가 글을 멈추지 않는다', '`src/lib/persona-thread-plan.ts`'].every((t) => d100Goal.includes(t))
+      '한 후보의 실패가 글을 멈추지 않는다', '`src/lib/persona-thread-target.ts`'].every((t) => d100Goal.includes(t))
     && !d100Goal.includes('같은 글에서 한 번만 말한다') && !/대화 hook만 대상|첫 댓글도 대화 기능을 쓴다/.test(d100Goal)])
   out.push(['canon §5.2 가 추가 댓글의 일상 경험 허용과 막는 것 넷을 적고 첫 댓글은 제외한다',
     ['가벼운 일상 경험을 자기 이야기로 말해도 된다', '막는 것은 넷뿐이다', '의료 사실', '갱년기를 자기 일로', '부부 사이가 틀어진 일',
@@ -552,7 +551,7 @@ check('D100 목표가 첫 댓글 증명과 대화 계획의 대화량을 구분�
   d100Goal.includes('첫 댓글 1건은 증명용 하한')
   && d100Goal.includes('계획의 숫자는 단계 PASS 기준이 아니다')
   && d100Goal.includes('계획보다 적게 달린 글을')
-  && d100Goal.includes('합계 `1..10`건'))
+  && d100Goal.includes(`합계 \`1..${PERSONA_COMMENTS_PER_POST_MAX}\`건`))
 check('D100 목표가 실회원 우선 홈·베스트 계약을 적는다',
   d100Goal.includes('홈·베스트는 실회원 반응을 우선한다')
   && d100Goal.includes('Persona 댓글 수를 실회원 인기처럼 합산해 홈 순위를 올리지 않는다'))
@@ -600,8 +599,8 @@ check('현재 실행이 모르는 운영 결과를 UNKNOWN 으로 적을 수 있
 check('현재 실행이 다음 critical path 를 표 하나로 적는다',
   current.includes('## 5. 다음 critical path') && /^\| D\d+-FIX \|/m.test(current))
 check('현재 실행의 대화 절이 canon §5 와 같은 reply-worthiness 를 가리킨다',
-  current.includes('첫 댓글 1 + 선택적 0~9')
-  && current.includes('총 구조 상한 10')
+  current.includes('첫 댓글 1 + 대화 계획')
+  && current.includes(`총 구조 상한 ${PERSONA_COMMENTS_PER_POST_MAX}`)
   && current.includes('글쓴이 답글 최대 3회')
   && current.includes('automatic provenance'))
 /**
@@ -1013,11 +1012,11 @@ check('실회원 글 외부 전송 금지를 release 절에도 적는다',
 check('댓글 회차를 글 발행량과 묶지 않는다고 적는다',
   master.includes('글 발행량(d1~d10)과 묶지 않는다'))
 /**
- * 🔴 **"결과 9개" 를 "9관문 통과" 로 읽지 못하게 한다.**
- *    입력을 빠뜨리면 notRun 인 채로 9개가 채워진다 — 첫 shadow 판이 그랬다.
+ * 🔴 **"결과가 다 왔다" 를 "관문 통과" 로 읽지 못하게 한다.**
+ *    입력을 빠뜨리면 notRun 인 채로 줄 수만 채워진다 — 첫 shadow 판이 그랬다.
  */
-check('9관문의 결과 존재와 실제 실행을 나눠 적는다',
-  master.includes('"결과 9개" 와 "실제 실행" 을 나눈다')
+check('관문의 결과 존재와 실제 실행을 나눠 적는다',
+  master.includes('"결과가 다 왔다" 와 "실제 실행" 을 나눈다')
   && ['결과 존재', '실제 실행', 'notRun', '필수 미실행'].every((t) => master.includes(t)))
 check('notRun 을 pass 로 세지 않는다고 명시한다',
   master.includes('`notRun` 을 `pass` 로 세지 않는다'))
@@ -1440,19 +1439,14 @@ check('🔴 다른 Gate 실패는 그대로 막는다고 적는다',
   check('🔴 60분 계약을 슬롯이 실제로 만족한다',
     plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
 }
-/** 🔴 ② 코퍼스 정본과 버린 길을 함께 적는다 */
-check('🔴 ② 코퍼스 정본이 익명 정본 자산이라고 적는다',
-  master.includes('② 댓글 코퍼스 공급원 — 소란소란 익명 정본 자산')
-  && master.includes('loadCanonCorpusTexts'))
-check('🔴 화자를 빈도 판정에 쓰지 않는다고 적는다',
-  master.includes('`speakerId` 는 빈도 판정에 쓰지 않는다'))
-check('🔴 원문을 Git·DB 로 복사하지 않는다고 적는다',
-  master.includes('원문을 Git·DB 로 복사하지 않는다'))
-check('🔴 버린 두 길을 기록으로 남긴다',
-  master.includes('CafePost`') === false
-  && master.includes('자체 `Comment` 표 + 500건 대기'))
-check('🔴 자산 부재를 영구 정지로 만들지 않는다고 적는다',
-  master.includes('bootstrap 전체를 영구 정지시키지 않는다'))
+/** 🔴 관문 ②·④ 삭제를 문서가 그대로 적는다 — 지운 코퍼스 읽기를 지금 있는 것처럼 적지 않는다 */
+check('🔴 관문 ②·④ 가 없다고 적고 이유를 남긴다',
+  master.includes('관문 ②(고유 표현)·④(전개 순서)는 없다')
+  && master.includes('우리 사이트에 이미 공개된 글·댓글'))
+check('🔴 번호를 당기지 않고 옛 행의 ②·④ 줄은 읽을 때 버린다고 적는다',
+  master.includes('②·④ 는 없는 번호다') && master.includes('`judgeGateReport` 가 읽을 때 버린다'))
+check('🔴 지운 ② 코퍼스 읽기를 살아 있는 것처럼 적지 않는다',
+  !master.includes('loadCanonCorpusTexts') && !master.includes('frequencyLookup'))
 /** 🔴 운영 창 계약 — 글 발행도 같은 창 안이어야 한다 */
 check('🔴 운영 창을 08~22 로 못박는다',
   master.includes('#### 🔴 운영 창 계약 — 08~22시')

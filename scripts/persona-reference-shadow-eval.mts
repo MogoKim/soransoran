@@ -113,7 +113,8 @@ if (WANT_REPORT) {
   console.log(`\n  statusPass ${s.statusPass}/${s.rows} · fullGatePass ${s.fullGatePass}/${s.rows}`
     + ` · 근거 없는 자기 경험 ${s.ungroundedTotal}/${s.rows}`)
   console.log('  Gate:')
-  for (const k of ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']) {
+  // 🔴 저장된 집계에 있는 관문을 그대로 찍는다 — 옛 회차 artifact 의 줄도 숨기지 않는다
+  for (const k of Object.keys(s.gateTally).sort()) {
     console.log(`    ${k} ${JSON.stringify(s.gateTally[k] ?? {})}`)
   }
   /**
@@ -348,7 +349,7 @@ for (const j of jobs) {
   const text = rawRows.find((x) => x.personaCode === j.code)?.text ?? null
   const gate = text === null ? null : checkCommentCandidate(toGateInput({
     input: j.input, text, sourceTexts: j.sourceTexts,
-    frequencyLookup: () => 0, knownNames: [],
+    knownNames: [],
   }))
   const g = judgeExperienceGrounding({ text: text ?? '', grounding: '' })
   judged.push({

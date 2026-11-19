@@ -5,7 +5,7 @@
  * 🔴 **하나의 흐름이다.** 조각들이 각자 돌지 않는다.
  *
  *    planner(대상 글 + Persona) → Persona-first 입력 → 기존 `buildPrompt`
- *    → (선택) 기존 `callProvider` → 기존 9관문 Gate → shadow artifact
+ *    → (선택) 기존 `callProvider` → 기존 Gate → shadow artifact
  *
  *    새 생성기를 만들지 않았다. 프롬프트 정본은 `buildPrompt`, 안전 판정 정본은
  *    `checkCommentCandidate` 이고, 이 스크립트는 그 사이를 잇기만 한다.
@@ -164,7 +164,7 @@ if (reasons.size > 0) {
   for (const [code, n] of [...reasons].sort((a, b) => b[1] - a[1])) console.log(`     ${code} ${n}건`)
 }
 
-// ── ④ shadow — 🔴 입력 → 프롬프트 → (선택) 호출 → 9관문 Gate ──
+// ── ④ shadow — 🔴 입력 → 프롬프트 → (선택) 호출 → Gate ──
 type ShadowRecord = {
   postId: string
   personaCode: string
@@ -203,9 +203,7 @@ if (WANT_SHADOW) {
    *    갈린 쪽으로 판정한 회차가 "관문이 돈다" 고 잘못 말하게 된다.
    */
   const withNames = material.gaps.filter((g) => g.startsWith('knownNames')).length === 0
-  const withCorpus = material.gaps.filter((g) => g.startsWith('frequencyLookup')).length === 0
   console.log(`     ⑥-A 회원 표시명 ${withNames ? '조회함' : '🔴 조회 실패(undefined)'}`)
-  console.log(`     ② 댓글 코퍼스 ${withCorpus ? '읽음 (원문 미저장)' : '🔴 없음 — ② 가 notRun 이 된다'}`)
   for (const g of material.gaps) console.log(`       빠짐: ${g}`)
 
   const inputs: CommentInput[] = material.targets.map((t) => t.target.input)

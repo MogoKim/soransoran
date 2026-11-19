@@ -48,9 +48,7 @@ import {
 } from './lib/persona-comment-eval-store'
 import { M3_MODEL_CANDIDATES } from './lib/voice-m3-contract.mjs'
 import { callProvider, keyStatus, type ProviderModel } from './lib/voice-m3-provider.mjs'
-import pg from 'pg'
 
-import { loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const WANT_CALL = process.argv.includes('--call')
@@ -356,45 +354,14 @@ const caller: EvalCaller = async ({ model, input }) => {
   }
 }
 
-/** 🔴 ② 코퍼스 — 없으면 ② 가 notRun 이 된다. 그 사실을 화면에 적는다 */
-const corpusLookup = await (async (): Promise<((n: string) => number) | null> => {
-  const url = ((): string | null => { try { return loadUnaoReadonlyUrl() } catch { return null } })()
-  if (url === null) return null
-  try {
-    const unao = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
-    await unao.connect()
-    const { rows } = await unao.query<{ topComments: unknown }>(
-      'SELECT "topComments" FROM "CafePost" WHERE "topComments" IS NOT NULL LIMIT 3000',
-    )
-    await unao.end()
-    const bodies: string[] = []
-    for (const r of rows) {
-      let arr: unknown = r.topComments
-      if (typeof arr === 'string') { try { arr = JSON.parse(arr) } catch { continue } }
-      if (!Array.isArray(arr)) continue
-      for (const item of arr) {
-        if (item === null || typeof item !== 'object') continue
-        const body = (item as Record<string, unknown>).content
-        if (typeof body === 'string' && body.trim() !== '') bodies.push(body.replace(/\s+/gu, ''))
-      }
-    }
-    return (ngram: string): number => {
-      let n = 0
-      for (const b of bodies) if (b.includes(ngram)) { n += 1; if (n > 6) break }
-      return n
-    }
-  } catch { return null }
-})()
-console.log(`  ② 댓글 코퍼스 ${corpusLookup === null ? '🔴 없음 — ② 가 notRun 이 된다' : '연결됨 (원문 미저장)'}`)
-
 /** 🔴 ⑧ 같은 배치의 앞선 후보 */
 const priorByPersona = new Map<string, string[]>()
 
 /**
  * 🔴 파싱과 Gate 는 **기존 정본**을 쓴다. 비교용 판정을 새로 만들지 않는다.
  *
- * 🔴 Gate 입력을 빠짐없이 채운다 — 빠뜨리면 관문이 `notRun` 인 채로 9개가 채워져
- *    "9관문 통과" 처럼 읽힌다.
+ * 🔴 Gate 입력을 빠짐없이 채운다 — 빠뜨리면 관문이 `notRun` 인 채로 줄 수만 채워져
+ *    "관문 통과" 처럼 읽힌다.
  */
 const judge: EvalJudge = ({ rawText, input }) => {
   const parsed = parseCandidate(rawText)
@@ -413,8 +380,6 @@ const judge: EvalJudge = ({ rawText, input }) => {
     // 🔴 합성 비교에는 실회원 표시명을 넣지 않는다 — 대신 **조회했다는 사실**을 빈 배열로 남긴다.
     //    `undefined` 로 두면 ⑥ 이 notRun 이 되어 "돌지 않은 검사" 가 통과로 읽힌다
     knownNames: [],
-    frequencyLookup: corpusLookup ?? undefined,
-    corpusName: corpusLookup === null ? undefined : 'comment',
     priorTexts: priorByPersona.get(input.personaCode) ?? [],
     seedUseCount: 1,
     adviceForbidden: false,

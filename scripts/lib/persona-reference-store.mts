@@ -169,8 +169,7 @@ export function loadCanonAsset(): {
 
 /**
  * 🔴 **자산을 여는 한 곳.** 경로·manifest·digest·권한·모양을 여기서 한 번만 본다.
- *    말투 묶음(`loadCanonAsset`)과 ② 빈도 코퍼스(`loadCanonCorpusTexts`)가
- *    같은 파일을 각자 열면 게이트가 두 벌이 되고, 한쪽만 고쳐지는 날이 온다.
+ *    여는 곳이 둘이 되면 게이트가 두 벌이 되고, 한쪽만 고쳐지는 날이 온다.
  */
 function readCanonAsset(): {
   ok: boolean
@@ -209,40 +208,6 @@ function readCanonAsset(): {
   const shape = judgeAssetShape(parsed)
   if (!shape.ok) return { ok: false, code: shape.code, reason: shape.reason, asset: null, digest: actualDigest }
   return { ok: true, code: 'OK', reason: ready.reason, asset: parsed as ReferenceAsset, digest: actualDigest }
-}
-
-/**
- * 🔴 **② 고유 표현 판정에 쓰는 빈도 코퍼스** (2026-09-11).
- *
- * 🔴 **`speakerId` 를 돌려주지 않는다.** ② 는 "이 표현이 이 공동체에서 흔한가" 를 묻고,
- *    그 물음에 누가 썼는지는 들어가지 않는다. 반환 타입에서 아예 빼서
- *    호출부가 실수로도 화자를 빈도 판정에 섞지 못하게 한다.
- *
- * 🔴 **밴드로 거르지 않는다.** 말투 묶음은 "인용할 만한 길이" 를 고르지만,
- *    빈도 코퍼스는 **이 공동체가 실제로 쓰는 말 전부**여야 한다 —
- *    짧은 맞장구를 빼면 `그쵸` 같은 흔한 말이 희귀어로 잡힌다.
- *
- * 🔴 원문을 Git·DB 로 옮기지 않는다. 이 함수는 메모리에만 올린다.
- */
-export function loadCanonCorpusTexts(): {
-  texts: string[]
-  ok: boolean
-  code: string
-  reason: string
-} {
-  const read = readCanonAsset()
-  if (!read.ok || read.asset === null) {
-    return { texts: [], ok: false, code: read.code, reason: read.reason }
-  }
-  const texts: string[] = []
-  for (const c of read.asset.comments) {
-    const t = c.content.trim()
-    if (t !== '') texts.push(t)
-  }
-  return {
-    texts, ok: true, code: 'OK',
-    reason: `정본 자산 ${texts.length}건 — ${read.reason}`,
-  }
 }
 
 /** 자산을 읽어 **작성자와 댓글**을 모은다 — 🔴 작성자는 로컬에서만 쓴다 */

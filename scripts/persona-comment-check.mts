@@ -16,18 +16,17 @@ import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  checkCommentCandidate, summarizeCandidates, type CandidateVerdict,
+  checkCommentCandidate, summarizeCandidates, GATE_ORDER, type CandidateVerdict,
 } from './lib/persona-comment-candidate.mjs'
+import { GATE_CODES, judgeGateReport } from '../src/lib/persona-comment-gate-report'
 import { checkPersonaConsistency, checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
-// 🔴 2026-09-01 ② 길이 보정 — 임계 상수와 판정부를 직접 부른다
-import { checkUniqueExpression, RARE_RATIO_MIN_LENGTH, RARE_RATIO_REGEN } from './lib/persona-gate-234.mjs'
 // 🔴 2026-09-01 가드 좁히기 — 전제 확인이 순수 함수로 빠져 여기서 잠근다
 import { planPersonaPreflight, planPriorOutputPrecondition } from './lib/persona-preflight.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = join(HERE, 'lib/persona-comment-candidate.mts')
 const RUNNER = join(HERE, 'persona-comment-dry-run.mts')
-const GATE234 = join(HERE, 'lib/persona-gate-234.mts')
+const GATE_DETAIL = join(HERE, 'lib/persona-gate-identifying-detail.mts')
 const GATE78 = join(HERE, 'lib/persona-gate-78.mts')
 const SELF = join(HERE, 'persona-comment-check.mts')
 
@@ -210,13 +209,12 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
 {
   const v = checkCommentCandidate({ personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE })
   const notRun = v.gates.filter((g) => g.outcome === 'notRun').map((g) => g.gate)
-  // 🔴 ⑦(identity 대조) · ⑧(반복 패턴) 은 여전히 돌지 않는다.
-  //    ② 는 코퍼스 조회가 없을 때만 notRun 이다
+  // 🔴 ⑦(identity 대조) · ⑧(반복 패턴) 은 대조 집합이 없으면 돌지 않는다
   const expected = ['⑦', '⑧']
   const missing = expected.filter((g) => !notRun.includes(g as never))
   if (missing.length > 0) bad('미실행은 notRun', 'guard', `🔴 ${missing.join(' ')} 가 notRun 이 아니다`)
-  else if (v.gates.length !== 9) bad('미실행은 notRun', 'guard', `🔴 관문 ${v.gates.length}/9`)
-  else ok('미실행은 notRun', 'guard', `9관문 · notRun ${notRun.length}종 (⑦ ⑧ 포함)`)
+  else if (v.gates.length !== GATE_ORDER.length) bad('미실행은 notRun', 'guard', `🔴 관문 ${v.gates.length}/${GATE_ORDER.length}`)
+  else ok('미실행은 notRun', 'guard', `관문 ${GATE_ORDER.length}개 · notRun ${notRun.length}종 (⑦ ⑧ 포함)`)
 }
 
 // ── 🔴 반환값에 본문이 없는가 ────────────────────────
@@ -268,119 +266,66 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   else ok('순수 함수 · 발행 없음', 'guard', 'DB · LLM · 발행 경로 없음 · ① 반환값 확인')
 }
 
-// ══ ② 고유 표현 ═══════════════════════════════════
+// ══ 🔴 윗글 낱말을 받아 말하는 댓글 — 막지 않는다 · 통째 복사는 ① 이 막는다 ═══
+//    대조 대상은 카페 원문이 아니라 우리 사이트에 공개된 글·댓글이다. 윗글의 낱말을 받아
+//    말하는 것이 대화다. 여기서는 판정부를 **실제로 불러** 동작을 잰다.
 {
-  // 🔴 희귀 = 코퍼스 빈도 0~1. 흔함 = 6+ (§3-② 판정 3단)
-  const rareLookup = () => 0
-  const commonLookup = () => 50
-  const midLookup = () => 3
-  const shared = '남의편이 그러는데'
-
-  const rare = checkCommentCandidate({
-    personaCode: 'P05', text: `${shared} 저도 그래요`, sourceTexts: [`${shared} 참 답답해요`],
-    frequencyLookup: rareLookup,
-  })
-  const common = checkCommentCandidate({
-    personaCode: 'P05', text: `${shared} 저도 그래요`, sourceTexts: [`${shared} 참 답답해요`],
-    frequencyLookup: commonLookup,
-  })
-  const mid = checkCommentCandidate({
-    personaCode: 'P05', text: `${shared} 저도 그래요`, sourceTexts: [`${shared} 참 답답해요`],
-    frequencyLookup: midLookup,
-  })
-  const g = (v: typeof rare) => v.gates.find((x) => x.gate === '②')?.outcome
+  const upper = '남의편 이야기를 읽었어요. 속천불 난다고 하네요'
   const offenders: string[] = []
-  if (g(rare) !== 'pass') offenders.push(`단일 희귀=${g(rare)}`)
-  if (g(mid) !== 'pass') offenders.push(`단일 중간=${g(mid)}`)
-  if (g(common) !== 'pass') offenders.push(`흔함=${g(common)}`)
-  if (offenders.length) bad('② 희귀도 3단', 'case', `🔴 ${offenders.join(' / ')}`)
-  else ok('② 단일 주제어 겹침', 'case', '단일 희귀·중간·흔함은 대화 맥락으로 pass')
 
-  const twoRare = checkCommentCandidate({
-    personaCode: 'P05', text: '남의편 때문에 그러셨군요 속천불도 나겠어요',
-    sourceTexts: ['남의편 이야기를 읽었어요. 속천불 난다고 하네요'], frequencyLookup: rareLookup,
+  // (a) 윗글의 드문 낱말 둘(남의편 · 속천불)을 받아 쓴 짧은 댓글 — 연속 20자 일치는 없다
+  const echo = checkCommentCandidate({
+    personaCode: 'P05', text: '남의편 때문에 그러셨군요 속천불도 나겠어요', sourceTexts: [upper],
   })
-  if (g(twoRare) !== 'regenerate') bad('② 희귀 조각 둘', 'case', `🔴 ${g(twoRare)}`)
-  else ok('② 희귀 조각 둘', 'case', '복수 희귀 겹침은 regenerate')
-}
+  if (echo.sourceLeak) offenders.push('(a) 낱말을 받은 댓글을 유출로 잡았다')
+  if (echo.status !== 'pass') {
+    const blocking = echo.gates.filter((g) => g.outcome !== 'pass' && g.outcome !== 'notRun')
+    offenders.push(`(a) status=${echo.status} — ${blocking.map((g) => `${g.gate}:${g.detail}`).join(' · ') || echo.reason}`)
+  }
+  if (echo.aiToneTags.includes('SEED_TOO_CLOSE')) offenders.push('(a) SEED_TOO_CLOSE 태그가 붙었다')
 
-// ── 🔴 ② 길이 보정 (2026-09-01) ──────────────────────
-//    긴 후보일수록 n-gram 이 많아 rare 가 우연히 걸릴 확률이 오른다.
-//    같은 잣대를 대면 길게 쓸수록 불리해진다 — 길이로 나눠 본다.
-//    🔴 원문 복붙은 어떤 임계로도 걸려야 한다. 그것이 ② 의 존재 이유다.
-{
-  const rareLookup = () => 0
-  const offenders: string[] = []
-  const two = (text: string, src: string) =>
-    checkUniqueExpression(text, [src], rareLookup, 'comment')
+  // (b) 윗글 문장을 20자 이상 통째로 옮긴 댓글 — ① 이 막는다
+  const copied = checkCommentCandidate({
+    personaCode: 'P05', text: `${upper} 저도 그래요`, sourceTexts: [upper],
+  })
+  const one = copied.gates.find((g) => g.gate === '①')
+  if (one?.outcome !== 'regenerate') offenders.push(`(b) ①=${one?.outcome}`)
+  if (copied.status !== 'regenerate') offenders.push(`(b) status=${copied.status}`)
+  if (!copied.sourceLeak) offenders.push('(b) sourceLeak 이 false')
 
-  // ① 길이 하한 미만 — 단일 주제어 겹침은 대화 맥락으로 통과
-  const shortShared = '남의편이 그러는데'
-  const short = two(`${shortShared} 저도 그래요`, `${shortShared} 참 답답해요`)
-  if (short.textLength >= RARE_RATIO_MIN_LENGTH) offenders.push(`짧은 케이스가 ${short.textLength}자`)
-  if (short.rareRatio !== null) offenders.push('짧은데 ratio 가 계산됐다')
-  if (short.rare === 1 && short.status !== 'pass') offenders.push(`짧은+rare 1 → ${short.status}`)
-
-  // ② 🔴 원문 복붙 — 길어도 비율이 압도적이라 걸린다
-  const copied =
-    '새벽 세시쯤 꼭 한 번씩 깹니다 다시 잠들기가 어려워서 아침이 늘 무겁고 하루가 통째로 힘드네요 ' +
-    '요즘은 낮에도 자꾸 졸리고 기운이 없어서 집안일도 손에 잘 안 잡히더라구요'
-  const copy = two(copied, copied)
-  if (copy.textLength < RARE_RATIO_MIN_LENGTH) offenders.push(`복붙 케이스가 ${copy.textLength}자 — 60자 이상이어야 한다`)
-  if (copy.status !== 'regenerate') offenders.push(`🔴 복붙이 ${copy.status}`)
-  if (copy.rareRatio !== null && copy.rareRatio <= RARE_RATIO_REGEN) {
-    offenders.push(`복붙 비율 ${copy.rareRatio}`)
+  // (c) 반환 gates 는 정확히 GATE_ORDER — ②·④ 는 없다
+  for (const [label, v] of [['a', echo], ['b', copied]] as const) {
+    const codes: string[] = v.gates.map((g) => g.gate)
+    if (codes.join('') !== GATE_ORDER.join('')) offenders.push(`(c) ${label} gates=${codes.join('')}`)
+    if (codes.includes('②') || codes.includes('④')) offenders.push(`(c) ${label} 에 ②·④ 가 있다`)
   }
 
-  // ③ 긴 후보 + 희귀 조각 하나 → pass (①·④ 복제 차단은 별도)
-  //    60자 이상이면서 공유 조각이 3자 하나뿐인 문장을 만든다
-  const longBase =
-    '어젯밤에도 비슷했는데 아침에 일어나니 몸이 무겁더라구요 그래도 오늘은 좀 낫습니다 다행이에요 정말 ' +
-    '커피 한 잔 마시면서 창밖을 보다가 문득 이 글이 떠올랐네요'
-  const few = two(longBase, '한동안 그랬어요 어젯밤 이야기네요')
-  if (few.textLength < RARE_RATIO_MIN_LENGTH) offenders.push(`긴 케이스가 ${few.textLength}자`)
-  if (few.rareRatio === null) offenders.push('긴데 ratio 가 null')
-  if (few.rare === 1 && few.rareRatio !== null && few.rareRatio <= RARE_RATIO_REGEN && few.status !== 'pass') {
-    offenders.push(`임계 아래 rare 1 → ${few.status} (pass 여야 한다)`)
+  // (d) 저장된 옛 행(②·④ 줄 포함)을 지금 줄 수와 같은 판정으로 읽는다
+  const now = echo.gates.map((g) => ({ gate: g.gate as string, outcome: g.outcome as string }))
+  const legacy = [...now, { gate: '②', outcome: 'pass' }, { gate: '④', outcome: 'pass' }]
+  const readNow = judgeGateReport({ gates: now, status: echo.status })
+  const readLegacy = judgeGateReport({ gates: legacy, status: echo.status })
+  if (legacy.length !== GATE_CODES.length + 2) offenders.push(`(d) 옛 행 ${legacy.length}줄`)
+  if (!readNow.shaped) offenders.push(`(d) 지금 행 shaped=false — ${readNow.reason}`)
+  if (!readLegacy.shaped) offenders.push(`(d) 옛 행 shaped=false — ${readLegacy.reason}`)
+  if (JSON.stringify(readLegacy) !== JSON.stringify(readNow)) {
+    offenders.push(`(d) 판정이 다르다 — 옛 ${JSON.stringify(readLegacy)} / 지금 ${JSON.stringify(readNow)}`)
   }
+  // 🔴 옛 줄을 버리는 것이지 아무 줄이나 버리는 것이 아니다 — 모르는 관문은 여전히 형식 위반이다
+  //    (이 반례가 없으면 "남는 줄은 다 버린다" 로 바뀌어도 (d) 가 통과한다)
+  const unknown = judgeGateReport({ gates: [...now, { gate: '⑩', outcome: 'pass' }], status: echo.status })
+  if (unknown.shaped) offenders.push('(d) 모르는 관문 줄이 섞였는데 shaped=true')
+  // 🔴 옛 ② 줄이 regenerate 여도 지금 판정을 바꾸지 않는다 — 없는 관문이 결과를 쥐지 않는다
+  const legacyBad = judgeGateReport({
+    gates: [...now, { gate: '②', outcome: 'regenerate' }, { gate: '④', outcome: 'notRun' }], status: echo.status,
+  })
+  if (JSON.stringify(legacyBad) !== JSON.stringify(readNow)) offenders.push('(d) 옛 ②·④ 줄의 결과가 판정을 바꿨다')
 
-  // ④ 공유 없음 → pass
-  const none = two(longBase, '전혀 다른 이야기입니다 관련 없는 내용이에요')
-  if (none.checked === 0 && none.status !== 'pass') offenders.push(`공유 0 → ${none.status}`)
-
-  // ⑤ 🔴 detail 에 n-gram 문자열이 없다 — 개수 · 비율 · 길이만
-  for (const [label, v] of [['복붙', copy], ['소수', few]] as const) {
-    const flat = (label === '복붙' ? copied : longBase).replace(/\s+/g, '')
-    for (let i = 0; i + 4 <= flat.length; i += 1) {
-      if (v.detail.includes(flat.slice(i, i + 4))) { offenders.push(`🔴 ${label} detail 에 원문 조각`); break }
-    }
-    if (!/희귀비율|개수 기준/.test(v.detail)) offenders.push(`${label} detail 에 비율/기준 표기 없음`)
-  }
-
-  if (offenders.length) bad('② 길이 보정', 'case', `🔴 ${offenders.join(' / ')}`)
+  if (offenders.length) bad('윗글 낱말 받아 말하기', 'guard', `🔴 ${offenders.join(' / ')}`)
   else {
-    ok('② 길이 보정', 'case',
-      `하한 ${RARE_RATIO_MIN_LENGTH}자 · 임계 ${(RARE_RATIO_REGEN * 100).toFixed(0)}% · 복붙 regenerate 유지`)
+    ok('윗글 낱말 받아 말하기', 'guard',
+      `낱말 둘 받은 댓글 pass · 통째 복사 ① regenerate · gates ${GATE_ORDER.join('')} · 옛 ${legacy.length}줄 = 지금 ${now.length}줄 판정`)
   }
-}
-
-// ── 🔴 ② 는 코퍼스 없으면 notRun ─────────────────────
-{
-  const v = checkCommentCandidate({ personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE })
-  const g = v.gates.find((x) => x.gate === '②')
-  if (g?.outcome !== 'notRun') bad('② 코퍼스 없으면 notRun', 'guard', `🔴 ②=${g?.outcome}`)
-  else ok('② 코퍼스 없으면 notRun', 'guard', 'pass 로 세지 않는다')
-}
-
-// ── 🔴 ② 반환값에 n-gram 문자열이 없다 ────────────────
-{
-  const shared = '남의편이그러는데'
-  const v = checkCommentCandidate({
-    personaCode: 'P05', text: `${shared} 저도요`, sourceTexts: [`${shared} 답답해요`],
-    frequencyLookup: () => 0,
-  })
-  if (JSON.stringify(v).includes('남의편')) bad('② 원문 조각 없음', 'guard', '🔴 n-gram 이 반환값에 있다')
-  else ok('② 원문 조각 없음', 'guard', '개수만')
 }
 
 // ══ ③ 식별 디테일 ═════════════════════════════════
@@ -421,64 +366,10 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   else ok('③ 밴드는 통과', 'case', '"50대 초반" · "수도권" 은 특정되지 않는다')
 }
 
-// ══ ④ 구조 과복제 ═════════════════════════════════
+// ══ 🔴 관문 수는 입력과 무관하게 `GATE_ORDER` 그대로다 ════════════
 {
-  // 🔴 흔한 전개(병원→검사→기다림)는 순서가 같아도 세지 않는다
-  const src = [
-    '무릎이 아파서 병원에 갔어요. 검사를 받았어요. 결과를 기다리고 있어요.',
-  ]
-  const commonFlow = checkCommentCandidate({
-    personaCode: 'P05',
-    text: '저도 병원에 갔어요. 검사를 받았어요. 결과를 기다려요.',
-    sourceTexts: src,
-  })
-  const g = commonFlow.gates.find((x) => x.gate === '④')
-  if (g?.outcome !== 'pass') bad('④ 흔한 구조는 통과', 'case', `🔴 ④=${g?.outcome} (${g?.detail})`)
-  else ok('④ 흔한 구조는 통과', 'case', '일반 구조 사전으로 걸러진다')
-}
-
-// ── 🔴 ④ 는 sourceTexts 없으면 notRun ────────────────
-{
-  const v = checkCommentCandidate({ personaCode: 'P05', text: '그러네요 저도 그래요', sourceTexts: [] })
-  const g = v.gates.find((x) => x.gate === '④')
-  if (g?.outcome !== 'notRun') bad('④ 검사 불가는 notRun', 'guard', `🔴 ④=${g?.outcome}`)
-  else ok('④ 검사 불가는 notRun', 'guard', 'pass 로 세지 않는다')
-}
-
-// ── 🔴 ④ 와 ① 의 역할이 다르다 ───────────────────────
-{
-  // 표현을 전부 바꿔 ① 은 통과하지만 고유 전개가 순서까지 같은 경우
-  const src = [
-    '옆집에서 고양이를 데려왔대요. 우리 애가 자꾸 넘어다봐요. 결국 같이 키우기로 했어요. 이름도 지어줬대요.',
-  ]
-  const v = checkCommentCandidate({
-    personaCode: 'P05',
-    text: '옆집에서 고양이를 데려왔대요. 우리 애가 자꾸 넘어다봐요. 결국 같이 키우기로 했어요. 이름도 지어줬대요.',
-    sourceTexts: src,
-  })
-  const four = v.gates.find((x) => x.gate === '④')
-  if (four?.outcome === 'pass') {
-    bad('④ 고유 전개 검출', 'case', `🔴 ④=pass (${four.detail})`)
-  } else ok('④ 고유 전개 검출', 'case', `④=${four?.outcome} — ${four?.detail}`)
-}
-
-// ── 🔴 AI 티 태그 중복이 없다 ─────────────────────────
-{
-  const shared = '남의편이그러는데참'
-  const v = checkCommentCandidate({
-    personaCode: 'P05', text: `${shared} 답답하네요 정말로요`, sourceTexts: [`${shared} 답답하네요 정말로요`],
-    frequencyLookup: () => 0,
-  })
-  const dup = v.aiToneTags.length !== new Set(v.aiToneTags).size
-  if (dup) bad('태그 중복 없음', 'guard', `🔴 ${v.aiToneTags.join(' · ')}`)
-  else ok('태그 중복 없음', 'guard', `${v.aiToneTags.length}종`)
-}
-
-// ══ 🔴 관문 수는 입력과 무관하게 9개 ════════════
-{
-  // 🔴 관문 하나가 근거를 둘 갖는다고 gates 가 10개가 되면
-  //    "9관문 중 몇 종 통과" 라는 집계가 후보마다 다른 분모를 갖게 된다.
-  const GATES = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
+  // 🔴 관문 하나가 근거를 둘 갖는다고 gates 가 하나 늘면
+  //    "관문 중 몇 종 통과" 라는 집계가 후보마다 다른 분모를 갖게 된다.
   type In = Parameters<typeof checkCommentCandidate>[0]
   const cases: Array<{ name: string; input: In }> = [
     { name: '기본', input: { personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE } },
@@ -487,7 +378,6 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
     { name: '조언 단정형', input: { personaCode: 'P17', text: '병원 가서 검사받으셔야 합니다', sourceTexts: SOURCE, adviceForbidden: true } },
     { name: '조언 금지 · 통과', input: { personaCode: 'P17', text: '저도 그랬어요 마음이 참 그렇죠', sourceTexts: SOURCE, adviceForbidden: true } },
     { name: '호칭+조언 동시', input: { personaCode: 'P07', text: '우리 또래분들은 병원 가서 검사받으셔야 합니다', sourceTexts: SOURCE, adviceForbidden: true } },
-    { name: '코퍼스 있음', input: { personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE, frequencyLookup: () => 50 } },
     { name: '닉네임 혼입', input: { personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE, knownNames: ['합성닉'] } },
     { name: '금지 역할', input: { personaCode: 'P05', text: '병원 가보세요', sourceTexts: SOURCE, forbiddenRoles: ['information'] } },
   ]
@@ -503,15 +393,15 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
       offenders.push(`${c.name}=throw(${e instanceof Error ? e.message : '알 수 없음'})`)
       continue
     }
-    if (v.gates.length !== 9) offenders.push(`${c.name}=${v.gates.length}개`)
+    if (v.gates.length !== GATE_ORDER.length) offenders.push(`${c.name}=${v.gates.length}개`)
     const codes = v.gates.map((g) => g.gate)
-    for (const code of GATES) {
+    for (const code of GATE_ORDER) {
       const n = codes.filter((x) => x === code).length
       if (n !== 1) offenders.push(`${c.name} ${code}=${n}개`)
     }
   }
-  if (offenders.length) bad('관문 수 항상 9', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('관문 수 항상 9', 'guard', `입력 ${cases.length}종 전부 ①~⑨ 각 1개`)
+  if (offenders.length) bad('관문 수 항상 같다', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('관문 수 항상 같다', 'guard', `입력 ${cases.length}종 전부 ${GATE_ORDER.join('')} 각 1개`)
 }
 
 // ── 🔴 ⑤ 는 근거가 둘이어도 관문은 하나 ────────
@@ -574,7 +464,7 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   'f12942fde1f5', 'f201d54d7389', 'f2e55d98c878', 'f30b0e7ec55e', 'f3ca2467fc94', 'f4dd769bda91',
   'f595b70ba5f3', 'f63f92a61f23', 'f7f6088823e3', 'fa06cc139b3e', 'fc4a5a95ed78', 'feffd7eb59e7',
   ])
-  const raw = [SELF, LIB, GATE234, GATE78, RUNNER].map((f) => readFileSync(f, 'utf-8'))
+  const raw = [SELF, LIB, GATE_DETAIL, GATE78, RUNNER].map((f) => readFileSync(f, 'utf-8'))
   const hits = new Set<string>()
   for (const src of raw) {
     for (const m of src.matchAll(/[가-힣]{2,4}(?:시|구|동|읍|면)/gu)) {

@@ -10,7 +10,7 @@
  *
  * 🔴 흐름은 하나다.
  *    확정 모델 확인 → 대상 선정 → Persona-first 입력 → 개인정보 판정
- *    → provider → 기존 9관문 Gate → `planEnqueue` → `PENDING` create
+ *    → provider → 기존 댓글 관문 Gate → `planEnqueue` → `PENDING` create
  *
  *    어느 단계든 막히면 **그 자리에서 멈춘다.** 다음 단계로 넘어가지 않는다.
  */
@@ -226,7 +226,7 @@ export async function runEnqueuePipeline(args: {
     const text = (res.text ?? '').trim()
     if (text === '') { at('PARSE_FAILED', '본문을 얻지 못했다'); continue }
 
-    // 🔴 기존 9관문 Gate 정본으로 넘긴다
+    // 🔴 기존 댓글 관문 Gate 정본으로 넘긴다
     const g = args.gate({ input: t.input, text })
     const plan = planEnqueue({
       ...t.facts,

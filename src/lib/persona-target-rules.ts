@@ -16,6 +16,7 @@
  * 🔴 이 파일은 고객 화면에서 import 되지 않는다.
  */
 import type { CandidateStatus } from './persona-candidate-rules'
+import { PLAN_AUTHOR_SEATS_MAX, THREAD_SIZE_CAP } from './persona-thread-target'
 
 /**
  * 🔴 대상 글을 지정할 수 있는 상태는 둘뿐이다.
@@ -46,18 +47,19 @@ export const MEMBER_COMMENT_LIMIT = 3
  *    실제로 막은 것은 상호작용이 아니라 **대화처럼 보이는 것 전부**였다.
  *    댓글이 하나 달린 글은 대화가 아니라 통보다 — 사람은 그런 글에 끼어들지 않는다.
  *
- *    그래서 상한을 10 으로 연다. 대신 **글쓴이 아닌 Persona 는 새 댓글을 한 번만 단다** —
+ *    그래서 상한을 연다 — 값은 대화 계획의 가장 큰 크기(`THREAD_SIZE_CAP` · 목표 평균의 두 배)다. 숫자를 여기 다시 적지 않는다.
+ *    대신 **글쓴이 아닌 Persona 는 새 댓글을 한 번만 단다** —
  *    두 번째 말은 자기 댓글에 달린 답에 답글로만 온다(`otherPersonaTurnsExceed`).
  *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 **"한 사람이 여럿인 척하는 것"** 이다.
  *    글쓴이 Persona 는 자기 글의 서로 다른 답글 대상에 제한된 수만큼 답할 수 있다.
  *
  * 🔴 하한은 강제하지 않는다. 붙일 Persona 가 하나뿐이면 1건이고, 그것으로 끝이다.
- *    억지로 10건을 채우면 그것은 대화가 아니라 자동 응답기다.
+ *    억지로 상한을 채우면 그것은 대화가 아니라 자동 응답기다.
  */
-export const PERSONA_COMMENTS_PER_POST_MAX = 10
+export const PERSONA_COMMENTS_PER_POST_MAX = THREAD_SIZE_CAP
 
 /** 글쓴이 Persona 가 자기 글에 남길 수 있는 추가 답글 상한. 최상위 댓글은 허용하지 않는다. */
-export const PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX = 3
+export const PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX = PLAN_AUTHOR_SEATS_MAX
 
 /** 글쓴이 아닌 Persona 가 한 글에 말할 수 있는 횟수 — 자기 댓글에 답이 달렸을 때 답글로 한 번 더 온다 */
 export const PERSONA_OTHER_TURNS_PER_POST_MAX = 2
@@ -120,7 +122,7 @@ export function judgeTargetPost(post: TargetPostFacts | null): TargetPostVerdict
     })
   }
 
-  // 🔴 한 글에 Persona 댓글은 최대 10건이다. 자리가 남아 있어도 대화 거리가 없으면 더 달지 않는다.
+  // 🔴 한 글의 Persona 댓글은 구조 상한까지다. 자리가 남아 있어도 대화 거리가 없으면 더 달지 않는다.
   if (post.personaComments >= PERSONA_COMMENTS_PER_POST_MAX) {
     blocks.push({
       code: 'POST_PERSONA_COMMENTS_FULL',

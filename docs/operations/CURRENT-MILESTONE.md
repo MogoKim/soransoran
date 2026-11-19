@@ -34,7 +34,7 @@
 | 비용 기준선 | 49개 slot-valid · $2.4056 · 약 **$0.04909/result** · D30 기준 $0.040 초과 |
 | 비용 수리 | 유료 의미 검수 전에 지배 판정 · publish/safety/quality gate 완화 0 · 운영 효과 UNKNOWN |
 | 추가 댓글 | switch ON · 운영 공통 profile · E6 consumer plist · 자연 followup 3건 확인 · 80건/$0.16 profile은 창업자 승인(아직 미배포) |
-| 현재 댓글 정책 | 첫 댓글 1 + 선택적 0~9 · 총 구조 상한 10 · 글쓴이 답글 최대 3회 · automatic provenance |
+| 현재 댓글 정책 | 첫 댓글 1 + 대화 계획(목표 평균 · 마감 8시간 — `persona-thread-target`) · 총 구조 상한 12 · 글쓴이 답글 최대 3회 · automatic provenance |
 | 댓글 기준선과 수리 | 11-12 글당 1.9 · 실패 254건의 두 Persona 집중 원인 확인 · typed block code·KST-day 격리·same-tick 재선정은 코드 검증, 운영 효과 UNKNOWN |
 | 완료 상태 계약 | 상태기계 self-test 6/6 · Git·CI·host 실제 증거는 별도 live 명령으로 수집(자가 수집 하네스가 아님) |
 
@@ -99,7 +99,7 @@
 
 - 실패를 Persona-day · post-day · combo-day · transient · halt로 나눈다.
 - 같은 tick에서 막힌 후보를 다시 뽑지 않고 다른 적격 Persona를 재선정한다.
-- 첫 댓글 60분 계약, 실회원 우선, 일반 Persona 1회, 글쓴이 답글 3회, 구조 상한 10은 유지한다.
+- 첫 댓글 60분 계약, 실회원 우선, 일반 Persona 1회, 글쓴이 답글 3회는 유지한다. 구조 상한은 대화 계획의 목표 평균에서 나온다(`persona-thread-target`).
 - 평균 5를 강제 quota로 만들지 않는다. 배포 후 고립률·실회원 참여·댓글 분포와 실제 평균을 함께 본다.
 
 ### 2.4 11-17 D30 시험 24/30 과 첫 수리 묶음 (2026-11-18)

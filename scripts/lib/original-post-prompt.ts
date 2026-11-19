@@ -871,7 +871,7 @@ export function assertNoStoredSource(
 /**
  * 🔴 이것은 **Gate 가 아니다.**
  *
- * 댓글 레인의 9관문은 별도 파일(persona-comment-candidate.mts)이고,
+ * 댓글 레인의 댓글 관문은 별도 파일(persona-comment-candidate.mts)이고,
  * 게시글용 originality gate 는 **다음 PR(B)** 의 일이다.
  * 여기서 판정까지 해 버리면 "생성기가 자기 결과를 채점" 하게 되고,
  * 그 순간 사람이 초안을 보는 단계가 사라진다.
