@@ -26,7 +26,6 @@ const MUTATIONS: Mutation[] = [
   { name: 'kill switch 모름을 통과', from: 'if (f.killSwitchOff !== true)', to: 'if (f.killSwitchOff === false)' },
   { name: '공유 장부 첫 댓글 몫 무시', from: '- (f.firstCommentReserveUsd as number))', to: '- 0)' },
   { name: '회차 상한 제거', from: 'Math.min(P.runMax, countLeft, byMoney)', to: 'Math.min(countLeft, byMoney)' },
-  { name: '글당 10건 상한 느슨', from: 'if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX)', to: 'if (personaCount > FOLLOWUP_TOTAL_PER_POST_MAX)' },
   { name: '삭제 뒤 live 순번 재사용', from: 'ordinal: historicalPersonaCount + 1', to: 'ordinal: personaCount + 1' },
   { name: '실회원 1~2건 축소 제거', from: 'liveReal.length > 0 ? FOLLOWUP_EXTRA_WITH_MEMBERS_MAX', to: 'liveReal.length > 0 ? FOLLOWUP_EXTRA_PER_POST_MAX' },
   { name: '마지막 말 실회원 STOP 제거', from: "if (latest !== undefined && (latest.commentOrigin === 'MEMBER'", to: "if (false && (latest!.commentOrigin === 'MEMBER'" },
@@ -107,7 +106,7 @@ const MUTATIONS: Mutation[] = [
   // ── 대화 계획 — 자리 · 사람 · 간격 ──
   { name: '🔴 계획 크기를 넘겨도 잇기', from: 'if (personaCount >= planSize) return stop(', to: 'if (false) return stop(' },
   { name: '🔴 계획의 자리 간격 무시', from: 'b.lastPersonaMs + here.gapMs', to: 'b.lastPersonaMs' },
-  { name: '🔴 계획이 정한 자리 종류를 먼저 서 보지 않음', from: "[slot.kind, ...(['author', 'reply', 'post'] as const).filter((k) => k !== slot.kind)]", to: "['post', 'author', 'reply']" },
+  { name: '🔴 계획이 정한 자리 종류를 먼저 서 보지 않음', from: "[slot.kind, ...(['post', 'reply'] as const).filter((k) => k !== slot.kind)]", to: "['post', 'reply', slot.kind]" },
   { name: '글쓴이 답글 3회 상한 제거', from: 'turnsOf(author) >= PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX', to: 'false' },
   { name: '🔴 한 사람 두 번 상한 제거(세 번째로 돌아옴)', from: 'turnsOf(who) < PERSONA_OTHER_TURNS_PER_POST_MAX', to: 'true' },
   { name: '🔴 글쓴이가 자기 댓글에 답하러 돌아옴', from: 'who !== null && who !== author && who !== x.c.personaId', to: 'who !== null && who !== x.c.personaId' },

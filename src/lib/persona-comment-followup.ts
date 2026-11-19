@@ -314,11 +314,9 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
     return stop('자동 출처 첫 댓글이 없다 — 추가 댓글은 첫 댓글을 대신하지 않는다')
   }
 
-  // ── 총량 · 실회원 상한 — 수량은 미해결 거리가 정하고 여기서는 넘지 못할 선만 본다 ──
+  // ── 계획 크기 · 실회원 상한 ──
+  // 🔴 구조 상한(`FOLLOWUP_TOTAL_PER_POST_MAX`)은 계획 크기의 최댓값이라 계획 크기가 먼저 막는다 — 따로 보지 않는다
   const personaCount = livePersona.length
-  if (personaCount >= FOLLOWUP_TOTAL_PER_POST_MAX) {
-    return stop(`Persona 댓글 ${personaCount}건 — 글당 ${FOLLOWUP_TOTAL_PER_POST_MAX}건 상한`)
-  }
   const planSize = threadPlanOf(f.postId, f.publishedAtMs).size
   if (personaCount >= planSize) return stop(`Persona 댓글 ${personaCount}건 — 이 글의 대화 계획 ${planSize}건을 다 채웠다`)
   const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length

@@ -164,10 +164,11 @@ for (const s of fx.scenarios) {
   check('② 🔴 삭제 이력을 포함한 다음 순번은 4 — live 순번 3 재사용 금지',
     v.verdict === 'GO' && v.ordinal === 4 && v.key === M.followupKeyOf(FX_POST, 4),
     v.verdict === 'GO' ? `ordinal=${v.ordinal}` : `${v.verdict} · ${v.reason}`)
-  check('② 🔴 사건 순번 11도 유효 — 구조 상한 10과 멱등 순번을 섞지 않는다',
+  const beyond = M.FOLLOWUP_TOTAL_PER_POST_MAX + 1
+  check(`② 🔴 사건 순번 ${beyond}도 유효 — 구조 상한과 멱등 순번을 섞지 않는다`,
     M.verifyStamp(
-      { v: M.FOLLOWUP_STAMP_VERSION, postId: FX_POST, ordinal: 11, parentCommentId: first.id, hook: 'question' },
-      { postId: FX_POST, dedupKey: M.followupKeyOf(FX_POST, 11) },
+      { v: M.FOLLOWUP_STAMP_VERSION, postId: FX_POST, ordinal: beyond, parentCommentId: first.id, hook: 'question' },
+      { postId: FX_POST, dedupKey: M.followupKeyOf(FX_POST, beyond) },
     ).ok)
 }
 
@@ -1172,6 +1173,28 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const big = plans.find((p) => p.size === 5)!
   check('⑭ 순번이 계획을 넘으면(지운 댓글) 마지막 자리 · 1번 자리는 계획 밖',
     planSlotAt(big, 1) === null && planSlotAt(big, 2) === big.slots[0] && planSlotAt(big, 99) === big.slots[3])
+}
+
+// ═════════ ⑭-2 계획이 넘어서지 못하는 구조 선 — 사슬 깊이 · 글쓴이 답글 3회 ═════════
+{
+  const P = (id: string, atMin: number, persona: string, parent?: string, deleted?: boolean): FxComment =>
+    ({ id, atMin, origin: 'PERSONA', persona, provenance: id === 'c1' ? 'auto' : 'followup', ...(parent === undefined ? {} : { parent }), ...(deleted ? { deleted } : {}) })
+  // 'plan-x-14' — 7번 자리가 글쓴이 답글이다. 답할 수 있는 댓글은 사슬 6단 끝(c6)뿐
+  const chain = ['pB', 'pC', 'pD', 'pE', 'pF', 'pG'].map((p, i) => P(`c${i + 1}`, 10 + i * 30, p, i === 0 ? undefined : `c${i}`))
+  const deep = M.judgeFollowupPost(factsOf('plan-x-14', { post: {}, comments: chain }), T0 + 300 * MIN)
+  check('⑭-2 🔴 글쓴이 자리라도 사슬 6단 끝에는 답하지 않는다 → 새 사람의 글에 답',
+    threadPlanOf('plan-x-14').slots[5]?.kind === 'author' && deep.verdict === 'GO' && deep.ordinal === 7 && deep.target.kind === 'post',
+    deep.verdict === 'GO' ? `${deep.ordinal} ${deep.target.kind}` : `${deep.verdict} · ${deep.reason}`)
+  // 'plan-x-393' — 계획 11건 · 마지막 자리가 글쓴이. 글쓴이가 이미 세 번 답했고 지운 댓글로 순번(12)이 계획을 넘었다
+  const author3 = [
+    P('c1', 10, 'pB'), P('c2', 30, 'pC', 'c1'), P('a1', 50, 'pA', 'c2'), P('c3', 70, 'pD'), P('a2', 90, 'pA', 'c3'),
+    P('c4', 110, 'pE'), P('a3', 130, 'pA', 'c4'), P('c5', 150, 'pF'), P('c6', 170, 'pG', undefined, true), P('c7', 190, 'pH'), P('c8', 210, 'pI'),
+  ]
+  const fourth = M.judgeFollowupPost(factsOf('plan-x-393', { post: {}, comments: author3 }), T0 + 300 * MIN)
+  check('⑭-2 🔴 순번이 계획을 넘어 마지막(글쓴이) 자리를 다시 써도 네 번째 글쓴이 답글은 없다 → 새 사람',
+    threadPlanOf('plan-x-393').size === 11 && threadPlanOf('plan-x-393').slots[9]?.kind === 'author'
+    && fourth.verdict === 'GO' && fourth.ordinal === 12 && fourth.speaker.kind === 'other',
+    fourth.verdict === 'GO' ? `${fourth.ordinal} ${fourth.speaker.kind}` : `${fourth.verdict} · ${fourth.reason}`)
 }
 
 // ═════════ ⑮ 자리의 입력 — 길이 · 자기 사실 · 일상 경험. 첫 댓글 프롬프트는 한 글자도 바뀌지 않는다 ═════════
