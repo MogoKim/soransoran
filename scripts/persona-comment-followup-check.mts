@@ -795,22 +795,16 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const authorPrompt = toPromptPost({ ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput).content
   check('⑪ 글쓴이 답글 입력에만 "당신이 쓴 글" 줄이 붙는다',
     authorPrompt.includes('[이 글은 당신이 쓴 글입니다') && !toPromptPost(promptInput).content.includes('당신이 쓴 글'))
-  // 🔴 글쓴이 답글의 관문 입력 — 자기 글은 ② 대조에서 빠지고 ⑦ 근거가 된다. 남의 글에 다는 댓글은 그대로다
+  // 🔴 글쓴이 답글의 관문 입력 — 자기 글이 ⑦ 근거가 된다. 남의 글에 다는 댓글은 그 글을 자기 근거로 삼지 않는다
   const authorInput = { ...promptInput, post: { ...promptInput.post, authorReply: true } } as CommentInput
   const gateSrc = [authorInput.post.title, authorInput.post.bodyDigest, ...authorInput.post.existingCommentDigests]
   const authorGate = toGateInput({ input: authorInput, text: '새벽 세 시만 되면 눈이 떠져서 그냥 일어나 있어요', sourceTexts: gateSrc })
   const otherGate = toGateInput({ input: promptInput, text: '저도 그래요', sourceTexts: gateSrc })
-  check('⑪ 🔴 글쓴이 답글 — ② 대조 대상에서 자기 글(제목·본문)이 빠지고 윗댓글은 남는다',
-    authorGate.uniqueExpressionSources !== undefined
-      && authorInput.post.existingCommentDigests.every((d) => authorGate.uniqueExpressionSources!.includes(d))
-      && !authorGate.uniqueExpressionSources.includes(authorInput.post.title)
-      && !authorGate.uniqueExpressionSources.includes(authorInput.post.bodyDigest),
-    JSON.stringify(authorGate.uniqueExpressionSources))
   check('⑪ 🔴 글쓴이 답글 — ① 유출 대조(sourceTexts)는 줄지 않는다', authorGate.sourceTexts.length === gateSrc.length)
   check('⑪ 🔴 글쓴이 답글 — 자기 글이 자기 말의 근거에 실린다',
     (authorGate.personaGrounding ?? '').includes(authorInput.post.bodyDigest) && (authorGate.personaGrounding ?? '').includes(authorInput.post.title))
-  check('⑪ 🔴 남의 글에 다는 댓글 — ② 대조 대상을 줄이지 않고, 그 글을 자기 근거로 삼지 않는다',
-    otherGate.uniqueExpressionSources === undefined && !(otherGate.personaGrounding ?? '').includes(promptInput.post.bodyDigest))
+  check('⑪ 🔴 남의 글에 다는 댓글 — 그 글(제목·본문)을 자기 근거로 삼지 않는다',
+    !(otherGate.personaGrounding ?? '').includes(promptInput.post.bodyDigest) && !(otherGate.personaGrounding ?? '').includes(promptInput.post.title))
 
   // 2 · 자리 — 계획이 정한 종류가 먼저, 나머지 종류가 뒤다(한 자리가 막혀도 넘어갈 곳이 있다)
   const seatsAt = (f: FollowupModule.FollowupPostFacts, ordinal: number) => M.followupSeatsOf(f, ordinal).seats
@@ -878,10 +872,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const cases: [string, Parameters<typeof C>[0], ReturnType<typeof C>][] = [
     ['⑧ regenerate → Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:regenerate'] }, 'FU_PERSONA_DAY'],
     ['⑦ 설정 모순 · 근거 없는 경험 → 글 × Persona(본문 탓 — 그 사람을 하루 빼지 않는다)', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:regenerate'] }, 'FU_COMBO_DAY'],
-    ['⑦:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:notRun', '②:regenerate'] }, 'FU_COMBO_DAY'],
+    ['⑦:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:notRun', '③:regenerate'] }, 'FU_COMBO_DAY'],
     ['⑧:notRun 은 Persona 실패가 아니다 → 글 × Persona', { step: 'ENQUEUE_BLOCKED', failedGates: ['⑧:notRun', '③:reject'] }, 'FU_COMBO_DAY'],
-    ['🔴 신규 Persona 의 ② 탈락(⑧ 미실행 꼬리표) → 글 × Persona — 꼬리표가 아니라 막은 관문이 정한다',
-      { step: 'ENQUEUE_BLOCKED', failedGates: ['②:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
+    ['🔴 신규 Persona 의 ③ 탈락(⑧ 미실행 꼬리표) → 글 × Persona — 꼬리표가 아니라 막은 관문이 정한다',
+      { step: 'ENQUEUE_BLOCKED', failedGates: ['③:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
     ['🔴 신규 Persona 의 ⑦ 탈락(⑧ 미실행 꼬리표) → 글 × Persona',
       { step: 'ENQUEUE_BLOCKED', failedGates: ['⑦:regenerate', '⑧:notRun'], blockCodes: ['BOOTSTRAP_CLAIM_INVALID'] }, 'FU_COMBO_DAY'],
     ['BOOTSTRAP_NEEDS_HUMAN 꼬리표 + 글 쪽 실패 → 글', { step: 'ENQUEUE_BLOCKED', blockCodes: ['BOOTSTRAP_NEEDS_HUMAN', 'POST_NOT_PUBLISHED'] }, 'FU_POST_DAY'],

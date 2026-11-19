@@ -569,7 +569,6 @@ try {
     const source: TargetSource = {
       posts: async () => [post], personas: async () => [persona], openDedupKeys: async () => [],
       recentRoleCounts: async () => ({}), knownNames: async () => ['홍길동'],
-      frequency: async () => ({ corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: 'replay corpus' }),
       seedUseCount: async () => 1,
     }
     const makeDb = (): { prisma: PrismaClient; bypass: string[] } => {

@@ -3,7 +3,7 @@
  *
  * 🔴 **예약 대상은 무인 루프다** (2026-09-28 · Track B).
  *    이 label 이 가리키는 스크립트는 `scripts/persona-comment-loop.mts` 다 —
- *    대상 선정 → 생성 → 9관문 → PENDING → 발행을 한 회차로 잇는다.
+ *    대상 선정 → 생성 → 댓글 관문 → PENDING → 발행을 한 회차로 잇는다.
  *    옛 `scripts/persona-comment-runner.mts` 는 **사람이 승인한 행만** 내는 수동 CLI 로 남는다
  *    (`npm run persona:comment-runner`). 두 스크립트가 같은 label 을 다투지 않는다.
  *
@@ -326,7 +326,7 @@ export function planRunnerSchedule(dailyTarget: number, perRunMax = 25, minRuns 
  *
  *    옛 판은 회차 간격이 60분 **이하**이기만 하면 됐다 — 500/day 에서 20회 · 간격 44분.
  *    그러면 한 글이 60분 안에 받는 시도는 **한 번**이다. 2026-09-28 20:00 글(cmul4z1j)은
- *    20:32 회차에서 9관문에 한 번 막혔고, 다음 회차 21:16 은 시한 밖이라 댓글 0 으로 끝났다.
+ *    20:32 회차에서 댓글 관문에 한 번 막혔고, 다음 회차 21:16 은 시한 밖이라 댓글 0 으로 끝났다.
  *    실패를 그 댓글에만 가두려면 **다음 시도가 시한 안에** 있어야 한다.
  *    시도 3 → 간격 ≤ 20분. 할 일 없는 회차는 provider 0 · DB 읽기뿐이다.
  */

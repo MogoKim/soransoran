@@ -29,7 +29,7 @@
  * 🔴 **사람** — 글쓴이는 자기 글에 답글로만 말한다(글당 3번까지). 다른 사람은 한 글에 두 번까지다 — 새 댓글 한 번,
  *    그리고 자기 댓글에 답이 달렸을 때 그 답에 한 번 더. 생성 쪽과 발행 트랜잭션이 같은 함수(`followupSeatsOf`)로 본다.
  *
- * 🔴 여기서 막는 것은 **이 레인이 더하는 축**뿐이다. 9관문 · 생활사 · No-Go · 모델 확정 · provenance ·
+ * 🔴 여기서 막는 것은 **이 레인이 더하는 축**뿐이다. 댓글 관문 · 생활사 · No-Go · 모델 확정 · provenance ·
  *    트랜잭션 재검사는 기존 경로가 그대로 본다. 이 파일은 그 위에 더할 뿐 하나도 빼지 않는다.
  */
 
@@ -1119,7 +1119,7 @@ export type FollowupPublishFacts = {
 
 /**
  * 🔴 **추가 댓글 발행 직전 재판정.** 하나라도 어긋나면 발행하지 않는다.
- *    기존 재검사(9관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)는
+ *    기존 재검사(댓글 관문 · 실회원 3건 · 같은 Persona · kill switch · 하루 예산 · provenance · 생활사 · cap)는
  *    호출부(`publishCandidateTx`)가 **그대로** 돌린다 — 이 판정은 그 위에 더할 뿐이다.
  */
 export type FollowupPublishVerdict = {

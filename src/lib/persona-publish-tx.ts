@@ -164,7 +164,7 @@ export async function publishCandidateTx(
      *    옮긴다 — 승인과 발행 사이의 틈을 만들지 않는다(틈이 있으면 APPROVED 로 남은 행을
      *    나중에 누가 60분 뒤에 발행할 수 있다).
      *
-     *    🔴 기존 재검사(9관문 · 실회원 댓글 3건 · 같은 Persona · kill switch · 일일 상한 ·
+     *    🔴 기존 재검사(댓글 관문 · 실회원 댓글 3건 · 같은 Persona · kill switch · 일일 상한 ·
      *       provenance · 생활사 · cap)는 **하나도 빠지지 않고** 그대로 돈다. 그 위에
      *       `judgeAutoLane`(60분 · 글당 1건 · 자기 글 · 단계·주체·상태)이 더해진다.
      *    🔴 `manual-admin` 과 함께 쓸 수 없다 — 사람 발행은 이 레인이 아니다.

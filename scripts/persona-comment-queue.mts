@@ -285,7 +285,7 @@ for (const c of material.blockedInputs) console.log(`     입력 차단: ${c}`)
 /**
  * 🔴 Gate 입력과 이전 발화를 **대상별로** 찾는다. 손으로 채우지 않는다 —
  *    옛 판은 `knownNames: []` · `seedUseCount: 1` 을 적어 넣어
- *    ②·⑥·⑧ 이 돌지 않은 채 9관문이 채워졌다.
+ *    ②·⑥·⑧ 이 돌지 않은 채 댓글 관문이 채워졌다.
  */
 const ctxByKey = new Map<string, { gate: GateContext; recentTexts: readonly string[] }>(
   material.targets.map((t) => [

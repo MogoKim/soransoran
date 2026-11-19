@@ -2,7 +2,7 @@
 /**
  * 무인 Persona 댓글 루프 — 🔴 launchd 예약 진입점 (`com.soransoran.persona-comment-runner`)
  *
- * 🔴 **하는 일** — 한 회차에 대상 선정 → 생성 → 9관문 → PENDING 적재 → 발행을 끝까지 잇는다.
+ * 🔴 **하는 일** — 한 회차에 대상 선정 → 생성 → 댓글 관문 → PENDING 적재 → 발행을 끝까지 잇는다.
  *    사람 승인 단계는 없다. 대신 `SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto` 일 때만 돈다 —
  *    그 값은 창업자가 올리는 것이다. 이 스크립트는 env 를 바꾸지 않는다.
  *

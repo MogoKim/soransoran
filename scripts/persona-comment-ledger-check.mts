@@ -104,7 +104,7 @@ const targetOf = (over: {
   }
 }
 
-/** 🔴 9관문 전부 pass — 차단이 **다른 축에서** 오는지 보기 위한 바닥 */
+/** 🔴 댓글 관문 전부 pass — 차단이 **다른 축에서** 오는지 보기 위한 바닥 */
 const allPass: PipelineGateResult = {
   gates: GATE_CODES.map((g) => ({ gate: g, outcome: 'pass' as const, detail: '시험' })),
   gateStatus: 'pass', isBootstrap: false,
@@ -557,7 +557,7 @@ console.log('\n④ 🔴 🔴 차단 관문을 실제 runner 경로로 돌린다'
   {
     const { res, written } = await runPipeline([targetOf()], { write: true })
     const plan = res.outcomes[0]?.plan
-    check('🔴 🔴 **9관문을 통과해도 상태는 `PENDING` 하나뿐 — 자동 승인·공개 0**',
+    check('🔴 🔴 **댓글 관문을 통과해도 상태는 `PENDING` 하나뿐 — 자동 승인·공개 0**',
       res.created === 1
       && plan?.ok === true
       && plan.status === 'PENDING'

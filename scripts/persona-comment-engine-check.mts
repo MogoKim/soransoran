@@ -48,7 +48,6 @@ import { FOLLOWUP_PROFILE_DERIVE_EXTRA_PER_POST } from '../src/lib/persona-comme
 import {
   isGateEightColdStart, GATE_NAMES,
 } from '../src/lib/persona-comment-gate-report'
-import { rarityOf } from './lib/persona-gate-234.mjs'
 import { FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
 import {
   readCommentStage, stagePowers, COMMENT_STAGES, COMMENT_STAGE_ENV,
@@ -114,7 +113,7 @@ import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
 import {
   allocateRolesByCorpus, ANCHOR_MIN_COMMENTS, BUNDLE_MAX, bundlesForPersonas,
   buildReferenceManifest, carriesExperience, identityLeakCheck,
-  loadCanonAsset, loadCanonCorpusTexts, loadCommentsFrom,
+  loadCanonAsset, loadCommentsFrom,
   planBundles, stableAssignment,
 } from './lib/persona-reference-store.mjs'
 import {
@@ -1907,7 +1906,7 @@ console.log('⑧ 역할 어휘 통합 — planner 가 고른 것을 생성기가
     // 🔴 Gate 입력에 forbiddenRoles 가 빠지면 관문 ⑦ 이 notRun 이 되어 통과처럼 읽힌다
     const gi = toGateInput({ input: built.input, text: '저도 그런 날이 있어요', sourceTexts: ['무릎이 아파요'] })
     check('🔴 Gate 입력에 forbiddenRoles 가 실린다', gi.forbiddenRoles !== undefined)
-    check('🟢 기존 9관문 Gate 가 실제로 판정한다', checkCommentCandidate(gi).gates.length > 0)
+    check('🟢 기존 Gate 가 실제로 판정한다', checkCommentCandidate(gi).gates.length > 0)
   }
 }
 
@@ -2120,7 +2119,7 @@ console.log('⑪ 모델 비교 실행기 — 가짜 provider 로 행동 검증 (
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('⑫ 9관문 완전성 — notRun 을 pass 로 세지 않는다')
+console.log('⑫ 관문 완전성 — notRun 을 pass 로 세지 않는다')
 // ─────────────────────────────────────────────────────────
 {
   const line = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
@@ -2128,27 +2127,27 @@ console.log('⑫ 9관문 완전성 — notRun 을 pass 로 세지 않는다')
     GATE_CODES.map((g) => line(g, outcome))
 
   const full = judgeGateReport({ gates: all('pass'), status: 'pass' })
-  check('🟢 9개가 다 pass 면 fullPass', full.shaped && full.fullGatePass && full.ran === 9)
+  check('🟢 전부 pass 면 fullPass', full.shaped && full.fullGatePass && full.ran === GATE_CODES.length)
   check('🟢 그때 공개 Queue 적재 가능', full.queueEligible)
 
   /**
    * 🔴 **여기가 첫 판의 구멍이다.**
-   *    `checkCommentCandidate` 는 입력과 무관하게 항상 ①~⑨ 를 돌려준다.
-   *    그래서 `gates.length === 9` 는 아무것도 보장하지 않는다 —
-   *    입력을 빠뜨리면 `notRun` 인 채로 9개가 채워지고 "9관문 통과" 로 읽힌다.
+   *    `checkCommentCandidate` 는 입력과 무관하게 항상 `GATE_CODES` 전부를 돌려준다.
+   *    그래서 `gates.length === GATE_CODES.length` 는 아무것도 보장하지 않는다 —
+   *    입력을 빠뜨리면 `notRun` 인 채로 줄 수가 채워지고 "관문 통과" 로 읽힌다.
    */
   const withNotRun = judgeGateReport({
-    gates: [...all('pass').filter((g) => g.gate !== '②'), line('②', 'notRun')],
+    gates: [...all('pass').filter((g) => g.gate !== '⑦'), line('⑦', 'notRun')],
     status: 'pass',
   })
-  check('🔴 9개 결과가 있어도 notRun 이 있으면 fullPass 가 아니다',
+  check('🔴 결과가 다 있어도 notRun 이 있으면 fullPass 가 아니다',
     withNotRun.shaped && !withNotRun.fullGatePass)
-  check('🔴 "결과 9개 존재" 와 "실제 실행 9개" 를 구분한다',
-    withNotRun.shaped && withNotRun.ran === 8)
+  check('🔴 "결과가 다 있다" 와 "전부 실제로 돌았다" 를 구분한다',
+    withNotRun.shaped && withNotRun.ran === GATE_CODES.length - 1)
   check('🔴 필수 관문이 돌지 않았다고 말한다',
-    withNotRun.missingRequired.includes('②') && withNotRun.reason.includes('돌지 않았다'))
+    withNotRun.missingRequired.includes('⑦') && withNotRun.reason.includes('돌지 않았다'))
   check('🔴 그때 공개 Queue 적재 불가', !withNotRun.queueEligible)
-  check('🔴 notRun 을 passed 로 세지 않는다', withNotRun.passed === 8)
+  check('🔴 notRun 을 passed 로 세지 않는다', withNotRun.passed === GATE_CODES.length - 1)
 
   // 🔴 ⑨ 는 필수가 아니다 — 출처가 카페일 때만 의미가 있다
   const onlyNine = judgeGateReport({
@@ -2156,10 +2155,10 @@ console.log('⑫ 9관문 완전성 — notRun 을 pass 로 세지 않는다')
     status: 'pass',
   })
   check('🟢 ⑨ 만 notRun 이면 필수는 충족된다', onlyNine.fullGatePass && onlyNine.queueEligible)
-  check('🔴 그래도 실행 관문 수는 8 로 적는다', onlyNine.ran === 8)
+  check('🔴 그래도 실행 관문 수는 하나 줄여 적는다', onlyNine.ran === GATE_CODES.length - 1)
 
   // 🔴 형식이 깨지면 fail-closed
-  check('🔴 9개가 오지 않으면 막는다', !judgeGateReport({ gates: all('pass').slice(0, 8) }).shaped)
+  check('🔴 한 줄이라도 빠지면 막는다', !judgeGateReport({ gates: all('pass').slice(0, GATE_CODES.length - 1) }).shaped)
   check('🔴 같은 관문이 두 번 오면 막는다',
     !judgeGateReport({ gates: [...all('pass'), line('①', 'pass')] }).shaped)
   check('🔴 status 가 pass 가 아니면 Queue 불가',
@@ -2190,7 +2189,7 @@ console.log('⑬ Gate 입력 완비 — 빠뜨린 것을 미리 안다')
 
   const full = toGateInput({
     input: built.input, text: '저도 그래요', sourceTexts: ['무릎이 아프다'],
-    knownNames: [], frequencyLookup: () => 0, corpusName: 'comment',
+    knownNames: [],
     // 🔴 후보 포함 표본이 minSamples 가 되도록 채운다 — 1건만 넣으면 ⑧ 이 못 돈다
     priorTexts: Array.from({ length: REQUIRED_PRIOR_TEXTS }, (_, i) => `이전 발화 ${i}`),
     seedUseCount: 1,
@@ -2208,7 +2207,7 @@ console.log('⑬ Gate 입력 완비 — 빠뜨린 것을 미리 안다')
   /** 🔴 `knownNames` 는 없는 것과 빈 배열이 다르다 */
   const noNames = toGateInput({
     input: built.input, text: 'x', sourceTexts: ['무릎이 아프다'],
-    frequencyLookup: () => 0, corpusName: 'comment', priorTexts: [],
+    priorTexts: [],
     adviceForbidden: false, sourceIsCafeOperational: false,
   })
   check('🔴 knownNames 를 안 넘기면 undefined 로 남는다 (빈 배열이 아니다)',
@@ -2218,7 +2217,7 @@ console.log('⑬ Gate 입력 완비 — 빠뜨린 것을 미리 안다')
   check('🔴 빈 배열은 "조회했다" 로 인정한다',
     !judgeGateInputs(describeGateInput(toGateInput({
       input: built.input, text: 'x', sourceTexts: ['무릎'], knownNames: [],
-      frequencyLookup: () => 0, corpusName: 'comment', priorTexts: [],
+      priorTexts: [],
       adviceForbidden: false, sourceIsCafeOperational: false,
     }))).willNotRun.includes('⑥'))
 
@@ -2226,14 +2225,11 @@ console.log('⑬ Gate 입력 완비 — 빠뜨린 것을 미리 안다')
   const baseArgs = {
     input: built.input, text: 'x', sourceTexts: ['무릎'] as readonly string[],
     knownNames: [] as readonly string[],
-    frequencyLookup: ((): number => 0) as Parameters<typeof toGateInput>[0]['frequencyLookup'],
-    corpusName: 'comment' as string | undefined,
     priorTexts: [] as readonly string[] | undefined,
     adviceForbidden: false as boolean | undefined,
     sourceIsCafeOperational: false as boolean | undefined,
   }
   for (const [label, args, gate] of [
-    ['frequencyLookup', { frequencyLookup: undefined, corpusName: undefined }, '②'],
     ['priorTexts', { priorTexts: undefined }, '⑧'],
     ['sourceIsCafeOperational', { sourceIsCafeOperational: undefined }, '⑨'],
   ] as const) {
@@ -2244,17 +2240,17 @@ console.log('⑬ Gate 입력 완비 — 빠뜨린 것을 미리 안다')
   check('🔴 sourceTexts 가 비면 ① 이 성립하지 않는다',
     judgeGateInputs(describeGateInput(toGateInput({
       input: built.input, text: 'x', sourceTexts: ['  '], knownNames: [],
-      frequencyLookup: () => 0, corpusName: 'comment', priorTexts: [],
+      priorTexts: [],
       adviceForbidden: false, sourceIsCafeOperational: false,
     }))).willNotRun.includes('①'))
 
   /** 🔴 실제 Gate 정본을 우회하지 않는다 — 채운 입력으로 진짜 돌려 본다 */
   const verdict = checkCommentCandidate(full)
   const report = judgeGateReport({ gates: verdict.gates, status: verdict.status })
-  check('🟢 채운 입력이면 9개 결과가 형식을 지킨다', report.shaped)
-  check('🔴 실제로 돌아간 관문 수를 센다', report.ran >= 8)
-  check('🔴 REQUIRED_GATES 는 ⑨ 를 뺀 여덟이다',
-    REQUIRED_GATES.length === 8 && !REQUIRED_GATES.includes('⑨' as never))
+  check('🟢 채운 입력이면 결과가 형식을 지킨다', report.shaped)
+  check('🔴 실제로 돌아간 관문 수를 센다', report.ran >= GATE_CODES.length - 1)
+  check('🔴 REQUIRED_GATES 는 GATE_CODES 에서 ⑨ 만 뺀 것이다',
+    REQUIRED_GATES.length === GATE_CODES.length - 1 && !REQUIRED_GATES.includes('⑨' as never))
 }
 
 {
@@ -2318,8 +2314,8 @@ console.log('⑭ blind 표본 — 본문은 있고 모델명은 없다')
   })
   check('🔴 표본에 생성 본문이 담긴다 (지문만으로는 채점할 수 없다)',
     run.samples.every((smp) => typeof smp.text === 'string' && smp.text.length > 0))
-  check('🔴 표본에 9관문 전체 결과가 담긴다',
-    run.samples.every((smp) => smp.gateLines.length === 9))
+  check('🔴 표본에 관문 전체 결과가 담긴다',
+    run.samples.every((smp) => smp.gateLines.length === GATE_CODES.length))
   check('🔴 표본에 blind 라벨이 있다', run.samples.every((smp) => /^[A-Z]$/.test(smp.blindLabel)))
   /**
    * 🔴 **모델명은 표본에 넣지 않는다.** 실제 파일 저장은 스크립트가 하지만,
@@ -2407,8 +2403,8 @@ console.log('⑯ Gate 지표 분리 — statusPass 와 fullGatePass 는 다르�
   check('🔴 둘이 다른 값이다 — 이름 하나로 세면 안 된다', r.statusPass !== r.fullGatePass)
   check('🔴 missingRequired 에 ⑧ 이 있다', r.missingRequired.join('') === '⑧')
   check('🔴 queueEligible 은 false 다', !r.queueEligible)
-  check('🔴 passed 에 notRun 을 세지 않는다', r.passed === 8)
-  check('🔴 ran 은 8 이다', r.ran === 8)
+  check('🔴 passed 에 notRun 을 세지 않는다', r.passed === GATE_CODES.length - 1)
+  check('🔴 ran 은 ⑧ 하나를 뺀 수다', r.ran === GATE_CODES.length - 1)
 
   const full = judgeGateReport({ gates: withEight('pass'), status: 'pass' })
   check('🟢 ⑧ 이 pass 면 fullGatePass 이고 queueEligible 이다',
@@ -2441,7 +2437,7 @@ console.log('⑰ Gate ⑧ cold-start — 자동 통과가 아니라 사람 승�
   const twoMissing = judgeBootstrapEligible({
     ...base,
     report: judgeGateReport({
-      gates: GATE_CODES.map((g) => line(g, g === '⑧' || g === '②' ? 'notRun' : 'pass')),
+      gates: GATE_CODES.map((g) => line(g, g === '⑧' || g === '⑦' ? 'notRun' : 'pass')),
       status: 'pass',
     }),
   })
@@ -2556,7 +2552,7 @@ console.log('⑲ Gate 사전 판정 정직성 — 필드 전달 ≠ 실행 가�
 {
   const gi = (prior: readonly string[] | undefined): ReturnType<typeof judgeGateInputs> =>
     judgeGateInputs({
-      knownNames: [], hasFrequencyLookup: true, corpusName: 'comment',
+      knownNames: [],
       identity: { a: 1 }, noGoTopics: [], noGoExpressions: [],
       priorTexts: prior, sourceTexts: ['x'], forbiddenRoles: [],
       adviceForbidden: false, sourceIsCafeOperational: false,
@@ -2828,7 +2824,7 @@ console.log('㉕ 발행 transaction 재검사')
     ['생활사가 충돌하면', { lifeConflict: true }],
     ['Queue 가 PENDING 이면(사람 승인 전)', { queueStatus: 'PENDING' as const }],
     ['이미 발행됐으면', { publishedCommentId: 'c1' }],
-    ['Gate 재검사가 실패하면', { gates: GATE_CODES.map((g) => line(g, g === '②' ? 'notRun' : 'pass')) }],
+    ['Gate 재검사가 실패하면', { gates: GATE_CODES.map((g) => line(g, g === '⑦' ? 'notRun' : 'pass')) }],
   ] as const) {
     check(`🔴 ${label} 발행하지 않는다`, !recheckBeforePublish({ ...base, ...over }).ok)
   }
@@ -3089,10 +3085,10 @@ console.log('㉛ bootstrap 변조 — 호출자 주장을 믿지 않는다')
    */
   for (const [label, bad] of [
     ['① reject', { '①': 'reject', '⑧': 'notRun' }],
-    ['② regenerate', { '②': 'regenerate', '⑧': 'notRun' }],
+    ['③ regenerate', { '③': 'regenerate', '⑧': 'notRun' }],
     ['⑥ review', { '⑥': 'review', '⑧': 'notRun' }],
     ['⑨ reject', { '⑨': 'reject', '⑧': 'notRun' }],
-    ['② 도 notRun', { '②': 'notRun', '⑧': 'notRun' }],
+    ['③ 도 notRun', { '③': 'notRun', '⑧': 'notRun' }],
   ] as const) {
     const r = planEnqueue({ ...base, isBootstrap: true, gates: gates(bad), gateStatus: 'reject' })
     check(`🔴 ${label} + bootstrap 주장 → 적재하지 않는다`, !r.ok)
@@ -3489,7 +3485,7 @@ console.log('㉟ Queue 파이프라인 — 실제 경로 (provider 주입)')
       return { ok: true, text: `후보 ${fallbackCalls}`, errorCode: null }
     },
     gate: ({ input }) => input.personaCode === 'P01'
-      ? { gates: GATE_CODES.map((g) => ({ gate: g, outcome: g === '②' ? 'regenerate' : 'pass' })), gateStatus: 'regenerate', isBootstrap: false }
+      ? { gates: GATE_CODES.map((g) => ({ gate: g, outcome: g === '③' ? 'regenerate' : 'pass' })), gateStatus: 'regenerate', isBootstrap: false }
       : okGate(),
     writer: async () => ({ created: true, reason: 'PENDING 적재' }),
   })
@@ -3931,9 +3927,6 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     openDedupKeys: async () => [],
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
-    frequency: async () => ({
-      corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
-    }),
     seedUseCount: async () => 1,
     ...over,
   })
@@ -4020,17 +4013,6 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     })
     check('🔴 knownNames 를 못 읽으면 미완이다',
       !noNames.gateInputsComplete && noNames.gaps.some((g) => g.startsWith('knownNames')))
-    const noCorpus = await materializeTargets({
-      source: makeSource({
-        frequency: async () => ({ corpus: null, reason: 'ASSET_MISSING — 정본 자산이 없다' }),
-      }),
-      limit: 5, nowMs: NOW, windowMs: 7 * DAY,
-    })
-    check('🔴 코퍼스를 못 읽으면 미완이다',
-      !noCorpus.gateInputsComplete && noCorpus.gaps.some((g) => g.startsWith('frequencyLookup')))
-    // 🔴 왜 못 읽었는지가 로그에 남아야 한다 — `null` 하나로는 고칠 곳을 알 수 없다
-    check('🔴 못 읽은 사유를 그대로 실어 보낸다',
-      noCorpus.gaps.some((g) => g.includes('ASSET_MISSING')))
     const noSeed = await materializeTargets({
       source: makeSource({ seedUseCount: async () => null }),
       limit: 5, nowMs: NOW, windowMs: 7 * DAY,
@@ -4095,8 +4077,6 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     if (t === undefined) throw new Error('fixture 대상 없음')
     const gi = gateInputOf(t.gate, t.target.input, '저도 그런 날이 있어요')
     check('🔴 ⑥ 회원 표시명이 실제로 들어간다', gi.knownNames?.includes('홍길동') === true)
-    check('🔴 ② 코퍼스 조회가 들어간다',
-      typeof gi.frequencyLookup === 'function' && gi.corpusName === 'comment')
     check('🔴 ⑧ 이전 발화가 실제 발화다', (gi.priorTexts?.length ?? 0) === 5)
     check('🔴 ⑧ seed 사용 횟수가 소스에서 온 값이다', gi.seedUseCount === 1)
     check('🔴 ⑨ 카페 운영 문맥 여부를 명시한다', gi.sourceIsCafeOperational === false)
@@ -4526,9 +4506,6 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     openDedupKeys: async () => [],
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
-    frequency: async () => ({
-      corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
-    }),
     seedUseCount: async () => 1,
     ...over,
   })
@@ -4619,8 +4596,6 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     const src = (throws: boolean): TargetSource => makeDbTargetSource({
       prisma: fakePrisma({ throws }),
       windowStart: new Date(0),
-      // 🔴 외부 코퍼스는 이 검사에서 열지 않는다 — 네트워크 0
-      readCorpus: false,
       referenceByCode: () => { if (throws) throw new Error('자산 읽기 실패'); return refs },
     })
 
@@ -4645,7 +4620,7 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
       await src(false).seedUseCount('P09') === 1)
     check('🔴 배정이 통째로 비어도 1 — seed 가 없으면 나눈 seed 도 없다(회차 전체를 멈추지 않는다)',
       await makeDbTargetSource({
-        prisma: fakePrisma({ throws: false }), windowStart: new Date(0), readCorpus: false,
+        prisma: fakePrisma({ throws: false }), windowStart: new Date(0),
         referenceByCode: () => new Map(),
       }).seedUseCount('P01') === 1)
     {
@@ -4653,9 +4628,6 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
       check('🔴 댓글 1건을 단 Persona 가 다음 댓글에서 ⑧ regenerate 로 영구히 막히지 않는다',
         v.status !== 'regenerate' && !v.axes.includes('SEED_REUSE'))
     }
-    check('🔴 코퍼스를 열지 않기로 하면 corpus 가 null 이다',
-      (await src(false).frequency()).corpus === null)
-    check('🔴 그때도 사유는 남는다', (await src(false).frequency()).reason.trim() !== '')
   }
 
   /** 🔴 출처 문맥 판정 불가 — provider 앞에서 막는다 */
@@ -5329,9 +5301,9 @@ console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
   check('🔴 ① 이 reject 면 cold-start 가 아니다 — Gate 실패다',
     !isGateEightColdStart(g({ '①': 'reject' }),
       judgeGateReport({ gates: g({ '①': 'reject' }), status: 'reject' })))
-  check('🔴 ② 도 notRun 이면 cold-start 가 아니다 — 입력 누락이다',
-    !isGateEightColdStart(g({ '②': 'notRun' }),
-      judgeGateReport({ gates: g({ '②': 'notRun' }), status: 'pass' })))
+  check('🔴 ③ 도 notRun 이면 cold-start 가 아니다 — 입력 누락이다',
+    !isGateEightColdStart(g({ '③': 'notRun' }),
+      judgeGateReport({ gates: g({ '③': 'notRun' }), status: 'pass' })))
   check('🔴 ⑧ 이 돌았으면 cold-start 가 아니다',
     !isGateEightColdStart(g({ '⑧': 'pass' }),
       judgeGateReport({ gates: g({ '⑧': 'pass' }), status: 'pass' })))
@@ -5365,13 +5337,13 @@ console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
 
     // ③ 필수 관문은 그대로 엄격하다
     check('🔴 [G] 필수 관문 fail 은 그대로 차단', (() => {
-      for (const c of ['①', '②', '③', '④', '⑤', '⑥', '⑦']) {
+      for (const c of REQUIRED_GATES.filter((x) => x !== '⑧')) {
         if (isGateEightColdStart(g({ [c]: 'reject' }), rep({ [c]: 'reject' }))) return false
       }
       return true
     })())
     check('🔴 [G] 허용되지 않은 필수 관문 notRun 은 그대로 차단', (() => {
-      for (const c of ['①', '②', '③', '④', '⑤', '⑥', '⑦']) {
+      for (const c of REQUIRED_GATES.filter((x) => x !== '⑧')) {
         if (isGateEightColdStart(g({ [c]: 'notRun' }), rep({ [c]: 'notRun' }))) return false
       }
       return true
@@ -5387,7 +5359,7 @@ console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
     })())
     check('🔴 [G] ⑨ 는 REQUIRED_GATES 에 없다 — 정본 그대로',
       !(REQUIRED_GATES as readonly string[]).includes('⑨')
-      && (REQUIRED_GATES as readonly string[]).length === 8)
+      && (REQUIRED_GATES as readonly string[]).length === GATE_CODES.length - 1)
     check('🔴 [G] 판정이 REQUIRED_GATES 정본을 쓴다 — GATE_CODES 를 무조건 요구하지 않는다', (() => {
       const src = readFileSync('src/lib/persona-comment-gate-report.ts', 'utf-8')
       const fn = src.slice(src.indexOf('export function isGateEightColdStart'))
@@ -5421,8 +5393,9 @@ console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
       const blk = run.slice(run.indexOf('for (const o of result.outcomes)'))
       return !/o\.plan\?\.text|\btext\b/.test(blk.slice(0, 1400))
     })())
-    check('🔴 [G] 관문 이름이 9개 다 있다',
-      (Object.keys(GATE_NAMES) as string[]).length === 9)
+    check('🔴 [G] 관문 이름이 GATE_CODES 전부에 있다',
+      (Object.keys(GATE_NAMES) as string[]).length === GATE_CODES.length
+      && GATE_CODES.every((c) => (GATE_NAMES[c] ?? '').trim() !== ''))
     check('🔴 [G] --run-limit 계약은 그대로다', (() => {
       const run = readFileSync('scripts/persona-comment-queue.mts', 'utf-8')
       return /providerCallLimit: WANT_CALL \? RUN_LIMIT : 0,/.test(run)
@@ -5445,7 +5418,7 @@ console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
 
   /** 🔴 ④ 다른 Gate 실패는 그대로 막는다 — 예외는 ⑧ 하나뿐이다 */
   for (const [code, outcome] of [['①', 'reject'], ['③', 'regenerate'], ['⑦', 'review'],
-    ['②', 'notRun']] as const) {
+    ['⑥', 'notRun']] as const) {
     const blocked = tx({ gates: g({ [code]: outcome }), gateStatus: outcome })
     check(`🔴 ${code} 가 ${outcome} 이면 bootstrap-auto 여도 막힌다`, !blocked.ok)
     check(`🔴 그 사유가 Gate 재검사 실패다 (${code})`,
@@ -5502,57 +5475,6 @@ console.log('㊽ 우나어 runtime 의존 — live 댓글 경로에 0 이어야 
     check(`🔴 ${f} 에 우나어 참조가 없다`,
       !/voice-unao-readonly|loadUnaoReadonlyUrl|UNAO_READONLY_DATABASE_URL|CafePost/.test(code))
   }
-  /**
-   * 🔴 **② 코퍼스는 소란소란 익명 정본 자산에서 온다.**
-   *    자산 자체는 worktree 밖 600 권한이라 CI 는 보지 못한다 — 여기서는
-   *    "그 자산을 본다" 는 배선과 "화자를 빈도에 섞지 않는다" 는 계약만 잠근다.
-   */
-  {
-    const src = readFileSync(join(process.cwd(), 'scripts/lib/persona-comment-source-db.ts'), 'utf8')
-    check('🟢 코퍼스를 정본 자산 로더에서 읽는다', src.includes('loadCanonCorpusTexts('))
-    check('🔴 자기 DB Comment 표를 코퍼스로 쓰지 않는다', !src.includes('prisma.comment.findMany'))
-    check('🔴 화자를 빈도 판정에 쓰지 않는다 — 반환 타입에 없다',
-      !/speakerId/.test(stripComments(src)))
-    /**
-     * 🔴 **정본 자산으로 ② 가 실제로 성립하는가** — 개수가 아니라 **판정 능력**으로 본다.
-     *
-     *    얇은 코퍼스의 문제는 "적다" 가 아니라 **흔한 말조차 `rare` 로 잡힌다**는 것이다
-     *    (`rarityOf`: 0~1 rare · 2~5 mid · 6+ common). 자산이 그 구분을 실제로
-     *    해내는지 본다 — 해내지 못하면 모든 후보가 regenerate 가 된다.
-     *
-     * 🔴 본문은 찍지 않는다. 개수만 센다.
-     */
-    const corpus = loadCanonCorpusTexts()
-    // 🔴 못 읽었으면 **왜** 못 읽었는지가 남아야 한다 — CI 에는 자산이 없다(600 권한·worktree 밖)
-    check('🔴 자산을 못 읽어도 사유가 남는다', corpus.reason.trim() !== '')
-    if (!corpus.ok) {
-      /**
-       * 🔴 **자산 부재를 실패로 만들지 않는다.** CI 는 자산을 볼 수 없고,
-       *    볼 수 없는 것을 실패로 세면 다음 사람은 검사를 끄게 된다.
-       *    대신 **건너뛴 사실을 숨기지 않는다** — `reference-preflight` 와 같은 규칙이다.
-       */
-      console.log(`     🟡 정본 자산 없음(${corpus.code}) — ② 능력 검사는 로컬에서만 돈다`)
-    }
-    if (corpus.ok) {
-      check('🟢 정본 자산을 읽는다', corpus.texts.length > 0)
-      const bodies = corpus.texts.map((t) => t.replace(/\s+/gu, '')).filter((b) => b !== '')
-      const lookup = (g: string): number => {
-        let n = 0
-        for (const b of bodies) if (b.includes(g)) { n += 1; if (n > 6) break }
-        return n
-      }
-      // 🔴 자산에서 뽑은 2-gram 표본이 실제로 `common` 대역에 닿는가
-      const grams = new Set<string>()
-      for (const b of bodies.slice(0, 200)) {
-        for (let i = 0; i + 2 <= b.length && grams.size < 400; i += 1) grams.add(b.slice(i, i + 2))
-      }
-      const common = [...grams].filter((g) => rarityOf(lookup(g)) === 'common').length
-      check('🟢 흔한 말이 common 으로 잡힌다 — 얇은 코퍼스였다면 전부 rare 다', common > 0)
-      check('🔴 그렇다고 전부 common 은 아니다 — 희귀어를 구분한다',
-        common < grams.size)
-    }
-  }
-
   /**
    * 🔴 **CI 가 preflight 실패를 숨기지 않는가** (2026-09-11).
    *

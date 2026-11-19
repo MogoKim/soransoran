@@ -3,9 +3,9 @@
  * 🔴 **첫 댓글 뒤 추가 댓글 — 격리 Postgres 실행 검사** (2026-10-14 · PR #704)
  *
  *   실제 경로 그대로 돈다: `runFollowupPhase` → 실제 DB 사실(출처 · 신고 · 반응 분류) → `judgeFollowupTick`·`judgeFollowupPost`
- *   → 9관문 정본(`checkCommentCandidate`) → 도장 PENDING 적재 → `publishCandidateTx({ followupLane: true })`(Serializable).
+ *   → 관문 정본(`checkCommentCandidate`) → 도장 PENDING 적재 → `publishCandidateTx({ followupLane: true })`(Serializable).
  *   그날 단계 · 대화 감사는 진입점과 같은 `readFollowupContext` 가 실제 행에서 읽는다.
- *   가짜는 두 곳뿐이다 — **생성 텍스트**(네트워크 0)와 **② 코퍼스 빈도**.
+ *   가짜는 한 곳뿐이다 — **생성 텍스트**(네트워크 0).
  *
  * 🔴 운영 DB 에 붙지 않는다(sentinel · localhost · soran_test). 운영 장부·자산·env·profile 0 — 전부 임시 HOME 아래.
  *
@@ -256,7 +256,7 @@ async function ageAll(postId: string, minutes: number): Promise<void> {
 }
 
 /** 🔴 네트워크 0 — 매번 다른 문장(같은 말 반복 차단에 걸리지 않게) · 부른 횟수를 센다 */
-/** 🔴 9관문 정본을 그대로 통과하는 문장만 — 근거 없는 1인칭 경험(⑦)을 넣지 않는다 */
+/** 🔴 관문 정본을 그대로 통과하는 문장만 — 근거 없는 1인칭 경험(⑦)을 넣지 않는다 */
 const REPLIES = [
   '그 시간에 깨면 괜히 생각이 많아지죠. 오늘 밤은 조금 더 편히 주무셨으면 해요.',
   '읽기만 해도 그 새벽이 그려지네요. 다들 비슷한 밤을 보내고 있었나 봐요.',
@@ -270,8 +270,7 @@ function fakeGen(texts: readonly string[] = REPLIES): { gen: FollowupGenerate; c
   return { gen: async () => { const t = texts[n % texts.length]!; n += 1; return { ok: true, text: t, errorCode: null } }, calls: () => n }
 }
 function source(): TargetSource {
-  const base = makeDbTargetSource({ prisma, windowStart: new Date(Date.now() - 7 * 86_400_000) })
-  return { ...base, frequency: async () => ({ corpus: { lookup: () => 7, size: 1000, corpusName: 'comment' }, reason: 'fixture corpus' }) }
+  return makeDbTargetSource({ prisma, windowStart: new Date(Date.now() - 7 * 86_400_000) })
 }
 const PASS_AUDIT = { verdict: 'PASS', codes: [], counts: {} }
 async function phase(gen: FollowupGenerate, over: Partial<Parameters<typeof runFollowupPhase>[0]> = {}): Promise<FollowupPhaseReport> {

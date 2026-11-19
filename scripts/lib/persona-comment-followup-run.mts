@@ -4,7 +4,7 @@
  * 🔴 **새 판정을 만들지 않는다.** 이 파일은 순서와 사실 모으기뿐이다.
  *      · 회차 상한 · 첫 댓글 양보 · profile · 대화 감사 — `judgeFollowupTick`
  *      · 한 글 판정 · 대상 · 제외 Persona · 순서 — `judgeFollowupPost` · `orderFollowupGo` · `pickFollowupPersona`
- *      · 입력 · 9관문 · 적재 계약 — `buildCommentInput` · `runEnqueuePipeline` · `checkCommentCandidate` (첫 댓글과 같은 정본)
+ *      · 입력 · 댓글 관문 · 적재 계약 — `buildCommentInput` · `runEnqueuePipeline` · `checkCommentCandidate` (첫 댓글과 같은 정본)
  *      · 본문 중복 — `judgeFollowupText`
  *      · 실패 격리 — 첫 댓글과 같은 시도 기억 정책 · 저장소(`persona-comment-attempt-policy` · 추가 댓글 lane 파일)
  *      · 발행 재판정 — `publishCandidateTx({ followupLane: true })` (Serializable · 기존 재검사 전부 + `judgeFollowupPublish`)
@@ -516,7 +516,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const eligibleReady = ready.filter((r) => !existingDedupKeys.has(r.go.key))
   if (existingDedupKeys.size > 0) lines.push(`dedupKey 선제 제거 ${existingDedupKeys.size}건 — provider 호출 생략`)
   const personas = await deps.source.personas()
-  const [knownNames, frequencyRead] = await Promise.all([deps.source.knownNames(), deps.source.frequency()])
+  const knownNames = await deps.source.knownNames()
   const fuToday = new Map<string, number>()
   for (const r of fuRows) fuToday.set(r.personaId, (fuToday.get(r.personaId) ?? 0) + 1)
   const personaIdByCode = new Map((await prisma.persona.findMany({ select: { id: true, code: true } })).map((p) => [p.code, p.id]))
@@ -571,7 +571,6 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   }
   const providerBlockers: string[] = []
   if (knownNames === undefined) providerBlockers.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
-  if (frequencyRead.corpus === null) providerBlockers.push(`frequencyLookup — ${frequencyRead.reason}`)
   // 🔴 seed 공유 수를 못 셌으면 회차 전체 유료 호출 0 — 첫 댓글 materializer 와 같은 정본(그 사람만 빼고 계속하지 않는다)
   for (const [code, n] of seedShareByCode) if (n === null) providerBlockers.push(`seedUseCount (${code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
 
@@ -655,7 +654,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
               ...liveComments.map((c) => ({ text: contentOf.get(c.id) ?? '', persona: c.commentOrigin === 'PERSONA' })),
             ],
             gate: {
-              sourceTexts: sourceTextsOf(built.input), knownNames, frequency: frequencyRead.corpus, priorTexts: recentTexts,
+              sourceTexts: sourceTextsOf(built.input), knownNames, priorTexts: recentTexts,
               seedUseCount: seedShareByCode.get(pe.code) ?? null, adviceForbidden: isAdviceForbidden(pe.forbiddenReactionRoles),
               sourceIsCafeOperational: ctx.operational, sourceContextReason: ctx.reason,
             },
@@ -688,7 +687,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     }
     return generate
   }
-  // 🔴 9관문은 첫 댓글과 같은 정본 그대로다(`makeCanonGate` 와 같은 모양 · 완화 없음)
+  // 🔴 댓글 관문은 첫 댓글과 같은 정본 그대로다(`makeCanonGate` 와 같은 모양 · 완화 없음)
   const gate: PipelineGate = ({ input, text }) => {
     const p = planOf(input)
     if (p === undefined) return { gates: [], gateStatus: 'INPUT_CONTEXT_MISSING', isBootstrap: false }
@@ -738,7 +737,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       lastErrorCode = 'PROVIDER_EXCEPTION'
       return { ok: false, text: null, errorCode: 'PROVIDER_EXCEPTION' }
     }
-    // 🔴 본문 중복 · 같은 도입 — 9관문 앞에서 막는다(돈은 썼지만 적재 0)
+    // 🔴 본문 중복 · 같은 도입 — 댓글 관문 앞에서 막는다(돈은 썼지만 적재 0)
     if (r.ok && r.text !== null && !judgeFollowupText({ text: r.text, existing: p.existing }).ok) {
       lastErrorCode = 'FOLLOWUP_TEXT_DUP'
       return { ok: false, text: null, errorCode: 'FOLLOWUP_TEXT_DUP' }

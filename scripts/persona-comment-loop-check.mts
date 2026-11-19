@@ -7,7 +7,7 @@
  *   ③ 예산 env — 기본 $0.20 · D20 승인 천장 $0.50 · 잘못 쓴 값은 보류
  *   ④ 🔴 실제 장부 세션(댓글 전용 디렉터리)이 하루 상한에서 **요청 전에** 막는다 — 생성 fetch 0
  *   ⑤ 댓글 1건의 실제 비용 계산(가격표 정본 · 운영 장부 실측 토큰)
- *   ⑥ 오케스트레이터 — 단계·모델이 아니면 provider 0 · write 0 · 9관문 정본 그대로
+ *   ⑥ 오케스트레이터 — 단계·모델이 아니면 provider 0 · write 0 · 관문 정본 그대로
  *   ⑦ schedule 템플릿 · 배포 quiesce 목록
  *   ⑨ 첫 댓글 재시도 — 같은 글 60분 window 안에서 post×Persona×role 을 다시 보내지 않는다(2026-11-01 D20 재현)
  *
@@ -42,6 +42,7 @@ import { legacyRepeatBand } from './lib/persona-voice-legacy-oracle.mjs'
 import { RATIO_WINDOW_DAYS } from '../src/lib/persona-comment-governor'
 import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
 import { dedupKeyOf } from '../src/lib/persona-comment-queue'
+import { GATE_CODES } from '../src/lib/persona-comment-gate-report'
 import {
   ATTEMPT_JOURNAL_CORRUPT_FILE, ATTEMPT_JOURNAL_FILE, ATTEMPT_JOURNAL_PREVIOUS_CORRUPT_FILE, createAttemptStore,
   type AttemptFsOps, type AttemptStore,
@@ -315,7 +316,7 @@ console.log('\n⑤ 댓글 1건의 실제 비용 — 가격표 정본 · 운영 �
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑥ 오케스트레이터 — 단계·모델 관문 · 9관문 정본')
+console.log('\n⑥ 오케스트레이터 — 단계·모델 관문 · 관문 정본')
 // ─────────────────────────────────────────────────────────
 {
   let generated = 0
@@ -342,7 +343,7 @@ console.log('\n⑥ 오케스트레이터 — 단계·모델 관문 · 9관문 �
   const wrongModel = await runCommentLoop(deps('bootstrap-auto', { canon: { ...canonOk, selection: { status: 'confirmed', winner: 'gpt-4o' } } }))
   check('🔴 등록되지 않은 모델 → 막힌다', wrongModel.outcome === 'MODEL_NOT_CONFIRMED')
 
-  // 🔴 9관문은 정본 그대로 — 원문 20자 복제는 ① 에서 막힌다
+  // 🔴 관문은 정본 그대로 — 원문 20자 복제는 ① 에서 막힌다
   const input = {
     personaCode: 'P01', reactionRole: 'empathy',
     persona: { code: 'P01', ageBand: '50대', region: null, lifeStage: '갱년기', identity: { menopauseStatus: '중' }, voiceCore: { ending: '요' }, voiceVariations: {}, noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
@@ -351,13 +352,13 @@ console.log('\n⑥ 오케스트레이터 — 단계·모델 관문 · 9관문 �
     memory: { has: false, note: '' }, fingerprint: 'f',
   } as unknown as CommentInput
   const ctx: GateContext = {
-    sourceTexts: [input.post.title, input.post.bodyDigest], knownNames: [], frequency: { lookup: () => 7, size: 100, corpusName: 'comment' },
+    sourceTexts: [input.post.title, input.post.bodyDigest], knownNames: [],
     priorTexts: [], seedUseCount: 1, adviceForbidden: true, sourceIsCafeOperational: false, sourceContextReason: 'x',
   }
   const gate = makeCanonGate(() => ctx)
   const copied = gate({ input, text: '새벽 세 시만 되면 눈이 떠져서 다시 잠들기가 너무 어려워요 저도요' })
   check('🔴 원문 20자 복제 → ① regenerate (정본 판정 그대로)',
-    copied.gates.length === 9 && copied.gates.find((g) => g.gate === '①')?.outcome === 'regenerate')
+    copied.gates.length === GATE_CODES.length && copied.gates.find((g) => g.gate === '①')?.outcome === 'regenerate')
   const advice = gate({ input, text: '그럴 땐 꼭 병원 가서 검사받으셔야 합니다. 약 드셔야 해요.' })
   check('🔴 단정형 의료 조언 → ⑤ regenerate (완화 없음)', advice.gates.find((g) => g.gate === '⑤')?.outcome === 'regenerate')
   const none = makeCanonGate(() => undefined)({ input, text: '괜찮아요' })
@@ -380,7 +381,7 @@ console.log('\n⑦ schedule 템플릿 · 배포 quiesce')
   const mins = COMMENT_RUNNER_SLOTS.map((s) => s.hour * 60 + s.minute)
   const maxGap = mins.slice(1).reduce((m, x, i) => Math.max(m, x - mins[i]!), 0)
   check(`🔴 회차 간격 최대 ${maxGap}분 ≤ 첫 댓글 시한 ${FIRST_COMMENT_MAX_MINUTES}분`, maxGap <= FIRST_COMMENT_MAX_MINUTES)
-  // 🔴 (2026-09-28) 60분 안에 한 번뿐이면 9관문 한 번 막힘이 그 글의 첫 댓글을 통째로 잃는다
+  // 🔴 (2026-09-28) 60분 안에 한 번뿐이면 관문 한 번 막힘이 그 글의 첫 댓글을 통째로 잃는다
   check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ${maxGap}분 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
     maxGap <= COMMENT_RUNNER_MAX_GAP_MINUTES)
   check('🔴 배포 동안 멈출 job 에 댓글 루프가 있다', DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL))
@@ -618,7 +619,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
 {
   /**
    * 🔴 운영 모양을 줄인 결정적 재현. **운영 경로 그대로** — `runCommentLoop` → 진짜 `autoLaneTargetSource` → `materializeTargets` →
-   *    `runEnqueuePipeline` → 진짜 9관문(`makeCanonGate`) 을 부르고, 읽기(TargetSource) · provider · DB(prisma) 만 가짜다.
+   *    `runEnqueuePipeline` → 진짜 관문(`makeCanonGate`) 을 부르고, 읽기(TargetSource) · provider · DB(prisma) 만 가짜다.
    *    시도 기억은 **진짜 파일 저장소**(임시 디렉터리)다. 네트워크 0 · 운영 DB 0 · 운영 파일 0.
    *
    *    · 14:20 KST 발행 · 20분 간격 3회차(+15 · +35 · +55분) — 전부 60분 window 안
@@ -668,7 +669,6 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     openDedupKeys: async () => [],
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
-    frequency: async () => ({ corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스' }),
     seedUseCount: async () => 1,
   })
 
@@ -756,7 +756,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       `반복 ${repeated.length}개 — ${repeated.map(([k, rounds]) => `${k}(회차 ${rounds.join('·')})`).join(' · ')}`)
     check('🔴 총 10회 호출이면 distinct 조합도 10 — 후속 회차가 새 조합으로 채운다',
       onTarget.length === 10 && seen.size === 10, `호출 ${onTarget.length} · distinct ${seen.size}`)
-    check('🔴 Gate 우회 0 — 이 글 호출 10회 전부 진짜 9관문에서 막힘(ENQUEUE_BLOCKED) · 첫 댓글 적재 0',
+    check('🔴 Gate 우회 0 — 이 글 호출 10회 전부 진짜 관문에서 막힘(ENQUEUE_BLOCKED) · 첫 댓글 적재 0',
       steps.length === 10 && steps.every((x) => x === 'ENQUEUE_BLOCKED') && reports.every((r) => r.enqueued === 0),
       `${steps.join(',')}`)
     check('🔴 Queue · publish 우회 0 — 가짜 DB 의 읽기 밖 접근 0 · 발행 sweep 은 회차마다 앞뒤로 돈다',
@@ -807,11 +807,9 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       // 🔴 P02 는 글쓴이다 — 자기 글에 첫 댓글을 달지 않으므로 pool 에 넣지 않는다
       ...['P01', 'P03', 'P04', 'P05', 'P06'].map((c, i) => withHistory(c, distinct(4000 + i * 200, 6))),
     ]
-    // 🔴 ② 가 흔한 말로 보도록 — 이 재현은 ⑧ 만 본다(다른 관문은 진짜 정본이 그대로 돈다)
-    const replaySource = (): TargetSource => ({
-      ...sourceOf([postAt(LONELY, PUB, '대구공항 주정차 라인이 궁금해서 여쭤봐요')], pool),
-      frequency: async () => ({ corpus: { lookup: () => 10_000, size: 100_000, corpusName: 'comment' }, reason: '시험 코퍼스' }),
-    })
+    // 🔴 이 재현은 ⑧ 만 본다(다른 관문은 진짜 정본이 그대로 돈다)
+    const replaySource = (): TargetSource =>
+      sourceOf([postAt(LONELY, PUB, '대구공항 주정차 라인이 궁금해서 여쭤봐요')], pool)
     /** PENDING 쓰기까지 받는 가짜 DB — 잠금(findUnique · updateMany)과 create 만 안다. 그 밖은 bypass */
     const makeWriteDb = () => {
       const base = makeDb()

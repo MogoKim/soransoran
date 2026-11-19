@@ -1013,11 +1013,11 @@ check('실회원 글 외부 전송 금지를 release 절에도 적는다',
 check('댓글 회차를 글 발행량과 묶지 않는다고 적는다',
   master.includes('글 발행량(d1~d10)과 묶지 않는다'))
 /**
- * 🔴 **"결과 9개" 를 "9관문 통과" 로 읽지 못하게 한다.**
- *    입력을 빠뜨리면 notRun 인 채로 9개가 채워진다 — 첫 shadow 판이 그랬다.
+ * 🔴 **"결과가 다 왔다" 를 "관문 통과" 로 읽지 못하게 한다.**
+ *    입력을 빠뜨리면 notRun 인 채로 줄 수만 채워진다 — 첫 shadow 판이 그랬다.
  */
-check('9관문의 결과 존재와 실제 실행을 나눠 적는다',
-  master.includes('"결과 9개" 와 "실제 실행" 을 나눈다')
+check('관문의 결과 존재와 실제 실행을 나눠 적는다',
+  master.includes('"결과가 다 왔다" 와 "실제 실행" 을 나눈다')
   && ['결과 존재', '실제 실행', 'notRun', '필수 미실행'].every((t) => master.includes(t)))
 check('notRun 을 pass 로 세지 않는다고 명시한다',
   master.includes('`notRun` 을 `pass` 로 세지 않는다'))
@@ -1440,19 +1440,14 @@ check('🔴 다른 Gate 실패는 그대로 막는다고 적는다',
   check('🔴 60분 계약을 슬롯이 실제로 만족한다',
     plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
 }
-/** 🔴 ② 코퍼스 정본과 버린 길을 함께 적는다 */
-check('🔴 ② 코퍼스 정본이 익명 정본 자산이라고 적는다',
-  master.includes('② 댓글 코퍼스 공급원 — 소란소란 익명 정본 자산')
-  && master.includes('loadCanonCorpusTexts'))
-check('🔴 화자를 빈도 판정에 쓰지 않는다고 적는다',
-  master.includes('`speakerId` 는 빈도 판정에 쓰지 않는다'))
-check('🔴 원문을 Git·DB 로 복사하지 않는다고 적는다',
-  master.includes('원문을 Git·DB 로 복사하지 않는다'))
-check('🔴 버린 두 길을 기록으로 남긴다',
-  master.includes('CafePost`') === false
-  && master.includes('자체 `Comment` 표 + 500건 대기'))
-check('🔴 자산 부재를 영구 정지로 만들지 않는다고 적는다',
-  master.includes('bootstrap 전체를 영구 정지시키지 않는다'))
+/** 🔴 관문 ②·④ 삭제를 문서가 그대로 적는다 — 지운 코퍼스 읽기를 지금 있는 것처럼 적지 않는다 */
+check('🔴 관문 ②·④ 가 없다고 적고 이유를 남긴다',
+  master.includes('관문 ②(고유 표현)·④(전개 순서)는 없다')
+  && master.includes('우리 사이트에 이미 공개된 글·댓글'))
+check('🔴 번호를 당기지 않고 옛 행의 ②·④ 줄은 읽을 때 버린다고 적는다',
+  master.includes('②·④ 는 없는 번호다') && master.includes('`judgeGateReport` 가 읽을 때 버린다'))
+check('🔴 지운 ② 코퍼스 읽기를 살아 있는 것처럼 적지 않는다',
+  !master.includes('loadCanonCorpusTexts') && !master.includes('frequencyLookup'))
 /** 🔴 운영 창 계약 — 글 발행도 같은 창 안이어야 한다 */
 check('🔴 운영 창을 08~22 로 못박는다',
   master.includes('#### 🔴 운영 창 계약 — 08~22시')

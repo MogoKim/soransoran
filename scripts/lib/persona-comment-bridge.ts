@@ -4,7 +4,7 @@
  * 🔴 **왜 어댑터인가.**
  *
  *    새 생성기를 하나 더 만들지 않는다. 프롬프트 정본은 `buildPrompt` 이고
- *    안전 판정 정본은 `checkCommentCandidate`(9관문)다. 둘 다 이미 있고,
+ *    안전 판정 정본은 `checkCommentCandidate`(댓글 관문)다. 둘 다 이미 있고,
  *    둘 다 오래 다듬어진 것들이다. 새로 쓰면 그 다듬음이 통째로 사라진다.
  *
  *    끊겨 있던 것은 생성기가 아니라 **연결**이었다. `persona-comment-input` 이
@@ -135,17 +135,16 @@ export function buildPromptFromInput(
 }
 
 /**
- * 생성 결과 → 9관문 Gate 입력.
+ * 생성 결과 → 관문 입력.
  *
  * 🔴 **입력을 빠뜨리면 관문이 돌지 않는다.** 그런데 `checkCommentCandidate` 는
- *    입력과 무관하게 ①~⑨ 각 1개를 돌려주므로, 빠뜨린 쪽은 `notRun` 인 채로
- *    9개가 채워지고 겉보기에는 "9관문 통과" 가 된다.
- *    첫 판이 정확히 그랬다 — `knownNames` · `frequencyLookup` · `identity` ·
- *    `noGoTopics` · `priorTexts` 를 하나도 넘기지 않았다.
+ *    입력과 무관하게 관문마다 1개를 돌려주므로, 빠뜨린 쪽은 `notRun` 인 채로
+ *    개수가 채워지고 겉보기에는 "관문 통과" 가 된다.
+ *    첫 판이 정확히 그랬다 — `knownNames` · `identity` · `noGoTopics` · `priorTexts` 를 하나도 넘기지 않았다.
  *
  * 🔴 그래서 여기서 **CommentInput 이 이미 들고 있는 것은 자동으로 잇는다** —
  *    identity · No-Go · forbiddenRoles 는 호출부가 다시 넘길 필요가 없다.
- *    호출부가 넘겨야 하는 것은 그 밖에서 오는 것들뿐이다(코퍼스 · 회원 표시명 · 이전 발화).
+ *    호출부가 넘겨야 하는 것은 그 밖에서 오는 것들뿐이다(회원 표시명 · 이전 발화).
  *
  * 🔴 `sourceTexts` 는 **파일에 저장하지 않고 런타임에 다시 읽는다**(기존 계약).
  * 🔴 `knownNames` 는 `undefined` 와 `[]` 를 구별해 넘긴다 —
@@ -158,9 +157,6 @@ export function toGateInput(args: {
   sourceTexts: readonly string[]
   /** ⑥-A 회원 표시명. 🔴 조회하지 않았으면 넘기지 않는다(빈 배열과 다르다) */
   knownNames?: readonly string[]
-  /** ② 댓글 코퍼스 빈도 조회 */
-  frequencyLookup?: CandidateInput['frequencyLookup']
-  corpusName?: string
   /** ⑧ 같은 persona 의 이전 발화 — 운영은 삭제되지 않은 공개 댓글 전체(반복 축은 후보 귀속 판정이라 영구 잠금이 없다) */
   priorTexts?: readonly string[]
   /** ⑧ seed 재사용 횟수 — 전체 단위 */
@@ -174,7 +170,6 @@ export function toGateInput(args: {
   const post = args.input.post
   /**
    * 🔴 **글쓴이가 자기 글에 답하는 자리** — 그 글은 남의 글이 아니라 이 사람이 한 말이다.
-   *    · ② 고유 표현: 자기 글(제목 · 본문)은 대조에서 뺀다. 윗댓글 · 답글 대상은 그대로 대조한다
    *    · ⑦ 자기 경험 근거: 자기 글에 쓴 사실은 다시 말할 수 있다
    *    ① 유출 대조(`sourceTexts`)는 줄이지 않는다 — 자기 글이라도 문장을 통째로 옮기면 걸린다.
    */
@@ -184,9 +179,6 @@ export function toGateInput(args: {
     personaCode: args.input.personaCode,
     text: args.text,
     sourceTexts: args.sourceTexts,
-    ...(ownPost
-      ? { uniqueExpressionSources: [...post.existingCommentDigests, ...(post.replyToDigest === undefined ? [] : [post.replyToDigest])] }
-      : {}),
     ...(args.knownNames === undefined ? {} : { knownNames: args.knownNames }),
     // 🔴 CommentInput 이 들고 있는 것은 자동으로 잇는다 — 호출부가 잊을 자리를 없앤다
     forbiddenRoles: p.forbiddenReactionRoles,
@@ -200,9 +192,6 @@ export function toGateInput(args: {
     ...(post.threadSeat === undefined ? {} : { everydayExperience: { menopauseExperienced: post.threadSeat.menopauseExperienced, spouseStrain: post.threadSeat.spouseStrain } }),
     noGoTopics: p.noGoTopics,
     noGoExpressions: p.noGoExpressions,
-    ...(args.frequencyLookup === undefined
-      ? {}
-      : { frequencyLookup: args.frequencyLookup, corpusName: args.corpusName ?? 'comment' }),
     ...(args.priorTexts === undefined ? {} : { priorTexts: args.priorTexts }),
     ...(args.seedUseCount === undefined ? {} : { seedUseCount: args.seedUseCount }),
     ...(args.adviceForbidden === undefined ? {} : { adviceForbidden: args.adviceForbidden }),
@@ -216,8 +205,6 @@ export function toGateInput(args: {
 export function describeGateInput(gi: CandidateInput): Parameters<typeof judgeGateInputs>[0] {
   return {
     knownNames: gi.knownNames,
-    hasFrequencyLookup: gi.frequencyLookup !== undefined,
-    corpusName: gi.corpusName,
     identity: gi.identity,
     noGoTopics: gi.noGoTopics,
     noGoExpressions: gi.noGoExpressions,
