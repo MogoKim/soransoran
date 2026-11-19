@@ -18,6 +18,8 @@
  */
 
 /** 이 규칙 묶음의 버전. 🔴 규칙이 바뀌면 값의 의미가 바뀐다 */
+import { COLLECT_SOURCES, sourceIdOf } from '../../src/lib/collect-sources'
+
 export const STYLE_RULE_VERSION = 'voice-m2-rule-v1'
 
 // ── communityRegister 사전 ────────────────────────────────
@@ -28,16 +30,15 @@ export const STYLE_RULE_VERSION = 'voice-m2-rule-v1'
  * 원출처 커뮤니티 호칭 — 🔴 **치환 대상**이다.
  * 그대로 쓰면 소란소란 글이 다른 커뮤니티에서 옮겨온 티를 낸다.
  */
-export const SOURCE_SPECIFIC_TERMS = [
+export const SOURCE_SPECIFIC_TERMS: readonly { term: string; site: string }[] = [
+  // 🔴 지금 원천의 호칭은 원천 줄(`collect-sources`)에 있다 — 카페를 더하면 여기도 저절로 는다
+  ...COLLECT_SOURCES.flatMap((s) => s.addressTerms.map((term) => ({ term, site: sourceIdOf(s.id) }))),
+  // 옛 원천 — 이미 쌓인 원문 · 말투 근거에 남아 있을 수 있어 치환 대상으로 둔다
   { term: '82님들', site: '82cook' },
   { term: '82님', site: '82cook' },
-  { term: '우갱님들', site: 'navercafe:wgang' },
-  { term: '우갱님', site: 'navercafe:wgang' },
-  { term: '레테님들', site: 'navercafe:remonterrace' },
-  { term: '레테님', site: 'navercafe:remonterrace' },
   { term: '은오님들', site: 'navercafe:dlxogns01' },
   { term: '은오님', site: 'navercafe:dlxogns01' },
-] as const
+]
 
 /** 소란소란 내부 호칭 — ✅ **치환 결과**로 쓴다 */
 export const SORANSORAN_REGISTER_TERMS = [

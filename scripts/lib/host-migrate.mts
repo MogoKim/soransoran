@@ -38,14 +38,15 @@ export const LABEL_PREFIX = 'com.soransoran.'
 export const LANE = 'd100'
 export type Lane = typeof LANE
 
+import { COLLECT_JOB_LABEL } from '../../src/lib/collect-sources'
+
 /**
  * 🔴 **D100 레인 allowlist — 단일 정본.** 묶음·quiesce·설치·되돌리기·handoff 가 전부 여기서 나온다.
  *    목록에 없는 label 은 판정 함수가 스스로 걸러 낸다(부르는 쪽이 걸러 주기를 믿지 않는다).
  *    새 D100 job 을 옮기려면 이 목록에 적고 검사를 다시 돌린다.
  */
 export const D100_LANE_LABELS: readonly string[] = [
-  'com.soransoran.navercafe-collect-wgang-multi',
-  'com.soransoran.navercafe-collect-remonterrace-multi',
+  COLLECT_JOB_LABEL,
   'com.soransoran.supply-process',
   'com.soransoran.original-post-runner',
   'com.soransoran.persona-comment-runner',

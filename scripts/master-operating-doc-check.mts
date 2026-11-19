@@ -319,7 +319,8 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('게시 시각·반응 백분위·velocity 는 순서에 들어오지 않는다')
     && d100Goal.includes('출처별 우대 없음')
     && d100Goal.includes('주제형 숫자 보너스 없음')
-    && d100Goal.includes('`jjong 20 + humor 1`')])
+    && d100Goal.includes('수집은 job 하나가 바퀴마다 원천 목록을 차례로 돈다')
+    && !d100Goal.includes('`jjong 20 + humor 1` 이다')])
   out.push(['canon §7 이 게시판을 중심 주제로만 라우팅하고 호환 경계를 닫는다',
     d100Goal.includes('게시판 라우팅 — 중심 주제 하나')
     && d100Goal.includes('중심 주제**를 `MENOPAUSE`')

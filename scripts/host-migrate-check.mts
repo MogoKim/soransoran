@@ -76,10 +76,10 @@ check('🔴 발행 회차 기록(publish-runs)은 분류돼 있고 싣지 않는
   classifyCanonEntry(PUBLISH_RUN_DIR_NAME).kind === 'exclude' && PUBLISH_RUN_DIR_NAME === basename(PUBLISH_RUN_DIR))
 check('heartbeat 지난 틱 표식은 싣는다', !isTransientFile('tick-2026-09-28T08-00.lock', 'publish-heartbeat'))
 check('🔴 heartbeat 디렉터리라도 틱 이름이 아니면 뺀다', isTransientFile('other.lock', 'publish-heartbeat'))
-check('🔴 D100 allowlist 는 정확히 10개(ops shadow observer 는 선택 설치 · 설치본이 있을 때만 실린다) — plist 템플릿 대상은 이것뿐', D100_LANE_LABELS.length === 10
+check('🔴 D100 allowlist 는 정확히 9개(ops shadow observer 는 선택 설치 · 설치본이 있을 때만 실린다) — plist 템플릿 대상은 이것뿐', D100_LANE_LABELS.length === 9
   && JSON.stringify([...D100_LANE_LABELS].sort()) === JSON.stringify([
-    'com.soransoran.auto-ready-audit', 'com.soransoran.keep-awake', 'com.soransoran.navercafe-collect-remonterrace-multi',
-    'com.soransoran.navercafe-collect-wgang-multi', 'com.soransoran.ops-shadow-observer', 'com.soransoran.original-post-runner',
+    'com.soransoran.auto-ready-audit', 'com.soransoran.keep-awake', 'com.soransoran.navercafe-collect',
+    'com.soransoran.ops-shadow-observer', 'com.soransoran.original-post-runner',
     'com.soransoran.persona-comment-runner', 'com.soransoran.runner-recover', 'com.soransoran.stage-controller', 'com.soransoran.supply-process',
   ]) && !D100_LANE_LABELS.some((l) => l.includes('magazine') || l.includes('82cook')))
 

@@ -50,8 +50,7 @@ D100 무인 루프 9개가 **창업자 노트북의 launchd gui 도메인**에�
 
 | job | 무엇 |
 |---|---|
-| `com.soransoran.navercafe-collect-wgang-multi` | 네이버 수집 |
-| `com.soransoran.navercafe-collect-remonterrace-multi` | 네이버 수집 |
+| `com.soransoran.navercafe-collect` | 네이버 수집(바퀴마다 원천 목록을 차례로) |
 | `com.soransoran.supply-process` | 공급 처리 |
 | `com.soransoran.original-post-runner` | 발행 heartbeat |
 | `com.soransoran.persona-comment-runner` | 댓글 루프 |

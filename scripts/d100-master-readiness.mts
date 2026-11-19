@@ -34,6 +34,7 @@ import {
   RECOVERY_PLAN, CANARY_CONTRACT, ESCALATION_LADDER, NO_AUTO_RETRY_SIGNALS,
   capacities82, judgeLadder, TOP_STEP_INCIDENT_FREE_DAYS,
 } from '../src/lib/collect-82cook-recovery'
+import { COLLECT_JOB_LABEL, COLLECT_SOURCES, sourceIdOf } from '../src/lib/collect-sources'
 import {
   readOperationalStock, readCurrentStageDecision, runReadiness,
 } from './lib/d100-operational-stock.mjs'
@@ -181,12 +182,7 @@ function measureFacts(): RunnerFacts {
 }
 
 /** 🔴 공급원별 수집 job — 하나만 보여 주면 나머지가 죽어도 초록이다 */
-const COLLECT_JOBS = [
-  { source: 'navercafe:wgang', label: 'com.soransoran.navercafe-collect-wgang-multi', env: null },
-  { source: 'navercafe:remonterrace', label: 'com.soransoran.navercafe-collect-remonterrace-multi', env: null },
-  // 🔴 82cook 은 **필수 공급원**인데 지금 등록되어 있지 않다. 그 사실이 화면에 보여야 한다
-  { source: '82cook', label: 'com.soransoran.raw-collect-82cook', env: 'SORAN_82COOK_COLLECT_ENABLED' },
-] as const
+const COLLECT_JOBS = COLLECT_SOURCES.map((s) => ({ source: sourceIdOf(s.id), label: COLLECT_JOB_LABEL, env: null as string | null }))
 
 const collectJobs = COLLECT_JOBS.map((j) => ({
   source: j.source,
@@ -212,14 +208,13 @@ const commentObs = observeJob(COMMENT_LABEL)
 const facts: Readonly<Record<Capability, RunnerFacts>> = {
   /**
    * 🔴 **수집은 job 하나가 아니다** (2026-09-21 3차 보정).
-   *    앞판은 wgang 하나만 보고 `collect: ready` 라 적었다 — remonterrace 도 82cook 도
-   *    같은 능력에 들어가는데 화면에 없었다. 아래 `collectJobs` 가 전부를 따로 보여 주고,
+   *    수집 job 은 하나지만 원천마다 회차 기록이 따로다 — 아래 `collectJobs` 가 원천마다 따로 보여 주고,
    *    능력 판정은 켜진 공급원 전부의 최근 회차로 한다.
    * 🔴 **고정 상세/day · 고정 READY/day 문턱을 지웠다** (2026-10-04 · canon §3.1 · C-01 · C-02).
    *    앞판은 `공개 × 3.82` 상세 · `공개 × 1.2` READY 를 능력 문턱으로 썼다. 처리량 판정은 단계 preflight
    *    (`judgeNextPreflight` — 슬롯 기회 · 목표 + 실측 손실) 하나다. 여기서는 관측값만 보여 준다.
    */
-  collect: factsOf('com.soransoran.navercafe-collect-wgang-multi', true,
+  collect: factsOf(COLLECT_JOB_LABEL, true,
     // 🔴 켜져 있는 공급원 **전부**의 최근 회차 — 이미 위에서 읽은 값을 능력 판정에도 넘긴다
     collectCapabilityFailing(collectJobs.map((j) => ({ enabled: j.facts.enabled, failing: j.facts.failing })))),
   generate: factsOf(SUPPLY_LABEL, envFlag('SORAN_SUPPLY_PROCESS_ENABLED'),
