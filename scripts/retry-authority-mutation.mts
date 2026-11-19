@@ -46,7 +46,7 @@ const MUTATIONS: { name: string; edits: Edit[] }[] = [
   { name: 'speakerBound 를 상한에서 뺀다 — Persona 실패만 무한 재구매',
     edits: [{ file: F.ws, find: "      || (r.state === 'retryable' && (r.retryClass === 'transient' || r.retryClass === 'speakerBound'))", replace: "      || (r.state === 'retryable' && r.retryClass === 'transient')" }] },
   { name: '채택 candidate 를 재선정 lane 으로 — 채택 원천을 유료 재생성',
-    edits: [{ file: F.ws, find: "    case 'terminal': case 'rawLane': case 'candidate': return 'excluded'", replace: "    case 'terminal': case 'rawLane': return 'excluded'\n    case 'candidate': return 'retry'" }] },
+    edits: [{ file: F.ws, find: "    case 'terminal': case 'candidate': return 'excluded'", replace: "    case 'terminal': return 'excluded'\n    case 'candidate': return 'retry'" }] },
   { name: '실패 지문에서 원인을 뺀다 — 서로 다른 실패가 한 지문',
     edits: [{ file: F.gf, find: "${i.speakerSetKey ?? 'unknown'}|${i.cause ?? 'complete'}|", replace: "${i.speakerSetKey ?? 'unknown'}|" }] },
   { name: '실패 지문에서 화자 묶음을 뺀다',

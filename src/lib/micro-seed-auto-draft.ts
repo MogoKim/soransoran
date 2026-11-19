@@ -26,7 +26,7 @@ import {
   type OriginalityMeasure, type CopyReason,
 } from './draft-originality'
 // 🔴 위해 축의 정본은 판정 단계다. 초안 단계가 목록을 따로 갖지 않는다
-import { SEMANTIC_DROP, DRAFT_HARM_AXES } from './micro-seed-auto-judge'
+import { SEMANTIC_DROP } from './micro-seed-auto-judge'
 // 🔴 위기 판정의 정본은 안전 신호 모듈 하나다 — 여기서 규칙을 다시 쓰지 않는다
 import { judgeCrisisSignal } from './micro-seed-safety-signals'
 import type { PersonaForMatch } from './original-post-persona-match'

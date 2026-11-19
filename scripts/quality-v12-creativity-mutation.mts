@@ -102,14 +102,14 @@ console.log('\n── 실제 생성·검수 프롬프트 경계 ──')
     decision: 'ok', personaCode: 'P13', stance: 'REFLECTION', selfBasis: null,
     warrants: [], universalReason: '보편적인 이야기', protectedFacts: [], speakerRelative: [],
     closingIntent: 'ask', contentRoles: ['conversationSpark'], reason: '', rejection: null,
-    planVersion: 'speaker-plan-p6',
+    planVersion: 'speaker-plan-p7',
   } as never
   const voice = buildVoiceEvidence({
     personaCode: 'P13', voiceTokens: ['존댓말'], samples: [], bundleDigest: 'b', sourceDigest: 's',
   })
   const draftPrompt = buildV2DraftSystemPrompt({ plan, voice, life: P13, mappings: [] })
   const reviewPrompt = buildV2ReviewSystemPrompt({ plan, voice, life: P13, mappings: [] })
-  check('초안 프롬프트 판 p15', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p15')
+  check('초안 프롬프트 판 p16', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p16')
   check('검수 프롬프트 판 p13', V2_REVIEW_PROMPT_VERSION === 'v2-review-p13')
   check('초안이 감상·질문·비유·일반 관찰을 허용',
     draftPrompt.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))

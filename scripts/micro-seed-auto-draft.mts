@@ -142,7 +142,6 @@ import {
 import { type LedgerStage } from '../src/lib/llm-ledger'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-safety-signals'
-import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { runClockFrom, RUN_AT_ENV } from './lib/run-clock.mjs'
 import { candidateEnvelope } from './lib/candidate-envelope.mjs'
@@ -468,32 +467,6 @@ export type SourceGround = {
   /** 판정이 남긴 한 줄 (`communityAngle`). 모르면 `''` */
   sourceAngle: string
 }
-
-/** 🔴 근거가 하나도 없으면 없는 것으로 친다 — 빈 칸을 보내 "모른다" 를 숨기지 않는다 */
-
-
-
-
-
-/**
- * 🔴 **생성된 글의 위해 축** — 이름은 판정 단계 정본(`SEMANTIC_DROP`)을 그대로 쓴다.
- *    여기 있는 것은 **모델에게 설명하는 말**뿐이고, 목록을 새로 만들지 않는다.
- */
-export const HARM_PROMPT: Readonly<Record<string, string>> = {
-  identifiablePrivatePerson: '공인이 아닌 사람이 특정된다 (실명 + 직장 · 주소 · 동호수 · 연락처)',
-  unverifiedDefamation: '확인되지 않은 범죄 · 불륜 · 질병을 **사실로 단정**한다 ("~했대요" 를 단정으로)',
-  targetedHarassmentOrThreat: '특정인을 향한 위협 · 괴롭힘 · 신상 털기 · 혐오 선동',
-  dangerousMedicalInstruction: '약 · 용량 · 진단 · 치료를 **확정적으로 지시**한다 (경험담은 해당하지 않는다)',
-  politicalCampaigning: '정치 · 진영 선동',
-  // 🔴 2026-09-16 — deterministic 판정(`micro-seed-safety-signals`)과 **같은 이름**이다
-  crisisSignal: '자해 · 자살 · 극단적 선택을 암시한다'
-    + ' (명시 표현 하나 · 또는 서로 다른 간접 갈래 둘 이상. 한 갈래만으로는 해당하지 않는다)',
-  medicalDecisionRequest: '치료 · 의료기기 · 약물의 **부작용 · 교체 · 중단 · 계속 사용 ·'
-    + ' 안전 여부 판단**을 묻는다 (겪은 이야기와 제품명만 나오는 글은 해당하지 않는다)',
-  healthEfficacyClaim: '몸 · 건강에 대한 **효능을 주장**한다'
-    + ' ("~라고 한다" 는 전언형이어도 해당한다)',
-}
-
 
 type CallOutcome<T> = { value: T | null; status: string; attemptCount: number; errorCode: string | null }
 

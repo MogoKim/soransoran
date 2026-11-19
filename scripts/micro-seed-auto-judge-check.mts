@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import {
   judgeOne, summarize, checkRegression, violatesProvenance, readReasons, readFlags,
   AUTO_DECISIONS, HUMAN_DECISIONS, HUMAN_PROVENANCE, AUTO_PROVENANCE, RULE_VERSION,
-  HARD_BLOCK, HOLD_REASONS, KNOWN_SAFETY_CODES, REASON_LABEL, SEED_AXIS, RAW_AXIS,
+  HARD_BLOCK, HOLD_REASONS, KNOWN_SAFETY_CODES, REASON_LABEL, SEED_AXIS,
   PROVEN_LANES, HOLD_ASSET_AXES, parseSemantic, hardGate, preSemanticGate, normalizeJudgeRow, holdBeforeAsking,
   SEMANTIC_RISKS, SEMANTIC_DROP, JUDGE_DROP, JUDGE_RISKS, MIN_CONFIDENCE, BODY_HEAD_MAX,
   SEMANTIC_STATUSES, PROMPT_VERSION, inputHashOf, SKIPPED,
@@ -80,15 +80,18 @@ console.log('\n① 🔴 사람 판정을 사칭하지 않는다')
 console.log('\n② 🔴 AUTO_PASS 필수 조건 — 하나라도 없으면 통과가 아니다')
 {
   check('🟢 전부 맞으면 AUTO_SEED', j().decision === 'AUTO_SEED')
-  check('🟢 raw 축이면 AUTO_RAW',
-    j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_RAW' })).decision === 'AUTO_RAW')
+  // 🔴 길이로 가르지 않는다 — 옛 사본에 남은 길이 축(100자 미만 · 긴 사연)도 통과하면 같은 글감이다
+  for (const axis of ['shortRawNoindex', 'rawOriginality']) {
+    check(`🟢 옛 사본의 축 ${axis} 도 통과하면 AUTO_SEED`, j({ axis }).decision === 'AUTO_SEED')
+    const input: JudgeInput = { sourceSite: 'navercafe:wgang', sourceArticleId: '1', axis, access: 'ok', lane: 'microSeedQuestion',
+      safetyVerdict: 'pass', safetyReasons: '', bodyLength: 40, title: '짧은 글', bodyHead: '오늘 좀 지치네요' }
+    check(`   묻기 전에 막지 않는다`, holdBeforeAsking(input).length === 0)
+  }
   const cases: [string, Partial<JudgeInput>, string][] = [
     ['access 가 ok 가 아니다', { access: 'failed' }, 'AUTO_HOLD'],
     ['access 가 비었다', { access: '' }, 'AUTO_HOLD'],
     ['safety 가 pass 가 아니다', { safetyVerdict: 'hold' }, 'AUTO_HOLD'],
     ['본문 길이 0', { bodyLength: 0 }, 'AUTO_HOLD'],
-    ['축이 SRN', { axis: 'shortRawNoindex' }, 'AUTO_HOLD'],
-    ['축이 모르는 값', { axis: 'growthIssue' }, 'AUTO_HOLD'],
     ['🔴 축이 drop', { axis: 'drop' }, 'AUTO_DROP'],
     ['🔴 hardExclude', { safetyVerdict: 'hardExclude' }, 'AUTO_DROP'],
     ['🔴 id 없음', { sourceArticleId: '' }, 'AUTO_DROP'],
@@ -99,7 +102,7 @@ console.log('\n② 🔴 AUTO_PASS 필수 조건 — 하나라도 없으면 통�
   check('🔴 어떤 조합으로도 통과가 새지 않는다', (() => {
     for (const p of [{ access: 'failed' }, { safetyVerdict: 'hold' }, { bodyLength: 0 }]) {
       const d = j(p).decision
-      if (d === 'AUTO_SEED' || d === 'AUTO_RAW') return false
+      if (d === 'AUTO_SEED') return false
     }
     return true
   })())
@@ -143,8 +146,6 @@ console.log('\n②-b 🔴 v1 오진 회귀 방지 — title · bodyHead 가 판�
       d !== null && holdBeforeAsking(d).includes('accessNotOk'))
     check('🟢 실제 본문 행은 그대로 ok', normalizeJudgeRow({ ...row, bodyHead: '화장실 청소요 오늘 할건데 미루다 미루다' }, 'detail')?.access === 'ok')
   }
-  check('🟢 raw 축이면 AUTO_RAW',
-    j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_RAW' })).decision === 'AUTO_RAW')
 }
 
 console.log('\n②-c 🔴 semantic judge — 모르면 통과가 아니다')
@@ -264,7 +265,7 @@ console.log('\n②-d 🔴 원천 판정이 막는 위험은 넷뿐이다 (2026-1
     check(`   사유가 남는다`, j({}, okSem({ risks: [risk] })).reasonCodes.includes(risk))
     check(`   어떤 confidence · 어떤 decision 으로도 통과하지 않는다`, (() => {
       for (const c of [0.71, 0.9, 1]) {
-        for (const d of ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const) {
+        for (const d of ['AUTO_SEED', 'AUTO_HOLD', 'AUTO_DROP'] as const) {
           if (j({}, okSem({ risks: [risk], confidence: c, decision: d })).decision !== 'AUTO_DROP') return false
         }
       }
@@ -303,14 +304,7 @@ console.log('\n②-d 🔴 원천 판정이 막는 위험은 넷뿐이다 (2026-1
     j({}, okSem({ decision: 'AUTO_DROP', risks: [] })).reasonCodes.includes('unexplainedModelDrop'))
   check('🔴 모델이 AUTO_HOLD 라 하면 격리한다',
     j({}, okSem({ decision: 'AUTO_HOLD' })).decision === 'AUTO_HOLD')
-  // 🔴 축은 우리가 정한다 — 모델이 통과로 답한 낱말이 우리 축과 달라도 원천을 막지 않는다.
-  //    앞판은 위험 0 · 확신 0.92 인 생활 글도 모델이 `AUTO_RAW` 라 답하면 `axisMismatch` 로 영구 HOLD 였다.
-  check('🔴 seed 축 · 위험 0 · 확신 0.92 · 모델 답 AUTO_RAW → AUTO_SEED (축 낱말로 막지 않는다)', (() => {
-    const v = j({}, okSem({ decision: 'AUTO_RAW', confidence: 0.92, risks: [] }))
-    return v.decision === 'AUTO_SEED' && v.reasonCodes.join() === 'axisSeed'
-  })())
-  check('🔴 raw 축 · 모델 답 AUTO_SEED → AUTO_RAW (축은 입력이 정한다)',
-    j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_SEED', risks: [] })).decision === 'AUTO_RAW')
+  check('🔴 통과 사유는 axisSeed 하나다', j({}, okSem({ confidence: 0.92, risks: [] })).reasonCodes.join() === 'axisSeed')
   check('🔴 사유 코드에 axisMismatch 가 없다', !Object.keys(REASON_LABEL).includes('axisMismatch'))
   check('🔴 프롬프트가 모델에게 축을 묻지 않는다 — 선택지에 AUTO_RAW 가 없고 세 답의 뜻을 적었다', (() => {
     const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
@@ -318,8 +312,13 @@ console.log('\n②-d 🔴 원천 판정이 막는 위험은 넷뿐이다 (2026-1
     return !prompt.includes('AUTO_RAW') && prompt.includes('"decision":"AUTO_SEED|AUTO_HOLD|AUTO_DROP"')
       && ['- AUTO_SEED:', '- AUTO_HOLD:', '- AUTO_DROP:'].every((x) => prompt.includes(x))
   })())
-  check('🔴 프롬프트 판만 올렸다(v4) — 규칙 판은 발행 경계의 현재 판 열쇠라 그대로다',
-    PROMPT_VERSION === 'semantic-shadow-v4' && RULE_VERSION === 'auto-judge-v4')
+  check('🔴 프롬프트 판만 올렸다 — 규칙 판은 발행 경계의 현재 판 열쇠라 그대로다',
+    (PROMPT_VERSION as string) !== 'semantic-shadow-v4' && RULE_VERSION === 'auto-judge-v4')
+  check('🔴 가입인사 · 자기소개 양식 글을 자유게시판으로 보낸다고 지시문이 말한다', (() => {
+    const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
+    const prompt = r.slice(r.indexOf('export const SYSTEM_PROMPT'), r.indexOf('export function buildPayload'))
+    return /가입인사[^\n]*FREE/.test(prompt)
+  })())
 }
 
 console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')
@@ -343,29 +342,29 @@ console.log('\n②-e 🔴 모델이 hard gate 를 되돌릴 수 없다')
 
 console.log('\n③ 🔴 위험 사유는 AUTO_DROP — 통과가 아니다')
 {
-  for (const code of ['personalIdentity', 'medicalClaim', 'promotion', 'hostility'] as const) {
+  for (const code of ['personalIdentity', 'hostility'] as const) {
     check(`🔴 ${code} → AUTO_DROP`, j({ safetyReasons: code }).decision === 'AUTO_DROP')
     check(`   사유가 남는다`, j({ safetyReasons: code }).reasonCodes.includes(code))
   }
   check('🔴 옛 정치 플래그(politicalFigure · politicalOrPublicFigure)는 막는 사유가 아니다 — 정치 낱말 사전은 지웠다',
     j({ qualityFlags: ['politicalFigure', 'politicalOrPublicFigure', 'politicalTopicLikely'] }).decision === 'AUTO_SEED')
-  // 🔴 v1 은 이걸 medicalClaim 으로 단정해 사유를 왜곡했다. 이름 그대로 의료 **또는** 광고다
-  check('🟡 medicalOrAdLikely → AUTO_HOLD (버리지 않는다)',
-    j({ qualityFlags: ['medicalOrAdLikely'] }).decision === 'AUTO_HOLD')
-  check('🔴 medicalClaim 으로 단정하지 않는다',
-    !j({ qualityFlags: ['medicalOrAdLikely'] }).reasonCodes.includes('medicalClaim'))
-  check('별도 사유 medicalOrAd 로 남는다',
-    j({ qualityFlags: ['medicalOrAdLikely'] }).reasonCodes.includes('medicalOrAd'))
+  // 🔴 의료 · 광고는 낱말 · 플래그로 막지 않는다 — 모델 판정이 본다
+  check('🟢 medicalOrAdLikely 플래그는 막는 사유가 아니다',
+    j({ qualityFlags: ['medicalOrAdLikely'] }).decision === 'AUTO_SEED')
+  check('🔴 옛 사본에 남은 의료 · 광고 낱말 사유는 모르는 사유(HOLD)로 읽는다 — 버리지 않는다',
+    ['medicalClaim', 'promotion', 'medicalDecisionRequest', 'healthEfficacyClaim'].every((c) =>
+      j({ safetyReasons: c }).decision === 'AUTO_HOLD' && j({ safetyReasons: c }).reasonCodes.includes('unknownReason')))
+  check('🔴 모델이 광고라고 판정하면 버린다', j({}, okSem({ risks: ['promotion'] })).decision === 'AUTO_DROP')
   check('🟢 다른 플래그는 막지 않는다',
     j({ qualityFlags: ['clickbaitTitle'] }).decision === 'AUTO_SEED')
   check('사유 코드 문자열이 `code:note` 여도 읽는다',
-    j({ safetyReasons: 'promotion:홍보 어휘' }).decision === 'AUTO_DROP')
+    j({ safetyReasons: 'hostility:집단 비하' }).decision === 'AUTO_DROP')
   check('여러 사유를 | 로 읽는다',
-    readReasons('hostility|promotion').length === 2)
+    readReasons('hostility|personalIdentity').length === 2)
   check('빈 문자열은 사유 0', readReasons('').length === 0)
   check('플래그 → 사유는 옮기기만 한다 — 정치 플래그는 사유가 아니다',
     readFlags(['politicalFigure', 'politicalFigureMention']).length === 0)
-  check('🔴 의료와 광고를 합치지 않는다', readFlags(['medicalOrAdLikely']).join(',') === 'medicalOrAd')
+  check('🟢 의료·광고 플래그는 사유가 아니다', readFlags(['medicalOrAdLikely']).length === 0)
 }
 
 console.log('\n④ 🔴 모르는 사유는 통과가 아니라 격리다')
@@ -374,7 +373,9 @@ console.log('\n④ 🔴 모르는 사유는 통과가 아니라 격리다')
   check('🔴 모르는 사유 → AUTO_HOLD', r.decision === 'AUTO_HOLD')
   check('unknownReason 으로 기록된다', r.reasonCodes.includes('unknownReason'))
   check('🔴 규칙이 모르는 위험이 통과하지 않는다', r.decision !== 'AUTO_SEED')
-  check('아는 사유 목록이 12종 — 언어 핏(hanjaLanguageFit) 포함', KNOWN_SAFETY_CODES.length === 12)
+  check('아는 사유 목록은 수집 필터가 지금 내는 8종이다 — 의료·광고 낱말 사유는 없다',
+    KNOWN_SAFETY_CODES.length === 8 && KNOWN_SAFETY_CODES.includes('hanjaLanguageFit')
+    && !['medicalClaim', 'promotion', 'medicalDecisionRequest', 'healthEfficacyClaim'].some((c) => KNOWN_SAFETY_CODES.includes(c)))
   check('🟡 격리 사유는 버리지 않는다 — 사람이 보면 통과할 수도 있다',
     j({ safetyReasons: 'visualDependent' }).decision === 'AUTO_HOLD')
   check('volatile 도 격리 (drop 아님)',
@@ -406,12 +407,12 @@ console.log('\n⑤ 회귀 대조 — 🔴 false pass 가 0이어야 한다')
 
 console.log('\n⑥ 집계')
 {
-  const js = [j(), j({ axis: RAW_AXIS }, okSem({ decision: 'AUTO_RAW' })),
+  const js = [j(), j({ axis: 'rawOriginality' }),
     j({ access: 'failed' }), j({ axis: 'drop' })]
   const s = summarize(js)
   check('총계', s.total === 4)
-  check('AUTO_SEED 1 · AUTO_RAW 1 · HOLD 1 · DROP 1',
-    s.AUTO_SEED === 1 && s.AUTO_RAW === 1 && s.AUTO_HOLD === 1 && s.AUTO_DROP === 1)
+  check('AUTO_SEED 2 · HOLD 1 · DROP 1',
+    s.AUTO_SEED === 2 && s.AUTO_HOLD === 1 && s.AUTO_DROP === 1)
   check('사유별로 센다', Object.keys(s.byReason).length > 0)
 }
 

@@ -398,7 +398,8 @@ async function main() {
   }
   console.log('  🔴 이미지 미수집 · 적재는 importer 가 따로 한다')
   console.log(`  ① 목록 단계 제외 : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
-  console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (적재 시점)`)
+  // 🔴 정기 수집(--thin)은 이 플래그로 보류하지 않는다 — 막는 사유는 판정의 넷이다. 전문 적재(비정기) 경로에만 닿는다
+  if (!THIN) console.log(`  ② 상세 단계 보류 : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (전문 적재 시점)`)
   console.log('')
 
   if (cafe!.stage === 'shadow') {
@@ -847,6 +848,8 @@ async function main() {
     //    수집 루프는 메모리에만 쌓고, 파일 write 는 이 지점 한 번뿐이기 때문이다.
     const thinRows: Record<string, unknown>[] = []
     let droppedThin = 0
+    /** 버린 사유별 건수 — 사유 없이 사라지는 글을 만들지 않는다 */
+    const dropReasons = new Map<string, number>()
     for (const r of collected) {
       const masked = maskSensitive(String(r.rawBody ?? ''))
       const v = classifyDetail({
@@ -860,6 +863,7 @@ async function main() {
       // 🔴 drop · hardExclude 는 얇은 사본조차 만들지 않는다
       if (!keepAfterClassify({ axis, safetyVerdict }).keep) {
         droppedThin += 1
+        for (const code of safetyReasonCodes(v.safety.reasons)) dropReasons.set(code, (dropReasons.get(code) ?? 0) + 1)
         /**
          * 🔴 **걸러진 글도 조회는 끝났다.** 여기 남기지 않으면 thin 이 없으므로
          *    다음 회차가 같은 글을 다시 연다 — 요청은 쓰이고 산출은 0 이다.
@@ -961,7 +965,9 @@ async function main() {
     console.log(`  신규 고유 ${newUnique}행 · 반복 ${repeated}행 (🔴 공급은 신규 고유 행이다)`)
     console.log(`\n  → ${thinPath} (${thinRows.length}건 · run ${RUN_ID})`)
     console.log(`  🔴 전문을 저장하지 않았다 — 마스킹 후 앞 ${BODY_HEAD_CHARS}자만 남겼다`)
-    if (droppedThin > 0) console.log(`  🔴 drop·hardExclude ${droppedThin}건은 얇은 사본도 만들지 않았다`)
+    if (droppedThin > 0) {
+      console.log(`  ▸ 버림 ${droppedThin}건 — 얇은 사본도 만들지 않았다 · 사유 ${[...dropReasons].map(([c, n]) => `${c} ${n}`).join(' · ')}`)
+    }
     console.log('  다음: micro-seed:82cook-thin-adapt 가 검수용으로 바꾼다')
   } else if (collected.length) {
     // 🔴 보류 대상도 파일에 남긴다 (Q-1). 보류는 **적재 단계**가 한다
