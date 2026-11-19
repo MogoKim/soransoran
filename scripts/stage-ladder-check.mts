@@ -31,8 +31,7 @@ import { STAGE_DECISION_V5 } from '../src/lib/stage-decision-contract'
 import { RUNTIME_PROFILES as PROFILES, RELEASE_ENV, CAPACITY_ENV, type RuntimeStage } from '../src/lib/scale-profile'
 import { consumerEnvOf, supplyHeadStartEnvOf } from '../src/lib/stage-controller'
 import { resolveScale, STAGE_DECISION_MARK_ENV } from '../src/lib/scale-runtime'
-import { PROOF_ENV_KEYS } from '../src/lib/stage-proof-day'
-import { COMMENT_STAGE_ENV } from '../src/lib/persona-comment-stage'
+import { LADDER_RULE } from '../src/lib/ladder-table'
 import { judgeNextPreflight, readyCapacityOf, forecastSupplyOf, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID, PREFLIGHT_ENV_KEYS } from './lib/stage-preflight-facts.mjs'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
@@ -95,8 +94,13 @@ const passEvidence = (stage: RuntimeStage): StageEvidenceVerdict => {
       postId: `pp-${i}`, queueId: `pq-${i}`,
       publishedAtMs: at + i * 3600_000, unattended: true, queueRows: 1, publishLogs: 1, authorPersonaId: `pa-${i}`,
       decider: 'auto' as const, release: 'STAMPED_ELIGIBLE' as const,
-      personaComments: [{ personaId: `pc-${i}`, createdAtMs: at + i * 3600_000 + 600_000, topLevel: true, provenance: 'auto' as const }],
+      // 첫 댓글 5분 뒤 + 추가 댓글 5건(화자 5명) — 결의 통과선을 넉넉히 넘는 하루
+      personaComments: [
+        { personaId: `pc-${i}-0`, createdAtMs: at + i * 3600_000 + 300_000, topLevel: true, provenance: 'auto' as const },
+        ...[1, 2, 3, 4, 5].map((k) => ({ personaId: `pc-${i}-${k}`, createdAtMs: at + i * 3600_000 + (k + 1) * 900_000, topLevel: false, provenance: 'followup' as const })),
+      ],
     })),
+    readAtMs: at + 48 * 3600_000,
     orphanPublishLogs: 0, unloggedPublishes: 0,
     audits: {
       rows: Array.from({ length: auditTarget(n) }, (_, i) => ({
@@ -133,12 +137,13 @@ const preflightFor = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): Preflig
 /** 🔴 사다리 한 번 — 정본 입력 모양 그대로 */
 const plan = (o: {
   sustained: RuntimeStage; prev: ValidatedStageDecision | null; evidence?: StageEvidenceVerdict | null
-  preflight?: PreflightVerdict | null; publishedToday?: number; decidedAt?: string
+  preflight?: PreflightVerdict | null; passDays?: number; decidedAt?: string
 }) => planStageDecision({
-  kstDate: DATE, sustainedRelease: o.sustained, previousDecision: o.prev,
+  kstDate: DATE, openStage: o.sustained, previousDecision: o.prev,
   previousEvidence: o.evidence === undefined ? null : o.evidence,
+  passDays: o.passDays ?? 0,
   nextPreflight: o.preflight === undefined ? null : o.preflight,
-  publishedToday: o.publishedToday ?? 0, decidedAt: o.decidedAt ?? AT,
+  decidedAt: o.decidedAt ?? AT,
 })
 
 /**
@@ -181,42 +186,46 @@ console.log('\n① 🔴 🔴 옛 권위가 돌아오지 않는다 — 입력원�
     && preparedStageOf('d50') === 'd50' && /const capacity = preparedStageOf\(release\)/.test(ladder))
 }
 
-console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 맞을 때만 열린다')
+console.log('\n② 🔴 🔴 올림은 연속 통과 · 관문이 모두 맞을 때만 열린다')
 {
-  const ok = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') })
-  check('🟢 전날 TRIAL d3 PASS · d5 preflight PASS · 07:00 → TRIAL d5 (기반 d3 · PASS)',
+  const TWO = LADDER_RULE.consecutiveDays
+  const ok = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO, preflight: preflightFor('d5') })
+  check('🟢 d3 연속 통과 · d5 관문 PASS → 올림 d5 (기반 d3 · PASS)',
     ok.state === 'TRIAL' && ok.release === 'd5' && ok.transition?.kind === 'TRIAL'
     && ok.transition.trialBase === 'd3' && ok.transition.basis === 'PASS' && ok.blocks.length === 0,
     `${ok.state} ${ok.release} ${JSON.stringify(ok.blocks)}`)
-  check('그때 capacity 는 다음 증명 단계(d10)', ok.capacity === 'd10')
+  check('그때 capacity 는 공개 단계의 다음 칸(d10)', ok.capacity === 'd10')
   check('그 결정은 정본 validator 를 통과한다', validateStoredDecision({ row: ok, expectKstDate: DATE }).ok)
+  const oneDay = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO - 1, preflight: preflightFor('d5') })
+  check('🔴 연속 통과가 모자라면 올리지 않는다 — 막는 block 없이 유지', oneDay.state === 'PREPARE' && oneDay.release === 'd3' && oneDay.blocks.length === 0)
 
-  const noPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: null })
-  check('🔴 preflight 가 없으면 열리지 않는다 (PREFLIGHT_UNKNOWN · 평상일 PREPARE d3 — 막힌 날 REPROVE 없음)',
+  const noPf = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO, preflight: null })
+  check('🔴 관문 판정이 없으면 올리지 않는다 (PREFLIGHT_UNKNOWN · PREPARE d3)',
     noPf.state === 'PREPARE' && noPf.release === 'd3' && noPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'), noPf.state)
-  const wrongPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d10') })
-  check('🔴 🔴 **다른 단계의 초록 preflight 로 열지 않는다**',
+  const wrongPf = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO, preflight: preflightFor('d10') })
+  check('🔴 🔴 **다른 단계의 초록 preflight 로 올리지 않는다**',
     wrongPf.state !== 'TRIAL' && wrongPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
-  // 🔴 (PR1b) 막는 원인은 hard gate 다 — 기회 부족(예측)은 더 이상 막지 않는다(㉑ 예측 경고 TRIAL 사례)
-  const failPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
+  const failPf = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO,
     preflight: preflightFor('d5', { contractValidPersonas: 1 }) })
-  check('🔴 preflight FAIL(hard gate · Persona 하한 미달) → PREFLIGHT_FAIL · 시험 없음', failPf.state !== 'TRIAL' && failPf.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
-  const unkPf = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
+  check('🔴 preflight FAIL(Persona 하한 미달) → PREFLIGHT_FAIL · 올림 없음', failPf.state !== 'TRIAL' && failPf.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'))
+  const unkPf = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO,
     preflight: preflightFor('d5', { contractValidPersonas: null }) })
-  check('🔴 🔴 **계약 유효 Persona 모름(null · 오늘 운영) → PREFLIGHT_UNKNOWN · 시험 없음**',
+  check('🔴 🔴 **계약 유효 Persona 모름(null) → PREFLIGHT_UNKNOWN · 올림 없음**',
     unkPf.state !== 'TRIAL' && unkPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
   const missingProofDate = preflightFor('d5', { proofKstDate: null })
-  check('🔴 proof 날짜를 모르면 현재 상수로 대신하지 않고 SUPPLY_COST_UNKNOWN',
-    missingProofDate.verdict === 'UNKNOWN' && missingProofDate.warnings.includes('SUPPLY_COST_UNKNOWN'),
-    JSON.stringify(missingProofDate.codes))
+  check('🔴 날짜를 모르면 현재 상수로 대신하지 않고 SUPPLY_COST_UNKNOWN 경고 — 관문은 막지 않는다',
+    missingProofDate.verdict === 'PASS' && missingProofDate.warnings.includes('SUPPLY_COST_UNKNOWN'),
+    JSON.stringify(missingProofDate.warnings))
   const baseReady = GOOD_FACTS('d5').readyCohort!
   const overrunPf = preflightFor('d5', { readyCohort: {
     ...baseReady,
     trialCost: { ...baseReady.trialCost!, overrunRequests: 1, ineligibleRequests: 1 },
   } })
-  check('🔴 예약 초과는 귀속 불명과 함께 있어도 UNKNOWN으로 약화하지 않고 SUPPLY_COST_SHORT',
-    overrunPf.verdict === 'FAIL' && overrunPf.warnings.includes('SUPPLY_COST_SHORT')
-    && !overrunPf.warnings.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(overrunPf.codes))
+  check('🔴 예약 초과는 귀속 불명과 함께 있어도 UNKNOWN으로 약화하지 않고 SUPPLY_COST_SHORT 경고',
+    overrunPf.verdict === 'PASS' && overrunPf.warnings.includes('SUPPLY_COST_SHORT')
+    && !overrunPf.warnings.includes('SUPPLY_COST_UNKNOWN'), JSON.stringify(overrunPf.warnings))
+  const costOnly = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: TWO, preflight: overrunPf })
+  check('🔴 🔴 **비용 경고만 있는 날은 올림을 막지 않는다**', costOnly.state === 'TRIAL' && costOnly.release === 'd5' && costOnly.blocks.length === 0)
   const cohortForCapacity = (capacity: number): NonNullable<PreflightFacts['readyCohort']> => {
     for (let sources = 1; sources <= 200; sources += 1) {
       for (let raw = 0; raw <= 200; raw += 1) {
@@ -237,63 +246,30 @@ console.log('\n② 🔴 🔴 시험은 계획 · preflight · 시각이 모두 �
   const shortFacts = { ...GOOD_FACTS('d20'), readyCohort: cohortForCapacity(19), slotValidReadyStock: 5 }
   const naturalShort = judgeNextPreflight('d20', shortFacts, RUNNER_GRID)
   const stockOnly = judgeNextPreflight('d20', { ...shortFacts, slotValidReadyStock: 99 }, RUNNER_GRID)
-  const recovered = judgeNextPreflight('d20', shortFacts, RUNNER_GRID, { boundedRecoveryReadyGain: 1 })
-  const invalidGain = judgeNextPreflight('d20', shortFacts, RUNNER_GRID, { boundedRecoveryReadyGain: -1 })
-  // 🔴 (PR1b) 처리량 결론은 막지 않는 예측 경고다. 복구 가산 산술은 한 릴리스 rollback 호환 경로라 그대로 검사한다
   check('🔴 실제 READY 재고 숫자만으로 자연 처리량 부족(예측 경고)을 지우지 않는다',
     naturalShort.forecastWarnings.includes('THROUGHPUT_SHORT') && stockOnly.forecastWarnings.includes('THROUGHPUT_SHORT'))
-  check('🟢 exact lineage로 검증된 복구 READY 1건만 자연 처리량 19에 더해 D20 처리량을 채운다',
-    recovered.counts.readyCapacityNatural === 19
-    && recovered.counts.readyCapacityRecoveryGain === 1
-    && recovered.counts.readyCapacity === 20
-    && !recovered.forecastWarnings.includes('THROUGHPUT_SHORT'))
-  check('🔴 음수·비정상 복구 가산은 무시하고 기존 부족 결론을 보존한다',
-    invalidGain.forecastWarnings.includes('THROUGHPUT_SHORT') && invalidGain.counts.readyCapacity === 19)
-  const late = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'),
-    decidedAt: new Date(`${DATE}T10:00:00+09:00`).toISOString() })
-  check('🔴 첫 슬롯 뒤에 결정하면 조각 하루로 시험하지 않는다 (LATE_START)',
-    late.state !== 'TRIAL' && late.blocks.some((b) => b.code === 'LATE_START'))
-  for (const d of [noPf, wrongPf, failPf, unkPf, late]) {
+  for (const d of [oneDay, noPf, wrongPf, failPf, unkPf]) {
     const v = validateStoredDecision({ row: d, expectKstDate: d.kstDate })
-    check(`막힌 결정(${d.state} ${d.release} · ${d.blocks.map((b) => b.code).join(',')})도 저장 가능한 모양이다`, v.ok, v.ok ? '' : v.reason)
+    check(`올리지 않은 결정(${d.state} ${d.release} · ${d.blocks.map((b) => b.code).join(',')})도 저장 가능한 모양이다`, v.ok, v.ok ? '' : v.reason)
   }
 }
 
-console.log('\n③ 🔴 🔴 PASS 가 아니면 같은 단계를 다시 · 바닥은 FLOOR · 기반은 지속 단계여야 한다')
+console.log('\n③ 🔴 🔴 유지 — 전날이 어떤 행이든 열린 단계를 그대로 낸다')
 {
-  const retest = plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: null, preflight: preflightFor('d3') })
-  check('🔴 전날 TRIAL d3 · 증거 없음 → TRIAL d3 재시험 (RETEST · 기반 d1)',
-    retest.state === 'TRIAL' && retest.release === 'd3' && retest.transition?.kind === 'TRIAL' && retest.transition.basis === 'RETEST')
+  const afterRaise = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: null, preflight: preflightFor('d5') })
+  check('🔴 올린 다음 날 판정이 없어도(미달·모름) 공개는 그 단계다 — 되돌리지 않는다',
+    afterRaise.state === 'PREPARE' && afterRaise.release === 'd3' && afterRaise.transition === null && afterRaise.blocks.length === 0)
   const floor = plan({ sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') })
-  check('바닥(d1) 유지 날 → d3 시험 (FLOOR)', floor.state === 'TRIAL' && floor.release === 'd3'
-    && floor.transition?.kind === 'TRIAL' && floor.transition.basis === 'FLOOR')
-  const mismatch = plan({ sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') })
-  check('🔴 🔴 **계획 기반(d3) ≠ 지속 단계(d1) → PROVENANCE_STAGE · 두 칸을 뛰지 않는다**',
-    mismatch.state !== 'TRIAL' && mismatch.release === 'd1' && mismatch.blocks.some((b) => b.code === 'PROVENANCE_STAGE'),
-    `${mismatch.state} ${mismatch.release}`)
-  const hold3 = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5') })
-  check('🔴 증명 기반 없는 d3 유지 날 · d5 preflight PASS · 첫 슬롯 전 → REPROVE d3 = 현재 단계 재인증(오르지 않는다)',
-    hold3.state === 'REPROVE' && hold3.release === 'd3' && hold3.transition === null)
-  const hold3Blocked = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { contractValidPersonas: 1 }) })
-  check('🔴 🔴 증거 없는 d3 유지 날 · d5 preflight 막힘 → 평상일 PREPARE d3 (REPROVE 아님 · 0..3)',
-    hold3Blocked.state === 'PREPARE' && hold3Blocked.release === 'd3' && hold3Blocked.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
-    `${hold3Blocked.state} ${hold3Blocked.release}`)
-  const hold3Unk = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) })
-  check('🔴 🔴 증명 기반 없는 d3 유지 날 · d5 preflight UNKNOWN → 평상일 PREPARE d3 (REPROVE 아님)',
-    hold3Unk.state === 'PREPARE' && hold3Unk.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'), hold3Unk.state)
-  const hold3NoPf = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: null })
-  check('🔴 증거 없는 d3 유지 날 · preflight 모름 → 평상일 PREPARE d3 (PREFLIGHT_UNKNOWN)',
-    hold3NoPf.state === 'PREPARE' && hold3NoPf.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN'))
-  const hold3Late = plan({ sustained: 'd3', prev: prevDecision('d3'), preflight: preflightFor('d5'),
-    decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() })
-  check('🔴 d5 preflight PASS 여도 d3 첫 슬롯 뒤에 결정하면 재인증하지 않는다 (LATE_START · 평상일)',
-    hold3Late.state === 'PREPARE' && hold3Late.blocks.some((b) => b.code === 'LATE_START'))
-  const first = plan({ sustained: 'd1', prev: null, preflight: preflightFor('d3') })
-  check('🔴 전날 결정이 없으면 시험 없음 (첫 controller 실행일 · fail-closed)',
-    first.state !== 'TRIAL' && first.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS'))
-  check('그때 바닥은 REPROVE 가 아니라 PREPARE(다음 증명 d3 준비)', first.state === 'PREPARE' && first.capacity === 'd3')
-  const pinned = plan({ sustained: 'd1', prev: null, publishedToday: 3 })
-  check('🔴 오늘 이미 d1 목표보다 많이 냈으면 그날 고정 (dayPinned)', pinned.dayPinned === true)
+  check('바닥(d1)도 같은 규칙이다 — 연속 통과 없이는 d3 로 올리지 않는다', floor.state === 'PREPARE' && floor.release === 'd1')
+  const first = plan({ sustained: 'd1', prev: null, passDays: LADDER_RULE.consecutiveDays, preflight: preflightFor('d3') })
+  check('🔴 전날 결정이 없으면 올리지 않는다 (첫 controller 실행일 · fail-closed)', first.state === 'PREPARE' && first.release === 'd1' && first.capacity === 'd3')
+  const twoDaysAgo = plan({ sustained: 'd1', prev: prevDecision('d1', { kstDate: previousKstDate(PREV_DATE)! }),
+    passDays: LADDER_RULE.consecutiveDays, preflight: preflightFor('d3') })
+  check('🔴 인접하지 않은 전날 행으로는 올리지 않는다', twoDaysAgo.state !== 'TRIAL' && twoDaysAgo.release === 'd1')
+  const top = plan({ sustained: 'd50', prev: prevDecision('d50'), passDays: LADDER_RULE.consecutiveDays })
+  check('맨 위 단계는 연속 통과해도 HOLD d50', top.state === 'HOLD' && top.release === 'd50' && top.capacity === 'd50')
+  check('🔴 사다리는 REPROVE · 시험 계획 · 증명일을 만들지 않는다',
+    !/REPROVE|RETEST|FLOOR|trialPlan|LATE_START|PROVENANCE_/.test(readFileSync('src/lib/stage-ladder.ts', 'utf-8').split('\n').filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')))
 }
 
 console.log('\n⑩ 🔴 writer · 동시성 · rollback · 🔴 세 지점 전부 검증')
@@ -523,34 +499,37 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
       readFileSync('src/lib/stage-decision-store.ts', 'utf-8')))
 }
 
-console.log('\n⑮ 🔴 🔴 trialBase 는 전날 실제 결정에서만 온다')
+console.log('\n⑮ 🔴 🔴 올림의 기반은 전날 실제 결정에서만 온다')
 {
-  const hasPrev = (d: ReturnType<typeof plan>) => d.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS')
-  const twoDays = plan({ sustained: 'd1', prev: prevDecision('d1', { kstDate: previousKstDate(PREV_DATE)! }), preflight: preflightFor('d3') })
-  check('🔴 🔴 **이틀 전 결정이면 차단**', twoDays.state !== 'TRIAL' && hasPrev(twoDays))
-  const oldVer = plan({ sustained: 'd1', prev: prevDecision('d1', { contractVersion: 'stage-decision-v3' as never }), preflight: preflightFor('d3') })
-  check('🔴 🔴 **모르는 contractVersion 이면 차단 (validator 가 거절 → 결정 없음)**', oldVer.state !== 'TRIAL' && hasPrev(oldVer))
-  const notController = plan({ sustained: 'd1', prev: prevDecision('d1', { decidedBy: 'publish' }), preflight: preflightFor('d3') })
-  check('🔴 🔴 **writer 가 controller 가 아니면 차단**', notController.state !== 'TRIAL' && hasPrev(notController))
-  const bigJump = plan({ sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d10') })
-  check('🔴 🔴 **전날 d3 PASS 인데 d10 preflight 를 넘겨도 d10 은 열리지 않는다 (다음 칸은 d5)**',
+  const held = (d: ReturnType<typeof plan>) => d.state !== 'TRIAL' && d.release === 'd1'
+  const PASSED = LADDER_RULE.consecutiveDays
+  check('🔴 기준선 — 멀쩡한 전날 d1 결정 · 연속 통과면 d3 로 올린다',
+    plan({ sustained: 'd1', prev: prevDecision('d1'), passDays: PASSED, preflight: preflightFor('d3') }).release === 'd3')
+  const twoDays = plan({ sustained: 'd1', prev: prevDecision('d1', { kstDate: previousKstDate(PREV_DATE)! }), passDays: PASSED, preflight: preflightFor('d3') })
+  check('🔴 🔴 **이틀 전 결정이면 올리지 않는다**', held(twoDays))
+  const oldVer = plan({ sustained: 'd1', prev: prevDecision('d1', { contractVersion: 'stage-decision-v3' as never }), passDays: PASSED, preflight: preflightFor('d3') })
+  check('🔴 🔴 **모르는 contractVersion 이면 올리지 않는다 (validator 가 거절 → 결정 없음)**', held(oldVer))
+  const notController = plan({ sustained: 'd1', prev: prevDecision('d1', { decidedBy: 'publish' }), passDays: PASSED, preflight: preflightFor('d3') })
+  check('🔴 🔴 **writer 가 controller 가 아니면 올리지 않는다**', held(notController))
+  const bigJump = plan({ sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: PASSED, preflight: preflightFor('d10') })
+  check('🔴 🔴 **d3 연속 통과인데 d10 preflight 를 넘겨도 d10 은 열리지 않는다 (다음 칸은 d5)**',
     bigJump.release !== 'd10' && bigJump.state !== 'TRIAL')
   check('🔴 정본은 전날 결정이다 — env 문자열에서 기반을 만들지 않는다',
     !/trialBase[^\n]*SORAN_RELEASE_STAGE/.test(readFileSync('src/lib/stage-ladder.ts', 'utf-8')))
   check('🔴 다음 칸 계산은 정본 하나다 — 러너 단계 위(d10 → d20 · d50 → 없음)', nextStage('d3') === 'd5' && nextStage('d10') === 'd20' && nextStage('d50') === null)
 }
 
-console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 열리면 안 된다')
+console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 올리면 안 된다')
 {
   const go = (prev: ValidatedStageDecision | null) =>
-    plan({ sustained: 'd3', prev, evidence: prev === null ? null : passEvidence('d3'), preflight: preflightFor('d5') })
-  check('🔴 기준선 — 멀쩡한 전날 TRIAL d3 결정이면 열린다', go(prevTrial('d1', 'd3')).state === 'TRIAL')
+    plan({ sustained: 'd3', prev, evidence: prev === null ? null : passEvidence('d3'), passDays: LADDER_RULE.consecutiveDays, preflight: preflightFor('d5') })
+  check('🔴 기준선 — 멀쩡한 전날 d3 결정이면 올린다', go(prevDecision('d3')).state === 'TRIAL')
   const rot = (label: string, o: Record<string, unknown>, want: string) => {
     const v = validateStoredDecision({ row: prevRow('d3', o), expectKstDate: PREV_DATE })
     check(`🔴 🔴 **${label} — 저장 검증이 거절한다**`, !v.ok && v.reason.includes(want), v.ok ? '🔴 통과해 버림' : v.reason)
     const d = go(v.ok ? v.decision : null)
-    check(`🔴 🔴 **${label} — 그래서 시험이 열리지 않는다**`,
-      d.state !== 'TRIAL' && d.blocks.some((b) => b.code === 'PROVENANCE_PREVIOUS'),
+    check(`🔴 🔴 **${label} — 그래서 올리지 않는다**`,
+      d.state !== 'TRIAL' && d.release === 'd3',
       `${d.state} release=${d.release} blocks=${JSON.stringify(d.blocks.map((b) => b.code))}`)
   }
   rot('전날 준비 단계 < 공개', { capacity: 'd1' }, '준비 단계')
@@ -902,30 +881,26 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
   const at = (label: string, i: PlanInput): { label: string; pf: PreflightVerdict | null; d: ReturnType<typeof planStageDecision> } =>
     ({ label, pf: i.preflight ?? null, d: plan(i) })
   const cases = [
-    at('TRIAL (전날 d3 PASS → 오늘 d5)', { sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }),
-    // 🔴 예측 경고(기회·처리량)만 있는 날도 TRIAL 이 열리고, 경고는 결정 행의 v6 supply 에 남는다 (PR1b)
-    at('TRIAL + 예측 경고 (기회 모름 · 처리량 부족)', {
-      sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'),
+    at('올림 (d3 연속 통과 → 오늘 d5)', { sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: 2, preflight: preflightFor('d5') }),
+    // 🔴 예측 경고(기회·처리량)만 있는 날도 올리고, 경고는 결정 행의 v6 supply 에 남는다
+    at('올림 + 예측 경고 (기회 모름 · 처리량 부족)', {
+      sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: 2,
       preflight: preflightFor('d5', { slotValidOpportunities: null, readyCohort: { ...GOOD_FACTS('d5').readyCohort!, sources: 4000 } }),
     }),
-    at('TRIAL RETEST (d3)', { sustained: 'd1', prev: prevTrial('d1', 'd3'), preflight: preflightFor('d3') }),
-    at('TRIAL FLOOR (d1 → d3)', { sustained: 'd1', prev: prevDecision('d1'), preflight: preflightFor('d3') }),
-    at('평상일 PREPARE (preflight UNKNOWN)', { sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5', { contractValidPersonas: null }) }),
-    at('평상일 PREPARE (증거 없는 d5 유지 날 · preflight 없음)', { sustained: 'd5', prev: prevDecision('d5') }),
-    at('REPROVE (증명 기반 없는 d5 유지 날 · d10 preflight PASS · 현재 단계 재인증)', { sustained: 'd5', prev: prevDecision('d5'), preflight: preflightFor('d10') }),
-    at('PREPARE (전날 결정 없음)', { sustained: 'd1', prev: null }),
-    at('PROVENANCE_STAGE (기반 ≠ 지속)', { sustained: 'd1', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5') }),
-    at('LATE_START', { sustained: 'd3', prev: prevTrial('d1', 'd3'), evidence: passEvidence('d3'), preflight: preflightFor('d5'), decidedAt: new Date(`${DATE}T21:00:00+09:00`).toISOString() }),
-    at('맨 위 d50 유지', { sustained: 'd50', prev: prevDecision('d50') }),
+    at('유지 (올린 다음 날 · 판정 없음)', { sustained: 'd3', prev: prevTrial('d1', 'd3'), preflight: preflightFor('d5') }),
+    at('유지 (연속 통과 · preflight UNKNOWN)', { sustained: 'd3', prev: prevDecision('d3'), evidence: passEvidence('d3'), passDays: 2, preflight: preflightFor('d5', { contractValidPersonas: null }) }),
+    at('유지 (d5 · preflight 없음)', { sustained: 'd5', prev: prevDecision('d5') }),
+    at('유지 (전날 결정 없음)', { sustained: 'd1', prev: null }),
+    at('맨 위 d50 유지', { sustained: 'd50', prev: prevDecision('d50'), passDays: 2 }),
   ]
   const forecastTrial = cases[1]!
-  check('🔴 🔴 **예측 경고만 있는 날 TRIAL 이 열리고 경고가 supply 에 남는다**',
+  check('🔴 🔴 **예측 경고만 있는 날에도 올리고 경고가 supply 에 남는다**',
     forecastTrial.d.state === 'TRIAL' && forecastTrial.d.supply !== null && 'forecastWarnings' in forecastTrial.d.supply
     && forecastTrial.d.supply.forecastWarnings.includes('OPPORTUNITY_UNKNOWN') && forecastTrial.d.supply.forecastWarnings.includes('THROUGHPUT_SHORT'),
     JSON.stringify({ s: forecastTrial.d.state, supply: forecastTrial.d.supply }))
   const states = new Set(cases.map((c) => c.d.state))
   check('🔴 시나리오가 여러 상태를 실제로 만든다 — 한 가지만 보고 통과시키지 않는다',
-    states.has('TRIAL') && states.has('REPROVE') && states.has('PREPARE'), [...states].join(','))
+    states.has('TRIAL') && states.has('HOLD') && states.has('PREPARE'), [...states].join(','))
   for (const c of cases) {
     const v = validateStoredDecision({ row: c.d, expectKstDate: DATE })
     check(`🔴 🔴 **${c.label} → state=${c.d.state} · validator 통과**`,
@@ -1084,8 +1059,8 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
   const headTrial = await headOf(prevRow('d30', {
     state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd20', previousKstDate: previousKstDate(PREV_DATE), target: 'd30', basis: 'PASS' },
   }))
-  check('🔴 🔴 **전날이 시험일(TRIAL d20→d30)이면 미리 사기 단계는 시험 대상 d30 이 아니라 기반 d20 — 시험 결과를 미리 믿지 않는다**',
-    headTrial.ok && headTrial.stage === 'd20' && headTrial.previousKstDate === PREV_DATE, JSON.stringify(headTrial))
+  check('🔴 🔴 **전날이 올린 날(TRIAL d20→d30)이면 미리 사기 단계는 그 공개 단계 d30 — 사다리는 미달이어도 되돌리지 않는다**',
+    headTrial.ok && headTrial.stage === 'd30' && headTrial.previousKstDate === PREV_DATE, JSON.stringify(headTrial))
   const headPlain = await headOf(prevRow('d20'))
   check('🔴 전날이 평상일이면 그날 공개 단계 그대로(d20)', headPlain.ok && headPlain.stage === 'd20', JSON.stringify(headPlain))
   const headNone = await headOf(null)
@@ -1093,13 +1068,13 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
   const headWrongDay = await headOf({ ...(prevRow('d20') as Record<string, unknown>), kstDate: DATE })
   check('🔴 🔴 **전날 행이 없거나 · 깨졌거나 · 다른 날짜면 미리 사지 않는다(ok:false → safest)**',
     !headNone.ok && !headBroken.ok && !headWrongDay.ok, JSON.stringify([headNone, headBroken, headWrongDay]))
-  check('🔴 🔴 **미리 사기 env — 두 단계 칸은 전날이 지킨 단계 · 표식은 전날 결정 날짜 · 증명일 칸은 빈 값(증명일로 돌지 않는다)**', (() => {
+  check('🔴 🔴 **미리 사기 env — 두 단계 칸은 전날 공개 단계 · 표식은 전날 결정 날짜 · 그 밖의 칸은 없다**', (() => {
     if (!headTrial.ok) return false
     const env = supplyHeadStartEnvOf(headTrial)
     const scale = resolveScale(env)
-    return env[RELEASE_ENV] === 'd20' && env[CAPACITY_ENV] === 'd20' && env[STAGE_DECISION_MARK_ENV] === PREV_DATE
-      && PROOF_ENV_KEYS.every((k) => env[k] === '')
-      && scale.releaseStage === 'd20' && scale.capacityStage === 'd20' && scale.source === 'env'
+    return env[RELEASE_ENV] === 'd30' && env[CAPACITY_ENV] === 'd30' && env[STAGE_DECISION_MARK_ENV] === PREV_DATE
+      && Object.keys(env).length === 3
+      && scale.releaseStage === 'd30' && scale.capacityStage === 'd30' && scale.source === 'env'
   })())
   check('🔴 🔴 **미리 사기는 공급 · "그날 결정이 아직 없다" 한 갈래뿐 — 발행·댓글 · 깨진 행 · kill switch 는 그대로 safest**', (() => {
     const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
@@ -1109,27 +1084,22 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
       && /if \(head\.ok\) \{\s+overrides = supplyHeadStartEnvOf\(head\)/.test(exec)
       && !/stageDecision\.(create|update|upsert)|insert\(/.test(exec)
   })())
-  check('🔴 🔴 **controller 단계 결정은 기존 허용 env만 읽고 복구 worker env 상속은 권위가 아니다**', (() => {
+  check('🔴 🔴 **controller 단계 결정은 허용된 env 키만 읽고 process.env 를 직접 보지 않는다**', (() => {
     const code = readFileSync('scripts/stage-controller.mts', 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n')
     // 🔴 실제로 메모리에 올리는 키 전부 — readEnvKeys 의 인자를 그대로 모은다
     const args = [...code.matchAll(/readEnvKeys\(([^)]*)\)/g)].map((m) => m[1]!.trim())
     const ARG_KEYS: Record<string, readonly string[]> = {
       '[CONTROLLER_ENV]': [CONTROLLER_ENV],
-      // 댓글 상한(글당 댓글 수)을 정하는 값이다 — 공개 단계 입력이 아니다
-      '[COMMENT_STAGE_ENV]': [COMMENT_STAGE_ENV],
       // preflight 의 자동 READY 스위치 · 예산 키
       PREFLIGHT_ENV_KEYS,
     }
     if (args.length === 0 || !args.every((a) => a in ARG_KEYS)) return false
     const keys = args.flatMap((a) => ARG_KEYS[a]!)
     const FORBIDDEN = [RELEASE_ENV, CAPACITY_ENV]
-    const workerEnv = /env: process\.env, detached: true, stdio: \['ignore', logFd, logFd\]/.test(code)
-    const withoutWorkerEnv = code.replace('env: process.env', '')
     return keys.includes(CONTROLLER_ENV)
       && !keys.some((k) => FORBIDDEN.includes(k) || /CANARY|WINDOW/.test(k))
-      && workerEnv
-      && !/process\.env/.test(withoutWorkerEnv)
+      && !/process\.env/.test(code)
       && !FORBIDDEN.some((k) => code.includes(k)) && !/\b(RELEASE_ENV|CAPACITY_ENV)\b/.test(code)
   })())
   /**
@@ -1224,9 +1194,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     && /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/.test(runnerCode)
     // 🔴 (2026-09-30) 교체 루프 — 만료된 행만 뺀 같은 조립 결과(view)로 다시 계획한다
     && /const view = excluded\.size === 0 \? stock : \{/.test(runnerCode)
-    && /planPublishBatch\(\{ loaded: view, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runnerCode)
-    // 🔴 (2026-09-29) 증명일 필요 수도 같은 조립 결과(stock.autoTargetsToday)와 consumer env 에서만 나온다
-    && /const proofAutoMissing = autoProofNeeded\(proofDay, stock\.autoTargetsToday \?\? 0\)/.test(runnerCode),
+    && /planPublishBatch\(\{ loaded: view, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runnerCode),
     runnerCode.split('\n').filter((l) => l.includes('stock.')).slice(0, 6).join(' | '))
   check('🔴 🔴 **러너 안에 별도 조립이 남아 있지 않다**',
     !/selectAutoTargets\(rows,/.test(runner)

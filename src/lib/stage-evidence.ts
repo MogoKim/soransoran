@@ -337,8 +337,8 @@ export type EvidencePost = {
   queueId: string | null
   /** 공개 시각(발행 기록 시각) — 첫 댓글 창·대화 마감·수집→공개의 기준 */
   publishedAtMs: number
-  /** 원천을 수집한 시각(큐의 원문 증거 `capturedAt`) — 못 읽었으면 null */
-  capturedAtMs: number | null
+  /** 원천을 수집한 시각(큐의 원문 증거 `capturedAt`) — 못 읽었으면 없다 */
+  capturedAtMs?: number | null
   /** 무인 러너 표식이 있는 발행 기록인가 */
   unattended: boolean
   /** 이 글을 가리키는 Queue 행 수 — 1 이어야 한다 */
@@ -515,8 +515,9 @@ export function judgeEvidenceForTarget<S extends string>(
     }
 
     // ④ 수집→공개 — `gate` 가 꺼져 있는 동안은 재고 찍기만 한다
-    const lags = autoTargets.filter((p) => p.capturedAtMs !== null && p.capturedAtMs <= p.publishedAtMs)
-      .map((p) => (p.publishedAtMs - (p.capturedAtMs as number)) / 3_600_000)
+    const lags = autoTargets.flatMap((p) => (
+      p.capturedAtMs === null || p.capturedAtMs === undefined || p.capturedAtMs > p.publishedAtMs
+        ? [] : [(p.publishedAtMs - p.capturedAtMs) / 3_600_000]))
     const lagKnown = lags.length > 0 && lags.length >= n * LADDER_RULE.collectKnownShareMin
     counts.collectKnown = lags.length
     if (lagKnown) counts.collectToPublishMedianH = round2(medianOf(lags))

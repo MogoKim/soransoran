@@ -153,7 +153,8 @@ export async function readSupplyHeadStart(io: {
   const v = io.validate(row)
   if (!v.ok) return { ok: false, reason: `전날 결정 행이 깨졌다 — ${v.reason}` }
   const d = v.decision
-  const stage = d.state === 'TRIAL' && d.transition?.kind === 'TRIAL' ? d.transition.trialBase : d.release
+  // 전날 공개 단계 그대로다. 올린 날(TRIAL)도 그 단계다 — 판정이 미달이어도 사다리는 되돌리지 않는다
+  const stage = d.release
   return { ok: true, stage, previousKstDate: d.kstDate }
 }
 
