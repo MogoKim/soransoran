@@ -1147,7 +1147,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     shaOf({ reactionType: 'other' }) === 'ea9f95f7cd19' && shaOf({ reactionType: 'experience' }) === '72a2ce655183'
     && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '47e61a85835f',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
-  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true }
+  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
   check('⑮ 🔴 자리 — 길이를 정해 주고, 자기 사실과 가벼운 일상 경험을 말하게 한다("들려줄 이야기가 없다"가 아니다)',
     text.includes('**한 줄**') && text.includes('- 자녀 2명 (고등학생)') && text.includes('가벼운 일상 경험')
@@ -1157,6 +1157,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && !JSON.stringify(built({ reactionType: 'experience', seat: { ...seat, menopauseExperienced: true } })).includes('갱년기를 직접 겪은 것처럼'))
   check('⑮ 🔴 답글 자리만 — 앞 댓글을 되받지 않게 한다(메아리 방지)',
     text.includes('되받아 쓰지 않습니다') && !JSON.stringify(built({ reactionType: 'other', seat: { ...seat, reply: false } })).includes('되받아 쓰지 않습니다'))
+  // 🔴 글쓴이가 자기 글에 답하는 자리 — 관문이 자기 글을 근거로 보는 것과 같은 말을 프롬프트가 한다
+  const own = JSON.stringify(built({ reactionType: 'experience', seat: { ...seat, ownPost: true } }))
+  check('⑮ 🔴 글쓴이 답글 — 이 글이 자기 글이라고 알리고, "당신에 대한 사실"에 이 글을 넣고, 전해 듣는 말투를 막는다',
+    own.includes('당신이 직접 쓴 글') && own.includes(`지금 답하는 이 글(「${post.title}」)은 내가 쓴 글이다`) && own.includes('남에게 들은 말투로 옮기지 않습니다'))
+  check('⑮ 🔴 글쓴이 답글 — 남의 글에나 맞는 지시("한 조각도 그대로 쓰지 않는다" · "주변에서 봤다" · "윗글에 직접 반응")는 받지 않는다',
+    !own.includes('한 조각도 그대로 쓰지 않습니다') && !own.includes('주변에서 봤다') && !own.includes('윗글에 직접 반응')
+    && own.includes('이 글에 쓴 것 밖으로'))
+  check('⑮ 🔴 남의 글에 다는 자리 — 자기 글 절이 붙지 않고 옮기지 않기 지시는 그대로다',
+    !text.includes('당신이 직접 쓴 글') && !text.includes('내가 쓴 글이다') && text.includes('한 조각도 그대로 쓰지 않습니다') && text.includes('주변에서 봤다'))
   const lengths = (['short', 'normal', 'long'] as const).map((length) => JSON.stringify(built({ reactionType: 'other', seat: { ...seat, length } })))
   check('⑮ 길이 세 등급이 서로 다른 지시로 나간다', lengths[0]!.includes('한 줄') && lengths[1]!.includes('한두 문장') && lengths[2]!.includes('서너 문장') && new Set(lengths).size === 3)
   const facts = selfFactsOf({

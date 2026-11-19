@@ -63,7 +63,7 @@ export function toPromptPost(input: CommentInput): PromptTargetPost {
     ...(input.post.replyToDigest === undefined
       ? []
       : ['', `[이 댓글에 이어서 답합니다]\n- ${input.post.replyToDigest}`]),
-    // 🔴 글쓴이 답글 자리만 — 남의 글에 단 댓글처럼 말하지 않게 한다
+    // 🔴 글쓴이 답글 자리만 — 본문 바로 곁에서도 한 번 더 말한다(지시는 system 쪽 `seat.ownPost` 절이 정본이다)
     ...(input.post.authorReply === true
       ? ['', '[이 글은 당신이 쓴 글입니다 — 글쓴이로서 위 댓글에 답합니다. 글에 없는 사실을 새로 더하지 않습니다]']
       : []),
@@ -130,7 +130,7 @@ export function buildPromptFromInput(
     // 🔴 추가 댓글만 — 첫 댓글 입력에는 이 칸이 없어 프롬프트가 한 글자도 바뀌지 않는다
     ...(input.post.threadSeat === undefined
       ? {}
-      : { seat: { ...input.post.threadSeat, reply: input.post.replyToDigest !== undefined } }),
+      : { seat: { ...input.post.threadSeat, reply: input.post.replyToDigest !== undefined, ownPost: input.post.authorReply === true } }),
   })
 }
 
