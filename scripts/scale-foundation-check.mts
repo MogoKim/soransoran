@@ -392,7 +392,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   // 🔴 (2026-10-11 Batch A2) 공급 수요 · 화자 여력은 가까운 지평(release 오늘 남은 슬롯 + 다음 첫 기회) 하나다.
   //    capacity(다음 증명 단계)는 controller preflight 의 눈금이지 오늘 생산량이 아니다
   check('G 🔴 공급 러너는 가까운 수요 지평(release)으로 화자 여력 · JIT 슬롯을 만든다 — capacity 프로필을 쓰지 않는다',
-    !/scale\.capacityProfile/.test(users['supply-process']) && /upcomingSlots\(\{ now: opts\.now, publishedToday: loaded\.publishedToday, release \}\)/.test(users['supply-process'])
+    !/scale\.capacityProfile/.test(users['supply-process']) && /jitCoverageOf\(\{ loaded, resolved: \{ \.\.\.view\.resolved, scale: opts\.scale \} \}, opts\.now\)/.test(users['supply-process'])
     && !/scale\.capacityProfile/.test(users['supply-autofill']))
   check('G 🔴 health 가 capacity 와 release 를 따로 보여 준다',
     /capacity: \{/.test(users['supply-health']) && /release: \{/.test(users['supply-health']))

@@ -18,9 +18,8 @@ export type SpeakerLoadRow = {
   /** 이미 READY 재고에 있는 이 화자의 글 수 */
   readyCount: number
   /**
-   * 🔴 **생성 시도 여력** (speaker-attempt-v1) — 공개 자리 몫(`openDays`)과 다른 값이다.
-   *    지평 안에서 혼자 판정해 발행 자격이 있는 날이 있고 WIP 를 뺀 뒤 남으면 회차당 1.
-   *    옛 파일에는 없다(`undefined`).
+   * 🔴 **생성 시도 여력** (`planSeatWriters`) — 공개 자리 몫(`openDays`)과 다른 값이다.
+   *    이 회차가 채울 자리의 날에 쓸 수 있는 사람만 1 · 나머지는 0. 옛 파일에는 없다(`undefined`).
    */
   attemptCapacity?: number
 }

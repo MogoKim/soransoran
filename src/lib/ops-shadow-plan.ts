@@ -146,7 +146,7 @@ export type DeficitObservation = {
   at: string
   kstDate: string
   /** 운영 러너와 같은 판독(`snapshot().jit`) — 못 읽으면 null */
-  jit: { slots: number; readyFilled: number } | null
+  jit: { slots: number; readyFilled: number; writable: number } | null
   /** 적재됐지만 도장을 기다리는 자동 적격 행(곧 READY) — 못 읽으면 null */
   inFlightExpectedReady: number | null
   /** 결말 수율 상한(`snapshot().sourceYield.high`) — 모르면 null */

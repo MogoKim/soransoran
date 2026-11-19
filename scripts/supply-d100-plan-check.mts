@@ -66,7 +66,7 @@ console.log('\n② 🔴 공급 수요는 JIT 하나다 — 700 은 공급 러너
  *    "다가오는 슬롯 − eligible READY" 만큼만 만든다. 재고선은 보고 화면에서도 지웠다(①).
  */
 for (const usable of [0, 42, 100, 300, 699, 700, 5_000]) {
-  const b = judgeJitDemand({ slots: 4, readyFilled: Math.min(usable, 4) })
+  const b = judgeJitDemand({ slots: 4, readyFilled: Math.min(usable, 4), writable: 4 })
   check(`🔴 형식 행 ${usable} 과 무관하게 수요는 슬롯 − READY 다`, b.upTo === 4 - Math.min(usable, 4))
 }
 check('🔴 🔴 **공급 러너 · 적재기가 STOCK_BANDS 를 읽지 않는다**', (() => {

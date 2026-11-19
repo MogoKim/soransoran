@@ -251,6 +251,7 @@
     "supply:stock-parity-db-check": "tsx scripts/supply-stock-parity-db-check.mts",
     "publish:lane-fairness-db-check": "tsx scripts/publish-lane-fairness-db-check.mts",
     "supply:wip-contract-db-check": "tsx scripts/supply-wip-contract-db-check.mts",
+    "supply:seat-writers-db-check": "tsx scripts/supply-seat-writers-db-check.mts",
     "supply:draft-deferral-e2e-db-check": "tsx scripts/supply-draft-deferral-e2e-db-check.mts",
     "supply:workset-check": "tsx scripts/supply-workset-check.mts",
     "supply:workset-e2e-check": "tsx scripts/supply-workset-e2e-check.mts",

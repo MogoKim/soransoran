@@ -316,6 +316,8 @@ const EXPECTED_D100_DB_COMMANDS = [
   'supply:stock-parity-db-check',
   'publish:lane-fairness-db-check',
   'supply:wip-contract-db-check',
+  // 2026-11-19 그 글이 나갈 날에 쓸 수 있는 사람에게만 초안 — 같은 격리 DB 한 번에서 실제 수요·여력을 잰다(새 job·step 없음)
+  'supply:seat-writers-db-check',
   // 2026-11-11 ops shadow S1/S2 격리 DB A-to-Z — 기존 D100 DB job 에 한 줄로 잇는다(새 job · 컨테이너 · step 없음)
   'ops:shadow-plan-db-check',
   'supply:draft-deferral-e2e-db-check',

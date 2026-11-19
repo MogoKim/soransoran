@@ -555,8 +555,8 @@ console.log('\n⑭ 🔴 (Lane B) 작은 표본 정규화 — 신뢰도가 없으
 // ─────────────────────────────────────────────────────────
 console.log('\n⑫ JIT 수요 · 다음 단계 preflight (D3~D100 한 함수)')
 {
-  check('🔴 수요 = 슬롯 − eligible READY', judgeJitDemand({ slots: 4, readyFilled: 1 }).upTo === 3 && judgeJitDemand({ slots: 4, readyFilled: 1 }).llm)
-  check('🔴 덮였으면 생성 0 · 모르면 파일 단계만(모델 0)', !judgeJitDemand({ slots: 3, readyFilled: 3 }).llm && !judgeJitDemand(null).llm)
+  check('🔴 수요 = 슬롯 − eligible READY', judgeJitDemand({ slots: 4, readyFilled: 1, writable: 4 }).upTo === 3 && judgeJitDemand({ slots: 4, readyFilled: 1, writable: 4 }).llm)
+  check('🔴 덮였으면 생성 0 · 모르면 파일 단계만(모델 0)', !judgeJitDemand({ slots: 3, readyFilled: 3, writable: 3 }).llm && !judgeJitDemand(null).llm)
   const facts: PreflightFacts = {
     proofKstDate: '2026-11-05',
     slotValidOpportunities: 3,

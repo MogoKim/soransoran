@@ -24,7 +24,7 @@ import {
 } from '../../src/lib/original-post-auto-publish'
 import { authoritativeGate } from '../../src/lib/auto-ready-repo'
 import { prepareCandidates } from '../../src/lib/supply-candidates'
-import { judgeVoiceMatch } from '../../src/lib/original-post-voice-match'
+import { judgeVoiceMatch, voiceOfGateResults } from '../../src/lib/original-post-voice-match'
 import {
   judgeSlotRelease, matchOpportunitiesToSlots, type ReleaseReason, type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
@@ -483,6 +483,39 @@ export type PublishPlan = {
    */
   autoDeferred: { id: string; codes: string[] }[]
   autoExceptions: { id: string; codes: string[] }[]
+  /** 🔴 슬롯 자격은 있는데 배정이 안 된 행과 그 실제 사유 — 러너 로그 · `SLOT_UNFILLED.held` 가 읽는다 */
+  unassigned: { id: string; author: string | null; codes: string[]; detail: string }[]
+}
+
+/**
+ * 🔴 **자격은 있는데 배정이 안 된 글의 실제 사유.** 기계 글은 쓴 사람 본인만 낼 수 있으므로 사유는 그 사람의
+ *    막힘이다 — 오늘 이미 씀(TOO_SOON) · 주간 상한(WEEKLY_CAP) · 생활사. 한 문구로 뭉치면 원인이 가려진다.
+ *    코드는 정본 `hardFilter` 가 낸 값 그대로다(새 코드 없음).
+ *    · 후보는 있는데 자리가 없다 → 같은 사람의 앞 글이 이 배치에서 주간 자리를 다 썼다(WEEKLY_CAP)
+ *    · 쓴 사람이 활성 Persona 에 없거나 말투 근거가 없다 → VOICE_MISMATCH
+ *    · 쓴 사람이 정해지지 않은 사람 글 → 전원의 막힘 코드를 모은다
+ */
+export function unassignedReasonOf(
+  a: BatchAssignment | undefined, author: string | null,
+): { codes: string[]; detail: string } {
+  if (a === undefined) return { codes: ['VOICE_MISMATCH'], detail: '배정 계획에 없는 행이다' }
+  if (a.eligible.length > 0) {
+    return { codes: ['WEEKLY_CAP'], detail: `후보 ${a.eligible.length}명의 주간 자리를 이 배치의 앞 글이 다 썼다` }
+  }
+  const reasons = author === null
+    ? a.blocked.flatMap((b) => b.reasons)
+    : a.blocked.find((b) => b.code === author)?.reasons ?? []
+  const own = reasons.filter((r) => r.code !== 'VOICE_MISMATCH')
+  if (own.length === 0) {
+    return { codes: ['VOICE_MISMATCH'], detail: author === null ? '낼 수 있는 Persona 가 없다' : `쓴 사람 ${author} 이(가) 활성 Persona 에 없거나 말투 근거가 없다` }
+  }
+  const codes = [...new Set(own.map((r) => r.code as string))].sort()
+  return {
+    codes,
+    detail: author === null
+      ? `낼 수 있는 Persona 가 없다 (${codes.join(' · ')})`
+      : `쓴 사람 ${author} — ${own.map((r) => `${r.code}(${r.detail})`).join(' · ')}`,
+  }
 }
 
 export function planPublishBatch(input: {
@@ -534,11 +567,17 @@ export function planPublishBatch(input: {
       /** 복구 여부는 보고용일 뿐 선택 순서를 바꾸지 않는다. */
       isRecovery: (id) => assignOf.get(id)?.recovery === true,
     })
+  const unassigned = freshOrdered
+    .filter((t) => (assignOf.get(t.id)?.assigned ?? null) === null)
+    .map((t) => {
+      const author = voiceOfGateResults(t.gateResults)?.personaCode ?? null
+      return { id: t.id, author, ...unassignedReasonOf(assignOf.get(t.id), author) }
+    })
   return {
     prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,
     nextPickedId: r.picked?.id ?? null,
     picked: r.picked, recovered: r.recovered, skipped: r.skipped, waiting: r.waiting,
-    autoDeferred, autoExceptions,
+    autoDeferred, autoExceptions, unassigned,
   }
 }
 
