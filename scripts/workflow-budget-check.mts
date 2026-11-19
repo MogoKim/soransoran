@@ -231,8 +231,12 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  * 🔴 2026-10-15: M3-A와 격리 DB 사슬을 별도 병렬 job으로 옮겼다.
  *    core 상한은 이동 뒤 실측값 68로 다시 잠근다. 도메인 job의 존재·조건·최종 집계는
  *    바로 아래 ⑤에서 별도로 검증하므로 병렬화가 검사 누락 통로가 되지 않는다.
+ * 🔴 2026-11-19: 매거진 자동 레인 게이트를 매거진 job 으로 옮겼다 (68 → 67).
+ *    2026-09-16 에 142ms 였던 이 단계가 검사가 붙으며 17분(실측 run 44424521765 · 1,029초)이 되어
+ *    core 벽시계의 절반을 썼다. 매거진 job 은 매거진·공용 경로 PR · 판정이 모호한 PR · 매일 main
+ *    정기 실행에서 돈다 — merge 로 재고가 바뀌어 깨지는 경우는 정기 실행이 잡는다.
  */
-const MAX_UNCONDITIONAL_STEPS = 68
+const MAX_UNCONDITIONAL_STEPS = 67
 
 const coreStart = lines.findIndex((l) => /^  core:\s*$/.test(l))
 const coreEnd = lines.findIndex((l, i) => i > coreStart && /^  [a-zA-Z0-9_-]+:\s*$/.test(l))
@@ -287,6 +291,8 @@ check('🔴 M3-A는 매거진 전용 job에서만 실행된다',
   /if: needs\.scope\.outputs\.magazine == 'true'/.test(magazineJob)
   && /npm run check:m3a/.test(magazineJob)
   && !/npm run check:m3a/.test(coreJob))
+check('🔴 매거진 자동 레인 게이트는 매거진 전용 job에서만 실행된다',
+  /npm run magazine:auto-check/.test(magazineJob) && !/npm run magazine:auto-check/.test(coreJob))
 check('🔴 D100 DB 사슬은 전용 job에서만 실행된다',
   /if: needs\.scope\.outputs\.d100_db == 'true'/.test(d100DbJob)
   && /bash scripts\/ci-d100-db-check\.sh/.test(d100DbJob)
