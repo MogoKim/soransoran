@@ -56,7 +56,7 @@ export function readProcessRuns(dir: string = SUPPLY_DATA_DIR): ProcessRunRead {
         ? j.runTokenShadow as Record<string, unknown> : null
       const runTokenShadow = parseRunTokenShadowTag(shadow)
       // 🔴 startedAt 이 없거나 날짜가 아니면 슬롯을 못 정한다 — 증명 슬롯에서 사라지지 않게 읽지 못한 파일로 센다
-      //    (슬롯은 파일명 벽시계로 정한다 · `proofDaySupplyHealth`)
+      //    (슬롯은 파일명 벽시계로 정한다)
       if (typeof j.startedAt !== 'string' || Number.isNaN(Date.parse(j.startedAt))) {
         unreadable += 1; unreadableFiles.push(f); continue
       }

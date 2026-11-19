@@ -210,7 +210,7 @@ export type PreflightFacts = {
   /** 다음 시험이 실제로 열릴 KST 날짜 — 날짜별 비용 계약 선택에 쓴다. 모르면 열지 않는다. */
   proofKstDate: string | null
   /**
-   * 🔴 **다음 증명일 전체 슬롯 중 slot-valid 기회로 덮이는 슬롯 수** — 정본 `judgeSlotRelease` 가 **그 슬롯 시각에**
+   * 🔴 **다음 날 전체 슬롯 중 slot-valid 기회로 덮이는 슬롯 수** — 정본 `judgeSlotRelease` 가 **그 슬롯 시각에**
    *    eligible 로 본 READY 와, 아직 초안이 없는 원천 기회(측정 수율로 할인)를 슬롯에 짝지은 수.
    *    완성 글 며칠치가 아니다 — 그 하루의 슬롯을 그 슬롯 시점 가치로 채울 수 있는가다.
    */
@@ -255,7 +255,7 @@ export type PreflightFacts = {
    *    표의 `activeFloor` 단계에서만 본다. 생략(`undefined`)·읽기 실패(`null`)는 모름이다.
    */
   stageActivePersonas?: number | null
-  /** 공급 하루 상한(USD) — env 값을 그 증명일의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 값 */
+  /** 공급 하루 상한(USD) — env 값을 그 날의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 값 */
   supplyDailyUsdCap: number | null
   /**
    * 🔴 **비용 단가 표본의 승계 후보** — 창 안에 다른 품질 계약 회차가 있을 때만 준다(없으면 `null`·생략).
@@ -325,7 +325,7 @@ export const PREFLIGHT_WARNING_CODES = ['SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOW
 export type PreflightWarningCode = (typeof PREFLIGHT_WARNING_CODES)[number]
 
 /**
- * 🔴 **필요 READY 구간 = 증명일 목표 슬롯 + 실측 손실 보충** — 처리량 · 공급 비용이 같이 쓰는 **한 계산**.
+ * 🔴 **필요 READY 구간 = 다음 날 목표 슬롯 + 실측 손실 보충** — 처리량 · 공급 비용이 같이 쓰는 **한 계산**.
  *    보충 = `ceil(목표 × 손실 ÷ 성공)` — 성공 = 공개 + 예정 슬롯에 걸린 대기. 모르는 대기는 두 극단으로 구간을 만든다:
  *      `min` 모르는 대기 전부 성공 · `max` 전부 손실. 모르는 대기 0 이면 두 값이 같다.
  *    공개 관측이 0 인 극단은 비율을 계산할 수 없어 `null`(모름)이다 — 🔴 "영원히 불능" 이 아니다.
@@ -470,7 +470,7 @@ export function judgeNextPreflight(
   const pubCap = publishCapacityOf(grid)
   counts.publishCapacity = pubCap
   if (pubCap < n) codes.add('PUBLISH_CAPACITY_SHORT')
-  // 기회 — 증명일 전체 슬롯이 슬롯 시점 가치로 덮이는가
+  // 기회 — 다음 날 전체 슬롯이 슬롯 시점 가치로 덮이는가
   if (facts.slotValidOpportunities === null) codes.add('OPPORTUNITY_UNKNOWN')
   else {
     const future = facts.futureSupplyCapacity
@@ -617,7 +617,7 @@ export function judgeNextPreflight(
 // 🔴 올림 관문 — 운영 사다리가 부른다 (모든 단계)
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 그 KST 날짜의 그 프로필 슬롯 시각 전부(UTC Date · 오름차순) — 증명일 기회 짝짓기 · JIT 수요가 쓴다 */
+/** 🔴 그 KST 날짜의 그 프로필 슬롯 시각 전부(UTC Date · 오름차순) — 다음 날 기회 짝짓기 · JIT 수요가 쓴다 */
 export function slotTimesOn(kstDate: string, p: ScaleProfile): Date[] {
   const mid = kstMidnight(new Date(`${kstDate}T12:00:00+09:00`))
   const out: Date[] = []

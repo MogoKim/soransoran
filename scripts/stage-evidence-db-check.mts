@@ -6,18 +6,15 @@
  *      `readStageEvidenceFacts` → `judgeStageEvidence` 가 PASS 를 낸다
  *   ② 행 하나씩 비틀면(댓글 없음 · 61분 · 지운 댓글 · 자기 글 댓글 · 감사 미판정/시한 초과 · 결함 yes · 표본 0 ·
  *      표본이 자동 target 밖 · 발행 기록 중복 · 같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · 사람 승인만/혼합 ·
- *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 구조 상한(`personaCommentCapFor('organic')`)까지 PASS · 상한 + 1 FAIL
+ *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 글당 댓글·타인 3명 통과선은 표(`ladder-table.ts`)에서 읽는다
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
- *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → 계획 d3 재시험 · 전날 PASS → 계획 d5 · DB write 0
- *      🔴 (2026-09-30) 실제 진입점의 preflight 는 Persona 4상태 정본을 읽는다(2026-11-13부터 `readPersonaCapacity` 한 판독 —
- *      계약 유효 · stage-active 두 칸, stage-active 는 D30 이상 시험만 본다) — 격리 DB 에는
- *      계약 유효 Persona 가 0 이라 PERSONA_SHORT(personas=0 · 제공자 연결 증명)이다 — 시험이 열리지 않고
- *         지금 단계의 평상일(PREPARE · 0..Dn)이다 — 막힌 날 REPROVE 없음(2026-10-11 Batch A1). 이것이 오늘 운영의 정직한 결과다.
+ *   ④ `scripts/stage-controller.mts --json` (dry-run · 2026-11-19 사다리 재설계) — 전날 미달이어도 공개 단계 유지 ·
+ *      PASS 이틀 연속이면 올림 계획 · 올라갈 칸의 Persona 관문(격리 DB 는 계약 유효 Persona 0)이 막으면 유지 ·
+ *      옛 되돌림 행(PREPARE 아래 칸)에서 이틀 전 열린 단계를 되찾는다 · `--evidence-date` 미리보기는 DB write 0
  *   ④-b (2026-10-11 Batch A3) 첫 댓글 증거는 Comment ↔ Queue(무인 표식) ↔ ActivityLog 세 행이 맞물린 것만 — 하나씩 비튼다
- *   ④-c (2026-10-13 · PR #704 E1) 추가 댓글 실제 행 — 추가 표식 답글 4건은 상한 1 에서도 PASS · 연결이 깨지면 대화 감사만 FAIL ·
- *      표식이 섞이면 첫 댓글 축 broken · 연결 없는 수동 Persona 댓글은 여전히 상한에 든다
- *   ⑤ REPROVE 증명일 실제 행 → PASS → 다음 날 d5 계획 · HOLD 는 아니다 · controller 진입점: 전날 TRIAL d20 → d20 재시험
- *      계획이어도 preflight(실제 DB·장부 · 계약 유효 Persona 0)가 막는다 · env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
+ *   ④-c (2026-10-13 · PR #704 E1) 추가 댓글 실제 행 — 추가 표식 답글은 글당 댓글에 든다 · 연결이 깨지면 출처 깨짐(무결성) ·
+ *      표식이 섞이면 첫 댓글 축 broken · 연결 없는 수동 Persona 댓글은 사람 손(COMMENT_MANUAL_PERSONA)이다
+ *   ⑤ 옛 행 판독 · D20 진입점 — env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
  *   ⑥ (2026-09-30 · 조항 ⑦) 발행 도장 — 도장 없는 발행 → RELEASE_CONTRACT_MISSING · 옛/ineligible 도장 → STALE_RELEASE
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0.
