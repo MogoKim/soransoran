@@ -1,17 +1,18 @@
-# 글당 Persona 댓글 최대 10 — 첫 댓글 뒤 선택적 추가 댓글·답글(0~9)
+# 글당 Persona 댓글 — 첫 댓글 뒤 대화 계획(글당 목표 평균에서 계산)
 
-작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 profile 보정 · 2026-11-04 구조 상한 보정 · 2026-11-14 H1 실패 분류·같은 회차 재선정(§4-1) · 2026-11-18 대화 계획으로 교체(§4-2) · 상태: **운영 중**(추가 댓글은 2026-10-19부터 · 대화 계획은 그 코드가 runtime 에 배포된 날부터)
+작성: 2026-10-13 · 연결: 2026-10-14(main 7b532940 통합 · 러너·발행 트랜잭션·장부·CI · E6 consumer 경유) · 2026-10-19 profile 보정 · 2026-11-04 구조 상한 보정 · 2026-11-14 H1 실패 분류·같은 회차 재선정(§4-1) · 2026-11-18 대화 계획으로 교체(§4-2) · 2026-11-19 목표 평균 하나 · 마감 8시간 · 상한 계산식(§4-3) · 상태: **운영 중**(추가 댓글은 2026-10-19부터 · 대화 계획은 그 코드가 runtime 에 배포된 날부터)
 근거 정본: D100 canon §5 "첫 댓글에서 선택적 다중 턴으로" · 답글 안전 불변식 · NORTH-STAR "이어지는 대화"
 
 ## 결론
 
 - 자동 글마다 60분 안 첫 댓글 1건 계약과 provenance는 **그대로**다. 첫 댓글 경로는 한 바이트도 다르게 돌지 않는다
   (첫 댓글 프롬프트 바이트 동일 · 첫 댓글 격리 DB 검사 39/39 · 단계 증거 격리 DB 검사 81/81).
-- 첫 댓글 뒤 글의 **대화 계획**(2~10건 · 평균 약 4.5)에 남은 자리를 한 회차에 한 글 한 건씩, 시간차를 두고 채운다. 글당 Persona 총 10건이 구조 상한이다.
+- 첫 댓글 뒤 글의 **대화 계획**(글당 목표 평균에서 나온 크기 · `src/lib/persona-thread-target.ts`)에 남은 자리를 한 회차에 한 글 한 건씩,
+  마감(공개 뒤 8시간)에서 역산한 간격으로 채운다. 글당 구조 상한은 목표 평균의 두 배다.
 - 러너 · 발행 트랜잭션 · 장부 · 단계 증거 분리 · CI 까지 실행 경로가 연결됐다. 기존 보조 Mac runtime에는
   E6 consumer 경유 plist, 스위치 `on`, 승인된 profile이 설치돼 있다(처음에는 D10 전용 · 2026-10-19부터 운영 공통).
 - 2026-10-19부터 기능 사용 가능 여부를 단계와 분리한다. 승인된 운영 공통 profile(`stage: all`)은 d5부터 D100까지
-  같은 안전 관문을 쓰고, 공개량·Persona·예산·회차 상한만 실측에 맞춰 조정한다. 모든 글을 10건으로 채우지는 않는다.
+  같은 안전 관문을 쓰고, 공개량·Persona·예산·회차 상한만 실측에 맞춰 조정한다. 모든 글을 상한으로 채우지는 않는다.
 - `SORAN_EVENT_WAKE`는 공개 직후 댓글 첫 반응만 재촉한다. 켜는 값은 `comment` 하나다. 옛 `all`은 2026-11-07 폐지되어
   모르는 값(off)으로 읽는다. 켜짐 출처는 정본 env 한 곳이다(발행 러너·고아 복구·readiness가 같은 키를 읽는다). 공급 event wake와
   공급 recovery kickstart는 실행시간 상한 없는 비예약 owner가 자연 증명과 충돌하지 않도록 닫혀 있다.
@@ -24,22 +25,23 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
   · 추가 댓글 스위치 OFF  → consumer 는 결정을 읽지 않는다(DB 0) · safest · 표식 없음
   · ON · 오늘 결정 있음   → 표식(오늘) · 공개 · 천장 env 를 넣는다
   · ON · 결정 없음·깨짐  → safest · 표식 없음
-정기 회차(followupEligibleFor: scheduled · --live · 스위치 on) 일 때만
+launchd 회차(followupEligibleFor: scheduled — 정기 · 사건 깨움 · 복구 kickstart 모두 같은 label) · --live · 스위치 on 일 때만
   runCommentLoop
     ① 첫 댓글 sweep → 생성 → sweep            ← 지금과 같다. 추가 댓글 행(comment-followup:*)은 집지 않는다
     ② followupPhase (첫 댓글 sweep 뒤 · 실패해도 첫 댓글 결과 불변)
          readFollowupContext   그날 단계(consumer 결정 env · decisionStageEnv) · 승인 profile 파일 · 대화 감사(judgeConversationAudit)
          sweepFollowupLane     남은 추가 댓글 PENDING 먼저(복구 · provider 0)
          judgeFollowupTick     스위치 · 단계 · kill switch · 첫 댓글 대기 양보 · profile · 대화 감사 · 장부(첫 댓글 몫 선차감)
-         judgeFollowupPost     출처 · 첫 댓글 · 총량 · 계획 크기 · 실회원 우선 · 현재성 · 계획의 다음 자리(followupSeatsOf) · 시간차
+         judgeFollowupPost     출처 · 첫 댓글 · 계획 크기 · 실회원 우선 · 대화 마감 · 계획의 다음 자리(followupSeatsOf) · 시간차
          orderFollowupGo → pickFollowupSeat(자리·사람 넘기기 · 생활사·No-Go 사전 확인) → buildCommentInput(replyToDigest · threadSeat)
-         runEnqueuePipeline    9관문 정본 · 장부 단계 commentFollowupGen · judgeFollowupText(중복·같은 도입)
+         runEnqueuePipeline    댓글 관문 정본(②·④ 는 2026-11-19 삭제) · 장부 단계 commentFollowupGen · judgeFollowupText(중복·같은 도입)
          PENDING 적재          dedupKey comment-followup:<글>:<순번> · editDiff.followupStamp
          sweepFollowupLane     publishCandidateTx({ followupLane: true })
 ```
 
-- **사건 깨움 · 복구 · 수동 회차는 추가 댓글을 돌지 않는다** — 첫 댓글만 한다. 정기 회차가 사건 표식을 거둬 trigger 가 `event` 가 되면 그 회차도 건너뛴다(다음 정기 회차가 본다).
-- **발행 트랜잭션**(`followupLane`)은 공통 안전 재검사(9관문 · 실회원 3건 · kill switch · provenance · 생활사 · 하루 절대 500)를 그대로 돌린다. 첫 댓글의 글당 provider 기준 5는 followup에 재적용하지 않고, followup은 승인 profile 잔량과 글당 구조 상한 10을 함께 본다. 글쓴이 아닌 Persona 는 한 글에 두 번까지 말하고(새 댓글 한 번 + 자기 댓글에 달린 답에 답글 한 번), 글쓴이 Persona 는 서로 다른 유효 대상에 답글로 최대 3회 말할 수 있다.
+- **launchd 가 연 회차는 정기 · 사건 깨움 · 복구 kickstart 모두 추가 댓글을 돈다** — 같은 label 이라 trigger 가 늘 `scheduled` 다
+  (사건 표식은 진단 칸 `absorbed` 에만 남는다). 손으로 띄운 회차(`manual`)와 dry-run 만 첫 댓글만 한다.
+- **발행 트랜잭션**(`followupLane`)은 공통 안전 재검사(댓글 관문 · 실회원 3건 · kill switch · provenance · 생활사 · 하루 절대 500)를 그대로 돌린다. 첫 댓글의 글당 provider 기준 5는 followup에 재적용하지 않고, followup은 승인 profile 잔량과 글당 구조 상한을 함께 본다. 글쓴이 아닌 Persona 는 한 글에 두 번까지 말하고(새 댓글 한 번 + 자기 댓글에 달린 답에 답글 한 번), 글쓴이 Persona 는 서로 다른 유효 대상에 답글로 최대 3회 말할 수 있다.
   그 위에 `judgeFollowupPublish` 를 더한다: 스위치·단계 재판독 · profile 재판독 · 오늘 추가 수(profile 상한) · Persona 하루 상한 · 다른 열린 후보 ·
   도장 검증 · 순번 = 지금 자리 · 최소 간격 10분 · 대상 유효성(살아 있음 · Persona 댓글 · 신고 없음 · 아직 답 없음 · 사슬 6) ·
   도장의 대상이 지금도 이 순번의 자리인지 · 정해진 사람(글쓴이 · 다시 답하는 사람)의 자리를 다른 Persona 가 쓰지 않는지.
@@ -51,13 +53,13 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 | # | 정책 | 코드 |
 |---|---|---|
 | 1 | 첫 댓글 1개 계약·provenance 유지 | 자동 출처(`auto`) 첫 댓글이 없는 글 `STOP` · 60분 안 첫 댓글 대기 글이 있으면 회차 0건 · 표식·분류는 #707 정본(`FOLLOWUP_LANE_*` · `personaCommentProvenanceOf`) · 대화 감사 FAIL·판독 불가 → 추가 0(첫 댓글은 계속) |
-| 2 | 추가 0~9 | `FOLLOWUP_EXTRA_PER_POST_MAX = 10 − 1` |
-| 3 | 모든 글을 10개로 채우지 않음 | 수량은 **글의 대화 계획**이 정한다(`src/lib/persona-thread-plan.ts` — 글 id 로 2~10건 · 평균 약 4.5). 자리마다 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해진다. 한 댓글에는 답이 하나만 달린다 |
+| 2 | 추가는 구조 상한 − 1 까지 | `FOLLOWUP_EXTRA_PER_POST_MAX = PERSONA_COMMENTS_PER_POST_MAX − 1` |
+| 3 | 모든 글을 상한으로 채우지 않음 | 수량은 **글의 대화 계획**이 정한다(`src/lib/persona-thread-plan.ts` — 글 id 와 공개 시각의 목표 평균으로 크기를 뽑는다). 자리마다 종류(글에 답 · 글쓴이 답글 · 다른 사람 답글) · 모양 · 길이 · 간격이 정해진다. 한 댓글에는 답이 하나만 달린다 |
 | 4 | 글쓴이 아닌 사람 두 번까지 · 글쓴이 제한 답글 | 글쓴이 아닌 Persona 는 그 글에 2회까지(`PERSONA_OTHER_TURNS_PER_POST_MAX`) — 두 번째는 자기 댓글에 달린 답에 답글로만. 글쓴이는 최상위 댓글 0, 서로 다른 유효 대상에 답글로 최대 3회. 정규화 일치 / bigram Jaccard ≥0.5 / 같은 도입 6자 |
 | 5 | 실회원 우선 · 추가량 축소 | 실회원 1~2건 → 추가 ≤1 · 3건 이상 → 0 · 마지막 말이 실회원이면 0 · 실회원 댓글에는 답하지 않음 |
-| 6 | 시간차 | 직전 Persona 댓글에서 계획이 정한 간격(10~90분 · 뒤 자리일수록 길다) · 발행 재검사는 최소 10분 · 한 회차 한 글 1건 · 회차 전체는 profile `runMax` · 같은 회차 같은 Persona 한 글 · 공개 24시간 뒤 종료 |
-| 7 | 한 후보의 실패가 글을 멈추지 않음 | 계획이 정한 자리가 지금 설 수 없으면 글쓴이 답글 → 다른 사람 답글 → 글에 새 댓글 순서로 넘어간다(`pickFollowupSeat`). 글쓴이 자리는 글쓴이만 선다 |
-| 8 | 글당 Persona 최대 10 · 사슬 최대 6 | `PERSONA_COMMENTS_PER_POST_MAX` · `PERSONA_REPLY_CHAIN_MAX` · 트랜잭션 `recheckBeforePublish` 도 그대로 본다 |
+| 6 | 시간차 · 마감 | 직전 Persona 댓글에서 계획이 정한 간격(마감에서 역산 · 큰 대화일수록 짧다 · 최소 10분) · 발행 재검사는 최소 10분 · 한 회차 한 글 1건 · 회차 전체는 profile `runMax` · 같은 회차 같은 Persona 한 글 · 대화 마감(공개 뒤 8시간 · `THREAD_DEADLINE_MS`) 뒤 새 자리 0 |
+| 7 | 한 후보의 실패가 글을 멈추지 않음 | 계획이 정한 자리가 지금 설 수 없으면 새 사람이 대신한다 — 글에 새 댓글 → 남의 댓글에 답글(`pickFollowupSeat`). 글쓴이 자리는 계획이 준 자리에서 글쓴이만 선다 |
+| 8 | 글당 Persona 구조 상한 · 사슬 최대 6 | `PERSONA_COMMENTS_PER_POST_MAX` · `PERSONA_REPLY_CHAIN_MAX` · 트랜잭션 `recheckBeforePublish` 도 그대로 본다 |
 | 9 | 비용 · 상한 · kill switch · 멱등 · 복구 | §3 · §4 |
 | 10 | 기본 OFF | `SORAN_PERSONA_COMMENT_FOLLOWUP=on` 정확히 그 값 · 트랜잭션도 다시 읽는다 · 이 PR 은 설정하지 않는다 |
 
@@ -72,10 +74,9 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
   그날 단계는 **consumer 가 넣은 결정 env** 로만 안다 — 정본 읽기 문 `decisionStageEnv` 결과를 `followupStageOf` 가 판정한다
   (회차·트랜잭션 같은 함수): 표식 날짜 = 오늘(KST) · 공개·천장이 정본 단계 · 공개 ≤ 천장. 아니면 단계 모름 → 0건.
   러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 이 모듈은 단계 칸 env 를 직접 읽지 않는다.
-  코드의 `FOLLOWUP_CANARY_PROFILE_CANDIDATE`(80건 · $0.16 · 3 · 3)는 승인자가 비어 있는 **후보값**이다.
-  승인자가 없으므로 이 값만으로는 0건이고, 운영 수량은 언제나 설치된 승인 profile(§9)이 정한다.
-- 구조 상한 10은 운영 예산을 확대하지 않는다. 첫 댓글 부트스트랩 계산은 기존 기준 5(첫 댓글 1 + profile 산출 기준 4),
-  하루 절대 500을 유지한다. 공유 장부 하루 상한의 기본값은 $0.20(`COMMENT_LOOP_DAILY_USD_DEFAULT`)이고 env 로 $0.50 까지 올릴 수 있다.
+  profile 의 값은 계산식 `deriveCommentScale`(§4-3)이 낸 것을 옮겨 적는다.
+- 구조 상한은 운영 예산을 확대하지 않는다. 첫 댓글 부트스트랩 계산은 글당 자리 기준 5와 하루 절대 500을 유지하고,
+  추가 댓글에는 그 기준을 쓰지 않는다. 공유 장부 하루 상한의 기본값은 $0.20(`COMMENT_LOOP_DAILY_USD_DEFAULT`)이고 env 로 $0.50 까지 올릴 수 있다.
   운영 수량은 §9 의 승인 profile 이 정하고, 바꾸려면 승인 파일을 새로 써야 한다.
 - kill switch: `PersonaGlobalSwitch` — 회차와 트랜잭션 둘 다.
 
@@ -86,7 +87,7 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - 도장은 `editDiff.followupStamp`(판 `followup-v1`) — `gateResults` 는 관문 배열이라 섞지 않는다. 사람이 고쳐 칸이 바뀌면 발행하지 않는다.
 - 첫 댓글 sweep 은 추가 댓글 행을 집지 않고, 추가 댓글 sweep 은 추가 댓글 행만 집는다 — 두 레인이 서로의 행을 닫지 않는다.
 - 적재 뒤 죽으면 다음 정기 회차가 먼저 발행한다(provider 0). 발행 뒤 다시 돌아도 Queue · ActivityLog 중복 0.
-- 놓친 회차를 메우지 않는다 — 늦으면 다음 회차에 한 건, 24시간이 지나면 끝.
+- 놓친 회차를 메우지 않는다 — 늦으면 다음 회차에 한 건, 대화 마감(공개 뒤 8시간)이 지나면 끝.
 
 ## 4-1. 실패 분류 · 최소 범위 격리 · 같은 회차 재선정 (H1 · 2026-11-14)
 
@@ -117,18 +118,29 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 ## 4-2. 대화 계획 (2026-11-18)
 
 - 계획은 `threadPlanOf(글 id)` 하나가 정한다. 저장하지 않는다 — 같은 글은 언제 다시 세워도 같은 계획이다.
-  크기 2~10(평균 약 4.5) · 자리 종류 셋 · 모양 넷(한마디 · 공감 · 되묻기 · 경험으로 답) · 길이 세 등급(한 줄 30% · 한두 문장 50% ·
-  서너 문장 20%) · 간격 10~90분.
+  크기(2 ~ 목표 평균의 두 배 · 평균 = 목표) · 자리 종류 셋 · 모양 넷(한마디 · 공감 · 되묻기 · 경험으로 답) · 길이 세 등급(한 줄 30% ·
+  한두 문장 50% · 서너 문장 20%) · 간격(마감에서 역산). 2026-11-19 부터 숫자는 `persona-thread-target` 의 목표 평균과 마감 둘이다.
 - 살아 있는 Persona 댓글 수가 계획 크기에 닿으면 그 글은 끝난다(`STOP`).
-- 자리 넘기기: 계획이 정한 종류가 먼저다. 그 자리가 설 수 없으면 글쓴이 답글 → 다른 사람 답글 → 글에 새 댓글 순서로 본다.
+- 자리 넘기기: 계획이 정한 종류가 먼저다. 그 자리가 설 수 없으면 새 사람이 대신한다(글에 새 댓글 → 남의 댓글에 답글). 글쓴이는 대신 서지 않는다.
   고른 사람이 생활사·No-Go 확인에서 막히면 같은 자리의 다음 사람으로 간다. 끝까지 없으면 실제 사유를 모아 남긴다.
-- 9관문의 개수와 순서는 그대로다. 바뀐 것은 셋이다.
+- 이때 바뀐 것은 셋이다(관문 ②·④ 는 2026-11-19 지웠다 — 대조 대상이 우리 사이트의 글·댓글이라 대화를 막았다).
   - 관문 ⑦(경험 근거)은 추가 댓글에서 가벼운 일상 경험을 허용한다. 막는 것은 근거 없는 의료 사실 · 카드가 겪는 중·겪은 뒤가
     아닌데 자기 일로 말하는 갱년기 · 카드나 자기 글이 뒷받침하지 않는 부부 불화 · 설정 모순이다. 첫 댓글은 이 허용을 받지 않는다.
   - 대화 감사(`judgeConversationAudit`)의 `FOLLOWUP_DUP_PERSONA` 는 글쓴이 아닌 사람이 세 번 이상 말했거나 새 댓글을 두 번 달았을 때 선다.
   - 발행 트랜잭션은 도장의 대상을 `followupSeatsOf` 의 자리와 대조한다.
 - 프롬프트에는 자리의 길이와 "이 사람이 자기 이야기로 말해도 되는 사실"(카드의 축 + 자기가 쓴 글 제목)이 들어간다.
 - §4-1 의 실패 분류와 격리는 그대로다.
+
+## 4-3. 목표 평균 하나 · 대화 마감 · 상한 계산식 (2026-11-19 밤 1)
+
+- 숫자는 `src/lib/persona-thread-target.ts` 의 둘이다 — 글당 목표 평균(`THREAD_TARGETS` · 공개 시각별 줄)과 대화 마감(`THREAD_DEADLINE_MS`).
+  크기 분포(2 + 이항) · 크기 상한(평균의 두 배) · 자리 종류 수 · 간격 · 글당 구조 상한(`PERSONA_COMMENTS_PER_POST_MAX`)이 여기서 나온다.
+  평균을 바꿀 때는 줄을 덧붙인다 — 있는 줄을 고치면 이미 공개된 글의 계획 크기가 바뀌어 끝난 대화에 새 자리가 열린다.
+- 간격은 마감에서 자리마다 러너 틱 하나를 떼고 크기로 나눈 평균을 0.5~1.5배로 흩는다(합 유지). 가장 긴 계획도 마감 안에 끝난다.
+  마감이 지난 글에는 새 자리를 열지 않는다(생성 · 발행 트랜잭션 · 시도 기억 창이 같은 값).
+- 상한은 `deriveCommentScale`(`src/lib/followup-profile-derive.ts`)이 하루 편수 · 글당 목표 평균 · Persona 수(조용한 Persona 는 절반)로 계산한다:
+  Persona 하루/주 · 추가 댓글 하루 건수 · 회차 · Persona 하루(= Persona 하루 상한) · 하루 USD(실측 단가 · 적재율이 있을 때).
+  운영 DB `Persona.dailyCap/weeklyCap` 은 `scripts/persona-comment-cap-apply.mts` 로, 호스트 profile 은 승인 파일로 그 값을 옮겨 적는다.
 
 ## 5. 단계 증거 분리 (D10)
 
@@ -140,11 +152,11 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 
 | 명령 | CI | 내용 |
 |---|---|---|
-| `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 시나리오 · profile 반례 · 구조 상한 10 · 글쓴이 아닌 사람 2회 · 글쓴이 답글 3회 · 계획 자리 넘기기 · 사슬 6 · 첫 댓글 프롬프트 바이트 동일 |
+| `npm run check:persona-followup` | `베스트·댓글 정책 가드` step | 순수 시나리오 · profile 반례 · 계획(평균 = 목표 · 마감 안 완주 · 큰 대화가 빠름) · 구조 선(사슬 6 · 글쓴이 3) · 글쓴이 아닌 사람 2회 · 글쓴이 답글 3회 · 계획 자리 넘기기 · 사슬 6 · 첫 댓글 프롬프트 바이트 동일 |
 | `npm run check:persona-followup-mutation` | 같은 step | 구조 상한·글쓴이 예외·한 사람 두 번 상한·profile·비용·증거를 지우거나 넓히면 잡히는지 확인 |
 | `npm run check:persona-followup-reselect` | 같은 step | H1 러너 결정 시험 — 실패 Persona 반복 0 · 같은 회차 대체 성공 · 글 실패가 다른 Persona·글을 막지 않음 · KST 자정 해제 · 일시 실패 오격리 0 · 모든 후보 실패 · 호출·비용 상한 · 결과 기록 IO 실패 · 첫 댓글 lane 규칙 불변(첫 댓글 저장소를 받으면 호출 0) · 실회원 Persona 선택 0 |
 | `npm run check:persona-followup-reselect-mutation` | 같은 step | 러너 사본에 재선정·격리·상한·중단 분기 14개를 하나씩 깨서 위 시험이 잡는지 확인 |
-| `npm run persona:followup-db-check` | 격리 Postgres step | 실제 consumer e2e · OFF 무변화 · 첫 댓글 회귀 · 정상 답글 · 총 10 상한 · 글쓴이 두 번째 답글 · 한 사람 세 번째 말 차단 · 실회원 우선 · 중복·동시 · 복구 · 장부 · 단계 증거 분리 |
+| `npm run persona:followup-db-check` | 격리 Postgres step | 실제 consumer e2e · OFF 무변화 · 첫 댓글 회귀 · 정상 답글 · 총량 상한 · 글쓴이 두 번째 답글 · 한 사람 세 번째 말 차단 · 실회원 우선 · 중복·동시 · 복구 · 장부 · 단계 증거 분리 |
 
 새 step 은 없다(무조건 step 상한 불변 — `check:workflow-budget`).
 계획 분포를 글 id 표본으로 다시 세어 보는 읽기 전용 도구는 `scripts/persona-thread-plan-replay.mts` 다.
@@ -165,7 +177,6 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 - E6 로 댓글 러너가 consumer 를 지나도 **첫 댓글은 단계 칸을 읽지 않아 그대로다**(첫 댓글 경로 import 그래프에서 단계 함수 호출 0 · 첫 댓글 격리 DB 검사 39/39).
   consumer 의 결정 읽기는 추가 댓글 스위치가 켜졌을 때만 일어난다.
 - 수량은 대화 계획과 승인 profile(하루 건수 · USD · 회차 상한)이 정한다. 대화 감사(`judgeConversationAudit`)가 같은 계약을 사후에 다시 본다.
-- 정기 회차가 사건 표식을 거두면 trigger 가 `event` 로 기록되어 그 회차는 추가 댓글을 건너뛴다. 사건이 잦은 날 추가 댓글이 적게 돌 수 있다(첫 댓글에는 영향 없음).
 - 변이 시험이 실제로 일을 했다: 실회원 댓글이 첫 댓글 뒤에 있던 우회 반례는 모든 사례가 "마지막 말 실회원" 하나로 막혀 의도한 사유를 못 보고 있었다 — 사유 단언으로 고쳤다.
   트랜잭션의 "자기 댓글 답글" 분기는 혼자서는 절대 걸리지 않는 죽은 분기라 지웠다(같은 Persona 규칙이 막는다).
 
@@ -173,8 +184,8 @@ launchd → stage-consume-exec --by=comment → persona-comment-loop --live     
 
 이 값은 기능 사용 가능 여부를 단계와 분리하는 운영 공통 profile이다. 수량과 비용은 영구값이 아니며 운영 실측으로
 조정한다. 값이 없거나 승인·판독·장부·감사 관문이 깨지면 0건(fail-closed)이다.
-아래는 2026-10-19 승인 파일이다. 2026-11-18 창업자가 하루 130건 · $0.30 · 회차 6건을 승인했다 — 승인 파일을 새로 써서 설치한 때부터
-적용되고, 설치한 변경에서 아래 블록을 그 파일 내용으로 바꾼다.
+아래는 2026-10-19 승인 파일(역사)이다. 2026-11-18 창업자 승인으로 130건 · $0.30 · 회차 6 · Persona 3 이 설치됐고, 2026-11-19 밤 1 부터는
+§4-3 계산식의 값을 옮겨 적는다(값을 이 문서에 다시 적지 않는다).
 
 ```json
 {

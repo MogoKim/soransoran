@@ -62,8 +62,8 @@ import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-wr
 
 /**
  * 🔴 **이 회차가 추가 댓글 단계를 돌 수 있는가** — 진입점은 이 함수 하나로 정한다(E6).
- *    정기 회차(`scheduled`) · `--live` · 스위치 on 만. 사건 깨움(`event`) · 복구(`recovery`) · 수동(`manual`) ·
- *    표식이 깨진 회차(`unknown`) · dry-run 은 첫 댓글만 한다. 그날 단계(결정 env)는 이 뒤 `readFollowupContext` 가 본다.
+ *    launchd 회차(`scheduled` — 정기 · 사건 깨움 · 복구 kickstart 가 같은 label 이라 모두 이 값) · `--live` · 스위치 on 만.
+ *    손으로 띄운 회차(`manual`)와 dry-run 은 첫 댓글만 한다. 그날 단계(결정 env)는 이 뒤 `readFollowupContext` 가 본다.
  */
 export function followupEligibleFor(i: {
   live: boolean; trigger: string; env: Readonly<Record<string, string | undefined>>
