@@ -364,8 +364,6 @@ export type SupplyCostEnvelopeInput = {
 }
 
 export type SupplyCostEvidence = {
-  /** 시행일 전 판정을 소급 변경하지 않기 위한 옛 하루 전체 미상 수 */
-  legacyUsageUnknownRequests: number
   /**
    * 하루 공급 장부의 중대 무결성. 늦은 준비 회차의 단순 사용량 미상·상한 소진은 제외하고,
    * 장부 판독 실패·정산 보류·예약 초과·기록 예산 초과는 bad다. 기록 예산 provenance가

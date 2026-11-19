@@ -483,6 +483,8 @@ export function judgeEvidenceForTarget<S extends string>(
 
     // ── 결 — 창이 닫힌 글만 분모에 든다. 닫힌 글이 너무 적으면 모름이다
     const enough = (closed: number): boolean => closed > 0 && closed >= n * LADDER_RULE.closedShareMin
+    // 비율 × 개수의 부동소수 오차로 통과선 위의 값이 미달이 되지 않게
+    const below = (value: number, line: number): boolean => value < line - 1e-9
     const counted = (p: EvidencePost) => p.personaComments.filter((c) => c.provenance === 'auto' || c.provenance === 'followup')
 
     // ① 첫 댓글 — 최상위 · 글쓴이 아닌 Persona · 자동 출처 · 공개 뒤 창 안
@@ -493,7 +495,7 @@ export function judgeEvidenceForTarget<S extends string>(
     counts.firstCommentOk = firstOk
     counts.firstCommentClosed = firstClosed.length
     if (n > 0 && !enough(firstClosed.length)) codes.add('TEXTURE_UNKNOWN')
-    else if (n > 0 && firstOk < firstClosed.length * LADDER_RULE.firstCommentRatio) codes.add('FIRST_COMMENT_SHORT')
+    else if (n > 0 && below(firstOk, firstClosed.length * LADDER_RULE.firstCommentRatio)) codes.add('FIRST_COMMENT_SHORT')
 
     // ② 글당 댓글 · ③ 타인 3명 — 대화 마감이 지난 글
     const talkClosed = autoTargets.filter((p) => p.publishedAtMs + THREAD_DEADLINE_MS <= facts.readAtMs)
@@ -508,8 +510,8 @@ export function judgeEvidenceForTarget<S extends string>(
       counts.commentDepthAvg = round2(total / talkClosed.length)
       counts.commentDepthFloor = round2(commentDepthFloorOf(targetMean))
       counts.threeVoicesPosts = voices
-      if (total / talkClosed.length < commentDepthFloorOf(targetMean)) codes.add('COMMENT_DEPTH_SHORT')
-      if (voices < talkClosed.length * row.threeVoicesRatio) codes.add('THREE_VOICES_SHORT')
+      if (below(total / talkClosed.length, commentDepthFloorOf(targetMean))) codes.add('COMMENT_DEPTH_SHORT')
+      if (below(voices, talkClosed.length * row.threeVoicesRatio)) codes.add('THREE_VOICES_SHORT')
     }
 
     // ④ 수집→공개 — `gate` 가 꺼져 있는 동안은 재고 찍기만 한다

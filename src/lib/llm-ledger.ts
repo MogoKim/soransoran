@@ -462,36 +462,6 @@ export function supplyProofCostObservationOf(
   return out
 }
 
-/**
- * 시행일 전 증거를 당시 계약으로 읽기 위한 하루 전체 관련 usageUnknown 수.
- * 2026-11-05 이후의 권위는 `supplyProofCostObservationOf`이며, 이 함수는 소급 방지용 legacy 값만 만든다.
- *
- *    왜 생겼나 (운영 반례). 10-16 14:15 자연 공급 회차가 Google draftGen 1건을 `usageUnknown` 으로 끝냈다
- *    (`startedAt` 은 proof day KST · 양수 reservedUsd · 뒤에 별도 `attemptId` 의 재시도가 정산됐다). 당시 canon §3.4 는
- *    증명일 자체의 운영 PASS 에 `usageUnknown=0` 을 요구했지만 `judgeCost` 는 overrun · cap · ledgerError 만 봐
- *    `health='ok'` 를 돌려줬고, stage-evidence 는 `COST_UNKNOWN` 조차 올리지 않았다 — `AUDIT_DEFECT` 로만 FAIL.
- *
- *    🔴 **계약.**
- *      · `startedAt` 의 KST 날짜가 proof day 와 같은 요청만 받는다 (장부 파일 자체가 그 날 파일이면 자동 성립).
- *      · `countTokens` 는 무료 단계라 제외한다.
- *      · `runKind === 'manual'` 은 commissioning · 손 실행이라 증거가 아니다 — 제외한다.
- *        🔴 `runKind` 가 `null`·`undefined`·`'scheduled'` 는 **관련으로 센다** (fail-closed — 모르는 소속을 안전 쪽으로).
- *      · `status === 'usageUnknown'` 인 요청만 센다. 예약은 그대로 미상 — 정산으로 바꾸지 않는다(§3.4).
- *      · 같은 `sourceKey` · 다른 `attemptId` 재시도가 뒤에 정산돼도 **원 요청**이 unknown 으로 남는 한 그 1건은 센다.
- *
- *    🔴 순수 함수. 파일 · 네트워크 · 시각 조회 0. 호출부가 그 날 KST 장부 entries 를 모아 넘긴다.
- */
-export function relevantUsageUnknownCount(entries: readonly LedgerEntry[]): number {
-  let n = 0
-  for (const e of entries) {
-    if (e.stage === 'countTokens') continue
-    if (e.status !== 'usageUnknown') continue
-    if (e.runKind === 'manual') continue
-    n += 1
-  }
-  return n
-}
-
 export function tallyOf(entries: readonly LedgerEntry[]): DayTally {
   const t: DayTally = {
     settledUsd: 0, openReservedUsd: 0, usageUnknownUsd: 0,
