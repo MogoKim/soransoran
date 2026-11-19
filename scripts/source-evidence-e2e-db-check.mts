@@ -604,7 +604,8 @@ async function main(): Promise<void> {
     const { sup } = await world('⑨-a hard gate(안전 · gate 판정)가 반응 순위보다 먼저다')
     check('공급 러너 정상 종료', sup.code === 0)
     const order = rankAt(await generated(), PUBLISH_AT)
-    const unsafe = '공동구매 진행합니다 문의는 쪽지 주세요'
+    // 🔴 낱말(광고·의료)은 수집 필터가 막지 않는다 — 결정적으로 남은 것(실제 연락처 번호)으로 hard gate 를 세운다
+    const unsafe = '공동구매 진행합니다 연락은 010-1234-5678'
     check('전제 — 그 제목은 정본 안전 판정에서 pass 가 아니다', safetyFilter({ title: unsafe }).verdict !== 'pass', safetyFilter({ title: unsafe }).verdict)
     await prisma.originalPostApprovalQueue.update({ where: { id: order[0]!.id }, data: { draftTitle: unsafe } })
     await prisma.originalPostApprovalQueue.update({ where: { id: order[1]!.id }, data: { gateVerdict: 'HOLD' } })

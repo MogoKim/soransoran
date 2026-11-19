@@ -12,11 +12,15 @@
  *    ③ 승인은 **발행이 아니다**. 이 모듈에는 publish · noindex 배포 경로가 없다.
  *
  * 🔴 **DB · Sheet · LLM · live fetch · Raw Vault 적재 · 82cook adapter 없음.**
- *    import 도 하지 않는다 — 판정 상수 하나만 detail-classify 에서 가져온다.
+ *    import 도 하지 않는다.
+ *
+ * 🟡 **새 입력이 오지 않는다.** 수집 분류(`classifyDetail`)는 길이로 가르지 않아 이 화면의 축을 더 만들지 않는다 —
+ *    이 화면은 그 전에 저장된 사본만 읽는다.
  */
-import { SHORT_RAW_MAX, type LengthBasis } from './micro-seed-detail-classify.mjs'
+import { type LengthBasis } from './micro-seed-detail-classify.mjs'
 
-export { SHORT_RAW_MAX }
+/** 이 화면이 승인 대상으로 받는 본문 길이(미만) — 이 화면 안에서만 쓰는 값이다 */
+export const SHORT_RAW_MAX = 100
 
 /** 🔴 이 화면이 다루는 유일한 축 */
 export const SRN_AXIS = 'shortRawNoindex'

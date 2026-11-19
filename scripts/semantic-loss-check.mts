@@ -22,7 +22,7 @@ import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult,
 } from './lib/content-core-run.mjs'
 import {
-  REVIEW_FAMILY_SPECIFICS_LINES, REVIEW_SEVERITY_LINES, buildV2DraftPayload, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, sourceBlock, sourceKeepOf,
+  REVIEW_FAMILY_SPECIFICS_LINES, REVIEW_SEVERITY_LINES, buildV2DraftPayload, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, sourceBlock, sourceKeepOf, sourceTitleWords,
 } from './lib/content-core-prompts.mjs'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import {
@@ -166,7 +166,7 @@ console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친
 console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안전한 창작만 허용한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 초안 프롬프트 판 = v2-draft-p15', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p15' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p15'))
+  check('🔴 초안 프롬프트 판 = v2-draft-p16', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p16' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p16'))
   for (const id of ['A', 'B', 'C']) {
     const c = CASE(id); const packet = packetOf(c); const plan = planOf(c)
     const keep = sourceKeepOf(plan, packet)
@@ -181,7 +181,17 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
         ? sent.보존.원문의물음.length > 0 && sent.보존.원문의물음.every((q) => /[?？]$/.test(q) && sourceBlock(packet).includes(q))
         : sent.보존.원문의물음.length === 0, JSON.stringify(sent.보존.원문의물음))
     check(`${id}: 원문은 고친 근거 묶음 그대로`, sent.원문 === sourceBlock(packet))
+    // 🔴 (v2-draft-p16) 제목의 검색어 — 계획 모델의 지목에 기대지 않고 코드가 원문 제목의 낱말을 싣는다
+    const words = (raw.보존 as { 제목낱말?: string[] } | undefined)?.제목낱말 ?? []
+    check(`${id}: 🔴 보존.제목낱말 = 원문 제목의 낱말 — 전부 원문 제목에 실제로 있다`,
+      words.length > 0 && words.every((w) => packet.title.includes(w)) && JSON.stringify(words) === JSON.stringify(sourceTitleWords(packet.title)),
+      JSON.stringify(words))
   }
+  check('🔴 제목낱말 — 문장부호를 떼고 한 글자 낱말은 뺀다 · 같은 낱말은 한 번',
+    JSON.stringify(sourceTitleWords('갱년기 불면증, 다들 어떻게 버티세요?? 잠 좀 자고 싶어요 (갱년기)'))
+      === JSON.stringify(['갱년기', '불면증', '다들', '어떻게', '버티세요', '자고', '싶어요']),
+    JSON.stringify(sourceTitleWords('갱년기 불면증, 다들 어떻게 버티세요?? 잠 좀 자고 싶어요 (갱년기)')))
+  check('🔴 제목이 비면 제목낱말도 빈다 — 없는 낱말을 만들지 않는다', sourceTitleWords('  ').length === 0)
   const c = CASE('C'); const plan = planOf(c)
   const sys = buildV2DraftSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
   check('🔴 🔴 초안 지시문이 보고 · 읽고 · 들은 경로를 지어 붙이지 말라고 한다 (운영 두 편의 말을 예로)',

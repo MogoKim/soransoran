@@ -1,22 +1,22 @@
 {
-  "version": "quality-v28",
-  "digest": "cbc39ea9135b28af447efdc25a7d758f0e28407ef1049308158befcb28a20167",
+  "version": "quality-v29",
+  "digest": "b9dddf00898dfa59e5b0e08262331743e40030246e9c613beef46437c1238ea3",
   "files": {
-    "src/lib/quality-contract.ts": "e0bbe8e7aa2f973bb9e0c30cbc12474783b841e8884b16380ab47d98f980318b",
+    "src/lib/quality-contract.ts": "963a5faf6509945286e2a599ea6e4c0024e55fd53f2dfa6c989acbb05ca18c79",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
     "src/lib/content-core/draft-life-gates.ts": "60464ba75050f5eb370ed67e553d189bc7e597ed737ab70d48ce5a9ad6b07c15",
     "src/lib/content-core/review.ts": "f0096a503e22122aee965e4dd8766b15935fc8dc871da797f00e3b1afee19547",
-    "src/lib/content-core/pipeline.ts": "9834f142e7f2812516d61b6a94f4248998f3405b6e233c0126a3c033f3f964b0",
+    "src/lib/content-core/pipeline.ts": "2e0fda1f2b705b13a3aa7016ea6cfdf380c164ca0529b0607f1f9d1580efb84d",
     "src/lib/content-core/evidence.ts": "d27479f1ab3e8490add3e6c6351f4a5c36016b314863173c6604cf6d0dc50558",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
-    "src/lib/micro-seed-auto-draft.ts": "808e7263f27d1943840a99518c4df35c483d33e02d159708f94bd6214a791a5e",
+    "src/lib/micro-seed-auto-draft.ts": "28cc4da6a68ed424fda043aa11ccc9cf7acc15fed16ab2f9845d073c3230f678",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
     "src/lib/supply-schedule-contract.ts": "a75d28635e2f90d854d88b879f7a619b75a59384868d72120a29731e517136a4",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "7f3a2d11544fcb9d6a0a5c5d3e9b036405d29cfda897b2bb19b7e019b3b604aa",
     "scripts/lib/content-core-run.mts": "97f321a1f32d1915c0da29efd7a00d096c81e521970efc5e37ed17e4f66f471b",
-    "scripts/lib/content-core-prompts.mts": "7501a12f86f894953c832ed0903ecb32774a1703e01b0d2fb80f4ee63c734e21",
+    "scripts/lib/content-core-prompts.mts": "bd0e274430e9b8914583d7655af35854cc5d60fb5e72ead00a475c3471dbc395",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -35,12 +35,12 @@
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "revise",
-    "reason": "quality-v28 digest bd1eecba48c3… → cbc39ea9135b… · v28 배포 전 — p12 실측(53건) 뒤 검수 등급 정의·시스템 나이 처리 보정(review-v11 · v2-review-p13)",
+    "kind": "bump",
+    "reason": "판 quality-v28 → quality-v29",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/content-core/review.ts",
       "src/lib/content-core/pipeline.ts",
+      "src/lib/micro-seed-auto-draft.ts",
       "scripts/lib/content-core-prompts.mts"
     ]
   }

@@ -19,7 +19,8 @@ import {
   sourceIdentityOf, WGANG_SOURCE_SITE,
   type PriorOutcome, type WorksetRow,
 } from '../src/lib/supply-workset'
-import { mergeJudgeRows, PROVEN_LANES, RAW_AXIS, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
+import { mergeJudgeRows, PROVEN_LANES, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
+import { STORED_RAW_AXIS as RAW_AXIS } from '../src/lib/supply-workset'
 import { fakeSourceEvidence } from './lib/fake-source-evidence.mjs'
 import { currentQualityContract } from '../src/lib/quality-contract'
 

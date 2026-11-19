@@ -335,7 +335,8 @@ async function worksetAxisRunner(
   prisma: InstanceType<typeof import('@prisma/client').PrismaClient>, codes: readonly string[],
 ): Promise<void> {
   console.log('\n⑤ 🔴 🔴 부모 러너(main --live)가 JIT 선택으로 묶음을 고른다 — raw 0 · 형제 제외 · 격리 DB 큐 · 가짜 provider')
-  const { PROVEN_LANES, SEED_AXIS, RAW_AXIS } = await import('../src/lib/micro-seed-auto-judge')
+  const { PROVEN_LANES, SEED_AXIS } = await import('../src/lib/micro-seed-auto-judge')
+  const { STORED_RAW_AXIS: RAW_AXIS } = await import('../src/lib/supply-workset')
   const T2 = realpathSync(mkdtempSync(join(tmpdir(), 'soran-wsaxis-cwd-')))
   for (const x of ['scripts', 'src', 'package.json', 'tsconfig.json']) cpSync(join(REPO, x), join(T2, x), { recursive: true })
   mkdirSync(join(T2, 'docs', 'operations'), { recursive: true })

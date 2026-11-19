@@ -1,21 +1,24 @@
 /**
- * 안전 · 브랜드 필터 8종 — 🔴 **source-agnostic 순수 판정. 발행하지 않는다**
+ * 결정적 안전 필터 — 🔴 **source-agnostic 순수 판정. 발행하지 않는다**
  *
- * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-U ⑤ · §4-X ⑦ · §4-Y ⑤
+ * 🔴 **낱말로 소재를 막지 않는다.** 글을 막는 사유는 모델 판정의 넷(위기 신호 · 특정인 괴롭힘/위협 ·
+ *    위험한 의료 지시 · 광고)이다(`micro-seed-auto-judge` `JUDGE_RISKS`). 의료 · 광고 낱말로 보류하던 칸은 지웠다 —
+ *    "처방" "계좌" 한 낱말이 갱년기 경험담을 판정에 가기도 전에 막았고, 같은 함수가 초안 · 적재 · 공개 · 감사에서 다시 걸렸다.
+ *    여기 남은 것은 모델에게 물을 필요가 없는 결정적인 것뿐이다:
+ *      버림   연락처·식별번호 패턴 · 고정 슬롯(공지) · 한자 · 보호 대상 집단 비하어 · 사진 없이는 못 읽는 글
+ *      보류   위기 신호 낱말(사람이 본다)
+ *      못 읽음
  *
  * 🔴 **이 모듈이 하는 일은 "위험한가" 를 답하는 것뿐이다.**
- *    자동 발행 · 자동 상세 fetch · DB write · Sheet · LLM · Raw Vault 적재 ·
- *    noindex 발행 — **어느 것도 하지 않는다.** §4-X · §4-Y 가 "이것이 코드로 서 있어야
- *    자동 발행을 연다" 고 한 그 게이트를 만드는 것이고, 문을 여는 것은 별개 작업이다.
+ *    자동 발행 · 자동 상세 fetch · DB write · Sheet · LLM · Raw Vault 적재 — **어느 것도 하지 않는다.**
  *
  * 🔴 **네이버 전용 DOM · URL 에 의존하지 않는다.**
  *    입력은 제목 · 본문 · 이미 계산된 메타(qualityFlags · rowLabel 등)뿐이다.
  *    네이버와 82cook 이 같은 입력을 주면 **같은 결과가 나온다** (§4-U ①).
  */
 import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
-// 🔴 위기 신호·의료 판단 요청·건강 효능 주장의 정본은 순수 판정 하나다 —
-//    여기서 정규식을 다시 적으면 semantic 판정과 갈라진다
-import { judgeSafetySignals } from '../../src/lib/micro-seed-safety-signals'
+// 🔴 위기 신호의 정본은 순수 판정 하나다 — 여기서 정규식을 다시 적으면 초안 쪽 판정과 갈라진다
+import { judgeCrisisSignal } from '../../src/lib/micro-seed-safety-signals'
 
 /** 🔴 판정 5종. `pass` 만 다음 단계로 간다 */
 export type SafetyVerdict = 'pass' | 'hold' | 'drop' | 'access' | 'hardExclude'
@@ -25,24 +28,15 @@ export type SafetyVerdict = 'pass' | 'hold' | 'drop' | 'access' | 'hardExclude'
  *    `volatile` 은 사유이지 제외가 아니다 — 아래 VOLATILE 주석 참조.
  */
 export type SafetyReasonCode =
-  | 'noticeSlot'          // ② 공지 · 필독 · 추천 고정 슬롯
-  | 'personalIdentity'    // ③ 실명 · 개인정보
-  | 'medicalClaim'        // ④ 의료 처방 · 효능 단정
-  | 'promotion'           // ⑤ 광고 · 홍보
-  | 'hostility'           // ⑥ 욕설 · 혐오 · 분쟁 유도
-  | 'visualDependent'     // ⑦ 이미지 의존
-  | 'access'              // ⑧ Access · deletedOrExpired
+  | 'noticeSlot'          // 공지 · 필독 · 추천 고정 슬롯
+  | 'personalIdentity'    // 연락처 · 식별번호 패턴
+  | 'hostility'           // 보호 대상 집단 비하어
+  | 'visualDependent'     // 이미지 의존
+  | 'access'              // Access · deletedOrExpired
   | 'volatile'            // 🟡 펑 · 삭제예정 — Drop 이 아니다
-  /**
-   * 🔴 ⑨ 자해 · 자살 위기 신호 — 정본 §4 가 **선행 차단**으로 못박은 축이다.
-   *    2026-09-16 까지 코드에 한 줄도 없었다.
-   */
+  /** 🔴 자해 · 자살 위기 신호 — 버리지 않고 사람에게 넘긴다 */
   | 'crisisSignal'
-  /** 🔴 ⑩ 치료·기기·약물의 부작용·교체·중단·계속 사용 판단을 커뮤니티에 요청 */
-  | 'medicalDecisionRequest'
-  /** 🔴 ⑪ 건강 효능 주장 — 전언형(*"~라고 한다"*)도 면제하지 않는다 */
-  | 'healthEfficacyClaim'
-  /** 🔴 ⑫ 실제 한자 문자 — 언어 핏 */
+  /** 🔴 실제 한자 문자 — 언어 핏 */
   | 'hanjaLanguageFit'
 
 export type SafetyReason = { code: SafetyReasonCode; note: string }
@@ -106,33 +100,37 @@ export type SafetyInput = {
 export const NOTICE_LABELS: readonly string[] = ['공지', '필독', '추천'] as const
 const NOTICE_TITLE = /^\s*[[(【]?\s*(공지|필독|추천|안내|이벤트 안내)\s*[\])】]?/
 
-/** ③ 실명 · 개인정보 — 🔴 "누가" 가 아니라 "무엇이 노출되는가" 를 본다 */
-const PERSONAL_IDENTITY =
-  /주민(등록)?번호|계좌번호|카드번호|여권번호|전화번호 ?(알려|드릴|공유)|010-?\d{3,4}-?\d{4}|[가-힣]{2,3} ?(씨|님) ?(연락처|주소|직장)|실명 ?(공개|까)|신상 ?(털|공개)/
-
 /**
- * ④ 의료 — 🔴 **주제를 막는 것이 아니다** (§4-J).
- *    당뇨 · 혈압 · 갱년기 · 관절 · 질유산균은 타겟 핏이 높은 생활 주제다.
- *    막는 것은 **처방 · 치료 선택 · 효능 단정 · 시술 유도**다.
+ * 연락처 · 식별번호 — 🔴 **낱말이 아니라 번호 모양을 본다.**
+ *    "계좌번호" "주민번호" 라는 낱말이 나왔다는 것만으로는 버리지 않는다(축의금 계좌 이야기는 생활 글이다).
+ *    실제 번호가 적혔을 때만이다 — 남의 번호를 우리 글감으로 들이지 않는다.
+ *      · 주민등록번호 `######-#######`
+ *      · 휴대전화 `01x-xxxx-xxxx` — 본문은 수집 때 마스킹(`[연락처]`)되므로 그 자리표도 같이 본다
+ *      · 카드 `####-####-####-####`
+ *      · 계좌 — 붙임표로 이은 숫자 묶음 셋 이상 · 숫자 10자리 이상
  */
-const MEDICAL_CLAIM =
-  /처방|복용법|용량|투약|완치|특효|즉효|낫는다|낫습니다|효과 ?(직빵|확실|보장)|부작용 ?없|도수치료|물리치료|레이저 ?시술|시술 ?(받|하시|추천)|수술 ?(받|하시|추천)|주사 ?(맞|추천)|한약 ?(지어|추천)/
+const RESIDENT_NUMBER = /(?<!\d)\d{6}\s?-\s?[1-4]\d{6}(?!\d)/
+const MOBILE_NUMBER = /(?<!\d)01[016-9][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)|\[연락처\]/
+const CARD_NUMBER = /(?<!\d)\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}(?!\d)/
+const ACCOUNT_LIKE = /(?<![\d-])\d{2,6}(?:-\d{2,8}){2,3}(?![\d-])/g
+const ACCOUNT_MIN_DIGITS = 10
 
-/** ⑤ 광고 · 홍보 */
-const PROMOTION =
-  /협찬|공구|공동구매|체험단|서포터즈|할인코드|쿠폰코드|추천인|링크 ?(타고|클릭)|구매 ?링크|카톡 ?문의|디엠 ?문의|DM ?문의|문의 ?주세요|판매합니다|팝니다|분양|입금|계좌/
+export function hasContactOrIdNumber(text: string): boolean {
+  if (RESIDENT_NUMBER.test(text) || MOBILE_NUMBER.test(text) || CARD_NUMBER.test(text)) return true
+  return (text.match(ACCOUNT_LIKE) ?? []).some((m) => m.replace(/\D/g, '').length >= ACCOUNT_MIN_DIGITS)
+}
 
 /**
- * ⑥ **보호 대상 집단 혐오 — 문맥 없이도 명백한 것만** (2026-10-04 P0-3 구조 보정).
+ * **보호 대상 집단 비하어 — 문맥 없이도 명백한 것만.**
  *    나이(틀딱) · 성별/양육(맘충 · 한남 · 김치녀) · 장애(병신) 를 낮잡는 집단 비하어만 결정적으로 버린다.
+ *    모델 판정의 넷에는 이 칸이 없다(특정인 괴롭힘만 본다) — 그래서 여기 남는다.
  *    🔴 일반 욕설 · 거친 감탄(시발 · 지랄 · 미친 · 꺼져) · 작품 비판은 낱말 하나로 버리지 않는다 — 주관적 의견이다.
- *    🔴 특정인 공격 동원 · 위협(죽어라 · 패죽) · 신상 박제 · 근거 없는 중대 사실 단정은 **의미 판정 사유**가 막는다
- *       (`targetedHarassmentOrThreat` · `identifiablePrivatePerson` · `unverifiedDefamation`) — 여기서 낱말로 흉내 내지 않는다.
+ *    🔴 특정인 공격 동원 · 위협 · 신상 털기는 모델 판정(`targetedHarassmentOrThreat`)이 막는다 — 여기서 낱말로 흉내 내지 않는다.
  */
 const HOSTILITY =
   /틀딱|맘충|한남|김치녀|병신/
 
-/** ⑦ 이미지 의존 — 🔴 이미지를 가져오겠다는 뜻이 아니다. **쓸 수 없다는 표시**다 */
+/** 이미지 의존 — 사진 없이는 읽히지 않는 글이다. 우리는 사진을 가져오지 않는다 */
 const VISUAL_DEPENDENT =
   /글씨체|폰트|이 ?사진|사진 ?속|사진 ?좀|이미지|그림 ?속|무슨 ?글씨|이거 ?뭔지|이게 ?뭔지|사진 ?참고|아래 ?사진|첨부 ?사진/
 
@@ -157,10 +155,9 @@ const RANK: Record<SafetyVerdict, number> = { pass: 0, hold: 1, drop: 2, access:
 const stronger = (a: SafetyVerdict, b: SafetyVerdict): SafetyVerdict => (RANK[b] > RANK[a] ? b : a)
 
 /**
- * 안전 · 브랜드 필터 8종.
+ * 결정적 안전 필터.
  *
  * 🔴 **이 함수는 발행을 승인하지 않는다.** 위험 여부만 답한다.
- *    100자 미만 여부(§4-Y)도, 레인 배정(§4-U)도 여기서 하지 않는다.
  */
 export function safetyFilter(input: SafetyInput): SafetyResult {
   const { title } = input
@@ -175,46 +172,30 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
     verdict = stronger(verdict, v)
   }
 
-  // ⑧ Access — 🔴 못 읽은 것은 판정이 아니다. 가장 먼저 가른다 (§4-W ⑥)
+  // Access — 🔴 못 읽은 것은 판정이 아니다. 가장 먼저 가른다
   if (input.accessStatus && input.accessStatus !== 'ok') {
     add('access', `읽지 못함(${input.accessStatus})`, 'access')
   }
 
-  // ⑫ 언어 핏 — 🔴 사용자에게 보이는 제목 · 본문의 실제 한자 문자
+  // 언어 핏 — 🔴 사용자에게 보이는 제목 · 본문의 실제 한자 문자
   const hanja = findCjkIdeograph(title) ?? findCjkIdeograph(body)
   if (hanja !== null) add('hanjaLanguageFit', `한자 문자(${hanja})`, 'drop')
 
-  // ② 공지 · 필독 · 추천 고정 슬롯 — 🔴 조회수가 압도적이라 점수로는 못 막는다
+  // 공지 · 필독 · 추천 고정 슬롯 — 회원 글이 아니다
   const label = (input.sourceRowLabel ?? '').trim()
   if (input.sourcePinned === true || input.sourceExcludeReason === 'pinned'
     || NOTICE_LABELS.includes(label) || NOTICE_TITLE.test(title)) {
     add('noticeSlot', label !== '' ? `고정 슬롯(${label})` : '공지·필독·추천', 'hardExclude')
   }
 
-  // ③ 개인정보 — 🔴 **비공개 개인이 특정되는 것만 본다** (2026-09-13 정정)
-  //    옛 판은 `publicFigure` · `publicFigureMention` 도 같은 사유로 hold 했다.
-  //    그건 위해가 아니라 **소재**다 — 공개 인물 이름이 나왔다는 사실뿐이고,
-  //    그 이름이 제목에 남아 있어야 사람이 검색으로 들어온다.
-  //    `PERSONAL_IDENTITY` 는 주민번호·계좌·연락처·신상털기만 잡는다. 그것이 위해다.
-  const ident = has(PERSONAL_IDENTITY, title, body, cmtText)
-  if (ident) add('personalIdentity', '개인정보 노출 표현', 'hold')
+  // 연락처 · 식별번호 — 번호 모양이 실제로 적힌 글은 버린다(낱말만으로는 버리지 않는다)
+  if ([title, body, cmtText].some(hasContactOrIdNumber)) add('personalIdentity', '연락처·식별번호', 'drop')
 
-  // ④ 의료 — 🔴 주제가 아니라 단정·시술 유도를 본다 (§4-J)
-  //    🔴 `medicalOrAdLikely` 플래그만으로는 막지 않는다 (2026-09-13 정정).
-  //    그 플래그는 "의료 **또는** 광고" 라서 갱년기·불면 경험담까지 물었다.
-  //    광고는 아래 ⑤ PROMOTION 이 따로 본다.
-  const med = has(MEDICAL_CLAIM, title, body, cmtText)
-  if (med) add('medicalClaim', `의료 단정·시술(${med})`, 'hold')
-
-  // ⑤ 광고 · 홍보
-  const promo = has(PROMOTION, title, body, cmtText)
-  if (promo) add('promotion', `광고·홍보 표현(${promo})`, 'hold')
-
-  // ⑥ 보호 대상 집단 혐오 — 🔴 커뮤니티 성격을 바꾼다. 쓰지 않는다(거친 말 · 작품 비판은 여기 아니다)
+  // 보호 대상 집단 비하어 — 🔴 커뮤니티 성격을 바꾼다. 쓰지 않는다(거친 말 · 작품 비판은 여기 아니다)
   const hostile = has(HOSTILITY, title, body, cmtText)
   if (hostile) add('hostility', '보호 대상 집단 비하', 'drop')
 
-  // ⑦ 이미지 의존 — 🔴 이미지 없이는 재사용이 안 된다 (§4-Q)
+  // 이미지 의존 — 🔴 이미지 없이는 재사용이 안 된다
   //    본문이 거의 없고 이미지만 있는 경우도 같다
   const visual = has(VISUAL_DEPENDENT, title, body)
   const imageOnly = (input.imageCount ?? 0) > 0 && body.trim().length > 0 && body.trim().length < 30
@@ -222,16 +203,9 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
     add('visualDependent', visual ? '이미지 의존 표현' : '본문이 거의 없고 이미지 중심', 'drop')
   }
 
-  /**
-   * ⑨⑩⑪ 🔴 **위기 신호 · 의료 판단 요청 · 건강 효능 주장** (2026-09-16 추가).
-   *
-   *    셋 다 `hold` 다 — 버리지 않고 **사람에게 넘긴다.** 정본 §4 의 `crisis_hold`
-   *    가 "운영자 알림 → 필요 시 사람이 수동 대응" 이라고 적은 그 자리다.
-   *    🔴 판정은 `judgeSafetySignals` 하나가 한다. 여기서 규칙을 다시 쓰지 않는다.
-   */
-  for (const sig of judgeSafetySignals({ title, body, comments })) {
-    add(sig.code, sig.note, 'hold')
-  }
+  // 위기 신호 — 버리지 않고 **사람에게 넘긴다**(hold). 판정은 `judgeCrisisSignal` 하나가 한다
+  const crisis = judgeCrisisSignal({ title, body, comments })
+  if (crisis !== null) add(crisis.code, crisis.note, 'hold')
 
   // 🟡 volatile — 🔴 verdict 를 바꾸지 않는다. 사유로만 남긴다
   const vol = has(VOLATILE, title, body)

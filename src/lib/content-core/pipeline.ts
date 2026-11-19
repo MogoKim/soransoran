@@ -32,7 +32,10 @@ export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.3'
  *    없애고 자격 값 어휘만 싣는다. Persona 는 코드가 유료 초안 전에 정한다(`decidePersona`).
  *    🔴 올리지 않으면 Persona 를 고르던 옛 판독 artifact·캐시가 새 계약으로 재사용된다.
  */
-export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
+/**
+ * 🔴 **p7 (quality-v29)** — 가입인사 · 자기소개 양식 글을 `hold` 로 멈추지 않는다. 인사 글로 옮길 수 있는 글이다.
+ */
+export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p7'
 /**
  * 🔴 **v2-draft-p8 (2026-10-01 · quality-v5)** — 생활 계약 줄의 말버릇 금지가 `persona-no-go` 열쇠 + 전원 공통 금지로 바뀌었다
  *    (개인 목록이 비어도 공통 금지 · 정리된 문서 모양 금지를 싣는다). 옛 프롬프트 artifact 를 재사용하지 않는다.
@@ -65,7 +68,11 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p6'
  * 함께 있어, 1인칭이 아닌 자리의 초안이 전달자를 세웠다가 검수(②-4)에 막혔다. 전달자를 세우는 길을 없애고,
  * 자기 경험으로 쓸 수 없으면 그 주제에 대한 자기 질문·생각으로 쓰게 한다. 원문에 이미 나오는 사람만 그 사람을 주어로 둔다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p15'
+/**
+ * 🔴 **v2-draft-p16 (quality-v29)** — 제목에 원문 제목의 검색어를 남기고(요청의 [보존].제목낱말), 원문에 있는 시간·상황 표현을 살린다.
+ * "언제 발행될지 이 글이 모른다" 는 전제를 지웠다 — 글은 쓰인 시간대에 나간다. 원문에 없는 시간대를 지어 붙이지 않는 것은 그대로다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p16'
 /**
  * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
  *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.
