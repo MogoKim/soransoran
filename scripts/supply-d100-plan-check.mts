@@ -14,10 +14,7 @@ import {
   capacityOf, judgeSupplyGap, planSourceRequests,
 } from '../src/lib/supply-stock-plan'
 import { judgeJitDemand } from '../src/lib/supply-process'
-import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
-import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch } from './lib/micro-seed-supply.mjs'
-import { MAX_REQUESTS_PER_DAY } from '../src/lib/collect-schedule'
 
 let pass = 0
 let fail = 0
@@ -156,88 +153,8 @@ check('🔴 미관측 source 로는 역산하지 않는다', planSourceRequests(
   check('🔴 출력에 재고선 도달 표가 없다', !/stockEta|걸리는 날|건까지/.test(plan))
 }
 
-// ─────────────────────────────────────────────────────────
-console.log('\n④ workflow — 돌 수 있는 상태인가')
-// ─────────────────────────────────────────────────────────
-{
-  const wf = readFileSync('.github/workflows/supply-collect.yml', 'utf8')
-  /** 🔴 judge·draft 가 claude-haiku-4.5 를 부른다 — 키가 없으면 그 자리에서 죽는다 */
-  check('🔴 ANTHROPIC_API_KEY 를 넘긴다', wf.includes('ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}'))
-  check('🔴 82cook 수집 kill switch 를 넘긴다',
-    wf.includes('SORAN_82COOK_THIN_DETAIL_ENABLED: ${{ vars.SORAN_82COOK_THIN_DETAIL_ENABLED }}'))
-  check('🔴 처리 kill switch 를 넘긴다',
-    wf.includes('SORAN_SUPPLY_PROCESS_ENABLED: ${{ vars.SORAN_SUPPLY_PROCESS_ENABLED }}'))
-  /**
-   * 🔴 **스위치가 둘이고 서로 다른 일을 끈다.** 하나로 묶으면 82cook 을 멈추려다
-   *    공급 전체가 멈춘다 — 옛 구조의 실패가 그것이었다.
-   */
-  check('🔴 수집 스위치와 처리 스위치가 다른 이름이다',
-    !wf.includes('SORAN_SUPPLY_AUTOPILOT_ENABLED'))
-  check('🔴 DB 접속을 넘긴다', wf.includes('DATABASE_URL') && wf.includes('DIRECT_URL'))
-  /** 🔴 하나씩 확인한다 — 없는 채로 남의 서버를 두드리지 않는다 */
-  for (const k of ['DATABASE_URL', 'DIRECT_URL', 'ANTHROPIC_API_KEY',
-    'SORAN_SUPPLY_PROCESS_ENABLED', 'SORAN_82COOK_THIN_DETAIL_ENABLED']) {
-    check(`🔴 실행 전 ${k} 를 검증한다`, new RegExp(`missing[\\s\\S]{0,400}${k}`).test(wf))
-  }
-  const activeCron = wf.split('\n').filter((l) => /^\s{2,6}- cron:/.test(l))
-  check('🔴 cron 이 활성화돼 있지 않다 (이번 PR 은 켜지 않는다)', activeCron.length === 0)
-  check('🟢 수동 실행 경로는 있다', wf.includes('workflow_dispatch'))
-  check('🔴 apply 없이는 수집하지 않는다', wf.includes("inputs.apply == 'true'"))
-  check('🔴 네이버를 GHA 에서 열지 않는다 — 세션을 러너에 두지 않는다',
-    !/scripts\/micro-seed-(collect-)?navercafe/.test(wf))
-  /**
-   * 🔴 **로컬 파일 잠금이 기계 사이를 막는다고 쓰지 않는다.**
-   *    잠금 파일은 `.microseed-data/` 안에 있고 각 기계에 따로 있다.
-   */
-  check('🔴 잠금이 기계 사이를 막는다고 쓰지 않는다',
-    !/잠금[^\n]{0,40}(기계|머신)[^\n]{0,20}사이/.test(wf))
-  check('🔴 82cook owner 가 한쪽뿐이라고 적는다', wf.includes('owner'))
-  /**
-   * 🔴 **수집이 실패해도 처리는 돈다.** 두 step 이 순서대로 놓여 있을 뿐이고,
-   *    처리 step 은 `always()` 다 — 묶여 있던 옛 구조로 돌아가지 않는다.
-   */
-  check('🔴 82cook 수집과 공급 처리가 다른 step 이다',
-    /micro-seed-82cook-thin-detail\.mts/.test(wf) && /scripts\/supply-process\.mts/.test(wf))
-  check('🔴 처리 step 이 수집 실패와 무관하게 돈다', /if: always\(\)[\s\S]{0,200}supply-process/.test(wf)
-    || /always\(\)/.test(wf.split('공급 처리')[1] ?? ''))
-  check('🔴 워크플로우가 옛 중앙 러너를 부르지 않는다', !/supply-autopilot/.test(wf))
-}
-
-// ─────────────────────────────────────────────────────────
-console.log('\n⑤ 계획된 게시판이 실제 인자로 나간다')
-// ─────────────────────────────────────────────────────────
-{
-  const rem = planCafeRun({ cafeId: 'remonterrace' })
-  const keys = rem.boards.map((b) => b.key).join(',')
-  check('🟢 remonterrace 계획에 jjong 과 humor 가 둘 다 있다',
-    keys === 'remonterrace:jjong,remonterrace:humor')
-  const jjong = rem.boards.find((b) => b.key === 'remonterrace:jjong')!
-  check('🟢 jjong 이 2~6p 다', jjong.startPage === 2 && jjong.endPage === 6 && jjong.pages === 5)
-  const humor = rem.boards.find((b) => b.key === 'remonterrace:humor')!
-  check('🟢 humor 가 1p 다', humor.startPage === 1 && humor.endPage === 1)
-  const wg = planCafeRun({ cafeId: 'wgang' })
-  const all = wg.boards.find((b) => b.key === 'wgang:all')!
-  check('🟢 wgang:all 이 1~5p 다', all.startPage === 1 && all.endPage === 5 && all.pages === 5)
-
-  /** 🔴 **`--pages=1` 로 끝나면 실패다** — 계획이 인자에 닿는지 값으로 본다 */
-  const args = rem.boards.map((b) => collectArgsFor(b, { live: true, thin: true }).join(' '))
-  check('🔴 인자가 --board 를 쓴다', args.every((a) => a.includes('--board=')))
-  check('🔴 인자에 --pages 가 없다', args.every((a) => !a.includes('--pages')))
-  check('🔴 인자에 --cafe 가 없다', args.every((a) => !a.includes('--cafe=')))
-
-  /** 🔴 하루 요청이 기존 상한 안이다 — 상한은 영구 안전장치다 */
-  for (const p of [rem, wg]) {
-    check(`🟢 ${p.cafeId} 하루 ${p.requestsPerDay}건 ≤ 상한 ${p.limitPerDay}건`,
-      p.withinLimit && p.requestsPerDay <= MAX_REQUESTS_PER_DAY[p.source])
-    check(`🔴 ${p.cafeId} 상세 몫이 0 이 아니다 — 목록만 읽고 끝나지 않는다`, p.detailPerRun > 0)
-  }
-  /** 🔴 숫자를 여기 복제하지 않았는지 — 정본에서 파생됐는가 */
-  check('🔴 게시판 범위를 BOARD_TARGETS 에서 읽는다',
-    rem.boards.every((b) => {
-      const t = BOARD_TARGETS.find((x) => x.key === b.key)!
-      return pagesOf(t).length === b.pages
-    }))
-}
+// 🔴 ④ 82cook GHA 워크플로 · ⑤ 회차 계획(planCafeRun) 은 지웠다 — 82cook 수집이 끝났고 바퀴 몫은
+//    실행 때 정한다(`collect-sources.cycleDetailQuota` · 검사는 collect:sources-check)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n⑥ 본문을 읽기 전에 후보를 버리지 않는다 — 신선도 1순위 (2026-10-19 창업자 결정)')
@@ -274,20 +191,14 @@ console.log('\n⑥ 본문을 읽기 전에 후보를 버리지 않는다 — 신
 // ─────────────────────────────────────────────────────────
 console.log('\n⑦ 옛 운영 경로가 남아 있지 않다')
 // ─────────────────────────────────────────────────────────
-for (const cafe of ['remonterrace', 'wgang']) {
-  const t = readFileSync(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`, 'utf8')
-  /**
-   * 🔴 **주석은 빼고 본다.** 옛 인자를 없앤 이유를 적으려면 그 문자열을 써야 하고,
-   *    그것까지 금지하면 "왜 바꿨는지" 를 남길 수 없다 — 기록을 못 남기게 하는 검사는
-   *    다음 사람이 같은 실수를 반복하게 만든다. 실제로 넘어가는 `<string>` 만 본다.
-   */
+{
+  const t = readFileSync('docs/operations/launchd/com.soransoran.navercafe-collect.plist.template', 'utf8')
+  // 🔴 주석은 빼고 실제로 넘어가는 `<string>` 만 본다
   const block = /<key>ProgramArguments<\/key>[\s\S]*?<\/array>/.exec(t)?.[0] ?? ''
   const args = (block.match(/<string>[^<]*<\/string>/g) ?? []).join(' ')
-  check(`🔴 ${cafe} template 이 --pages=1 로 끝나지 않는다`, !args.includes('--pages='))
-  check(`🔴 ${cafe} template 이 옛 수집기를 직접 부르지 않는다`,
-    !args.includes('micro-seed-collect-navercafe.mts'))
-  check(`🟢 ${cafe} template 이 runner 를 부른다`, args.includes('micro-seed-navercafe-run.mts'))
-  check(`🔴 ${cafe} template 에 --max 숫자를 손으로 적지 않는다`, !args.includes('--max='))
+  check('🔴 수집 template 이 --pages · --max 를 손으로 적지 않는다', !args.includes('--pages=') && !args.includes('--max='))
+  check('🔴 수집 template 이 수집기를 직접 부르지 않는다', !args.includes('micro-seed-collect-navercafe.mts'))
+  check('🟢 수집 template 이 runner 를 부른다', args.includes('micro-seed-navercafe-run.mts'))
 }
 /** 🔴 정본 문서를 두 지침이 모두 가리킨다 */
 for (const f of ['AGENTS.md', 'CLAUDE.md']) {

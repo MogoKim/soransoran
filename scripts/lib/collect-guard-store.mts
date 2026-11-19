@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import {
-  backoffMs, canRequest, canRetry, classifyFailure, newGuardState,
+  canRequest, classifyFailure, newGuardState,
   recordFailure, recordRequest, recordSuccess, rollBudgetDay,
   type BlockedBy, type FailureClass, type GuardState, type SourceId,
 } from '../../src/lib/collect-guard'
@@ -399,7 +399,7 @@ export async function withGuardLock<T>(
      * 🔴 **잠금을 쥔 채 이벤트 루프를 놓지 않는다.**
      *    `await` 가 하나라도 있으면 잠금이 TTL(60초)을 넘길 수 있고, 그러면 남이 회수한 뒤에
      *    **옛 callback 이 뒤늦게 돌아와** 부작용을 만든다. 상태 처리는 동기로 끝내고,
-     *    네트워크·대기는 잠금 **밖**에서 한다(`guardedGet`·`guardedNavigate` 가 그 구조다).
+     *    네트워크·대기는 잠금 **밖**에서 한다(`guardedNavigate` 가 그 구조다).
      *    🔴 타입만으로는 async 함수를 막지 못하므로 **실행으로** 막는다.
      */
     if (typeof (out as { then?: unknown } | null | undefined)?.then === 'function') {
@@ -567,70 +567,11 @@ export async function settleRequest(
   })
 }
 
-export type GuardedFetchResult = { text: string; state: GuardState }
-
-/**
- * 🔴 **보호장치를 통과한 요청 하나.**
- *
- *    ① **잠금 안에서** 예산·차단기를 보고 예약한다 — 막혀 있으면 요청을 보내지 않고 던진다
- *    ② 네트워크 요청은 **잠금 밖**에서 한다 (남의 서버를 기다리는 동안 다른 job 을 세우지 않는다)
- *    ③ 결과를 다시 **잠금 안에서** 기록한다
- *    ④ 실패하면 분류별 지수 backoff 만큼 물러난 뒤 ①부터 다시 — 그때도 차단기를 다시 본다
- *    ⑤ 403 은 재시도하지 않는다(`BACKOFF.FORBIDDEN.maxAttempts = 0`) — 두드릴수록 나빠진다
- */
-export async function guardedGet(input: {
-  url: string
-  source: SourceId
-  now: () => Date
-  headers: Record<string, string>
-  /** 테스트에서 갈아 끼운다. 기본은 전역 fetch */
-  fetchImpl?: typeof fetch
-  /** 물러나는 동안 사람에게 보이는 로그 */
-  log?: (m: string) => void
-}): Promise<GuardedFetchResult> {
-  const doFetch = input.fetchImpl ?? fetch
-  const log = input.log ?? ((): void => {})
-  let attempt = 0
-
-  for (;;) {
-    const reserved = await reserveRequest(input.source, input.now())
-    if (!reserved.ok) {
-      throw new Error(`수집 보호장치가 막았다 — ${reserved.reason} (${input.url})`)
-    }
-
-    let cls: FailureClass | null = null
-    let detail = ''
-    try {
-      const res = await doFetch(input.url, { headers: input.headers })
-      if (res.ok) {
-        const text = await res.text()
-        const state = await settleRequest(input.source, input.now(), { ok: true })
-        return { text, state }
-      }
-      cls = classifyFailure({ status: res.status })
-      detail = `HTTP ${res.status}`
-    } catch (e) {
-      const err = e as { code?: string; cause?: { code?: string }; message?: string }
-      cls = classifyFailure({ code: err.code ?? err.cause?.code ?? err.message ?? null })
-      detail = err.message ?? String(e)
-    }
-
-    const after = await settleRequest(input.source, input.now(), { ok: false, cls })
-    attempt += 1
-    if (!canRetry(cls, attempt)) {
-      throw new Error(`${input.url} → ${detail} (${cls}) — 재시도 상한. 차단기 상태를 남겼다`)
-    }
-    const wait = backoffMs(cls, attempt, after.requestsToday)
-    log(`   ⏳ ${cls} ${detail} — ${Math.round(wait / 1000)}초 물러난 뒤 ${attempt + 1}번째 시도`)
-    await sleep(wait)
-  }
-}
-
 /**
  * 🔴 **Playwright 경로도 같은 보호장치를 지난다** (2026-09-08).
  *
- *    82cook 은 `fetch` 라 `guardedGet` 으로 감쌌지만, Naver 카페는 Playwright 라
- *    그 경로가 **보호장치를 통째로 우회**했다. 그 상태에서 "source 별 보호장치 구현 완료" 라고
+ *    Naver 카페는 Playwright 라 fetch 래퍼를 지나지 않아
+ *    **보호장치를 통째로 우회**했다. 그 상태에서 "source 별 보호장치 구현 완료" 라고
  *    적으면 문서가 거짓이 된다 — 그래서 목록·상세 이동을 여기서 감싼다.
  *
  *    🔴 `page.goto` 는 `Response | null` 을 준다. 상태 코드가 있으면 그것이 분류의 정본이고,
@@ -655,7 +596,7 @@ export function classifyNavigation(input: { status?: number | null; error?: unkn
 /**
  * 🔴 보호장치를 지나는 페이지 이동 하나.
  *
- *    예약 → 이동 → 결과 기록. `guardedGet` 과 **같은 계약**이고 같은 상태 파일을 쓴다.
+ *    예약 → 이동 → 결과 기록. 상태 파일 하나를 잠금 안에서 쓴다.
  *    🔴 재시도는 하지 않는다 — 브라우저 세션은 재시도가 싸지 않고, 실패는 차단기가 센다.
  */
 export async function guardedNavigate(input: {
