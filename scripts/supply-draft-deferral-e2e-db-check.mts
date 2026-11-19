@@ -309,6 +309,11 @@ async function main(): Promise<void> {
   check('🔴 화면이 초안 실패가 아니라 여력 대기라고 적는다',
     /Persona 여력 대기로 미룬 원천 3건 — AI 를 부르지 않았다 · 초안 실패 아님/.test(res.out))
 
+  /**
+   * 🔴 ⑤⑥ 은 부모 러너가 실제로 묶음을 고르는지 본다 — 쓸 사람이 있어야 수요가 선다(`planSeatWriters`).
+   *    ②에서 전원에게 심은 대기 초안을 걷는다. 두면 쓸 사람 0 → 수요 0 → 러너가 묶음을 고르지 않는다.
+   */
+  await prisma.originalPostApprovalQueue.deleteMany({ where: { dedupKey: { startsWith: 'dd-' } } })
   await worksetAxisRunner(prisma, codes)
   await duplicateSourceRunner(prisma)
 
