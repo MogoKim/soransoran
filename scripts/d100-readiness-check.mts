@@ -18,6 +18,7 @@ import {
 import { RUNTIME_PROFILES } from '../src/lib/scale-profile'
 import { readyNetFromSnapshots, READY_SELECTOR_VERSION } from './lib/d100-ready-snapshot.mjs'
 import { detailThroughput, DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
+import { SOURCE_IDS } from '../src/lib/collect-sources'
 import {
   latestRunFailing,
   runReadiness, SnapshotWriteFailed, readFailureOf, perDayMeasured,
@@ -971,9 +972,14 @@ console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌
   })())
 
   // 🔴 공급원별 수집 — wgang 하나만 보여 주면 나머지가 죽어도 초록이다
+  //    (2026-11-19 수집 job 하나 · 13회) job 은 하나지만 원천마다 회차 기록이 따로다 —
+  //    손으로 적은 목록이 아니라 수집 원천 정본 전부에서 줄을 만들고, 원천마다 실패를 읽는다
   check('🔴 ⑨-b **수집 job 을 공급원마다 따로 보여 준다**', (() => {
     const code = strip(cli)
-    return /remonterrace/.test(code) && /82cook/.test(code) && /collectJobs/.test(code)
+    return /const COLLECT_JOBS = COLLECT_SOURCES\.map\(/.test(code)
+      && /read\.collectFailing\[j\.source\]/.test(code)
+      && /collectCapabilityFailing\(collectJobs\.map\(/.test(code)
+      && SOURCE_IDS.includes('navercafe:wgang') && SOURCE_IDS.includes('navercafe:remonterrace')
       && DETAIL_SOURCES.length === 3
   })())
 }
