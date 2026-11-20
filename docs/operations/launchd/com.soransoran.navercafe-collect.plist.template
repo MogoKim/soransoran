@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  네이버 카페 수집 — 🔴 **이 파일은 생성된다. 손으로 고치지 않는다**
+    만드는 곳  scripts/lib/navercafe-collect-template.mts (npm run launchd:collect-template -- --write)
+    바퀴 시각  src/lib/cycle-schedule.ts 의 CYCLES — 하루 13회 (01:00 04:00 06:30 08:20 10:00 11:20 12:20 13:20 15:20 17:20 18:20 20:20 22:20)
+    원천 목록  src/lib/collect-sources.ts — 바퀴마다 카페를 차례로 돈다(한 카페가 실패해도 다음 카페는 돈다)
+
+  🔴 LOCAL ONLY — 네이버는 로그인 세션이 필요하다. 쿠키를 다른 곳에 올리지 않는다.
+  🔴 kill switch 는 .env.local 의 SORAN_NAVERCAFE_COLLECT_ENABLED=true — plist 를 지우지 않고 멈춘다.
+  🔴 launchd 기본 PATH 에는 nvm 의 node 가 없다(없으면 exit 78) · 로그는 Documents 밖(__LOGDIR__ · TCC).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.navercafe-collect</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NPX__</string>
+    <string>tsx</string>
+    <string>__REPO__/scripts/micro-seed-navercafe-run.mts</string>
+    <string>--live</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__NODEBIN__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>20</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/navercafe-collect.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/navercafe-collect-error.log</string>
+</dict>
+</plist>

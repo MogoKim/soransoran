@@ -407,13 +407,7 @@ console.log('\n⑤-b 🔴 (Lane B) 82cook **실제 artifact 형식** replay — 
   check('🔴 🔴 **댓글 수를 못 읽은 네이버 줄 → 증거 댓글 null(모름)** — 상세 행의 0 을 읽지 않는다 · 조회는 목록 값',
     wx?.evidence?.response?.comments === null && wx?.evidence?.response?.views === 40, JSON.stringify(wx?.evidence?.response))
 
-  // 🔴 러너 배선 — 얇은 러너가 목록 줄의 세 시각을 넘기고, 수집기가 목록 줄을 `buildListRow` 로 만든다
-  const thinRunner = readFileSync('scripts/micro-seed-82cook-thin-detail.mts', 'utf-8')
-  const collector82 = readFileSync('scripts/micro-seed-collect-82cook.mts', 'utf-8')
-  check('🔴 82cook 얇은 러너가 목록 줄 시각을 넘긴다(`times: sourceTimesOf(t)`) · 원천+id 로 목록을 묶는다',
-    /times: sourceTimesOf\(t\)/.test(thinRunner) && /byKey\.set\(`\$\{S\(r\.sourceSite\)\}::\$\{id\}`/.test(thinRunner))
-  check('🔴 82cook 수집기가 목록 줄을 `buildListRow` 로 · 페이지 번호를 붙여 쓴다',
-    /items\.map\(\(i\) => buildListRow\(i, now\.toISOString\(\)\)\)/.test(collector82) && /sourcePage: p \}/.test(collector82))
+  // 🔴 82cook 얇은 러너 · 수집기 배선 단정은 그 코드와 함께 지웠다(2026-11-19)
   // 🔴 주석 줄은 뺀다 — "앞판은 무엇을 읽었다" 는 설명이 코드로 읽히지 않게
   const code = (f: string): string => readFileSync(f, 'utf-8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
   const sp = code('scripts/supply-process.mts')

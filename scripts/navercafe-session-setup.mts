@@ -40,10 +40,11 @@ import { createInterface } from 'node:readline'
 import {
   DEFAULT_SESSION_PATH, SESSION_PATH_ENV, KILL_SWITCH_ENV,
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions,
-  isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, activeCafes,
+  isUnaoSessionPath, isSessionPathIgnored, summarizeCookies,
   type CookieMeta,
 } from './lib/micro-seed-navercafe.mjs'
 import { CAFE_HOME_URL, judgeCafeMembership } from '../src/lib/naver-member-gate'
+import { COLLECT_SOURCES } from '../src/lib/collect-sources'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 import {
   judgeSessionLocation, judgeStorageStateShape, SESSION_DIR_MODE, SESSION_FILE_MODE,
@@ -226,11 +227,11 @@ async function main(): Promise<void> {
      */
     console.log('\n  카페 회원 확인 (카페 홈만 연다 · 글은 열지 않는다)')
     const notMember: string[] = []
-    for (const c of activeCafes()) {
+    for (const c of COLLECT_SOURCES) {
       const p = await context.newPage()
       let text = ''
       try {
-        await p.goto(CAFE_HOME_URL(c.cafeId), { waitUntil: 'domcontentloaded', timeout: 30_000 })
+        await p.goto(CAFE_HOME_URL(c.id), { waitUntil: 'domcontentloaded', timeout: 30_000 })
         await p.waitForTimeout(4_000)
         for (const f of p.frames()) {
           try { text += `\n${await f.evaluate(() => document.body?.innerText ?? '')}` } catch { /* 다른 출처 프레임 */ }

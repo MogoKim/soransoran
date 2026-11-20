@@ -145,7 +145,7 @@ grep -o '__[A-Z_]*__' "$HOME/Library/LaunchAgents/${JOB}.plist" || echo "남은 
 
 🔴 **`.env.local` 에 그 job 의 스위치가 없으면 `--live` 는 무시된다.**
 (`supply-process` → `SORAN_SUPPLY_PROCESS_ENABLED` ·
- 네이버 수집 둘 → `SORAN_NAVERCAFE_COLLECT_ENABLED`)
+ 네이버 수집 → `SORAN_NAVERCAFE_COLLECT_ENABLED`)
 kill switch 는 plist 가 아니라 환경변수다 — plist 를 지우지 않고도 멈출 수 있어야 한다.
 
 ## 되돌리기
@@ -158,69 +158,34 @@ rm ~/Library/LaunchAgents/com.soransoran.supply-process.plist
 또는 **더 빠르게**: `.env.local` 에서 그 job 의 스위치를 `false` 로.
 plist 는 계속 돌지만 수집이 일어나지 않는다.
 
-## 수집원은 네이버 카페 둘이다 — 82cook 은 뺐다 (2026-11-17 창업자 결정)
+## 수집 — job 하나가 바퀴마다 원천 목록을 차례로 돈다 (2026-11-19)
 
-🔴 82cook 은 수집원이 아니다(canon §13). 상시 호스트에 82cook job 은 없고 다시 등록하지 않는다.
-아래 82cook 템플릿·시각·요청량은 **지우기 전까지 저장소에 남은 잔재**다 — 코드(`RUNTIME_JOBS`)·템플릿·검사와 함께
-별도 작업에서 지운다. 현재 처리량이 아니고 등록 계획도 아니다.
+- **언제**: `com.soransoran.navercafe-collect` 가 바퀴 시각에 뜬다. 시각의 정본은
+  [`src/lib/cycle-schedule.ts`](../../../src/lib/cycle-schedule.ts) 의 `CYCLES` 하나다 — 이 문서에 적지 않는다.
+  템플릿은 손으로 고치지 않는다: 바퀴를 바꾸면 `npm run launchd:collect-template -- --write` 로 다시 만들고,
+  `launchd:template-check` 가 "파일 == 생성 결과" 를 본다.
+- **무엇을**: [`src/lib/collect-sources.ts`](../../../src/lib/collect-sources.ts) 의 `COLLECT_SOURCES` — 카페마다 한 줄
+  (카페 번호 · 게시판 · 목록 최대 쪽 · 하루 요청 상한 · 호칭 낱말)과 수집 계정 전체 하루 상한(`ACCOUNT_DAILY_REQUESTS`).
+  카페를 더하는 일은 **이 배열에 한 줄 + 수집 계정 가입**이다. job 수는 그대로다.
+- **차례로**: runner(`micro-seed-navercafe-run.mts`)가 카페마다 수집기 프로세스를 띄운다. 잠금이 하나라 같은 시각에
+  두 job 을 올리면 뒤쪽이 `LOCK_BUSY` 였다 — 그래서 job 하나다. 한 카페가 실패해도 다음 카페는 돈다(실패는 exit 1).
+- **얼마나**: 바퀴의 본문 수는 수집기가 목록을 본 뒤 정한다(`cycleDetailQuota`) — 남은 하루 예산(남은 바퀴마다 회원 확인 ·
+  목록 · 본문 1건을 먼저 뗀다)을 "앞 바퀴 뒤 새 글 : 어제 같은 시간대 바퀴들이 본 새 글" 비율로 나눈다. 13바퀴가 어떻게 돌아도
+  카페 상한 · 계정 상한을 넘지 않는다(`collect:sources-check` 가 최악의 경우까지 잰다). 목록은 1쪽부터, 그 쪽이 전부 새 글이면 다음 쪽.
+- **남기는 것**: 버린 글은 상세 원장에 사유 코드(`reasons`), 목록 단계 제외는 로그 한 줄(▸ 고정 글 · 이미 연 글 · 한자 제목 · 몫 밖),
+  차단은 회차 기록에 `HTTP_403` · `HTTP_429` · `LOGIN_WALL`(로그인 화면) 로 남고 사람을 부른다.
 
-🔴 **한 source 의 실패가 다른 source 의 공급을 세우지 않는다.** 그래서 수집은 job 으로 나뉘어 있다 —
-세 source 를 한 회차에 묶어 돌리던 옛 구조에서는 82cook 하나가 `ECONNREFUSED` 이면
-이미 받아 둔 네이버 수집물까지 처리되지 못했다(2026-09-10 실측: 이틀간 신규 공급 0).
-그 구조의 폐기 경위는 [Raw 공급망 설계 §4-AU](../2026-09-03-raw-supply-chain-design.md) 에 있다.
-
-운영 수집 job 은 `navercafe:remonterrace`와 `navercafe:wgang` 둘이다.
-
-| 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
-|---|---|---|---|
-| 82cook 목록 | `com.soransoran.raw-collect-82cook` | **07:00 · 10:00 · 13:00 · 16:00 · 19:00** (5회) | `micro-seed-collect-82cook.mts --list --pages=3 --live` |
-| 82cook 본문 (공급 레인) | `com.soransoran.supply-collect-82cook-thin` | **07:40 · 10:40 · 13:40 · 16:40 · 19:40** (5회 · 목록 40분 뒤) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
-| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **00:30 · 02:30 · 05:30 · 13:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
-| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **01:30 · 03:30 · 04:30 · 11:30 · 20:30** (5회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
-
-🔴 **82cook 은 두 job 이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
-목록 job = robots 1 + 목록 3 = **4/회차** × 5 = 20
-본문 job = robots 1 + 상세 17 = **18/회차** × 5 = 90
-→ **110/day** (상한 400, 여유 290).
-🔴 목록 job 은 본문을 열지 않는다 — `--auto --auto-max=30` 은 2026-09-13 에 뗐다.
-🔴 본문은 목록의 **40분 뒤**다. 목록이 먼저 쌓여야 열 대상이 생긴다 —
-같은 분에 두면 빈 목록을 보고 0건으로 끝난다.
-`--cap` 의 정본은 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
-`THIN_82COOK_CAP_PER_RUN` 이고, fixture 가 plist 인자와 대조한다.
-
-🔴 **네이버 두 카페는 `--pages` · `--max` 를 인자로 받지 않는다.** 회차가 읽을 게시판·페이지와
-회차당 상세 몫은 runner 가 `BOARD_TARGETS` · `RUNS_PER_DAY` · 하루 요청 상한에서 역산한다.
-무엇을 넘길지 보려면 `--live` 없이 돌린다 (네트워크 0 · DB 0):
+무엇을 할지 보려면 `--live` 없이 돌린다 (네트워크 0 · DB 0):
 
 ```bash
-npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
+npx tsx scripts/micro-seed-navercafe-run.mts
 ```
 
-🟡 `dlxogns01` · `masanmam` · `goondae` · `yeowooya` 는 **미활성 장래 후보**다.
-수집기가 아는 카페일 뿐 확정 수집원도 현재 스케줄도 아니며, **실행 템플릿을 두지 않는다.**
-늘리려면 그때 승인을 받고 템플릿을 새로 만든다 — fixture 가 이 넷의 템플릿이 없는지 검사한다.
+🔴 82cook · 유머 게시판 수집은 끝났다 — 수집기 · 템플릿을 지웠고 옛 job(카페별 `…-multi` 둘 · 82cook 둘)은
+`RETIRED_JOBS` 라 배포가 내린다. 지난 라운드에 뺀 후보 카페(dlxogns01 · masanmam · goondae · yeowooya)는 실행 템플릿이 없다.
 
-## 🔴 일정 계약 (전부 KST · 82cook은 잔재 — 돌지 않는다)
-
-```
-82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
-82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
-remonterrace     00:30 02:30 05:30 13:30 21:30        5회
-wgang            01:30 03:30 04:30 11:30 20:30        5회
-supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 수집 처리 + 수집 뒤 drain
-```
-
-🔴 **D20 target date의 재료는 00:30~05:30 수집 → 06:15 공급 → 07:00 controller 순서로 만든다.**
-새벽 슬롯은 상시 호스트가 **AC 전원 · 로그인 · 덮개 열림 · keep-awake**를 모두 만족할 때만 능력이다.
-배터리·잠자기·로그아웃 상태를 능력으로 세지 않으며, 전제가 깨지면 controller가 fail-closed한다.
-
-🔴 그때 **게시판·페이지 설정은 바꾸지 않았다.** 바뀐 것은 **언제 도는가** 하나였다.
-지금 범위는 jjong 2~6p · humor 1p · wgang:all 1~5p 다(2026-11-18 — 쫑알 목록 10쪽을 상세로 옮겼다 ·
-회차 상세 jjong 20 + humor 1 · 하루 요청 145 그대로). 정본은 `BOARD_TARGETS` 다.
-
-🔴 시각의 정본은 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
-`SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.
-이 문서의 표는 그것을 옮겨 적은 것이고, fixture 가 **render 한 실제 plist** 와 대조한다.
+🔴 공급 처리(`supply-process`) 시각의 정본은 아직 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
+`SUPPLY_PROCESS_SLOTS` 다 — fixture 가 render 한 실제 plist 와 대조한다.
 
 ## 🔴 상시 job 시각표 (전부 KST)
 
@@ -229,8 +194,7 @@ supply-process   06:15 08:15 12:15 14:15 17:15 21:15 22:15  7회   ← 새벽 �
 
 | job (`com.soransoran.` 생략) | 하는 일 | 언제 |
 |---|---|---|
-| `navercafe-collect-remonterrace-multi` | 레몬테라스 수집 | 00:30 · 02:30 · 05:30 · 13:30 · 21:30 (5회) |
-| `navercafe-collect-wgang-multi` | 우아한 갱년기 수집 | 01:30 · 03:30 · 04:30 · 11:30 · 20:30 (5회) |
+| `navercafe-collect` | 네이버 카페 수집(원천 목록을 차례로) | 바퀴 시각 — `cycle-schedule.ts` 의 `CYCLES` |
 | `supply-process` | 공급 처리 | 06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 (7회) |
 | `stage-controller` | 그날 단계 결정 | 07:00 · 07:20 · 07:40 · 07:55 · 07:58 (5회 — 결정은 하루 한 번만 저장된다) |
 | `original-post-runner` | 글 발행 | 08:00~22:00 10분마다 (85회 · 한 회차 1편) |
@@ -249,13 +213,12 @@ com.soransoran.overnight-audit-1117    퇴역 (11-17 05:30 점검용)
 com.soransoran.persona-d30-oneshot     퇴역 (11-17 Persona 투입용 · 스크립트는 저장소에서 지웠다)
 ```
 
-## 🔴 공급 수집·처리 템플릿은 다섯이고, 운영 공급 job은 셋이다
+## 🔴 운영 공급 job 은 둘이다 — 수집 하나 · 처리 하나
 
 정본은 [`src/lib/runtime-isolation.ts`](../../../src/lib/runtime-isolation.ts) 의 `RUNTIME_JOBS` 다.
 격리 검사와 배포가 **이 목록과 실제 loaded 를 정확히 대조**한다.
 
-운영 공급 job은 네이버 수집 2개와 `supply-process` 1개다. 82cook 2개는 아래 목록에 남아 있지만 수집원이 아니며
-current capacity에 합치지 않는다. D100 전체 allowlist는 발행·댓글·감사·controller·recovery·
+운영 공급 job은 네이버 수집 1개와 `supply-process` 1개다. D100 전체 allowlist는 발행·댓글·감사·controller·recovery·
 keep-awake를 포함한 9개와 ops shadow observer 1개이고 `ALWAYS-ON-HOST.md`가 싣는다.
 
 > 🔴 **ops shadow observer(`com.soransoran.ops-shadow-observer`) · 권위 0 · 상시 job 이다(60초마다 · 2026-11-18 호스트에서 설치 확인)** —
@@ -277,26 +240,15 @@ keep-awake를 포함한 9개와 ops shadow observer 1개이고 `ALWAYS-ON-HOST.m
 > 실패는 이 job 의 exit · log 에만 남는다 — 공급 lease · provider · DB · stage · 장부 쓰기 · job kick 0.
 
 ```
-① com.soransoran.navercafe-collect-remonterrace-multi   수집
-② com.soransoran.navercafe-collect-wgang-multi          수집
-③ com.soransoran.raw-collect-82cook                     수집 — 목록을 만든다
-④ com.soransoran.supply-collect-82cook-thin             수집 — ③의 목록을 소비한다
-⑤ com.soransoran.supply-process                         처리
+① com.soransoran.navercafe-collect   수집 — 바퀴마다 원천 목록을 차례로
+② com.soransoran.supply-process      처리
 ```
-
-🔴 **82cook 은 두 job 이 함께 있어야 한다.** ④는 목록을 스스로 만들지 않는다 —
-③이 없으면 열 대상이 0 이고, 82cook 공급은 조용히 0 이 된다.
-🔴 `raw-import`(Raw Vault 적재)는 이 목록에 없다. 공급 레인이 아니라 보관 레인이다.
 
 ## 목록
 
 | 템플릿 | 무엇을 | 환경 |
 |---|---|---|
-| `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (**5회/day** 07:00·10:00·13:00·16:00·19:00 KST) | 로컬 (GHA `supply-collect` 는 수동 dispatch 전용 — 자동 owner 가 아니다) |
-| `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (5슬롯 · 현재 OFF) | 로컬 (위와 같다 — owner 는 한쪽뿐) |
-| `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
-| `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (5슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
-| `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (5슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
+| `com.soransoran.navercafe-collect.plist.template` | 네이버 카페 수집 (바퀴 시각 · 생성된 파일) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
 | `com.soransoran.supply-process.plist.template` | 공급 처리(drain) — 미처리 입력을 변환→판정→초안→적재 (7슬롯) | 🔴 **로컬 전용** (§4-AU) |
 
 매거진 템플릿 5개는 `magazine/` 에 따로 있다(producer 00:10 · auto-register 01:00 · auto-merge-recovery 02:00 · watch 11:00 ·
@@ -310,9 +262,8 @@ graph-watch 11:05). 회사 Mac 전용이고 절차는 [`magazine-automation-runb
 ```bash
 # ── 0) 🔴 .env.local 에 스위치 하나 ──
 #    SORAN_SUPPLY_PROCESS_ENABLED=true
-#    🔴 수집 job 의 스위치는 따로다 (SORAN_82COOK_THIN_DETAIL_ENABLED ·
-#       SORAN_82COOK_COLLECT_ENABLED · SORAN_NAVERCAFE_COLLECT_ENABLED).
-#       한 스위치가 수집과 처리를 동시에 끄면, 82cook 을 멈추려다 공급 전체가 멈춘다.
+#    🔴 수집 job 의 스위치는 따로다 (SORAN_NAVERCAFE_COLLECT_ENABLED).
+#       한 스위치가 수집과 처리를 동시에 끄면, 수집을 멈추려다 공급 전체가 멈춘다.
 
 # ── 1) 첫 실행은 사람이 본다 — dry-run 은 네트워크 0 · LLM 0 · DB write 0 ──
 npm run supply:process                        # 무엇이 밀려 있는지 · 무엇을 할지
@@ -380,22 +331,13 @@ job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.
    (playwright-core@1.62.1 은 rev 1234 를 기대하는데 로컬 캐시에는 1208 · 1217 뿐이다).
 
 ③ 첫 live 를 사람이 한 번 본다
-   npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=remonterrace --pages=1 --max=3 --live
+   npx tsx scripts/micro-seed-collect-navercafe.mts --source=remonterrace --live
    🔴 목록 셀렉터는 첫 live 실측으로 확정한다 — 네이버는 iframe 구조이고
       신형·구형 DOM 이 섞여 있어 실제 페이지를 보기 전에는 확정할 수 없다.
       0건이면 스크립트가 throw 한다(조용히 넘어가지 않는다).
 ```
 
-**카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다.
-
-`-multi` job 이 정본이다. 시(hour)를 어긋나게 두어 두 카페가 같은 시각에 돌지 않는다.
-
-```
-remonterrace  00:30 · 02:30 · 05:30 · 13:30 · 21:30 KST (5회)
-wgang         01:30 · 03:30 · 04:30 · 11:30 · 20:30 KST (5회)
-```
-
-🔴 **카페는 이 둘이 전부**이며, 같은 시각에 돌지 않는 것을 fixture 가 검사한다.
+**수집 job 은 하나다.** 바퀴마다 원천 목록을 차례로 돈다(위 "수집" 절).
 
 > 📜 **역사** — Wave B 이전에는 1회판 job 두 개(`09:20 remonterrace` · `13:20 wgang`)가 돌았다.
 > 그 job 도 템플릿도 지금은 없다. 아래 문서에 남은 09:20/13:20 표기는 **그때의 기록**이지

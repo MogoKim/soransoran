@@ -13,7 +13,7 @@
  *      모집단은 그 회차 trace 에서 **DB 상태로 빠진 원천(큐 · 형제 · 사람 판정 · 끝남 · 이월)을 뺀** 원천이다.
  *      재시도 상태(attempted)는 재현하지 않는다 — 두 모드 모두 비운다(선택 순위를 바꾸지 않는 관측값이다).
  *   B. **수집 상세 선별** — 네이버 회차 목록마다 `planAutoFetch` 를 앞판 동률(점수 → 글 번호 오름차순) · 지금 동률
- *      (점수 → 게시 시각 하한 ↓ → 글 번호 ↓)로 고른다. 상한은 회차 계획(`planCafeRun`)의 게시판 상세 몫.
+ *      (점수 → 게시 시각 하한 ↓ → 글 번호 ↓)로 고른다. 상한은 그 카페 하루 본문 상한의 바퀴 평균(실제 몫은 실행 때 정한다).
  *      "이미 본 글" 은 그 회차 전 thin 파일의 글로 근사한다(상세 원장은 사본에 없을 수 있다).
  *   C. **참고(운영 미적용)** — 공급 순위에서 품질 성분이 정확히 같아 나이가 순서를 정한 이웃 쌍 수.
  *      품질 경계(창업자 결정 대기)를 정하는 재료일 뿐 · 이 replay 는 어떤 경계도 운영에 넣지 않는다.
@@ -32,8 +32,9 @@ import { worksetRows } from './supply-process.mjs'
 import { planAutoFetch, type AutoFetchInput } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { currentQualityContract } from '../src/lib/quality-contract'
-import { thresholdBasis, type CollectedCandidate } from './lib/micro-seed-navercafe.mjs'
-import { planCafeRun } from './lib/navercafe-run-plan.mjs'
+import { type CollectedCandidate } from './lib/micro-seed-navercafe.mjs'
+import { detailCeilingPerDay, findSource } from '../src/lib/collect-sources'
+import { CYCLES } from '../src/lib/cycle-schedule'
 
 const H = 3_600_000
 const arg = (k: string): string | null => {
@@ -219,10 +220,10 @@ for (const name of listFiles) {
   const rows = readFileSync(join(DATA, name), 'utf8').split('\n').filter((l) => l.trim() !== '')
     .map((l) => JSON.parse(l) as CollectedCandidate & Record<string, unknown>)
   if (rows.length === 0) continue
-  const board = String(rows[0]!.sourceBoardKey ?? '')
-  const plan = planCafeRun({ cafeId: cafe })
-  const max = plan.boards.find((b) => b.key === board)?.detailMax ?? 0
-  if (max === 0) continue
+  const src = findSource(cafe)
+  // 🔴 지금 원천 목록의 게시판 줄만 — 옛 유머 게시판 목록은 다시 돌리지 않는다
+  if (src === null || rows[0]!.sourceMenuId !== src.menuId) continue
+  const max = Math.ceil(detailCeilingPerDay(src) / CYCLES.length)
   // 🔴 "이미 본 글" 근사 — 이 회차 전 같은 카페 thin 파일의 글
   const seen = new Set<string>()
   const actualThin = new Set<string>()
@@ -240,7 +241,7 @@ for (const name of listFiles) {
       seen.add(String((JSON.parse(l) as Record<string, unknown>).sourceArticleId))
     }
   }
-  const eligible = thresholdBasis(rows).eligible
+  const eligible = rows.filter((r) => r.sourceExcludeReason === null)
   const listedAt = String(rows[0]!.sourceListedAt)
   /** 🔴 정확한 게시 시각을 아는 글만 — 날짜만 아는 글은 "오늘 글" 로 세지 않는다 */
   const exactPosted = new Map<string, number>()
@@ -270,7 +271,7 @@ for (const name of listFiles) {
   }
   const scores = (ids: readonly string[]): string => ids.map((id) => byId.get(id)!.score).sort((a, b) => a - b).join()
   collectRuns.push({
-    file: name, board, eligible: eligible.length, max,
+    file: name, board: `${cafe}:${src.menuId}`, eligible: eligible.length, max,
     changed: after.filter((id) => !before.includes(id)).length,
     sameScores: scores(after) === scores(before),
     ageBefore: before.map(ageOf).filter((x): x is number => x !== null),

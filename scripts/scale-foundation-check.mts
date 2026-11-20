@@ -24,7 +24,7 @@ import {
 } from '../src/lib/scale-runtime'
 import {
   planSupply, findBottlenecks, requiredRuns, estimateCost, readPricing,
-  YIELD, YIELD_EVIDENCE, ASSUMED_STAGES, SOURCES, THIN_82COOK_JOB, thin82cookDetailPerDay, rateOf, COST_ENV,
+  YIELD, YIELD_EVIDENCE, ASSUMED_STAGES, SOURCES, rateOf, COST_ENV,
   detailPerQueueItem,
 } from '../src/lib/scale-supply-plan'
 import {
@@ -51,14 +51,11 @@ import {
   type CohortMemberState, type CohortId,
 } from '../src/lib/persona-cohort'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
-import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import { currentCapacity, preparedCapacity, type ObservedJob } from '../src/lib/collect-inventory'
 import * as autofillLib from '../src/lib/micro-seed-supply-autofill'
-import {
-  RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, thin82cookCapPerRun,
-} from '../src/lib/collect-schedule'
+import { COLLECT_JOB_LABEL, COLLECT_SLOTS, COLLECT_SOURCES, detailCeilingPerDay } from '../src/lib/collect-sources'
 import {
   judgePublish, judgeManualLimit, MANUAL_PUBLISH_CAP, type PublishCandidate,
 } from '../src/lib/original-post-publish'
@@ -695,16 +692,8 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
    *    fixture 가 **이미 사라진 운영 형태**를 현재 능력으로 못박고 있었다.
    */
   const OBSERVED: readonly ObservedJob[] = [
-    {
-      label: 'com.soransoran.navercafe-collect-remonterrace-multi',
-      slots: [{ hour: 4, minute: 20 }, { hour: 10, minute: 20 }, { hour: 16, minute: 20 }, { hour: 22, minute: 20 }],
-      loaded: true,
-    },
-    {
-      label: 'com.soransoran.navercafe-collect-wgang-multi',
-      slots: [{ hour: 2, minute: 50 }, { hour: 8, minute: 50 }, { hour: 14, minute: 50 }, { hour: 20, minute: 50 }],
-      loaded: true,
-    },
+    // 🔴 수집 job 하나가 바퀴 일부만 올라와 있는 관측 — 슬롯 수만큼만 센다
+    { label: COLLECT_JOB_LABEL, slots: COLLECT_SLOTS.slice(0, 5), loaded: true },
     /** 🔴 공급 **처리** job 이다 — 수집하지 않으므로 수집 능력에 한 건도 보태지 않는다 */
     { label: 'com.soransoran.supply-process', slots: [{ hour: 23, minute: 15 }], loaded: true },
   ]
@@ -713,90 +702,19 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
     const t = read(join('docs/operations/launchd', s.template))
     const slots = (t.match(/<key>Hour<\/key>/g) ?? []).length
     check(`🔴 [${s.id}] 회차 수가 템플릿과 같다`, slots === s.runsPerDay)
-    /**
-     * 🔴 회차 상한의 출처가 소스마다 다르다 — **있지도 않은 인자를 찾지 않는다.**
-     *    82cook 은 템플릿 인자에 박혀 있고, 네이버는 runner 가 역산한다.
-     */
-    const cafe = /navercafe:(\w+)/.exec(s.id)?.[1]
-    // 🔴 **주석이 아니라 실제로 넘기는 인자만 본다.** XML 주석에는 옛 인자가 역사로 남아 있다
     const passedArgs = (t.replace(/<!--[\s\S]*?-->/g, '').match(/<string>([^<]*)<\/string>/g) ?? []).join(' ')
-    if (cafe === undefined) {
-      // 🔴 82cook 얇은 상세 job 은 `--cap=` 으로 받는다. 인자 이름을 여기서 지어내지 않는다
-      const maxArg = /--(?:auto-max|max|cap)=(\d+)/.exec(passedArgs)
-      check(`🔴 [${s.id}] 회차 상한이 템플릿 인자와 같다`, Number(maxArg?.[1] ?? -1) === s.maxPerRun)
-    } else {
-      check(`🔴 [${s.id}] 회차 상한이 runner 역산값과 같다`,
-        planCafeRun({ cafeId: cafe, phase: 'start' }).detailPerRun === s.maxPerRun)
-      check(`🔴 [${s.id}] 실제 인자에 --max 숫자를 손으로 적지 않는다`, !/--max=/.test(passedArgs))
-    }
+    check(`🔴 [${s.id}] 실제 인자에 --max 숫자를 손으로 적지 않는다`, !/--max=/.test(passedArgs))
   }
-  /**
-   * 🔴 **옛 판은 "82cook 은 미등록" 을 계약으로 박고 있었다** (2026-09-13 교체).
-   *
-   *    2026-09-11 에 세 job 이 모두 등록됐는데 이 fixture 때문에 메모를 고칠 수 없었다 —
-   *    고치면 CI 가 깨지는 구조였다. **관측이 바뀌면 메모도 바뀌어야 한다.**
-   *    지켜야 하는 계약은 "정적 메모를 판정 근거로 쓰지 않는다" 다.
-   */
-  check('🔴 D100 수집원은 실제로 D100 경로에 들어가는 job 을 가리킨다',
-    SOURCES.every((s) => s.template.includes('supply-collect') || s.template.includes('navercafe-collect')))
-  check('🔴 82cook 항목이 목록 job 이 아니라 얇은 상세 job 이다', (() => {
-    const c = SOURCES.find((s) => s.id === '82cook')
-    return c !== undefined && c.template.includes('supply-collect-82cook-thin')
-      && !c.template.includes('raw-collect')
-  })())
-  /**
-   * 🔴 **1회판은 운영 경로에서 사라졌다** (2026-09-11).
-   *    실행 가능한 옛 템플릿을 남겨 두면 누군가 그것을 load 한다.
-   *    `JOB_LABELS[].single` 만 남긴다 — 그건 "혹시 올라와 있으면 1회판이라고 부른다" 는
-   *    **호환 판정용 이름**이지 실행 경로가 아니다.
-   */
-  for (const cafe of ['remonterrace', 'wgang'] as const) {
-    check(`🔴 [${cafe}] 옛 1회판 템플릿이 저장소에 없다`,
-      !existsSync(join('docs/operations/launchd', `com.soransoran.navercafe-collect-${cafe}.plist.template`)))
-    check(`🔴 [${cafe}] SOURCES 가 -multi 를 가리킨다`,
-      SOURCES.some((s) => s.id === `navercafe:${cafe}` && s.template.includes('-multi')
-        && s.runsPerDay === RUNS_PER_DAY[`navercafe:${cafe}`].start && s.loaded))
-  }
-  check('🔴 SOURCES note 에 옛 09:20/13:20 1회 운영이 남아 있지 않다',
-    SOURCES.every((s) => !s.note.includes('09:20') && !s.note.includes('13:20')))
+  check('🔴 수집원은 수집 job 템플릿 하나를 가리킨다', SOURCES.every((s) => s.template === `${COLLECT_JOB_LABEL}.plist.template`))
+  check('🔴 수집원이 원천 목록과 같다', SOURCES.length === COLLECT_SOURCES.length)
   check('🔴 현재 능력 < 준비 능력 — 둘을 합치지 않는다',
-    cap.effectivePerDay < preparedCapacity('start').effectivePerDay)
-  /**
-   * 🔴 **관측된 슬롯 수 × 정본 상세량**으로 센다 (2026-09-14).
-   *    옛 fixture 는 `회차당 10건` 을 손으로 적었다. 실제는 `planCafeRun` 정본이
-   *    remonterrace 11 · wgang 16 을 낸다 — 옛 값으로 현재 능력을 계산하지 않는다.
-   */
-  const wantObservedCap = (): number => {
-    let n = 0
-    for (const cafeId of ['remonterrace', 'wgang'] as const) {
-      const cp = planCafeRun({ cafeId })
-      const slots = OBSERVED.filter((o) => o.loaded && o.label.includes(`collect-${cafeId}`))
-        .reduce((a, o) => a + o.slots.length, 0)
-      n += cp.detailPerRun * slots
-    }
-    return n
-  }
+    cap.effectivePerDay < preparedCapacity().effectivePerDay)
+  const wantObservedCap = (): number => COLLECT_SOURCES.reduce((n, c) => n + Math.floor((detailCeilingPerDay(c) * 5) / COLLECT_SLOTS.length), 0)
   check('🔴 현재 능력은 등록된 것만 · 관측 슬롯 수로 센다', cap.effectivePerDay === wantObservedCap())
-  check('🔴 등록된 것은 -multi 로 읽힌다',
-    cap.perSource.filter((x) => x.kind === 'multi').length === 2
-    && cap.perSource.every((x) => x.kind !== 'single'))
-  /**
-   * 🔴 **처리 job 은 수집 능력이 아니다** (2026-09-11).
-   *    옛 중앙 러너는 "재고가 모자랄 때만" 82cook 을 열었고, 그 조건부 몫이 능력으로
-   *    세어져 화면은 초록인데 실제 신규는 며칠씩 0 이었다. 지금 처리 job 은 수집하지 않고,
-   *    82cook 몫은 **예약 job 의 슬롯**에서만 나온다.
-   */
-  check('🔴 처리 job 이 올라와 있어도 수집 능력은 늘지 않는다', cap.effectivePerDay === wantObservedCap())
-  check('🔴 82cook 얇은 상세 job 이 미등록이면 그 몫은 0 이다',
-    thin82cookDetailPerDay(OBSERVED) === 0)
-  check('🟢 등록되면 관측 슬롯 수 × 회차 상한 × 성공률로 센다', (() => {
-    const on = [...OBSERVED, {
-      label: THIN_82COOK_JOB,
-      slots: [...THIN_82COOK_SLOTS],
-      loaded: true,
-    }]
-    return thin82cookDetailPerDay(on) === thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY * 0.8
-  })())
+  check('🔴 처리 job 이 올라와 있어도 수집 능력은 늘지 않는다',
+    currentCapacity(OBSERVED.filter((o) => o.label === COLLECT_JOB_LABEL)).effectivePerDay === cap.effectivePerDay)
+  check('🔴 옛 카페별 job 만 올라와 있으면 능력 0 이다',
+    currentCapacity([{ label: 'com.soransoran.navercafe-collect-wgang-multi', slots: COLLECT_SLOTS, loaded: true }]).effectivePerDay === 0)
   check('🔴 정적 loaded 계산기(supplyCapacity)가 사라졌다',
     !/export function supplyCapacity/.test(read('src/lib/scale-supply-plan.ts')))
   check('🔴 병목 판정도 관측을 쓴다',
@@ -825,7 +743,8 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   // 🔴 병목 — limits 를 넘기지 않으면 **실제 상수**로 본다
   const now = findBottlenecks(p100, undefined, OBSERVED)
   check('🔴 실제 상한으로 100/day 는 BLOCK', now.some((b) => b.stage === 'collect' && b.severity === 'BLOCK'))
-  check('🔴 미등록 수집원을 경고한다', now.some((b) => b.stage === 'source' && b.detail.includes('82cook')))
+  check('🔴 미등록 수집원을 경고한다',
+    findBottlenecks(p100, undefined, []).some((b) => b.stage === 'source' && b.detail.includes('미등록')))
   check('🔴 통과율 가정도 병목으로 적는다', now.some((b) => b.stage === 'yield'))
   const fixed = findBottlenecks(p100, { collectCapMax: 500, runsPerDay: 10, registeredSources: 3 })
   check('🔴 상한을 올리면 collect BLOCK 이 사라진다', !fixed.some((b) => b.stage === 'collect' && b.severity === 'BLOCK'))

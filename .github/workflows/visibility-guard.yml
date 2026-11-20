@@ -624,10 +624,6 @@ jobs:
       - name: 후보 생성 파이프라인 (사람 판정 층 보호)
         run: npm run micro-seed:candidate-pipeline-check
 
-      # 82cook 얇은 상세 — 본문 전문이 디스크에 남지 않는지 본다 (§4-AP)
-      - name: 82cook 얇은 상세 fetch (전문 미저장 · 두 스위치)
-        run: npm run micro-seed:82cook-thin-check
-
       # 사본으로도 전문이 새지 않는지 · drop 이 화면에 오르지 않는지 본다 (§4-AQ)
       - name: thin → 검수 어댑터 (전문 미저장 · drop 차단)
         run: npm run micro-seed:82cook-thin-adapt-check
@@ -710,6 +706,10 @@ jobs:
       - name: 수집 락 (실제 프로세스 경쟁)
         if: needs.scope.outputs.heavy == 'true'
         run: npm run collect:lock-check
+
+      # 수집 바퀴 몫이 하루 상한(카페 · 계정 전체)을 넘지 않는지 · 새 글 수에 비례하는지 · 차단이 차단으로 남는지 본다
+      - name: 수집 원천 · 바퀴 몫 (하루 상한 · 새 글 비례 · 차단 코드)
+        run: npm run collect:sources-check
 
       # 기계 판정이 사람 값을 사칭하지 않는지 · 위험 글이 통과하지 않는지 본다 (§4-AR)
       - name: 자동 판정 Shadow (사람 사칭 금지 · false pass 0)

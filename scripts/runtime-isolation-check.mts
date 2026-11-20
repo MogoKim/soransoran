@@ -39,6 +39,7 @@ import { runtimePersonaAssetIdentityOf } from '../src/lib/persona-reference-dige
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
 import { programArguments, rollbackDirOf, sameArgs } from './lib/launchd-install.mjs'
 /** 🔴 발행 러너 label 의 정본 — 여기에 문자열을 다시 적지 않는다 */
+import { COLLECT_JOB_LABEL } from '../src/lib/collect-sources'
 import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 /** 🔴 감사 러너 label · 렌더 입력 형식의 정본 */
 import { AUDIT_RUNNER_LABEL } from './lib/auto-ready-audit-template'
@@ -1398,19 +1399,15 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       check('🔴 [D] 내려 둔 job 의 상태를 못 보면 통과시키지 않는다', !r.ok)
     }
 
-    // ④ 판정부 — 정본 스위치 이름으로 82cook 만 갈린다
+    // ④ 판정부 — 정본 스위치 이름으로 내려 둔 job 만 갈린다(수집 스위치를 false 로 내린 경우)
     {
       const env: Record<string, string> = {
-        SORAN_NAVERCAFE_COLLECT_ENABLED: 'true',
+        SORAN_NAVERCAFE_COLLECT_ENABLED: 'false',
         SORAN_SUPPLY_PROCESS_ENABLED: 'true',
-        SORAN_82COOK_COLLECT_ENABLED: 'false',
-        SORAN_82COOK_THIN_DETAIL_ENABLED: 'false',
       }
       const part = partitionJobsByEnv({ jobs: RUNTIME_JOBS, env })
-      check('🔴 [D] 실측 env 에서 82cook 두 job 만 내려 둔 것으로 갈린다',
-        part.disabled.length === 2
-        && part.disabled.every((l) => l.includes('82cook'))
-        && part.active.length === 3)
+      check('🔴 [D] 수집 스위치를 false 로 내리면 수집 job 만 내려 둔 것으로 갈린다',
+        part.disabled.length === 1 && part.disabled[0] === COLLECT_JOB_LABEL && part.active.length === 1)
       check('🔴 [D] 내려 둔 job 을 뺀 나머지는 blocker 0 — 배포가 열린다',
         judgeJobEnv({ jobs: part.active, env }).length === 0)
       /** 🔴 `unset` 을 disabled 로 넘기면 "등록만 되고 공급 0" 이 초록이 된다 */
@@ -1418,22 +1415,22 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       delete unset.SORAN_SUPPLY_PROCESS_ENABLED
       const p2 = partitionJobsByEnv({ jobs: RUNTIME_JOBS, env: unset })
       check('🔴 [D] unset 은 disabled 가 아니다 — 그대로 blocker 로 막힌다',
-        p2.disabled.length === 2
+        p2.disabled.length === 1
         && judgeJobEnv({ jobs: p2.active, env: unset }).length === 1)
       check('🔴 [D] 빈 값도 disabled 가 아니다',
         partitionJobsByEnv({
           jobs: RUNTIME_JOBS, env: { ...env, SORAN_SUPPLY_PROCESS_ENABLED: '' },
-        }).disabled.length === 2)
+        }).disabled.length === 1)
       check('🔴 [D] 오타(FALSEY)는 disabled 가 아니다',
         partitionJobsByEnv({
           jobs: RUNTIME_JOBS, env: { ...env, SORAN_SUPPLY_PROCESS_ENABLED: 'FALSEY' },
-        }).disabled.length === 2)
+        }).disabled.length === 1)
       check('🔴 [D] 대소문자는 가리지 않는다 (False)',
         partitionJobsByEnv({
           jobs: RUNTIME_JOBS, env: { ...env, SORAN_SUPPLY_PROCESS_ENABLED: 'False' },
-        }).disabled.length === 3)
+        }).disabled.length === 2)
       /** 🔴 격리 검사도 같은 계약이어야 한다 — 활성만 loaded 를 요구한다 */
-      check('🔴 [D] 활성 3개만 loaded 면 격리 판정이 통과한다',
+      check('🔴 [D] 활성만 loaded 면 격리 판정이 통과한다',
         judgeLoadedJobs({ loaded: part.active, expected: part.active }).ok)
       check('🔴 [D] 내려 둔 job 이 올라와 있으면 격리 판정이 막는다',
         !judgeLoadedJobs({
@@ -1447,7 +1444,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
      *    그 자리에 파일이 있으면 "내려 두었다" 는 다음 로그인까지만 참이다.
      */
     {
-      const dis = ['com.soransoran.raw-collect-82cook', 'com.soransoran.supply-collect-82cook-thin']
+      const dis = [COLLECT_JOB_LABEL]
       const files = dis.map((l) => `${l}.plist`)
       const alive = RUNTIME_JOBS.filter((l) => !dis.includes(l)).map((l) => `${l}.plist`)
       check('🟢 [D] 설치본이 보관소로 옮겨졌으면 통과한다',
@@ -1712,7 +1709,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
 
     // ── ⑧ 공급 job 계약은 그대로다 ──
     check('🔴 [Q] 🔴 **발행 러너를 RUNTIME_JOBS 에 넣지 않았다**',
-      !RUNTIME_JOBS.includes(PUBLISH_RUNNER_LABEL) && RUNTIME_JOBS.length === 5)
+      !RUNTIME_JOBS.includes(PUBLISH_RUNNER_LABEL) && RUNTIME_JOBS.length === 2)
     check('🔴 [Q] 🔴 **퇴역 job 으로 취급하지 않는다**', !RETIRED_JOBS.includes(PUBLISH_RUNNER_LABEL))
     check('🔴 [Q] 🔴 **활성화 스위치를 요구하지 않는다**',
       !Object.keys(JOB_ENV_REQUIREMENTS).includes(PUBLISH_RUNNER_LABEL))
@@ -2789,8 +2786,8 @@ console.log('\n⑦ 🔴 단일 실행 authority (StageDecision → consumer → 
       apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('npx tsx scripts/stage-consume-exec.mts --by=publish -- npx tsx scripts/original-post-auto-publish.mts', 'npx tsx scripts/original-post-auto-publish.mts --apply --limit=1 --trigger=schedule')) },
     { name: 'auto-publish.yml 이 vars.SORAN_RELEASE_STAGE 를 넘김', want: 'LEGACY_ENV',
       apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n', '      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n      SORAN_RELEASE_STAGE: ${{ vars.SORAN_RELEASE_STAGE }}\n')) },
-    { name: 'supply-collect.yml 이 window 변수를 넘김', want: 'LEGACY_ENV',
-      apply: (i) => wf(i, 'supply-collect.yml', (t) => t.replace('      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n', '      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n      SORAN_RELEASE_WINDOW_STAGE: ${{ vars.SORAN_RELEASE_WINDOW_STAGE }}\n')) },
+    { name: 'auto-publish.yml 이 window 변수를 넘김', want: 'LEGACY_ENV',
+      apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n', '      DIRECT_URL: ${{ secrets.DIRECT_URL }}\n      SORAN_RELEASE_WINDOW_STAGE: ${{ vars.SORAN_RELEASE_WINDOW_STAGE }}\n')) },
     { name: 'workflow 가 npm run original-post:auto-publish 로 우회(package.json 해석)', want: 'CONSUMER_BYPASS',
       apply: (i) => wf(i, 'auto-publish.yml', (t) => t.replace('npx tsx scripts/stage-consume-exec.mts --by=publish -- npx tsx scripts/original-post-auto-publish.mts', 'npm run -s original-post:auto-publish -- --apply --limit=1')) },
     { name: '발행 러너를 --by=supply 로 감쌈', want: 'CONSUMER_BYPASS',
@@ -2801,11 +2798,11 @@ console.log('\n⑦ 🔴 단일 실행 authority (StageDecision → consumer → 
     { name: 'launchd 템플릿 env 에 SORAN_CAPACITY_STAGE', want: 'LEGACY_ENV',
       apply: (i) => ({ ...i, launchd: i.launchd.map((l) => (l.source.endsWith('supply-process.plist.template')
         ? { ...l, xml: l.xml.replace('<key>EnvironmentVariables</key>\n  <dict>', '<key>EnvironmentVariables</key>\n  <dict>\n    <key>SORAN_CAPACITY_STAGE</key><string>d10</string>') } : l)) }) },
-    { name: 'supply-collect.yml 에 cron 복원(launchd supply-process 와 같은 작업)', want: 'DUPLICATE_OWNER',
-      apply: (i) => wf(i, 'supply-collect.yml', (t) => t.replace('on:\n', "on:\n  schedule:\n    - cron: '0 */4 * * *'\n")) },
+    // 🔴 공급 처리를 GHA 에서 예약으로 돌리던 워크플로(supply-collect.yml)는 지웠다 — 같은 모양을 새로 만들면 잡힌다
+    { name: '새 workflow 가 launchd supply-process 와 같은 작업을 예약', want: 'DUPLICATE_OWNER',
+      apply: (i) => ({ ...i, workflows: [...i.workflows, { file: 'mut-supply.yml', text: "on:\n  schedule:\n    - cron: '0 */4 * * *'\njobs:\n  s:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npx tsx scripts/stage-consume-exec.mts --by=supply -- npx tsx scripts/supply-process.mts --live\n" }] }) },
     { name: 'workflow 예약이 package.json 을 거쳐 발행 엔트리에 닿음', want: 'SCHEDULE_PUBLISH',
-      apply: (i) => wf(i, 'supply-collect.yml', (t) => t.replace('on:\n', "on:\n  schedule:\n    - cron: '0 */4 * * *'\n")
-        .replace('npx tsx scripts/micro-seed-82cook-thin-detail.mts', 'npm run original-post:auto-publish; npx tsx scripts/micro-seed-82cook-thin-detail.mts')) },
+      apply: (i) => ({ ...i, workflows: [...i.workflows, { file: 'mut-pkg.yml', text: "on:\n  schedule:\n    - cron: '0 */4 * * *'\njobs:\n  s:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run original-post:auto-publish\n" }] }) },
     { name: '러너 TS 가 SORAN_RELEASE_WINDOW_STAGE 를 다시 읽음', want: 'DEAD_KEY_READ',
       apply: (i) => src(i, 'scripts/original-post-auto-publish.mts', (t) => `${t}\nconst w = process.env.SORAN_RELEASE_WINDOW_STAGE\nvoid w\n`) },
     { name: '공급 TS 가 SORAN_RELEASE_STAGE 를 직접 읽음(두 번째 stage authority)', want: 'STAGE_ENV_OUTSIDE',

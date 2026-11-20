@@ -140,9 +140,12 @@ check('unrelated file untouched', readFileSync(unrelatedPath, 'utf8') === 'leave
 check('matching symlink is not followed', readFileSync(symlinkTarget, 'utf8') === 'outside\n')
 
 const collector = readFileSync(new URL('./micro-seed-collect-navercafe.mts', import.meta.url), 'utf8')
-const gated = collector.slice(collector.indexOf('if (THIN && evidenceSalt.ok)'), collector.indexOf('console.log(`  ✅', collector.indexOf('if (THIN && evidenceSalt.ok)')))
+// 🔴 수집기는 언제나 얇은 행만 쓴다(전문 경로 삭제) — 댓글 DOM 은 salt 문 안에서만 읽는다
+const GATE = 'if (evidenceSalt.ok) {\n        const readComments'
+const gated = collector.slice(collector.indexOf(GATE), collector.indexOf('console.log(`  ✅', collector.indexOf(GATE)))
 const reader = collector.slice(collector.indexOf('async function readArticleComments'), collector.indexOf('\nmain()', collector.indexOf('async function readArticleComments')))
-check('collector reads comments only inside thin plus salt gate', gated.includes('readArticleComments(page)'))
+check('collector reads comments only inside the salt gate', collector.indexOf(GATE) > 0 && gated.includes('readArticleComments(page)')
+  && (collector.match(/readArticleComments\(page\)/g) ?? []).length === 1)
 check('comment reader performs no navigation', !reader.includes('.goto(') && !reader.includes('guardedNavigate'))
 check('collector writes evidence with restricted mode', collector.includes('writeSecureJsonl(evidencePath, keptEvidence)')
   && collector.includes('mode: 0o600') && collector.includes('chmodSync(dirname(path), 0o700)')

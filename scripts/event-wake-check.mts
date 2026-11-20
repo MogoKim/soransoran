@@ -201,7 +201,7 @@ try {
   check('🔴 예고 Persona 불일치는 깨움 앞에서 회차를 끝낸다(fail → exit 1 · 깨움 0)',
     /if \(announced !== null && res\.personaCode !== announced\) \{\s*\n\s*await prisma\.\$disconnect\(\)\s*\n\s*fail\(/.test(pub))
   const users = ['scripts/original-post-auto-publish.mts', 'scripts/runner-recover.mts', 'scripts/persona-comment-loop.mts', 'scripts/supply-process.mts',
-    'scripts/micro-seed-navercafe-run.mts', 'scripts/micro-seed-collect-navercafe.mts', 'scripts/micro-seed-82cook-thin-detail.mts', 'scripts/lib/supply-lease.mts']
+    'scripts/micro-seed-navercafe-run.mts', 'scripts/micro-seed-collect-navercafe.mts', 'scripts/lib/supply-lease.mts']
     .filter((f) => /wakeRunner\(/.test(strip(f)))
   check('🔴 깨움 배선 — 발행 뒤 댓글 한 곳만 남고, 수집기에는 공급 깨움 호출 자체가 없다',
     JSON.stringify(users) === JSON.stringify(['scripts/original-post-auto-publish.mts']), users.join(','))

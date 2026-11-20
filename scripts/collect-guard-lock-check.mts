@@ -76,7 +76,7 @@ function rootOf(dir: string): string {
 
 function plantStaleLock(root: string, ageMs: number): string {
   setGuardRoot(root)
-  const p = lockPath('82cook')
+  const p = lockPath('navercafe:wgang')
   mkdirSync(dirname(p), { recursive: true })
   writeFileSync(p, JSON.stringify({ pid: 999_999, at: Date.now() - ageMs, host: 'local', token: 'dead' }))
   return p
@@ -100,7 +100,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { join } from 'node:path'
 import { setGuardRoot, withGuardLock } from ${JSON.stringify(STORE)}
 setGuardRoot(process.env.GUARD_ROOT)
-const LOCK = join(process.env.GUARD_ROOT, 'collect-guard-82cook.json.lock')
+const LOCK = join(process.env.GUARD_ROOT, 'collect-guard-navercafe-wgang.json.lock')
 const ROLE = process.env.ROLE
 // 🔴 두 역할 모두 **먼저 관측한다**
 const observed = JSON.parse(readFileSync(LOCK, 'utf-8'))
@@ -118,7 +118,7 @@ if (ROLE === 'slow') {
 }
 try {
   // 🔴 잠금 안은 **동기**다 — Promise 를 돌려주면 store 가 던진다
-  await withGuardLock('82cook', () => {
+  await withGuardLock('navercafe:wgang', () => {
     appendFileSync(process.env.OUT, JSON.stringify({ ev: 'enter', t: Date.now(), role: ROLE }) + '\\n')
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
     appendFileSync(process.env.OUT, JSON.stringify({ ev: 'exit', t: Date.now(), role: ROLE }) + '\\n')
@@ -138,7 +138,7 @@ try {
 const CHILD_LEGACY = `
 import { appendFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-const LOCK = join(process.env.GUARD_ROOT, 'collect-guard-82cook.json.lock')
+const LOCK = join(process.env.GUARD_ROOT, 'collect-guard-navercafe-wgang.json.lock')
 const TTL = ${LOCK_TTL_MS}
 const ROLE = process.env.ROLE
 const observed = JSON.parse(readFileSync(LOCK, 'utf-8'))
@@ -251,7 +251,7 @@ setGuardRoot(process.env.GUARD_ROOT)
 const ROLE = process.env.ROLE
 try {
   // 🔴 잠금 안은 **동기**다 — Promise 를 돌려주면 store 가 던진다
-  await withGuardLock('82cook', () => {
+  await withGuardLock('navercafe:wgang', () => {
     appendFileSync(process.env.OUT, JSON.stringify({ ev: 'enter', t: Date.now(), role: ROLE }) + '\\n')
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
     appendFileSync(process.env.OUT, JSON.stringify({ ev: 'exit', t: Date.now(), role: ROLE }) + '\\n')
@@ -271,8 +271,8 @@ const CHILD_REAPER_LEGACY = `
 import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 const ROOT = process.env.GUARD_ROOT, SYNC = process.env.SYNC, ROLE = process.env.ROLE
-const LOCK = join(ROOT, 'collect-guard-82cook.json.lock')
-const REAP = join(ROOT, 'collect-guard-82cook.json.reap')
+const LOCK = join(ROOT, 'collect-guard-navercafe-wgang.json.lock')
+const REAP = join(ROOT, 'collect-guard-navercafe-wgang.json.reap')
 const TTL = ${LOCK_TTL_MS}, RTTL = ${REAPER_TTL_MS}
 const tok = ROLE + '-' + process.pid
 const nap = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
@@ -325,7 +325,7 @@ async function raceReaper(childSrc: string): Promise<{ peak: number; reaperToken
     plantStaleLock(root, LOCK_TTL_MS * 10)
     const sync = join(dir, 'sync')
     mkdirSync(sync, { recursive: true })
-    writeFileSync(reaperPath('82cook'), JSON.stringify({
+    writeFileSync(reaperPath('navercafe:wgang'), JSON.stringify({
       pid: 999_998, at: Date.now() - REAPER_TTL_MS * 10, host: 'local', token: 'dead-reaper',
     }))
     const script = join(dir, 'child.mts')
@@ -347,7 +347,7 @@ async function raceReaper(childSrc: string): Promise<{ peak: number; reaperToken
       if (e.ev === 'exit') cur -= 1
     }
     let reaperToken: string | null = null
-    try { reaperToken = JSON.parse(readFileSync(reaperPath('82cook'), 'utf-8')).token as string } catch { /* 없다 */ }
+    try { reaperToken = JSON.parse(readFileSync(reaperPath('navercafe:wgang'), 'utf-8')).token as string } catch { /* 없다 */ }
     return { peak: mx, reaperToken }
   })
 }
@@ -372,7 +372,7 @@ console.log('\n② 지연된 관측자 vs successor')
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   plantStaleLock(root, LOCK_TTL_MS * 10)
-  const lock = lockPath('82cook')
+  const lock = lockPath('navercafe:wgang')
 
   /**
    * 🔴 자식이 stale 을 **관측만 하고** 멈춘 사이, 부모가 successor 가 된다.
@@ -390,7 +390,7 @@ writeFileSync(process.env.OBSERVED, readFileSync(process.env.LOCK, 'utf-8'))
 const { existsSync } = await import('node:fs')
 while (!existsSync(process.env.SUCCESSOR)) { /* spin */ }
 try {
-  await withGuardLock('82cook', () => 'GOT', { waitMs: 400 })
+  await withGuardLock('navercafe:wgang', () => 'GOT', { waitMs: 400 })
   writeFileSync(process.env.RESULT, 'ENTERED')
 } catch { writeFileSync(process.env.RESULT, 'BLOCKED') }
 `)
@@ -406,7 +406,7 @@ try {
 
   // 부모가 successor 가 된다 (실제 코드로 회수)
   let successorToken = ''
-  await withGuardLock('82cook', () => {
+  await withGuardLock('navercafe:wgang', () => {
     successorToken = JSON.parse(readFileSync(lock, 'utf-8')).token as string
     writeFileSync(successor, 'go')
     // 🔴 잠금 안은 동기다 — 이벤트 루프를 놓지 않고 기다린다(자식은 별도 OS 프로세스다)
@@ -430,12 +430,12 @@ console.log('\n③ 갓 만들어진 lock')
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  const p = lockPath('82cook')
+  const p = lockPath('navercafe:wgang')
   mkdirSync(dirname(p), { recursive: true })
   // 🔴 내용이 **비어 있는** 새 잠금 — 옛 판은 이것을 "죽은 것" 으로 보고 훔쳤다
   writeFileSync(p, '')
   let entered = false
-  try { await withGuardLock('82cook', () => { entered = true }, { waitMs: 600 }) } catch { /* 기대한 실패 */ }
+  try { await withGuardLock('navercafe:wgang', () => { entered = true }, { waitMs: 600 }) } catch { /* 기대한 실패 */ }
   check('🔴 빈 잠금을 훔치지 않는다', !entered)
   check('🔴 그 잠금은 그대로 남아 있다', existsSync(p))
 })
@@ -447,10 +447,10 @@ console.log('\n④ 옛 owner 의 뒤늦은 해제')
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  const p = lockPath('82cook')
+  const p = lockPath('navercafe:wgang')
   mkdirSync(dirname(p), { recursive: true })
   let newOwnerToken = ''
-  await withGuardLock('82cook', () => {
+  await withGuardLock('navercafe:wgang', () => {
     // 잠금 안에서 **남이 뺏어간 것처럼** 파일을 바꿔 둔다
     newOwnerToken = 'other-owner'
     writeFileSync(p, JSON.stringify({ pid: 1, at: Date.now(), host: 'local', token: newOwnerToken }))
@@ -472,13 +472,13 @@ for (const [label, plant] of [
   await withTempAsync(async (dir) => {
     const root = rootOf(dir)
     setGuardRoot(root)
-    const p = lockPath('82cook')
+    const p = lockPath('navercafe:wgang')
     mkdirSync(dirname(p), { recursive: true })
     plant(p)
     const t0 = Date.now()
     let entered = false
     let threw = ''
-    try { await withGuardLock('82cook', () => { entered = true }, { waitMs: 700 }) }
+    try { await withGuardLock('navercafe:wgang', () => { entered = true }, { waitMs: 700 }) }
     catch (e) { threw = (e as Error).message }
     const took = Date.now() - t0
     check(`🔴 [${label}] 잠금을 얻지 않는다 (fail-closed)`, !entered)
@@ -500,9 +500,9 @@ await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   plantStaleLock(root, LOCK_TTL_MS * 3)
   // 🔴 reaper 가 없을 때만 새 reaper 를 `wx` 로 얻어 stale primary 를 회수한다
-  check('🔴 시작 시점에 reaper 가 없다', !existsSync(reaperPath('82cook')))
+  check('🔴 시작 시점에 reaper 가 없다', !existsSync(reaperPath('navercafe:wgang')))
   let entered = false
-  await withGuardLock('82cook', () => { entered = true }, { waitMs: 2000 })
+  await withGuardLock('navercafe:wgang', () => { entered = true }, { waitMs: 2000 })
   check('🟢 진짜 stale primary 는 회수한다', entered)
 })
 for (const [label, at, token] of [
@@ -517,20 +517,20 @@ for (const [label, at, token] of [
      * 🔴 **살아 있든 시효가 지났든 똑같이 물러난다.** reaper 를 뺏는 길은 코드에 없다 —
      *    "시효가 지났으니 죽었겠지" 를 근거로 뺏는 순간 그 판정 자체가 다시 경쟁이 된다.
      */
-    writeFileSync(reaperPath('82cook'),
+    writeFileSync(reaperPath('navercafe:wgang'),
       JSON.stringify({ pid: 999_999, at, host: 'local', token }))
-    const before = readFileSync(reaperPath('82cook'), 'utf-8')
+    const before = readFileSync(reaperPath('navercafe:wgang'), 'utf-8')
     let entered = false
     let threw = ''
-    try { await withGuardLock('82cook', () => { entered = true }, { waitMs: 600 }) }
+    try { await withGuardLock('navercafe:wgang', () => { entered = true }, { waitMs: 600 }) }
     catch (e) { threw = (e as Error).message }
     check(`🔴 [${label} reaper] 뺏지 않는다 — 이번 회차는 들어가지 않는다`, !entered)
     check(`🔴 [${label} reaper] 파일을 바꾸지도 지우지도 않는다`,
-      existsSync(reaperPath('82cook')) && readFileSync(reaperPath('82cook'), 'utf-8') === before)
+      existsSync(reaperPath('navercafe:wgang')) && readFileSync(reaperPath('navercafe:wgang'), 'utf-8') === before)
     check(`🔴 [${label} reaper] 마감을 넘기면 명확한 오류로 끝난다`, threw.includes('얻지 못했다'))
     if (label === '시효가 지난') {
       // 🔴 남은 reaper 는 **운영 이상**이다 — 오류가 그것과 사람 조치를 함께 말해야 한다
-      check('🔴 오류가 남은 reaper 를 지목한다', threw.includes(reaperPath('82cook')))
+      check('🔴 오류가 남은 reaper 를 지목한다', threw.includes(reaperPath('navercafe:wgang')))
       check('🔴 오류가 "자동으로 회수하지 않는다" 를 밝힌다', threw.includes('자동으로 회수하지 않는다'))
       check('🔴 오류가 사람 복구 절차를 준다 (job 정지 → 소유 프로세스 확인 → 삭제)',
         threw.includes('수집 job 을 모두 멈춘다')
@@ -552,16 +552,16 @@ console.log('\n⑦ 정상 획득·해제')
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  mkdirSync(dirname(lockPath('82cook')), { recursive: true })
+  mkdirSync(dirname(lockPath('navercafe:wgang')), { recursive: true })
   const order: string[] = []
-  await withGuardLock('82cook', () => { order.push('a') }, { waitMs: 2000 })
-  check('🔴 해제하면 잠금 파일이 사라진다', !existsSync(lockPath('82cook')))
-  check('🔴 reaper 도 남기지 않는다', !existsSync(reaperPath('82cook')))
-  await withGuardLock('82cook', () => { order.push('b') }, { waitMs: 2000 })
+  await withGuardLock('navercafe:wgang', () => { order.push('a') }, { waitMs: 2000 })
+  check('🔴 해제하면 잠금 파일이 사라진다', !existsSync(lockPath('navercafe:wgang')))
+  check('🔴 reaper 도 남기지 않는다', !existsSync(reaperPath('navercafe:wgang')))
+  await withGuardLock('navercafe:wgang', () => { order.push('b') }, { waitMs: 2000 })
   check('🟢 다음 사람이 곧바로 얻는다', order.join() === 'a,b')
   // 🔴 상태 파일 경로가 주입된 뿌리 아래다
   check('🔴 잠금·상태가 주입된 뿌리 아래에 있다',
-    guardPath('82cook').startsWith(root) && lockPath('82cook').startsWith(root))
+    guardPath('navercafe:wgang').startsWith(root) && lockPath('navercafe:wgang').startsWith(root))
 })
 
 // ─────────────────────────────────────────────────────────
@@ -574,25 +574,25 @@ console.log('\n⑨ saveGuard fencing')
 
 /** 잠금 안에서 쓸 수 있는 최소 상태 하나 */
 const stateWith = (requestsToday: number): ReturnType<typeof newGuardState> =>
-  ({ ...newGuardState('82cook', kstDayOf(new Date())), requestsToday })
+  ({ ...newGuardState('navercafe:wgang', kstDayOf(new Date())), requestsToday })
 
 // ── ⑨-1 정상 owner 는 쓴다 (회귀) ──
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  mkdirSync(dirname(lockPath('82cook')), { recursive: true })
-  await withGuardLock('82cook', () => { saveGuard(stateWith(7)) }, { waitMs: 2000 })
-  check('🟢 정상 owner 의 save 는 성공한다', existsSync(guardPath('82cook')))
+  mkdirSync(dirname(lockPath('navercafe:wgang')), { recursive: true })
+  await withGuardLock('navercafe:wgang', () => { saveGuard(stateWith(7)) }, { waitMs: 2000 })
+  check('🟢 정상 owner 의 save 는 성공한다', existsSync(guardPath('navercafe:wgang')))
   check('🟢 쓴 값이 그대로 읽힌다',
-    (JSON.parse(readFileSync(guardPath('82cook'), 'utf-8')).requestsToday as number) === 7)
-  check('🔴 save 가 reaper 를 남기지 않는다', !existsSync(reaperPath('82cook')))
+    (JSON.parse(readFileSync(guardPath('navercafe:wgang'), 'utf-8')).requestsToday as number) === 7)
+  check('🔴 save 가 reaper 를 남기지 않는다', !existsSync(reaperPath('navercafe:wgang')))
 })
 
 // ── ⑨-2 🔴 **실제 프로세스가 잠금을 승계한 뒤** 옛 주인이 쓰려 한다 ──
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  mkdirSync(dirname(lockPath('82cook')), { recursive: true })
+  mkdirSync(dirname(lockPath('navercafe:wgang')), { recursive: true })
 
   /**
    * 🔴 자식은 **실제 코드로** 승계한다 — reaper 를 `wx` 로 얻어 stale primary 를 rename 교체한다.
@@ -606,8 +606,8 @@ setGuardRoot(process.env.GUARD_ROOT)
 const nap = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
 writeFileSync(process.env.READY, '1')
 while (!existsSync(process.env.GO)) nap(2)
-await withGuardLock('82cook', () => {
-  writeFileSync(process.env.TOOK, readFileSync(lockPath('82cook'), 'utf-8'))
+await withGuardLock('navercafe:wgang', () => {
+  writeFileSync(process.env.TOOK, readFileSync(lockPath('navercafe:wgang'), 'utf-8'))
   nap(900)   // 옛 주인이 save 를 시도하는 동안 계속 쥐고 있는다
 }, { waitMs: 6000 })
 `)
@@ -625,7 +625,7 @@ await withGuardLock('82cook', () => {
   const nap = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
   // 🔴 내 잠금이 **시효를 넘긴 것처럼** 보이게 해 자식이 정상 경로로 승계하게 한다
   const past = (): Date => new Date(Date.now() - LOCK_TTL_MS * 10)
-  await withGuardLock('82cook', () => {
+  await withGuardLock('navercafe:wgang', () => {
     writeFileSync(go, '1')
     for (let i = 0; i < 400 && !existsSync(took); i += 1) nap(20)
     successorToken = existsSync(took)
@@ -636,10 +636,10 @@ await withGuardLock('82cook', () => {
     catch (e) { saveThrew = (e as Error).message }
     // 🔴 **판정은 여기서 한다** — 자식이 아직 쥐고 있는 동안이다.
     //    자식이 정상 해제한 뒤에 보면 "잠금이 없다" 가 되어 아무것도 증명하지 못한다
-    lockAfterSave = existsSync(lockPath('82cook'))
-      ? (JSON.parse(readFileSync(lockPath('82cook'), 'utf-8')).token as string)
+    lockAfterSave = existsSync(lockPath('navercafe:wgang'))
+      ? (JSON.parse(readFileSync(lockPath('navercafe:wgang'), 'utf-8')).token as string)
       : '(사라짐)'
-    stateFileAfterSave = existsSync(guardPath('82cook'))
+    stateFileAfterSave = existsSync(guardPath('navercafe:wgang'))
   }, { now: past, waitMs: 5000 })
   await child
 
@@ -648,7 +648,7 @@ await withGuardLock('82cook', () => {
   check('🔴 그 오류가 fail-closed 라고 밝힌다', saveThrew.includes('fail-closed'))
   check('🔴 상태 파일 write 0 — 예산·차단기를 덮지 못했다', !stateFileAfterSave)
   check('🔴 save 시도 뒤에도 successor 잠금이 그대로다', lockAfterSave === successorToken)
-  check('🔴 실패한 save 도 reaper 를 남기지 않는다', !existsSync(reaperPath('82cook')))
+  check('🔴 실패한 save 도 reaper 를 남기지 않는다', !existsSync(reaperPath('navercafe:wgang')))
 })
 
 // ── ⑨-3 잠금이 사라졌거나 읽을 수 없으면 쓰지 않는다 ──
@@ -659,14 +659,14 @@ for (const [label, sabotage] of [
   await withTempAsync(async (dir) => {
     const root = rootOf(dir)
     setGuardRoot(root)
-    mkdirSync(dirname(lockPath('82cook')), { recursive: true })
+    mkdirSync(dirname(lockPath('navercafe:wgang')), { recursive: true })
     let threw = ''
-    await withGuardLock('82cook', () => {
-      sabotage(lockPath('82cook'))
+    await withGuardLock('navercafe:wgang', () => {
+      sabotage(lockPath('navercafe:wgang'))
       try { saveGuard(stateWith(5)) } catch (e) { threw = (e as Error).message }
     }, { waitMs: 2000 })
     check(`🔴 [${label}] saveGuard 가 던진다`, threw.includes('확인할 수 없다'))
-    check(`🔴 [${label}] 상태 파일 write 0`, !existsSync(guardPath('82cook')))
+    check(`🔴 [${label}] 상태 파일 write 0`, !existsSync(guardPath('navercafe:wgang')))
   })
 }
 
@@ -674,33 +674,33 @@ for (const [label, sabotage] of [
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  mkdirSync(dirname(lockPath('82cook')), { recursive: true })
+  mkdirSync(dirname(lockPath('navercafe:wgang')), { recursive: true })
   let threw = ''
-  await withGuardLock('82cook', () => {
+  await withGuardLock('navercafe:wgang', () => {
     // 🔴 잠금을 쥔 뒤 남이 reaper 를 잡은 상황 — 뺏지 않고 쓰지도 않는다
-    writeFileSync(reaperPath('82cook'),
+    writeFileSync(reaperPath('navercafe:wgang'),
       JSON.stringify({ pid: 999_999, at: Date.now(), host: 'local', token: 'other-reaper' }))
     try { saveGuard(stateWith(5)) } catch (e) { threw = (e as Error).message }
   }, { waitMs: 2000 })
   check('🔴 reaper 를 못 얻으면 saveGuard 가 던진다', threw.includes('회수 잠금을 얻지 못했다'))
-  check('🔴 그때도 상태 파일 write 0', !existsSync(guardPath('82cook')))
+  check('🔴 그때도 상태 파일 write 0', !existsSync(guardPath('navercafe:wgang')))
   check('🔴 남의 reaper 를 뺏지 않는다',
-    (JSON.parse(readFileSync(reaperPath('82cook'), 'utf-8')).token as string) === 'other-reaper')
-  rmSync(reaperPath('82cook'), { force: true })
+    (JSON.parse(readFileSync(reaperPath('navercafe:wgang'), 'utf-8')).token as string) === 'other-reaper')
+  rmSync(reaperPath('navercafe:wgang'), { force: true })
 })
 
 // ── ⑨-5 잠금 안에서 Promise 를 돌려주면 거부한다 (TTL 초과 callback 봉쇄) ──
 await withTempAsync(async (dir) => {
   const root = rootOf(dir)
   setGuardRoot(root)
-  mkdirSync(dirname(lockPath('82cook')), { recursive: true })
+  mkdirSync(dirname(lockPath('navercafe:wgang')), { recursive: true })
   let threw = ''
   try {
-    await withGuardLock('82cook',
+    await withGuardLock('navercafe:wgang',
       (() => Promise.resolve('늦게 온다')) as unknown as () => string, { waitMs: 2000 })
   } catch (e) { threw = (e as Error).message }
   check('🔴 잠금 안에서 Promise 를 돌려주면 던진다', threw.includes('동기여야 한다'))
-  check('🔴 그래도 잠금은 풀린다', !existsSync(lockPath('82cook')))
+  check('🔴 그래도 잠금은 풀린다', !existsSync(lockPath('navercafe:wgang')))
 })
 
 resetGuardRoot()
@@ -716,7 +716,7 @@ console.log('\n⑧ 저장소 불변')
     : '(없음)'
   check('🔴 저장소 .microseed-data 의 잠금·상태 파일이 그대로다', repoBefore === repoAfter)
   check('🔴 이 fixture 가 저장소에 잠금을 만들지 않았다',
-    !existsSync(join(REPO_DATA, 'collect-guard-82cook.json.lock')))
+    !existsSync(join(REPO_DATA, 'collect-guard-navercafe-wgang.json.lock')))
   void statSync
 }
 

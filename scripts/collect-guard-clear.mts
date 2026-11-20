@@ -26,13 +26,13 @@ import {
   BREAKER, FAILURE_CLASSES, breakerOf, budgetOf, clearByHuman, guardSnapshot,
   type FailureClass, type SourceId,
 } from '../src/lib/collect-guard'
-import { SOURCE_FACTS } from '../src/lib/collect-schedule'
+import { SOURCE_IDS } from '../src/lib/collect-sources'
 import {
   guardPath, readGuard, reaperAnomaly, reaperAnomalyMessage, saveGuard, withGuardLock,
 } from './lib/collect-guard-store.mjs'
 
 /** 🔴 allowlist — 임의 문자열을 받지 않는다 */
-const SOURCES: readonly SourceId[] = SOURCE_FACTS.map((f) => f.id)
+const SOURCES: readonly SourceId[] = SOURCE_IDS
 const AUDIT_LOG = join('.microseed-data', 'collect-guard-audit.log')
 
 const argv = process.argv.slice(2)

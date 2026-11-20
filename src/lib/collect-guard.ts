@@ -21,9 +21,9 @@
  *    그래야 fixture 가 시각·파일 없이 같은 결과를 재현한다.
  */
 
-import { MAX_REQUESTS_PER_DAY, type SourceId } from './collect-schedule'
+import { ACCOUNT_DAILY_REQUESTS, dailyRequestsOf, type SourceId } from './collect-sources'
 
-// 🔴 호출부가 한 곳에서 import 하도록 그대로 내보낸다 — 소스 목록의 정본은 collect-schedule 이다
+// 🔴 호출부가 한 곳에서 import 하도록 그대로 내보낸다 — 원천 목록의 정본은 collect-sources 다
 export type { SourceId }
 
 // ─────────────────────────────────────────────────────────
@@ -193,16 +193,27 @@ export function breakerOf(state: GuardState, cls: FailureClass, nowMs: number): 
   return 'half-open'
 }
 
-/** 🔴 지금 요청을 보내도 되는가 — **예산과 차단기를 함께 본다** */
-export function canRequest(state: GuardState, nowMs: number, budgetLimit?: number): {
+export type BlockedBy = 'budget' | 'accountBudget' | FailureClass
+
+/**
+ * 🔴 지금 요청을 보내도 되는가 — **카페 예산 · 계정 전체 예산 · 차단기를 함께 본다.**
+ *    `accountUsedToday` 는 같은 날 모든 원천의 사용량 합이다(이 원천 포함). 넘기지 않으면 카페 예산만 본다.
+ */
+export function canRequest(state: GuardState, nowMs: number, opts: { accountUsedToday?: number } = {}): {
   ok: boolean
   reason: string
   /** 막은 것이 무엇인가 */
-  blockedBy: 'budget' | FailureClass | null
+  blockedBy: BlockedBy | null
 } {
-  const limit = budgetLimit ?? MAX_REQUESTS_PER_DAY[state.source]
+  const limit = dailyRequestsOf(state.source)
   if (state.requestsToday >= limit) {
     return { ok: false, blockedBy: 'budget', reason: `하루 요청 예산 소진 (${state.requestsToday}/${limit})` }
+  }
+  if (opts.accountUsedToday !== undefined && opts.accountUsedToday >= ACCOUNT_DAILY_REQUESTS) {
+    return {
+      ok: false, blockedBy: 'accountBudget',
+      reason: `수집 계정 하루 요청 예산 소진 (${opts.accountUsedToday}/${ACCOUNT_DAILY_REQUESTS} · 모든 카페 합)`,
+    }
   }
   for (const cls of FAILURE_CLASSES) {
     if (breakerOf(state, cls, nowMs) === 'open') {
@@ -290,8 +301,8 @@ export function rollBudgetDay(state: GuardState, kstDay: string): GuardState {
 
 export type BudgetView = { used: number; limit: number; remaining: number; ratio: number; exhausted: boolean }
 
-export function budgetOf(state: GuardState, budgetLimit?: number): BudgetView {
-  const limit = budgetLimit ?? MAX_REQUESTS_PER_DAY[state.source]
+export function budgetOf(state: GuardState): BudgetView {
+  const limit = dailyRequestsOf(state.source)
   const used = state.requestsToday
   return {
     used, limit, remaining: Math.max(0, limit - used),

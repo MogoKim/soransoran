@@ -16,48 +16,25 @@
  *    그래야 CI 가 fixture 로 이 규칙을 시험할 수 있다.
  */
 
+import { COLLECT_JOB_LABEL } from './collect-sources'
+
 /**
- * 🔴 **예약 실행이 반드시 지나야 하는 job 다섯 개** (2026-09-11).
- *
- *    수집 넷 + 처리 하나다. 82cook 은 **두 job 이 필요하다** —
- *    `raw-collect-82cook` 이 목록(`82cook.list.jsonl`)을 만들고,
- *    `supply-collect-82cook-thin` 이 그 목록을 소비해 얇은 상세를 연다.
- *    thin 은 목록을 스스로 만들지 않으므로 raw 가 없으면 **열 대상이 0** 이다.
- *
- *    🔴 앞선 판은 82cook 두 job 을 "선택 사항" 으로 두고 셋만 요구했다.
- *       그러면 82cook 이 등록되지 않은 채로도 격리 검사가 초록이고,
- *       공급은 네이버 둘로만 돈다 — 100/day 는 그 구성으로 나오지 않는다.
- *
- *    🔴 `raw-import`(Raw Vault 적재)는 여기 없다. 공급 레인이 아니라 보관 레인이다.
+ * 🔴 **예약 실행이 반드시 지나야 하는 job** — 수집 하나 + 처리 하나.
+ *    수집은 job 하나가 바퀴마다 원천 목록(`collect-sources`)을 차례로 돈다. 카페를 늘려도 job 은 그대로다.
+ *    🔴 Raw Vault 적재 · 82cook 수집은 없다(퇴역 — `RETIRED_JOBS`).
  */
 export const RUNTIME_JOBS: readonly string[] = [
-  'com.soransoran.navercafe-collect-remonterrace-multi',
-  'com.soransoran.navercafe-collect-wgang-multi',
-  'com.soransoran.raw-collect-82cook',
-  'com.soransoran.supply-collect-82cook-thin',
+  COLLECT_JOB_LABEL,
   'com.soransoran.supply-process',
 ]
 
 /**
  * 🔴 **job 이 실제로 일하려면 켜져 있어야 하는 스위치** (2026-09-11).
- *
- *    plist 를 설치하고 load 해도 **kill switch 가 닫혀 있으면 그 job 은 아무것도 하지 않는다.**
- *    파일이 있는지만 보고 "배포 완료" 라고 적으면, 며칠 뒤 "등록은 됐는데 공급이 0" 이 된다 —
- *    이 저장소가 이미 두 번 겪은 모양이다.
- *
- *    실측(2026-09-11 runtime `.env.local`):
- *      SORAN_NAVERCAFE_COLLECT_ENABLED=true · SORAN_82COOK_COLLECT_ENABLED=true
- *      SORAN_82COOK_THIN_DETAIL_ENABLED=true · **SORAN_SUPPLY_PROCESS_ENABLED=unset**
- *    → 처리 job 을 올려도 매 회차 재고만 읽고 끝난다. 배포 전에 막아야 한다.
- *
- * 🔴 **배포는 env 를 고치지 않는다.** 무엇이 없는지 정확히 말하고 멈춘다 —
- *    스위치를 코드가 켜면 "사람이 내려 둔 것" 과 "아직 안 켠 것" 을 구분할 수 없다.
+ *    plist 를 설치하고 load 해도 kill switch 가 닫혀 있으면 그 job 은 아무것도 하지 않는다.
+ *    🔴 배포는 env 를 고치지 않는다 — 무엇이 없는지 정확히 말하고 멈춘다.
  */
 export const JOB_ENV_REQUIREMENTS: Readonly<Record<string, string>> = {
-  'com.soransoran.navercafe-collect-remonterrace-multi': 'SORAN_NAVERCAFE_COLLECT_ENABLED',
-  'com.soransoran.navercafe-collect-wgang-multi': 'SORAN_NAVERCAFE_COLLECT_ENABLED',
-  'com.soransoran.raw-collect-82cook': 'SORAN_82COOK_COLLECT_ENABLED',
-  'com.soransoran.supply-collect-82cook-thin': 'SORAN_82COOK_THIN_DETAIL_ENABLED',
+  [COLLECT_JOB_LABEL]: 'SORAN_NAVERCAFE_COLLECT_ENABLED',
   'com.soransoran.supply-process': 'SORAN_SUPPLY_PROCESS_ENABLED',
 }
 
@@ -138,6 +115,15 @@ export function judgeJobEnv(input: {
 export const RETIRED_JOBS: readonly string[] = [
   'com.soransoran.navercafe-collect-remonterrace',
   'com.soransoran.navercafe-collect-wgang',
+  /**
+   * 🔴 **카페별 수집 job 은 퇴역했다** (2026-11-19). 잠금이 하나라 같은 시각이면 뒤쪽이 `LOCK_BUSY` 였다.
+   *    지금은 `COLLECT_JOB_LABEL` 하나가 바퀴마다 원천을 차례로 돈다 — 옛 job 이 남으면 같은 카페를 두 번 연다.
+   */
+  'com.soransoran.navercafe-collect-remonterrace-multi',
+  'com.soransoran.navercafe-collect-wgang-multi',
+  /** 🔴 82cook 수집은 끝났다 — 수집기 · 템플릿을 지웠다(설치본은 보관소에 있다) */
+  'com.soransoran.raw-collect-82cook',
+  'com.soransoran.supply-collect-82cook-thin',
   /**
    * 🔴 **중앙 공급 러너는 폐기됐다** (2026-09-11). 수집·판정·적재를 한 회차에 묶어서
    *    82cook 하나의 장애가 세 source 의 공급을 세웠다. 지금은 수집 job 셋과
