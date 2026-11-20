@@ -7,7 +7,7 @@
  *   ① D30 이상 preflight — 계약 유효 + stage-active 두 칸 (reserve60·active40 / 계약59·active60 / active60 중 계약 무효 /
  *      모름 / 판독 어긋남 / D20 은 보지 않음)
  *   ② Persona 용량 두 칸은 4상태 정본 한 판정에서 나온다 — active 행 수로 대신하지 않는다
- *   ③ 증거 — 자동 target 글의 수동 Persona 댓글: 시행일(11-14)부터 COMMENT_MANUAL_PERSONA · 그 전 날짜는 그대로
+ *   ③ 증거 — 자동 target 글의 수동 Persona 댓글: COMMENT_MANUAL_PERSONA(무결성 — 한 건이어도 FAIL)
  *   ④ 비용 진단 — noReady 장부 단계 분해 · #838 epoch 단가는 보고 전용(판정 입력 불변)
  *   ⑤ 댓글 vitality — 분모 0 · 부분 데이터 · 실회원 · 8~10 분포 · 불변식(중복 · 글쓴이 답글 · 구조 상한)
  *   ⑥ 배선 — controller 가 한 판독 제공자를 쓰고, 판정 사실에 진단 칸이 섞이지 않는다
@@ -21,7 +21,7 @@ import { profileOf } from '../src/lib/scale-profile'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
 import { personaCapacityOf } from '../src/lib/persona-reserve'
 import {
-  judgeStageEvidence, personaCommentCapFor, MANUAL_PERSONA_PROOF_GATE_FROM_KST,
+  judgeStageEvidence,
   type EvidencePost, type EvidenceSideSignals, type StageEvidenceFacts,
 } from '../src/lib/stage-evidence'
 import { DECISION_WRITER } from '../src/lib/stage-decision-contract'
@@ -57,9 +57,7 @@ const GOOD = (stage: 'd20' | 'd30' | 'd50'): PreflightFacts => {
       trialCost: { settledRequests: 40, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001 },
     },
     latencyP50H: 3, latencyP90H: 10,
-    contractValidPersonas: 500, stageActivePersonas: 500,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.5,
-    auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2, runnerHealth: 'ok',
+    contractValidPersonas: 500, stageActivePersonas: 500, supplyDailyUsdCap: 1.2,
   }
 }
 const pf = (stage: 'd20' | 'd30' | 'd50', o: Partial<PreflightFacts> = {}): PreflightVerdict =>
@@ -143,7 +141,7 @@ console.log('\n③ 증거 — 자동 target 글의 수동 Persona 댓글')
     const post = (i: number, o: Partial<EvidencePost> = {}): EvidencePost => ({
       postId: `p-${i}`, queueId: `q-${i}`, publishedAtMs: T0 + i * 4 * HOUR, unattended: true, queueRows: 1, publishLogs: 1,
       authorPersonaId: `author-${i}`, decider: 'auto', release: 'STAMPED_ELIGIBLE',
-      personaComments: [{ personaId: `c-${i}`, createdAtMs: T0 + i * 4 * HOUR + 12 * MIN, topLevel: true, provenance: 'auto' }],
+      personaComments: [{ personaId: `c-${i}`, createdAtMs: T0 + i * 4 * HOUR + 5 * MIN, topLevel: true, provenance: 'auto' }],
       ...o,
     })
     const posts = [post(0), post(1), post(2)]
@@ -152,43 +150,38 @@ console.log('\n③ 증거 — 자동 target 글의 수동 Persona 댓글')
     if (manualOn === 'human') posts.push(post(3, { decider: 'human', unattended: false, personaComments: [manual] }))
     return {
       kstDate, stage: 'd3',
-      decision: { kstDate, state: 'TRIAL', release: 'd3', decidedBy: DECISION_WRITER },
-      posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: personaCommentCapFor('bootstrap-auto'),
-      audits: { rows: [{ postId: 'p-0', queueId: 'q-0', judged: true, defectYes: false, retryable: false, overdue: false }] },
+      decision: { kstDate, release: 'd3', decidedBy: DECISION_WRITER },
+      readAtMs: T0 + 48 * HOUR,
+      posts, orphanPublishLogs: 0, unloggedPublishes: 0,
+      audits: { rows: [{ postId: 'p-0', queueId: 'q-0', judged: true }] },
     }
   }
   const costOk = judgeCost({ uses: true, tally: { ...tallyOf([]), settledUsd: 0.01, overruns: 0 }, ledgerError: null, settleHold: null, capUsd: 1 })
   const side: EvidenceSideSignals = {
     cost: [
-      { lane: 'supply', name: '공급 장부', health: costOk.health },
       { lane: 'comment', name: '댓글 장부', health: costOk.health },
       { lane: 'audit', name: '감사 장부', health: costOk.health },
     ],
-    errors: 'ok',
+
     supplyCostEvidence: {
-      legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok',
+wholeDayCriticalHealth: 'ok',
       envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
     },
   }
   const j = (d: string, m: 'target' | 'human' | 'none') => judgeStageEvidence(d, 'd3', factsOn(d, m), side)
-  const G = MANUAL_PERSONA_PROOF_GATE_FROM_KST
+  const G = '2026-11-21'
   const cleanOn = j(G, 'none')
-  check(`🟢 시행일(${G}) · 수동 0 → 새 코드 없음 · manualPersonaOnTargets 0`,
+  check('🟢 수동 0 → 코드 없음 · manualPersonaOnTargets 0',
     !has(cleanOn.codes, 'COMMENT_MANUAL_PERSONA') && cleanOn.counts.manualPersonaOnTargets === 0, JSON.stringify(cleanOn.codes))
   const onTarget = j(G, 'target')
-  check(`🔴 시행일 · 자동 target 글(첫 댓글은 자동으로 이미 있음)에 수동 Persona 댓글 1 → COMMENT_MANUAL_PERSONA FAIL`,
+  check('🔴 자동 target 글(첫 댓글은 자동으로 이미 있음)에 수동 Persona 댓글 1 → COMMENT_MANUAL_PERSONA FAIL',
     onTarget.verdict === 'FAIL' && has(onTarget.codes, 'COMMENT_MANUAL_PERSONA') && onTarget.counts.manualPersonaOnTargets === 1
     && onTarget.counts.firstCommentOk === 3, JSON.stringify({ v: onTarget.verdict, c: onTarget.codes, k: onTarget.counts }))
-  check('🔴 수동 댓글은 지우지 않고 자동 증거에서만 뺀다 — 첫 댓글 3/3 은 자동 댓글로만 셈 · 수동 1 은 manualPersonaComments 로 남음',
-    onTarget.counts.manualPersonaComments === 1 && onTarget.counts.firstCommentOk === 3)
+  check('🔴 수동 댓글은 지우지 않고 자동 증거에서만 뺀다 — 글당 댓글의 분자에 들지 않는다',
+    onTarget.counts.personaComments === cleanOn.counts.personaComments && onTarget.counts.firstCommentOk === 3)
   const onHuman = j(G, 'human')
   check('🟢 사람 승인 글(증명 target 밖)의 수동 Persona 댓글은 증명 FAIL 코드를 내지 않는다',
     !has(onHuman.codes, 'COMMENT_MANUAL_PERSONA') && onHuman.counts.manualPersonaOnTargets === 0, JSON.stringify(onHuman.codes))
-  const before = j('2026-11-13', 'target')
-  check('🟢 시행일 전날(11-13) 같은 입력 → 새 코드 · 새 칸 없음(역사 판정 소급 변경 0)',
-    !has(before.codes, 'COMMENT_MANUAL_PERSONA') && before.counts.manualPersonaOnTargets === undefined, JSON.stringify(before.codes))
-  const d20hist = j('2026-11-12', 'target')
-  check('🟢 D20 증명일(11-12) 재판정 — 새 코드 없음', !has(d20hist.codes, 'COMMENT_MANUAL_PERSONA'))
 }
 
 // ─────────────────────────────────────────────────────────

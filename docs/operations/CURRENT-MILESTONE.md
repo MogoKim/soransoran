@@ -10,6 +10,11 @@
 > `PLANNED → DESIGNED → CODE_PASS → MERGED → DEPLOYED → OPERATING_PASS`는 서로 다른 상태다.
 > 관측하지 않은 것을 PASS로 쓰지 않는다. 모르는 운영 결과는 UNKNOWN이다.
 
+> 🔴 2026-11-20 사다리 정책 변경(canon §1.1 · §3.2 · §6 — **CODE 단계 · 배포 전**): 하루 판정은 수와 결의 비율 + 무결성 ·
+> 연속 통과로 올림 · 미달이어도 내리지 않음 · 내려가는 길은 브레이크 · 비용 추정 관문은 경고 · `CERTIFIED` 쓰기 활성 ·
+> 운영 controller 는 제한 복구를 더 부르지 않는다. 아래 as-of 11-15 본문의 "증명일 · TRIAL 뒤 30/30 · preflight 비용" 표현은
+> 그 시점의 기록이다 — 지금 규칙은 canon 과 `src/lib/ladder-table.ts` 가 정한다.
+
 ## 0. 창업자용 한 문장
 
 **D20 operating PASS는 유지된다. D30을 막던 Persona·비용·댓글 결함의 코드와 자산은 복구 브랜치에서
@@ -184,7 +189,7 @@
 | Persona | contract-valid 60 · active 60 · 기존 40 배정 불변 | 일부 적재·충돌·cadence 위반 | DB/근거 판독 실패 | 새 runtime에서 cohort 전체 pause → active 0·기존 40 불변 확인 → 직전 runtime pin 복구 |
 | 비용 | rolling 72h ≤ $0.040/result | 초과 | 장부 미정산·분모 0 | 지배 판정 경로 off/직전 SHA |
 | 댓글 | block code 정상 · starvation 0 · 불변식 위반 0 | 첫 댓글/실회원/중복 회귀 | 표본 또는 provenance 부족 | followup switch off |
-| D30 | controller `TRIAL d30` 뒤 자연 30/30 증명 | controller/preflight 또는 증명 FAIL | 증거 부족 | D20 공개 유지 |
+| D30 | 열린 단계의 하루 판정(수·결 비율 — 숫자는 `src/lib/ladder-table.ts`)이 연속 통과 | 무결성 FAIL · 통과선 미달 | 판정 모름 | 공개 단계는 내려가지 않는다(브레이크만 감속) |
 
 ## 5. 다음 critical path
 
@@ -193,9 +198,9 @@
 | 순서 | 목표 | 완료 조건 | 금지 |
 |---|---|---|---|
 | D30-FIX | Persona +20 · 비용 지배 판정 · 댓글 starvation 수리 · 완료 상태 계약 | exact-head CI · runtime exact SHA · contract-valid/active 60 · rolling 비용 green · 자연 댓글 불변식 green | 수동 stage·READY·게시·댓글·장부 보정 · gate 완화 |
-| D30 | D20 operating PASS 선행(11-12 ✅) · controller 자연 개방 | 자동 30/30 · 첫 댓글 30/30 · 비용·감사·provenance · 수동 표식 0 | 날짜로 강제 개방 · 증명 전·도중 runtime 변경 |
-| D20 | D10 operating PASS 선행 · 인증 유지 | 평상일 0..20 자연 운영 | 매일 재증명 강제 |
-| D50 | D30 operating PASS 선행 | Persona 100 · preflight green · 자동 50/50 | D30 생략 |
+| D30 | D20 operating PASS 선행(11-12 ✅) · controller 자연 개방 | 하루 판정(수·결 비율 + 무결성 — canon §6 · 숫자는 `src/lib/ladder-table.ts`) 연속 통과 · 수동 표식 0 | 날짜로 강제 개방 · 배포 창 밖 runtime 변경 |
+| D20 | D10 operating PASS 선행 · 인증 유지 | 0..20 자연 운영 | 통과선 미달을 이유로 한 단계 내림 |
+| D50 | D30 operating PASS 선행(하루 판정 연속 통과) | Persona 하한(표) · 올림 관문 green · D50 하루 판정 연속 통과 | D30 생략 |
 | VIEWS | 조회수·공감 초기 보정(2026-11-18 창업자 결정 · 구현 전 — 지금 화면은 실제 열람·노출) | 설계 승인 · 실제 값 원장 분리 유지 · 순위·North Star 입력 0 · 회원 약 1만 명 종료 조건 · UI 표본 PASS | 접속자 수·실시간 표시 · 더한 값을 순위·North Star 에 넣기 |
 
 공격적 목표일은 PASS 약속이 아니다. D30은 생략하지 않음이 단계 계약이다. 실패 축은 즉시 수리하지만

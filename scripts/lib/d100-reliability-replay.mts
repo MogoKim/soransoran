@@ -27,11 +27,6 @@ export type BaselineGap = {
   readonly current: Observation
   /** 보정 뒤 계속 지켜야 하는 값(부분 일치) */
   readonly target: Observation
-  /**
-   * 🔴 reader 판에서 멈춘 중간 상태(부분 일치) — 읽는 쪽은 준비됐지만 writer 가 아직 꺼져 있다.
-   *    이 칸이 있는 gap 은 `target` 이 아니라 여기와 맞으면 `READER_READY` 다. 해소(`GAP_CLOSED`)로 세지 않는다.
-   */
-  readonly readerReady?: Observation
 }
 
 export const BASELINE_GAPS: readonly BaselineGap[] = [
@@ -59,19 +54,11 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
       day0Brake: 'slowdown', day0Operating: 'd3', day0Release: 'd3', day1State: 'REPROVE',
       day1Sustained: 'd3', day1BelowCertified: true, exactNDay1Release: 'd5',
     },
-    /**
-     * 🔴 완전 해소는 writer 활성(`CERTIFIED_ROLLOUT_PHASE = WRITER_ACTIVE`) 뒤다 — 3일 이월 밖 감속까지 인증을 되찾으려면
-     *    감속 행이 `CERTIFIED` 를 들어야 한다. reader 판은 이월 안 감속만 복구하고 `READER_READY` 로 남는다.
-     */
+    /** 감속한 날의 행이 열린 단계를 `CERTIFIED` 로 들고 가고, 신호가 돌아온 날 그 단계로 돌아온다 */
     target: {
-      certified: 'd5', day0Brake: 'slowdown', day0Operating: 'd3', day1Sustained: 'd5',
-      day1State: 'TRIAL', day1Release: 'd10', day1BelowCertified: false, exactNDay1Release: 'd5',
+      certified: 'd5', day0Brake: 'slowdown', day0Operating: 'd3', day0Raised: false, day1Sustained: 'd5',
+      day1Release: 'd5', day1BelowCertified: false, secondBrakeDayRelease: 'd3',
       readerAcceptsCertified: true, writerEmitsCertified: true,
-    },
-    readerReady: {
-      certified: 'd5', day0Brake: 'slowdown', day0Operating: 'd3', day1Sustained: 'd5',
-      day1State: 'TRIAL', day1Release: 'd10', day1BelowCertified: false, exactNDay1Release: 'd5',
-      readerAcceptsCertified: true, writerEmitsCertified: false,
     },
   },
   {
@@ -82,9 +69,10 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
       controllerFeedsCurrentErrors: true, historicalCallCount: 4, currentErrorCallCount: 4,
       canDistinguishErrorDate: false, pastVerdict: 'FAIL', pastHasRunnerBad: true, sustainedAfter: 'd3',
     },
+    /** 하루 판정은 러너 건강을 입력으로 받지 않는다 — 양은 수가 재고 당일 러너 결함은 브레이크 오류 축이 본다 */
     target: {
-      controllerFeedsCurrentErrors: false, historicalCallCount: 4, currentErrorCallCount: 0,
-      canDistinguishErrorDate: true, pastVerdict: 'PASS', pastHasRunnerBad: false, sustainedAfter: 'd5',
+      controllerFeedsCurrentErrors: false, currentErrorCallCount: 0, evidenceTakesRunnerHealth: false,
+      pastVerdict: 'PASS', pastHasRunnerBad: false, sustainedAfter: 'd5',
     },
   },
   {
@@ -129,7 +117,7 @@ export const BASELINE_GAPS: readonly BaselineGap[] = [
   },
 ]
 
-export type GapVerdict = 'MATCH' | 'GAP_CLOSED' | 'READER_READY' | 'DRIFT'
+export type GapVerdict = 'MATCH' | 'GAP_CLOSED' | 'DRIFT'
 
 /** 기대 칸이 전부 같은 값인가 — 관측에 없는 칸은 불일치다 */
 export function matchesObservation(observed: Observation, spec: Observation): boolean {
@@ -139,10 +127,8 @@ export function matchesObservation(observed: Observation, spec: Observation): bo
 export function judgeGap(gap: BaselineGap, observed: Observation): GapVerdict {
   const atCurrent = matchesObservation(observed, gap.current)
   const atTarget = matchesObservation(observed, gap.target)
-  const atReader = gap.readerReady !== undefined && matchesObservation(observed, gap.readerReady)
-  if (atCurrent && !atTarget && !atReader) return 'MATCH'
+  if (atCurrent && !atTarget) return 'MATCH'
   if (atTarget && !atCurrent) return 'GAP_CLOSED'
-  if (atReader && !atCurrent && !atTarget) return 'READER_READY'
   return 'DRIFT'
 }
 

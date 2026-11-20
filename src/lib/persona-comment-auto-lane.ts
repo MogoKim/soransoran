@@ -137,7 +137,9 @@ export function judgeAutoLane(f: AutoLaneFacts): AutoLaneVerdict {
  * 🔴 **첫 댓글은 글을 읽을 시간이 지난 뒤에 단다** — 글마다 3~9분, 글 id 로 정해지는 값이다(같은 글은 언제 물어도 같다).
  *    발행 직후 깨움이 곧바로 댓글을 만들면 모든 글에 "올라온 그 분의 댓글"이 붙는다. 사람은 읽고 나서 쓴다.
  *    상한 9분은 60분 시한(`AUTO_FIRST_COMMENT_WINDOW_MINUTES`) 안에 정기 회차가 두 번 이상 더 남는 값이다.
- *    🔴 이것은 생성 전 고르는 규칙이다. 발행 트랜잭션(`judgeAutoLane`)과 단계 증거는 이 값을 보지 않는다.
+ *    🔴 이것은 생성 전 고르는 규칙이다. 발행 트랜잭션(`judgeAutoLane`)은 이 값을 보지 않는다.
+ *    하루 판정의 첫 댓글 창은 이 상한에서 나온다(`ladder-table.ts` `firstCommentWindowMs` = 상한 + 처리 여유 1분) —
+ *    상한을 바꾸면 판정 창이 같이 움직인다.
  */
 export const FIRST_COMMENT_DELAY_MIN_MS = 3 * 60_000
 export const FIRST_COMMENT_DELAY_MAX_MS = 9 * 60_000

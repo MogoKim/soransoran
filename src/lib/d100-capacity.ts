@@ -22,6 +22,7 @@
 import {
   PROFILES, RUNTIME_STAGES, isRuntimeStage, profileOf, type ReleaseStage, type RuntimeStage,
 } from './scale-profile'
+import { ladderRowOf } from './ladder-table'
 
 export const D100_STAGES = ['d3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as const
 export type D100Stage = (typeof D100_STAGES)[number]
@@ -30,7 +31,7 @@ export type D100Stage = (typeof D100_STAGES)[number]
  * 🔴 **한 편을 공개하려면 원천 몇 건이 드는가 — 비권위 용량 계획값** (2026-10-04 격하 · canon §3.1 · C-02).
  *
  *    과거 전환율에서 온 **계획값**이다. 수집 job 수·회차를 어림할 때만 쓴다.
- *    🔴 단계 preflight·준비도 판정은 이 값을 읽지 않는다 — 증명일 기회는 `slotValidOpportunities`
+ *    🔴 단계 preflight·준비도 판정은 이 값을 읽지 않는다 — 다음 날 기회는 `slotValidOpportunities`
  *       (슬롯 시각 정본 판정) 하나가 본다. 상세가 많아도 슬롯 기회 부족을 대신 통과시키지 않는다.
  *    🔴 보고서가 이 값을 "측정값" · "필요량" 이라고 부르지 않는다.
  */
@@ -39,13 +40,13 @@ export const PLANNED_DETAIL_PER_PUBLIC_POST = 3.82
 /**
  * 🔴 **`STOCK_DAYS`(14일치 재고) · `readyStock14Days` 를 지웠다** (2026-09-30 · source-slot-v1).
  *    정본: fourteen-day finished-post inventory 는 지속 준비도가 아니다. 완성 글을 쌓아 두는 목표는 없다 —
- *    다음 단계 준비도는 `judgeNextPreflight`(증명일 slot-valid 기회 · 처리량 · Persona · 비용)가 본다.
+ *    다음 단계 준비도는 `judgeNextPreflight`(다음 날 slot-valid 기회 · 처리량 · Persona · 비용)가 본다.
  */
 
 /**
  * 📜 **`READY_NET_MARGIN`(1.2 — 공개량에 20% 고정 가산)을 지웠다** (2026-10-04 · canon §3.1 · C-01).
  *    근거 없는 할증이 D5 preflight 를 영구히 막았다(`readyNeeded=6` vs 실측 공급 5). 이제 필요 READY 는
- *    `stage-ladder-generic.readyRequirementOf` 하나 — 증명일 목표 슬롯 + 같은 창에서 실측한 손실 보충 — 가 정한다.
+ *    `stage-ladder-generic.readyRequirementOf` 하나 — 다음 날 목표 슬롯 + 같은 창에서 실측한 손실 보충 — 가 정한다.
  *    실측이 없으면 UNKNOWN 이다. 🔴 상수를 되살리지 않는다(`ready-loss-contract-check` 가 막는다).
  */
 
@@ -85,7 +86,7 @@ export type D100Plan = {
   publishSlotCount: number
   /**
    * 📜 `minimumObservationDays`(7·14·21일 최소 관측)를 지웠다 (2026-09-30). 보고 화면만 읽던 값이지만
-   *    정본은 "no arbitrary 7/14/21-day wait" 다 — PASS + 다음 단계 preflight green 이면 다음 증명일이 잡힌다.
+   *    정본은 "no arbitrary 7/14/21-day wait" 다 — 연속 통과 + 다음 단계 관문 green 이면 다음 날 올라간다.
    */
   /** 🔴 **계획이 아니라 실제 스케줄러가 할 수 있는 것** */
   scheduler: SchedulerSupport
@@ -164,9 +165,10 @@ export function schedulerSupportOf(stage: D100Stage): SchedulerSupport {
  *    지속 목표는 **지금** 보고한다(없는 프로필을 이유로 숫자를 숨기지 않는다).
  * 🔴 D100 지속 목표는 "300명 이상" 이다 — 여기 적는 300 은 **하한**이다.
  */
-export const PERSONA_CANARY_FLOOR: Readonly<Record<D100Stage, number>> = {
-  d3: 24, d5: 24, d10: 30, d20: 40, d30: 60, d50: 100, d100: 180,
-}
+export const PERSONA_CANARY_FLOOR: Readonly<Record<D100Stage, number>> = Object.fromEntries(
+  // 🔴 숫자는 사다리 표(`ladder-table`) 한 곳에 있다 — 여기 다시 적지 않는다
+  D100_STAGES.map((stage) => [stage, ladderRowOf(stage)?.personaFloor ?? Number.POSITIVE_INFINITY]),
+) as Record<D100Stage, number>
 
 export const PERSONA_SUSTAINED_TARGET: Readonly<Record<D100Stage, number>> = {
   d3: 24, d5: 24, d10: 30, d20: 60, d30: 90, d50: 150, d100: 300,

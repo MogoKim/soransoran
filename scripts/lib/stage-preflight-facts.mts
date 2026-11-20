@@ -15,10 +15,8 @@
  *   · 지연          최근 3일 지금 계약 도장(`source-slot-v1`)으로 나간 글의 원천 게시 → 공개 p50 · p90
  *   · Persona       🔴 **계약 유효 수는 Persona 레인이 제공한다** — 이 파일은 주입 인터페이스(`contractValidPersonas`)만 둔다.
  *                   읽기 실패면 `null`(UNKNOWN). 🔴 활성 행 수로 대체하지 않는다(정본: active rows are not capacity).
- *   · 단가          최근 3일(증거일 포함) 장부 정산 평균 — 댓글 1건 · 감사 1건 · 자동 READY 1건당 공급 (PR3 KEEP)
- *   · 상한          공급은 env 값을 그 증명일의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 것 · 댓글 · 감사는 각 레인 정본 env 판독기 값 그대로
- *                  (`commentLoopLimitsFromEnv` · `auditLimitsFromEnv` — 댓글 기본 $0.20/천장 $0.50을 여기서 다시 누르지 않는다)
- *   · 러너 건강      controller 가 이미 관측한 오류 신호(`errorSignalOf`)
+ *   · 단가          최근 3일(증거일 포함) 장부 정산 평균 — 자동 READY 1건당 공급. 🔴 경고에만 쓴다(단계를 막지 않는다)
+ *   · 상한          공급 env 값을 그 날의 날짜 계약 승인 천장(`supplyApprovedDailyUsdOf`)으로 누른 것
  *
  * 🔴 **지운 입력** — `readyAutoStock`(지금 시각 기준 완성 글 수 · `STOCK_SHORT`) · `activePersonas`(활성 행 수) ·
  *    증거일 하루 단가(관측 없는 날 UNKNOWN) — 전부 이 파일에서 뺐다.
@@ -37,9 +35,7 @@ import {
 import { costEpochDiagnosticOf, noReadyBreakdownOf } from '../../src/lib/supply-cost-diagnostics'
 import { PER_RUN_MAX } from '../../src/lib/publish-slot-catchup'
 import { kstDateString } from '../../src/lib/release-canary'
-import {
-  COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv,
-} from '../../src/lib/persona-comment-auto-lane'
+import { COMMENT_LOOP_BUDGET_ENV } from '../../src/lib/persona-comment-auto-lane'
 import { AUTO_DECIDER, AUTO_READY_ENV, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
 import {
@@ -59,13 +55,10 @@ import {
 } from '../../src/lib/supply-workset'
 import { claimsJitContract, intentLinkIssue, type IntentLinkIssue } from '../../src/lib/supply-intent'
 import { currentQualityContract, type QualityContractMark } from '../../src/lib/quality-contract'
-import type { Health } from '../../src/lib/ops-status'
 import { HEARTBEAT_INTERVAL_MINUTES } from './original-post-runner-template'
 import { COMMENT_RUNNER_SLOTS, FIRST_COMMENT_ATTEMPTS } from './persona-comment-runner-template'
 import { defaultLedgerDir, ledgerPathOf, readLedgerDay } from './llm-ledger-store.mjs'
 import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
-import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
-import { commentLoopLedgerDir } from './persona-comment-loop.mjs'
 import { readyOpportunitiesOf, type LoadedStock } from './publishable-stock.mjs'
 import { readStageRecoverySourceHashes } from './stage-recovery-source-receipt.mjs'
 
@@ -75,7 +68,6 @@ export const RUNNER_GRID: RunnerGrid = {
   perRunMax: PER_RUN_MAX,
   commentSlots: COMMENT_RUNNER_SLOTS,
   attempts: FIRST_COMMENT_ATTEMPTS,
-  commentRunRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT,
 }
 
 /** 🔴 preflight 가 읽는 정본 env 키 — 이 목록 밖은 메모리에 올리지 않는다 */
@@ -85,18 +77,6 @@ export const PREFLIGHT_ENV_KEYS: readonly string[] = [
   AUDIT_BUDGET_ENV.dailyUsd, AUDIT_BUDGET_ENV.runRequestCap, AUDIT_BUDGET_ENV.headroomMultiplier,
   ...Object.values(COMMENT_LOOP_BUDGET_ENV),
 ]
-
-/**
- * 🔴 **정산 단가** — 장부의 정산된 유료 요청만 센다(countTokens · 차단 · 미정산 제외).
- *    정산 건이 없으면 `null`(모름). 🔴 예약액으로 추정하지 않는다.
- */
-export function settledUnitUsd(entries: readonly LedgerEntry[] | null): number | null {
-  if (entries === null) return null
-  const settled = entries.filter((e) => e.stage !== 'countTokens' && e.status === 'settled' && e.settledUsd !== null)
-  if (settled.length === 0) return null
-  const usd = settled.reduce((n, e) => n + (e.settledUsd ?? 0), 0)
-  return usd > 0 ? usd / settled.length : null
-}
 
 /** 🔴 정산 합계 — 공급 건당 비용의 분자. 못 읽었으면 `null` */
 export function settledTotalUsd(entries: readonly LedgerEntry[] | null): number | null {
@@ -1089,7 +1069,6 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   env: Readonly<Record<string, string>>
   dataDir: string
   now: Date
-  runnerHealth: Health | null
   /** 오늘 제한 복구의 신원·비용·성과 입력(`StagePreflightRecoveryInput`). 주지 않으면 오늘 claim이 없는 것으로 본다. */
   recovery?: StagePreflightRecoveryInput
   /**
@@ -1107,8 +1086,6 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
   /** 🔴 결정일 — 한 번만 계산해 recovery 신원 판정과 `facts.proofKstDate` 에 같이 쓴다(`now` 가 아니다) */
   const decisionDate = recoveryIdentityDateOf(i.proofSlots)
   const win = preflightWindowsOf(i.evidenceDate, i.now)
-  const dates = win.proof.dates
-  const pooled = (dir: string): LedgerEntry[] | null => pooledEntries(dates.map((d) => readDay(dir, d)))
 
   // 기회(READY) — 자동 · 열림. 증명일 슬롯 짝짓기는 커버리지와 대기 결말 분류가 **같은 호출**을 쓴다
   const readyOpps = i.autoOpen.open
@@ -1184,9 +1161,6 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     }
   }
 
-  // 단가
-  const commentUsdPerRequest = settledUnitUsd(pooled(commentLoopLedgerDir()))
-  const auditUsdPerCall = settledUnitUsd(pooled(auditLedgerDir()))
   /**
    * 🔴 **비용 귀속** — 같은 창 공급 장부(하루라도 손상이면 모름) → 현재 계약 요청(`supplyContract` · `sourceKey`)을
    *    cohort 행 결말에 붙인다. legacy · 미연결 · 미정산 · 결말 모름 비용이 하나라도 있으면 결과당 단가는 `null`.
@@ -1277,13 +1251,8 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
     latencyP50H, latencyP90H,
     contractValidPersonas,
     stageActivePersonas,
-    commentUsdPerRequest,
-    commentDailyUsdCap: commentLoopLimitsFromEnv(i.env).limits.dailyUsd,
-    auditUsdPerCall,
-    auditDailyUsdCap: auditLimitsFromEnv(i.env).dailyUsd,
     // 🔴 그 증명일의 날짜 계약 천장으로 누른다 — 공급 러너가 그날 실제로 쓸 수 있는 값과 같아야 한다
     supplyDailyUsdCap: cappedBy(limitsFromEnv(i.env).dailyUsd, decisionDate === null ? null : supplyApprovedDailyUsdOf(decisionDate)),
-    runnerHealth: i.runnerHealth,
     supplyCostCarryover,
   }
   return {
@@ -1311,8 +1280,6 @@ export async function readPreflightFacts(prisma: PrismaClient, i: {
       },
       // 🔴 두 시계를 그대로 보고한다 — 증명(전날 KST 달력일 3일) · 용량(`now` 에서 거슬러 72h)
       proofWindow: { from: win.proof.from.toISOString(), to: win.proof.to.toISOString() },
-      // 🔴 댓글 · 감사 단가를 모은 날 — 증명 달력일이다(오늘이 끼면 전날 증명이 오염된 것)
-      unitCostDates: dates,
       capacityWindow: { from: win.capacity.from.toISOString(), to: win.capacity.to.toISOString() },
     },
   }

@@ -25,7 +25,6 @@ import { contractAxes, roleRoundVerdict, type ActivityHistory, type RoleHistory 
 import { planCommentDistribution, type PlannerPersona, type PlannerPost } from '../src/lib/persona-comment-planner'
 import { PERSONA_LIFE_AXES, ROLE_SHARE_CAP, ACTIVITY_CAP_PER_DAY, CONSECUTIVE_EXPOSURE_CAP, PAIR_REPEAT_GAP } from '../src/lib/d100-persona-scale'
 import { LIFE_CONTRACT_FIELDS } from '../src/lib/content-core/speaker'
-import { judgeEvidenceForTarget, type EvidenceFactsFor } from '../src/lib/stage-evidence'
 import { checkPersonaConsistency } from './lib/persona-gate-78.mjs'
 
 let pass = 0
@@ -104,19 +103,14 @@ console.log('\n④ C8 — 개인 말버릇은 없어도 되는 칸 · 소재 경
   check('🔴 역할 쏠림 0.9 → 계약 유효 · 이번 회차 막힘', conc.valid && conc.roundBlocked.includes('roleShare'))
   const unk = v(ALL, { ...busy(10, { empathy: 3 }), unresolvedRoleEvents: 2 })
   check('🔴 역할 모름 → 계약 유효 · 이번 회차 배정 안 함', unk.valid && unk.roundUnknown.includes('roleShare'))
-  const ev = (authors: (string | null)[]): string[] => {
-    const facts: EvidenceFactsFor<string> = {
-      kstDate: '2026-10-02', stage: 'd3', decision: null, commentCapPerPost: 3,
-      posts: authors.map((a, i) => ({ postId: `p${i}`, queueId: `q${i}`, publishedAtMs: 0, unattended: true, queueRows: 1, publishLogs: 1,
-        authorPersonaId: a, decider: 'auto' as const, personaComments: [], release: 'STAMPED_ELIGIBLE' as const })),
-      orphanPublishLogs: 0, unloggedPublishes: 0,
-      audits: { rows: [] },
-    } as unknown as EvidenceFactsFor<string>
-    return [...judgeEvidenceForTarget('2026-10-02', 'd3', 3, facts, null).codes]
-  }
-  check('🔴 증명일 자동 글 글쓴이 겹침 → PERSONA_REPEAT', ev(['a', 'a', 'b']).includes('PERSONA_REPEAT'))
-  check('🔴 글쓴이를 모르는 자동 글 → PERSONA_REPEAT(fail-closed)', ev(['a', null, 'b']).includes('PERSONA_REPEAT'))
-  check('서로 다른 글쓴이 → PERSONA_REPEAT 없음', !ev(['a', 'b', 'c']).includes('PERSONA_REPEAT'))
+  // 🔴 하루 판정은 글쓴이 겹침을 보지 않는다(2026-11-19 사다리 재설계 — PERSONA_REPEAT 삭제).
+  //    같은 사람이 하루에 두 편 쓰는 것은 **발행 배정**이 막는다: 오늘 이미 쓴 사람은 `TOO_SOON`.
+  const rhythm = (daysSinceLastPost: number | null): string[] =>
+    hardFilter({ code: 'P1', status: 'active', providerId: null, accountCount: 0, noGoTopics: [], noGoExpressions: [], postsThisWeek: 0, daysSinceLastPost },
+      readPostRequirements('t', NEUTRAL), 't', NEUTRAL, { postsPerWeek: 7, minDaysBetween: 1 }).map((x) => x.code)
+  check('🔴 오늘 이미 글을 쓴 사람 → 발행 배정이 TOO_SOON 으로 막는다(하루 1편 간격)', rhythm(0).includes('TOO_SOON'))
+  check('어제 쓴 사람 · 처음 쓰는 사람 → 간격으로 막지 않는다', !rhythm(1).includes('TOO_SOON') && !rhythm(null).includes('TOO_SOON'))
+  check('🔴 하루 판정에 글쓴이 겹침 코드가 없다 — 배정 한 곳이 지킨다', !/PERSONA_REPEAT/.test(readFileSync('src/lib/stage-evidence.ts', 'utf-8')))
 
   console.log('\n⑤-2 C9 — 역할 쏠림은 **실제 댓글 회차(planner)** 에서 막힌다')
   const NOW = Date.UTC(2026, 9, 1, 3)

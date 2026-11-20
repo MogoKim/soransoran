@@ -36,8 +36,6 @@ const MUTATIONS: { name: string; edits: Edit[] }[] = [
     edits: [{ file: F.facts, find: '  const proofDates = recentDates(evidenceDate)\n', replace: '  const proofDates = recentDates(kstDateString(now))\n' }] },
   { name: '지연 조회가 용량 창으로 나간다 — 증명 창 호출 지점',
     edits: [{ file: F.facts, find: 'publishLatencyHours(prisma, win.proof.from, win.proof.to)', replace: 'publishLatencyHours(prisma, win.capacity.from, win.capacity.to)' }] },
-  { name: '댓글 · 감사 단가가 용량 날짜를 쓴다 — 오늘 장부가 전날 증명에 샌다',
-    edits: [{ file: F.facts, find: '  const dates = win.proof.dates\n', replace: '  const dates = win.capacity.dates\n' }] },
   { name: '공급 장부가 증명 날짜만 읽는다 — 오늘 장부 누락',
     edits: [{ file: F.facts, find: 'pooledEntries(win.capacity.ledgerDates.map(', replace: 'pooledEntries(win.proof.dates.map(' }] },
   { name: '자정 정각 now 에서 그날 파일을 날짜에 넣는다 — 마지막 순간(to − 1ms) 대신 to',

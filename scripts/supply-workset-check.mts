@@ -1583,8 +1583,7 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
       trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.02 },
     },
     latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30,
-    commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-    supplyDailyUsdCap: 0.5, runnerHealth: 'ok',
+    supplyDailyUsdCap: 0.5,
   })
   const oppOf = (eligible: readonly WorksetRow[]) => slotValidOpportunitiesOf({
     slots, ready: [], readyPerSource: 0.1,

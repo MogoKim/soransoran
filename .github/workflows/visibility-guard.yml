@@ -910,11 +910,15 @@ jobs:
           npm run stage:one-day-check
           # 🔴 D20+ 제한 복구 — 한 릴리스 rollback 호환 코드. 예측만 있는 날은 preflight PASS 라 도달 불가(stage:forecast-warning-check ⑤)
           npm run stage:active-recovery-check
-          # 🔴 승격 운영 증거(2026-09-29 P0) — 날짜만으로 오르지 않는다 · FAIL/모름 → 같은 단계 재시험 ·
-          #    첫 댓글 보장/추가 댓글 상한 분리 · 감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
+          # 🔴 하루 판정(2026-11-19 사다리 재설계) — 무결성 0건 · 수와 결의 통과선 · 첫 댓글/추가 댓글 출처 분리 ·
+          #    감사 표본 coverage · 근거 없는 d3→d5 행 거절. 새 step 이 아니다
           npm run stage:evidence-check
-          # 🔴 D1→D50 한 사다리(2026-09-29 generic scheduler 배선) — 운영 decideStage 를 여러 날 돌린다 ·
-          #    PASS 다음 날 한 칸 · 천장 d10 이면 D20 0 · REPROVE 증명일 · D20+ preflight · 슬롯/비용/롤백. 새 step 이 아니다
+          # 🔴 사다리 정책 — 운영 로그 재생 사례(1건 누락은 통과 · 이틀 연속 올림 · 미달이어도 유지 · 비용 경고는 막지 않음 ·
+          #    브레이크만 감속 · 배포 첫날 되찾기)와 그 변이. 새 step 이 아니다
+          npm run stage:ladder-policy-check
+          npm run stage:ladder-policy-mutation
+          # 🔴 D1→D100 한 사다리 — 운영 decideStage 를 여러 날 돌린다 · 이틀 연속 통과 뒤 한 칸 · 천장 d10 이면 D20 0 ·
+          #    올라갈 칸 관문 · 슬롯/비용/롤백. 새 step 이 아니다
           npm run stage:scheduler-check
       # 🔴 D100 생동감 계약 — 순수 fixture (DB 0 · provider 0 · build 0).
       #    필요 READY = 증명일 목표 + 실측 손실(모르면 UNKNOWN) · JIT 부족분만 유료 · 현재 계약 cohort 만 비용 근거 ·
