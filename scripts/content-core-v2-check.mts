@@ -22,7 +22,7 @@ import { runContentCore, personaInputOf, personaPoolIdentity, STAGE_MODEL, type 
 import {
   buildSpeakerPlanSystemPrompt, buildSpeakerPlanPayload,
   buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, lifeContractLines,
-  requirementVocabulary, sourceBlock,
+  requirementVocabulary, sourceBlock, DRAFT_FORM_LINES,
 } from './lib/content-core-prompts.mjs'
 import {
   cardValueText, hasFact, verifySelfWarrants,
@@ -65,7 +65,7 @@ import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-c
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL, REVIEW_VERSION,
   reviewShapeOk,
-  REVIEW_WARNING_AXES, judgeMachine, reviewWarnings,
+  REVIEW_WARNING_AXES, judgeMachine, reviewWarnings, parseSemanticReview,
   type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
 } from '../src/lib/content-core/review'
 import { readReviewArtifact, reviewEvidenceLines } from '../src/lib/original-post-machine-review'
@@ -78,7 +78,7 @@ import {
   CONTENT_CORE_STAGES, STAGE_MAX_OUTPUT_TOKENS, V2_DRAFT_PROMPT_VERSION,
   V2_REVIEW_PROMPT_VERSION,
 } from '../src/lib/content-core/pipeline'
-import { buildVoiceEvidence, voiceStandardOf, VOICE_SAMPLE_MIN }
+import { voiceStandardOf, VOICE_SAMPLE_MIN }
   from '../src/lib/content-core/voice-evidence'
 import {
   costOf, priceOf, GEMINI_POST_PROMO, GEMINI_PROMO_ENDS_AT, MODEL_PRICES,
@@ -756,8 +756,11 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
   const ok = await run({ ...KIM, personas: [P({ code: 'P01', voiceTokens: tokens })],
     canned: { plan: PLAN_U, draft: DRAFT } })
   const std = voiceStandardOf(tokens)
-  check('🔴 🔴 **생성·검수 요청에 말투 기준 값이 실제로 들어갔다**',
-    sentOf('draftGen')[0]!.system.includes(std) && sentOf('semanticReview')[0]!.system.includes(std))
+  // 🔴 (quality-v30) 글의 꼴은 원문에서 잰다 — Persona 말투 기준·참고는 생성에도 검수에도 싣지 않는다
+  const sentAll = [...sentOf('draftGen'), ...sentOf('semanticReview')]
+  check('🔴 🔴 **생성·검수 요청에 말투 기준·참고가 실리지 않는다** (꼴은 원문에서)',
+    sentAll.length === 2 && ok.draft !== null
+    && sentAll.every((x) => !x.system.includes(std) && !`${x.system}\n${x.payload}`.includes('그러게요')))
   check('🔴 말투 근거가 몇 토큰에서 나왔는지 남는다', ok.voice.provenance!.voiceTokenCount === 3)
   check('🔴 정본 변환은 하나다', voiceStandardOf(['a', '', ' b ']) === 'a · b')
 
@@ -774,7 +777,7 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
   const capped = await run({ ...KIM, personas: [partTime], canned: { plan: PLAN_U, draft: DRAFT }, cap: 2 })
   check('🔴 원천당 요청 상한을 넘기지 않는다', capped.cost.totalCalls <= 2)
 
-  check('🔴 의미 축은 셋뿐이다', SEMANTIC_AXES.length === 3, SEMANTIC_AXES.join(','))
+  check('🔴 의미 축은 둘뿐이다 — Persona 말투 어긋남 축은 없다', SEMANTIC_AXES.length === 2, SEMANTIC_AXES.join(','))
   check('🔴 형편·배우자 관계가 생활사 모순 축에 있다',
     (LIFE_CONTRADICTION_FACTS as readonly string[]).includes('economicStatus')
     && (LIFE_CONTRADICTION_FACTS as readonly string[]).includes('spouseRelationship'))
@@ -799,7 +802,6 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
       warrants: [], universalReason: 'x', protectedFacts: [], speakerRelative: [], closingIntent: null,
       contentRoles: [], reason: '', rejection: null, planVersion: 'x' },
     mappings: [],
-    voice: buildVoiceEvidence({ personaCode: 'P02', voiceTokens: ['짧은 문장'], samples: [], bundleDigest: 'b', sourceDigest: 's' }),
     life: homemaker,
   })
   check('🔴 생활사는 자격 장치이지 글의 재료가 아니라고 말한다', gen.includes('글의 재료가 아닙니다'))
@@ -1171,7 +1173,7 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
       id: SRC.C.id, title: SRC.C.title, body: SRC.C.body, personas: [partTime],
       canned: {
         plan: planIn, draft: D,
-        review: { ...EMPTY_REVIEW, issues: ['voiceMismatch'] },
+        review: { ...EMPTY_REVIEW, issues: ['voiceContentLeak'] },
       },
     })
     check('🔴 🔴 **모델이 완주해서 고른 HOLD 는 결론이다**',
@@ -1276,7 +1278,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
-    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p16'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**
    * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
@@ -1289,7 +1291,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
     // 🔴 따옴표든 템플릿이든 **글자 자체**가 남아 있으면 안 된다 — 앞판이 그렇게 새어 나갔다
     && !envLib.includes('content-core-v2') && !runner.includes('content-core-v2'))
 
-  // ── ② 말투는 경향이다 ──
+  // ── ② 꼴은 원문에서 — Persona 말투 절을 싣지 않는다 (quality-v30) ──
   // 🔴 파싱된 계획 모양 그대로 — 모델 응답 모양(`plan()`)이 아니다
   const sys = buildV2DraftSystemPrompt({
     plan: {
@@ -1299,27 +1301,17 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
       planVersion: SPEAKER_PLAN_VERSION,
     } as never,
     mappings: [],
-    voice: buildVoiceEvidence({
-      personaCode: 'P01', voiceTokens: ['길게', '"ㅋㅋ" 자주', '오타 잦음', '느낌표 많음'],
-      samples: ['ㅋㅋ 저도요', '진짜 그래요!', '아휴 참'],
-      bundleDigest: 'b0', sourceDigest: 'a0',
-    }),
     life: partTime,
   })
-  check('🔴 🔴 **기준이 넣어야 할 목록이 아니라고 적혀 있다**',
-    sys.includes('항목을 하나씩 넣어야 하는 목록이 아닙니다'))
-  check('🔴 🔴 **모든 특징을 한 글에 넣지 말라고 적혀 있다**',
-    sys.includes('모든 특징을 한 글에 다 넣지 않습니다'))
-  check('🔴 🔴 **오타를 일부러 만들지 말라고 적혀 있다**',
-    sys.includes('오타를 일부러 만들지 않습니다'))
-  check('🔴 🔴 **ㅋㅋ·ㅎㅎ·ㅠㅠ·느낌표·사투리는 감정이 맞을 때만**',
-    /ㅋㅋ · ㅎㅎ · ㅠㅠ · 느낌표 · 사투리는 \*\*원문의 감정과 맞을 때만\*\*/.test(sys))
-  check('🔴 🔴 **말끝·호흡·문장 길이·줄바꿈을 먼저 쓰라고 적혀 있다**',
-    sys.includes('말끝 · 호흡 · 문장 길이 · 줄바꿈'))
-  check('🔴 강한 말투 기준 자체는 그대로 실린다 — 지우지 않았다',
-    sys.includes('"ㅋㅋ" 자주') && sys.includes('오타 잦음'))
+  check('🔴 🔴 **"낱말은 새로, 꼴은 원문 그대로" 절이 있다**',
+    sys.includes('## 🔴 낱말은 새로, 꼴은 원문 그대로') && DRAFT_FORM_LINES.every((l) => sys.includes(l)))
+  check('🔴 🔴 **없는 오타를 일부러 만들지는 않는다고 적혀 있다** — 느슨함은 원문 수준까지',
+    sys.includes('없는 오타를 일부러 만들지는 않습니다'))
+  check('🔴 🔴 **Persona 말투 절이 없다** — 리듬만 빌린다 · 참고 · 경향 문장이 남지 않는다',
+    !sys.includes('리듬만 빌립니다') && !sys.includes('--- 참고') && !sys.includes('그 사람의 경향')
+    && !sys.includes('원문의 감정과 맞을 때만') && !sys.includes('말끝 · 호흡 · 문장 길이 · 줄바꿈'))
   check('🔴 🔴 **차단 규칙·검수 축을 더하지 않았다**',
-    SEMANTIC_AXES.length === 3
+    SEMANTIC_AXES.length === 2
     && !/ㅋ\{2,\}|ㅎ\{2,\}|ㅠ\{2,\}/.test(readFileSync('src/lib/content-core/review.ts', 'utf-8')))
 }
 
@@ -1367,7 +1359,6 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용
     ['생활사 모순', V({ lifeContradictions: [{ fact: 'work', drafted: '전업', card: '파트타임', evidence: 'x' }] }), 'hold'],
     ['harm', V({ issues: ['harm'] }), 'drop'],
     ['말투 누수', V({ issues: ['voiceContentLeak'] }), 'hold'],
-    ['말투 불일치', V({ issues: ['voiceMismatch'] }), 'hold'],
     ['모르는 축', V({ unknownIssues: ['무엇'] }), 'hold'],
   ] as const) {
     const j = judgeMachine({ deterministic: PASS, semantic: arg, semanticCompletion: DONE })
@@ -1393,7 +1384,15 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 안전한 창작은 허용
   check('🔴 🔴 **경고 축은 둘뿐이다** — 새 축을 만들지 않았다',
     REVIEW_WARNING_AXES.length === 2
     && REVIEW_WARNING_AXES.join(',') === 'unsupportedAdditions,droppedFromSource')
-  check('🔴 검수 축은 그대로 셋이다', SEMANTIC_AXES.join(',') === 'voiceContentLeak,voiceMismatch,harm')
+  check('🔴 검수 축은 둘이다 — Persona 말투 어긋남은 결함이 아니다', SEMANTIC_AXES.join(',') === 'voiceContentLeak,harm')
+  {
+    // 🔴 지운 축 이름을 앞판 검수가 답하면 조용히 채택하지 않는다 — 모르는 축으로 HOLD 다
+    const old = parseSemanticReview('{"issues":["voiceMismatch"],"droppedFromSource":[],"unsupportedAdditions":[],"lifeContradictions":[],"confidence":0.9,"note":""}')
+    const j = old === null ? null : judgeMachine({ deterministic: PASS, semantic: old, semanticCompletion: DONE })
+    check('🔴 🔴 **지운 축(voiceMismatch)이 오면 모르는 축 — HOLD**',
+      old !== null && old.issues.length === 0 && old.unknownIssues.includes('voiceMismatch') && j?.outcome === 'hold',
+      JSON.stringify(old?.unknownIssues))
+  }
 
   // ── ④-b 🔴 혼합 — 경고와 hard 사유가 같이 있으면 전체는 HOLD 다 ──
   {
@@ -2022,7 +2021,6 @@ console.log('\n🔴 🔴 **P02 실제 E2E — 원문 "곧 44" 가 초안 프롬�
     JSON.stringify(mapping))
   const prompt = buildV2DraftSystemPrompt({
     plan, life: life as never, mappings: mapping.ok ? mapping.mappings : [],
-    voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
   })
   check('🔴 🔴 **⑥ 프롬프트가 "44 를 복제하지 말고 N살로 써라" 를 실제로 담는다**',
     prompt.includes('복제하지 않고') && age.ok && prompt.includes(`${age.age}살`),
@@ -2052,7 +2050,6 @@ console.log('\n🔴 🔴 **P02 실제 E2E — 원문 "곧 44" 가 초안 프롬�
   })
   const noAge = buildV2DraftSystemPrompt({
     plan, life: life as never, mappings: bandMap.ok ? bandMap.mappings : [],
-    voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
   })
   check('🔴 🔴 **⑪ 정확한 나이가 없으면 연령대로 쓰라고 한다 — 숫자를 지어내지 않는다**',
     noAge.includes(card.ageBand) && !/\d{2}살/.test(noAge.split('바꿔 씁니다')[1] ?? ''))
@@ -2504,7 +2501,6 @@ console.log('\n🔴 🔴 **load-bearing 조건 보존 — 초안이 지우면 �
       plan: {
         ...lbPlan('SELF_EXPERIENCE'), protectedFacts: [], speakerRelative: [], warrants: [],
       } as never,
-      voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
       life: pFit as never, mappings: [], keep: reqSelf,
     })
     return sysKeep.includes('바꾸지 말고 지킵니다') && sysKeep.includes(String(AGE))
@@ -2514,7 +2510,6 @@ console.log('\n🔴 🔴 **load-bearing 조건 보존 — 초안이 지우면 �
       plan: {
         ...lbPlan('SELF_EXPERIENCE'), protectedFacts: [], speakerRelative: [], warrants: [],
       } as never,
-      voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
       life: pFit as never,
       mappings: [{ axis: 'age', sourceText: '44', personaText: '47살', outputRule: '🔴 44 를 47살 로 서술한다' }],
       keep: reqSelf,

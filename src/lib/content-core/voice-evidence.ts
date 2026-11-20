@@ -14,6 +14,9 @@
  *    정본 카드에는 그런 칸이 없어서(`voiceTokens` 다) 부르는 쪽이 조용히 빈 문자열을
  *    넘겼고, **말투 기준 없이 생성·검수가 통과했다** (2026-09-19 두 번째 유료 실측).
  *    이제 변환은 `voiceStandardOf` 하나뿐이고, 비면 **묻기 전에 멈춘다.**
+ *
+ * 🔴 (quality-v30) 글 생성·의미 검수 요청은 말투 기준·참고를 싣지 않는다 — 글의 꼴은 원문에서 코드가 잰다
+ *    (`source-form.ts`). 글 경로는 여기서 출처(`provenance`)와 준비 판정만 쓴다.
  */
 export const VOICE_EVIDENCE_VERSION = 'voice-evidence-v2'
 /** 🔴 2~3개면 리듬은 보인다. 늘리면 내용이 새어 들어온다 */
@@ -104,16 +107,6 @@ export function judgeVoiceReadiness(v: VoiceEvidence): VoiceReadiness {
 }
 
 /**
- * 🔴 **정말로 들어갔는지 값으로 본다.** 프롬프트를 만드는 쪽이 조건을 잘못 쓰면
- *    기준이 조용히 빠진다 — 그것이 이번 실측에서 실제로 일어난 일이다.
- *    부르는 쪽은 이 검사에 걸리면 **요청을 보내지 않는다.**
- */
-export function voiceStandardMissingFrom(system: string, v: VoiceEvidence): boolean {
-  const std = v.voiceStandard.trim()
-  return std === '' || !system.includes(std)
-}
-
-/**
  * 🔴 **말투 참고의 사건 누수는 deterministic 이 막지 않는다** (2026-09-19 보정).
  *
  *    앞판은 "붙은 낱말 2개 + 관계·장소 낱말" 로 막았다. 그런데 원문이 *"배우자 은퇴"* 이고
@@ -121,6 +114,6 @@ export function voiceStandardMissingFrom(system: string, v: VoiceEvidence): bool
  *    같은 말을 쓴 것과 참고에서 **가져온 것**을 글자만 보고 가를 수 없다.
  *
  * 🔴 그래서 이 판정은 **Content Core 의미 검수(`voiceContentLeak`)**가 맡는다.
- *    선택한 Persona 의 말투로 읽히는가는 `voiceMismatch` 가 따로 본다.
+ *    Persona 말투와 어긋나는가는 더 보지 않는다(quality-v30) — 글의 꼴은 원문을 따른다.
  *    deterministic 에는 확정 가능한 것만 남긴다 — 사전도 유사도 규칙도 만들지 않는다.
  */

@@ -706,10 +706,13 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     const inherited = /notRunFrom\(/.test(src)
       ? [...src.matchAll(/reason: '([a-zA-Z]+)', cause: '([a-zA-Z]+)'/g)].map((m) => m[2]!)
       : []
+    // 🔴 앞판 러너만 내던 원인 — 역사 artifact 판독용으로 목록에 남는다(quality-v30 말투 배선 검사 삭제). 정확히 이것만이다
+    const LEGACY_ONLY = ['wiringBroken']
     const emitted = new Set([...direct, ...inherited, ...picked, ...transform])
     const listed = new Set<string>(NOT_RUN_CAUSES)
     return emitted.size > 0 && [...emitted].every((c) => listed.has(c))
-      && [...listed].every((c) => emitted.has(c))
+      && LEGACY_ONLY.every((c) => listed.has(c) && !emitted.has(c))
+      && [...listed].every((c) => emitted.has(c) || LEGACY_ONLY.includes(c))
   })())
   check('🔴 🔴 **확정 결함으로 묻기 전에 버린 것만 미완료 drop 이다**', (() => {
     const det = RV({

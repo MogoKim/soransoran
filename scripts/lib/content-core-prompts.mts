@@ -18,13 +18,13 @@ import type { LoadBearingRequirement } from '../../src/lib/content-core/load-bea
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL } from '../../src/lib/content-core/speaker'
-import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT,
 } from '../../src/lib/content-core/review'
 import { MATERIAL_CONTRACT_LINES } from '../../src/lib/content-core/material-contract'
 import { COPY_RUN_CHARS, COPY_RUN_WORDS } from '../../src/lib/draft-originality'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
+import { sourceFormOf } from '../../src/lib/content-core/source-form'
 
 /**
  * 🔴 **판 값의 정본은 `src/lib/content-core/pipeline.ts` 다.** 봉투·큐·발행이 같은 값을
@@ -36,8 +36,12 @@ export {
 
 /** 🔴 원문 근거를 한 덩어리로 — 계획도 생성도 검수도 **같은 것**을 본다 */
 export function sourceBlock(p: SourceEvidencePacket): string {
-  return [`제목: ${p.title}`, ...p.spans.filter((s) => s.kind !== 'title').map((s) => s.text)]
-    .join('\n')
+  return [`제목: ${p.title}`, sourceBodyOf(p)].join('\n')
+}
+
+/** 🔴 원문 근거의 **본문 span 만** 이은 글 — 제목 제외. 생성에 건네는 [꼴]은 이것을 잰다 */
+export function sourceBodyOf(p: SourceEvidencePacket): string {
+  return p.spans.filter((s) => s.kind !== 'title').map((s) => s.text).join('\n')
 }
 
 /**
@@ -228,9 +232,28 @@ export function buildSpeakerPlanPayload(input: {
 // ② 생성 — 한 편. 🔴 원문을 직접 읽는다
 // ─────────────────────────────────────────────────────────
 
+/**
+ * 🔴 **낱말은 새로, 꼴은 원문 그대로** (v2-draft-p17 · quality-v30) — 내용과 꼴은 원문에서, 자격은 Persona 에서.
+ *    운영 글이 원문보다 두 배 긴 줄 · 마침표 끝 80% · 같은 맺음말로 수렴한 원인은 "새로 · 감상 · 질문" 을 시킨 지시문이었다.
+ *    [꼴]은 요청 페이로드에 코드가 잰 값으로 실린다(`sourceFormOf`). 원문 복제 기준(`COPY_RUN_*`)은 그대로다.
+ */
+export const DRAFT_FORM_LINES: readonly string[] = [
+  '## 🔴 낱말은 새로, 꼴은 원문 그대로',
+  '- 내용: 원문의 사정 · 감정 · 물음 · 숫자 · 고유명을 그대로 둡니다. 원문에 없는 사정 · 감상 · 당부 · 질문을 더하지 않습니다.',
+  '- 낱말: 원문 문장을 통째로 옮기지 않습니다. 흔한 낱말은 그대로 써도 됩니다 — 억지로 어려운 말이나 낯선 말로 바꾸지 않습니다.',
+  '  줄을 합치거나 나누거나 앞뒤를 바꿔도 됩니다. 같은 낱말이 6어절 넘게 이어지지만 않으면 됩니다.',
+  '- 꼴: [꼴]에 적힌 값을 따릅니다.',
+  '  · 글자 수는 [꼴].글자수의 0.8~1.2배, 줄 수는 [꼴].줄수와 한두 줄 차이 안. 원문이 두 줄이면 두 줄입니다. 늘리지 않습니다.',
+  '  · 줄 끝은 [꼴].줄끝모양처럼 끝냅니다 — 원문이 마침표 없이 끝나면 마침표를 찍지 않고, "~는데" "~인듯" "~했음"처럼',
+  '    끊겨 있으면 끊긴 채로, ㅠㅠ · ㅋㅋ · .. · ?? 로 끝나면 그런 식으로 끝냅니다.',
+  '  · 띄어쓰기와 문장부호의 느슨함도 원문 수준으로 둡니다. 반듯하게 다듬지 않습니다. 없는 오타를 일부러 만들지는 않습니다.',
+  '- 끝: 원문이 끝나는 곳에서 끝냅니다. [꼴].끝맺음과 같은 식으로 끝냅니다.',
+  '  "궁금하네요" · "아시는 분 계실까요" · "조심하세요" · "도움 될 것 같아요" 같은 맺음말을 붙이지 않습니다.',
+  '- [보존].원문범위가 "일부"이면 [원문]은 머리와 꼬리만 있습니다. [꼴]도 보이는 부분의 값입니다 — 보이는 만큼만 쓰고 가운데를 지어 채우지 않습니다.',
+]
+
 export function buildV2DraftSystemPrompt(input: {
   plan: SpeakerPlan
-  voice: VoiceEvidence
   life: PersonaLifeContract
   /**
    * 🔴 **성공한 변환 계획만 받는다** (2026-09-23 fail-closed).
@@ -246,7 +269,7 @@ export function buildV2DraftSystemPrompt(input: {
    */
   keep?: readonly LoadBearingRequirement[]
 }): string {
-  const { plan, voice, life } = input
+  const { plan, life } = input
   const replacements = input.mappings.map((m) => m.outputRule)
   const keeps = (input.keep ?? []).map((k) => k.outputRule)
   return [
@@ -258,7 +281,7 @@ export function buildV2DraftSystemPrompt(input: {
     '- 원문의 주제 · 핵심 낱말 · 숫자 · 관계 · 상황 · 질문',
     // 🔴 제목에서 검색어가 사라지면 그 낱말로 찾는 사람이 이 글에 오지 못한다 — 막는 검사가 아니라 지시 한 줄이다
     '- 🔴 **제목**에는 [보존].제목낱말 가운데 주제어 · 증상 · 물건이나 프로그램 이름처럼 **사람들이 검색창에 칠 낱말**을 남깁니다(예: "갱년기" · "불면" · "안면홍조").',
-    '  제목 문장은 당신의 말로 새로 짓습니다. 원문 제목을 그대로 옮기지 않습니다.',
+    '  제목 길이는 원문 제목의 0.7~1.3배입니다. 원문 제목이 짧으면 짧게 둡니다 — 설명하는 문장으로 늘리지 않습니다. 원문 제목과 글자가 똑같지만 않으면 됩니다.',
     // 🔴 글은 쓰인 시간대에 나간다 — 원문의 시간 감성이 곧 그 시간대의 이야기다
     '- 🔴 원문에 **있는** 시간 · 상황 표현("잠이 안 와서" · "아침부터" · "퇴근하고" · "새벽에")은 살립니다. 글은 쓰인 시간대의 감성 그대로 나갑니다.',
     ...(plan.protectedFacts.length > 0
@@ -283,21 +306,15 @@ export function buildV2DraftSystemPrompt(input: {
       ? ['', '## 🔴 이 값은 **바꾸지 말고 지킵니다** (바꾸면 글이 성립하지 않습니다)',
         ...keeps.map((r) => `- ${r}`)]
       : []),
-    ...(plan.closingIntent === 'ask'
-      ? ['- 원문은 묻고 끝납니다. 그 물음이 살아 있어야 합니다.']
-      : plan.closingIntent === 'none'
-        ? ['- 원문은 묻지 않습니다. 억지로 질문을 붙이지 않습니다.']
-        : []),
     '',
-    '## 새로 쓰는 것',
-    '- 문장과 문단 구성은 **처음부터 새로** 씁니다. 원문 문장을 옮겨 적지 않습니다.',
-    '- 원문 핵심을 바꾸지 않는 범위에서 **감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰**로 새 글을 만듭니다.',
-    '- 원문이 짧아도 요약문으로 끝내지 않습니다. 다만 새 사건이나 결말을 지어 길이를 채우지 않습니다.',
+    // 🔴 꼴(길이 · 줄 · 줄 끝 · 맺음)은 원문에서 코드가 잰 값을 따른다 — 지시문이 "새로 · 감상 · 질문" 을 시키자
+    //    초안이 원문보다 길고 반듯해지고 같은 맺음말로 수렴했다. 막는 규칙이 아니라 건네는 재료다
+    ...DRAFT_FORM_LINES,
     '- 🔴 원문에 없는 **제3자의 사건 · 날짜 · 직접 대사 · 결과**를 사실처럼 만들지 않습니다.',
     '- 🔴 원문에 **없는** 새벽 · 아침 · 퇴근길 · 방금 · 어제 같은 시간대·상대 시점은 지어 붙이지 않습니다.',
     // 🔴 (v2-draft-p15) 전달자를 세우는 길은 하나도 없다 — 검수(②-4)가 막는 것을 초안 지시가 시키지 않는다
     '- 🔴 원문 화자가 자기 일로 한 말을 **"아는 분이" · "어떤 분이" · "누가 그러는데" · "지인이" · "…라는 분이 계시더군요"** 같은 새 전달자의 일로 바꾸지 않습니다.',
-    '  당신의 경험으로 쓸 수 없는 자리면 그 일을 **사건으로 전하지 않고**, 같은 주제에 대한 당신의 질문·생각으로 씁니다.',
+    '  당신의 경험으로 쓸 수 없는 자리면 그 대목을 **빼고** 나머지를 원문의 꼴대로 씁니다. 빈자리를 감상이나 질문으로 채우지 않습니다.',
     '  원문의 구체 사정은 "이런 방법도 쓴다던데" 정도의 일반적인 말까지만 씁니다.',
     '- 🔴 배우자 · 자녀 · 부모 · 건강 · 치료 · 돈 · 정확한 나이 · 거주지 같은 구체 생활 사실은 원문이나 아래 카드 근거 없이 만들지 않습니다.',
     '- 🟢 짧은 직장 경험 같은 저위험 일상 결은 원문 뜻과 충돌하지 않을 때만 자연스럽게 쓸 수 있습니다.',
@@ -331,32 +348,8 @@ export function buildV2DraftSystemPrompt(input: {
     `## 당신이 서는 자리 — 🔴 ${STANCE_LABEL[plan.stance ?? 'REFLECTION']}`,
     ...(plan.stance !== null && plan.stance !== 'SELF_EXPERIENCE'
       ? ['🔴 **이 글 속 경험은 당신 것이 아닙니다.** 겪었다고 쓰지 않습니다.',
-         '   🔴 남의 사연으로 옮겨 전하지도 않습니다. 그 주제를 두고 **당신이 묻고 생각하는 글**로 씁니다.',
-         '   생각 · 감정 · 궁금함은 1인칭으로 말해도 됩니다.']
+         '   🔴 남의 사연으로 옮겨 전하지도 않습니다. 원문의 물음이나 생각이 있으면 그것을 원문의 꼴대로 씁니다.']
       : []),
-    '',
-    `## 말투 — 🔴 리듬만 빌립니다. 기준: ${voice.voiceStandard}`,
-    /**
-     * 🔴 **기준은 경향이지 체크리스트가 아니다** (2026-09-20 실측 보정).
-     *
-     *    SHADOW5 450407 에서 `길게 · "ㅋㅋ" 자주 · 오타 잦음 · 느낌표 많음` 이
-     *    **넣어야 할 항목 목록**으로 읽혔다. "꼬라지" · "터져나갑니다 ㅋㅋㅋ!!" ·
-     *    "죽겟네요 진짜!!" 처럼 특징을 한 글에 다 욱여넣었고, 그 과정에서
-     *    원문에 없는 표현 4건이 생겼다. 흉내가 사람 글을 밀어냈다.
-     *
-     * 🔴 **차단 규칙을 더하지 않는다.** 정규식으로 "ㅋㅋ 금지" 를 걸면 자연스러운
-     *    글까지 막는다. 무엇을 우선 빌릴지를 **여기서 말로 정한다.**
-     */
-    '🔴 위 기준은 **그 사람의 경향**입니다. 항목을 하나씩 넣어야 하는 목록이 아닙니다.',
-    '   🔴 **모든 특징을 한 글에 다 넣지 않습니다.** 이번 글에 자연스러운 것만 씁니다.',
-    '   🔴 **오타를 일부러 만들지 않습니다.**',
-    '   🔴 ㅋㅋ · ㅎㅎ · ㅠㅠ · 느낌표 · 사투리는 **원문의 감정과 맞을 때만** 씁니다.',
-    '      원문이 담담하면 담담하게 씁니다. 억지로 밝게 만들지 않습니다.',
-    '   🔴 사람이 차이를 느끼는 것은 **말끝 · 호흡 · 문장 길이 · 줄바꿈**입니다.',
-    '      그것으로 먼저 이 사람의 글처럼 만듭니다.',
-    '🔴 아래 참고에서 가져오는 것은 **말끝 · 호흡 · 감정 표현 · 줄바꿈**뿐입니다.',
-    '   🔴 참고에 나온 **사건 · 가족 · 직장 · 병 · 돈 이야기는 당신 것이 아닙니다.**',
-    ...voice.samples.flatMap((s, i) => [`--- 참고 ${i + 1} ---`, s]),
     '',
     `🔴 쓰지 않는 낱말: ${BANNED_WORDS.join(' · ')}`,
     '🔴 실명 + 소속 · 연락처 · 주소 · 계정을 쓰지 않습니다.',
@@ -368,11 +361,11 @@ export function buildV2DraftSystemPrompt(input: {
     '- 원문의물음: 원문이 던진 **물음의 뜻**을 살립니다. 문장과 표현은 새로 씁니다',
     '- 제목낱말: 원문 제목의 낱말입니다. 이 가운데 검색어가 될 낱말을 **새 제목에** 남깁니다. 조사와 어미는 바꿔도 됩니다',
     '- 원문범위: "일부" 면 [원문]은 머리와 꼬리만 있습니다. 비어 있는 가운데와 뒤는 **모릅니다** — 지어 채우지 않습니다',
+    '- 꼴: 원문 본문(제목 제외)을 코드가 잰 값입니다 — 글자수 · 줄수 · 마침표로끝나는줄 · 어미없이끊긴줄 · 말줄임 · 울음웃음 · 물음표 · 느낌표 · 줄끝모양 · 끝맺음. 제목글자수는 원문 제목의 글자 수입니다',
     '',
     '## 🔴 원문과 겹치지 않게 마무리합니다',
     '- [보존].그대로쓸말 밖의 문장과 표현은 원문에서 옮기지 말고 새로 씁니다.',
     `- 답하기 전 [원문]과 다시 견주어, **연속 ${COPY_RUN_WORDS}어절** 또는 **공백을 빼고 ${COPY_RUN_CHARS}자** 이상 같은 부분이 있으면 그 문장을 다시 씁니다.`,
-    '- 핵심 사실·감정·물음은 남기되, 어순·문장 구조·말투는 이 화자의 글로 바꾸어야 합니다.',
     '',
     '초안 **한 편**을 JSON 으로만 답합니다.',
     '{"title":"...","body":"..."}',
@@ -423,9 +416,17 @@ export function sourceKeepOf(plan: SpeakerPlan, packet: SourceEvidencePacket): {
   }
 }
 
-/** 🔴 마스킹되고 300자로 묶인 원문 근거와 그 원문에서 살릴 것을 함께 건넨다 */
+/**
+ * 🔴 마스킹되고 300자로 묶인 원문 근거 · 그 원문에서 살릴 것 · 원문 본문의 꼴(`sourceFormOf`) · 원문 제목 글자 수를 함께 건넨다.
+ *    꼴과 제목 길이는 코드가 잰 값이다 — 생성이 원문 길이와 줄 끝을 추측하지 않게.
+ */
 export function buildV2DraftPayload(input: { packet: SourceEvidencePacket; plan: SpeakerPlan }): string {
-  return JSON.stringify({ 원문: sourceBlock(input.packet), 보존: sourceKeepOf(input.plan, input.packet) })
+  return JSON.stringify({
+    원문: sourceBlock(input.packet),
+    보존: sourceKeepOf(input.plan, input.packet),
+    꼴: sourceFormOf(sourceBodyOf(input.packet)),
+    제목글자수: [...input.packet.title].length,
+  })
 }
 
 // ─────────────────────────────────────────────────────────
@@ -464,7 +465,6 @@ export const REVIEW_SEVERITY_LINES: readonly string[] = [
 
 export function buildV2ReviewSystemPrompt(input: {
   plan: SpeakerPlan
-  voice: VoiceEvidence
   life: PersonaLifeContract
   /**
    * 🔴 **초안 지시에 실은 그 변환 계획** — 원문 화자의 사실을 이 사람 값으로 바꿔 쓰라고 코드가 시킨 것이다.
@@ -476,7 +476,7 @@ export function buildV2ReviewSystemPrompt(input: {
   const swapped = input.mappings.filter((m) => m.personaText !== null)
   return [
     '너는 40대 중반~60대 중반 여성 커뮤니티의 글 검수자다.',
-    '[원문]과 [초안]을 **직접 견주어** 아래 여섯 가지만 본다.',
+    '[원문]과 [초안]을 **직접 견주어** 아래 다섯 가지만 본다.',
     // 🔴 발행 뒤 의미 감사와 같은 실질 변경 계약 — 정본은 `material-contract.ts` 한 곳이다
     ...MATERIAL_CONTRACT_LINES,
     '',
@@ -541,7 +541,7 @@ export function buildV2ReviewSystemPrompt(input: {
     '      상시 별거 · 이혼 절차 · 관계가 끝났다고 말할 때만 spouseRelationship 이다.',
     ...REVIEW_FAMILY_SPECIFICS_LINES,
     '',
-    '## ④⑤⑥ issues — 해당하는 것만 고른다. 해당 없으면 빈 배열이다',
+    '## ④⑤ issues — 해당하는 것만 고른다. 해당 없으면 빈 배열이다',
     ...SEMANTIC_AXES.map((a) => `   - ${a}: ${SEMANTIC_AXIS_PROMPT[a]}`),
     '',
     '🔴 **말투와 맺음으로 막지 않는다.** 반말도 · 짧은 글도 · 묻지 않고 끝나는 글도',
@@ -556,7 +556,6 @@ export function buildV2ReviewSystemPrompt(input: {
          // 🔴 초안 지시(v2-draft-p15)와 같은 선 — 자리는 전달자를 세울 이유가 아니다
          '🔴 이 자리의 글은 원문 글쓴이의 경험을 **자기 일로도 남의 사연으로도 옮기지 않고**, 같은 주제의 질문·생각을 직접 말한다.',
          '   그 경험 서술과 구체 사정이 빠진 것은 droppedFromSource 가 아니다 — 원문의 **핵심 질문·주제**가 사라졌을 때만 적는다.'] : []),
-    `## 이 사람의 말투 기준: ${input.voice.voiceStandard}`,
     '',
     '## 🔴 원문이 부르는 생활사 — 이것만 초안에 나와도 된다',
     ...(warrants.length > 0

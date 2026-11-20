@@ -40,7 +40,6 @@ import { COPY_RUN_CHARS, COPY_RUN_WORDS } from '../src/lib/draft-originality'
 import { MATERIAL_CONTRACT_LINES } from '../src/lib/content-core/material-contract'
 import { SEMANTIC_AUDIT_SYSTEM_PROMPT } from '../src/lib/auto-ready-semantic-audit'
 import { SPEAKER_PLAN_VERSION, parseSpeakerPlan, type SpeakerPlan } from '../src/lib/content-core/speaker'
-import { buildVoiceEvidence } from '../src/lib/content-core/voice-evidence'
 import {
   SEMANTIC_HOLD_CODES, semanticHoldsOf, semanticSummaryOf,
 } from '../src/lib/semantic-summary-codes'
@@ -95,10 +94,6 @@ const planOf = (c: Case): SpeakerPlan => {
   return parseSpeakerPlan(JSON.stringify(c.plan), p, PERSONAS).plan
 }
 const lifeOf = (plan: SpeakerPlan) => PERSONAS.find((x) => x.code === plan.personaCode) ?? PERSONAS[0]!
-const voiceOf = (code: string) => {
-  const p = PERSONAS.find((x) => x.code === code) ?? PERSONAS[0]!
-  return buildVoiceEvidence({ personaCode: p.code, voiceTokens: p.voiceTokens, samples: p.samples, bundleDigest: p.bundleDigest, sourceDigest: 'asset000000000' })
-}
 
 console.log('\n══ 의미 손실 감사 검사 (🔴 합성 fixture · 네트워크 0 · provider 0 · DB 0) ══')
 
@@ -166,7 +161,7 @@ console.log('\n② 재생 — 고치기 전 근거 묶음(evidence-v1)과 고친
 console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안전한 창작만 허용한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 초안 프롬프트 판 = v2-draft-p16', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p16' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p16'))
+  check('🔴 초안 프롬프트 판 = v2-draft-p17', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17' && CONTENT_CORE_PROMPT_VERSION.includes('v2-draft-p17'))
   for (const id of ['A', 'B', 'C']) {
     const c = CASE(id); const packet = packetOf(c); const plan = planOf(c)
     const keep = sourceKeepOf(plan, packet)
@@ -193,7 +188,7 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
     JSON.stringify(sourceTitleWords('갱년기 불면증, 다들 어떻게 버티세요?? 잠 좀 자고 싶어요 (갱년기)')))
   check('🔴 제목이 비면 제목낱말도 빈다 — 없는 낱말을 만들지 않는다', sourceTitleWords('  ').length === 0)
   const c = CASE('C'); const plan = planOf(c)
-  const sys = buildV2DraftSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
+  const sys = buildV2DraftSystemPrompt({ plan, life: lifeOf(plan), mappings: [] })
   check('🔴 🔴 초안 지시문이 보고 · 읽고 · 들은 경로를 지어 붙이지 말라고 한다 (운영 두 편의 말을 예로)',
     sys.includes('어디서 보고 · 읽고 · 들었는지') && sys.includes('"어디서 봤는데"') && sys.includes('"어떤 글을 봤는데"'))
   check('🔴 초안 지시문이 [보존] 세 칸을 설명한다', ['그대로쓸말', '원문의물음', '원문범위'].every((k) => sys.includes(k)))
@@ -206,8 +201,10 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
   check('🔴 생성이 현행 복제 게이트 경계를 답하기 전 스스로 대조한다',
     sys.includes(`연속 ${COPY_RUN_WORDS}어절`) && sys.includes(`공백을 빼고 ${COPY_RUN_CHARS}자`)
     && sys.includes('그 문장을 다시 씁니다'))
-  check('🟢 안전한 창작 — 감상·질문·비유·연결·일반 관찰을 허용한다',
-    sys.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
+  // 🔴 (v2-draft-p17) 내용과 꼴은 원문에서 — 원문에 없는 감상·질문으로 새 글을 만들라는 줄은 지웠다
+  check('🔴 원문에 없는 사정·감상·당부·질문을 더하지 않는다 — 감상·질문·비유로 새 글을 만들라는 줄은 없다',
+    sys.includes('원문에 없는 사정 · 감상 · 당부 · 질문을 더하지 않습니다')
+    && !sys.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
   check('🔴 고위험 사실과 제3자 사건·결과는 계속 금지한다',
     sys.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈')
     && sys.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과'))
@@ -218,13 +215,16 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
   const relayOrders = sys.split('\n').filter((l) => /전합니다|전한다/.test(l) && !/않습니다|않는다|않고/.test(l))
   check('🔴 초안 지시문에 전달자를 세워 "전하라" 는 줄이 없다 — 금지와 한 방향이다',
     relayOrders.length === 0 && !sys.includes('그러셨대요') && sys.includes('"어떤 분이"'), relayOrders.join(' | '))
-  check('🔴 자기 경험으로 쓸 수 없으면 사건으로 전하지 않고 질문·생각으로 쓴다',
-    sys.includes('사건으로 전하지 않고') && sys.includes('당신의 질문·생각으로 씁니다'))
+  check('🔴 자기 경험으로 쓸 수 없으면 그 대목을 빼고 나머지를 원문의 꼴대로 — 빈자리를 감상·질문으로 채우지 않는다',
+    sys.includes('그 대목을 **빼고** 나머지를 원문의 꼴대로 씁니다') && sys.includes('빈자리를 감상이나 질문으로 채우지 않습니다')
+    && !sys.includes('사건으로 전하지 않고'))
   const askPlan = { ...plan, stance: 'QUESTION' as const, selfBasis: null }
-  const askSys = buildV2DraftSystemPrompt({ plan: askPlan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
-  check('🔴 1인칭이 아닌 자리 — 겪었다고도 쓰지 않고 남의 사연으로도 옮기지 않는다',
-    askSys.includes('겪었다고 쓰지 않습니다') && askSys.includes('남의 사연으로 옮겨 전하지도 않습니다'))
-  const askReview = buildV2ReviewSystemPrompt({ plan: askPlan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
+  const askSys = buildV2DraftSystemPrompt({ plan: askPlan, life: lifeOf(plan), mappings: [] })
+  check('🔴 1인칭이 아닌 자리 — 겪었다고도 쓰지 않고 남의 사연으로도 옮기지 않는다 · 원문의 물음·생각은 원문의 꼴대로',
+    askSys.includes('겪었다고 쓰지 않습니다')
+    && askSys.includes('남의 사연으로 옮겨 전하지도 않습니다. 원문의 물음이나 생각이 있으면 그것을 원문의 꼴대로 씁니다.')
+    && !askSys.includes('당신이 묻고 생각하는 글') && !askSys.includes('궁금함은 1인칭으로 말해도 됩니다'))
+  const askReview = buildV2ReviewSystemPrompt({ plan: askPlan, life: lifeOf(plan), mappings: [] })
   check('🔴 검수도 같은 선 — 그 자리에서 경험 서술이 빠진 것은 손실이 아니고, 새 전달자는 계속 적는다',
     askReview.includes('같은 주제의 질문·생각') && askReview.includes('**자기 일로도 남의 사연으로도 옮기지 않고**')
     && askReview.includes('droppedFromSource 가 아니다')
@@ -235,13 +235,13 @@ console.log('\n③ 생성 입력 — 🔴 보존할 사실은 구조로 · 안�
 console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손실을 구분한다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 검수 판 review-v11 · 검수 프롬프트 p13', V2_REVIEW_PROMPT_VERSION === 'v2-review-p13' && REVIEW_VERSION === 'review-v11')
+  check('🔴 검수 판 review-v11 · 검수 프롬프트 p14', V2_REVIEW_PROMPT_VERSION === 'v2-review-p14' && REVIEW_VERSION === 'review-v11')
   check('🔴 의미 경고 코드 그대로', JSON.stringify(SEMANTIC_HOLD_CODES) === JSON.stringify({
     unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION', lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
     droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE', incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
   }))
   const c = CASE('B'); const plan = planOf(c)
-  const reviewSys = buildV2ReviewSystemPrompt({ plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan), mappings: [] })
+  const reviewSys = buildV2ReviewSystemPrompt({ plan, life: lifeOf(plan), mappings: [] })
   check('🟢 사소한 생략·재구성은 droppedFromSource로 세지 않는다',
     reviewSys.includes('사소한 세부 · 문장 순서 · 표현')
     && reviewSys.includes('재구성했어도 핵심 뜻과 결론이 남아 있으면 적지 않는다'))
@@ -344,7 +344,7 @@ console.log('\n④ 🔴 검수는 안전한 창작과 위험 사실·핵심 손�
   check('🔴 우리 축이 아닌 생활사 이름은 참고라 해도 채택하지 않는다', unknownFact.j.outcome === 'hold')
   // 🔴 시스템이 바꾼 나이 — 검수가 그 값을 가리켜 적은 나이 모순만 참고로 옮긴다
   const swapSys = buildV2ReviewSystemPrompt({
-    plan, voice: voiceOf(plan.personaCode ?? 'P21'), life: lifeOf(plan),
+    plan, life: lifeOf(plan),
     mappings: [{ axis: 'age', sourceText: '30대 후반', personaText: '58살', outputRule: 'x' }],
   })
   check('🔴 검수 지시문이 시스템이 바꾼 값을 싣는다 — 바꾼 것이 없으면 그 칸도 없다',

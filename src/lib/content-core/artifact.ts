@@ -163,8 +163,11 @@ export type HumanReviewArtifact = {
     unsupportedAdditions: UnsupportedAddition[]
     /** 🔴 카드와 다른 생활사를 자기 일로 주장한 곳 (나이·자녀 나이 포함) */
     lifeContradictions: LifeContradiction[]
-    /** 🔴 말투 두 책임을 **나눠서** 남긴다 */
-    voice: { contentLeak: boolean; mismatch: boolean }
+    /**
+     * 🔴 말투 참고의 사건을 가져왔는가. Persona 말투와의 어긋남(`mismatch`)은 quality-v30 에서 지웠다 —
+     *    글의 꼴은 원문을 따르므로 Persona 말투와 다른 것은 결함이 아니다. 앞판 artifact 에는 그 칸이 남아 있다.
+     */
+    voice: { contentLeak: boolean }
     /** 🔴 기계 값이다. READY 가 아니다 */
     machineOutcome: MachineOutcome
     machineReason: string

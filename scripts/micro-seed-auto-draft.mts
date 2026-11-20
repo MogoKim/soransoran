@@ -58,17 +58,7 @@ import {
   measureOriginality, judgeCopy, describeOriginality, COPY_REASON_LABEL,
   copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION,
 } from '../src/lib/draft-originality'
-/**
- * 🔴 **말투 자산을 새로 만들지 않는다** (2026-09-13).
- *
- *    이 레인은 "존댓말 · 2~4문장 · 마지막에 물음표" 라는 손으로 적은 25줄 프롬프트를 썼고,
- *    그래서 모든 글이 한 모양으로 나왔다. 그런데 이 저장소에는 이미
- *    원문을 읽고 **온도 · 제목 모양 · 전개 · 맺음** 을 정하는 정본이 있다 —
- *    `source-profile.ts` 는 Original Post 레인이 창업자 피드백 11판을 거쳐 만든 것이다.
- *    그것을 여기로 **연결**한다. 두 벌째 체계를 만들면 한쪽만 낡는다.
- */
 import { createHash, randomUUID } from 'node:crypto'
-import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfile } from './lib/source-profile'
 /**
  * 🔴 **말투 근거를 새로 만들지 않는다** (2026-09-13).
  *
@@ -100,7 +90,6 @@ import { materializePersonaAt } from '../src/lib/persona-birth-anchor'
 /** 🔴 정본 문서 경로 — `persona-pool-card` 파일 머리가 가리키는 그 문서다 */
 import type { VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import type { VoiceProvenance } from '../src/lib/original-post-voice-match'
-import { humanVoiceDirectives, registerFreedomDirectives, VOICE_TAKEAWAYS } from './lib/original-post-prompt'
 // 🔴 기존 LLM 경로를 그대로 쓴다. 새 HTTP 클라이언트도 SDK 도 만들지 않는다
 import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-provider.mjs'
 /**

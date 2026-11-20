@@ -33,6 +33,7 @@ const LOSS_CHECK = 'scripts/semantic-loss-check.mts'
 const ENGINE_CHECK = 'scripts/persona-comment-engine-check.mts'
 const FU_CHECK = 'scripts/persona-comment-followup-check.mts'
 const EV_CHECK = 'scripts/stage-evidence-check.mts'
+const FORM_CHECK = 'scripts/source-form-check.mts'
 
 type Mutation = { name: string; file: string; from: string; to: string; check: string }
 const M = (name: string, file: string, check: string, from: string, to: string): Mutation => ({ name, file, from, to, check })
@@ -75,6 +76,17 @@ const MUTATIONS: Mutation[] = [
   M('초안 지시문에 전달자를 세워 전하라는 줄 부활', PROMPTS, LOSS_CHECK,
     "말과 행동만 **그 사람을 주어로** 둡니다. 없던 전달자를 앞에 세우지 않습니다.',",
     "말과 행동은 \"어떤 분이 … 그러셨대요\" 처럼 **그 사람을 주어로** 전합니다.',"),
+  // ── 낱말은 새로, 꼴은 원문 그대로 (quality-v30 · v2-draft-p17) ──
+  M('생성 요청 페이로드에서 꼴을 뺌', PROMPTS, FORM_CHECK,
+    '    꼴: sourceFormOf(sourceBodyOf(input.packet)),\n', ''),
+  M('꼴을 제목까지 붙인 원문 덩어리로 잼', PROMPTS, FORM_CHECK,
+    '    꼴: sourceFormOf(sourceBodyOf(input.packet)),', '    꼴: sourceFormOf(sourceBlock(input.packet)),'),
+  M('지운 "감상 · 질문 · 비유" 줄 부활', PROMPTS, FORM_CHECK,
+    '    ...DRAFT_FORM_LINES,\n',
+    "    ...DRAFT_FORM_LINES,\n    '- 원문 핵심을 바꾸지 않는 범위에서 **감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰**로 새 글을 만듭니다.',\n"),
+  M('초안 지시문이 꼴 절을 싣지 않음', PROMPTS, FORM_CHECK, '    ...DRAFT_FORM_LINES,\n', ''),
+  M('줄 끝 모양을 공백째 잼', 'src/lib/content-core/source-form.ts', FORM_CHECK,
+    "lastChars(l.replace(/\\s+/g, ''), LINE_END_CHARS)", 'lastChars(l, LINE_END_CHARS)'),
   // ── C · 400 요청 모양 거부 ──
   M('400 도 다음 후보로 재시도', PIPE, ENGINE_CHECK,
     'if (!res.ok && requestShapeRejected(res.errorCode)) {', 'if (false) {'),
