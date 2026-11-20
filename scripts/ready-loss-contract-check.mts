@@ -56,8 +56,7 @@ const D5_FACTS = (o: Partial<PreflightFacts> = {}): PreflightFacts => ({
   proofKstDate: '2026-11-05',
   slotValidOpportunities: 5, readyCohort: cohort(),
   latencyP50H: 20, latencyP90H: 40, contractValidPersonas: PERSONA_CANARY_FLOOR.d5,
-  commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2, auditUsdPerCall: 0.005, auditDailyUsdCap: 0.3,
-  supplyDailyUsdCap: 0.5, runnerHealth: 'ok', ...o,
+  supplyDailyUsdCap: 0.5,...o,
 })
 const d5 = (c: Partial<ReadyCohortFact> = {}, o: Partial<PreflightFacts> = {}): PreflightVerdict =>
   judgeNextPreflight('d5', D5_FACTS({ readyCohort: cohort(c), ...o }), RUNNER_GRID)
@@ -88,15 +87,15 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
   // 🔴 slot-valid 결과 0 이면 결과당 비용도 없다(비용 귀속이 null) — 현실 모양 그대로
   const v = d5({ published: 0, lost: 3, sources: sourcesFor(3, 5), usdPerSlotValidResult: null })
   check('🔴 반례3 공개 0 · 손실 3 · 용량 5 → READY_REQUIREMENT_UNKNOWN 예측 경고 · 부족(SHORT) 단정 없음 · 비용 SHORT 없음',
-    v.verdict === 'UNKNOWN' && fw(v, 'READY_REQUIREMENT_UNKNOWN')
-    && !fw(v, 'THROUGHPUT_SHORT') && !v.codes.includes('SUPPLY_COST_SHORT'), show(v))
-  check('🔴 반례3 공급 비용은 hard gate UNKNOWN 그대로 (결과 0 → 결과당 비용 없음)', v.codes.includes('SUPPLY_COST_UNKNOWN'), show(v))
+    v.verdict === 'PASS' && fw(v, 'READY_REQUIREMENT_UNKNOWN')
+    && !fw(v, 'THROUGHPUT_SHORT') && !v.warnings.includes('SUPPLY_COST_SHORT'), show(v))
+  check('🔴 반례3 공급 비용은 모름 경고로 남는다 (결과 0 → 결과당 비용 없음 · 막지 않는다)', v.warnings.includes('SUPPLY_COST_UNKNOWN'), show(v))
   const hard = d5({ published: 0, lost: 3, sources: sourcesFor(3, 4) })
   check('🔴 필요량은 목표 아래로 내려가지 않으므로 용량 4 < 목표 5 → THROUGHPUT_SHORT 예측 경고는 사라지지 않는다',
     fw(hard, 'THROUGHPUT_SHORT') && hard.counts.readyCapacity === 4, show(hard))
   const none = d5({}, { readyCohort: null })
-  check('🔴 cohort 모름 → THROUGHPUT_UNKNOWN 예측 경고 · SUPPLY_COST_UNKNOWN hard gate (0 으로 읽지 않는다)',
-    none.verdict === 'UNKNOWN' && fw(none, 'THROUGHPUT_UNKNOWN') && none.codes.includes('SUPPLY_COST_UNKNOWN')
+  check('🔴 cohort 모름 → THROUGHPUT_UNKNOWN 예측 경고 · SUPPLY_COST_UNKNOWN 비용 경고 (0 으로 읽지 않는다)',
+    none.verdict === 'PASS' && fw(none, 'THROUGHPUT_UNKNOWN') && none.warnings.includes('SUPPLY_COST_UNKNOWN')
     && !('readyNeeded' in none.counts), show(none))
   const empty = d5({ published: 0, lost: 0, unknown: 0 })
   check('🔴 결말 0 · 대기 0(READY 0) → 용량 0 < 목표 → THROUGHPUT_SHORT 예측 경고 (관측된 0 생산)',
@@ -149,14 +148,14 @@ console.log('\n⑤ 반례 7 · 8 — 비용: 하루 필요 = 목표 × 완전 �
     ok.verdict === 'PASS' && Math.abs((ok.counts.supplyDailyUsdNeeded ?? 0) - 0.35) < 1e-12, show(ok))
   const short = d5({ usdPerSlotValidResult: 0.08 })
   check('🔴 반례8 결과당 $0.08 × 목표 5 = $0.40 > 저예산 profile의 앞 5/7 몫 $0.3571 → SUPPLY_COST_SHORT',
-    short.codes.includes('SUPPLY_COST_SHORT'), show(short))
+    short.warnings.includes('SUPPLY_COST_SHORT'), show(short))
   const lossy = d5({ lost: 1, sources: sourcesFor(6, 50), usdPerSlotValidResult: 0.07 })
   check('🔴 🔴 결과당 비용에 손실이 이미 들어 있다 — 손실 1 이어도 비용은 목표 5 × $0.07 (필요 READY 6 을 다시 곱하지 않는다)',
     lossy.counts.readyNeeded === 6 && Math.abs((lossy.counts.supplyDailyUsdNeeded ?? 0) - 0.35) < 1e-12
-    && !lossy.codes.includes('SUPPLY_COST_SHORT'), show(lossy))
+    && !lossy.warnings.includes('SUPPLY_COST_SHORT'), show(lossy))
   const unknown = d5({ unknown: 10, published: 4, sources: sourcesFor(14, 18), usdPerSlotValidResult: null })
   check('🔴 🔴 반례7 결과당 비용 모름(legacy-only · 미연결 · 미정산 · 확인 결과 0) → SUPPLY_COST_UNKNOWN — raw 단가로 GREEN/FAIL 하지 않는다',
-    unknown.codes.includes('SUPPLY_COST_UNKNOWN') && !unknown.codes.includes('SUPPLY_COST_SHORT')
+    unknown.warnings.includes('SUPPLY_COST_UNKNOWN') && !unknown.warnings.includes('SUPPLY_COST_SHORT')
     && !('rawReadyUsd' in unknown.counts) && !('publicPostUsd' in unknown.counts), show(unknown))
   const judge = strip('src/lib/stage-ladder-generic.ts')
   check('🔴 처리량은 replenishmentOf 구간 하나 · 비용은 목표 × 결과당 비용 또는 제한 trial 위험 하나 — raw 단가 계산 없음',

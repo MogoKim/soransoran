@@ -59,7 +59,7 @@ export const CARD_BLOCK_CODES = [
  * 🔴 **Pool 층은 지금 비어 있다** (2026-10-01 · C9). 역할 쏠림은 회차로 옮겼고, 소재 쏠림은 지웠다 —
  *    소재 라벨이 어느 표에도 없어 영원히 "모름" 인 축은 판정이 아니라 쓰일수록 막는 함정이었다.
  *    소재 다양성은 새 분류표 없이 **배정 근거**로 본다: 같은 Persona 의 주간 글 상한 · 최소 간격(`hardFilter`)과
- *    증명일 자동 글의 글쓴이가 서로 달라야 한다는 단계 증거(`stage-evidence` `PERSONA_REPEAT`, canon §6-3).
+ *    하루 판정은 글쓴이 겹침을 따로 재지 않는다(2026-11-19) — 같은 날 두 편은 그 간격 규칙이 막는다.
  */
 export const POOL_BLOCK_CODES = [] as const
 export const ASSIGNMENT_BLOCK_CODES = [

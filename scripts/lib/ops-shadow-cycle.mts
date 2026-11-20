@@ -79,7 +79,6 @@ export async function runShadowCycle(o: ShadowCycleOptions): Promise<ShadowCycle
   const { profileOf } = await import('../../src/lib/scale-profile')
   const { readStageDecision } = await import('../../src/lib/stage-decision-repo')
   const { readStageEvidenceFacts } = await import('../../src/lib/stage-evidence-repo')
-  const { PERSONA_COMMENTS_PER_POST_MAX } = await import('../../src/lib/persona-target-rules')
   const { classifyReservations, ledgerDateOf, previousLedgerDate, tallyOf } = await import('../../src/lib/llm-ledger')
   const { SUPPLY_RUN_WINDOW_MS } = await import('../../src/lib/supply-schedule-contract')
   const { readSpeakerLoad, SPEAKER_LOAD_FILE } = await import('../../src/lib/content-core/speaker-load-file')
@@ -203,7 +202,7 @@ export async function runShadowCycle(o: ShadowCycleOptions): Promise<ShadowCycle
     const records: ShadowRecord[] = [cycle]
     if (writer.due && writer.runId !== null && writer.completedAt !== null) {
       const facts = await readStageEvidenceFacts(db, {
-        kstDate, stage: validated.release, decision: validated, now, commentCapPerPost: PERSONA_COMMENTS_PER_POST_MAX,
+        kstDate, stage: validated.release, decision: validated, now,
       })
       const outcome = dailyOutcomeOf(envelope, plan, { posts: facts.posts, tally: today.ok ? tallyOf(today.entries) : null })
       const closeHash = inputHashOf({ envelope, plan, outcome, writerRun: writer.runId, source })

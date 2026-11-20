@@ -12,7 +12,7 @@
  *    ③ **옛 단계 변수 소비** — `SORAN_CAPACITY_STAGE` · `SORAN_RELEASE_STAGE` · `SORAN_RELEASE_CANARY_*` ·
  *       `SORAN_RELEASE_WINDOW_*` · `SORAN_STAGE_PROOF_*` · 표식(`SORAN_STAGE_DECISION_DATE`)을 workflow ·
  *       plist · package.json · 셸이 넘기거나(`vars.*` 포함), 허용 밖 TypeScript 가 읽는다.
- *    ④ **StageDecision 밖 stage authority** — 허용된 네 파일(정의 · 유일한 읽기 문 · 증명일 · 유일한 쓰기) 밖에서
+ *    ④ **StageDecision 밖 stage authority** — 허용된 세 파일(정의 · 유일한 읽기 문 · 유일한 쓰기) 밖에서
  *       단계 운반 칸이나 표식을 다룬다.
  *    ⑤ **fixture 표식이 운영 경로로 샌다** — 검사 전용 `stage-decision-fixture` 를 운영 엔트리가 import 한다.
  *
@@ -48,16 +48,15 @@ export const LEGACY_ENV_RE = /\bSORAN_(CAPACITY_STAGE|RELEASE_STAGE|RELEASE_CANA
 /** 🔴 CANARY · WINDOW 는 어떤 TypeScript 도 읽지 않는다(검사 파일 제외) */
 export const DEAD_KEY_RE = /\bSORAN_RELEASE_(CANARY|WINDOW)_[A-Z_]+\b/g
 /** 🔴 단계 운반 칸 · 표식 — 이름 문자열이든 상수 식별자든 */
-export const STAGE_ENV_TOKEN_RE = /\bSORAN_(CAPACITY_STAGE|RELEASE_STAGE|STAGE_PROOF_STAGE|STAGE_PROOF_DATE|STAGE_DECISION_DATE)\b|\b(RELEASE_ENV|CAPACITY_ENV|PROOF_STAGE_ENV|PROOF_DATE_ENV|PROOF_ENV_KEYS|STAGE_DECISION_MARK_ENV)\b/g
+export const STAGE_ENV_TOKEN_RE = /\bSORAN_(CAPACITY_STAGE|RELEASE_STAGE|STAGE_PROOF_STAGE|STAGE_PROOF_DATE|STAGE_DECISION_DATE)\b|\b(RELEASE_ENV|CAPACITY_ENV|STAGE_DECISION_MARK_ENV)\b/g
 
 /**
- * 🔴 **단계 칸을 다뤄도 되는 파일 — 이 넷(과 가드 자신)뿐이다.**
- *    정의(scale-profile) · 유일한 읽기 문(scale-runtime) · 증명일(stage-proof-day) · 유일한 쓰기(stage-controller.consumerEnvOf).
+ * 🔴 **단계 칸을 다뤄도 되는 파일 — 이 셋(과 가드 자신)뿐이다.**
+ *    정의(scale-profile) · 유일한 읽기 문(scale-runtime) · 유일한 쓰기(stage-controller.consumerEnvOf).
  */
 export const STAGE_ENV_ALLOWED: readonly string[] = [
   'src/lib/scale-profile.ts',
   'src/lib/scale-runtime.ts',
-  'src/lib/stage-proof-day.ts',
   'src/lib/stage-controller.ts',
   'scripts/lib/stage-authority-graph.ts',
   FIXTURE_MODULE,

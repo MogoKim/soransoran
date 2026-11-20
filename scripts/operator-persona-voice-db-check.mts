@@ -242,7 +242,7 @@ async function snap(now: Date): Promise<SnapResult> {
     stage: 'd20',
     decision: null,
     now,
-    commentCapPerPost: 10,
+
   })
   const verdict = judgeStageEvidence(D_KST, 'd20', _facts, null)
   const verdictJson = JSON.stringify(verdict)

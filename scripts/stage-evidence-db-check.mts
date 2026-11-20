@@ -6,18 +6,15 @@
  *      `readStageEvidenceFacts` → `judgeStageEvidence` 가 PASS 를 낸다
  *   ② 행 하나씩 비틀면(댓글 없음 · 61분 · 지운 댓글 · 자기 글 댓글 · 감사 미판정/시한 초과 · 결함 yes · 표본 0 ·
  *      표본이 자동 target 밖 · 발행 기록 중복 · 같은 Persona 두 번 · 표식 없는 발행 · 편수 부족 · 사람 승인만/혼합 ·
- *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 구조 상한(`personaCommentCapFor('organic')`)까지 PASS · 상한 + 1 FAIL
+ *      HOLD 결정 · 기록 없는 발행 · 고아 기록) PASS 가 아니다 · 글당 댓글·타인 3명 통과선은 표(`ladder-table.ts`)에서 읽는다
  *   ③ 발행 트랜잭션이 무인 표식을 실제로 남긴다(예약 · unattended) · 수동 단건은 남기지 않는다
- *   ④ `scripts/stage-controller.mts --json` (dry-run) — 전날 FAIL → 계획 d3 재시험 · 전날 PASS → 계획 d5 · DB write 0
- *      🔴 (2026-09-30) 실제 진입점의 preflight 는 Persona 4상태 정본을 읽는다(2026-11-13부터 `readPersonaCapacity` 한 판독 —
- *      계약 유효 · stage-active 두 칸, stage-active 는 D30 이상 시험만 본다) — 격리 DB 에는
- *      계약 유효 Persona 가 0 이라 PERSONA_SHORT(personas=0 · 제공자 연결 증명)이다 — 시험이 열리지 않고
- *         지금 단계의 평상일(PREPARE · 0..Dn)이다 — 막힌 날 REPROVE 없음(2026-10-11 Batch A1). 이것이 오늘 운영의 정직한 결과다.
+ *   ④ `scripts/stage-controller.mts --json` (dry-run · 2026-11-19 사다리 재설계) — 전날 미달이어도 공개 단계 유지 ·
+ *      PASS 이틀 연속이면 올림 계획 · 올라갈 칸의 Persona 관문(격리 DB 는 계약 유효 Persona 0)이 막으면 유지 ·
+ *      옛 되돌림 행(PREPARE 아래 칸)에서 이틀 전 열린 단계를 되찾는다 · `--evidence-date` 미리보기는 DB write 0
  *   ④-b (2026-10-11 Batch A3) 첫 댓글 증거는 Comment ↔ Queue(무인 표식) ↔ ActivityLog 세 행이 맞물린 것만 — 하나씩 비튼다
- *   ④-c (2026-10-13 · PR #704 E1) 추가 댓글 실제 행 — 추가 표식 답글 4건은 상한 1 에서도 PASS · 연결이 깨지면 대화 감사만 FAIL ·
- *      표식이 섞이면 첫 댓글 축 broken · 연결 없는 수동 Persona 댓글은 여전히 상한에 든다
- *   ⑤ REPROVE 증명일 실제 행 → PASS → 다음 날 d5 계획 · HOLD 는 아니다 · controller 진입점: 전날 TRIAL d20 → d20 재시험
- *      계획이어도 preflight(실제 DB·장부 · 계약 유효 Persona 0)가 막는다 · env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
+ *   ④-c (2026-10-13 · PR #704 E1) 추가 댓글 실제 행 — 추가 표식 답글은 글당 댓글에 든다 · 연결이 깨지면 출처 깨짐(무결성) ·
+ *      표식이 섞이면 첫 댓글 축 broken · 연결 없는 수동 Persona 댓글은 사람 손(COMMENT_MANUAL_PERSONA)이다
+ *   ⑤ 옛 행 판독 · D20 진입점 — env 단계 키(SORAN_*_STAGE)는 결정에 영향이 없다
  *   ⑥ (2026-09-30 · 조항 ⑦) 발행 도장 — 도장 없는 발행 → RELEASE_CONTRACT_MISSING · 옛/ineligible 도장 → STALE_RELEASE
  *
  * 🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0.
@@ -37,11 +34,11 @@ import { createStageDecision } from '../src/lib/stage-decision-repo'
 import { kstDayBounds, readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
 import { publishLatencyHours } from './lib/stage-preflight-facts.mjs'
 import {
-  judgeStageEvidence, trialPlanOf, evidenceReasonOf, FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY,
+  judgeStageEvidence, evidenceReasonOf, FOLLOWUP_LANE_DECIDED_BY, FOLLOWUP_LANE_ACTIVITY_DECIDED_BY,
   type StageEvidenceVerdict, type EvidenceSideSignals,
 } from '../src/lib/stage-evidence'
 import { UNATTENDED_PUBLISH_DECIDED_BY, publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
-import { AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
+import { AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY } from '../src/lib/persona-comment-auto-lane'
 import { AUDIT_OVERDUE_MS } from '../src/lib/auto-ready-audit-store'
 import { AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { AUTO_DECIDER, digestOf } from '../src/lib/auto-ready-v2'
@@ -54,7 +51,9 @@ import {
 } from '../src/lib/auto-ready-semantic-audit'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import { observeJob } from './lib/runner-health.mjs'
-import { personaCommentCapFor } from '../src/lib/stage-evidence'
+import { consecutivePassDays } from '../src/lib/stage-ladder'
+import { LADDER_RULE } from '../src/lib/ladder-table'
+import { unresolvedDefectCount } from '../src/lib/auto-ready-repo'
 import { judgeSlotRelease, publishEventAtOf, releaseStampOf, releaseStampStatusOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { appendLedgerLine, ledgerDirForHome, ledgerPathOf } from './lib/llm-ledger-store.mjs'
@@ -63,7 +62,6 @@ import { PRICING_VERSION } from '../src/lib/llm-pricing'
 import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import { supplyRunIdOf } from '../src/lib/supply-run-token'
 import { SUPPLY_PROOF_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
-import { usesSupplyCostEnvelope } from '../src/lib/supply-cost-envelope'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -91,18 +89,18 @@ const NOW = new Date()
 const TODAY = kstDateString(NOW)
 const D = previousKstDate(TODAY)!
 const D_PREV = previousKstDate(D)!
-const at = (hh: number, mm: number): Date => new Date(`${D}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+09:00`)
 const MIN = 60_000
-const SLOTS = [at(9, 30), at(13, 30), at(17, 30)]
+// 🔴 대화 마감(공개 뒤 8시간)이 그날 안에 닫히는 시각 — 이 검사를 자정 직후에 돌려도 결의 분모가 같다
+const slotsOf = (day: string): Date[] => ['09:30', '11:30', '13:30'].map((hm) => new Date(`${day}T${hm}:00+09:00`))
+const SLOTS = slotsOf(D)
 const SIDE_OK: EvidenceSideSignals = {
   cost: [
-    { lane: 'supply', name: '공급 장부', health: 'ok' },
     { lane: 'comment', name: '댓글 장부', health: 'ok' },
     { lane: 'audit', name: '감사 장부', health: 'ok' },
   ],
-  errors: 'ok',
+
   supplyCostEvidence: {
-    legacyUsageUnknownRequests: 0,
+
     wholeDayCriticalHealth: 'ok',
     envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
   },
@@ -173,11 +171,11 @@ const decisionRow = (kstDate: string, o: Record<string, unknown>): Record<string
   decidedAt: new Date(`${kstDate}T07:00:00+09:00`).toISOString(), contractVersion: STAGE_DECISION_VERSION,
   decidedBy: DECISION_WRITER, transition: null, ...o,
 })
-/** 🔴 09-29 운영 행 모양 — TRIAL d3 · 기반 d1 */
+/** 올린 날의 행 모양 — TRIAL d3 · 기반 d1 */
 const TRIAL_D3 = { release: 'd3', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: D_PREV, target: 'd3' } }
 
-async function storeDecision(o: Record<string, unknown>): Promise<ValidatedStageDecision> {
-  const v = validateStoredDecision({ row: decisionRow(D, o), expectKstDate: D })
+async function storeDecision(o: Record<string, unknown>, day: string = D): Promise<ValidatedStageDecision> {
+  const v = validateStoredDecision({ row: decisionRow(day, o), expectKstDate: day })
   if (!v.ok) throw new Error(`fixture 결정이 깨졌다 — ${v.reason}`)
   await createStageDecision(prisma, v.decision)
   return v.decision
@@ -209,17 +207,18 @@ async function rawRow(capturedAt: Date): Promise<string> {
 type Seeded = { posts: string[]; authors: string[]; commenters: string[]; comments: string[]; logs: string[]; queues: string[] }
 
 /**
- * 🔴 D 하루 — 무인 발행 3건(자동 READY 도장 행) · 글마다 12분 뒤 다른 Persona 첫 댓글 1건 ·
- *    감사 1건(판정 no) = 정본 표본 ceil(3×0.2)=1
+ * 🔴 하루 — 무인 발행 3건(자동 READY 도장 행) · 글마다 5분 뒤 다른 Persona 첫 댓글 1건 + 서로 다른 화자의 추가 댓글 5건 ·
+ *    감사 1건(판정 no) = 정본 표본 ceil(3×0.2)=1. 수와 결의 통과선을 넘는 하루다.
  */
-async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER): Promise<Seeded> {
+async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER, day: string = D): Promise<Seeded> {
+  const DAY_SLOTS = slotsOf(day)
   const s: Seeded = { posts: [], authors: [], commenters: [], comments: [], logs: [], queues: [] }
   for (let i = 0; i < n; i += 1) {
     const author = await persona(`A${i}-${seq}`)
     const commenter = await persona(`C${i}-${seq}`)
     const authorUser = (await prisma.persona.findUniqueOrThrow({ where: { id: author }, select: { userId: true } })).userId
     const commenterUser = (await prisma.persona.findUniqueOrThrow({ where: { id: commenter }, select: { userId: true } })).userId
-    const t = SLOTS[i]!
+    const t = DAY_SLOTS[i]!
     const post = await prisma.post.create({
       data: { boardType: 'FREE', title: `저녁 산책 ${i}`, content: `동네 한 바퀴 ${i}`, source: 'SYSTEM', authorId: authorUser, personaId: author, createdAt: t },
       select: { id: true },
@@ -236,37 +235,36 @@ async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER): Promise<
     })
     const c = await autoComment({
       data: { content: '저도 저녁에 걸어요', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: post.id, authorId: commenterUser,
-        personaId: commenter, createdAt: new Date(t.getTime() + 12 * MIN) },
+        personaId: commenter, createdAt: new Date(t.getTime() + 5 * MIN) },
       select: { id: true },
     })
+    for (let k = 0; k < 5; k += 1) await followupComment(post.id, null, new Date(t.getTime() + (k + 2) * 15 * MIN))
     s.posts.push(post.id); s.authors.push(author); s.commenters.push(commenter); s.comments.push(c.id); s.logs.push(log.id); s.queues.push(q.id)
   }
   if (n > 0 && decidedBy === AUTO_DECIDER) {
     await prisma.autoReadyAudit.create({
-      data: { queueId: s.queues[0]!, postId: s.posts[0]!, selectedAtN: n, selectedTarget: 1, selectedAt: new Date(SLOTS[0]!.getTime() + 30 * MIN),
+      data: { queueId: s.queues[0]!, postId: s.posts[0]!, selectedAtN: n, selectedTarget: 1, selectedAt: new Date(DAY_SLOTS[0]!.getTime() + 30 * MIN),
         publishedTitleHash: 'a'.repeat(64), publishedBodyHash: 'b'.repeat(64), stampContractDigest: 'd',
-        defect: 'no', judgedAt: new Date(SLOTS[0]!.getTime() + 40 * MIN), auditor: 'machine:fixture',
+        defect: 'no', judgedAt: new Date(DAY_SLOTS[0]!.getTime() + 40 * MIN), auditor: 'machine:fixture',
         auditContractVersion: 'v', auditModel: 'm', auditPromptVersion: 'p' },
     })
   }
   return s
 }
 
-const CAP_AUTO = personaCommentCapFor('bootstrap-auto')
-async function verdictOf(decision: ValidatedStageDecision | null, cap: number | null = CAP_AUTO): Promise<StageEvidenceVerdict> {
-  const facts = await readStageEvidenceFacts(prisma, { kstDate: D, stage: 'd3', decision, now: NOW, commentCapPerPost: cap })
+async function verdictOf(decision: ValidatedStageDecision | null): Promise<StageEvidenceVerdict> {
+  const facts = await readStageEvidenceFacts(prisma, { kstDate: D, stage: 'd3', decision, now: NOW })
   return judgeStageEvidence(D, 'd3', facts, SIDE_OK)
 }
 const has = (v: StageEvidenceVerdict, c: string): boolean => (v.codes as readonly string[]).includes(c)
 
 /** 🔴 한 반례 = 깨끗한 하루를 새로 심고, 행 하나만 비튼다 */
-async function counter(name: string, code: string, mutate: (s: Seeded) => Promise<void>, decisionOverride?: Record<string, unknown>,
-  cap: number | null = CAP_AUTO): Promise<void> {
+async function counter(name: string, code: string, mutate: (s: Seeded) => Promise<void>, decisionOverride?: Record<string, unknown>): Promise<void> {
   await wipe()
   const decision = await storeDecision(decisionOverride ?? TRIAL_D3)
   const s = await seedDay()
   await mutate(s)
-  const v = await verdictOf(decision, cap)
+  const v = await verdictOf(decision)
   check(name, v.verdict !== 'PASS' && has(v, code), `${v.verdict} ${v.codes.join(',')}`)
 }
 
@@ -284,19 +282,20 @@ try {
   check('편수 3 · 자동 target 3 · 첫 댓글 3 · 감사 기대 ceil(3×20%)=1 · 표본 1', base.counts.published === 3 && base.counts.autoTargets === 3
     && base.counts.firstCommentOk === 3 && base.counts.auditExpected === 1
     && base.counts.auditSampled === 1, JSON.stringify(base.counts))
-  const plan = trialPlanOf(dec, base)
-  check('🟢 다음 날 계획 = d5 시험 (기반 d3 · PASS)', plan?.target === 'd5' && plan.base === 'd3' && plan.basis === 'PASS', JSON.stringify(plan))
+  check('🟢 결 — 글당 댓글 6(첫 1 + 추가 5) · 타인 3명 3편 · 수집 시각을 큐 행에서 읽었다',
+    base.counts.commentDepthAvg === 6 && base.counts.threeVoicesPosts === 3 && base.counts.collectKnown === 3, JSON.stringify(base.counts))
+  check('🟢 그 하루는 열린 단계 d3 의 연속 통과 1일이다', consecutivePassDays(TODAY, 'd3', [{ decision: dec, evidence: base }]) === 1)
 
   console.log('\n② 행 하나씩 비틀면 PASS 가 아니다')
-  await counter('🔴 09:30 글 댓글 삭제(행 없음) → COMMENT_MISSING', 'COMMENT_MISSING', async (s) => {
+  await counter('🔴 09:30 글 첫 댓글 삭제(행 없음) → FIRST_COMMENT_SHORT', 'FIRST_COMMENT_SHORT', async (s) => {
     await prisma.comment.delete({ where: { id: s.comments[0]! } })
   })
   // ── 🔴 자동 첫 댓글 출처 (2026-10-11 Batch A3) — 실제 세 행을 하나씩 비튼다 ──
-  await counter('🔴 반례⑧ 그 댓글이 사람(운영자) 발행이다(Queue 사람 표식 · 로그 operator) → 증거 0 · COMMENT_MISSING', 'COMMENT_MISSING', async (s) => {
+  await counter('🔴 반례⑧ 그 댓글이 사람(운영자) 발행이다(Queue 사람 표식 · 로그 operator) → 자동 증거 0 · COMMENT_MANUAL_PERSONA', 'COMMENT_MANUAL_PERSONA', async (s) => {
     await prisma.personaApprovalQueue.updateMany({ where: { publishedCommentId: s.comments[0]! }, data: { decidedBy: 'admin:fixture' } })
     await prisma.personaActivityLog.updateMany({ where: { kind: 'comment', targetId: s.comments[0]! }, data: { decidedBy: 'operator' } })
   })
-  await counter('🔴 반례⑧ 연결 행 없는 맨 PERSONA 댓글 → 증거 0 · COMMENT_MISSING', 'COMMENT_MISSING', async (s) => {
+  await counter('🔴 반례⑧ 연결 행 없는 맨 PERSONA 댓글 → 자동 증거 0 · COMMENT_MANUAL_PERSONA', 'COMMENT_MANUAL_PERSONA', async (s) => {
     await prisma.personaApprovalQueue.deleteMany({ where: { publishedCommentId: s.comments[0]! } })
     await prisma.personaActivityLog.deleteMany({ where: { kind: 'comment', targetId: s.comments[0]! } })
   })
@@ -321,11 +320,11 @@ try {
   await counter('🔴 반례⑩ 결정 시각 ≠ 로그 발행 시각 → COMMENT_PROVENANCE_BROKEN', 'COMMENT_PROVENANCE_BROKEN', async (s) => {
     await prisma.personaApprovalQueue.updateMany({ where: { publishedCommentId: s.comments[0]! }, data: { decidedAt: new Date(SLOTS[0]!.getTime() + 3 * MIN) } })
   })
-  await counter('🔴 지운 댓글(isDeleted)은 세지 않는다 → COMMENT_MISSING', 'COMMENT_MISSING', async (s) => {
+  await counter('🔴 지운 댓글(isDeleted)은 세지 않는다 → FIRST_COMMENT_SHORT', 'FIRST_COMMENT_SHORT', async (s) => {
     await prisma.comment.update({ where: { id: s.comments[0]! }, data: { isDeleted: true } })
   })
-  await counter('🔴 첫 댓글이 61분 뒤 → COMMENT_LATE', 'COMMENT_LATE', async (s) => {
-    await prisma.comment.update({ where: { id: s.comments[0]! }, data: { createdAt: new Date(SLOTS[0]!.getTime() + AUTO_FIRST_COMMENT_WINDOW_MS + MIN) } })
+  await counter('🔴 첫 댓글이 판정 창을 1분 넘겨 달렸다 → FIRST_COMMENT_SHORT', 'FIRST_COMMENT_SHORT', async (s) => {
+    await prisma.comment.update({ where: { id: s.comments[0]! }, data: { createdAt: new Date(SLOTS[0]!.getTime() + LADDER_RULE.firstCommentWindowMs + MIN) } })
   })
   const secondPersonaComment = async (s: Seeded): Promise<void> => {
     const other = await persona(`X-${seq}`)
@@ -333,17 +332,16 @@ try {
     await autoComment({ data: { content: '저도요', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s.posts[0]!, authorId: u,
       personaId: other, createdAt: new Date(SLOTS[0]!.getTime() + 20 * MIN) } })
   }
-  await counter('🔴 bootstrap-auto(상한 1) — 60분 안 두 번째 Persona → COMMENT_OVER_CAP', 'COMMENT_OVER_CAP', secondPersonaComment)
   {
     await wipe()
     const d2 = await storeDecision(TRIAL_D3)
     const s2 = await seedDay()
     await secondPersonaComment(s2)
-    const v = await verdictOf(d2, personaCommentCapFor('organic'))
-    check('🟢 구조 상한 안 — 같은 두 댓글은 PASS (60분 안 2건은 실패가 아니다)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+    const v = await verdictOf(d2)
+    check('🟢 첫 댓글 레인의 두 번째 Persona 댓글은 결함이 아니다 — PASS', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
   }
 
-  console.log('\n④-c 🔴 추가 댓글 실제 행 — 첫 댓글 증거와 분리 (2026-10-13 · PR #704 E1)')
+  console.log('\n④-c 🔴 추가 댓글 실제 행 — 첫 댓글과 다른 축 · 출처 깨짐은 하루 판정도 막는다')
   const thread = async (n: number): Promise<{ d: ValidatedStageDecision; s: Seeded; fu: { id: string; personaId: string }[] }> => {
     await wipe()
     const d = await storeDecision(TRIAL_D3)
@@ -360,15 +358,16 @@ try {
   {
     const { d } = await thread(4)
     const v = await verdictOf(d)
-    check('🟢 bootstrap-auto(상한 1) — 자동 첫 댓글 1 + 추가 답글 4 → PASS (COMMENT_OVER_CAP 아님)', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
-    check('그때 counts — 첫 댓글 3 · 추가 4 · 수동 0 · 대화 감사 PASS', v.counts.firstCommentOk === 3 && v.counts.followupComments === 4
-      && v.counts.manualPersonaComments === 0 && v.conversation?.verdict === 'PASS', `${JSON.stringify(v.counts)} ${JSON.stringify(v.conversation)}`)
+    check('🟢 자동 첫 댓글 1 + 추가 답글 4 → PASS', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
+    check('그때 counts — 첫 댓글 3 · 글당 댓글의 분자 22(글 3 × 6 + 답글 4) · 수동 0 · 대화 감사 PASS', v.counts.firstCommentOk === 3 && v.counts.personaComments === 22
+      && v.counts.manualPersonaOnTargets === 0 && v.conversation?.verdict === 'PASS', `${JSON.stringify(v.counts)} ${JSON.stringify(v.conversation)}`)
   }
   {
     const { d, fu } = await thread(2)
     await prisma.personaActivityLog.deleteMany({ where: { kind: 'comment', targetId: fu[1]!.id } })
     const v = await verdictOf(d)
-    check('🔴 추가 댓글 로그 없음 → 단계 PASS 그대로 · 첫 댓글 3 (소급 삭제 없음)', v.verdict === 'PASS' && v.counts.firstCommentOk === 3,
+    check('🔴 추가 댓글 로그 없음 → 하루 판정 FAIL COMMENT_PROVENANCE_BROKEN(글당 댓글의 근거가 깨졌다) · 첫 댓글 3 은 그대로',
+      v.verdict === 'FAIL' && has(v, 'COMMENT_PROVENANCE_BROKEN') && v.counts.firstCommentOk === 3,
       `${v.verdict} ${v.codes.join(',')}`)
     check('🔴 그때 대화 감사 FAIL — FOLLOWUP_PROVENANCE_BROKEN · 이유 줄에 따로 남는다',
       v.conversation?.verdict === 'FAIL' && v.conversation.codes.includes('FOLLOWUP_PROVENANCE_BROKEN')
@@ -386,8 +385,8 @@ try {
     const fuPersona = (await prisma.comment.findFirstOrThrow({ where: { postId: s.posts[0]!, parentId: s.comments[0]! }, select: { personaId: true } })).personaId
     await prisma.comment.updateMany({ where: { postId: s.posts[0]!, parentId: s.comments[0]! }, data: { personaId: s.commenters[0]! } })
     const v = await verdictOf(d)
-    check('🔴 추가 댓글 Persona 를 첫 댓글 Persona 로 바꾸면 연결이 깨진다 → 단계 PASS · 대화 감사 FAIL',
-      fuPersona !== null && v.verdict === 'PASS' && v.conversation?.verdict === 'FAIL', `${v.verdict} ${JSON.stringify(v.conversation)}`)
+    check('🔴 추가 댓글 Persona 를 첫 댓글 Persona 로 바꾸면 연결이 깨진다 → 하루 판정 FAIL · 대화 감사 FAIL',
+      fuPersona !== null && has(v, 'COMMENT_PROVENANCE_BROKEN') && v.conversation?.verdict === 'FAIL', `${v.verdict} ${JSON.stringify(v.conversation)}`)
   }
   {
     const { d } = await thread(6)
@@ -454,15 +453,14 @@ try {
     check('🟢 실제 DB 정상 발행 뒤 중간 Persona 답글을 삭제해도 사슬 사실은 보존',
       v.conversation?.verdict === 'PASS', JSON.stringify(v.conversation))
   }
-  await counter('🔴 연결 없는 수동 Persona 댓글은 여전히 상한에 든다(상한 1) → COMMENT_OVER_CAP', 'COMMENT_OVER_CAP', async (s) => {
+  await counter('🔴 연결 없는 수동 Persona 댓글이 자동 글에 있다 → COMMENT_MANUAL_PERSONA', 'COMMENT_MANUAL_PERSONA', async (s) => {
     const other = await persona(`M-${seq}`)
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: other }, select: { userId: true } })).userId
     await prisma.comment.create({ data: { content: '수동', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s.posts[0]!, authorId: u,
       personaId: other, createdAt: new Date(SLOTS[0]!.getTime() + 2 * 60 * MIN) } })
   })
 
-  await counter('🔴 댓글 단계를 모른다(상한 null) → COMMENT_CAP_UNKNOWN', 'COMMENT_CAP_UNKNOWN', async () => undefined, undefined, null)
-  await counter('🔴 🔴 **자동 READY 3건인데 감사 행 0 → AUDIT_COVERAGE_ZERO**', 'AUDIT_COVERAGE_ZERO', async (s) => {
+  await counter('🔴 🔴 **자동 READY 3건인데 감사 행 0 → AUDIT_COVERAGE_SHORT**', 'AUDIT_COVERAGE_SHORT', async (s) => {
     await prisma.autoReadyAudit.delete({ where: { queueId: s.queues[0]! } })
   })
   await counter('🔴 Queue 결정자가 비었다 → AUDIT_TARGET_UNKNOWN', 'AUDIT_TARGET_UNKNOWN', async (s) => {
@@ -476,14 +474,14 @@ try {
     const d3 = await storeDecision(TRIAL_D3)
     await seedDay(3, 'founder')
     const v = await verdictOf(d3)
-    check('🔴 🔴 **전부 사람 승인(founder) 3건 · 감사 0 → 승격 물량 0 · FAIL (PUBLISH_NOT_AUTO_READY)**',
-      v.verdict === 'FAIL' && has(v, 'PUBLISH_NOT_AUTO_READY') && v.counts.autoTargets === 0 && v.counts.humanApproved === 3,
+    check('🔴 🔴 **전부 사람 승인(founder) 3건 · 감사 0 → 승격 물량 0 · FAIL (PUBLISH_SHORT)**',
+      v.verdict === 'FAIL' && has(v, 'PUBLISH_SHORT') && v.counts.autoTargets === 0 && v.counts.humanApproved === 3,
       `${v.verdict} ${v.codes.join(',')} ${JSON.stringify(v.counts)}`)
   }
-  await counter('🔴 혼합 — 자동 2 · 사람 승인 1(founder) → PUBLISH_NOT_AUTO_READY', 'PUBLISH_NOT_AUTO_READY', async (s) => {
+  await counter('🔴 혼합 — 자동 2 · 사람 승인 1(founder) → PUBLISH_SHORT', 'PUBLISH_SHORT', async (s) => {
     await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[2]! }, data: { decidedBy: 'founder' } })
   })
-  await counter('🔴 감사 표본이 그날 자동 target 밖(전날 글의 감사를 그날 고름) → AUDIT_OUTSIDE_TARGET', 'AUDIT_OUTSIDE_TARGET', async (s) => {
+  await counter('🔴 감사 표본이 그날 자동 target 밖(전날 글의 감사를 그날 고름) → 표본으로 세지 않는다(AUDIT_COVERAGE_SHORT)', 'AUDIT_COVERAGE_SHORT', async (s) => {
     const a = await persona(`O-${seq}`)
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: a }, select: { userId: true } })).userId
     const old = new Date(SLOTS[0]!.getTime() - 86_400_000)
@@ -503,45 +501,31 @@ try {
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: s.authors[0]! }, select: { userId: true } })).userId
     await autoComment({ data: { content: '제 글이에요', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s.posts[0]!, authorId: u,
       personaId: s.authors[0]!, createdAt: new Date(SLOTS[0]!.getTime() + 30 * MIN) } })
-  }, undefined, personaCommentCapFor('organic'))
-  {
-    await wipe()
-    const d5 = await storeDecision(TRIAL_D3)
-    const s5 = await seedDay()
-    const CAP = personaCommentCapFor('organic')
-    // 첫 댓글 1건(seedDay)에 서로 다른 Persona 를 더해 정확히 상한까지 채운다
-    for (let k = 0; k < CAP - 1; k += 1) {
-      const o = await persona(`M${k}-${seq}`)
-      const u = (await prisma.persona.findUniqueOrThrow({ where: { id: o }, select: { userId: true } })).userId
-      await autoComment({ data: { content: `저도요 ${k}`, source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u,
-        personaId: o, createdAt: new Date(SLOTS[0]!.getTime() + (20 + k) * MIN) } })
-    }
-    const v10 = await verdictOf(d5, personaCommentCapFor('organic'))
-    check(`🟢 구조 상한 ${CAP} — 한 글에 서로 다른 Persona ${CAP}건(첫 1 + 추가 ${CAP - 1}) → PASS`, v10.verdict === 'PASS', `${v10.verdict} ${v10.codes.join(',')}`)
-    const o11 = await persona(`Mover-${seq}`)
-    const u11 = (await prisma.persona.findUniqueOrThrow({ where: { id: o11 }, select: { userId: true } })).userId
-    await autoComment({ data: { content: '상한 다음 한 건', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s5.posts[0]!, authorId: u11,
-      personaId: o11, createdAt: new Date(SLOTS[0]!.getTime() + 40 * MIN) } })
-    const v11 = await verdictOf(d5, personaCommentCapFor('organic'))
-    check(`🔴 구조 상한 ${CAP} — ${CAP + 1}건 → COMMENT_OVER_CAP`, v11.verdict === 'FAIL' && has(v11, 'COMMENT_OVER_CAP'), `${v11.verdict} ${v11.codes.join(',')}`)
-  }
+  })
   await counter('🔴 같은 Persona 가 한 글에 두 번 → DUP_COMMENT', 'DUP_COMMENT', async (s) => {
     const u = (await prisma.persona.findUniqueOrThrow({ where: { id: s.commenters[0]! }, select: { userId: true } })).userId
     await autoComment({ data: { content: '또', source: 'SYSTEM', commentOrigin: 'PERSONA', postId: s.posts[0]!, authorId: u,
       personaId: s.commenters[0]!, createdAt: new Date(SLOTS[0]!.getTime() + 3 * 3600_000) } })
   })
-  await counter('🔴 감사 판정 전 · 6시간 넘음 → AUDIT_OVERDUE', 'AUDIT_OVERDUE', async (s) => {
+  await counter('🔴 감사 판정 전 · 6시간 넘음 → 판정 끝난 표본이 없다(AUDIT_COVERAGE_SHORT)', 'AUDIT_COVERAGE_SHORT', async (s) => {
     await prisma.autoReadyAudit.update({ where: { queueId: s.queues[0]! }, data: {
       defect: null, judgedAt: null, auditor: null, auditContractVersion: null, auditModel: null, auditPromptVersion: null,
       selectedAt: new Date(NOW.getTime() - AUDIT_OVERDUE_MS - MIN) } })
   })
-  await counter('🔴 그날 감사가 판정 전 → AUDIT_UNJUDGED', 'AUDIT_UNJUDGED', async (s) => {
+  await counter('🔴 그날 감사가 판정 전 → AUDIT_COVERAGE_SHORT', 'AUDIT_COVERAGE_SHORT', async (s) => {
     await prisma.autoReadyAudit.update({ where: { queueId: s.queues[0]! }, data: {
       defect: null, judgedAt: null, auditor: null, auditContractVersion: null, auditModel: null, auditPromptVersion: null } })
   })
-  await counter('🔴 감사 결함 yes → AUDIT_DEFECT', 'AUDIT_DEFECT', async (s) => {
-    await prisma.autoReadyAudit.update({ where: { queueId: s.queues[0]! }, data: { defect: 'yes' } })
-  })
+  {
+    // 감사 결함은 하루 판정이 아니라 브레이크 품질 축이 막는다 — 같은 해소 판정(`unresolvedDefectCount`)으로 그날 감속한다
+    await wipe()
+    const dDefect = await storeDecision(TRIAL_D3)
+    const sDefect = await seedDay()
+    await prisma.autoReadyAudit.update({ where: { queueId: sDefect.queues[0]! }, data: { defect: 'yes' } })
+    const v = await verdictOf(dDefect)
+    check('🔴 🔴 **감사 결함 yes → 하루 판정에는 코드가 없고(표본은 판정 완료) · 미해소 결함 1건이 브레이크 품질 축 입력으로 잡힌다**',
+      !v.codes.some((c) => c.startsWith('AUDIT_')) && (await unresolvedDefectCount(prisma)) === 1, `${v.verdict} ${v.codes.join(',')}`)
+  }
   {
     await wipe()
     const decision = await storeDecision(TRIAL_D3)
@@ -586,10 +570,10 @@ try {
   await counter('🔴 Queue 가 PUBLISHED 가 아니다(1:1 깨짐) → DUP_QUEUE', 'DUP_QUEUE', async (s) => {
     await prisma.originalPostApprovalQueue.update({ where: { id: s.queues[1]! }, data: { status: 'APPROVED' } })
   })
-  await counter('🔴 표식 없는 발행(operator — 수동 · 표식 이전)은 자동 target 이 아니다 → PUBLISH_NOT_AUTO_READY', 'PUBLISH_NOT_AUTO_READY', async (s) => {
+  await counter('🔴 표식 없는 발행(operator — 수동 · 표식 이전)은 자동 target 이 아니다 → PUBLISH_SHORT', 'PUBLISH_SHORT', async (s) => {
     await prisma.personaActivityLog.update({ where: { id: s.logs[0]! }, data: { decidedBy: 'operator' } })
   })
-  await counter('🔴 2건만 냈다 → PUBLISH_NOT_AUTO_READY', 'PUBLISH_NOT_AUTO_READY', async (s) => {
+  await counter('🔴 2건만 냈다 → PUBLISH_SHORT', 'PUBLISH_SHORT', async (s) => {
     await prisma.personaActivityLog.delete({ where: { id: s.logs[2]! } })
     await prisma.autoReadyAudit.deleteMany({ where: { postId: s.posts[2]! } })
     await prisma.comment.deleteMany({ where: { postId: s.posts[2]! } })
@@ -751,64 +735,58 @@ try {
     const APP = join(HOME, 'Library', 'Application Support', 'soransoran')
     mkdirSync(APP, { recursive: true })
     mkdirSync(join(HOME, 'Library', 'LaunchAgents'), { recursive: true })
-    writeFileSync(join(APP, 'env.local'), [
-      'SORAN_RELEASE_STAGE=d1', 'SORAN_CAPACITY_STAGE=d10', 'STAGE_CONTROLLER_ENABLED=on', 'SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto',
-      'SORAN_LLM_DAILY_BUDGET_USD=0.5', 'SORAN_LLM_RUN_REQUEST_CAP=20', 'SORAN_LLM_RESERVE_HEADROOM=1.2',
-      'SORAN_AUDIT_LLM_DAILY_BUDGET_USD=0.3', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP=25', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM=1.5', '',
-    ].join('\n'), { mode: 0o600 })
+    const envWith = (release: string, capacity: string): void => {
+      writeFileSync(join(APP, 'env.local'), [
+        `SORAN_RELEASE_STAGE=${release}`, `SORAN_CAPACITY_STAGE=${capacity}`, 'STAGE_CONTROLLER_ENABLED=on', 'SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto',
+        'SORAN_LLM_DAILY_BUDGET_USD=0.5', 'SORAN_LLM_RUN_REQUEST_CAP=20', 'SORAN_LLM_RESERVE_HEADROOM=1.2',
+        'SORAN_AUDIT_LLM_DAILY_BUDGET_USD=0.3', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP=25', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM=1.5', '',
+      ].join('\n'), { mode: 0o600 })
+    }
+    envWith('d1', 'd10')
     type Out = {
       evidence: StageEvidenceVerdict | null
-      plan: { base: string; target: string; basis: string } | null
-      result: { decision: { state: string; release: string; capacity: string; reasons: string[]; blocks: { code: string }[]; transition: { trialBase?: string; basis?: string } | null }; brake: string }
-      nextPreflight?: { stage: string; verdict: string; codes: string[]; counts: Record<string, number> } | null
+      dayBefore: { evidence: StageEvidenceVerdict | null } | null
+      result: {
+        decision: { state: string; release: string; capacity: string; reasons: string[]; blocks: { code: string }[]; transition: { kind?: string; trialBase?: string; basis?: string; certified?: string } | null }
+        brake: string; sustained: string; passDays: number
+      }
+      nextPreflight?: { stage: string; verdict: string; codes: string[]; warnings: string[]; counts: Record<string, number> } | null
     }
     /**
-     * 🔴 **러너 신호는 진짜 launchd 를 본다** — 가짜로 만들지 않는다(fixture 가 실제보다 강할 수 없다).
-     *    공급 회차 기록만 가짜 HOME 에 "그날 정상 끝난 회차" 한 개를 둔다(실제 읽기 경로 그대로).
-     *    launchd 가 없는 곳(CI · Linux)에서는 러너 신호가 모름이다 → 증거는 PASS 가 될 수 없고,
-     *    그때는 **모름 → 머문다(재시험)** 를 검사한다. launchd 가 있는 곳에서는 PASS → d5 를 검사한다.
-     */
-    /**
-     * 🔴 **비용 증거도 완전해야 "launchd 만 없음"이 참이다** (2026-11-06).
-     *    2026-11-05 시행 bounded 계약부터 증거일 공급 비용은 envelope(자연 proof 슬롯의 정산 표본)로만 판정한다.
-     *    장부가 비면 정산 0건 → COST_UNKNOWN 이 붙어, 실제 시계가 시행일을 넘는 날부터 이 fixture가 깨졌다.
-     *    요약값을 controller 에 주입하지 않고, 운영과 같은 정본 장부 줄(예약 proof 슬롯 · 기록 예산 · 자연 token)을
-     *    생산 writer(`appendLedgerLine`)로 가짜 HOME 장부에 쓴다. controller 는 `readCostSignals` 로 그대로 읽는다.
-     *    시행일 전 증거일이어도 같은 줄은 옛 계약에서 미상 0 이므로 날짜와 무관하게 비용 축은 깨끗하다.
+     * 🔴 **비용 증거는 정본 장부 줄로 만든다** — 요약값을 controller 에 주입하지 않고, 운영과 같은 장부 줄(예약 proof 슬롯 ·
+     *    기록 예산 · 자연 token)을 생산 writer(`appendLedgerLine`)로 가짜 HOME 장부에 쓴다. controller 는 `readCostSignals` 로
+     *    그대로 읽는다. 연속 통과는 이틀을 다시 판정하므로 전날과 이틀 전 장부를 둘 다 쓴다.
+     *    🔴 하루 판정은 러너 건강을 입력으로 받지 않는다 — launchd 가 없는 곳(CI · Linux)에서도 같은 판정이 나와야 한다.
      */
     const ledgerDir = ledgerDirForHome(HOME)
     mkdirSync(ledgerDir, { recursive: true })
     const proofSlotLabel = (s: { hour: number; minute: number }): string =>
       `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`
-    for (const [i, s] of SUPPLY_PROOF_RUN_SLOTS_KST.entries()) {
-      const hm = proofSlotLabel(s)
-      const slot = `${D} ${hm}`
-      appendLedgerLine(ledgerPathOf(ledgerDir, D), {
-        runId: `${supplyRunIdOf(new Date(`${D}T${hm}:02+09:00`))}-d`, stage: 'draftGen',
-        attemptId: `evidence-cost-${i}`, requestNo: 0, provider: 'google',
-        apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash', status: 'settled', blockCode: null,
-        countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006,
-        inputTokens: 100, outputTokens: 200, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
-        settledUsd: 0.004, pricingVersion: PRICING_VERSION,
-        startedAt: `${D}T${hm}:30+09:00`, endedAt: `${D}T${hm}:50+09:00`, errorCode: null,
-        runKind: 'scheduled', runSlot: slot, budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2,
-        budgetSource: 'process-override', sourceKey: `evidence-src-${i}`, supplyContract: SUPPLY_JIT_CONTRACT,
-        runTokenShadow: {
-          ok: true, code: null, tokenId: `evidence-token-${i}`, trigger: 'scheduled', launchTrigger: 'scheduled',
-          absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
-        },
-      } as LedgerEntry)
+    for (const day of [D_PREV, D]) {
+      for (const [i, s] of SUPPLY_PROOF_RUN_SLOTS_KST.entries()) {
+        const hm = proofSlotLabel(s)
+        const slot = `${day} ${hm}`
+        appendLedgerLine(ledgerPathOf(ledgerDir, day), {
+          runId: `${supplyRunIdOf(new Date(`${day}T${hm}:02+09:00`))}-d`, stage: 'draftGen',
+          attemptId: `evidence-cost-${day}-${i}`, requestNo: 0, provider: 'google',
+          apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash', status: 'settled', blockCode: null,
+          countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006,
+          inputTokens: 100, outputTokens: 200, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
+          settledUsd: 0.004, pricingVersion: PRICING_VERSION,
+          startedAt: `${day}T${hm}:30+09:00`, endedAt: `${day}T${hm}:50+09:00`, errorCode: null,
+          runKind: 'scheduled', runSlot: slot, budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2,
+          budgetSource: 'process-override', sourceKey: `evidence-src-${day}-${i}`, supplyContract: SUPPLY_JIT_CONTRACT,
+          runTokenShadow: {
+            ok: true, code: null, tokenId: `evidence-token-${day}-${i}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+            absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+          },
+        } as LedgerEntry)
+      }
     }
-    const dataDir = join(APP, 'microseed-data')
-    mkdirSync(dataDir, { recursive: true })
-    writeFileSync(join(dataDir, 'supply-process-evidence-fixture.run.json'), JSON.stringify({
-      runId: 'evidence-fixture', startedAt: new Date(`${D}T08:00:00+09:00`).toISOString(), status: 'done',
-      completedAt: new Date(`${D}T08:05:00+09:00`).toISOString(), runtimeSha: null, stages: [],
-    }))
     const launchdOk = ['com.soransoran.original-post-runner', 'com.soransoran.supply-process']
       .every((l) => observeJob(l).state === 'loaded')
-    console.log(`   launchd ${launchdOk ? '있음 — PASS → d5 까지 검사한다' : '없음(CI) — 러너 모름 → 머문다를 검사한다'}`)
-    /** 🔴 발행 가능 재고 — 사람이 승인한 행(정본 로더가 그대로 읽는다). 하루 시험 판정이 재고로 막히지 않게 */
+    console.log(`   launchd ${launchdOk ? '있음' : '없음(CI)'} — 하루 판정은 어느 쪽이든 같다`)
+    /** 발행 가능 재고 — 사람이 승인한 행(정본 로더가 그대로 읽는다) */
     const seedStock = async (): Promise<void> => {
       for (let k = 0; k < 12; k += 1) await persona(`S${k}-${seq}`)
       for (let k = 0; k < 40; k += 1) {
@@ -832,105 +810,106 @@ try {
       return { code: r.status, out, raw: `${text.slice(-400)} ${(r.stderr ?? '').slice(-400)}` }
     }
     const show = (o: Out | null): string => o === null ? '(출력 없음)'
-      : `evidence=${o.evidence?.verdict ?? '-'} [${o.evidence?.codes.join(',') ?? ''}] · plan=${o.plan === null ? 'none' : `${o.plan.base}→${o.plan.target}:${o.plan.basis}`}`
-        + ` · 결정=${o.result.decision.state} ${o.result.decision.release} (brake ${o.result.brake}) · transition=${JSON.stringify(o.result.decision.transition)}`
+      : `evidence=${o.evidence?.verdict ?? '-'} [${o.evidence?.codes.join(',') ?? ''}] · 연속 ${o.result.passDays}`
+        + ` · 결정=${o.result.decision.state} ${o.result.decision.release} (brake ${o.result.brake} · 열린 단계 ${o.result.sustained}) · transition=${JSON.stringify(o.result.decision.transition)}`
+    const noRowToday = async (): Promise<boolean> => (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0
+    const pfPersonaShort = (o: Out | null): boolean => o?.nextPreflight !== null && o?.nextPreflight !== undefined
+      && o.nextPreflight.verdict === 'FAIL' && o.nextPreflight.codes.includes('PERSONA_SHORT')
+      && !o.nextPreflight.codes.includes('PERSONA_UNKNOWN') && o.nextPreflight.counts.personas === 0
 
-    // (가) 전날 D3 FAIL — 09:30 글 댓글 없음
+    // (가) 전날 올린 d3 가 미달(09:30 글 첫 댓글 없음) — 내리지 않는다
     await wipe()
     await storeDecision(TRIAL_D3)
     const s = await seedDay()
     await prisma.comment.delete({ where: { id: s.comments[0]! } })
     await seedStock()
     const failRun = runController()
-    console.log(`   (가) 전날 FAIL → ${show(failRun.out)}`)
+    console.log(`   (가) 전날 미달 → ${show(failRun.out)}`)
     check('exit 0 (dry-run)', failRun.code === 0, failRun.raw)
-    check('🔴 전날 증거 FAIL · COMMENT_MISSING', failRun.out?.evidence?.verdict === 'FAIL' && failRun.out.evidence.codes.includes('COMMENT_MISSING'))
-    check('🔴 🔴 **시험 계획 = d3 재시험 (기반 d1 · RETEST) — d5 아님**',
-      failRun.out?.plan?.target === 'd3' && failRun.out.plan.base === 'd1' && failRun.out.plan.basis === 'RETEST', JSON.stringify(failRun.out?.plan))
-    check('🔴 결정 공개는 d5 가 아니다', failRun.out !== null && failRun.out.result.decision.release !== 'd5')
-    check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
+    check('🔴 전날 판정 FAIL · FIRST_COMMENT_SHORT', failRun.out?.evidence?.verdict === 'FAIL' && failRun.out.evidence.codes.includes('FIRST_COMMENT_SHORT'),
+      JSON.stringify(failRun.out?.evidence))
+    check('🔴 🔴 **미달이어도 공개는 d3 그대로다 — 기반 칸(d1)으로 되돌리지 않는다 · 연속 0 · 올림 없음**',
+      failRun.out?.result.decision.release === 'd3' && failRun.out.result.decision.state === 'PREPARE' && failRun.out.result.sustained === 'd3'
+      && failRun.out.result.passDays === 0 && failRun.out.result.decision.transition === null, show(failRun.out))
+    check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', await noRowToday())
 
-    // (나) 전날 D3 PASS
+    // (나) 전날 d3 통과 · 이틀 전 행 없음 — 하루로는 올리지 않는다
     await wipe()
     await storeDecision(TRIAL_D3)
     await seedDay()
     await seedStock()
     const passRun = runController()
-    console.log(`   (나) 전날 PASS → ${show(passRun.out)}`)
+    console.log(`   (나) 전날 통과(1일) → ${show(passRun.out)}`)
     check('exit 0 (dry-run)', passRun.code === 0, passRun.raw)
-    check('🔴 비용 축은 가짜 HOME 정본 장부에서 읽었다 — 시행일 이후면 proof 슬롯 정산 표본 전부 · 미상·귀속불명 0',
-      !usesSupplyCostEnvelope(D) || (
-        passRun.out?.evidence?.counts.supplySettledRequests === SUPPLY_PROOF_RUN_SLOTS_KST.length
-        && passRun.out.evidence.counts.supplyUsageUnknown === 0
-        && passRun.out.evidence.counts.supplyCostIneligibleRequests === 0
-        && !passRun.out.evidence.codes.some((c) => c === 'COST_UNKNOWN' || c === 'COST_BAD')),
+    check('🔴 비용 축은 가짜 HOME 정본 장부에서 읽었다 — proof 슬롯 정산 표본 전부 · 미상·귀속불명 0',
+      passRun.out?.evidence?.counts.supplySettledRequests === SUPPLY_PROOF_RUN_SLOTS_KST.length
+      && passRun.out.evidence.counts.supplyUsageUnknown === 0
+      && passRun.out.evidence.counts.supplyCostIneligibleRequests === 0
+      && !passRun.out.evidence.codes.some((c) => c === 'COST_UNKNOWN' || c === 'COST_BAD'),
       JSON.stringify(passRun.out?.evidence?.counts))
-    if (launchdOk) {
-      check('🟢 전날 증거 PASS', passRun.out?.evidence?.verdict === 'PASS', JSON.stringify(passRun.out?.evidence))
-      check('🟢 시험 계획 = d5 (기반 d3 · PASS)', passRun.out?.plan?.target === 'd5' && passRun.out.plan.base === 'd3' && passRun.out.plan.basis === 'PASS')
-    } else {
-      check('⬚ launchd 없음 — 증거는 PASS 가 아니다(RUNNER_UNKNOWN 하나뿐 · DB 여섯 조건은 다 채웠다)',
-        passRun.out?.evidence?.verdict === 'UNKNOWN' && passRun.out.evidence.codes.join(',') === 'RUNNER_UNKNOWN', JSON.stringify(passRun.out?.evidence))
-      check('⬚ 모름 → 머문다: 시험 계획 = d3 재시험', passRun.out?.plan?.target === 'd3' && passRun.out.plan.basis === 'RETEST')
-    }
-    check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
-    {
-      /**
-       * 🔴 (2026-09-30) 실제 진입점 — Persona 4상태 정본이 연결돼 있다. 격리 DB 에는 계약 유효 Persona 가 0 →
-       *    preflight 가 PERSONA_SHORT(personas=0) → 시험은 열리지 않는다. 지속 단계를 다시 증명한다.
-       *    🔴 personas 가 null(PERSONA_UNKNOWN)이면 제공자 미연결이다 — 그것도 실패로 본다.
-       *    TRIAL 경로 자체(PASS → d5 · FAIL → d3 재시험)는 같은 정본 함수로 `stage:evidence-check` ③ 이 본다.
-       */
-      const fd = failRun.out?.result.decision
-      const pd = passRun.out?.result.decision
-      const pfPersonaShort = (o: Out | null): boolean => o?.nextPreflight !== null && o?.nextPreflight !== undefined
-        && o.nextPreflight.verdict !== 'PASS' && o.nextPreflight.codes.includes('PERSONA_SHORT')
-        && !o.nextPreflight.codes.includes('PERSONA_UNKNOWN') && o.nextPreflight.counts.personas === 0
-      const pfBlocked = (d: Out['result']['decision'] | undefined): boolean =>
-        d !== undefined && d.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN' || b.code === 'PREFLIGHT_FAIL')
-      check('🔴 🔴 **러너 수준 — 전날 FAIL → 계획 d3 재시험 · 계약 유효 Persona 0(연결됨) → 시험 없이 바닥 PREPARE d1**',
-        fd?.state === 'PREPARE' && fd.release === 'd1' && pfBlocked(fd) && pfPersonaShort(failRun.out),
-        `${fd?.state} ${fd?.release} ${JSON.stringify(failRun.out?.nextPreflight)}`)
-      if (launchdOk) {
-        check('🟢 🔴 **러너 수준 — 전날 PASS → 지속 d3(증명됐다) · 계획 d5 · 계약 유효 Persona 0(연결됨) → 평상일 PREPARE d3 (d5 를 열지 않는다 · 막힌 날 REPROVE 없음)**',
-          pd?.state === 'PREPARE' && pd.release === 'd3' && pfBlocked(pd) && pfPersonaShort(passRun.out),
-          `${pd?.state} ${pd?.release}`)
-      }
-    }
-    for (const r of [failRun, passRun]) {
-      const d = r.out?.result.decision
-      if (d?.state === 'TRIAL') {
-        check(`TRIAL ${d.release} 결정의 근거 칸이 계획과 같다`, d.transition?.basis === r.out?.plan?.basis && d.transition?.trialBase === r.out?.plan?.base)
-      }
-    }
-    check('결정 reasons 에 증거 판정 코드가 남는다',
-      [failRun, passRun].every((r) => r.out?.result.decision.reasons.some((x) => x.startsWith(`EVIDENCE ${D} d3 `)) === true))
+    check('🟢 🔴 **전날 판정 PASS — launchd 유무와 무관하다(러너 건강은 판정의 입력이 아니다)**',
+      passRun.out?.evidence?.verdict === 'PASS', JSON.stringify(passRun.out?.evidence))
+    check('🟢 실제 행에서 결 네 칸이 계산된다 — 첫 댓글 3/3 · 글당 댓글 6 · 타인 3명 3편 · 수집→공개 중앙값',
+      passRun.out?.evidence?.counts.firstCommentOk === 3 && passRun.out.evidence.counts.commentDepthAvg === 6
+      && passRun.out.evidence.counts.threeVoicesPosts === 3 && passRun.out.evidence.counts.collectToPublishMedianH !== undefined,
+      JSON.stringify(passRun.out?.evidence?.counts))
+    check('🔴 하루 통과로는 올리지 않는다 — 연속 1 · 공개 d3', passRun.out?.result.passDays === 1 && passRun.out.result.decision.release === 'd3'
+      && passRun.out.result.decision.state !== 'TRIAL', show(passRun.out))
+    check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', await noRowToday())
 
-    console.log('\n⑤ REPROVE 증명일 · D20 진입점 (2026-09-29 generic scheduler 배선)')
+    // (다) 이틀 연속 통과 — 올릴 조건은 찼지만 격리 DB 의 계약 유효 Persona 는 0 이다 → 관문이 막는다
+    await wipe()
+    await storeDecision({ release: 'd3', state: 'PREPARE' }, D_PREV)
+    await storeDecision({ release: 'd3', state: 'PREPARE' })
+    await seedDay(3, AUTO_DECIDER, D_PREV)
+    await seedDay()
+    await seedStock()
+    const twoRun = runController()
+    const td = twoRun.out?.result.decision
+    console.log(`   (다) 이틀 연속 통과 → ${show(twoRun.out)} · preflight ${twoRun.out?.nextPreflight?.verdict} [${twoRun.out?.nextPreflight?.codes.join(',')}]`)
+    check('exit 0 (dry-run)', twoRun.code === 0, twoRun.raw)
+    check('🟢 전날·이틀 전 판정이 둘 다 PASS — 연속 2',
+      twoRun.out?.evidence?.verdict === 'PASS' && twoRun.out.dayBefore?.evidence?.verdict === 'PASS' && twoRun.out.result.passDays === 2,
+      `${JSON.stringify(twoRun.out?.evidence?.codes)} ${JSON.stringify(twoRun.out?.dayBefore?.evidence?.codes)}`)
+    check('🔴 🔴 **실제 DB 로 모은 d5 관문 — 계약 유효 Persona 0(연결됨) → PERSONA_SHORT · 비용 추정은 막는 코드에 없다**',
+      pfPersonaShort(twoRun.out) && twoRun.out?.nextPreflight?.stage === 'd5'
+      && !twoRun.out.nextPreflight.codes.some((c) => /COST|RUNNER/.test(c)), JSON.stringify(twoRun.out?.nextPreflight))
+    check('🔴 🔴 **관문이 막으면 올리지 않는다 — PREPARE d3 · PREFLIGHT_FAIL · capacity 는 다음 칸 d5**',
+      td?.state === 'PREPARE' && td.release === 'd3' && td.capacity === 'd5' && td.blocks.some((b) => b.code === 'PREFLIGHT_FAIL'),
+      `${td?.state} ${td?.release} ${td?.capacity} ${JSON.stringify(td?.blocks)}`)
+    check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', await noRowToday())
+
+    // (라) 배포 첫날 — 옛 사다리가 남긴 행: 이틀 전 TRIAL d5(미달) → 전날 PREPARE d3(되돌림)
+    await wipe()
+    await storeDecision({ capacity: 'd10', release: 'd5', state: 'TRIAL',
+      transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: previousKstDate(D_PREV), target: 'd5', basis: 'PASS' } }, D_PREV)
+    await storeDecision({ release: 'd3', state: 'PREPARE', blocks: [{ code: 'PREFLIGHT_FAIL', reason: 'd5 preflight FAIL [SUPPLY_COST_SHORT]' }] })
+    await seedDay()
+    await seedStock()
+    const firstMorning = runController()
+    console.log(`   (라) 옛 되돌림 행 → ${show(firstMorning.out)}`)
+    check('🟢 🔴 **옛 되돌림 행(전날 PREPARE d3 · 이틀 전 TRIAL d5) → 열린 단계 d5 를 되찾는다 · 공개 d5 · 올림 없음**',
+      firstMorning.code === 0 && firstMorning.out?.result.sustained === 'd5' && firstMorning.out.result.decision.release === 'd5'
+      && firstMorning.out.result.passDays === 0 && firstMorning.out.result.decision.state !== 'TRIAL', show(firstMorning.out))
+    check('결정 reasons 에 하루 판정 코드가 남는다',
+      [failRun, passRun, twoRun].every((r) => r.out?.result.decision.reasons.some((x) => x.startsWith(`EVIDENCE ${D} d3 `)) === true))
+
+    console.log('\n⑤ 옛 행 판독 · D20 진입점')
     {
-      // (가) REPROVE d3 실제 행 — 자동 3편 · 첫 댓글 · 감사 표본 → PASS → 다음 날 d5 시험
+      // (가) 옛 사다리가 쓴 REPROVE · HOLD 행의 날도 같은 본체로 판정한다 — 행의 상태는 판정 입력이 아니다
       await wipe()
       const reprove = await storeDecision({ release: 'd3', state: 'REPROVE' })
       await seedDay()
       const rv = await verdictOf(reprove)
-      check('🟢 REPROVE d3 증명일 · 실제 행 6조건 → PASS', rv.verdict === 'PASS', `${rv.verdict} ${rv.codes.join(',')}`)
-      const rp = trialPlanOf(reprove, rv)
-      check('🟢 REPROVE PASS 다음 날 = d5 시험 (기반 d3 · PASS)', rp?.target === 'd5' && rp.base === 'd3' && rp.basis === 'PASS', JSON.stringify(rp))
+      check('🟢 옛 REPROVE d3 행의 날 · 실제 행 → PASS · 연속 1일로 센다', rv.verdict === 'PASS'
+        && consecutivePassDays(TODAY, 'd3', [{ decision: reprove, evidence: rv }]) === 1, `${rv.verdict} ${rv.codes.join(',')}`)
       await wipe()
       const hold = await storeDecision({ release: 'd3', state: 'HOLD' })
       await seedDay()
       const hv = await verdictOf(hold)
-      check('🟢 HOLD d3 자연 exact-N도 PASS → 다음 날 d5 계획', hv.verdict === 'PASS'
-        && trialPlanOf(hold, hv)?.target === 'd5')
+      check('🟢 HOLD d3 행의 날도 PASS', hv.verdict === 'PASS', hv.codes.join(','))
 
-      // (나) controller 진입점 — 전날 TRIAL d20(기반 d10) · 증거 없음 → d20 재시험 계획 · preflight 가 막는다
-      const envWith = (release: string, capacity: string): void => {
-        writeFileSync(join(APP, 'env.local'), [
-          `SORAN_RELEASE_STAGE=${release}`, `SORAN_CAPACITY_STAGE=${capacity}`, 'STAGE_CONTROLLER_ENABLED=on', 'SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto',
-          'SORAN_LLM_DAILY_BUDGET_USD=0.5', 'SORAN_LLM_RUN_REQUEST_CAP=20', 'SORAN_LLM_RESERVE_HEADROOM=1.2',
-          'SORAN_AUDIT_LLM_DAILY_BUDGET_USD=0.3', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP=25', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM=1.5', '',
-        ].join('\n'), { mode: 0o600 })
-      }
+      // (나) controller 진입점 — 전날 올린 d20(기반 d10) · 그날 글 0 → 미달이어도 d20 유지
       const trialD20 = { capacity: 'd30', release: 'd20', state: 'TRIAL', transition: { kind: 'TRIAL', trialBase: 'd10', previousKstDate: D_PREV, target: 'd20', basis: 'PASS' } }
       await wipe()
       await storeDecision(trialD20)
@@ -938,18 +917,15 @@ try {
       envWith('d10', 'd10')
       const c1 = runController()
       const r1 = c1.out?.result.decision
-      console.log(`   (나-1) 전날 TRIAL d20 · 증거 없음 → ${show(c1.out)} · preflight ${c1.out?.nextPreflight?.verdict} [${c1.out?.nextPreflight?.codes.join(',')}]`)
+      console.log(`   (나-1) 전날 올린 d20 · 글 0 → ${show(c1.out)} · preflight ${c1.out?.nextPreflight?.verdict} [${c1.out?.nextPreflight?.codes.join(',')}]`)
       check('exit 0 (dry-run)', c1.code === 0, c1.raw)
-      check('전날 d20 이 PASS 가 아니다 → 계획 = d20 재시험(기반 d10 · RETEST)', c1.out?.plan?.target === 'd20' && c1.out.plan.base === 'd10'
-        && c1.out.plan.basis === 'RETEST', JSON.stringify(c1.out?.plan))
-      check('🔴 🔴 **실제 DB · 장부로 모은 d20 preflight 가 PASS 가 아니다(계약 유효 Persona 0 · 단가 모름)**',
-        c1.out?.nextPreflight?.stage === 'd20' && c1.out.nextPreflight.verdict !== 'PASS'
-        && c1.out.nextPreflight.codes.includes('PERSONA_SHORT') && c1.out.nextPreflight.counts.personas === 0
-        && c1.out.nextPreflight.codes.includes('COMMENT_COST_UNKNOWN'),
-      JSON.stringify(c1.out?.nextPreflight))
-      check('🔴 🔴 **preflight 가 막으면 d20 시험을 열지 않는다 — 지속 d10 평상일(PREPARE · 0..10 · 증명일 아님) · capacity 는 다음 증명 d20**', r1 !== undefined
-        && r1.state === 'PREPARE' && r1.release === 'd10' && r1.capacity === 'd20'
-        && r1.blocks.some((b) => b.code === 'PREFLIGHT_UNKNOWN' || b.code === 'PREFLIGHT_FAIL'),
+      check('🔴 전날 d20 판정은 PASS 가 아니다(PUBLISH_SHORT) → 연속 0', c1.out?.evidence?.verdict !== 'PASS'
+        && c1.out?.evidence?.codes.includes('PUBLISH_SHORT') === true && c1.out.result.passDays === 0, JSON.stringify(c1.out?.evidence))
+      check('🔴 🔴 **실제 DB 로 모은 d30 관문 — 계약 유효 Persona 0 → PERSONA_SHORT(막는 코드는 Persona·구조뿐)**',
+        c1.out?.nextPreflight?.stage === 'd30' && pfPersonaShort(c1.out) && !c1.out.nextPreflight.codes.some((c) => /COST|RUNNER/.test(c)),
+        JSON.stringify(c1.out?.nextPreflight))
+      check('🔴 🔴 **미달이어도 d20 을 유지한다 — PREPARE d20 · capacity d30 · 기반 d10 으로 되돌리지 않는다**', r1 !== undefined
+        && r1.state === 'PREPARE' && r1.release === 'd20' && r1.capacity === 'd30' && c1.out?.result.sustained === 'd20',
       `${r1?.state} ${r1?.release} ${r1?.capacity} ${JSON.stringify(r1?.blocks)}`)
       // 🔴 env 단계 키는 결정의 입력이 아니다 — d50/d100 을 적어도 같은 결정이다
       envWith('d50', 'd100')
@@ -958,7 +934,25 @@ try {
       check('🔴 🔴 **env 에 SORAN_RELEASE_STAGE=d50 · CAPACITY=d100 을 적어도 결정은 그대로 — 단계 입력원은 StageDecision 하나**',
         c2.code === 0 && r2 !== undefined && r1 !== undefined && r2.state === r1.state && r2.release === r1.release && r2.capacity === r1.capacity,
         `${r2?.state} ${r2?.release} ${r2?.capacity}`)
-      check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', (await prisma.stageDecision.count({ where: { kstDate: TODAY } })) === 0)
+      check('🔴 dry-run — 오늘 결정 행 0 (DB write 0)', await noRowToday())
+
+      // (다) 읽기 전용 미리보기 — `--evidence-date` 는 결정을 계산하지도 쓰지도 않는다
+      const rowsBefore = await prisma.stageDecision.count()
+      const preview = spawnSync(process.execPath, [...process.execArgv, 'scripts/stage-controller.mts', `--evidence-date=${D}`, '--evidence-days=2', '--json'], {
+        encoding: 'utf-8', env: { ...process.env, HOME }, timeout: 300_000,
+      })
+      let days: { date: string; evidence: StageEvidenceVerdict }[] | null = null
+      try { days = JSON.parse((preview.stdout ?? '').slice((preview.stdout ?? '').indexOf('['))) as { date: string; evidence: StageEvidenceVerdict }[] } catch { days = null }
+      check('🟢 미리보기 — 그날부터 거꾸로 이틀의 하루 판정을 낸다(이틀 전은 결정 행이 없어 --evidence-stage 없이는 멈춘다)',
+        preview.status === 1 || (days !== null && days.length === 2 && days[0]!.date === D), `${preview.status} ${(preview.stderr ?? '').slice(-200)}`)
+      const previewOne = spawnSync(process.execPath, [...process.execArgv, 'scripts/stage-controller.mts', `--evidence-date=${D}`], {
+        encoding: 'utf-8', env: { ...process.env, HOME }, timeout: 300_000,
+      })
+      check('🟢 미리보기 — 사람이 읽는 줄(▸ 공개 · 첫 댓글 · 글당 댓글 · 타인 3명 · 수집→공개)이 찍힌다',
+        previewOne.status === 0 && /▸ \d\d-\d\d 공개 0\/20편/.test(previewOne.stdout ?? '') && (previewOne.stdout ?? '').includes('read-only · DB write 0'),
+        `${previewOne.status} ${(previewOne.stdout ?? '').slice(-300)}`)
+      check('🔴 🔴 **미리보기는 결정 행을 쓰지 않는다 — 실행 전후 StageDecision 행 수가 같다**',
+        (await prisma.stageDecision.count()) === rowsBefore && await noRowToday())
     }
   }
 } finally {

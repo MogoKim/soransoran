@@ -53,7 +53,6 @@ import {
 } from './lib/stage-authority-graph'
 import { renderedLaunchd } from './lib/stage-authority-repo'
 import { resolveScale, releaseStageCeiling, boundedReleaseStage } from '../src/lib/scale-runtime'
-import { proofDayOf } from '../src/lib/stage-proof-day'
 import { consumerEnvOf } from '../src/lib/stage-controller'
 
 /** 🔴 예약 실행 전용 worktree — 개발 작업트리와 **다른 곳**이다 */
@@ -2765,13 +2764,13 @@ console.log('\n⑦ 🔴 단일 실행 authority (StageDecision → consumer → 
     SORAN_RELEASE_CANARY_DATE: '2026-09-30', SORAN_STAGE_PROOF_STAGE: 'd10', SORAN_STAGE_PROOF_DATE: '2026-09-30' }
   check('🔴 🔴 **손으로 적은 옛 변수 전부(d10) → resolveScale d1 · 천장 d1 · 증명일 없음**',
     resolveScale(hand).releaseStage === 'd1' && resolveScale(hand).capacityStage === 'd1'
-    && releaseStageCeiling(hand, T) === 'd1' && boundedReleaseStage('d10', hand, T) === 'd1' && proofDayOf(hand, T) === null)
+    && releaseStageCeiling(hand, T) === 'd1' && boundedReleaseStage('d10', hand, T) === 'd1')
   const off = consumerEnvOf({ ok: false, code: 'NO_DECISION', fallback: 'safest', reason: 'kill switch' })
   check('🔴 🔴 **controller OFF(kill switch) → consumer 가 d1 을 명시해서 넣는다 — env 파일 단계가 이기는 legacy 경로 없음**',
     resolveScale({ ...hand, ...off }).releaseStage === 'd1' && off.SORAN_RELEASE_STAGE === 'd1')
   const withDecision = { ...hand, ...consumerEnvOf({ ok: true, decision: { kstDate: '2026-09-30', release: 'd3', capacity: 'd5', state: 'TRIAL' } as never }) }
   check('🟢 결정이 넣은 칸(d3 · 표식)만 단계가 된다 — 옛 canary/window d10 은 무시',
-    resolveScale(withDecision).releaseStage === 'd3' && releaseStageCeiling(withDecision, T) === 'd3' && proofDayOf(withDecision, T)?.stage === 'd3')
+    resolveScale(withDecision).releaseStage === 'd3' && releaseStageCeiling(withDecision, T) === 'd3')
   const consumeSrc = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
   check('🔴 consumer 는 kill switch 에서도 결정 칸을 넣는다(빈 overrides 로 실행하는 길 없음)',
     !/let overrides: Record<string, string> = \{\}/.test(consumeSrc) && /overrides = consumerEnvOf\(\{ ok: false, code: 'NO_DECISION', fallback: 'safest'/.test(consumeSrc))

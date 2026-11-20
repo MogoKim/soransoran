@@ -242,15 +242,15 @@ console.log('\n④ 봉투 상한 · 대화 상한 · writer 모호성')
 // ─────────────────────────────────────────────────────────
 const env20 = operatingEnvelopeOf({ publishHardCapPerDay: 20, publishSlotsPerDay: 20, supplyDailyUsd: 1.2 })
 const planBig = dailyOperatingPlanOf(env20, '2026-11-12', { kstDate: '2026-11-12', state: 'TRIAL', releaseDailyTarget: 30 })
-check('🔴 controller 의도가 봉투 상한을 넘으면 상한이 이긴다(증명 N 없음 · 상한 20)',
-  planBig.publishCap === 20 && planBig.exactN === null && planBig.intentExceedsCap && planBig.authority === 'none')
+check('🔴 controller 의도가 봉투 상한을 넘으면 상한이 이긴다(통과선 없음 · 상한 20)',
+  planBig.publishCap === 20 && planBig.countFloor === null && planBig.intentExceedsCap && planBig.authority === 'none')
 const post = (n: number): { decider: string; unattended: boolean; personaComments: unknown[] } => ({ decider: 'auto', unattended: true, personaComments: Array.from({ length: n }) })
 const out21 = dailyOutcomeOf(env20, planBig, { posts: Array.from({ length: 21 }, () => post(1)), tally: null })
 check('🔴 자동 발행 21 > 봉투 상한 20 → overCap(계획·의도와 무관)', out21.overCap === true && out21.publishHardCap === 20 && out21.authorityVerdict === null)
 const planP = dailyOperatingPlanOf(env20, '2026-11-12', { kstDate: '2026-11-12', state: 'TRIAL', releaseDailyTarget: 20 })
 const outP = dailyOutcomeOf(env20, planP, { posts: Array.from({ length: 20 }, () => post(PERSONA_COMMENTS_PER_POST_MAX + 1)), tally: null })
-check('🔴 정확 N 측정 · 글당 Persona 댓글이 구조 상한 + 1 → 감지(상한은 정본 상수 그대로)',
-  planP.dayKind === 'proof' && outP.exactNMet === true && outP.conversationCapRespected === false && env20.conversationHardCapPerPost === PERSONA_COMMENTS_PER_POST_MAX)
+check('🔴 수 통과선 측정 · 글당 Persona 댓글이 구조 상한 + 1 → 감지(상한은 정본 상수 그대로)',
+  planP.dayKind === 'ordinary' && planP.countFloor === 18 && outP.countFloorMet === true && outP.conversationCapRespected === false && env20.conversationHardCapPerPost === PERSONA_COMMENTS_PER_POST_MAX)
 check('결정을 못 읽으면 unknown · 상한은 그대로 봉투', dailyOperatingPlanOf(env20, '2026-11-12', null).dayKind === 'unknown'
   && dailyOperatingPlanOf(env20, '2026-11-12', null).publishCap === 20)
 /** 완전한 run token tag — 정본 판독기(`parseRunTokenShadowTag`) 모양 그대로 */
@@ -758,7 +758,7 @@ check('🔴 단계 이름 분기 0 — 코드에 d1~d100 리터럴이 없다', S
   SRC.filter(([, t]) => /['"`]d(1|3|5|10|20|30|50|100)['"`]/.test(code(t))).map(([f]) => f).join(','))
 const pureImports = [...src('src/lib/ops-shadow-plan.ts').matchAll(/from '([^']+)'/g)].map((m) => m[1]!)
 check('🔴 순수 모듈 import 는 판정 권위와 node:crypto 뿐', pureImports.every((m) => ['node:crypto', './llm-ledger', './persona-target-rules', './ready-fate',
-  './stage-evidence', './supply-process', './supply-selection-trace', './supply-workset', './supply-schedule-contract'].includes(m)), pureImports.join(','))
+  './ladder-table', './supply-process', './supply-selection-trace', './supply-workset', './supply-schedule-contract'].includes(m)), pureImports.join(','))
 const obsImports = [...src('src/lib/ops-shadow-observer.ts').matchAll(/from '([^']+)'/g)].map((m) => m[1]!)
 check('🔴 observer 선택기 import 는 Phase 1 계약과 공급 회차 창뿐', obsImports.every((m) => ['./ops-shadow-plan', './supply-schedule-contract'].includes(m)), obsImports.join(','))
 // 🔴 진입점 둘 — 가드를 건 뒤에만 공용 사이클을 import 한다

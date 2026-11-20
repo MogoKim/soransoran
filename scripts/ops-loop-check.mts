@@ -29,23 +29,20 @@ import {
 import { runnerFactsOf, capabilityFactsReady } from '../src/lib/d100-readiness'
 import { judgeCost, lastFailureLine, redactSecrets, laneHealth } from '../src/lib/ops-status'
 import {
-  decideStage, holdAtCurrent, previousStage, sustainedReleaseOf, consumerEnvOf, validateForToday,
+  decideStage, holdAtCurrent, previousStage, openStageOf, consumerEnvOf, validateForToday,
   qualitySignalOf, costSignalOf, errorSignalOf, type HealthSignal, type ControllerInputs,
 } from '../src/lib/stage-controller'
 import { STAGE_DECISION_VERSION, validateStoredDecision, type ValidatedStageDecision } from '../src/lib/stage-decision-contract'
 import { type RuntimeStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
-import { PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
 import { judgeRecovery, latestSlotAtOrBefore, RECOVERY_SLOT_GRACE_MS } from '../src/lib/runner-recovery'
 import { staleAfterFromSlots } from '../src/lib/supply-health'
 import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS } from './lib/persona-comment-runner-template'
 import {
-  proofDaySupplyHealth, publishFailing, readProcessRuns, supplyFailing,
-  type JobObservation, type ProcessRunRead, type ProcessRunLite,
+  publishFailing, supplyFailing,
+  type JobObservation,
 } from './lib/runner-health.mjs'
-import { createProcessRunRecord, writeProcessRunRecord } from './lib/process-run-record.mjs'
-import type { ProcessRun } from '../src/lib/supply-process'
-import { buildRunToken, judgeRunTokenShadow, shadowTagOf, supplyRunIdOf } from '../src/lib/supply-run-token'
+import { supplyRunIdOf } from '../src/lib/supply-run-token'
 import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from './lib/publish-run-record.mjs'
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
@@ -116,161 +113,6 @@ console.log('\n① readiness 오판 — 근본 원인 반례')
     supplyFailing(obs(PRINT_NEVER), done) === false && supplyFailing(obs(PRINT_NEVER), failed) === true)
   check('공급: launchd exit 1 이면 기록이 done 이어도 실패', supplyFailing(obs(PRINT_FAIL), done) === true)
   check('공급: launchctl 을 못 읽었으면 기록이 있어도 모른다', supplyFailing(obs(null), done) === null)
-
-  const shadow = (
-    trigger: 'scheduled' | 'event' | 'recovery' | 'manual' | 'unknown' = 'scheduled',
-    launchTrigger: 'scheduled' | 'event' | 'recovery' | 'manual' | 'unknown' = trigger,
-    absorbedTrigger: 'scheduled' | 'event' | 'recovery' | 'manual' | 'unknown' | null = null,
-    pass = 0,
-    absorbedAt: string | null = absorbedTrigger === null ? null : '2026-10-30T08:15:00.000Z',
-  ): NonNullable<ProcessRunLite['runTokenShadow']> => {
-    const issuedAt = new Date('2026-10-30T09:00:00.000Z')
-    const lock = { dev: 17, ino: 29 }
-    const token = buildRunToken({
-      tokenId: `fixture-${trigger}-${pass}`, trigger, launchTrigger, absorbedTrigger, absorbedAt,
-      issuedAt, lock, runId: `fixture-${pass}`, pass,
-    })
-    const judged = judgeRunTokenShadow({
-      lease: { kind: 'proven', identity: lock }, envTokenId: token.tokenId,
-      file: { kind: 'raw', raw: JSON.stringify(token) }, now: new Date(issuedAt.getTime() + 1_000),
-    })
-    if (!judged.ok) throw new Error(`fixture token failed: ${judged.code}`)
-    return shadowTagOf(judged)
-  }
-  const processRun = (
-    startedAt: string, status: string, completedAt: string | null,
-    runTokenShadow: ProcessRunLite['runTokenShadow'] = shadow(), runtimeSha: string | null = 'fixture',
-  ): ProcessRunLite => ({
-    runId: `${startedAt}-${status}`, startedAt, status, completedAt, runtimeSha, runTokenShadow, failedStages: [],
-  })
-  const processRead = (
-    runs: ProcessRunLite[], unreadableFiles: string[] = [],
-  ): ProcessRunRead => ({ runs, unreadable: unreadableFiles.length, unreadableFiles })
-  const proofDone = [
-    ['2026-10-29T21:16:00.000Z', '2026-10-29T21:30:00.000Z'], // 10/30 06:16 KST(슬롯 창 안)
-    ['2026-10-29T23:15:00.000Z', '2026-10-29T23:30:00.000Z'], // 10/30 08:15 KST
-    ['2026-10-30T03:15:00.000Z', '2026-10-30T03:30:00.000Z'], // 10/30 12:15 KST
-    ['2026-10-30T05:15:00.000Z', '2026-10-30T05:30:00.000Z'], // 10/30 14:15 KST
-    ['2026-10-30T08:15:00.000Z', '2026-10-30T08:30:00.000Z'], // 10/30 17:15 KST
-  ].map(([startedAt, completedAt]) => processRun(startedAt!, 'done', completedAt!))
-  const proofFailed = processRun('2026-10-29T23:15:00.000Z', 'failed', '2026-10-29T23:20:00.000Z') // 10/30 08:15 KST
-  const lateFailed = processRun('2026-10-30T12:15:00.000Z', 'failed', '2026-10-30T12:20:00.000Z') // 10/30 21:15 KST
-  check('🔴 과거 proof day는 자연 공급 5개 슬롯이 허용 창 안에 모두 완료되고 runtime SHA가 같아야 정상이다',
-    proofDaySupplyHealth(processRead(proofDone), '2026-10-30') === 'ok')
-  check('🔴 과거 proof day 자연 공급 슬롯이 하나라도 없으면 정상으로 지어내지 않는다',
-    proofDaySupplyHealth(processRead(proofDone.slice(0, -1)), '2026-10-30') === 'unknown')
-  check('🔴 과거 proof day 자연 공급 슬롯 실패는 bad다',
-    proofDaySupplyHealth(processRead([...proofDone, proofFailed]), '2026-10-30') === 'bad')
-  check('🔴 21:15·22:15 준비 회차 실패는 과거 proof day를 오염시키지 않는다',
-    proofDaySupplyHealth(processRead([...proofDone, lateFailed]), '2026-10-30') === 'ok')
-  check('🔴 준비 회차만 있고 자연 증명 슬롯이 없으면 성공을 지어내지 않는다',
-    proofDaySupplyHealth(processRead([lateFailed]), '2026-10-30') === 'unknown')
-  check('🔴 수동·사건 회차는 빈 자연 증명 슬롯을 채우지 못한다', (() => {
-    const manual = processRun('2026-10-30T08:15:00.000Z', 'done', '2026-10-30T08:30:00.000Z', shadow('manual'))
-    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), manual]), '2026-10-30') === 'unknown'
-  })())
-  check('🔴 슬롯 창 안 event kickstart가 최종 scheduled로 보여도 자연 회차를 대신하지 못한다', (() => {
-    const eventKickstart = processRun(
-      '2026-10-30T08:20:00.000Z', 'done', '2026-10-30T08:30:00.000Z',
-      shadow('scheduled', 'scheduled', 'event'),
-    )
-    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), eventKickstart]), '2026-10-30') === 'unknown'
-  })())
-  check('🔴 슬롯 창 안 recovery kickstart도 최종 scheduled로 보여도 자연 회차를 대신하지 못한다', (() => {
-    const recoveryKickstart = processRun(
-      '2026-10-30T08:25:00.000Z', 'done', '2026-10-30T08:35:00.000Z',
-      shadow('scheduled', 'scheduled', 'recovery'),
-    )
-    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), recoveryKickstart]), '2026-10-30') === 'unknown'
-  })())
-  check('🔴 겹친 scheduled 요청은 follow-up의 실제 시작이 늦어도 marker 원시각의 자연 슬롯을 채운다', (() => {
-    const followUp = processRun(
-      '2026-10-30T09:05:00.000Z', 'done', '2026-10-30T09:20:00.000Z',
-      shadow('scheduled', 'scheduled', 'scheduled', 1, '2026-10-30T08:15:00.000Z'),
-    )
-    return proofDaySupplyHealth(processRead([...proofDone.slice(0, -1), followUp]), '2026-10-30') === 'ok'
-  })())
-  check('🔴 follow-up의 event·recovery·manual·미래 marker는 자연 슬롯을 채우지 못한다', (() => {
-    const base = proofDone.slice(0, -1)
-    const run = (tag: NonNullable<ProcessRunLite['runTokenShadow']>) => processRun(
-      '2026-10-30T09:05:00.000Z', 'done', '2026-10-30T09:20:00.000Z', tag,
-    )
-    return ['event', 'recovery', 'manual'].every((trigger) => proofDaySupplyHealth(processRead([
-      ...base, run(shadow('scheduled', 'scheduled', trigger as 'event' | 'recovery' | 'manual', 1, '2026-10-30T08:15:00.000Z')),
-    ]), '2026-10-30') === 'unknown')
-      && proofDaySupplyHealth(processRead([
-        ...base, run(shadow('scheduled', 'scheduled', 'scheduled', 1, '2026-10-30T10:00:00.000Z')),
-      ]), '2026-10-30') === 'unknown'
-  })())
-  check('🔴 자연 증명 5회에 서로 다른 runtime SHA가 섞이면 bad',
-    proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runtimeSha: 'other' } : run)), '2026-10-30') === 'bad')
-  check('🔴 자연 증명 runtime SHA·완료 시각·trigger를 모르거나 값이 비면 PASS를 지어내지 않는다',
-    proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runtimeSha: null } : run)), '2026-10-30') === 'unknown'
-    && proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runtimeSha: '  ' } : run)), '2026-10-30') === 'unknown'
-    && proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, completedAt: 'not-a-date' } : run)), '2026-10-30') === 'unknown'
-    && proofDaySupplyHealth(processRead(proofDone.map((run, index) => index === 2 ? { ...run, runTokenShadow: null } : run)), '2026-10-30') === 'unknown')
-  check('🔴 깨진 자연 증명 슬롯 파일은 unknown · 깨진 준비 회차 파일은 무관하다',
-    proofDaySupplyHealth(processRead(proofDone, ['supply-process-20261029-211500.run.json']), '2026-10-30') === 'unknown'
-    && proofDaySupplyHealth(processRead(proofDone, ['supply-process-20261030-121500.run.json']), '2026-10-30') === 'ok')
-
-  /**
-   * 🔴 실제 장부 모양을 파일에 적고 다시 읽는 최소 종단 관통.
-   *    메모리에서 태그를 직접 만들면 공급 러너의 ProcessRun JSON 저장 계약과
-   *    관제 판독기 사이가 엇갈려도 검사가 통과한다. 신 태그는 PASS, 예전 trigger-only 태그는 UNKNOWN이다.
-   */
-  {
-    const dir = mkdtempSync(join(tmpdir(), 'proof-process-run-'))
-    try {
-      for (const [index, run] of proofDone.entries()) {
-        const record = createProcessRunRecord({
-          runId: `proof-${index}`,
-          runtimeSha: run.runtimeSha!,
-          startedAt: run.startedAt,
-          jit: { slots: 0, readyFilled: 0, upTo: 0, reason: 'fixture' },
-          runTokenShadow: run.runTokenShadow as ProcessRun['runTokenShadow'],
-        })
-        record.status = 'done'
-        record.completedAt = run.completedAt
-        writeProcessRunRecord(join(dir, `supply-process-proof-${index}.run.json`), record)
-      }
-      const persisted = readProcessRuns(dir)
-      check('🔴 ProcessRun JSON 저장 → 재판독 → proof-day 사슬이 신 기원 태그 5회를 그대로 증명한다',
-        persisted.unreadable === 0 && persisted.runs.length === 5
-        && proofDaySupplyHealth(persisted, '2026-10-30') === 'ok')
-
-      const legacy = JSON.parse(readFileSync(join(dir, 'supply-process-proof-2.run.json'), 'utf-8')) as Record<string, unknown>
-      legacy.runTokenShadow = {
-        ok: true, code: null, tokenId: 'legacy-token', trigger: 'scheduled', budgetWindow: '2026-10-30 12:15',
-      }
-      writeFileSync(join(dir, 'supply-process-proof-2.run.json'), `${JSON.stringify(legacy, null, 2)}\n`)
-      const mixed = readProcessRuns(dir)
-      check('🔴 구·신 태그가 섞인 저장 장부를 자연 5회 PASS로 지어내지 않는다',
-        mixed.runs.some((run) => run.runTokenShadow === null)
-        && proofDaySupplyHealth(mixed, '2026-10-30') === 'unknown')
-
-      // 🔴 같은 슬롯(08:15 KST)에 파싱은 되지만 startedAt 이 없거나 날짜가 아닌 기록 — 사라지지 않고 unknown
-      const sameSlotFile = join(dir, 'supply-process-20261029-231500.run.json')
-      const goodShape = JSON.parse(readFileSync(join(dir, 'supply-process-proof-1.run.json'), 'utf-8')) as Record<string, unknown>
-      const healthWith = (startedAt: unknown): { health: string; unreadable: number } => {
-        const record: Record<string, unknown> = { ...goodShape }
-        if (startedAt === undefined) delete record.startedAt; else record.startedAt = startedAt
-        writeFileSync(sameSlotFile, `${JSON.stringify(record)}\n`)
-        const read = readProcessRuns(dir)
-        return { health: proofDaySupplyHealth(read, '2026-10-30'), unreadable: read.unreadable }
-      }
-      // 같은 장부에서 정상 기록으로는 ok 임을 먼저 고정한다(위 mixed 의 구 태그 파일은 되돌린다)
-      writeFileSync(join(dir, 'supply-process-proof-2.run.json'), `${JSON.stringify({ ...legacy, runTokenShadow: proofDone[2]!.runTokenShadow })}\n`)
-      check('🔴 startedAt 반례의 기준선 — 복원한 정상 장부는 ok', proofDaySupplyHealth(readProcessRuns(dir), '2026-10-30') === 'ok')
-      const missing = healthWith(undefined)
-      const invalid = healthWith('not-a-date')
-      const numeric = healthWith(12345)
-      rmSync(sameSlotFile)
-      check('🔴 같은 슬롯의 파싱 가능 JSON 이 startedAt 없음·날짜 아님이면 읽지 못한 파일로 세어 ok 가 되지 않는다',
-        missing.health === 'unknown' && invalid.health === 'unknown' && numeric.health === 'unknown'
-        && missing.unreadable === 1 && invalid.unreadable === 1 && numeric.unreadable === 1,
-        JSON.stringify({ missing, invalid, numeric }))
-    } finally { rmSync(dir, { recursive: true, force: true }) }
-  }
 
   // 🔴 앞판의 실제 결함: 관측값이 있어도 `failing: null` 상수가 넘어가 healthUnknown → canRun false
   const before = runnerFactsOf({ installed: true, loaded: true, enabled: true, failing: null })
@@ -382,9 +224,8 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       && c.supplyCostEvidence.envelope.ineligibleRequests === 0
       && c.supplyCostEvidence.envelope.budgetUsd === 1.2,
       JSON.stringify(c.supplyCostEvidence))
-    check('🟢 늦은 미상은 proof 밖이어도 whole-day 장부의 열린 예약·legacy 증거에는 남는다',
-      c.supplyLedger.spentUsd !== null && Math.abs(c.supplyLedger.spentUsd - 0.086) < 1e-9
-      && c.supplyCostEvidence?.legacyUsageUnknownRequests === 1,
+    check('🟢 늦은 미상은 proof 밖이어도 whole-day 장부의 열린 예약에는 남는다',
+      c.supplyLedger.spentUsd !== null && Math.abs(c.supplyLedger.spentUsd - 0.086) < 1e-9,
       `${JSON.stringify(c.supplyLedger)} ${JSON.stringify(c.supplyCostEvidence)}`)
     check('🟢 whole-day와 proof 예산은 현재 env $0.50으로 소급 변경되지 않는다',
       c.supplyLedger.capUsd === 1.2 && c.supplyCostEvidence?.envelope.budgetUsd === 1.2)
@@ -581,33 +422,30 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
 
   for (const axis of ['quality', 'cost', 'errors'] as const) {
     const r = decideStage(inputs({ previousDecision: prevOf('d5', 'HOLD'), signals: withSignal(axis, 'bad') }))
-    // 🔴 이 판은 CERTIFIED reader 판이다(`CERTIFIED_ROLLOUT_PHASE`) — 감속 행에 인증 칸을 쓰지 않는다(write 0)
-    check(`🔴 ${axis} 나쁨 → 시험 없이 한 칸 감속 d5 → d3 · 인증 d5 · reader 판은 CERTIFIED 를 쓰지 않는다`,
+    check(`🔴 ${axis} 나쁨 → 올림 없이 오늘만 한 칸 감속 d5 → d3 · 열린 단계 d5 는 행의 CERTIFIED 칸에 남는다`,
       r.brake === 'slowdown' && r.decision.release === 'd3' && r.decision.state !== 'TRIAL' && r.sustained === 'd5'
-      && r.decision.transition === null
+      && r.decision.transition?.kind === 'CERTIFIED' && r.decision.transition.certified === 'd5'
       && validateForToday(r.decision).ok, `${r.decision.state} ${r.decision.release}`)
     const validatedBrake = validateStoredDecision({ row: r.decision, expectKstDate: KST })
     if (!validatedBrake.ok) throw new Error(`감속 fixture가 저장 계약을 어긴다 — ${validatedBrake.reason}`)
-    const carried = { base: 'd5' as const, target: 'd10' as const, basis: 'PASS' as const }
     const recovered = decideStage({
       ...inputs({}), kstDate: '2026-09-29', decidedAt: '2026-09-28T22:10:00.000Z',
-      previousDecision: validatedBrake.decision, carriedPlan: carried,
+      previousDecision: validatedBrake.decision,
     })
-    check(`🔴 ${axis} 일시 감속 다음 날 정상 → 인증 d5를 잃지 않고 d5 운영으로 복귀`,
+    check(`🔴 ${axis} 일시 감속 다음 날 정상 → 열린 단계 d5를 잃지 않고 d5 운영으로 복귀`,
       recovered.sustained === 'd5' && recovered.decision.release === 'd5',
       `${recovered.sustained} ${recovered.decision.state} ${recovered.decision.release}`)
   }
   const floor = decideStage(inputs({ signals: withSignal('cost', 'bad') }))
   check('감속은 d1 아래로 가지 않는다', floor.decision.release === 'd1' && validateForToday(floor.decision).ok)
 
-  // 🔴 d5 preflight 초록 — 사다리는 REPROVE d3(현재 단계 재인증)를 낸다. 모르는 신호가 그것을 되돌리는지 본다
   const greenD5 = { stage: 'd5' as const, verdict: 'PASS' as const, codes: [], forecastWarnings: [], warnings: [], counts: {}, costCohort: 'current' }
-  const unkPlanned = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5 }))
-  check('기준선 — 신호가 정상이면 같은 입력은 REPROVE d3', unkPlanned.decision.state === 'REPROVE' && unkPlanned.decision.release === 'd3',
-    `${unkPlanned.decision.state} ${unkPlanned.decision.release}`)
+  const noStreak = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5 }))
+  check('기준선 — 관문이 초록이어도 연속 통과가 없으면 d3 유지(올리지 않는다)', noStreak.decision.state === 'PREPARE' && noStreak.decision.release === 'd3',
+    `${noStreak.decision.state} ${noStreak.decision.release}`)
   const unk = decideStage(inputs({ previousDecision: prevOf('d3', 'HOLD'), nextPreflight: greenD5, signals: withSignal('errors', 'unknown') }))
-  check('🔴 신호를 모르면 증명일(REPROVE)도 되돌리고 지금 단계 d3 를 지킨다(내리지도 않는다)',
-    unk.brake === 'holdUnknown' && unk.decision.release === 'd3' && unk.decision.state !== 'REPROVE' && validateForToday(unk.decision).ok,
+  check('🔴 신호를 모르는 날도 지금 단계 d3 를 지킨다(내리지 않는다)',
+    unk.decision.release === 'd3' && unk.decision.state !== 'TRIAL' && validateForToday(unk.decision).ok,
     `${unk.decision.state} ${unk.decision.release}`)
 
   const legacy = decideStage(inputs({ previousDecision: prevOf('d5', 'SUSTAIN', { legacy: true }) }))
@@ -617,12 +455,12 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
   const hold = holdAtCurrent({ kstDate: KST, decidedAt: AT, current: 'd5', reason: 'x' })
   check('controller 실패 → 지금 공개 단계 d5 를 지킨다 · 저장 가능', hold.release === 'd5' && hold.state === 'HOLD' && validateForToday(hold).ok)
 
-  check('지속 공개 단계의 원천 — 없음=d1 · TRIAL(PASS 없음)=기반 · 그 밖=전날 공개 · 옛 판=d1',
-    sustainedReleaseOf(null) === 'd1'
-    && sustainedReleaseOf(prevOf('d5', 'TRIAL')) === 'd3'
-    && sustainedReleaseOf(prevOf('d3', 'HOLD')) === 'd3'
-    && sustainedReleaseOf(prevOf('d10', 'REPROVE')) === 'd10'
-    && sustainedReleaseOf(prevOf('d5', 'SUSTAIN', { legacy: true })) === 'd1')
+  check('열린 단계의 원천 — 없음=d1 · 올린 날(TRIAL)=그 공개 단계(되돌리지 않는다) · 그 밖=전날 공개 · 옛 판=d1',
+    openStageOf(null) === 'd1'
+    && openStageOf(prevOf('d5', 'TRIAL')) === 'd5'
+    && openStageOf(prevOf('d3', 'HOLD')) === 'd3'
+    && openStageOf(prevOf('d10', 'REPROVE')) === 'd10'
+    && openStageOf(prevOf('d5', 'SUSTAIN', { legacy: true })) === 'd1')
 
   const pinned = decideStage(inputs({ previousDecision: prevOf('d5', 'HOLD'), publishedToday: 4, signals: withSignal('cost', 'bad') }))
   check('오늘 이미 낸 편수가 낮춘 단계 목표를 넘으면 그날은 고정(사다리 정본 규칙)',
@@ -642,9 +480,15 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
     && errorSignalOf([{ label: 'p', loaded: true, failing: false }]).health === 'ok')
 
   const cli = readFileSync('scripts/stage-controller.mts', 'utf-8')
-  // 배선만 본다. dry-run·flag off에서 write 0은 stage:active-recovery-check ⑦이 실행부를 돌려 증명한다.
-  check('🔴 저장은 --apply 이면서 flag on 일 때만',
-    /writeMode: !APPLY \? 'dry-run' : flagOn \? 'apply' : 'flag-off'/.test(cli))
+  // 배선만 본다 — dry-run 과 flag off 는 저장 호출보다 먼저 return 한다
+  check('🔴 저장은 --apply 이면서 flag on 일 때만', (() => {
+    const main = cli.slice(cli.indexOf('async function main()'), cli.indexOf('async function computeToday('))
+    const dry = main.indexOf('if (!APPLY) {')
+    const off = main.indexOf('if (!flagOn) {')
+    const save = main.indexOf('return await saveDecision(prisma, computed.decision)')
+    return dry >= 0 && off > dry && save > off && (main.match(/saveDecision\(/g) ?? []).length === 1
+      && /if \(!APPLY\) \{[\s\S]{0,120}?return 0 \}/.test(main) && /if \(!flagOn\) \{[\s\S]{0,80}?return 0 \}/.test(main)
+  })())
   check('🔴 쓰는 길은 ensureStageDecision 하나 — create/update/upsert/delete 직접 호출 0',
     /ensureStageDecision\(/.test(cli) && !/stageDecision\.(create|update|upsert|delete)/.test(cli))
   const mainSrc = cli.slice(cli.indexOf('async function main()'))
@@ -664,17 +508,17 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
     && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T08:01:00+09:00')) === 'safe-hold'
     && stageControllerLeaseDisposition('busy', new Date('2026-10-30T08:16:00+09:00')) === 'safe-hold')
   const holdStart = cli.indexOf('async function holdForSupplyLease(')
-  const holdEnd = cli.indexOf('/** 🔴 `--evidence-date`', holdStart)
+  const holdEnd = cli.indexOf('async function evidenceOnly(', holdStart)
   const holdSrc = holdStart >= 0 && holdEnd > holdStart ? cli.slice(holdStart, holdEnd) : ''
   const safeHoldContract = (src: string): boolean =>
-    /carriedPlanFor\(prisma, previous\)/.test(src)
+    /validRowOf\(prisma, previousKstDate\(row\.kstDate\)\)/.test(src)
     && /leaseSafeHoldOf\(\{/.test(src)
-    && /ensureStageDecision\(/.test(src)
+    && /saveDecision\(prisma, decision\)/.test(src)
     && !/(loadPublishableStock|readPreflightFacts|decideStage|trialPlanOf|nextStage|genericNextStage|auditAwareGate)/.test(src)
     && !/readStageDecision\(prisma, TODAY\)/.test(src)
   // 🔴 공개·인증 값의 정본 증거는 stage-scheduler-check S-CERT(`leaseSafeHoldOf` 동작 반례)다. 여기는 배선만 본다
   const leaseCall = 'const { decision, certified } = leaseSafeHoldOf({'
-  check('🔴 lease 안전 HOLD는 전날 결정·증거·과거 계획만 `leaseSafeHoldOf` 에 넘기고 오늘 Queue·preflight·승격 계산을 읽지 않는다',
+  check('🔴 lease 안전 HOLD는 전날·이틀 전 결정 행만 `leaseSafeHoldOf` 에 넘기고 오늘 Queue·preflight·올림 계산을 읽지 않는다',
     holdSrc.includes(leaseCall) && safeHoldContract(holdSrc))
   check('🔴 변이 검출 — lease 안전 HOLD가 오늘 Queue를 읽으면 계약 위반',
     !safeHoldContract(holdSrc.replace(leaseCall, `const partial = await loadPublishableStock(prisma)\n    ${leaseCall}`)))
@@ -696,9 +540,9 @@ console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
   check('🔴 flag OFF → d1 을 명시해서 넣는다 · 표식 없음(env 파일 단계가 이기지 못한다)',
     off.SORAN_RELEASE_STAGE === 'd1' && off.SORAN_CAPACITY_STAGE === 'd1' && off.SORAN_STAGE_DECISION_DATE === '')
   const safest = consumerEnvOf({ ok: false, code: 'BROKEN', fallback: 'safest', reason: '' })
-  check('🔴 결정 없음·깨짐 → d1 · 증명일 빈 값 · canary/window 키는 아예 없다',
-    safest.SORAN_RELEASE_STAGE === 'd1' && safest.SORAN_CAPACITY_STAGE === 'd1' && safest[PROOF_STAGE_ENV] === ''
-    && !Object.keys(safest).some((k) => /CANARY|WINDOW/.test(k)))
+  check('🔴 결정 없음·깨짐 → d1 · canary/window/증명일 키는 아예 없다',
+    safest.SORAN_RELEASE_STAGE === 'd1' && safest.SORAN_CAPACITY_STAGE === 'd1'
+    && !Object.keys(safest).some((k) => /CANARY|WINDOW|PROOF/.test(k)))
   const d = decideStage(inputs({})).decision
   const v = validateForToday(d)
   const ok = v.ok ? consumerEnvOf({ ok: true, decision: v.decision }) : {}
@@ -717,15 +561,16 @@ console.log('\n④ consumer — 결정을 러너 env 로 옮긴다')
   }
   const tv = validateStoredDecision({ row: trialRow, expectKstDate: '2026-09-29' })
   const te = tv.ok ? consumerEnvOf({ ok: true, decision: tv.decision }) : {}
-  check('🔴 🔴 **TRIAL 결정 → 공개 = 시험 단계 d3 그대로 · 증명일 d3 · canary 키 없음**',
-    tv.ok && te.SORAN_RELEASE_STAGE === 'd3' && te[PROOF_STAGE_ENV] === 'd3' && !Object.keys(te).some((k) => /CANARY|WINDOW/.test(k)),
+  check('🔴 🔴 **TRIAL 결정 → 공개 = 그 단계 d3 그대로 · canary/증명일 키 없음**',
+    tv.ok && te.SORAN_RELEASE_STAGE === 'd3' && !Object.keys(te).some((k) => /CANARY|WINDOW|PROOF/.test(k)),
     JSON.stringify(te))
   check('🔴 🔴 **러너가 그 env 를 d3 · 하루 3건으로 읽는다(09-29 반례 해소)**',
     resolveScale(te).releaseStage === 'd3' && resolveScale(te).releaseProfile.dailyTarget === 3)
   const prepRow = { ...trialRow, state: 'PREPARE', release: 'd1', transition: null, reasons: ['🟢 PREPARE'] }
   const pv = validateStoredDecision({ row: prepRow, expectKstDate: '2026-09-29' })
-  const pe = pv.ok ? consumerEnvOf({ ok: true, decision: pv.decision }) : { [PROOF_STAGE_ENV]: 'x' }
-  check('🔴 TRIAL 이 아닌 날(PREPARE)은 증명일 빈 값', pv.ok && pe[PROOF_STAGE_ENV] === '')
+  const pe = pv.ok ? consumerEnvOf({ ok: true, decision: pv.decision }) : {}
+  check('🔴 올린 날과 유지하는 날의 러너 env 는 같은 세 칸이다(단계 둘 + 표식)',
+    pv.ok && JSON.stringify(Object.keys(pe).sort()) === JSON.stringify(Object.keys(te).sort()) && Object.keys(pe).length === 3)
   const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
   check('🔴 consumer 는 DB 를 쓰지 않는다', !/\.(create|update|upsert|delete)\w*\(/.test(exec))
   const loadEnv = readFileSync('scripts/lib/micro-seed-time.mjs', 'utf-8')
@@ -918,11 +763,9 @@ console.log('\n⑥ 복구 판정')
   // 배선만 본다. "recovery 산출물이 있는 날 07:55 전 write 0"은 stage:active-recovery-check ⑦이
   // 실제 실행부(runStageRecoveryStep)를 07:00→07:20→07:40→07:55 순서로 돌려 증명한다.
   const recoveryStep = readFileSync('scripts/lib/stage-controller-recovery-step.mts', 'utf-8')
-  check('🔴 controller는 recovery 단계를 주입 실행부 하나에 맡기고, 실행권 선점은 그 실행부만 한다',
-    /phase: activeRecoveryPhaseOf\(NOW\)/.test(controller)
-    && (controller.match(/runStageRecoveryStep\(/g) ?? []).length === 1
-    && !/claimStageRecoveryLaunch|createStageRecoveryIntent/.test(controller)
-    && /claimStageRecoveryLaunch\(/.test(recoveryStep) && /activeRecoveryDirective\(/.test(recoveryStep))
+  check('🔴 운영 controller 는 제한 복구를 부르지 않는다(실행부·worker 는 다음 변경에서 지운다)',
+    !/runStageRecoveryStep|activeRecoveryPhaseOf|claimStageRecoveryLaunch|createStageRecoveryIntent|stage-active-recovery/.test(controller)
+    && /claimStageRecoveryLaunch\(/.test(recoveryStep))
   check('🔴 제한 worker는 기존 수집·공급만 부르고 07:50 종료·07:30 유료 시작 마감을 지킨다',
     /ACTIVE_RECOVERY_MAX_RUNTIME_MS = 50 \* 60_000/.test(activeRecovery)
     && /activeRecoveryDeadlineAt/.test(recoveryWorker)

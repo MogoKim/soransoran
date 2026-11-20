@@ -3,7 +3,7 @@
  *
  *    ① 막는 코드와 막지 않는 코드의 분리 — 실제 `judgeNextPreflight`
  *       · 원천 기회·처리량·READY 필요량 예측 5코드 → `forecastWarnings` (판정 PASS 유지)
- *       · `LATENCY_UNKNOWN` → 막지 않는 `warnings` (관측일 뿐 판정 엔진이 아니다 — canon §9)
+ *       · 공급 비용 추정(`SUPPLY_COST_*`) → 막지 않는 `warnings` (실제 지출은 장부가 막는다)
  *       · `SUPPLY_COST_TRIAL_RISK` → `warnings` 그대로
  *    ② v6 `supply` 투영은 `forecastSupplyOf` 하나 — 닫힌 5코드만, `warnings` 는 절대 넣지 않는다
  *    ③ 비용 회귀(실측 모양, 값은 fixture) — 정산 다수 + 미상 소수 → bounded 경고 · 신원 불명 → UNKNOWN · 예산 초과 → SHORT
@@ -17,7 +17,7 @@
  */
 import { readFileSync } from 'node:fs'
 import {
-  judgeNextPreflight, forecastSupplyOf, preflightLogLine, PREFLIGHT_CODES, PREFLIGHT_WARNING_CODES,
+  judgeNextPreflight, forecastSupplyOf, preflightLogLine, preflightPlainLinesOf, PREFLIGHT_CODES, PREFLIGHT_WARNING_CODES,
   type PreflightFacts, type PreflightVerdict,
 } from '../src/lib/stage-ladder-generic'
 import {
@@ -52,8 +52,7 @@ const GOOD = (): PreflightFacts => ({
     trialCost: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.001 },
   },
   latencyP50H: 3, latencyP90H: 10,
-  contractValidPersonas: 500, commentUsdPerRequest: 0.001, commentDailyUsdCap: 0.2,
-  auditUsdPerCall: 0.001, auditDailyUsdCap: 0.3, supplyDailyUsdCap: 1.2, runnerHealth: 'ok',
+  contractValidPersonas: 500, supplyDailyUsdCap: 1.2,
 })
 const pf = (o: Partial<PreflightFacts> = {}): PreflightVerdict => judgeNextPreflight('d20', { ...GOOD(), ...o }, RUNNER_GRID)
 const cohort = (o: Partial<NonNullable<PreflightFacts['readyCohort']>>): PreflightFacts['readyCohort'] => ({ ...GOOD().readyCohort!, ...o })
@@ -80,31 +79,30 @@ for (const [code, patch] of forecastCases) {
 }
 {
   const v = pf({ latencyP50H: null, latencyP90H: null })
-  check('🔴 LATENCY_UNKNOWN 은 막지 않는 관측 경고다 — 판정 PASS · warnings 에만 · v6 예측 경고 아님',
-    v.verdict === 'PASS' && has(v.warnings, 'LATENCY_UNKNOWN') && !has(v.codes as readonly string[], 'LATENCY_UNKNOWN')
-    && !has(v.forecastWarnings, 'LATENCY_UNKNOWN') && !(FORECAST_WARNING_CODES as readonly string[]).includes('LATENCY_UNKNOWN'),
+  check('🔴 지연 관측이 없어도 판정·경고가 바뀌지 않는다 — 값만 counts 에서 빠진다(수집→공개는 하루 판정이 잰다)',
+    v.verdict === 'PASS' && v.warnings.length === 0 && v.forecastWarnings.length === 0 && !('latencyP50H' in v.counts),
     JSON.stringify({ v: v.verdict, c: v.codes, w: v.warnings }))
 }
 {
   const v = pf({ contractValidPersonas: 1 })
   check('🔴 hard gate(Persona 하한)는 그대로 FAIL', v.verdict === 'FAIL' && has(v.codes, 'PERSONA_SHORT'))
-  const r = pf({ runnerHealth: null })
-  check('🔴 hard gate(runner 모름)는 그대로 UNKNOWN', r.verdict === 'UNKNOWN' && has(r.codes, 'RUNNER_UNKNOWN'))
+  const r = pf({ contractValidPersonas: null })
+  check('🔴 hard gate(Persona 모름)는 그대로 UNKNOWN', r.verdict === 'UNKNOWN' && has(r.codes, 'PERSONA_UNKNOWN'))
 }
 
 console.log('\n② v6 supply 투영은 하나 · 닫힌 5코드만')
 {
   check('preflight 를 평가하지 않았으면 null', forecastSupplyOf(null) === null)
   const all = pf({
-    slotValidOpportunities: null, readyCohort: cohort({ sources: 0 }), latencyP50H: null, latencyP90H: null,
+    slotValidOpportunities: null, readyCohort: cohort({ sources: 0, usdPerSlotValidResult: null, trialCost: null }),
   })
   const s = forecastSupplyOf(all)
   check('🔴 투영 결과는 정확히 {forecastWarnings} 이고 판정의 예측 경고와 같다',
     s !== null && JSON.stringify(Object.keys(s)) === '["forecastWarnings"]'
     && JSON.stringify(s.forecastWarnings) === JSON.stringify(all.forecastWarnings), JSON.stringify(s))
-  check('🔴 LATENCY_UNKNOWN · SUPPLY_COST_TRIAL_RISK 는 투영에 들어가지 않는다',
+  check('🔴 공급 비용 경고는 투영에 들어가지 않는다',
     s !== null && s.forecastWarnings.every((c) => (FORECAST_WARNING_CODES as readonly string[]).includes(c))
-    && has(all.warnings, 'LATENCY_UNKNOWN'))
+    && has(all.warnings, 'SUPPLY_COST_UNKNOWN'))
   const row = {
     kstDate: PROOF, capacity: 'd30', release: 'd20', state: 'PREPARE', reasons: [], blocks: [], dayPinned: false,
     supply: s, decidedAt: '2026-11-06T22:00:00.000Z', contractVersion: STAGE_DECISION_V6, decidedBy: DECISION_WRITER, transition: null,
@@ -128,11 +126,13 @@ console.log('\n③ 비용 회귀 — 정산 다수·미상 소수 → bounded �
     JSON.stringify({ v: bounded.verdict, c: bounded.codes, w: bounded.warnings }))
   check('🔴 그 경고는 v6 supply 투영에 들어가지 않는다', !has(forecastSupplyOf(bounded)!.forecastWarnings, 'SUPPLY_COST_TRIAL_RISK'))
   const orphan = pf({ readyCohort: costCohort(null) })
-  check('🔴 같은 날 신원 불명 recovery(trialCost null) → SUPPLY_COST_UNKNOWN 그대로', has(orphan.codes, 'SUPPLY_COST_UNKNOWN') && orphan.verdict !== 'PASS')
+  check('🔴 비용 표본을 모르면(trialCost null) SUPPLY_COST_UNKNOWN 경고 — 관문은 막지 않는다', has(orphan.warnings, 'SUPPLY_COST_UNKNOWN') && orphan.verdict === 'PASS' && orphan.codes.length === 0)
   const over = pf({ readyCohort: costCohort({
     settledRequests: 479, usageUnknownRequests: 2, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.0600001,
   }) })
-  check('🔴 결과당 위험 × 20 이 예산을 넘으면 SUPPLY_COST_SHORT', has(over.codes, 'SUPPLY_COST_SHORT') && over.verdict === 'FAIL')
+  check('🔴 결과당 위험 × 20 이 예산을 넘으면 SUPPLY_COST_SHORT 경고 — 관문은 막지 않는다', has(over.warnings, 'SUPPLY_COST_SHORT') && over.verdict === 'PASS' && over.codes.length === 0)
+  check('🔴 비용 경고마다 사람이 읽는 줄이 반드시 나온다(막지 않는다는 말과 함께)',
+    [bounded, orphan, over].every((v) => preflightPlainLinesOf(v).some((l) => l.includes('비용 경고(막지 않음)'))))
 }
 
 console.log('\n④ 막는 코드는 전부 hard gate 범주다')
@@ -141,14 +141,12 @@ console.log('\n④ 막는 코드는 전부 hard gate 범주다')
     'SLOTS_INFEASIBLE', 'PUBLISH_CAPACITY_SHORT', 'PERSONA_SHORT', 'PERSONA_UNKNOWN',
     // canon §3.2 Persona canary 하한 hard gate 의 D30 이상 실투입 칸(2026-11-13 · §4)
     'PERSONA_ACTIVE_SHORT', 'PERSONA_ACTIVE_UNKNOWN',
-    'COMMENT_COST_SHORT', 'COMMENT_COST_UNKNOWN', 'COMMENT_RUNNER_SHORT', 'AUDIT_COST_SHORT', 'AUDIT_COST_UNKNOWN',
-    'SUPPLY_COST_SHORT', 'SUPPLY_COST_UNKNOWN', 'RUNNER_BAD', 'RUNNER_UNKNOWN',
   ]
   const blocking = (PREFLIGHT_CODES as readonly string[]).filter((c) => !(FORECAST_WARNING_CODES as readonly string[]).includes(c))
   check('🔴 막을 수 있는 preflight 코드 = 독립 oracle 의 hard gate 목록', JSON.stringify([...blocking].sort()) === JSON.stringify([...HARD].sort()),
     blocking.join(','))
-  check('🔴 막지 않는 경고 목록은 비용 시험 위험 · 지연 관측 둘',
-    JSON.stringify([...PREFLIGHT_WARNING_CODES].sort()) === JSON.stringify(['LATENCY_UNKNOWN', 'SUPPLY_COST_TRIAL_RISK']))
+  check('🔴 막지 않는 경고 목록은 공급 비용 추정 셋이다',
+    JSON.stringify([...PREFLIGHT_WARNING_CODES].sort()) === JSON.stringify(['SUPPLY_COST_SHORT', 'SUPPLY_COST_TRIAL_RISK', 'SUPPLY_COST_UNKNOWN']))
 }
 
 console.log('\n⑤ 제한 복구는 예측 경고만 있는 날 열리지 않는다')
@@ -234,11 +232,11 @@ console.log('\n⑨ 사다리는 v6 supply 를 nextPreflight 에서만 만든다 
   check('🔴 planStageDecision 이 supply 를 forecastSupplyOf(input.nextPreflight) 로만 만든다',
     /supply:\s*forecastSupplyOf\(input\.nextPreflight\)/.test(ladder) && !/input\.supply/.test(ladder))
   const withPf = planStageDecision({
-    kstDate: PROOF, sustainedRelease: 'd10', previousDecision: null, publishedToday: 0, decidedAt: '2026-11-06T22:00:00.000Z',
+    kstDate: PROOF, openStage: 'd10', previousDecision: null, passDays: 0, decidedAt: '2026-11-06T22:00:00.000Z',
     nextPreflight: pf({ slotValidOpportunities: null }),
   })
   const noPf = planStageDecision({
-    kstDate: PROOF, sustainedRelease: 'd10', previousDecision: null, publishedToday: 0, decidedAt: '2026-11-06T22:00:00.000Z',
+    kstDate: PROOF, openStage: 'd10', previousDecision: null, passDays: 0, decidedAt: '2026-11-06T22:00:00.000Z',
     nextPreflight: null,
   })
   check('🔴 preflight 가 있으면 supply = 투영 · 없으면 null · 둘 다 v6',
@@ -253,10 +251,10 @@ console.log('\n⑨ 사다리는 v6 supply 를 nextPreflight 에서만 만든다 
 
 console.log('\n⑩ controller 운영 로그 — 막는 코드 · 운영 경고 · 예측 경고를 따로 보인다')
 {
-  const all = pf({ slotValidOpportunities: null, latencyP50H: null, contractValidPersonas: 1 })
+  const all = pf({ slotValidOpportunities: null, supplyDailyUsdCap: null, contractValidPersonas: 1 })
   const line = preflightLogLine('d20', all)
-  check('🔴 세 갈래가 각자 자리에 찍힌다 — [PERSONA_SHORT] · WARN [LATENCY_UNKNOWN] · FORECAST [OPPORTUNITY_UNKNOWN]',
-    / preflight FAIL \[[^\]]*PERSONA_SHORT[^\]]*\]/.test(line) && / WARN \[LATENCY_UNKNOWN\]/.test(line)
+  check('🔴 세 갈래가 각자 자리에 찍힌다 — [PERSONA_SHORT] · WARN [SUPPLY_COST_UNKNOWN] · FORECAST [OPPORTUNITY_UNKNOWN]',
+    / preflight FAIL \[[^\]]*PERSONA_SHORT[^\]]*\]/.test(line) && / WARN \[SUPPLY_COST_UNKNOWN\]/.test(line)
     && / FORECAST \[OPPORTUNITY_UNKNOWN\]/.test(line) && !/\[[^\]]*OPPORTUNITY_UNKNOWN[^\]]*\] WARN/.test(line), line)
   const forecastOnly = preflightLogLine('d20', pf({ slotValidOpportunities: null }))
   check('🔴 🔴 **예측만 있는 날 — PASS 여도 FORECAST 가 보인다(PASS 뒤에 숨지 않는다)**',
