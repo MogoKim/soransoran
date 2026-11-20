@@ -82,6 +82,7 @@ const INCOMPLETE_GATE = {
 import { profileOf, releaseCapsOf } from '../src/lib/scale-profile'
 import { judgeNextPreflight, slotTimesOn } from '../src/lib/stage-ladder-generic'
 import { SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE } from '../src/lib/supply-cost-envelope'
+import { SUPPLY_RUNS_PER_DAY } from '../src/lib/supply-schedule-contract'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { ledgerDirForHome } from './lib/llm-ledger-store.mjs'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
@@ -119,6 +120,20 @@ if (problems.length > 0) {
   for (const p of problems) console.error(`   · ${p}`)
   console.error('   세우는 법은 이 파일 맨 위 주석에 있다')
   process.exit(2)
+}
+
+/**
+ * 🔴 이 검사의 처리량 사례(용량 33 · 20 · 15 · 19 · 2 · 5)는 **하루 공급 5회** 시절의 실측과 경계값이다.
+ *    용량 = READY × 회차 묶음 × 하루 회차 수 ÷ 원천이라, 회차 수가 바뀌면 같은 cohort 의 용량이 달라진다.
+ *    사례가 재는 것은 경계 판정(부족 · 결말 모름 · 해소)이지 회차 수가 아니므로, 원천 수를 지금 회차 수 비율로
+ *    환산해 그때와 같은 용량을 만든다. 하루 회차 수 자체는 `supply:cycle-check` 가 바퀴 표와 대조한다.
+ */
+const RUNS_PER_DAY_THEN = 5
+type PreflightArgs = Parameters<typeof judgeNextPreflight>
+function judgeAtFiveRuns(stage: PreflightArgs[0], facts: PreflightArgs[1], grid: PreflightArgs[2]): ReturnType<typeof judgeNextPreflight> {
+  const c = facts.readyCohort
+  return judgeNextPreflight(stage, c === null || c === undefined ? facts
+    : { ...facts, readyCohort: { ...c, sources: c.sources * SUPPLY_RUNS_PER_DAY / RUNS_PER_DAY_THEN } }, grid)
 }
 
 let pass = 0
@@ -765,11 +780,11 @@ contractValidPersonas: async () => 30,
       const y = r.detail.yieldBounds as { low: number; high: number } | null
       check('🔴 결말 수율 구간 = 공개 2 ÷ 30 ~ (2 + 모름 4) ÷ 30', y !== null && y.low === 2 / 30 && y.high === 6 / 30, JSON.stringify(y))
       if (c !== null) {
-        const d3 = judgeNextPreflight('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
+        const d3 = judgeAtFiveRuns('d3', { ...r.facts, readyCohort: { ...c, usdPerSlotValidResult: 0.01 } }, RUNNER_GRID)
         check('🔴 d3 — 모르는 대기를 전부 손실로 봐도(필요 15) bounded recovery 포함 용량 33 이 채운다 → 처리량 확정',
           d3.counts.readyNeededMax === 15 && d3.counts.readyCapacity === 33
           && !d3.forecastWarnings.includes('THROUGHPUT_SHORT') && !d3.forecastWarnings.includes('READY_REQUIREMENT_UNKNOWN'), JSON.stringify(d3.counts))
-        const d5 = judgeNextPreflight('d5', {
+        const d5 = judgeAtFiveRuns('d5', {
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
@@ -779,7 +794,7 @@ contractValidPersonas: async () => 30,
           && d5.counts.supplyProofBudgetUsd === undefined
           && d5.codes.length === 0 && d5.warnings.includes('SUPPLY_COST_UNKNOWN') && d5.verdict === 'PASS',
           JSON.stringify({ counts: d5.counts, codes: d5.codes, warnings: d5.warnings }))
-        const d5CurrentContract = judgeNextPreflight('d5', {
+        const d5CurrentContract = judgeAtFiveRuns('d5', {
           ...r.facts, proofKstDate: SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
           slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60, supplyDailyUsdCap: 1.2,
           readyCohort: {
@@ -793,7 +808,7 @@ contractValidPersonas: async () => 30,
         check('🟢 같은 DB cohort + 시행일 이후 온전한 비용 증거 → D5 preflight PASS',
           d5CurrentContract.verdict === 'PASS' && d5CurrentContract.codes.length === 0,
           JSON.stringify({ counts: d5CurrentContract.counts, codes: d5CurrentContract.codes }))
-        const d5Boundary = judgeNextPreflight('d5', {
+        const d5Boundary = judgeAtFiveRuns('d5', {
           ...r.facts, slotValidOpportunities: 5, latencyP50H: 20, latencyP90H: 60, supplyDailyUsdCap: 1.2,
           readyCohort: { ...c, sources: 50, usdPerSlotValidResult: 0.01 },
         }, RUNNER_GRID)
@@ -1007,7 +1022,7 @@ contractValidPersonas: async () => 30,
       check('🔴 앞판 분자(decidedAt 창 · 창 안 회차) = 16 → floor(16 × 60 ÷ 101) = 9 (07:00 기록과 같다)',
         oldNumerator === 16 && Math.floor((16 * 60) / 101) === 9, String(oldNumerator))
       // 🔴 07:00 운영 기록 그대로의 cohort 로 앞판 판정을 재현한다 — 공급 능력 9 · 필요 12
-      const old0700 = judgeNextPreflight('d10', {
+      const old0700 = judgeAtFiveRuns('d10', {
         proofKstDate: '2026-11-05',
         slotValidOpportunities: 10, readyCohort: {
           sources: 101, published: 8, lost: 2, scheduled: 6, unknown: 0,
@@ -1037,7 +1052,7 @@ contractValidPersonas: async () => 30,
         JSON.stringify({ raw: r.detail.readyCount, ex: r.detail.autoIneligibleExcluded, legacy: r.detail.legacyExcluded, src: c?.sources }))
       check('🔴 🔴 **22:15 도장 전 4건은 성공으로 확정하지 않는다 — 결말 모름 · 공개 8 · 손실 2 · 모름 10(대기 6 + 도장 전 4)**',
         c !== null && c.published === 8 && c.lost === 2 && c.scheduled === 0 && c.unknown === 10, JSON.stringify(c))
-      const v = judgeNextPreflight('d10', r.facts, RUNNER_GRID)
+      const v = judgeAtFiveRuns('d10', r.facts, RUNNER_GRID)
       check('🔴 🔴 **보정 후 공급 능력 19 · 필요 하한 12 → 처리량 부족은 해소 · 과거 원천 inventory 부재는 예측 경고 OPPORTUNITY_UNKNOWN (PR1b: 막지 않는다)**',
         v.counts.readyCapacity === 19 && v.counts.readyNeededMin === 12 && old0700.counts.readyNeeded === 12
         && !v.forecastWarnings.includes('THROUGHPUT_SHORT') && v.forecastWarnings.includes('OPPORTUNITY_UNKNOWN')
@@ -1205,10 +1220,10 @@ contractValidPersonas: async () => 30,
         slotValidOpportunities: 3, latencyP50H: 20, latencyP90H: 40, contractValidPersonas: 30, supplyDailyUsdCap: 0.5, runnerHealth: 'ok' as const,
       }
       const cleanTrial = { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsdPerSlotValidResult: 0.01 }
-      const vNow = judgeNextPreflight('d3', { ...facts, readyCohort: only.fates === null ? null : {
+      const vNow = judgeAtFiveRuns('d3', { ...facts, readyCohort: only.fates === null ? null : {
         sources: only.worksetSources ?? 0, ...only.fates, usdPerSlotValidResult: 0.01, trialCost: cleanTrial,
       } }, RUNNER_GRID)
-      const vOld = judgeNextPreflight('d3', { ...facts, readyCohort: {
+      const vOld = judgeAtFiveRuns('d3', { ...facts, readyCohort: {
         sources: 100, published: 2, lost: 0, scheduled: 0, unknown: 3,
         usdPerSlotValidResult: 0.01, trialCost: cleanTrial,
       } }, RUNNER_GRID)

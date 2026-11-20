@@ -2,7 +2,7 @@
 /**
  * 🔴 **공급 자동 READY 마감 — 격리 Postgres 전용** (2026-10-27)
  *
- *   06:15 공급이 적재한 자동 적격 행을 같은 lease 안에서 정본 도장 회차(`stampRoundAuditAware`)로 도장해
+ *   아침 공급 회차가 적재한 자동 적격 행을 같은 lease 안에서 정본 도장 회차(`stampRoundAuditAware`)로 도장해
  *   07:00 controller 전에 재고 상태를 확정한다. 실제 러너(`supply-process.mts`)를 임시 cwd · 임시 HOME 에서
  *   자식 프로세스로 돌리고, 변이는 **임시 복사본**에만 건다(저장소 파일은 건드리지 않는다).
  *
@@ -36,6 +36,7 @@ import { authoritativeGate } from '../src/lib/auto-ready-repo'
 import { RETRYABLE_NOTE_PREFIX, stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
 import { closeRunStatus, finalizeAutoReady, mayFinalizeAutoReady } from '../src/lib/supply-process'
 import { judgeAgainst, readyCapacityOf, replenishmentOf, type ReadyCohortFact } from '../src/lib/stage-ladder-generic'
+import { SUPPLY_RUNS_PER_DAY } from '../src/lib/supply-schedule-contract'
 import { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE } from '../src/lib/micro-seed-supply-autofill'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
@@ -346,23 +347,24 @@ console.log('PROBE ' + JSON.stringify({
 
     /**
      * 🔴 정본 `readyCapacityOf` · `replenishmentOf` · `judgeAgainst`를 그대로 쓴다.
-     *    D20 처리량 계약(원천 20 × 당일 5회)에서 원천 50 · raw 7의 용량은 14다.
+     *    원천이 회차마다 10건씩 들어온 날(원천 = 10 × 하루 회차 수) raw 7의 용량은 7 × 묶음 20 ÷ 10 = 14다.
      *    마감 전 미도장 3 = 모름 → 필요 구간 10~18이라 UNKNOWN, 마감 뒤 예정 3이면 필요 10이라 ok다.
      */
     const TARGET = 10
-    const capacity = readyCapacityOf(7, 50)
+    const SOURCES = 10 * SUPPLY_RUNS_PER_DAY
+    const capacity = readyCapacityOf(7, SOURCES)
     const fits = (need: number): boolean => capacity !== null && need <= capacity
     const fact = (f: Omit<ReadyCohortFact, 'usdPerSlotValidResult' | 'trialCost'>): ReadyCohortFact => ({
       ...f, usdPerSlotValidResult: null, trialCost: null,
     })
     const rawOf = (f: ReadyCohortFact): number => f.published + f.lost + f.scheduled + f.unknown
-    const beforeF = fact({ sources: 50, published: 4, lost: 0, scheduled: 0, unknown: 3 })
-    const afterF = fact({ sources: 50, published: 4, lost: 0, scheduled: 3, unknown: 0 })
+    const beforeF = fact({ sources: SOURCES, published: 4, lost: 0, scheduled: 0, unknown: 3 })
+    const afterF = fact({ sources: SOURCES, published: 4, lost: 0, scheduled: 3, unknown: 0 })
     const rb = replenishmentOf(TARGET, beforeF)
     const ra = replenishmentOf(TARGET, afterF)
-    check('🔴 🔴 **마감 전 실측(원천 50 · raw 7 · 공개 4 · 손실 0 · 예정 0 · 모름 3) → 실제 용량 14 · 필요 10~18이라 UNKNOWN**',
+    check('🔴 🔴 **마감 전 실측(회차마다 원천 10 · raw 7 · 공개 4 · 손실 0 · 예정 0 · 모름 3) → 실제 용량 14 · 필요 10~18이라 UNKNOWN**',
       capacity === 14 && rawOf(beforeF) === 7 && rb.min === 10 && rb.max === 18 && judgeAgainst(rb, fits) === 'unknown', JSON.stringify(rb))
-    check('🔴 🔴 **마감 뒤 실측(원천 50 · raw 7 · 공개 4 · 손실 0 · 예정 3 · 모름 0) → 실제 용량 14 · 필요 10이라 ok**',
+    check('🔴 🔴 **마감 뒤 실측(회차마다 원천 10 · raw 7 · 공개 4 · 손실 0 · 예정 3 · 모름 0) → 실제 용량 14 · 필요 10이라 ok**',
       capacity === 14 && rawOf(afterF) === 7 && ra.min === 10 && ra.max === 10 && judgeAgainst(ra, fits) === 'ok', JSON.stringify(ra))
   }
 
