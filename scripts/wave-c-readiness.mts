@@ -33,7 +33,7 @@ import { judgeSourceOperations } from '../src/lib/collect-operations'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { RUN_FILE_RE } from '../src/lib/supply-process'
-import { SUPPLY_PROCESS_SLOTS } from '../src/lib/collect-schedule'
+import { SUPPLY_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
 import { COLLECT_SLOTS, COLLECT_SOURCES, detailCeilingPerDay, sourceIdOf } from '../src/lib/collect-sources'
 
 const WANT_PLAN = process.argv.includes('--plan')
@@ -46,8 +46,8 @@ const CONFIGURED_PER_DAY: Readonly<Record<string, number>> =
 /** 🔴 예정 슬롯 — 바퀴 표에서 온다. 증거는 이 시각들에 하나씩 붙어야 한다 */
 const SLOTS_OF: Readonly<Record<string, readonly { hour: number; minute: number }[]>> =
   Object.fromEntries(COLLECT_SOURCES.map((s) => [sourceIdOf(s.id), COLLECT_SLOTS]))
-/** 🔴 공급 처리(supply-process)의 예약 슬롯 — 정본은 `collect-schedule` 하나다 */
-const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] = SUPPLY_PROCESS_SLOTS
+/** 🔴 공급 처리(supply-process)의 정기 회차 — 바퀴 표에서 계산된 정본(`supply-schedule-contract`) */
+const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] = SUPPLY_RUN_SLOTS_KST
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')
 const MANIFEST_FILE = join(CANON_DIR, 'runtime-manifest.json')
 

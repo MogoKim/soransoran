@@ -2,13 +2,10 @@
 /**
  * 공급 처리(drain) 러너 — 🔴 **수집하지 않는다. 이미 생긴 입력만 비운다** (§4-AU)
  *
- * 수집은 source 마다 **독립 job** 이 한다.
+ * 수집은 수집 job(`com.soransoran.navercafe-collect`)이 바퀴마다 한다. 이 러너는 그 바퀴가 시작되고
+ * `SUPPLY_AFTER_COLLECT_MINUTES` 분 뒤에 뜬다(`cycle-schedule.ts`).
  *
- *   82cook                  `com.soransoran.supply-collect-82cook-thin` (얇은 상세)
- *   navercafe:remonterrace  `com.soransoran.navercafe-collect-remonterrace-multi`
- *   navercafe:wgang         `com.soransoran.navercafe-collect-wgang-multi`
- *
- * 이 러너는 그중 **누가 성공했는지 묻지 않는다.** 디스크에 남은 미처리 입력을
+ * 이 러너는 수집이 **성공했는지 묻지 않는다.** 디스크에 남은 미처리 입력을
  * source 별로 훑어 변환 → 판정 → 초안 → 적재까지 흘려보낼 뿐이다.
  *
  * 🔴 **이 러너는 발행하지 않는다.** Post · persona 배정 · ActivityLog 를 만들지 않는다.
@@ -845,7 +842,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
   })
   /**
    * 🔴 **자동 READY 마감 — 공통 DB 마감 단계** (2026-10-27). 적재 뒤 · 같은 lease 안에서 정본 도장 회차를 부른다.
-   *    07:00 controller 전에 06:15 공급이 적재한 자동 적격 행의 도장을 끝내 재고 상태를 확정한다.
+   *    07:00 controller 전에 아침 바퀴 공급이 적재한 자동 적격 행의 도장을 끝내 재고 상태를 확정한다.
    *    🔴 lease 를 쥔 live 회차만 — dry-run · 스위치 닫힘 · 증명 없음은 부르지 않는다(DB write 0).
    *    🔴 시각은 마감 시각이다 — 감사 시한 초과를 회차 시작 시각으로 재면 그만큼 늦게 닫힌다.
    *    🔴 Queue 도장만 쓴다 — Post · Persona 배정 · ActivityLog 를 만들지 않는다.

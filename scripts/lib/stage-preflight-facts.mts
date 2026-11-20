@@ -39,7 +39,7 @@ import { COMMENT_LOOP_BUDGET_ENV } from '../../src/lib/persona-comment-auto-lane
 import { AUTO_DECIDER, AUTO_READY_ENV, eligibilityOf } from '../../src/lib/auto-ready-v2'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
 import {
-  SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS,
+  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS,
   supplyRunSlotMinuteOf,
 } from '../../src/lib/supply-schedule-contract'
 import { isNaturalScheduledRunTag, parseRunTokenShadowTag } from '../../src/lib/supply-run-token'
@@ -337,12 +337,12 @@ const kstWallClock = (ms: number): { date: string; minute: number } | null => {
   return { date: iso.slice(0, 10), minute: Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16)) }
 }
 
-/** 공급 회차 id 의 KST 날짜와 proof 슬롯 — 창 밖 시작이면 슬롯 `null` */
+/** 공급 회차 id 의 KST 날짜와 정기 회차 — 창 밖 시작이면 회차 `null` */
 const proofSlotOfRunId = (runId: string): { date: string; minute: number | null } | null => {
   const ms = runMsOf(runId)
   const wall = ms === null ? null : kstWallClock(ms)
   return wall === null ? null
-    : { date: wall.date, minute: supplyRunSlotMinuteOf(wall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS) }
+    : { date: wall.date, minute: supplyRunSlotMinuteOf(wall.minute, SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS) }
 }
 
 type NaturalRunSnapshot = {
@@ -355,7 +355,7 @@ type NaturalRunSnapshot = {
  *    · 회차가 **끝났어야** 한다 — `done` 또는 `failed`. 🔴 `failed` 는 회차의 다른 단계가 실패했다는 뜻이다.
  *      snapshot · marker(`written` · runId · 관측 시각 · 건수 · reason 없음)가 온전하면 그 시각 inventory 로 쓴다.
  *      `running`·모르는 상태는 모름이다
- *    · runId(파일 이름) · `startedAt` · `completedAt`(시작 뒤 · `atMs` 이전) · `runtimeSha` · proof 슬롯 창이 맞아야 한다
+ *    · runId(파일 이름) · `startedAt` · `completedAt`(시작 뒤 · `atMs` 이전) · `runtimeSha` · 정기 회차 창이 맞아야 한다
  *    · snapshot 관측은 회차 시작 ~ `atMs` 사이
  *    하나라도 어긋나면 `null`(모름).
  */
@@ -370,7 +370,7 @@ function naturalRunSnapshotOf(dataDir: string, runId: string, atMs: number): Nat
     const completedAtMs = typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : Number.NaN
     const runWall = Number.isFinite(startedAtMs) ? kstWallClock(startedAtMs) : null
     const runSlot = runWall === null ? null
-      : supplyRunSlotMinuteOf(runWall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
+      : supplyRunSlotMinuteOf(runWall.minute, SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
     if (run.runId !== runId || (run.status !== 'done' && run.status !== 'failed')
       || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs || completedAtMs > atMs
       || typeof run.runtimeSha !== 'string' || run.runtimeSha.trim() === ''
@@ -392,15 +392,15 @@ function naturalRunSnapshotOf(dataDir: string, runId: string, atMs: number): Nat
 }
 
 /**
- * 🔴 **표본일 `date` 의 기준선 inventory — 판정 벽시계 `nowMinute` 직전에 창이 끝난 자연 proof 슬롯 하나** (2026-11-02).
- *    07:00 판정이면 06:15 슬롯(06:15 + 45분 = 07:00)이다. 그 슬롯의 자연 예약 회차가 남긴 snapshot 만 쓴다
+ * 🔴 **표본일 `date` 의 기준선 inventory — 판정 벽시계 `nowMinute` 직전에 창이 끝난 정기 회차 하나**.
+ *    회차 시각 + 창(`SUPPLY_RUN_WINDOW_MS`)이 판정 시각 이전인 마지막 회차다. 그 회차의 자연 예약 실행이 남긴 snapshot 만 쓴다
  *    (`naturalRunSnapshotOf` — 미래 표본과 같은 무결성 규칙). 겹친 자연 회차가 여럿이면 마지막 회차다.
  *    🔴 그 슬롯에 자연 회차가 없거나(사건·수동·복구뿐 포함) 하나라도 손상·미완료면 `null`(모름) —
  *       전날 밤 회차 · 더 이른 슬롯 · 비자연 회차로 내려가지 않는다. 창이 끝난 슬롯이 없는 시각도 `null` 이다.
  */
 function baselineEvidenceOf(dataDir: string, date: string, nowMinute: number): readonly unknown[] | null {
   const windowMinutes = SUPPLY_RUN_WINDOW_MS / 60_000
-  const slot = SUPPLY_PROOF_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute)
+  const slot = SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute)
     .filter((minute) => minute + windowMinutes <= nowMinute).sort((a, b) => a - b).at(-1)
   if (slot === undefined) return null
   const atMs = Date.parse(`${date}T00:00:00+09:00`) + nowMinute * 60_000
@@ -419,15 +419,15 @@ function baselineEvidenceOf(dataDir: string, date: string, nowMinute: number): r
 /**
  * 🔴 **당일 남은 정기 공급의 추가 기회 — 재고 수준이 아니라 새로 들어온 원천으로 센다.**
  *    설정상 `회차×20`·선행 재고 할당을 쓰지 않는다. 직전 3개 완결 KST 일자마다:
- *    ① 기준선 = 그날 `now` 벽시계 직전에 창이 끝난 자연 proof 슬롯(07:00 이면 06:15)의 inventory(`baselineEvidenceOf`)
+ *    ① 기준선 = 그날 `now` 벽시계 직전에 창이 끝난 정기 회차의 inventory(`baselineEvidenceOf`)
  *       — 전날 밤·사건·수동·복구 회차로 대신하지 않는다
- *    ② 오늘 남은 proof 공급 슬롯과 **동일한 슬롯 창**의 자연 예약 회차가 기준선 뒤에 처음 관측한 고유 원천
+ *    ② 오늘 남은 정기 회차와 **동일한 회차 창**의 자연 예약 실행이 기준선 뒤에 처음 관측한 고유 원천
  *       (`articleIdHash`)만 순유입이다. 같은 원천을 두 회차가 보면 먼저 본 회차 하나로 센다. 해시가 없으면 세지 않는다
- *    ③ 순유입 원천은 그 회차 시작 + 45분 뒤 발행 슬롯에서만, 그날 같은 벽시계 슬롯에서 `judgeSlotRelease` 가
+ *    ③ 순유입 원천은 그 회차 시작 + 회차 창 뒤 발행 슬롯에서만, 그날 같은 벽시계 슬롯에서 `judgeSlotRelease` 가
  *       eligible 일 때만 쓸 수 있다(원천↔슬롯 유효성 · 도착 시각 보존)
  *    ④ 하루 추가분 = `futureAdditionalOf` — 합집합 겹침 상한과 순유입 자기 수율 상한 중 작은 값
  *    날짜별 추가 기회의 최솟값을 쓴다. 다른 날 원천을 오늘 원천과 대조하지 않는다.
- *    지연된 첫 예약 pass는 정본 45분 창으로 같은 슬롯에 붙인다. provenance가 완전한 예약 follow-up도 자연 표본이다.
+ *    지연된 첫 예약 pass는 정본 회차 창으로 같은 회차에 붙인다. provenance가 완전한 예약 follow-up도 자연 표본이다.
  *    사건·복구·수동·기원 불명 follow-up은 표본이 아니다 — 세지 않을 뿐 용량을 만들지 않는다.
  *    🔴 자연 표본이 **없음이 증명된** 슬롯(창 안에 기회 파일이 없고, 회차 기록도 없거나 snapshot 을 주장하지 않는다)은
  *       그 슬롯 순유입 0 이다. 순유입은 더하기만 하므로 0 은 보수적이다 — 다음 회차가 같은 원천을 더 늦게 볼 뿐이다.
@@ -458,7 +458,7 @@ export function measuredFutureSourceOpportunities(input: {
   const nowWall = kstWallClock(input.now.getTime())
   if (nowWall === null || nowWall.date !== input.kstDate) return null
   const nowMinute = nowWall.minute
-  const futureSupplyMinutes = SUPPLY_PROOF_RUN_SLOTS_KST
+  const futureSupplyMinutes = SUPPLY_RUN_SLOTS_KST
     .map((slot) => slot.hour * 60 + slot.minute)
     .filter((minute) => minute > nowMinute)
   if (futureSupplyMinutes.length === 0) return 0
@@ -475,7 +475,7 @@ export function measuredFutureSourceOpportunities(input: {
     const runMs = runMsOf(runId)
     const wall = runMs === null ? null : kstWallClock(runMs)
     const minute = wall === null ? null
-      : supplyRunSlotMinuteOf(wall.minute, SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
+      : supplyRunSlotMinuteOf(wall.minute, SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS)
     return wall === null || minute === null || !sampleDateSet.has(wall.date) || !futureSupplyMinutes.includes(minute)
       ? null : { date: wall.date, minute }
   }

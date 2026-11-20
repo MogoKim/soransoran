@@ -1,50 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  공급 처리(drain) — 🔴 템플릿이다. 등록되어 있지 않다 (README.md 참조)
+  공급 처리(글 만들기) — 🔴 **이 파일은 생성된다. 손으로 고치지 않는다**
+    만드는 곳  scripts/lib/supply-process-template.mts (npm run launchd:supply-template -- --write)
+    회차 시각  src/lib/cycle-schedule.ts — 수집 바퀴(CYCLES 13회)마다 수집 시작 15분 뒤 한 번
+               (01:15 04:15 06:45 08:35 10:15 11:35 12:35 13:35 15:35 17:35 18:35 20:35 22:35)
+    회차 창    45분 — 이 시각들이 러너의 정기 회차 창과 같아야 유료 요청이 나간다
 
-  정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-AU
-
-  하는 일: 이미 디스크에 있는 **미처리 입력**을 source 별로 비운다.
-           얇은 변환 → 검수용 변환 → 자동 판정 → 초안 생성 → Queue 보충
-
-  🔴 이 job 은 수집하지 않는다
-     수집은 source 마다 독립 job 이다 — supply-collect-82cook-thin ·
-     navercafe-collect-remonterrace-multi · navercafe-collect-wgang-multi.
-     그중 누가 실패했는지 이 job 은 묻지 않는다. 있는 입력만 처리한다.
-     🔴 반대로 수집 job 도 이 job 의 상태를 보지 않는다 — 서로를 소유하지 않는다.
-
-  🔴 이 job 은 발행하지 않는다
-     Post · persona 배정 · ActivityLog 를 만들지 않는다.
-     발행은 auto-publish(GHA)가 그 단계의 예약 슬롯에 한다 — `scale-profile.ts` `PROFILES` 가 정본이다.
-
-  🔴 하루 7회다 — 06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST
-     수집이 하루 14회 들어오므로 처리가 하루 1회면 입력이 반나절씩 묵는다.
-     첫 Persona 댓글 60분 목표와도 맞지 않는다.
-     🔴 06:15는 00:30~05:30 target-date 네이버 수집분을 07:00 controller 전에 처리한다.
-     🔴 나머지는 **수집 슬롯 뒤에 붙인다.** 07:00/07:40 수집 → 08:15 처리,
-        21:30 수집 → 22:15 처리. 입력이 생긴 뒤에 비워야 대기 시간이 줄어든다.
-     분(:15)은 수집 레인(:00 · :30 · :40)과 겹치지 않게 골랐다.
-     🔴 22:15가 마지막 처리 회차다. 상시 호스트는 이후에도 AC·로그인·덮개 열림·keep-awake를
-        유지해 다음 날 00:30~05:30 target-date 수집을 이어 간다.
-
-  🔴 미처리 입력이 없으면 정상 no-op 이다
-     네트워크 0 · LLM 0 · DB write 0. 조용한 날이 실패로 보이지 않는다.
-
-  🔴 재고 700 은 **버퍼 목표**이지 수집 스위치가 아니다
-     재고가 700 이상이면 파일 단계(얇은 변환 · 검수용 변환)만 돌고 모델과 DB 는 쉰다.
-     수집 job 은 이 판정을 보지 않는다.
-
-  🔴 kill switch 는 plist 가 아니라 환경변수다
-     .env.local 에 SORAN_SUPPLY_PROCESS_ENABLED=true 가 없으면 --live 는 무시된다.
-     plist 를 지우지 않고 멈출 수 있어야 한다.
-
-  🔴 동시 실행은 러너가 막는다 — 커널 lease (2026-10-12 Batch C1 · scripts/lib/supply-lease.mts)
-     잠금 파일 ~/Library/Application Support/soransoran/supply-process/process.kernel-lock 을 fd 9 로 열어
-     /usr/bin/lockf 커널 잠금을 건 뒤 Node 본체로 exec 한다. 잠금 수명 = 본체(와 fd 9 를 물려받은 자식) 수명.
-     🔴 강제 종료 · 전원 · 재부팅이면 커널이 푼다 — 사람이 치울 잠금이 없다(옛 wx 잠금의 STALE_HELD 는 없앴다).
-     잠금을 못 얻은 실행은 follow-up 표식 하나만 남기고 물러난다(겹친 깨움은 한 번으로 합친다 · 최대 1회).
-     🔴 이 잠금은 **한 기계 안**에서만 유효하다. 기계 사이의 중복 적재는
-     DB 쪽 dedup(provenanceKey + 트랜잭션)이 막는다.
+  하는 일: 디스크에 있는 미처리 수집 결과를 분류 → 판정 → 글쓴이 → 초안 → 검수 → 대기열까지 잇는다.
+  🔴 수집하지 않는다 · 발행하지 않는다. 수집이 실패한 바퀴에도 뜬다 — 있는 입력만 처리하고, 없으면 정상 no-op 이다.
+  🔴 kill switch 는 .env.local 의 SORAN_SUPPLY_PROCESS_ENABLED=true — plist 를 지우지 않고 멈춘다.
+  🔴 동시 실행은 러너의 커널 lease 가 막는다(scripts/lib/supply-lease.mts) — 강제 종료 · 재부팅이면 커널이 푼다.
+  🔴 launchd 기본 PATH 에는 nvm 의 node 가 없다(없으면 exit 78) · 로그는 Documents 밖(__LOGDIR__ · TCC).
+  🔴 RunAtLoad 를 쓰지 않는다 — load 하는 순간 모델을 부르는 것은 의도가 아니다.
 -->
 <plist version="1.0">
 <dict>
@@ -64,10 +31,6 @@
     <string>--live</string>
   </array>
 
-  <!-- 🔴 launchd 기본 PATH 는 /usr/bin:/bin:/usr/sbin:/sbin 뿐이다. nvm 의 node 가 없다.
-       npx 의 shebang 이 #!/usr/bin/env node 라 PATH 를 주지 않으면 프로세스가 뜨기도 전에
-       exit 78 로 죽는다 — stdout·stderr 어디에도 원인이 남지 않아 "등록은 됐는데 아무 일도
-       안 일어나는" 상태가 된다. 2026-09-07 첫 kickstart 에서 실측했다. -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -79,23 +42,24 @@
 
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>35</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>35</integer></dict>
   </array>
 
-  <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 모델을 부르는 것은 의도가 아니다 -->
   <key>RunAtLoad</key>
   <false/>
 
-  <!-- 🔴 로그를 ~/Documents 아래 두면 launchd 가 그 파일을 열지 못해 역시 exit 78 이다.
-       macOS 의 Documents 접근 보호(TCC) 때문이다. __LOGDIR__ 은 Documents 밖이어야 한다
-       (기본 $HOME/Library/Logs/soransoran). ~ 나 $HOME 은 plist 안에서 확장되지 않으므로
-       설치 스크립트가 **절대경로로 치환**한다. -->
   <key>StandardOutPath</key>
   <string>__LOGDIR__/supply-process.log</string>
   <key>StandardErrorPath</key>

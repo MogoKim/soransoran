@@ -7,7 +7,7 @@
  *   수집 10회 중 6회가 06:15 전이어서 한밤중 글("잠이 안 와서…")이 아침 08:00 에 나갔다.
  *
  *   그래서 **바퀴 시각 하나**가 뒤의 단계를 전부 끌고 간다.
- *   수집 job · 글 만들기 창 · 비용 증거의 정상 회차 · 공개 몫이 이 표에서 계산된다.
+ *   수집 job · 공급(글 만들기) job 과 그 정기 회차 창 · 예산 배분 · 공개 몫이 이 표에서 계산된다.
  *   시각을 바꿀 때 고칠 곳은 이 표 하나다 — 다른 파일에 시각을 다시 적지 않는다.
  *
  * 🔴 `weight` 는 하루 30편을 시간대에 나눈 창업자 결정값이다(새벽 3 · 아침 8 · 점심 6 · 오후 7 · 저녁 6).
@@ -43,6 +43,20 @@ export const CYCLES: readonly Cycle[] = Object.freeze([
 ] as const)
 
 export const CYCLE_MINUTES: readonly number[] = Object.freeze(CYCLES.map((c) => c.minute))
+
+/**
+ * 공급(글 만들기) 회차는 **바퀴마다 한 번, 수집이 시작되고 이만큼 뒤에** 뜬다.
+ *
+ * 막는 사고: 공급이 수집보다 먼저(또는 같은 분에) 뜨면 그 바퀴의 글이 아직 파일에 없어 다음 회차까지
+ *   몇 시간을 기다린다(옛 08:15 공급은 08:20 수집보다 5분 먼저 떴다).
+ * 값의 근거: 두 카페를 차례로 도는 수집 한 바퀴의 예상 소요가 7~10분이다. 수집이 이보다 늦게 끝난 바퀴의 글은
+ *   잃지 않는다 — 수집기는 결과 파일을 한 번에 내놓고(원자적 rename), 못 본 파일은 다음 공급 회차가 받는다.
+ * 🔴 공급 job 시각 · 정기 회차 창 · 예산 배분 · 비용 증거가 전부 이 값과 `CYCLES` 에서 계산된다.
+ */
+export const SUPPLY_AFTER_COLLECT_MINUTES = 15
+
+/** 공급 회차가 뜨는 분(KST 자정 기준) — 바퀴 순서 그대로 */
+export const SUPPLY_CYCLE_MINUTES: readonly number[] = Object.freeze(CYCLES.map((c) => c.minute + SUPPLY_AFTER_COLLECT_MINUTES))
 
 const DAY_MINUTES = 24 * 60
 

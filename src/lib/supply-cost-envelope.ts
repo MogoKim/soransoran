@@ -7,9 +7,7 @@
  * preflight와 운영 증거는 반드시 이 함수 하나를 공유한다.
  */
 
-import {
-  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, supplyRunSlotMinuteOf,
-} from './supply-schedule-contract'
+import { SUPPLY_RUN_WINDOW_MS } from './supply-schedule-contract'
 import { budgetWindowShadowOf, isNaturalScheduledRunTag, parseRunTokenShadowTag } from './supply-run-token'
 import {
   ACTIVE_RECOVERY_PAID_CUTOFF_MINUTE_KST, ACTIVE_RECOVERY_START_MINUTE_KST, kstMinuteOf,
@@ -171,8 +169,12 @@ export type SupplyCostScheduledSlot = { kstDate: string; minute: number }
 const KST_OFFSET_MS = 9 * 60 * 60_000
 
 /**
- * 장부의 요청 시각으로 회차를 재추측하지 않고, 런처가 UTC로 기록한 회차 id와
- * KST 슬롯 태그가 같은 자연 예약 슬롯을 말하는지 본다.
+ * 장부 줄이 적은 정기 회차(`runSlot`)와 런처가 UTC 로 기록한 회차 id 가 같은 회차를 말하는지 본다 —
+ * 회차 id 의 시각이 그 회차의 창(`SUPPLY_RUN_WINDOW_MS`) 안이어야 한다.
+ *
+ * 🔴 **지금 시각표(`SUPPLY_RUN_SLOTS_KST`)와 대조하지 않는다.** 그 요청을 정기로 판정한 것은 요청 순간의
+ *    시각표다(`supplyRunKindOf`). 여기서 지금 표와 다시 맞추면 바퀴 시각을 바꾼 날, 그 전에 쌓인 장부가
+ *    전부 "귀속 불명"이 되어 비용 증거가 모름으로 닫힌다. 증거는 기록된 값끼리의 정합만 본다.
  */
 export function supplyCostScheduledSlotOf(i: {
   runId: string
@@ -180,8 +182,13 @@ export function supplyCostScheduledSlotOf(i: {
   runSlot?: string | null
 }): SupplyCostScheduledSlot | null {
   if (i.runKind !== 'scheduled' || typeof i.runSlot !== 'string') return null
+  const label = /^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2})$/.exec(i.runSlot)
   const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-[jd]$/.exec(i.runId)
-  if (m === null) return null
+  if (label === null || m === null) return null
+  const kstDate = label[1]!
+  const slotHour = Number(label[2])
+  const slotMinuteOfHour = Number(label[3])
+  if (!strictKstDate(kstDate) || slotHour > 23 || slotMinuteOfHour > 59) return null
   const year = Number(m[1])
   const month = Number(m[2])
   const day = Number(m[3])
@@ -195,18 +202,13 @@ export function supplyCostScheduledSlotOf(i: {
   const utc = new Date(utcMs)
   if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day
     || utc.getUTCHours() !== hour || utc.getUTCMinutes() !== minute || utc.getUTCSeconds() !== second) return null
-  const kst = new Date(utcMs + KST_OFFSET_MS)
-  const kstDate = kst.toISOString().slice(0, 10)
-  const slotMinute = supplyRunSlotMinuteOf(
-    kst.getUTCHours() * 60 + kst.getUTCMinutes(), SUPPLY_RUN_SLOTS_KST,
-  )
-  if (slotMinute === null) return null
-  const label = `${kstDate} ${String(Math.floor(slotMinute / 60)).padStart(2, '0')}:${String(slotMinute % 60).padStart(2, '0')}`
-  return i.runSlot === label ? { kstDate, minute: slotMinute } : null
+  const slotStartMs = Date.parse(`${kstDate}T${label[2]}:${label[3]}:00.000+09:00`)
+  if (!Number.isFinite(slotStartMs) || utcMs < slotStartMs || utcMs >= slotStartMs + SUPPLY_RUN_WINDOW_MS) return null
+  return { kstDate, minute: slotHour * 60 + slotMinuteOfHour }
 }
 
 /**
- * 장부 요청이 태그된 자연 슬롯의 실제 45분 창 안에서 시작했는지 본다.
+ * 장부 요청이 태그된 정기 회차의 창 안에서 시작했는지 본다.
  * runId가 창 안에 있어도 유료 요청 자체가 창 밖에서 시작했다면 같은 자연 회차 증거가 아니다.
  */
 export function supplyCostRequestStartedInScheduledWindow(i: {
@@ -255,7 +257,7 @@ export function supplyCostRecordedBudgetCapOf(i: {
  * 시행일 이후 유료 공급 요청 한 줄의 비용 provenance.
  * preflight 비용 귀속과 당일 proof가 이 판정을 공유해야 아침 PASS가 밤 UNKNOWN으로 뒤집히지 않는다.
  * 상태·cohort 소속은 각 소비자가 별도로 확인하고, 여기서는 요청 자체의 불변 메타데이터와
- * 태그된 자연 슬롯의 실제 45분 시작 경계를 본다.
+ * 태그된 정기 회차 창의 시작 경계를 본다.
  */
 export function supplyCostRequestMetadataEligible(i: {
   startedAt: string
@@ -350,7 +352,7 @@ export type SupplyCostEnvelopeInput = {
   recoveryUsageUnknownRequests?: number
   /** 실제 정산액이 요청 전 예약액을 넘은 요청 — 1건이라도 알려진 비용 결함이다 */
   overrunRequests: number
-  /** 현재 계약·원천·자연 proof 회차·양수 예약을 증명하지 못한 요청 수 */
+  /** 현재 계약·원천·정기 회차·양수 예약을 증명하지 못한 요청 수 */
   ineligibleRequests: number
   /** 정산액 + 미상 예약액 또는 목표 단계 투영 위험액 */
   riskUsd: number | null
@@ -365,12 +367,11 @@ export type SupplyCostEnvelopeInput = {
 
 export type SupplyCostEvidence = {
   /**
-   * 하루 공급 장부의 중대 무결성. 늦은 준비 회차의 단순 사용량 미상·상한 소진은 제외하고,
-   * 장부 판독 실패·정산 보류·예약 초과·기록 예산 초과는 bad다. 기록 예산 provenance가
+   * 하루 공급 장부의 중대 무결성. 장부 판독 실패·정산 보류·예약 초과·기록 예산 초과는 bad다. 기록 예산 provenance가
    * 불완전하면 unknown이다.
    */
   wholeDayCriticalHealth: 'ok' | 'bad' | 'unknown'
-  /** 시행일부터 쓰는 자연 proof 슬롯 비용 표본 */
+  /** 시행일부터 쓰는 그날 정기 회차 전체의 비용 표본 */
   envelope: SupplyCostEnvelopeInput
 }
 
