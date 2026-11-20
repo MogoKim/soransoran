@@ -138,6 +138,10 @@ function entry(o: Partial<LedgerEntry>): LedgerEntry {
   const mid = protectAt(SLOT_MIN[1]! + 2, LABEL, own)
   check('회차는 자기가 이미 쓴 것만큼만 자기 몫이 준다(다른 회차 몫은 그대로)', near(roomOf(mid, own), CAP / (N - 1) - 0.05), `$${roomOf(mid, own).toFixed(4)}`)
 
+  const manualDuring = protectAt(SLOT_MIN[1]! + 3, {}, own)
+  check('도는 회차가 이미 쓴 금액은 손 실행에게 남기는 몫에서 한 번만 빠진다(쓸 수 있는 금액은 0 — 음수가 아니다)',
+    near(manualDuring.protect.reservedForOthersUsd, CAP - 0.05) && near(roomOf(manualDuring, own), 0), `$${manualDuring.protect.reservedForOthersUsd.toFixed(4)}`)
+
   const manual = protectAt(SLOT_MIN[4]! + 1, {}, [])
   check('손 실행은 남은 회차 전부의 몫을 남긴다 — 쓸 수 있는 금액 0', manual.kind === 'manual' && near(roomOf(manual, []), 0))
 
@@ -259,6 +263,11 @@ try {
     const rLabel = evidenceOf(DAY, [...good, wrongLabel])
     check('회차 id 와 회차 표식이 서로 다른 회차를 말하는 요청 → COST_UNKNOWN', rLabel.codes.includes('COST_UNKNOWN'), costCodes(rLabel.codes))
 
+    // 표식 · 요청 시각 · 예산 창은 전부 넷째 회차인데 회차 id 만 첫 회차 시각이다
+    const rRunId = evidenceOf(DAY, [...good, { ...otherSlot, runId: good[0]!.runId }])
+    check('회차 id 의 시각이 표식한 회차의 창 밖인 요청 → COST_UNKNOWN',
+      rRunId.codes.includes('COST_UNKNOWN') && rRunId.evidence?.envelope.ineligibleRequests === 1, costCodes(rRunId.codes))
+
     const lateStart = at(DAY, SLOT_MIN[3]! + WINDOW_MIN + 1)
     const late = scheduledLine(DAY, SLOT_MIN[3]!, 92, SUPPLY_RUN_SLOTS_KST, { startedAt: lateStart.toISOString() })
     const rLate = evidenceOf(DAY, [...good, { ...late, runKind: 'scheduled', runSlot: otherSlot.runSlot }])
@@ -266,7 +275,8 @@ try {
 
     const over = scheduledLine(DAY, SLOT_MIN[3]!, 93, SUPPLY_RUN_SLOTS_KST, { settledUsd: 0.02, reservedUsd: 0.006 })
     const rOver = evidenceOf(DAY, [...good, over])
-    check('정산액이 예약액을 넘은 요청 → COST_BAD', rOver.codes.includes('COST_BAD'), costCodes(rOver.codes))
+    check('정산액이 예약액을 넘은 요청 → COST_BAD · 비용 표본에도 초과 1건으로 남는다',
+      rOver.codes.includes('COST_BAD') && rOver.evidence?.envelope.overrunRequests === 1, costCodes(rOver.codes))
   }
 
   // ─────────────────────────────────────────────────────────

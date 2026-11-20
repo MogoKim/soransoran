@@ -184,8 +184,10 @@ npx tsx scripts/micro-seed-navercafe-run.mts
 🔴 82cook · 유머 게시판 수집은 끝났다 — 수집기 · 템플릿을 지웠고 옛 job(카페별 `…-multi` 둘 · 82cook 둘)은
 `RETIRED_JOBS` 라 배포가 내린다. 지난 라운드에 뺀 후보 카페(dlxogns01 · masanmam · goondae · yeowooya)는 실행 템플릿이 없다.
 
-🔴 공급 처리(`supply-process`) 시각의 정본은 아직 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
-`SUPPLY_PROCESS_SLOTS` 다 — fixture 가 render 한 실제 plist 와 대조한다.
+🔴 공급 처리(`supply-process`) 시각도 바퀴 표에서 계산된다 — 바퀴마다 수집 시작 뒤 `SUPPLY_AFTER_COLLECT_MINUTES` 분
+([`src/lib/cycle-schedule.ts`](../../../src/lib/cycle-schedule.ts)). 템플릿은 손으로 고치지 않는다: 바퀴나 지연을 바꾸면
+`npm run launchd:supply-template -- --write` 로 다시 만들고, `launchd:template-check` 가 "템플릿 == 생성 결과" 와
+"템플릿이 띄우는 분마다 러너가 정기 회차로 판정한다" 를 본다.
 
 ## 🔴 상시 job 시각표 (전부 KST)
 
@@ -195,7 +197,7 @@ npx tsx scripts/micro-seed-navercafe-run.mts
 | job (`com.soransoran.` 생략) | 하는 일 | 언제 |
 |---|---|---|
 | `navercafe-collect` | 네이버 카페 수집(원천 목록을 차례로) | 바퀴 시각 — `cycle-schedule.ts` 의 `CYCLES` |
-| `supply-process` | 공급 처리 | 06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 (7회) |
+| `supply-process` | 공급 처리(글 만들기) | 바퀴마다 수집 시작 뒤 `SUPPLY_AFTER_COLLECT_MINUTES` 분 — `cycle-schedule.ts` |
 | `stage-controller` | 그날 단계 결정 | 07:00 · 07:20 · 07:40 · 07:55 · 07:58 (5회 — 결정은 하루 한 번만 저장된다) |
 | `original-post-runner` | 글 발행 | 08:00~22:00 10분마다 (85회 · 한 회차 1편) |
 | `persona-comment-runner` | 첫 댓글 · 추가 댓글 | 08:07~22:00 약 20분마다 (43회) |
@@ -273,12 +275,10 @@ npm run supply:process -- --simulate-stock=5  # 다가오는 슬롯 중 eligible
 JOB=com.soransoran.supply-process
 ```
 
-실행 시각은 **06:15 · 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST** 7회다.
-🔴 06:15는 00:30~05:30 target-date 네이버 수집분을 07:00 controller 전에 처리한다.
-나머지는 **수집 슬롯 뒤에 붙인다** — 07:00/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
-입력이 생긴 뒤에 비워야 대기 시간이 줄고, 그만큼 APPROVED 순증이 빨라진다.
-🔴 22:15가 마지막 처리 회차다. 상시 호스트는 이후에도 AC 전원·로그인·덮개 열림·keep-awake를
-유지해 다음 날 00:30~05:30 target-date 수집을 이어 간다.
+실행 시각은 수집 바퀴마다 한 번이다 — 그 바퀴의 수집이 시작되고 `SUPPLY_AFTER_COLLECT_MINUTES` 분 뒤(`cycle-schedule.ts`).
+입력이 생긴 직후에 비워야 수집된 글이 그 시간대 안에 대기열까지 간다.
+🔴 템플릿의 시각과 러너의 정기 회차 창은 같은 표에서 나온다. 설치된 plist 가 옛 시각이면 job 은 뜨지만 러너가 "창 밖에서 시작한
+회차"로 보고 유료 요청을 한 건도 보내지 않는다 — 배포 때 이 job 은 반드시 새 템플릿으로 다시 올린다(`runtime:deploy` 가 한다).
 
 🔴 **미처리 입력이 없으면 정상 no-op 이다** — 네트워크 0 · LLM 0 · DB write 0.
 조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.

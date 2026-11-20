@@ -260,13 +260,15 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && goalLiveEarly.includes('열린 단계는 결정 행의 구조화된 `CERTIFIED` 칸이 다음 날로 잇고')
     && !goalLiveEarly.includes('READER_READY')
     && !goalLiveEarly.includes('같은 단계의 증명일을 다시 잡는다')])
-  out.push(['canon §3.4 가 preflight·proof 공용 bounded envelope와 proof 슬롯 경계를 고정한다',
+  out.push(['canon §3.4 가 preflight·proof 공용 bounded envelope와 비용 표본(그날 정기 회차 전부 · 기록된 값끼리의 정합)을 고정한다',
     d100Goal.includes('정산 요청 20건 이상')
     && d100Goal.includes('정산 비율 95% 이상')
     && d100Goal.includes('절대 미상 건수 상한을 따로 두지 않는다')
     && d100Goal.includes('`supply-cost-envelope-v2`')
-    && d100Goal.includes('`06:15·08:15·12:15·14:15·17:15`')
-    && d100Goal.includes('`21:15·22:15`는 다음날 준비 회차')
+    && d100Goal.includes('하루 Dn proof의 비용 표본은 그날 정기 공급 회차 전부다')
+    && d100Goal.includes('지금 시각표와 다시 대조하지 않는다')
+    // 🔴 옛 "당일용 5회 / 다음 날용 2회" 구분과 손으로 적은 공급 시각이 정책 본문에 다시 나오면 실패한다
+    && !activeTextOf(d100Goal).includes('다음날 준비 회차') && !activeTextOf(d100Goal).includes('`06:15·08:15·12:15·14:15·17:15`')
     && d100Goal.includes('`runId`와 `runSlot`이 같은 자연 예약 슬롯')
     && d100Goal.includes('producer가 `SCHEDULED_WINDOW_CLOSED`로 차단')
     && d100Goal.includes('처음부터 수동·event·복구인 요청은')
@@ -280,11 +282,15 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     && d100Goal.includes('proof·preflight 표본의 provenance 책임')
     && d100Goal.includes('2026-11-05 KST부터만')
     && d100Goal.includes('그 이전 증거는 당시의 하루 전체 `usageUnknown=0`')])
+  out.push(['canon §3.2.1 이 바퀴마다 공급 · 남은 예산 ÷ 남은 회차를 적고 공급 시각을 다시 적지 않는다',
+    ['공급 회차는 수집 바퀴마다 한 번', '`SUPPLY_AFTER_COLLECT_MINUTES`', '예산 배분은 "남은 예산 ÷ 남은 회차" 하나다',
+      '수집과 공급은 서로를 부르지 않는다'].every((t) => d100Goal.includes(t))
+    && !activeTextOf(d100Goal).includes('proof-first') && !activeTextOf(d100Goal).includes('하루 7회')])
   out.push(['canon §3 이 생성 수요를 가장 가까운 실제 공개 기회로 정한다',
     d100Goal.includes('가장 가까운 실제 공개 기회')
     && d100Goal.includes('Persona 여력도 같은')])
   out.push(['canon §3.3 이 공급 자연 예약 · 댓글 event-assisted · 공통 lease · exactly-once 금지를 적는다',
-    ['일반 공급 owner는 하루 7회 고정 schedule 하나다', '공개 commit 이 첫 댓글을 깨운다', '정기 댓글 회차가 fallback',
+    ['일반 공급 owner는 바퀴 표에서 계산한 고정 schedule 하나다', '공개 commit 이 첫 댓글을 깨운다', '정기 댓글 회차가 fallback',
       '실행 lease/token', '예외 공급 경로는 없다',
       'exactly-once 시스템을 새로 만들지 않는다']
       .every((t) => d100Goal.includes(t))])
@@ -379,8 +385,8 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     ['**비용 단가의 표본**', '하루 목표 ÷ 3 올림', '같은 72시간 창의 모든 품질 계약', '합치는 것은 비용 단가 한 칸뿐이다',
       '재고와 수율은 현재 품질 계약 표본만 센다'].every((t) => d100Goal.includes(t))
     && !d100Goal.includes('rolling 72h cohort') && !d100Goal.includes('완전 정산된 소표본을 이유 없이 막지 않되')])
-  out.push(['canon 이 06:15 공급 회차의 수요 단계 예외를 §3 과 §6 에 적는다 — 발행·댓글은 그날 결정만',
-    d100Goal.includes('**06:15 공급 회차의 수요 단계**') && d100Goal.includes('공급 수요만 전날 결정이 지킨 단계로 센다')
+  out.push(['canon 이 결정 전 공급 회차의 수요 단계 예외를 §3 과 §6 에 적는다 — 발행·댓글은 그날 결정만',
+    d100Goal.includes('**결정 전 공급 회차의 수요 단계**') && d100Goal.includes('공급 수요만 전날 결정이 지킨 단계로 센다')
     && d100Goal.split('발행과 댓글은 언제나 그날 결정만 따른다').length - 1 === 2])
   out.push(['canon §13 이 82cook 을 수집원에서 뺐다고 적고 필수 수집원이라고 하지 않는다',
     d100Goal.includes('## 13. 82cook — 수집원에서 뺐다') && !d100Goal.includes('필수 수집원이다') && !d100Goal.includes('향후 82cook')])

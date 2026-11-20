@@ -55,8 +55,12 @@ export const SHADOW_PACE_LEAD_SLOTS = 2
 /** 선택 트레이스가 이보다 오래됐으면 신선 원천 용량을 모른다(가상 지출 0) */
 export const SHADOW_TRACE_MAX_AGE_MS = 3 * 3_600_000
 
-/** writer 관측 창 — 🔴 권위가 아니다. 트리거는 마지막 자연 공급 회차의 완료다 */
-export const SHADOW_WRITER_EXPECTED_WINDOW_KST = '22:45-23:00'
+/** writer 관측 창(마지막 정기 공급 회차 시각 + 30~45분) — 🔴 권위가 아니다. 트리거는 마지막 자연 공급 회차의 완료다 */
+export const SHADOW_WRITER_EXPECTED_WINDOW_KST = ((): string => {
+  const last = Math.max(...SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute))
+  const hhmm = (m: number): string => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  return `${hhmm(last + 30)}-${hhmm(last + 45)}`
+})()
 
 // ─────────────────────────────────────────────────────────
 // S1 — 봉투 · 하루 계획

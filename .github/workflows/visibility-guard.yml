@@ -989,6 +989,8 @@ jobs:
       - name: launchd 템플릿 (PATH · 로그 위치 · placeholder · 불변 계약)
         run: |
           npm run launchd:template-check
+          npm run cycle:schedule-check
+          npm run supply:cycle-check
           npm run publish:heartbeat-check
 
       # 🔴 예약 실행이 개발 브랜치를 돌면 여기서 FAIL 한다.

@@ -232,6 +232,7 @@
     "persona:comment-cap-apply": "tsx scripts/persona-comment-cap-apply.mts",
     "persona:comment-cap-check": "tsx scripts/persona-comment-cap-check.mts",
     "cycle:schedule-check": "tsx scripts/cycle-schedule-check.mts",
+    "supply:cycle-check": "tsx scripts/supply-cycle-check.mts && tsx scripts/supply-cycle-mutation.mts",
     "persona:comment-cap-db-check": "tsx scripts/persona-comment-cap-db-check.mts",
     "persona:p15-remediation": "tsx scripts/persona-p15-remediation.mts",
     "persona:p15-remediation-check": "tsx scripts/persona-p15-remediation-check.mts",

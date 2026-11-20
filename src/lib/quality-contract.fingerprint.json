@@ -11,7 +11,7 @@
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "28cc4da6a68ed424fda043aa11ccc9cf7acc15fed16ab2f9845d073c3230f678",
     "src/lib/auto-ready-v2.ts": "bdb3e1901bb2f89ea377904f852b8a38e1bee71fc8db9782c8b930db4d03fc68",
-    "src/lib/supply-schedule-contract.ts": "a75d28635e2f90d854d88b879f7a619b75a59384868d72120a29731e517136a4",
+    "src/lib/supply-schedule-contract.ts": "38d1cb70a61cd2101c34861cdc3161d073f725bb3a02f72fffaa60d7802b617f",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "7f3a2d11544fcb9d6a0a5c5d3e9b036405d29cfda897b2bb19b7e019b3b604aa",
@@ -35,13 +35,10 @@
     "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v28 → quality-v29",
+    "kind": "behaviorUnchanged",
+    "reason": "공급 회차 시각을 cycle-schedule 에서 계산하도록 옮기고 증명/늦은 회차 상수·지출 추정을 지웠다 — 품질 판정 값(AUTO_READY_CONTRACT · 회차당 상한)은 그대로",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/content-core/pipeline.ts",
-      "src/lib/micro-seed-auto-draft.ts",
-      "scripts/lib/content-core-prompts.mts"
+      "src/lib/supply-schedule-contract.ts"
     ]
   }
 }
