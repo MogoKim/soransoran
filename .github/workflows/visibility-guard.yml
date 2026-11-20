@@ -682,11 +682,13 @@ jobs:
       #    운영 기계 초안 4편(사진 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제)이
       #    `runContentCore → pickV2` 에서 구조화된 사유로 AUTO_HOLD 되는지, 대조 2편은 채택되는지 본다.
       #    가짜 provider · DB 0 · 네트워크 0.
+      # 🔴 **원문 꼴 재기**(quality-v30)도 같은 자리다 — 생성 요청에 실리는 꼴이 원문 본문의 값과 같은지 본다.
       - name: Content Core v2 세로 경로 (근거·소재·화자 자격·말투·검수 완주)
         if: needs.scope.outputs.heavy == 'true'
         run: |
           npm run check:content-core-v2
           npm run check:draft-life-gates
+          npm run content:source-form-check
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —

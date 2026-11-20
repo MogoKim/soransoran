@@ -141,6 +141,7 @@
     "check:generation-loss": "tsx scripts/generation-loss-check.mts",
     "check:pre-review-dominance-mutation": "tsx scripts/pre-review-dominance-mutation.mts",
     "check:draft-life-gates": "tsx scripts/draft-life-gates-check.mts",
+    "content:source-form-check": "tsx scripts/source-form-check.mts",
     "check:draft-life-gates-db": "tsx scripts/draft-life-gates-db-check.mts",
     "micro-seed:auto-judge": "tsx scripts/micro-seed-auto-judge.mts",
     "micro-seed:auto-judge-check": "tsx scripts/micro-seed-auto-judge-check.mts",
