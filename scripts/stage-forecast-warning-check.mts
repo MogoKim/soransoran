@@ -30,6 +30,7 @@ import {
   RUNNER_GRID, recoveryIdentityOf, recoveryIdentityDateOf, preflightCostSummaryOf, NO_RECOVERY_CLAIM,
 } from './lib/stage-preflight-facts.mjs'
 import { slotTimesOn } from '../src/lib/stage-ladder-generic'
+import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 
 let pass = 0
 let fail = 0
@@ -68,14 +69,15 @@ const forecastCases: readonly [ForecastWarningCode, Partial<PreflightFacts>][] =
   ['OPPORTUNITY_UNKNOWN', { slotValidOpportunities: null }],
   ['THROUGHPUT_SHORT', { readyCohort: cohort({ sources: 4000 }) }],
   ['THROUGHPUT_UNKNOWN', { readyCohort: cohort({ sources: 0 }) }],
-  // 공개 N · 결말 모름 N — 용량이 필요량 하한은 채우고 상한은 못 채운다(비용 표본은 충분)
-  ['READY_REQUIREMENT_UNKNOWN', { readyCohort: cohort({ unknown: N, sources: N * 10 }) }],
+  // 공개 N · 결말 모름 N — 용량이 필요량 하한(N)은 채우고 상한(2N)은 못 채운다(비용 표본은 충분).
+  // 원천 수는 하루 공급 묶음(회차당 묶음 × 하루 정기 회차 수)에서 계산한다: raw 2N 건이 정확히 용량 N 이 되는 원천 수.
+  ['READY_REQUIREMENT_UNKNOWN', { readyCohort: cohort({ unknown: N, sources: 2 * SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY }) }],
 ]
 for (const [code, patch] of forecastCases) {
   const v = pf(patch)
   check(`🔴 ${code} 는 막지 않는 예측 경고다 — 판정 PASS · forecastWarnings 에만 있다`,
     v.verdict === 'PASS' && has(v.forecastWarnings, code) && !has(v.codes, code),
-    JSON.stringify({ v: v.verdict, c: v.codes, f: v.forecastWarnings }))
+    JSON.stringify({ v: v.verdict, c: v.codes, f: v.forecastWarnings, counts: v.counts }))
 }
 {
   const v = pf({ latencyP50H: null, latencyP90H: null })

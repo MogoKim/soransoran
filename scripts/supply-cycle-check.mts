@@ -101,13 +101,15 @@ console.log('\n③ 아침 결정은 직전 공급 회차를 기다렸다가 판�
 // ─────────────────────────────────────────────────────────
 console.log('\n④ 예산 — 남은 예산 ÷ 남은 회차')
 // ─────────────────────────────────────────────────────────
-const entry = (o: Partial<LedgerEntry>): LedgerEntry => ({
+function entry(o: Partial<LedgerEntry>): LedgerEntry {
+  return {
   runId: 'x', stage: 'draftGen', attemptId: 'a', requestNo: 0,
   provider: 'google', apiModelId: 'm', model: 'm', status: 'settled', blockCode: null,
   countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006, inputTokens: 100, outputTokens: 200,
   cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [], settledUsd: 0.004, pricingVersion: null,
   startedAt: '', endedAt: null, errorCode: null, ...o,
-})
+  }
+}
 {
   const CAP = 1.8
   const N = SLOT_MIN.length

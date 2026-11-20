@@ -41,14 +41,72 @@ const mutations: readonly Mutation[] = [
     check: RESERVE_CHECK,
   },
   {
-    name: '21:15·22:15 준비 슬롯을 당일 proof에 다시 넣었다',
+    name: '정기 회차 귀속을 증명하지 못한 유료 요청을 귀속 불명으로 닫지 않고 조용히 뺐다',
     file: LEDGER,
-    from: `  const lateMinutes = new Set([...scheduledMinutes].filter((minute) => !proofMinutes.has(minute)))
-  const proofStartMinute = Math.min(...proofMinutes)
-  const proofEndMinute = Math.max(...proofMinutes) + 45`,
-    to: `  const lateMinutes = new Set<number>()
-  const proofStartMinute = Math.min(...proofMinutes)
-  const proofEndMinute = Math.max(...scheduledMinutes) + 45`,
+    from: `    const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
+    if (!currentMetadata) {
+      out.ineligibleRequests += 1
+      continue
+    }`,
+    to: `    const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
+    if (!currentMetadata) continue`,
+    check: EVIDENCE_CHECK,
+  },
+  {
+    name: '밤(21시 이후) 회차 요청을 그날 비용 표본에서 다시 뺐다',
+    file: LEDGER,
+    from: `    const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
+`,
+    to: `    if (new Date(started.getTime() + 9 * 3_600_000).getUTCHours() >= 21) continue
+    const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
+`,
+    check: EVIDENCE_CHECK,
+  },
+  {
+    name: '밤(21시 이후) 회차 요청을 그날 비용 표본에서 다시 뺐다 — 장부 파일 왕복',
+    file: LEDGER,
+    from: `    const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
+`,
+    to: `    if (new Date(started.getTime() + 9 * 3_600_000).getUTCHours() >= 21) continue
+    const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
+`,
+    check: OPS_CHECK,
+  },
+  {
+    name: '회차 표식과 runId 의 창 정합을 보지 않았다',
+    file: ENVELOPE,
+    from: 'if (!Number.isFinite(slotStartMs) || utcMs < slotStartMs || utcMs >= slotStartMs + SUPPLY_RUN_WINDOW_MS) return null',
+    to: 'if (!Number.isFinite(slotStartMs)) return null',
+    check: EVIDENCE_CHECK,
+  },
+  {
+    name: '표식 회차보다 먼저 뜬 runId 를 그 회차로 인정했다',
+    file: ENVELOPE,
+    from: 'if (!Number.isFinite(slotStartMs) || utcMs < slotStartMs || utcMs >= slotStartMs + SUPPLY_RUN_WINDOW_MS) return null',
+    to: 'if (!Number.isFinite(slotStartMs) || utcMs >= slotStartMs + SUPPLY_RUN_WINDOW_MS) return null',
+    check: EVIDENCE_CHECK,
+  },
+  {
+    name: '회차 창 끝 시각의 runId 를 창 안으로 인정했다',
+    file: ENVELOPE,
+    from: 'if (!Number.isFinite(slotStartMs) || utcMs < slotStartMs || utcMs >= slotStartMs + SUPPLY_RUN_WINDOW_MS) return null',
+    to: 'if (!Number.isFinite(slotStartMs) || utcMs < slotStartMs || utcMs > slotStartMs + SUPPLY_RUN_WINDOW_MS) return null',
+    check: EVIDENCE_CHECK,
+  },
+  {
+    name: '지금 시각표에 없는 회차 표식(옛 14:15)을 정합이어도 거절했다',
+    file: ENVELOPE,
+    from: '  return { kstDate, minute: slotHour * 60 + slotMinuteOfHour }',
+    to: `  if (slotHour * 60 + slotMinuteOfHour === 14 * 60 + 15) return null
+  return { kstDate, minute: slotHour * 60 + slotMinuteOfHour }`,
+    check: EVIDENCE_CHECK,
+  },
+  {
+    name: '회차 창 밖에서 시작한 유료 요청을 그 회차 표본으로 인정했다',
+    file: ENVELOPE,
+    from: `    && scheduled !== null && scheduled.kstDate === kstDate
+    && supplyCostRequestStartedInScheduledWindow(i)`,
+    to: '    && scheduled !== null && scheduled.kstDate === kstDate',
     check: EVIDENCE_CHECK,
   },
   {
@@ -59,7 +117,7 @@ const mutations: readonly Mutation[] = [
     check: EVIDENCE_CHECK,
   },
   {
-    name: '늦은 회차의 whole-day 예산 초과를 무시했다',
+    name: 'whole-day 총위험이 기록 예산을 넘은 것을 무시했다',
     file: SIGNALS,
     from: 'const wholeDayOverBudget = wholeDayCap !== null && wholeDayRisk > wholeDayCap + 1e-9',
     to: 'const wholeDayOverBudget = false',

@@ -12,14 +12,15 @@ import { PROFILES } from '../src/lib/scale-profile'
 import { prepareCandidates } from '../src/lib/supply-candidates'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
 import {
-  SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_PROOF_RUN_SLOTS_KST,
+  SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST,
   SUPPLY_BUDGET_ENV_NAMES,
   SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
   SUPPLY_WORKSET_PER_RUN, SUPPLY_RESERVE_HEADROOM, SUPPLY_ENV_FILE_REL, SUPPLY_ENABLE_ENV,
-  SUPPLY_JUDGE_REQUESTS_PER_RUN, SUPPLY_DRAFT_REQUESTS_PER_RUN, estimateSupplySpend,
+  SUPPLY_JUDGE_REQUESTS_PER_RUN, SUPPLY_DRAFT_REQUESTS_PER_RUN,
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
 import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
+import { CYCLES } from '../src/lib/cycle-schedule'
 import {
   WORKSET_DEFAULT_LIMIT, WORKSET_MAX_LIMIT, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   judgeStageBudget, resolveWorksetLimit,
@@ -179,18 +180,21 @@ console.log('\n② 🔴 🔴 (2026-09-30) 기간형(window) · 하루 canary 경
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 잡는 것')
+console.log('\n③ 🔴 🔴 공급 회차 — 바퀴마다 한 번 · 예산 env 경로 · 못 잡는 것')
 // ─────────────────────────────────────────────────────────
 {
   const tpl = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
   const hours = [...tpl.matchAll(/<key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer>/g)]
     .map((m) => ({ hour: Number(m[1]), minute: Number(m[2]) }))
-  check('🔴 🔴 **정본 회차 수가 템플릿과 같다 — 7회**',
-    hours.length === SUPPLY_RUNS_PER_DAY && SUPPLY_RUNS_PER_DAY === 7,
-    `템플릿 ${hours.length} · 정본 ${SUPPLY_RUNS_PER_DAY}`)
-  check('🔴 🔴 **슬롯 시각도 같다 — 2회라고 부르지 않는다**',
-    JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
-    JSON.stringify(hours))
+  check('🔴 🔴 **정기 회차는 수집 바퀴마다 하나다 — 회차 수를 따로 적지 않는다**',
+    SUPPLY_RUNS_PER_DAY === CYCLES.length && SUPPLY_RUN_SLOTS_KST.length === SUPPLY_RUNS_PER_DAY,
+    `정본 ${SUPPLY_RUNS_PER_DAY} · 바퀴 ${CYCLES.length}`)
+  // 🔴 템플릿 전수 대조(글자 · 인자 · 로그 경로)는 `launchd:template-check` 가 한다. 여기서는 이 검사가 읽는 템플릿이
+  //    정본 회차 수 · 시각과 같은지만 한 번 본다 — 아래 단언들이 낡은 템플릿을 보고 통과하지 않게
+  check('🔴 🔴 **정본 회차 수 · 시각이 템플릿과 같다**',
+    hours.length === SUPPLY_RUNS_PER_DAY
+    && JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
+    `템플릿 ${hours.length} · 정본 ${SUPPLY_RUNS_PER_DAY} · ${JSON.stringify(hours)}`)
   /**
    * 🔴 **두 번 틀렸던 자리다** (2026-09-22 2차 정정).
    *
@@ -285,7 +289,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 7회 · 예산 env 경로 · 못 
       installed === null || (enabled && declared.length === SUPPLY_BUDGET_ENV_NAMES.length))
   }
   if (installed !== null) {
-    check('🔴 설치본도 7회다',
+    check('🔴 설치본의 회차 수도 정본과 같다',
       (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
     check('🔴 🔴 **설치본에 비밀값 리터럴이 없다**',
       !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(installed.text))
@@ -459,27 +463,14 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 20 · judge 20 ·
       describeSupplySchedule().includes('회차당 원천 20 · 요청 100 (judge 20 · draft 80)'))
   }
 
-  check('🔴 당일 처리량 증명은 5회 — 21:15·22:15는 마지막 발행 전 완료 불가라 제외',
-    SUPPLY_RUNS_PER_DAY === 7 && SUPPLY_PROOF_RUNS_PER_DAY === 5
-    && SUPPLY_PROOF_RUN_SLOTS_KST.map((s) => `${s.hour}:${s.minute}`).join(',')
-      === '6:15,8:15,12:15,14:15,17:15')
-
-  // ── 🔴 하루 비용 — 계약 천장 $1.20 · 운영 env는 별도 정본 ──
-  const eCurrent = estimateSupplySpend(SUPPLY_WORKSET_PER_RUN)
-  const e5 = estimateSupplySpend(5)
-  console.log(`     실측 단가 추정 — 묶음 5: 회차 $${e5.expectedPerRun.toFixed(4)} · 하루 $${e5.expectedPerDay.toFixed(4)}`
-    + `  |  묶음 20: 회차 $${eCurrent.expectedPerRun.toFixed(4)} · 하루 $${eCurrent.expectedPerDay.toFixed(4)}`
-    + ` · 상한 전부 사용 시 회차 $${eCurrent.capPerRun.toFixed(4)} · 하루 $${eCurrent.capPerDay.toFixed(4)}`)
+  // ── 🔴 하루 비용 — 천장은 날짜별 계약 · 운영 env는 별도 정본 ──
   check('🔴 🔴 **공급 승인 천장은 날짜 계약이다 — 11-16 까지 $1.20 · 11-17 부터 $1.80 · 운영 env 는 그 이하여야 한다**',
     supplyApprovedDailyUsdOf('2026-11-16') === 1.20 && supplyApprovedDailyUsdOf('2026-11-17') === 1.80)
-  const lowestApproved = supplyApprovedDailyUsdOf('2026-11-05')
-  check('🔴 🔴 **묶음 20의 실측 기대 하루 지출이 가장 낮은 공급 천장($1.20) 안이다**',
-    lowestApproved !== null && eCurrent.expectedPerDay <= lowestApproved
-    && Math.abs(eCurrent.expectedPerRun - 4 * e5.expectedPerRun) < 1e-9, `$${eCurrent.expectedPerDay.toFixed(4)}`)
   {
     /**
-     * 🔴 **0.30 에서는 늦은 회차가 막힐 수 있다** — 장부가 fail-closed 로 막는 것을 값으로 본다.
-     *    상한을 전부 쓰는 회차 둘이면 0.30 을 넘는다. 0.50 이었다면 세 번째 회차 첫 요청까지 들어간다.
+     * 🔴 **하루 예산을 다 쓰면 뒤 회차는 막힌다** — 장부가 fail-closed 로 막는 것을 값으로 본다.
+     *    같은 사용액이라도 env 하루 예산이 더 크면(0.50) 다음 요청이 들어간다.
+     *    회차 사이 배분(남은 예산 ÷ 남은 회차)은 `supply-cycle-check` 가 본다.
      */
     const limits = (daily: number) => ({ dailyUsd: daily, runRequestCap: SUPPLY_JUDGE_REQUESTS_PER_RUN, headroomMultiplier: 1.2 })
     const t = (settled: number): DayTally => ({
@@ -490,11 +481,6 @@ console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 20 · judge 20 ·
     const at50 = judgeSpend({ limits: limits(0.50), tally: t(0.296), runPaid: 0, reserve: req, ledgerOk: true, settleHold: null, unresolved: [] })
     check('🔴 🔴 **운영 0.30 — 이미 $0.296을 쓰면 다음 $0.005 요청은 DAILY_EXHAUSTED (fail-closed)**',
       !at30.ok && at30.code === 'DAILY_EXHAUSTED' && at50.ok, `${JSON.stringify(at30)}`)
-    check('🔴 기대 지출이면 0.30에서 7회 중 3회가 들어간다 — 운영 1.20은 7회를 수용한다',
-      eCurrent.expectedRunsWithin(0.30) === 3 && SUPPLY_RUNS_PER_DAY === 7
-      && eCurrent.expectedRunsWithin(1.20) === SUPPLY_RUNS_PER_DAY
-      && estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerDay > 0.30,
-      `${eCurrent.expectedRunsWithin(0.30)}회`)
   }
 }
 

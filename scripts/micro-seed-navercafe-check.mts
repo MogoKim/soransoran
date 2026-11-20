@@ -16,7 +16,7 @@
  *
  * 사용법: npx tsx scripts/micro-seed-navercafe-check.mts
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -36,6 +36,7 @@ import {
   judgeExcludeReason, dedupeListRows,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
+import { writeJsonlAtomic } from './lib/atomic-jsonl.mjs'
 import { isNaverCafeSource } from './lib/micro-seed-supply.mjs'
 import { assessCandidate } from './lib/micro-seed-quality.mjs'
 // 🔴 원천 · 시각 정본 — fixture 도 손으로 적은 표가 아니라 정본을 본다
@@ -766,9 +767,26 @@ check('목록과 상세가 다른 파일',
   runOutputPath('remonterrace', '20260903-163337', 'list')
     !== runOutputPath('remonterrace', '20260903-163337', 'detail'))
 check('경로에 runId 가 들어간다', runOutputPath('remonterrace', '20260903-163337', 'list').includes('20260903-163337'))
-check('🔴 writeJsonl 이 append 하지 않는다',
-  /function writeJsonl[\s\S]{0,200}writeFileSync/.test(COLLECTOR_CODE) && !/function writeJsonl[\s\S]{0,200}appendFileSync/.test(COLLECTOR_CODE),
-  '두 실행이 한 파일에 44행으로 섞여 null 비율을 한 번 잘못 읽었다')
+// 🔴 수집기의 쓰기(`writeJsonlAtomic`)를 같은 경로에 두 번 부른다 — 두 번째 행만 남아야 한다(덧붙이면 두 실행이 섞인다)
+{
+  const dir = mkdtempSync(join(tmpdir(), 'navercafe-jsonl-'))
+  try {
+    const path = join(dir, 'remonterrace-20260903-163337-detail.jsonl')
+    const first = Array.from({ length: 22 }, (_, i) => ({ run: 'first', i }))
+    const second = [{ run: 'second', i: 0 }, { run: 'second', i: 1 }]
+    writeJsonlAtomic(path, first)
+    const afterFirst = readFileSync(path, 'utf-8')
+    writeJsonlAtomic(path, second)
+    const afterSecond = readFileSync(path, 'utf-8')
+    check('🔴 writeJsonl 이 append 하지 않는다 — 같은 경로에 다시 쓰면 뒤 실행의 행만 남는다',
+      afterFirst === first.map((x) => `${JSON.stringify(x)}\n`).join('')
+      && afterSecond === second.map((x) => `${JSON.stringify(x)}\n`).join('')
+      && readdirSync(dir).join(',') === 'remonterrace-20260903-163337-detail.jsonl',
+      `두 실행이 한 파일에 44행으로 섞여 null 비율을 한 번 잘못 읽었다 — 남은 줄 ${afterSecond.split('\n').filter((l) => l !== '').length} · 파일 ${readdirSync(dir).join(',')}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 check('행마다 sourceRunId 가 붙는다',
   buildCollected('remonterrace', {
     sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '제목', sourceCommentCount: 0,

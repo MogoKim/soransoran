@@ -25,7 +25,7 @@ import {
 import {
   OBSERVER_CAUSAL_LAG_MS, OBSERVER_INTERVAL_SEC, OBSERVER_LOOKBACK_MS, OBSERVER_MAX_PER_TICK, selectObserverWork,
 } from '../src/lib/ops-shadow-observer'
-import { SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-schedule-contract'
+import { SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-schedule-contract'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import { judgeStageBudget, WORKSET_TOTAL_PER_SOURCE } from '../src/lib/supply-workset'
 import { readSupplySelectionTrace, SELECTION_TRACE_KIND, SELECTION_TRACE_VERSION, summarizeTrace, type TraceCandidate } from '../src/lib/supply-selection-trace'
@@ -85,9 +85,32 @@ for (const r of fx.runs) {
 check(`🔴 shadow 수요 · 유료 원천 수가 운영 결정과 30/30 같다(judgeJitDemand · paidSourcesFor 재사용)`, same === fx.runs.length, diffs.slice(0, 3).join(' | '))
 const days = [...new Set(fx.runs.map((r) => new Date(Date.parse(r.startedAt) + 9 * 3_600_000).toISOString().slice(0, 10)))].sort()
 const REPLAY_NOW = new Date('2026-11-10T23:52:00.000Z')
-const dueByDay = days.map((d) => writerDueOf(d, REPLAY_NOW, fx.runs).due)
-check('🔴 writer — 마지막 자연 회차(22:15)가 끝난 날만 due · 11-11 은 아직 아니다',
-  days.length === 5 && dueByDay.slice(0, 4).every(Boolean) && dueByDay[4] === false, `${days.join(',')} ${dueByDay.join(',')}`)
+// 🔴 지금 시각표 — 정기 회차 시각(KST 분)은 정본에서 계산한다. 손으로 적지 않는다(바퀴 표가 바뀌면 따라 바뀐다)
+const SLOT_MINUTES = SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute).sort((x, y) => x - y)
+const LAST_SLOT_MINUTE = SLOT_MINUTES[SLOT_MINUTES.length - 1]!
+const WINDOW_MINUTES = SUPPLY_RUN_WINDOW_MS / 60_000
+// 🔴 fixture 는 실측 당시 시각표로 돈 회차다. writer 는 "그날 **마지막** 정기 회차가 끝났는가"만 묻으므로, 실측의 마지막 회차
+//    (표식 `budgetWindow` 가 그 fixture 에서 가장 늦은 칸)만 지금 마지막 회차 시각으로 옮겨 넣는다 — 걸린 시간 · 상태 · 표식은 실측 그대로
+const labelMinuteOf = (tag: unknown): number => {
+  const m = /(\d{2}):(\d{2})$/.exec(String((tag as { budgetWindow?: unknown }).budgetWindow))
+  if (m === null) throw new Error('fixture budgetWindow 모양이 다르다')
+  return +m[1]! * 60 + +m[2]!
+}
+const FX_LAST_LABEL_MINUTE = Math.max(...fxRaw.runs.map((x) => labelMinuteOf(x.runTokenShadow)))
+const shiftIso = (iso: string, ms: number): string => new Date(Date.parse(iso) + ms).toISOString()
+const fxAtCurrentLastSlot: SupplyRunView[] = fxRaw.runs.map((x) => {
+  const ms = labelMinuteOf(x.runTokenShadow) === FX_LAST_LABEL_MINUTE ? (LAST_SLOT_MINUTE - FX_LAST_LABEL_MINUTE) * 60_000 : 0
+  const startedAt = shiftIso(x.startedAt, ms)
+  return { runId: x.runId, status: x.status, startedAt, completedAt: x.completedAt === null ? null : shiftIso(x.completedAt, ms),
+    naturalAt: naturalScheduledRunEvidenceAt(x.runTokenShadow, startedAt) }
+})
+const fxLastPerDay = days.map((d) => fxRaw.runs.filter((x) => String((x.runTokenShadow as { budgetWindow?: unknown }).budgetWindow).startsWith(d)
+  && labelMinuteOf(x.runTokenShadow) === FX_LAST_LABEL_MINUTE).length)
+const dueOfDays = days.map((d) => writerDueOf(d, REPLAY_NOW, fxAtCurrentLastSlot))
+const dueByDay = dueOfDays.map((w) => w.due)
+check('🔴 writer — 그날 마지막 정기 회차가 끝난 날만 due · 11-11 은 마지막 회차가 아직 없어 아니다',
+  days.length === 5 && fxLastPerDay.join(',') === '1,1,1,1,0' && dueByDay.slice(0, 4).every(Boolean) && dueByDay[4] === false
+  && dueOfDays.every((w) => w.lastNaturalSlotMinute === LAST_SLOT_MINUTE), `${days.join(',')} ${dueByDay.join(',')}`)
 const ledgerDateOfRun = (r: { startedAt: string }): string => new Date(Date.parse(r.startedAt) + 9 * 3_600_000).toISOString().slice(0, 10)
 const ev = (usd: number): LedgerRunEvidence => ({ settledUsd: usd, settled: usd > 0 ? 1 : 0, unsettled: 0, blocked: 0 })
 const fxEvidence = new Map<string, LedgerRunEvidence>()
@@ -123,8 +146,8 @@ const a = planDeficit(ENV, obsOf())
 const b = planDeficit(ENV, obsOf())
 check('같은 관측 → 같은 계획(정규 JSON 동일)', canonicalJson(a) === canonicalJson(b))
 check('키 순서가 달라도 같은 입력 해시', inputHashOf({ x: 1, y: [1, { b: 2, a: 1 }] }) === inputHashOf({ y: [1, { a: 1, b: 2 }], x: 1 }))
-const shuffled = [...fx.runs].reverse()
-check('writer 판정이 입력 순서와 무관하다', days.every((d) => canonicalJson(writerDueOf(d, REPLAY_NOW, fx.runs)) === canonicalJson(writerDueOf(d, REPLAY_NOW, shuffled))))
+const shuffled = [...fxAtCurrentLastSlot].reverse()
+check('writer 판정이 입력 순서와 무관하다', days.every((d) => canonicalJson(writerDueOf(d, REPLAY_NOW, fxAtCurrentLastSlot)) === canonicalJson(writerDueOf(d, REPLAY_NOW, shuffled))))
 check('사이클 열쇠는 날짜 · 종류 · 해시로만 정해진다', cycleIdOf('cycle', '2026-11-11', 'ab'.repeat(32)) === `2026-11-11:cycle:${'ab'.repeat(8)}`)
 
 // ─────────────────────────────────────────────────────────
@@ -253,50 +276,76 @@ check('🔴 수 통과선 측정 · 글당 Persona 댓글이 구조 상한 + 1 �
   planP.dayKind === 'ordinary' && planP.countFloor === 18 && outP.countFloorMet === true && outP.conversationCapRespected === false && env20.conversationHardCapPerPost === PERSONA_COMMENTS_PER_POST_MAX)
 check('결정을 못 읽으면 unknown · 상한은 그대로 봉투', dailyOperatingPlanOf(env20, '2026-11-12', null).dayKind === 'unknown'
   && dailyOperatingPlanOf(env20, '2026-11-12', null).publishCap === 20)
+// 🔴 writer 시험의 시각은 전부 "그날 마지막 정기 회차 시각 + n분"으로 만든다(`LAST_SLOT_MINUTE` — 정본에서 계산)
+const W_DATE = '2026-11-11'
+/** KST 날짜의 자정부터 n분 뒤 — 엄격 ISO(UTC) */
+const kstMinuteIso = (kstDate: string, minute: number): string => new Date(Date.parse(`${kstDate}T00:00:00.000Z`) - 9 * 3_600_000 + minute * 60_000).toISOString()
+/** 마지막 정기 회차 시각 + n분 */
+const lastSlotIso = (plusMinutes = 0): string => kstMinuteIso(W_DATE, LAST_SLOT_MINUTE + plusMinutes)
+/** 회차 id(UTC `YYYYMMDD-HHMMSS`) — 시작 시각에서 만든다 */
+const runIdOfIso = (iso: string): string => `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`
+const hhmm = (minute: number): string => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
 /** 완전한 run token tag — 정본 판독기(`parseRunTokenShadowTag`) 모양 그대로 */
 const tagOf = (trigger: string, o: { launch?: string; pass?: number; absorbedTrigger?: string | null; absorbedAt?: string | null } = {}): unknown => ({
   ok: true, code: null, tokenId: 'fixture-token', trigger, launchTrigger: o.launch ?? trigger,
-  absorbedTrigger: o.absorbedTrigger ?? null, absorbedAt: o.absorbedAt ?? null, pass: o.pass ?? 0, budgetWindow: '2026-11-11 22:15',
+  absorbedTrigger: o.absorbedTrigger ?? null, absorbedAt: o.absorbedAt ?? null, pass: o.pass ?? 0, budgetWindow: `${W_DATE} ${hhmm(LAST_SLOT_MINUTE)}`,
 })
 const r = (id: string, start: string, status: string, done: string | null, tag: unknown): SupplyRunView =>
   ({ runId: id, startedAt: start, status, completedAt: done, naturalAt: naturalScheduledRunEvidenceAt(tag, start) })
-const W_NOW = new Date('2026-11-11T14:00:00.000Z')
+/** 마지막 회차 시각 + n분에 시작한 회차 — id 는 시작 시각에서 */
+const lastSlotRun = (startPlus: number, status: string, donePlus: number | null, tag: unknown): SupplyRunView =>
+  r(runIdOfIso(lastSlotIso(startPlus)), lastSlotIso(startPlus), status, donePlus === null ? null : lastSlotIso(donePlus), tag)
+const W_NOW = new Date(lastSlotIso(WINDOW_MINUTES))
 const lastRuns = [
-  r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', tagOf('scheduled')),
-  r('20261111-131600', '2026-11-11T13:16:00.000Z', 'running', null, tagOf('scheduled')),
+  lastSlotRun(0, 'done', 25, tagOf('scheduled')),
+  lastSlotRun(1, 'running', null, tagOf('scheduled')),
 ]
-check('🔴 마지막 슬롯 자연 회차가 둘이고 하나가 진행 중이면 due 아님(먼저 끝난 하나로 닫지 않는다)', !writerDueOf('2026-11-11', W_NOW, lastRuns).due)
-const bothDone = [lastRuns[0]!, { ...lastRuns[1]!, status: 'done', completedAt: '2026-11-11T13:35:00.000Z' }]
-const w2 = writerDueOf('2026-11-11', W_NOW, bothDone)
-check('🔴 둘 다 끝나면 가장 늦게 끝난 회차로 결정적', w2.due && w2.runId === '20261111-131500'
-  && canonicalJson(w2) === canonicalJson(writerDueOf('2026-11-11', W_NOW, [...bothDone].reverse())))
-check('손 실행만 있으면 due 아님', !writerDueOf('2026-11-11', W_NOW, [r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', tagOf('manual'))]).due)
-const ok1 = r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', tagOf('scheduled'))
-check('기준 — 관측 시각 전에 끝난 자연 회차면 due', writerDueOf('2026-11-11', W_NOW, [ok1]).due)
-check('🔴 반례 — 관측 시각(아침)보다 미래에 시작한 22:15 회차는 due 아님', !writerDueOf('2026-11-11', new Date('2026-11-11T00:00:00.000Z'), [ok1]).due)
-check('🔴 반례 — 완료 시각이 관측 시각보다 미래면 due 아님', !writerDueOf('2026-11-11', new Date('2026-11-11T13:30:00.000Z'), [ok1]).due)
-check('🔴 반례 — 완료가 시작보다 이르면 due 아님', !writerDueOf('2026-11-11', W_NOW, [{ ...ok1, completedAt: '2026-11-11T13:00:00.000Z' }]).due)
-check('🔴 반례 — 시각이 엄격 ISO 가 아니면 due 아님', !writerDueOf('2026-11-11', W_NOW, [{ ...ok1, completedAt: '2026-11-11 13:40' }]).due)
-check('🔴 반례 — 시작 시각이 엄격 ISO 가 아니면(읽히긴 해도) due 아님', !writerDueOf('2026-11-11', W_NOW, [{ ...ok1, startedAt: '2026-11-11T13:15:00Z' }]).due)
-check('🔴 반례 — done 이 아닌 상태(실패)면 완료 시각이 있어도 due 아님', !writerDueOf('2026-11-11', W_NOW, [{ ...ok1, status: 'failed' }]).due)
+check('🔴 마지막 슬롯 자연 회차가 둘이고 하나가 진행 중이면 due 아님(먼저 끝난 하나로 닫지 않는다)', !writerDueOf(W_DATE, W_NOW, lastRuns).due)
+const bothDone = [lastRuns[0]!, { ...lastRuns[1]!, status: 'done', completedAt: lastSlotIso(20) }]
+const w2 = writerDueOf(W_DATE, W_NOW, bothDone)
+check('🔴 둘 다 끝나면 가장 늦게 끝난 회차로 결정적', w2.due && w2.runId === lastRuns[0]!.runId
+  && canonicalJson(w2) === canonicalJson(writerDueOf(W_DATE, W_NOW, [...bothDone].reverse())))
+check('손 실행만 있으면 due 아님', !writerDueOf(W_DATE, W_NOW, [lastSlotRun(0, 'done', 25, tagOf('manual'))]).due)
+const ok1 = lastSlotRun(0, 'done', 25, tagOf('scheduled'))
+check('기준 — 관측 시각 전에 끝난 자연 회차면 due', writerDueOf(W_DATE, W_NOW, [ok1]).due)
+// 🔴 마지막이 아닌 정기 회차는 끝나도 하루를 닫지 않는다 — 바로 앞 회차 · 그날 첫 회차 · 마지막 회차 창이 닫힌 뒤 시작한 회차
+{
+  const slotRun = (minute: number): SupplyRunView => r(runIdOfIso(kstMinuteIso(W_DATE, minute)), kstMinuteIso(W_DATE, minute), 'done', kstMinuteIso(W_DATE, minute + 5), tagOf('scheduled'))
+  const prev = SLOT_MINUTES[SLOT_MINUTES.length - 2]!
+  check('🔴 반례 — 마지막이 아닌 정기 회차(바로 앞 · 그날 첫 회차)만 끝났으면 due 아님 · 마지막 회차가 더해지면 due',
+    SLOT_MINUTES.length >= 2 && !writerDueOf(W_DATE, W_NOW, [slotRun(prev)]).due && !writerDueOf(W_DATE, W_NOW, [slotRun(SLOT_MINUTES[0]!)]).due
+    && !writerDueOf(W_DATE, W_NOW, [slotRun(prev), slotRun(SLOT_MINUTES[0]!)]).due && writerDueOf(W_DATE, W_NOW, [slotRun(prev), ok1]).due)
+  check('🔴 경계 — 마지막 회차 창(시각부터 SUPPLY_RUN_WINDOW_MS)의 첫 분 · 끝 분은 그 회차 · 1분 앞 · 창이 닫힌 분은 아니다',
+    writerDueOf(W_DATE, new Date(lastSlotIso(WINDOW_MINUTES + 30)), [lastSlotRun(WINDOW_MINUTES - 1, 'done', WINDOW_MINUTES + 4, tagOf('scheduled'))]).due
+    && !writerDueOf(W_DATE, new Date(lastSlotIso(WINDOW_MINUTES + 30)), [lastSlotRun(WINDOW_MINUTES, 'done', WINDOW_MINUTES + 5, tagOf('scheduled'))]).due
+    && !writerDueOf(W_DATE, W_NOW, [lastSlotRun(-1, 'done', 4, tagOf('scheduled'))]).due)
+}
+check('🔴 반례 — 관측 시각(아침)보다 미래에 시작한 마지막 회차는 due 아님', !writerDueOf(W_DATE, new Date(kstMinuteIso(W_DATE, 9 * 60)), [ok1]).due)
+check('🔴 반례 — 완료 시각이 관측 시각보다 미래면 due 아님', !writerDueOf(W_DATE, new Date(lastSlotIso(15)), [ok1]).due)
+check('🔴 반례 — 완료가 시작보다 이르면 due 아님', !writerDueOf(W_DATE, W_NOW, [{ ...ok1, completedAt: lastSlotIso(-15) }]).due)
+check('🔴 반례 — 시각이 엄격 ISO 가 아니면 due 아님', !writerDueOf(W_DATE, W_NOW, [{ ...ok1, completedAt: lastSlotIso(25).slice(0, 16).replace('T', ' ') }]).due)
+check('🔴 반례 — 시작 시각이 엄격 ISO 가 아니면(읽히긴 해도) due 아님', !writerDueOf(W_DATE, W_NOW, [{ ...ok1, startedAt: lastSlotIso(0).replace('.000Z', 'Z') }]).due)
+check('🔴 반례 — done 이 아닌 상태(실패)면 완료 시각이 있어도 due 아님', !writerDueOf(W_DATE, W_NOW, [{ ...ok1, status: 'failed' }]).due)
 check('🔴 자연 회차 권위 — launchTrigger 가 scheduled 가 아니면(trigger 만 scheduled) · 손상 tag · recovery · event 는 due 아님',
-  !writerDueOf('2026-11-11', W_NOW, [r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', tagOf('scheduled', { launch: 'manual' }))]).due
-  && !writerDueOf('2026-11-11', W_NOW, [r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', { trigger: 'scheduled' })]).due
-  && !writerDueOf('2026-11-11', W_NOW, [r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', tagOf('recovery'))]).due
-  && !writerDueOf('2026-11-11', W_NOW, [r('20261111-131500', '2026-11-11T13:15:00.000Z', 'done', '2026-11-11T13:40:00.000Z', tagOf('event'))]).due)
-// 🔴 follow-up pass — 원래 22:15 marker 를 흡수해 23:05 KST 에 시작한 회차는 원래 marker 시각으로 마지막 슬롯에 귀속한다
-const follow = r('20261111-140500', '2026-11-11T14:05:00.000Z', 'done', '2026-11-11T14:20:00.000Z',
-  tagOf('scheduled', { pass: 1, absorbedTrigger: 'scheduled', absorbedAt: '2026-11-11T13:15:00.000Z' }))
+  !writerDueOf(W_DATE, W_NOW, [lastSlotRun(0, 'done', 25, tagOf('scheduled', { launch: 'manual' }))]).due
+  && !writerDueOf(W_DATE, W_NOW, [lastSlotRun(0, 'done', 25, { trigger: 'scheduled' })]).due
+  && !writerDueOf(W_DATE, W_NOW, [lastSlotRun(0, 'done', 25, tagOf('recovery'))]).due
+  && !writerDueOf(W_DATE, W_NOW, [lastSlotRun(0, 'done', 25, tagOf('event'))]).due)
+// 🔴 follow-up pass — 마지막 회차의 원래 marker 를 흡수해 회차 창이 닫힌 뒤(+5분)에 시작한 회차는 원래 marker 시각으로 마지막 슬롯에 귀속한다
+const follow = lastSlotRun(WINDOW_MINUTES + 5, 'done', WINDOW_MINUTES + 20,
+  tagOf('scheduled', { pass: 1, absorbedTrigger: 'scheduled', absorbedAt: lastSlotIso(0) }))
 check('🔴 follow-up 자연 회차는 정본 증거 시각(원래 marker)으로 슬롯 귀속 · 시작 시각으로 귀속하지 않는다',
-  follow.naturalAt === '2026-11-11T13:15:00.000Z' && writerDueOf('2026-11-11', new Date('2026-11-11T14:30:00.000Z'), [follow]).due)
+  follow.naturalAt === lastSlotIso(0) && writerDueOf(W_DATE, new Date(lastSlotIso(WINDOW_MINUTES + 30)), [follow]).due)
 check('🔴 회차 id 달력 검사 — 13월 · 32일 · 2월 30일 · 24시 · 60분은 null · 정상 id 는 round-trip',
   ['20261332-221500', '20261132-221500', '20260230-221500', '20261111-241500', '20261111-226000', '2026111-221500'].every((x) => runIdStartMs(x) === null)
   && runIdStartMs('20261111-131500') === Date.UTC(2026, 10, 11, 13, 15, 0) && runIdStartMs('20280229-000000') !== null)
-check('🔴 반례 — 달력에 없는 회차 id 의 깨진 기록은 시각을 모르니 막는다', !writerDueOf('2026-11-11', W_NOW, [ok1], ['20261132-131500']).due)
-check('🔴 반례 — 마지막 슬롯 창의 회차 기록이 깨졌으면 due 아님 · 창 밖 깨짐은 영향 없음 · id 를 못 읽으면 막는다',
-  !writerDueOf('2026-11-11', W_NOW, [ok1], ['20261111-132000']).due
-  && writerDueOf('2026-11-11', W_NOW, [ok1], ['20261111-031500']).due
-  && !writerDueOf('2026-11-11', W_NOW, [ok1], ['garbage']).due)
+check('🔴 반례 — 달력에 없는 회차 id 의 깨진 기록은 시각을 모르니 막는다', !writerDueOf(W_DATE, W_NOW, [ok1], ['20261132-131500']).due)
+check('🔴 반례 — 마지막 슬롯 창의 회차 기록이 깨졌으면 due 아님 · 창 밖 깨짐(1분 앞 · 창이 닫힌 분)은 영향 없음 · id 를 못 읽으면 막는다',
+  !writerDueOf(W_DATE, W_NOW, [ok1], [runIdOfIso(lastSlotIso(5))]).due
+  && !writerDueOf(W_DATE, W_NOW, [ok1], [runIdOfIso(lastSlotIso(WINDOW_MINUTES - 1))]).due
+  && writerDueOf(W_DATE, W_NOW, [ok1], [runIdOfIso(lastSlotIso(-1))]).due
+  && writerDueOf(W_DATE, W_NOW, [ok1], [runIdOfIso(lastSlotIso(WINDOW_MINUTES))]).due
+  && !writerDueOf(W_DATE, W_NOW, [ok1], ['garbage']).due)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n④-b observer 선택 — 자연 회차 · 회차 열쇠 · causal/backfill · stale · 순서')

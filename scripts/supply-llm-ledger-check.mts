@@ -55,10 +55,27 @@ import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-que
 import { judgeJitDemand, planCommonPhase, planPending } from '../src/lib/supply-process'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 import {
-  LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, conservativeShareUsd,
+  LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, activeSlotAt, pendingSlotsAt,
 } from '../src/lib/supply-scheduled-reserve'
+import { SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-schedule-contract'
+import { LAST_SLOT_PROTECT_NOW } from './lib/fake-scheduled-slot-env.mjs'
 import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 import { clearPriorDraftArtifacts } from './lib/fake-prior-artifacts.mjs'
+
+/**
+ * 🔴 정기 회차 시각은 손으로 적지 않는다 — 정본 시각표(`SUPPLY_RUN_SLOTS_KST`)에서 계산한다.
+ *    가짜 provider 러너의 보호 판정 벽시계(`FAKE_SUPPLY_PROTECT_NOW`)는 2026-09-28 KST 하루 안에서 고른다.
+ */
+const PROTECT_DAY = '2026-09-28'
+/** 정기 회차 시각(KST 자정에서 센 분) — 이른 순 */
+const SLOT_MINUTES = SUPPLY_RUN_SLOTS_KST.map((x) => x.hour * 60 + x.minute).sort((a, b) => a - b)
+const SLOT_WINDOW_MINUTES = SUPPLY_RUN_WINDOW_MS / 60_000
+/** `PROTECT_DAY` KST 자정에서 `minute` 분 뒤(ISO) */
+const protectNowAt = (minute: number): string =>
+  new Date(Date.parse(`${PROTECT_DAY}T00:00:00.000+09:00`) + minute * 60_000).toISOString()
+/** 회차 이름 — 장부 `runSlot` 과 같은 모양(`YYYY-MM-DD HH:MM`) */
+const slotLabelOf = (date: string, minute: number): string =>
+  `${date} ${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
 const stripComments = (src: string): string =>
@@ -861,12 +878,12 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
           /**
            * 🔴 **이 절의 러너는 정기 회차로 돈다** (2026-09-29). 이 절이 보는 것은 하루 예산 ·
            *    미정산 · 재시작의 장부 규칙이다 — 정기 회차 몫 보호(손 실행 양보)는 ⑯ 이 따로 본다.
-           *    라벨은 launchd 가 넣는 값 그대로, 벽시계는 22:20 KST(**마지막** 22:15 슬롯 창 안)로 고정한다.
-           *    🔴 마지막 슬롯이어야 한다 — 앞 슬롯이면 뒤 슬롯 몫을 남기느라(2026-09-29 2차) 하루 예산보다
+           *    라벨은 launchd 가 넣는 값 그대로, 벽시계는 그날 **마지막** 정기 회차의 창 안(회차 시각 + 5분)으로 고정한다.
+           *    🔴 마지막 회차여야 한다 — 앞 회차면 뒤 회차 몫을 남기느라(2026-09-29 2차) 하루 예산보다
            *       먼저 `SCHEDULED_RESERVE` 에 닿아, 이 절이 보려는 `DAILY_EXHAUSTED` 를 못 본다.
            */
           [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL,
-          FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T13:20:00.000Z',
+          FAKE_SUPPLY_PROTECT_NOW: LAST_SLOT_PROTECT_NOW,
           // 🔴 **시험 값이다. 운영 예산이 아니다** — 임시 환경에만 들어간다
           ...budget,
         },
@@ -1079,10 +1096,10 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       /**
        * 🔴 **정기 회차 둘이다** (2026-09-29). 손 실행이면 정기 몫에 먼저 막혀 **아무것도 안 쓰고**
        *    이 검사가 저절로 통과한다(시각에 따라). 여기서 보는 것은 하루 예산의 동시성이다.
-       *    🔴 마지막 슬롯(22:20 KST)이다 — 뒤 슬롯 몫이 없어야 하루 예산 자체의 동시성을 본다.
+       *    🔴 마지막 회차의 창 안이다 — 뒤 회차 몫이 없어야 하루 예산 자체의 동시성을 본다.
        */
       [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL,
-      FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T13:20:00.000Z',
+      FAKE_SUPPLY_PROTECT_NOW: LAST_SLOT_PROTECT_NOW,
       [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
     }
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
@@ -1104,54 +1121,70 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
    * ⓚ' 🔴 **정기 회차 몫 보호 — 운영 러너 그대로** (2026-09-29).
    *
    *    2026-09-28 재현: 손 실행이 먼저 하루 예산을 쓰고 정기 회차가 `DAILY_EXHAUSTED` 로 0건이었다.
-   *    하루 예산을 "남은 정기 슬롯 몫" 보다 작게 잡으면 — 손 실행은 한 건도 못 보내고,
-   *    정기 회차는 같은 예산으로 보낸다. 🔴 시각은 훅이 고정한다(보호 판정의 벽시계만).
+   *    남은 정기 회차가 남은 하루 예산을 똑같이 나눠 갖는다(남은 예산 ÷ 남은 회차) — 손 실행은 그 몫 전부를 남겨야 해서
+   *    한 건도 못 보내고, 정기 회차는 같은 예산에서 자기 몫만큼 보낸다. 🔴 시각은 훅이 고정한다(보호 판정의 벽시계만).
    *    라벨은 launchd 가 넣는 env 이름 그대로 준다.
    */
   {
     const SMALL = { [BUDGET_ENV.dailyUsd]: '0.2', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP }
-    const MANUAL_1113 = { [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T02:13:00.000Z' }
+    /** 시험하는 정기 회차 — 그날 끝에서 다섯 번째(뒤에 회차가 넷 남는다) */
+    const OWN = Math.max(0, SLOT_MINUTES.length - 5)
+    const OWN_MINUTE = SLOT_MINUTES[OWN]!
+    /** 그 회차 창 안(회차 시각 + 5분) · 그 회차 직전(창 밖 · 2분 전) · 마지막 회차 창이 끝난 뒤(10분 뒤) */
+    const SCHED_NOW = protectNowAt(OWN_MINUTE + 5)
+    const BEFORE_NOW = protectNowAt(OWN_MINUTE - 2)
+    const AFTER_LAST_NOW = protectNowAt(SLOT_MINUTES.at(-1)! + SLOT_WINDOW_MINUTES + 10)
+    /** 그 회차 시각에 아직 끝나지 않은 회차 수(자기 포함) — 하루 예산을 이 수로 나눈다 */
+    const PENDING = pendingSlotsAt(new Date(SCHED_NOW)).length
+    const OTHERS = PENDING - 1
+    const OWN_LABEL = slotLabelOf(PROTECT_DAY, OWN_MINUTE)
+    check('fixture — 시험 시각이 뜻한 자리다: 회차 창 안 · 회차 직전은 창 밖 · 마지막 회차 뒤는 같은 날이고 남은 회차 0 · 뒤 회차가 하나 이상',
+      activeSlotAt(new Date(SCHED_NOW))?.label === OWN_LABEL && activeSlotAt(new Date(BEFORE_NOW)) === null
+      && pendingSlotsAt(new Date(BEFORE_NOW)).length === PENDING
+      && ledgerDateOf(new Date(AFTER_LAST_NOW)) === PROTECT_DAY && pendingSlotsAt(new Date(AFTER_LAST_NOW)).length === 0
+      && PENDING === SLOT_MINUTES.length - OWN && OTHERS >= 1,
+      `own=${OWN_LABEL} pending=${PENDING}`)
+    const MANUAL_BEFORE = { [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: BEFORE_NOW }
     const codes = (r: Run): string[] => [...new Set(r.entries.map((e) => e.blockCode).filter((x): x is NonNullable<typeof x> => x !== null))]
     /**
-     * 🔴 **12:20 정기 회차가 쓸 수 있는 폭** (2026-09-29 2차). 임시 HOME 장부에는 정기 실측이 없다 →
-     *    슬롯 몫은 보수 기본값(회차 상한)이고, 남은 슬롯 5개(12:15~22:15) × 그 값이 하루 예산 0.2 보다 크다 →
-     *    비례 축소로 슬롯마다 0.2/5. 12:15 회차는 **자기 몫만** 쓰고 뒤 4개 슬롯 몫(0.16)을 남겨야 한다.
+     * 🔴 **정기 회차가 쓸 수 있는 폭 = 남은 예산 ÷ 남은 회차.** 임시 HOME 장부는 비어 있다 → 남은 예산은 하루 예산 0.2 전부이고
+     *    남은 회차 `PENDING` 개가 똑같이 나눈다. 이 회차는 **자기 몫만** 쓰고 뒤 `OTHERS` 개 회차 몫을 남겨야 한다.
      */
     const SMALL_USD = 0.2
-    const FAIR_1220 = 5 * conservativeShareUsd() > SMALL_USD ? SMALL_USD / 5 : conservativeShareUsd()
+    const FAIR_OWN = SMALL_USD / PENDING
     const spentOf = (es: readonly LedgerEntry[], runIdPrefix?: string): number => es
       .filter((e) => e.stage !== 'countTokens' && e.status !== 'blocked' && (runIdPrefix === undefined || e.runId.startsWith(runIdPrefix)))
       .reduce((n, e) => n + (e.status === 'settled' && e.settledUsd !== null ? e.settledUsd : e.reservedUsd ?? 0), 0)
-    const manual = run({ ...SMALL, ...MANUAL_1113 })
-    check('🔴 [L] 손 실행(11:13 · 라벨 없음) — 남은 정기 슬롯 몫에 막혀 유료 0건',
+    const manual = run({ ...SMALL, ...MANUAL_BEFORE })
+    check('🔴 [L] 손 실행(회차 직전 · 라벨 없음) — 남은 정기 회차 몫에 막혀 유료 0건',
       manual.paid === 0 && manual.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'),
       `paid=${manual.paid} codes=${codes(manual).join(',')}`)
-    const sched = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' })
-    check('🔴 [L] 정기 회차(12:20 · 공급 job 라벨) — 같은 예산으로 유료 요청이 나간다',
+    const sched = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: SCHED_NOW })
+    check('🔴 [L] 정기 회차(회차 창 안 · 공급 job 라벨) — 같은 예산으로 유료 요청이 나간다',
       sched.paid > 0, `paid=${sched.paid} codes=${codes(sched).join(',')}`)
-    check('🔴 [L] 정기 회차(12:20)는 자기 슬롯 몫까지만 쓴다 — 뒤 4개 슬롯 몫을 남긴다',
-      spentOf(sched.entries) <= FAIR_1220 + 1e-9 && spentOf(sched.entries) > 0,
-      `spent=${spentOf(sched.entries).toFixed(6)} fair=${FAIR_1220.toFixed(6)} codes=${codes(sched).join(',')}`)
-    check('🔴 [L] 정기 회차의 장부 줄에 실행 종류·슬롯이 남는다 — 다음 날 실측의 근거',
-      sched.entries.filter((e) => e.stage !== 'countTokens').every((e) => e.runKind === 'scheduled' && e.runSlot === '2026-09-28 12:15')
+    check('🔴 [L] 정기 회차는 자기 회차 몫(하루 예산 ÷ 남은 회차)까지만 쓴다 — 뒤 회차 몫을 남긴다',
+      spentOf(sched.entries) <= FAIR_OWN + 1e-9 && spentOf(sched.entries) > 0,
+      `spent=${spentOf(sched.entries).toFixed(6)} fair=${FAIR_OWN.toFixed(6)} codes=${codes(sched).join(',')}`)
+    check('🔴 [L] 정기 회차의 장부 줄에 실행 종류·회차 이름이 남는다 — 배분과 비용 증거의 근거',
+      sched.entries.filter((e) => e.stage !== 'countTokens').every((e) => e.runKind === 'scheduled' && e.runSlot === OWN_LABEL)
       && manual.entries.filter((e) => e.stage !== 'countTokens').every((e) => e.runKind === 'manual' && e.runSlot === null))
-    const kick = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T02:13:00.000Z' })
-    check('🔴 [L] 공급 job 라벨이어도 창 밖(11:13 kickstart)이면 손 실행이다 — 유료 0건',
+    const kick = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: BEFORE_NOW })
+    check('🔴 [L] 공급 job 라벨이어도 창 밖(회차 직전 kickstart)이면 손 실행이다 — 유료 0건',
       kick.paid === 0 && kick.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'))
-    // 🔴 12:20(슬롯 창 안)에 위조한다 — 창 밖이면 위조가 먹혀도 창 판정이 막아 이 검사가 아무것도 못 가린다
+    // 🔴 회차 창 안에서 위조한다 — 창 밖이면 위조가 먹혀도 창 판정이 막아 이 검사가 아무것도 못 가린다
     const forged = run({
-      ...SMALL, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z',
+      ...SMALL, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: SCHED_NOW,
       SORAN_SUPPLY_RUN_KIND: 'scheduled', SORAN_TRIGGER: 'schedule',
     })
     // 🔴 `SORAN_RUN_AT` 은 러너 자체의 회차 시각이라 여기서 넣으면 러너가 다른 이유로 멈춘다 —
     //    보호 판정이 그 값을 시각으로 쓰지 않는지는 supply:reserve-check ⓓ 가 본다
     check('🔴 [L] 호출자가 적는 칸(SORAN_*)으로 정기가 되지 않는다 — 유료 0건',
       forged.paid === 0 && forged.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'))
-    const other = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: 'com.soransoran.persona-comment-runner', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' })
+    const other = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: 'com.soransoran.persona-comment-runner', FAKE_SUPPLY_PROTECT_NOW: SCHED_NOW })
     check('🔴 [L] 다른 soransoran job 라벨은 정기 공급이 아니다 — 유료 0건',
       other.paid === 0 && other.entries.some((e) => e.blockCode === 'SCHEDULED_RESERVE'))
-    const late = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T14:10:00.000Z' })
-    check('🔴 [L] 손 실행(23:10 · 마지막 슬롯 창 뒤) — 몫이 풀려 유료 요청이 나간다', late.paid > 0,
+    const late = run({ ...SMALL, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: AFTER_LAST_NOW })
+    check('🔴 [L] 손 실행(마지막 회차 창 뒤) — 몫이 풀려 유료 요청이 나간다', late.paid > 0,
       `paid=${late.paid} codes=${codes(late).join(',')}`)
 
     /**
@@ -1160,7 +1193,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
      */
     wipeLedger()
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
-    // 🔴 앞 12:20 정기 회차의 채택이 두 동시 회차를 `CONCLUDED` 로 막지 않게 — 동시성 판정은 실제 provider 도달이 전제다
+    // 🔴 앞 정기 회차의 채택이 두 동시 회차를 `CONCLUDED` 로 막지 않게 — 동시성 판정은 실제 provider 도달이 전제다
     clearPriorDraftArtifacts(dd)
     const spawnOne = (extra: Record<string, string>, runId: string, logFile: string): Promise<{ code: number | null; out: string }> =>
       new Promise((resolve) => {
@@ -1189,16 +1222,16 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     /**
      * 🔴 **동시 실행의 하루 예산 — 정기 회차 몫이 실제로 걸리게 잡는다.** 가짜 provider 의 정산액은 예약보다
      *    훨씬 작아서, 넉넉한 예산이면 정기 회차가 자기 몫에 닿지 않고 "몫까지만 쓴다" 가 저절로 참이 된다
-     *    (변이 — 정기 회차 무보호 — 가 살아남았다). 앞 12:20 회차의 **가장 큰 예약 1건 × 1.02** 를 몫으로
-     *    삼는다: 첫 요청은 반드시 나가고, 그 뒤는 뒤 4슬롯 몫에 막혀야 한다.
+     *    (변이 — 정기 회차 무보호 — 가 살아남았다). 앞 정기 회차의 **가장 큰 예약 1건 × 1.02** 를 회차 몫으로
+     *    삼는다(하루 예산 = 그 몫 × 남은 회차 수): 첫 요청은 반드시 나가고, 그 뒤는 뒤 회차 몫에 막혀야 한다.
      */
     const maxReserve = Math.max(0, ...sched.entries.filter((e) => e.stage !== 'countTokens').map((e) => e.reservedUsd ?? 0))
     const FAIR_RACE = maxReserve * 1.02
-    const RACE_USD = 5 * FAIR_RACE
+    const RACE_USD = PENDING * FAIR_RACE
     const raceBudget = { [BUDGET_ENV.dailyUsd]: RACE_USD.toFixed(8) }
     const [rm, rs] = await Promise.all([
-      spawnOne({ ...raceBudget, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RM', mLog),
-      spawnOne({ ...raceBudget, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T03:20:00.000Z' }, 'RS', sLog),
+      spawnOne({ ...raceBudget, [LAUNCHD_LABEL_ENV]: '', FAKE_SUPPLY_PROTECT_NOW: SCHED_NOW }, 'RM', mLog),
+      spawnOne({ ...raceBudget, [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL, FAKE_SUPPLY_PROTECT_NOW: SCHED_NOW }, 'RS', sLog),
     ])
     const paidOf = (f: string): number => readFileSync(f, 'utf-8').split('\n').filter((l) => l.startsWith('paid\t')).length
     check('🔴 [L] 동시 실행 — 손 실행은 0건 · 정기 회차는 보낸다 (잠금 순서와 무관)',
@@ -1207,9 +1240,9 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       + `\n${rm.out.slice(-1200)}\n---\n${rs.out.slice(-1200)}`)
     {
       const race = ledgerEntries()
-      check('🔴 [L] 동시 실행 — 정기 회차도 자기 몫까지만 · 손 실행 0 · 뒤 슬롯 4개 몫이 그대로 남는다',
+      check('🔴 [L] 동시 실행 — 정기 회차도 자기 몫까지만 · 손 실행 0 · 뒤 회차 몫이 전부 그대로 남는다',
         maxReserve > 0 && spentOf(race, 'RS') > 0 && spentOf(race, 'RS') <= FAIR_RACE + 1e-9 && spentOf(race, 'RM') === 0
-        && RACE_USD - spentOf(race) >= 4 * FAIR_RACE - 1e-9,
+        && RACE_USD - spentOf(race) >= OTHERS * FAIR_RACE - 1e-9,
         `RS=${spentOf(race, 'RS').toFixed(6)} RM=${spentOf(race, 'RM').toFixed(6)} fair=${FAIR_RACE.toFixed(6)}`)
       console.log(`     동시 실행 RS=$${spentOf(race, 'RS').toFixed(6)} RM=$${spentOf(race, 'RM').toFixed(6)} fair=$${FAIR_RACE.toFixed(6)}`
         + ` · RS 예약 최대 $${Math.max(0, ...race.filter((e) => e.runId.startsWith('RS')).map((e) => e.reservedUsd ?? 0)).toFixed(6)}`
@@ -1360,6 +1393,8 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
   const openId = open.ok ? (open.list[0]?.attemptId ?? '') : ''
   check('🔴 [SF] 열린 예약이 남아 있다 — 사람이 대조할 대상이 보인다', openId !== '')
   const resolvePath = ledgerPathOf(dir, ledgerDateOf(new Date()))
+  /** 원 요청이 적어 둔 정기 회차 이름 — 사람 마감이 그대로 보존해야 하는 칸 */
+  const SF_RUN_SLOT = slotLabelOf('2026-11-05', SLOT_MINUTES[2]!)
   const beforeHumanResolve = readLedgerDay(resolvePath)
   const unresolvedEntry = beforeHumanResolve.ok
     ? beforeHumanResolve.entries.find((e) => e.attemptId === openId)
@@ -1369,10 +1404,10 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
       ...unresolvedEntry,
       budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2, budgetCapUsd: 1.2, budgetSource: 'env.local',
       sourceKey: 'fixture-source-key', supplyContract: 'supply-jit-v2',
-      runKind: 'scheduled', runSlot: '2026-11-05 06:15',
+      runKind: 'scheduled', runSlot: SF_RUN_SLOT,
       runTokenShadow: {
         ok: true, code: null, tokenId: 'fixture-token', trigger: 'scheduled', launchTrigger: 'scheduled',
-        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-11-05 06:15',
+        absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: SF_RUN_SLOT,
       },
     })
   }
@@ -1406,7 +1441,7 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
         && e.budgetDailyUsd === 1.2 && e.budgetCeilingUsd === 1.2 && e.budgetCapUsd === 1.2
         && e.budgetSource === 'env.local' && e.sourceKey === 'fixture-source-key'
         && e.supplyContract === 'supply-jit-v2'
-        && e.runKind === 'scheduled' && e.runSlot === '2026-11-05 06:15'
+        && e.runKind === 'scheduled' && e.runSlot === SF_RUN_SLOT
         && e.runTokenShadow?.tokenId === 'fixture-token'
     })())
   check('🔴 [SF] 🔴 장부를 지우지 않았다 — 앞 줄이 그대로 있다',
@@ -1711,11 +1746,11 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
           [BUDGET_ENV.runRequestCap]: cap,
           /**
            * 🔴 이 절이 보는 것은 **회차 요청 상한**이다 — 정기 회차 몫 보호가 끼어들면 안 된다(2026-09-29 2차).
-           *    손 실행이면 임시 장부에 정기 실측이 없어 보수 기본값으로 하루 여력 전부가 정기 몫이 되고,
-           *    시험을 돌린 시각(23시 전/후)에 따라 결과가 갈린다. 마지막 슬롯(22:20 KST) 정기 회차로 고정한다.
+           *    손 실행이면 남은 정기 회차가 하루 여력 전부를 나눠 가져 한 건도 못 보내고,
+           *    시험을 돌린 시각(마지막 회차 창 전/후)에 따라 결과가 갈린다. 마지막 정기 회차의 창 안으로 고정한다.
            */
           [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL,
-          FAKE_SUPPLY_PROTECT_NOW: '2026-09-28T13:20:00.000Z',
+          FAKE_SUPPLY_PROTECT_NOW: LAST_SLOT_PROTECT_NOW,
         },
       },
     )

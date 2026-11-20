@@ -35,6 +35,7 @@ import {
   LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, supplyRunKindOf, supplySpendProtectAt,
 } from '../src/lib/supply-scheduled-reserve'
 import { SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-process'
+import { SUPPLY_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 
 let pass = 0
@@ -43,22 +44,40 @@ function check(name: string, ok: boolean, detail = ''): void {
   if (ok) { pass += 1; console.log(`  ✅ ${name}`) } else { fail += 1; console.log(`  ❌ ${name}${detail === '' ? '' : ` — ${detail}`}`) }
 }
 const REPO = process.cwd()
-const kst = (s: string): Date => new Date(`${s}+09:00`)
+// 🔴 회차 시각은 손으로 적지 않는다 — 정본 시각표(`SUPPLY_RUN_SLOTS_KST`)에서 계산한다. 바퀴 표가 바뀌어도 이 검사는 그대로다
+const DAY = '2026-10-12'
+const NEXT_DAY = '2026-10-13'
+/** 정기 회차 시각(KST 자정에서 센 분) — 이른 순 */
+const S = SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute).sort((a, b) => a - b)
+const LAST = S.length - 1
+const WINDOW_MIN = SUPPLY_RUN_WINDOW_MS / 60_000
+/** 그 KST 날짜의 자정에서 `minute` 분 `sec` 초 뒤 */
+const kstAt = (date: string, minute: number, sec = 0): Date => new Date(Date.parse(`${date}T00:00:00.000+09:00`) + minute * 60_000 + sec * 1000)
+const hhmm = (minute: number): string => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+/** i 번째 회차의 이름 — 장부 `runSlot` · token 예산 창과 같은 모양 */
+const slotLabel = (date: string, i: number): string => `${date} ${hhmm(S[i]!)}`
+/** 다음 회차까지 가장 먼 회차 — 그 간격이 45분 창보다 길어야 "이어 붙인 창"과 "45분 창"이 갈린다 */
+const WIDE = S.slice(0, -1).reduce((best, m, i) => (S[i + 1]! - m > S[best + 1]! - S[best]! ? i : best), 0)
+const MID = Math.floor(S.length / 2)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n① 순수 — token · shadow · 창 · trigger')
 // ─────────────────────────────────────────────────────────
 {
-  check('예산 창(shadow) — 첫 슬롯 전은 첫 슬롯의 창', budgetWindowShadowOf(kst('2026-10-12T05:30:00')) === '2026-10-12 06:15')
-  check('예산 창(shadow) — 슬롯 시각 정각은 그 슬롯', budgetWindowShadowOf(kst('2026-10-12T12:15:00')) === '2026-10-12 12:15')
-  check('예산 창(shadow) — 다음 슬롯 직전까지 앞 슬롯 (이어 붙인 창 · 45분 창이 아니다)',
-    budgetWindowShadowOf(kst('2026-10-12T12:14:59')) === '2026-10-12 08:15' && budgetWindowShadowOf(kst('2026-10-12T16:59:00')) === '2026-10-12 14:15')
-  check('예산 창(shadow) — 마지막 슬롯 뒤 자정 전은 마지막 슬롯 · KST 날짜', budgetWindowShadowOf(kst('2026-10-12T23:59:00')) === '2026-10-12 22:15'
-    && budgetWindowShadowOf(kst('2026-10-13T00:05:00')) === '2026-10-13 06:15')
+  check('예산 창(shadow) — 첫 회차 전은 첫 회차의 창', S[0]! > 0 && budgetWindowShadowOf(kstAt(DAY, S[0]! - 1)) === slotLabel(DAY, 0)
+    && budgetWindowShadowOf(kstAt(DAY, 0)) === slotLabel(DAY, 0))
+  check('예산 창(shadow) — 회차 시각 정각은 그 회차', budgetWindowShadowOf(kstAt(DAY, S[MID]!)) === slotLabel(DAY, MID))
+  check('예산 창(shadow) — 다음 회차 직전까지 앞 회차 (이어 붙인 창 · 45분 창이 아니다)',
+    budgetWindowShadowOf(kstAt(DAY, S[MID]!, -1)) === slotLabel(DAY, MID - 1)
+    && S[WIDE + 1]! - S[WIDE]! > WINDOW_MIN + 1 && budgetWindowShadowOf(kstAt(DAY, S[WIDE + 1]! - 1)) === slotLabel(DAY, WIDE))
+  check('예산 창(shadow) — 마지막 회차 뒤 자정 전은 마지막 회차 · KST 날짜', budgetWindowShadowOf(kstAt(DAY, 23 * 60 + 59)) === slotLabel(DAY, LAST)
+    && S[0]! > 5 && budgetWindowShadowOf(kstAt(NEXT_DAY, 5)) === slotLabel(NEXT_DAY, 0))
   check('회차 id = 회차 시각(UTC) YYYYMMDD-HHMMSS', supplyRunIdOf(new Date('2026-10-12T09:22:47.039Z')) === '20261012-092247')
   check('token 수명 = 공급 회차 정상 수명(45분)', RUN_TOKEN_TTL_MS === SUPPLY_RUN_WINDOW_MS && RUN_TOKEN_TTL_MS === 45 * 60_000)
 
   const at = new Date('2026-10-12T03:00:00.000Z')
+  // 발급 시각(KST 12:00)이 속한 예산 창 — 시각표에서 따로 센다(그 시각 이전의 가장 늦은 회차)
+  const AT_WINDOW = slotLabel(DAY, S.reduce((hit, m, i) => (m <= 12 * 60 ? i : hit), 0))
   const lock = { dev: 16777230, ino: 86300280 }
   const tok = buildRunToken({
     tokenId: 't-1', trigger: 'event', launchTrigger: 'manual', absorbedTrigger: 'event', absorbedAt: '2026-10-12T02:59:00.000Z',
@@ -66,7 +85,7 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
   })
   const raw = JSON.stringify(tok)
   check('token 모양 — 일곱 칸(tokenId · trigger · budgetWindow · issuedAt · expiresAt · lock · runId) 전부', parseRunToken(raw) !== null
-    && tok.version === RUN_TOKEN_VERSION && tok.budgetWindowShadow === '2026-10-12 08:15'
+    && tok.version === RUN_TOKEN_VERSION && tok.budgetWindowShadow === AT_WINDOW
     && Date.parse(tok.expiresAt) - Date.parse(tok.issuedAt) === RUN_TOKEN_TTL_MS && tok.runId === '20261012-030000')
   const bad = (f: (t: Record<string, unknown>) => void): string => { const t = JSON.parse(raw) as Record<string, unknown>; f(t); return JSON.stringify(t) }
   check('🔴 깨진 token → null (JSON 아님 · 버전 · 만료를 멀리 · identity 없음 · trigger 모름 · 창 모양)',
@@ -75,14 +94,14 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
     && parseRunToken(bad((t) => { t.expiresAt = '2099-01-01T00:00:00.000Z' })) === null
     && parseRunToken(bad((t) => { delete t.lock })) === null
     && parseRunToken(bad((t) => { t.trigger = 'cron' })) === null
-    && parseRunToken(bad((t) => { t.budgetWindowShadow = '08:15' })) === null)
+    && parseRunToken(bad((t) => { t.budgetWindowShadow = hhmm(S[MID]!) })) === null)
 
   const proven = { kind: 'proven' as const, identity: lock }
   const J = (o: Partial<Parameters<typeof judgeRunTokenShadow>[0]>) => judgeRunTokenShadow({
     lease: proven, envTokenId: 't-1', file: { kind: 'raw', raw }, now: new Date(at.getTime() + 60_000), ...o,
   })
   const code = (s: ReturnType<typeof judgeRunTokenShadow>): string => (s.ok ? 'OK' : s.code)
-  check('shadow — 다섯 칸이 다 맞으면 ok · trigger · 창', (() => { const s = J({}); return s.ok && s.trigger === 'event' && s.budgetWindowShadow === '2026-10-12 08:15' })())
+  check('shadow — 다섯 칸이 다 맞으면 ok · trigger · 창', (() => { const s = J({}); return s.ok && s.trigger === 'event' && s.budgetWindowShadow === AT_WINDOW })())
   check('🔴 저장 shadow가 최종 trigger뿐 아니라 launch·흡수 표식·pass를 보존한다', (() => {
     const tag = shadowTagOf(J({}))
     const parsed = parseRunTokenShadowTag(tag)
@@ -91,10 +110,10 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
       && parsed.pass === 0 && !isNaturalScheduledRunTag(parsed)
   })())
   check('🔴 옛 trigger-only tag는 자연 회차로 추정하지 않고, 첫 예약·예약 follow-up만 원시각으로 자연 증거다', (() => {
-    const old = { ok: true, code: null, tokenId: 'old', trigger: 'scheduled', budgetWindow: '2026-10-12 08:15' }
+    const old = { ok: true, code: null, tokenId: 'old', trigger: 'scheduled', budgetWindow: AT_WINDOW }
     const natural = {
       ok: true, code: null, tokenId: 'new', trigger: 'scheduled', launchTrigger: 'scheduled',
-      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: '2026-10-12 08:15',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: AT_WINDOW,
     }
     const followUp = {
       ...natural, tokenId: 'follow', absorbedTrigger: 'scheduled' as const,
@@ -152,16 +171,23 @@ console.log('\n① 순수 — token · shadow · 창 · trigger')
 
   // 띄운 이유 = 지금 예산 판정의 실행 종류(같은 함수)
   const label = { [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL }
-  const grid: [Record<string, string>, string][] = [
-    [label, '2026-10-12T08:15:30'], [label, '2026-10-12T08:59:59'], [label, '2026-10-12T09:00:01'], [label, '2026-10-12T07:40:00'],
-    [{}, '2026-10-12T08:16:00'], [{ [LAUNCHD_LABEL_ENV]: 'com.soransoran.persona-comment-runner' }, '2026-10-12T12:16:00'],
-    [label, '2026-10-12T22:59:00'], [label, '2026-10-12T23:01:00'],
+  // 창 안: 회차 시각 직후 · 창 끝 1초 전 · 마지막 회차 창 안 / 창 밖: 창 끝 1초 뒤 · 회차 시각 1분 전(앞 회차 창도 끝난 자리) · 마지막 회차 창 뒤
+  const IN_START = kstAt(DAY, S[WIDE + 1]!, 30)
+  const IN_END = kstAt(DAY, S[WIDE + 1]! + WINDOW_MIN, -1)
+  const OUT_AFTER = kstAt(DAY, S[WIDE + 1]! + WINDOW_MIN, 1)
+  const OUT_BEFORE = kstAt(DAY, S[WIDE + 1]! - 1)
+  const grid: [Record<string, string>, Date][] = [
+    [label, IN_START], [label, IN_END], [label, OUT_AFTER], [label, OUT_BEFORE],
+    [{}, kstAt(DAY, S[WIDE + 1]! + 1)], [{ [LAUNCHD_LABEL_ENV]: 'com.soransoran.persona-comment-runner' }, kstAt(DAY, S[MID]! + 1)],
+    [label, kstAt(DAY, S[LAST]! + WINDOW_MIN - 1)], [label, kstAt(DAY, S[LAST]! + WINDOW_MIN + 1)],
   ]
-  check('🔴 띄운 이유 = 지금 예산 판정의 실행 종류(supplyRunKindOf) — 라벨 + 45분 슬롯 창 안만 scheduled',
-    grid.every(([env, t]) => supplyLaunchTrigger(env, kst(t)) === supplyRunKindOf(env, kst(t)).kind)
-    && supplyLaunchTrigger(label, kst('2026-10-12T08:15:30')) === 'scheduled'
-    && supplyLaunchTrigger(label, kst('2026-10-12T09:00:01')) === 'manual'
-    && supplyLaunchTrigger({}, kst('2026-10-12T08:16:00')) === 'manual')
+  check('🔴 띄운 이유 = 지금 예산 판정의 실행 종류(supplyRunKindOf) — 라벨 + 45분 회차 창 안만 scheduled',
+    grid.every(([env, t]) => supplyLaunchTrigger(env, t) === supplyRunKindOf(env, t).kind)
+    && supplyLaunchTrigger(label, IN_START) === 'scheduled'
+    && supplyLaunchTrigger(label, IN_END) === 'scheduled'
+    && supplyLaunchTrigger(label, OUT_AFTER) === 'manual'
+    && supplyLaunchTrigger(label, OUT_BEFORE) === 'manual'
+    && supplyLaunchTrigger({}, kstAt(DAY, S[WIDE + 1]! + 1)) === 'manual')
 
   const proof = { lockPath: '/x', followUpDir: '/', lockf: LOCKF_PATH, fd: 9 }
   const withFd = stageSpawnOf('scripts/x.mts', ['--a'], proof)
@@ -225,10 +251,17 @@ console.log('\n② 예산 판정 불변 — token · lease 표식은 예산 허�
     [LEASE_INNER_ENV]: '/x/process.kernel-lock', [LEASE_FD_ENV]: '9', [SUPPLY_RUN_TOKEN_ENV]: 'tok', [SUPPLY_PASS_ENV]: '0',
   }
   const entries: LedgerEntry[] = []
-  const times = ['2026-10-12T07:10:00', '2026-10-12T08:16:00', '2026-10-12T09:05:00', '2026-10-12T12:20:00', '2026-10-12T22:40:00', '2026-10-12T23:30:00']
+  // 회차 창 안 셋(이른 · 가운데 · 마지막) · 창 밖 셋(창이 끝난 직후 둘 · 마지막 회차 창 뒤)
+  const times = [
+    kstAt(DAY, S[2]! + WINDOW_MIN + 1), kstAt(DAY, S[3]! + 1), kstAt(DAY, S[3]! + WINDOW_MIN + 5),
+    kstAt(DAY, S[MID]! + 5), kstAt(DAY, S[LAST]! + 5), kstAt(DAY, S[LAST]! + WINDOW_MIN + 10),
+  ]
+  const kinds = times.map((t) => supplySpendProtectAt({ env: label, now: t, todayEntries: entries, dailyUsd: 0.3 }).kind)
+  check('fixture — 고른 시각에 회차 창 안(scheduled) 셋 · 창 밖(manual) 셋이 다 있다(한쪽만 있으면 아래 단언이 반만 잰다)',
+    kinds.join(',') === 'manual,scheduled,manual,scheduled,scheduled,manual', kinds.join(','))
   const same = times.every((t) => [label, {}].every((env) => {
-    const a = supplySpendProtectAt({ env, now: kst(t), todayEntries: entries, historyEntries: null, dailyUsd: 0.3 })
-    const b = supplySpendProtectAt({ env: { ...env, ...forged }, now: kst(t), todayEntries: entries, historyEntries: null, dailyUsd: 0.3 })
+    const a = supplySpendProtectAt({ env, now: t, todayEntries: entries, dailyUsd: 0.3 })
+    const b = supplySpendProtectAt({ env: { ...env, ...forged }, now: t, todayEntries: entries, dailyUsd: 0.3 })
     return JSON.stringify(a) === JSON.stringify(b)
   }))
   check('🔴 같은 시각 · 같은 라벨이면 lease · token 표식이 있어도 예산 판정(종류 · 몫 · 천장) 결과가 바이트 단위로 같다', same)

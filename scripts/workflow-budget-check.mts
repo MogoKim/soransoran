@@ -501,7 +501,7 @@ if (ALLOW !== null && DENY !== null && AUTHORITY !== null) {
     { light: false, why: '화면 + API 혼합', files: ['src/app/page.tsx', 'src/app/api/example/route.ts'] },
     { light: false, why: '화면 + server action 혼합', files: ['src/components/ui/Button.tsx', 'src/lib/actions/scraps.ts'] },
     { light: true, why: '화면 + 정본 문서 혼합', files: ['src/app/page.tsx', 'docs/operations/CURRENT-MILESTONE.md'] },
-    { light: false, why: '화면 + 공용 lib', files: ['src/app/page.tsx', 'src/lib/collect-schedule.ts'] },
+    { light: false, why: '화면 + 공용 lib', files: ['src/app/page.tsx', 'src/lib/cycle-schedule.ts'] },
 
     // 🔴 영향 범위가 넓은 것들
     { light: false, why: '의존성 잠금', files: ['package-lock.json'] },

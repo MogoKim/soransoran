@@ -44,7 +44,7 @@ import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
 import { AUTO_FIRST_COMMENT_WINDOW_MS, firstCommentDelayMs } from '../src/lib/persona-comment-auto-lane'
 import { countFloorOf } from '../src/lib/ladder-table'
 import {
-  SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN,
+  SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN,
 } from '../src/lib/supply-schedule-contract'
 import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
 import {
@@ -107,7 +107,7 @@ const GRID = RUNNER_GRID
 // 공급 비용 계약(envelope) 시행 뒤의 날짜 — 그 전 날짜의 하루 판정은 비용을 모른다
 const D = '2026-11-10'
 const SUPPLY_USD_PER_RESULT = 0.008
-const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
 const OK_SIGNALS: HealthSignal[] = [
   { axis: 'quality', health: 'ok', reasons: [] }, { axis: 'cost', health: 'ok', reasons: [] }, { axis: 'errors', health: 'ok', reasons: [] },
 ]
@@ -231,7 +231,7 @@ try {
       sources: currentSources,
       readyPerSource: 0.2,
     })
-    // 08:15 이후 회차가 처리할 **새** 원천. 현재 10건과 key 교집합이 0이어야 두 번 세지 않는다.
+    // 07:00 뒤의 정기 회차가 처리할 **새** 원천. 현재 10건과 key 교집합이 0이어야 두 번 세지 않는다.
     const futureSources = Array.from({ length: 10 }, (_, i) => always(`future-src:${i}`))
     // 🔴 추가 기회 = `measuredFutureSourceOpportunities` 의 하루 산식(`futureAdditionalOf` — 겹침 상한 ∧ 순유입 자기 수율 상한)
     const unionAdditional = (inflow: readonly ReturnType<typeof always>[]): number => futureAdditionalOf({
