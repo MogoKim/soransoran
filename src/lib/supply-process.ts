@@ -797,7 +797,7 @@ export function runStatusOf(outcomes: readonly StageOutcome[]): RunStatus {
 /**
  * 🔴 **공급이 적재한 후보를 controller 전에 도장까지 끝낸다.**
  *
- *    앞판은 자동 READY 도장을 08:00 뒤 발행 러너만 했다. 06:15 공급이 적재한 자동 적격 행은
+ *    앞판은 자동 READY 도장을 08:00 뒤 발행 러너만 했다. 아침 공급 회차가 적재한 자동 적격 행은
  *    07:00 controller 에서 미도장 = 결말 모름(unknown)으로 세져 READY 필요량 구간을 벌렸다
  *    (2026-10-27 실측: 미도장 3행 → UNKNOWN · 08:00 에 그 3행이 도장됨).
  *    🔴 새 판정이 아니다 — 정본 도장 회차(`stampRoundAuditAware`)를 그대로 부른다. 결과는 품질 결과다:

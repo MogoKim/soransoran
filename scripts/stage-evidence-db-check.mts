@@ -61,7 +61,7 @@ import type { LedgerEntry } from '../src/lib/llm-ledger'
 import { PRICING_VERSION } from '../src/lib/llm-pricing'
 import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import { supplyRunIdOf } from '../src/lib/supply-run-token'
-import { SUPPLY_PROOF_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
+import { SUPPLY_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -753,18 +753,19 @@ try {
       nextPreflight?: { stage: string; verdict: string; codes: string[]; warnings: string[]; counts: Record<string, number> } | null
     }
     /**
-     * 🔴 **비용 증거는 정본 장부 줄로 만든다** — 요약값을 controller 에 주입하지 않고, 운영과 같은 장부 줄(예약 proof 슬롯 ·
+     * 🔴 **비용 증거는 정본 장부 줄로 만든다** — 요약값을 controller 에 주입하지 않고, 운영과 같은 장부 줄(그날 정기 회차 전부 ·
      *    기록 예산 · 자연 token)을 생산 writer(`appendLedgerLine`)로 가짜 HOME 장부에 쓴다. controller 는 `readCostSignals` 로
      *    그대로 읽는다. 연속 통과는 이틀을 다시 판정하므로 전날과 이틀 전 장부를 둘 다 쓴다.
      *    🔴 하루 판정은 러너 건강을 입력으로 받지 않는다 — launchd 가 없는 곳(CI · Linux)에서도 같은 판정이 나와야 한다.
      */
     const ledgerDir = ledgerDirForHome(HOME)
     mkdirSync(ledgerDir, { recursive: true })
-    const proofSlotLabel = (s: { hour: number; minute: number }): string =>
+    // 회차 시각은 바퀴 표에서 나온 정본 시각표(`SUPPLY_RUN_SLOTS_KST`)를 그대로 돈다 — 여기 시각을 적지 않는다
+    const runSlotLabel = (s: { hour: number; minute: number }): string =>
       `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`
     for (const day of [D_PREV, D]) {
-      for (const [i, s] of SUPPLY_PROOF_RUN_SLOTS_KST.entries()) {
-        const hm = proofSlotLabel(s)
+      for (const [i, s] of SUPPLY_RUN_SLOTS_KST.entries()) {
+        const hm = runSlotLabel(s)
         const slot = `${day} ${hm}`
         appendLedgerLine(ledgerPathOf(ledgerDir, day), {
           runId: `${supplyRunIdOf(new Date(`${day}T${hm}:02+09:00`))}-d`, stage: 'draftGen',
@@ -841,8 +842,8 @@ try {
     const passRun = runController()
     console.log(`   (나) 전날 통과(1일) → ${show(passRun.out)}`)
     check('exit 0 (dry-run)', passRun.code === 0, passRun.raw)
-    check('🔴 비용 축은 가짜 HOME 정본 장부에서 읽었다 — proof 슬롯 정산 표본 전부 · 미상·귀속불명 0',
-      passRun.out?.evidence?.counts.supplySettledRequests === SUPPLY_PROOF_RUN_SLOTS_KST.length
+    check('🔴 비용 축은 가짜 HOME 정본 장부에서 읽었다 — 그날 정기 회차 전부의 정산 표본 · 미상·귀속불명 0',
+      passRun.out?.evidence?.counts.supplySettledRequests === SUPPLY_RUN_SLOTS_KST.length
       && passRun.out.evidence.counts.supplyUsageUnknown === 0
       && passRun.out.evidence.counts.supplyCostIneligibleRequests === 0
       && !passRun.out.evidence.codes.some((c) => c === 'COST_UNKNOWN' || c === 'COST_BAD'),

@@ -43,11 +43,10 @@ import {
   d100Plan, PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET, schedulerSupportOf,
 } from '../src/lib/d100-capacity'
 import {
-  SUPPLY_PROOF_LAST_PUBLISH_MINUTE, SUPPLY_PROOF_RUNS_PER_DAY,
-  SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN,
-  supplyProofBudgetUsd, supplyProofRunSlots, supplyRunSlotMinuteOf,
+  SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS, SUPPLY_WORKSET_PER_RUN,
+  supplyRunSlotMinuteOf,
 } from '../src/lib/supply-schedule-contract'
-import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
+import { supplyApprovedDailyUsdOf, supplyCostProofBudgetUsd } from '../src/lib/supply-cost-envelope'
 import {
   judgeStageEvidence, judgeEvidenceForTarget,
   type EvidencePost, type EvidenceSideSignals, type StageEvidenceFacts, type StageEvidenceVerdict,
@@ -188,43 +187,51 @@ section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 �
  * 🔴 경계값 fixture — 각 칸이 그 단계를 **딱** 채운다(기회 = 목표 · cohort 공개 = 목표 · 손실 0 · 대기 0 ·
  *    용량 = 필요량(= 목표)을 겨우 채움 · Persona = canary 하한). 넉넉한 값으로 PASS 를 만들면 경계 반례가 헛돈다.
  */
-const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
 /** 🔴 미래 순유입 합집합 반례의 실제 산출 — 아래 D20 preflight 판정에 그대로 넣는다 */
 const FUTURE_UNION: {
   overlap: number | null; distinct: number | null
   /** H1 반례 — 현재 원천 300(이른 슬롯) · y=0.1 · 순유입 17(늦은 슬롯) */
   pooledCurrent: number | null; pooled: number | null; oldPooled: number | null
 } = { overlap: null, distinct: null, pooledCurrent: null, pooled: null, oldPooled: null }
-const d3LastPublishMinute = Math.max(...profileOf('d3').slots.map((slot) => slot.hour * 60 + slot.minute))
-check('🔴 당일 증명 회차 경계는 가장 이른 D3 마지막 발행 슬롯 19:00과 맞고 5회다',
-  SUPPLY_PROOF_LAST_PUBLISH_MINUTE === d3LastPublishMinute
-  && supplyProofRunSlots(SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS).length === 5)
-check('launchd 가 1분 늦게 시작한 08:16은 08:15 자연 공급 회차에 귀속된다',
-  supplyRunSlotMinuteOf(8 * 60 + 16) === 8 * 60 + 15)
-check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정하지 않는다',
-  supplyRunSlotMinuteOf(9 * 60) === null)
+/**
+ * 🔴 회차 시각은 손으로 적지 않는다 — 정본 시각표(`SUPPLY_RUN_SLOTS_KST`)에서 계산한다.
+ *    아래 fixture 는 07:00 판정을 재현한다: 기준선 = 07:00 전에 창이 끝난 마지막 정기 회차,
+ *    남은 회차 = 07:00 뒤에 뜨는 정기 회차 전부(바퀴 표가 바뀌어도 이 검사는 그대로다).
+ */
+const SUPPLY_MINUTES = SUPPLY_RUN_SLOTS_KST.map((slot) => slot.hour * 60 + slot.minute).sort((a, b) => a - b)
+const SUPPLY_WINDOW_MINUTES = SUPPLY_RUN_WINDOW_MS / 60_000
+const JUDGE_MINUTE = 7 * 60
+/** 07:00 판정의 기준선 회차 — 회차 시각 + 창이 판정 시각 이전인 마지막 회차 */
+const BASE_RUN = SUPPLY_MINUTES.filter((m) => m + SUPPLY_WINDOW_MINUTES <= JUDGE_MINUTE).at(-1)!
+/** 07:00 뒤 그날 남은 정기 회차 — 첫 회차가 순유입을 처음 본다 */
+const FUTURE_RUNS = SUPPLY_MINUTES.filter((m) => m > JUDGE_MINUTE)
+const FIRST_RUN = FUTURE_RUNS[0]!
+const hhmm = (minute: number): string => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+check(`fixture — 07:00 판정에 기준선 회차(${hhmm(BASE_RUN)})와 남은 회차가 셋 이상 있다(첫 회차 ${hhmm(FIRST_RUN)})`,
+  Number.isInteger(BASE_RUN) && FUTURE_RUNS.length >= 3)
+check(`launchd 가 1분 늦게 시작한 회차는 그 정기 회차(${hhmm(FIRST_RUN)})에 귀속된다`,
+  supplyRunSlotMinuteOf(FIRST_RUN + 1) === FIRST_RUN)
+check('정기 회차의 45분 창이 끝난 시각은 가까운 회차로 추정하지 않는다',
+  supplyRunSlotMinuteOf(FIRST_RUN + SUPPLY_WINDOW_MINUTES - 1) === FIRST_RUN
+  && FUTURE_RUNS[1]! > FIRST_RUN + SUPPLY_WINDOW_MINUTES && supplyRunSlotMinuteOf(FIRST_RUN + SUPPLY_WINDOW_MINUTES) === null)
 {
   const target = '2026-11-03'
   const now = new Date(`${target}T07:00:00+09:00`)
-  const runIdAt = (date: string, hour = 8, minute = 15): string => {
-    const iso = new Date(`${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+09:00`).toISOString()
-    return iso.replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
-  }
+  /** 그 KST 날짜의 자정에서 `minute` 분 뒤 */
+  const kstAt = (date: string, minute: number): Date => new Date(Date.parse(`${date}T00:00:00+09:00`) + minute * 60_000)
+  const runIdAt = (date: string, minute: number): string =>
+    kstAt(date, minute).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
   const snapshotAt = (
-    targetDir: string, date: string, ids: readonly string[], hour = 8, minute = 15, evidenceAt?: Date,
+    targetDir: string, date: string, ids: readonly string[], minute: number, evidenceAt?: Date,
     origin: 'natural' | 'scheduled-followup' | 'event' | 'manual' | 'legacy' = 'natural',
   ): void => {
     const written = ids.length
-    const runId = runIdAt(date, hour, minute)
-    const runAt = new Date(`${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+09:00`)
+    const runId = runIdAt(date, minute)
+    const runAt = kstAt(date, minute)
     const takenAt = new Date(runAt.getTime() + 10 * 60_000).toISOString()
-    const budgetSlot = SUPPLY_RUN_SLOTS_KST.find((slot) => {
-      const start = slot.hour * 60 + slot.minute
-      const actual = hour * 60 + minute
-      return actual >= start && actual < start + SUPPLY_RUN_WINDOW_MS / 60_000
-    })
-    const budgetWindow = budgetSlot === undefined ? `${date} 00:00`
-      : `${date} ${String(budgetSlot.hour).padStart(2, '0')}:${String(budgetSlot.minute).padStart(2, '0')}`
+    const budgetSlot = supplyRunSlotMinuteOf(minute)
+    const budgetWindow = budgetSlot === null ? `${date} 00:00` : `${date} ${hhmm(budgetSlot)}`
     const evidence = ids.map((id) => fakeSourceEvidence(evidenceAt ?? new Date(takenAt), {
       site: 'navercafe:fixture', id, ageH: 3,
     }))
@@ -247,7 +254,7 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
         : origin === 'scheduled-followup'
           ? {
               ok: true, code: null, tokenId: `token-${runId}`, trigger: 'scheduled', launchTrigger: 'scheduled',
-              absorbedTrigger: 'scheduled', absorbedAt: new Date(`${date}T08:15:00+09:00`).toISOString(),
+              absorbedTrigger: 'scheduled', absorbedAt: kstAt(date, budgetSlot ?? minute).toISOString(),
               pass: 1, budgetWindow,
             }
         : origin === 'event'
@@ -267,26 +274,31 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   const SAMPLE_DATES = ['2026-10-31', '2026-11-01', '2026-11-02']
   const ids = (prefix: string, n: number): string[] => Array.from({ length: n }, (_, k) => `${prefix}-${k}`)
   type DayPlan = {
-    baseline?: readonly string[] | null; inflow0815: readonly string[]; skip?: readonly number[]
+    /** `skip` — 빠진 남은 회차의 순번(`FUTURE_RUNS` 의 index · 0 = 순유입을 처음 보는 회차) */
+    baseline?: readonly string[] | null; inflowFirst: readonly string[]; skip?: readonly number[]
     origin?: 'natural' | 'event'; evidenceAt?: (date: string) => Date
     /** 기준선 원천이 소진돼 뒤 회차 inventory 에서 빠진다(재고 수준은 그대로 · 원천은 교체) */
     dropBaseline?: boolean
   }
-  /** 🔴 하루 = 06:15 기준선 회차 + 남은 proof 공급 회차 넷. 08:15 회차가 순유입을 처음 보고, 뒤 회차는 같은 원천을 다시 본다 */
+  /** 🔴 하루 = 기준선 회차 + 07:00 뒤 남은 정기 회차 전부. 첫 회차가 순유입을 처음 보고, 뒤 회차는 같은 원천을 다시 본다 */
   const writeDay = (targetDir: string, date: string, p: DayPlan): void => {
     const base = p.baseline === undefined ? ids(`${date}-base`, 5) : p.baseline
-    if (base !== null) snapshotAt(targetDir, date, base, 6, 15, p.evidenceAt?.(date))
-    const seen = [...(base === null || p.dropBaseline === true ? [] : base), ...p.inflow0815]
-    for (const [h, m] of [[8, 15], [12, 15], [14, 15], [17, 15]] as const) {
-      if (p.skip?.includes(h)) continue
-      snapshotAt(targetDir, date, seen, h, m, p.evidenceAt?.(date), p.origin ?? 'natural')
-    }
+    if (base !== null) snapshotAt(targetDir, date, base, BASE_RUN, p.evidenceAt?.(date))
+    const seen = [...(base === null || p.dropBaseline === true ? [] : base), ...p.inflowFirst]
+    FUTURE_RUNS.forEach((minute, i) => {
+      if (p.skip?.includes(i)) return
+      snapshotAt(targetDir, date, seen, minute, p.evidenceAt?.(date), p.origin ?? 'natural')
+    })
   }
-  const at = (h: number, m: number): Date =>
-    new Date(`${target}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+09:00`)
-  // 증명 슬롯 20 — 이른 3개(08:00·08:20·08:40)는 아무도 못 채운다 · 늦은 17개 09:00~10:20(5분 간격)
-  const PROOF20 = [at(8, 0), at(8, 20), at(8, 40), ...Array.from({ length: 17 }, (_, k) => at(9 + Math.floor((k * 5) / 60), (k * 5) % 60))]
-  const LATE = 9 * 60
+  /** 첫 남은 회차가 본 원천이 쓸 수 있게 되는 발행 분 — 회차 시작 + 회차 창 */
+  const LATE = FIRST_RUN + SUPPLY_WINDOW_MINUTES
+  // 발행 증명 슬롯 20 — 이른 3개(LATE 60·40·20분 전)는 아무도 못 채운다 · 늦은 17개는 LATE 부터 5분 간격(80분)
+  const PROOF20 = [
+    ...[60, 40, 20].map((before) => kstAt(target, LATE - before)),
+    ...Array.from({ length: 17 }, (_, k) => kstAt(target, LATE + k * 5)),
+  ]
+  check('fixture — 둘째 남은 회차가 본 원천은 늦은 발행 슬롯이 다 지난 뒤에야 쓸 수 있다(첫 회차 누락 반례의 전제)',
+    FUTURE_RUNS[1]! + SUPPLY_WINDOW_MINUTES > LATE + 16 * 5)
   const kstMinute = (d: Date): number => { const w = new Date(d.getTime() + 9 * 3600_000); return w.getUTCHours() * 60 + w.getUTCMinutes() }
   const opp = (key: string, ok: (minute: number) => boolean) => ({ key, validAt: (slot: Date) => ok(kstMinute(slot)) })
   const lateOnly = (prefix: string, n: number) => ids(prefix, n).map((k) => opp(k, (m) => m >= LATE))
@@ -308,7 +320,7 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   const keep = (d: string): string => { dirs.push(d); return d }
 
   // ① 재현 — READY 10 · 미래 원천 17 이 모두 늦은 17슬롯에서만 유효 · 이른 3슬롯은 못 채운다
-  const overlap = keep(scenario('overlap', (date) => ({ inflow0815: ids(`${date}-new`, 17) })))
+  const overlap = keep(scenario('overlap', (date) => ({ inflowFirst: ids(`${date}-new`, 17) })))
   const ready10 = lateOnly('ready', 10)
   FUTURE_UNION.overlap = futureOf(overlap, { ready: ready10 })
   check('🔴🔴 합집합 — READY 10 이 늦은 17슬롯을 먼저 쓰면 순유입 17 은 남은 늦은 7슬롯만 채운다 → 추가 7',
@@ -321,15 +333,15 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   check('🟢 서로 다른 슬롯 — READY 3(이른) + 순유입 17(늦은) → 추가 17(85~90 선행 재고 없음)',
     FUTURE_UNION.distinct === 17, String(FUTURE_UNION.distinct))
   const turnover = keep(scenario('turnover', (date) => ({
-    baseline: ids(`${date}-old`, 17), inflow0815: ids(`${date}-new`, 17), dropBaseline: true,
+    baseline: ids(`${date}-old`, 17), inflowFirst: ids(`${date}-new`, 17), dropBaseline: true,
   })))
   check('🟢 재고 수준은 17→17 그대로여도 원천이 통째로 바뀌었으면 새 원천 17 을 순유입으로 센다(재고 차이 0 이 아니다)',
     futureOf(turnover, { ready: earlyOnly('ready', 3) }) === 17)
-  const noInflow = keep(scenario('flat', (date) => ({ baseline: ids(`${date}-old`, 17), inflow0815: [] })))
+  const noInflow = keep(scenario('flat', (date) => ({ baseline: ids(`${date}-old`, 17), inflowFirst: [] })))
   check('🔴 재고가 많아도(기준선 17 을 다시 봄) 새로 들어온 원천이 없으면 추가 0 — 재고 수준은 유입이 아니다',
     futureOf(noInflow, { ready: earlyOnly('ready', 3) }) === 0)
   const recoveredThenNatural = keep(scenario('recovered-then-natural', (date) => ({
-    inflow0815: ids(`${date}-recovered`, 17),
+    inflowFirst: ids(`${date}-recovered`, 17),
   })))
   const recoveryHome = mkdtempSync(join(tmpdir(), 'future-inflow-recovery-home-'))
   dirs.push(recoveryHome)
@@ -345,11 +357,11 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
   writeFileSync(stageRecoverySourceReceiptPath(SAMPLE_DATES[1]!, `nonce-${SAMPLE_DATES[1]}`, recoveryHome), '{')
   check('🔴 복구 원천 영수증이 손상되면 순유입을 부풀리지 않고 UNKNOWN',
     futureOf(recoveredThenNatural, { recoveryHome }) === null)
-  const weakDay = keep(scenario('weak', (date) => ({ inflow0815: ids(`${date}-new`, date === '2026-11-01' ? 12 : 17) })))
+  const weakDay = keep(scenario('weak', (date) => ({ inflowFirst: ids(`${date}-new`, date === '2026-11-01' ? 12 : 17) })))
   check('🔴 3일 중 가장 약한 날의 추가분을 쓴다(17·12·17 → 12)', futureOf(weakDay, { ready: earlyOnly('ready', 3) }) === 12)
   check('🔴 하한 수율로 할인한다 — 순유입 17 × 0.5 → 8(현재 0)', futureOf(overlap, { y: 0.5 }) === 8)
   const stale = keep(scenario('stale', (date) => ({
-    inflow0815: ids(`${date}-new`, 17), evidenceAt: (d) => new Date(`${addDays(d, -4)}T00:00:00+09:00`),
+    inflowFirst: ids(`${date}-new`, 17), evidenceAt: (d) => new Date(`${addDays(d, -4)}T00:00:00+09:00`),
   })))
   check('🔴 순유입이어도 그날 같은 슬롯에서 신선도·품질 관문을 못 넘으면 추가 0', futureOf(stale, { ready: earlyOnly('ready', 3) }) === 0)
 
@@ -369,74 +381,74 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
     && futureAdditionalOf({ slots: PROOF20, ready: lateOnly('ready', 10), current: [], inflow: lateOnly('in', 17), readyPerSource: 1 }) === 7)
 
   // ④ 증명된 누락은 0 · 기준선 없음과 손상은 모름(null)
-  const skipped = keep(scenario('skip', (date) => ({ inflow0815: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [14] : [] })))
-  check('🟢 M2 — 표본일 하나에 14:15 자연 회차만 빠져도 08:15 이 이미 본 순유입 17 은 센다(UNKNOWN 아님)',
+  const skipped = keep(scenario('skip', (date) => ({ inflowFirst: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [2] : [] })))
+  check('🟢 M2 — 표본일 하나에 뒤 자연 회차 하나만 빠져도 첫 회차가 이미 본 순유입 17 은 센다(UNKNOWN 아님)',
     futureOf(skipped, { ready: earlyOnly('ready', 3) }) === 17)
-  const skippedInflow = keep(scenario('skip-inflow', (date) => ({ inflow0815: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [8] : [] })))
-  check('🔴 M2 — 순유입을 처음 볼 08:15 회차가 빠지면 그 원천은 12:15 에야 보인다 → 그날 늦은 가용(증명 슬롯 뒤) · 추가 0',
+  const skippedInflow = keep(scenario('skip-inflow', (date) => ({ inflowFirst: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [0] : [] })))
+  check('🔴 M2 — 순유입을 처음 볼 회차가 빠지면 그 원천은 다음 회차에야 보인다 → 그날 늦은 가용(증명 슬롯 뒤) · 추가 0',
     futureOf(skippedInflow, { ready: earlyOnly('ready', 3) }) === 0)
-  const noNatural = keep(scenario('no-natural', (date) => ({ inflow0815: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? [8, 12, 14, 17] : [] })))
+  const noNatural = keep(scenario('no-natural', (date) => ({ inflowFirst: ids(`${date}-new`, 17), skip: date === '2026-11-01' ? FUTURE_RUNS.map((_, i) => i) : [] })))
   check('🔴 M2 — 기준선은 있고 자연 공급 회차가 하루 통째로 없으면 그날 추가 0 → 3일 최솟값 0',
     futureOf(noNatural, { ready: earlyOnly('ready', 3) }) === 0)
-  const noBase = keep(scenario('nobase', (date) => ({ inflow0815: ids(`${date}-new`, 17), baseline: date === SAMPLE_DATES[0] ? null : undefined })))
+  const noBase = keep(scenario('nobase', (date) => ({ inflowFirst: ids(`${date}-new`, 17), baseline: date === SAMPLE_DATES[0] ? null : undefined })))
   check('🔴 첫 표본일 07:00 기준선 inventory 가 없으면 순유입을 셀 수 없다 → UNKNOWN', futureOf(noBase) === null)
-  const eventOnly = keep(scenario('event', (date) => ({ inflow0815: ids(`${date}-new`, 17), origin: 'event' })))
+  const eventOnly = keep(scenario('event', (date) => ({ inflowFirst: ids(`${date}-new`, 17), origin: 'event' })))
   check('🔴 슬롯 창 안 event kickstart 회차는 자연 표본이 아니다 → 추가 0(부풀리지 않는다)', futureOf(eventOnly, { ready: earlyOnly('ready', 3) }) === 0)
-  const corrupt = keep(scenario('corrupt', (date) => ({ inflow0815: ids(`${date}-new`, 17) })))
-  writeFileSync(join(corrupt, `supply-opportunities-${runIdAt('2026-11-01', 12, 15)}.json`), '{')
+  const corrupt = keep(scenario('corrupt', (date) => ({ inflowFirst: ids(`${date}-new`, 17) })))
+  writeFileSync(join(corrupt, `supply-opportunities-${runIdAt('2026-11-01', FUTURE_RUNS[1]!)}.json`), '{')
   check('🔴 M2 — 남은 슬롯 표본 하나라도 손상이면 여전히 UNKNOWN(누락이 아니다)', futureOf(corrupt) === null)
-  const orphan = keep(scenario('orphan', (date) => ({ inflow0815: ids(`${date}-new`, 17) })))
-  rmSync(join(orphan, `supply-opportunities-${runIdAt('2026-11-01', 14, 15)}.json`))
+  const orphan = keep(scenario('orphan', (date) => ({ inflowFirst: ids(`${date}-new`, 17) })))
+  rmSync(join(orphan, `supply-opportunities-${runIdAt('2026-11-01', FUTURE_RUNS[2]!)}.json`))
   check('🔴 M2 — 자연 회차가 snapshot written 을 주장하는데 파일이 없으면 손상 → UNKNOWN', futureOf(orphan) === null)
   const twoDays = keep(mkdtempSync(join(tmpdir(), 'future-inflow-two-')))
-  for (const date of SAMPLE_DATES.slice(1)) writeDay(twoDays, date, { inflow0815: ids(`${date}-new`, 17) })
+  for (const date of SAMPLE_DATES.slice(1)) writeDay(twoDays, date, { inflowFirst: ids(`${date}-new`, 17) })
   check('🔴 표본 3일 중 하루가 통째로 없으면(기준선 없음) UNKNOWN', futureOf(twoDays) === null)
   check('🔴 하한 수율을 모르거나 kstDate·now 날짜가 어긋나면 UNKNOWN',
     futureOf(overlap, { y: null }) === null && futureOf(overlap, { kstDate: '2026-11-05' }) === null)
 
   // ⑤ M2 — 끝난 failed 회차도 snapshot·marker 가 온전하면 표본이다 · running · marker 손상은 모름
-  const runPath = (dir: string, date: string, h: number, m: number): string =>
-    join(dir, `supply-process-${runIdAt(date, h, m)}.run.json`)
-  const patchRun = (dir: string, date: string, h: number, m: number, patch: Record<string, unknown>): void => {
-    const path = runPath(dir, date, h, m)
+  const runPath = (dir: string, date: string, minute: number): string =>
+    join(dir, `supply-process-${runIdAt(date, minute)}.run.json`)
+  const patchRun = (dir: string, date: string, minute: number, patch: Record<string, unknown>): void => {
+    const path = runPath(dir, date, minute)
     writeFileSync(path, JSON.stringify({ ...(JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>), ...patch }))
   }
-  const markerOf = (dir: string, date: string, h: number, m: number): Record<string, unknown> =>
-    (JSON.parse(readFileSync(runPath(dir, date, h, m), 'utf-8')) as { opportunityInventory: Record<string, unknown> }).opportunityInventory
-  const inflowPlan = (date: string): DayPlan => ({ inflow0815: ids(`${date}-new`, 17) })
+  const markerOf = (dir: string, date: string, minute: number): Record<string, unknown> =>
+    (JSON.parse(readFileSync(runPath(dir, date, minute), 'utf-8')) as { opportunityInventory: Record<string, unknown> }).opportunityInventory
+  const inflowPlan = (date: string): DayPlan => ({ inflowFirst: ids(`${date}-new`, 17) })
   const failedOk = keep(scenario('failed-written', inflowPlan))
-  patchRun(failedOk, '2026-11-01', 8, 15, { status: 'failed' })
-  patchRun(failedOk, '2026-11-02', 6, 15, { status: 'failed' })
+  patchRun(failedOk, '2026-11-01', FIRST_RUN, { status: 'failed' })
+  patchRun(failedOk, '2026-11-02', BASE_RUN, { status: 'failed' })
   check('🟢 M2 — 다른 단계가 실패한(failed) 자연 회차도 snapshot·marker·runId·시각·SHA 가 온전하면 표본·기준선이다(대조와 같은 17)',
     futureOf(failedOk, { ready: earlyOnly('ready', 3) }) === 17 && futureOf(overlap, { ready: earlyOnly('ready', 3) }) === 17)
   const failedBadMarker = keep(scenario('failed-bad-marker', inflowPlan))
-  patchRun(failedBadMarker, '2026-11-01', 8, 15, {
+  patchRun(failedBadMarker, '2026-11-01', FIRST_RUN, {
     status: 'failed',
-    opportunityInventory: { ...markerOf(failedBadMarker, '2026-11-01', 8, 15), status: 'failed', written: null, reason: 'write EIO' },
+    opportunityInventory: { ...markerOf(failedBadMarker, '2026-11-01', FIRST_RUN), status: 'failed', written: null, reason: 'write EIO' },
   })
   const failedDriftMarker = keep(scenario('failed-drift-marker', inflowPlan))
-  patchRun(failedDriftMarker, '2026-11-01', 8, 15, {
+  patchRun(failedDriftMarker, '2026-11-01', FIRST_RUN, {
     status: 'failed',
-    opportunityInventory: { ...markerOf(failedDriftMarker, '2026-11-01', 8, 15), observedAt: '2026-11-01T00:00:00.000Z' },
+    opportunityInventory: { ...markerOf(failedDriftMarker, '2026-11-01', FIRST_RUN), observedAt: '2026-11-01T00:00:00.000Z' },
   })
   check('🔴 M2 — failed 회차의 marker 가 written 이 아니거나 snapshot 과 어긋나면 UNKNOWN',
     futureOf(failedBadMarker) === null && futureOf(failedDriftMarker) === null)
   const runningWritten = keep(scenario('running-written', inflowPlan))
-  patchRun(runningWritten, '2026-11-01', 8, 15, { status: 'running', completedAt: null })
+  patchRun(runningWritten, '2026-11-01', FIRST_RUN, { status: 'running', completedAt: null })
   const runningBaseline = keep(scenario('running-baseline', inflowPlan))
-  patchRun(runningBaseline, '2026-11-01', 6, 15, { status: 'running', completedAt: null })
+  patchRun(runningBaseline, '2026-11-01', BASE_RUN, { status: 'running', completedAt: null })
   const unknownStatus = keep(scenario('unknown-status', inflowPlan))
-  patchRun(unknownStatus, '2026-11-01', 8, 15, { status: 'partial' })
+  patchRun(unknownStatus, '2026-11-01', FIRST_RUN, { status: 'partial' })
   check('🔴 M2 — running(완료 시각 없음)·모르는 상태는 snapshot·marker 가 written 이어도 UNKNOWN(표본·기준선 모두)',
     futureOf(runningWritten) === null && futureOf(runningBaseline) === null && futureOf(unknownStatus) === null)
-  /** 2026-11-01 14:15 자연 회차의 기회 파일을 지우고 marker 를 비운다 — snapshot 을 주장하지 않는 회차 기록만 남는다 */
+  /** 2026-11-01 의 셋째 남은 자연 회차의 기회 파일을 지우고 marker 를 비운다 — snapshot 을 주장하지 않는 회차 기록만 남는다 */
   const noSnapshot = (name: string, patch: Record<string, unknown>): string => {
     const dir = keep(scenario(name, inflowPlan))
-    rmSync(join(dir, `supply-opportunities-${runIdAt('2026-11-01', 14, 15)}.json`))
-    patchRun(dir, '2026-11-01', 14, 15, { opportunityInventory: null, ...patch })
+    rmSync(join(dir, `supply-opportunities-${runIdAt('2026-11-01', FUTURE_RUNS[2]!)}.json`))
+    patchRun(dir, '2026-11-01', FUTURE_RUNS[2]!, { opportunityInventory: null, ...patch })
     return dir
   }
-  check('🟢 M2 대조 — 끝난(done) 자연 회차가 snapshot 없이 written 도 주장하지 않으면 증명된 누락 → 슬롯 0 · 08:15 순유입 17',
+  check('🟢 M2 대조 — 끝난(done) 자연 회차가 snapshot 없이 written 도 주장하지 않으면 증명된 누락 → 그 회차 0 · 첫 회차 순유입 17',
     futureOf(noSnapshot('nosnap-done', {}), { ready: earlyOnly('ready', 3) }) === 17)
   check('🔴 M2 — running 자연 회차가 snapshot 없이 marker 도 없으면 누락이 아니라 UNKNOWN',
     futureOf(noSnapshot('nosnap-running', { status: 'running', completedAt: null }), { ready: earlyOnly('ready', 3) }) === null)
@@ -446,36 +458,41 @@ check('08:15 회차의 45분 창이 끝난 09:00은 가까운 회차로 추정�
     futureOf(noSnapshot('nosnap-bad-completed', { completedAt: 'not-a-date' }), { ready: earlyOnly('ready', 3) }) === null
     && futureOf(noSnapshot('nosnap-future-completed', { completedAt: '2026-11-05T00:00:00.000Z' }), { ready: earlyOnly('ready', 3) }) === null)
 
-  // ⑥ 기준선 provenance — 07:00 판정의 기준선은 그날 06:15 자연 proof 슬롯 하나다
-  /** 표본일 전날 22:15 자연 회차 — 06:15 이 없을 때 앞판이 내려가 읽던 "전날 밤" 기준선 */
+  // ⑥ 기준선 provenance — 07:00 판정의 기준선은 그날 07:00 전에 창이 끝난 마지막 자연 정기 회차 하나다
+  /** 표본일 전날 마지막 회차 · 같은 날 더 이른 회차의 자연 snapshot — 기준선 회차가 없을 때 내려가 읽으면 안 되는 자리 */
+  const EARLIER_RUNS = SUPPLY_MINUTES.filter((m) => m < BASE_RUN)
   const priorNight = (dir: string): void => {
-    for (const date of SAMPLE_DATES) snapshotAt(dir, addDays(date, -1), ids(`${date}-base`, 5), 22, 15)
+    for (const date of SAMPLE_DATES) {
+      snapshotAt(dir, addDays(date, -1), ids(`${date}-base`, 5), SUPPLY_MINUTES.at(-1)!)
+      for (const minute of EARLIER_RUNS) snapshotAt(dir, date, ids(`${date}-base`, 5), minute)
+    }
   }
   const missingAll = keep(scenario('base-missing-all', (date) => ({ ...inflowPlan(date), baseline: null })))
   priorNight(missingAll)
-  check('🔴🔴 기준선 — 세 표본일 모두 06:15 이 없고 전날 밤 22:15 자연 snapshot 이 온전해도 UNKNOWN(전날 밤으로 내려가지 않는다)',
+  check('🔴🔴 기준선 — 세 표본일 모두 기준선 회차가 없고 전날 밤 · 더 이른 회차의 자연 snapshot 이 온전해도 UNKNOWN(내려가지 않는다)',
     futureOf(missingAll) === null)
   const priorControl = keep(scenario('base-prior-control', inflowPlan))
   priorNight(priorControl)
-  check('🟢 기준선 대조 — 06:15 이 있으면 같은 전날 밤 회차가 있어도 06:15 로 센다(17)',
+  check('🟢 기준선 대조 — 기준선 회차가 있으면 같은 전날 밤 · 더 이른 회차가 있어도 기준선 회차로 센다(17)',
     futureOf(priorControl, { ready: earlyOnly('ready', 3) }) === 17)
   const nonNaturalBase = (origin: 'event' | 'manual'): string => {
     const dir = keep(scenario(`base-${origin}`, (date) => ({ ...inflowPlan(date), baseline: null })))
-    for (const date of SAMPLE_DATES) snapshotAt(dir, date, ids(`${date}-base`, 5), 6, 15, undefined, origin)
+    for (const date of SAMPLE_DATES) snapshotAt(dir, date, ids(`${date}-base`, 5), BASE_RUN, undefined, origin)
     priorNight(dir)
     return dir
   }
-  check('🔴 기준선 — 세 표본일의 06:15 이 event·manual 회차뿐이면 UNKNOWN(비자연 회차를 기준선으로 쓰지 않는다)',
+  check('🔴 기준선 — 세 표본일의 기준선 회차가 event·manual 실행뿐이면 UNKNOWN(비자연 회차를 기준선으로 쓰지 않는다)',
     futureOf(nonNaturalBase('event')) === null && futureOf(nonNaturalBase('manual')) === null)
   const corruptBase = keep(scenario('base-corrupt', inflowPlan))
-  writeFileSync(join(corruptBase, `supply-opportunities-${runIdAt('2026-11-01', 6, 15)}.json`), '{')
+  writeFileSync(join(corruptBase, `supply-opportunities-${runIdAt('2026-11-01', BASE_RUN)}.json`), '{')
   const noShaBase = keep(scenario('base-no-sha', inflowPlan))
-  patchRun(noShaBase, '2026-11-01', 6, 15, { runtimeSha: '' })
-  check('🔴 기준선 — 06:15 snapshot 손상 · runtimeSha 없음이면 UNKNOWN',
+  patchRun(noShaBase, '2026-11-01', BASE_RUN, { runtimeSha: '' })
+  check('🔴 기준선 — 기준선 회차 snapshot 손상 · runtimeSha 없음이면 UNKNOWN',
     futureOf(corruptBase) === null && futureOf(noShaBase) === null)
-  check('🔴 기준선 — 창이 끝난 proof 슬롯이 없는 06:50 판정은 UNKNOWN(전날 밤으로 내려가지 않는다)',
-    measuredFutureSourceOpportunities({
-      dataDir: priorControl, kstDate: target, now: new Date(`${target}T06:50:00+09:00`), proofSlots: PROOF20,
+  check('🔴 기준선 — 창이 끝난 정기 회차가 아직 없는 시각(첫 회차 창이 끝나기 10분 전)의 판정은 UNKNOWN(전날 밤으로 내려가지 않는다)',
+    SUPPLY_MINUTES[0]! + SUPPLY_WINDOW_MINUTES - 10 >= 0
+    && measuredFutureSourceOpportunities({
+      dataDir: priorControl, kstDate: target, now: kstAt(target, SUPPLY_MINUTES[0]! + SUPPLY_WINDOW_MINUTES - 10), proofSlots: PROOF20,
       ready: [], current: [], readyPerSourceLow: 1,
     }) === null)
   for (const d of dirs) rmSync(d, { recursive: true, force: true })
@@ -502,12 +519,15 @@ const factsFor = (s: GenericStage, o: Partial<PreflightFacts> = {}): PreflightFa
 const D20_TRANSITION = judgeNextPreflight('d20', factsFor('d20', {
     readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
   }), GRID)
-check('🔴 D20 전환일 실측 — READY 21/원천 95 × 20원천 × 당일 5회 = 용량 22 · 최대 필요 21을 채운다',
-  D20_TRANSITION.counts.readyCapacity === 22 && D20_TRANSITION.counts.readyNeededMax === 21
+check('🔴 D20 전환일 실측 수율 — READY 21/원천 95 × 묶음 20 × 하루 정기 회차 수 = 용량 · 최대 필요 21을 채운다',
+  D20_TRANSITION.counts.readyCapacity === Math.floor((21 * SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY) / 95)
+  && D20_TRANSITION.counts.readyNeededMax === 21 && (D20_TRANSITION.counts.readyCapacity ?? 0) >= 21
   && !D20_TRANSITION.forecastWarnings.includes('THROUGHPUT_SHORT') && !D20_TRANSITION.codes.includes('THROUGHPUT_SHORT'))
-check('🔴 D20 전환일 반례 — 같은 실측에서 묶음 18이면 용량 19라 최대 필요 21을 못 채운다',
-  readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) === 19
-  && (readyCapacityOf(21, 95, 18, SUPPLY_PROOF_RUNS_PER_DAY) ?? 0) < (D20_TRANSITION.counts.readyNeededMax ?? 0))
+check('🔴 용량 산식 — 회차 수 인자를 넘기면 그 수로 센다(묶음 18 · 5회면 용량 19라 최대 필요 21 미달) · 안 넘기면 하루 정기 회차 수',
+  readyCapacityOf(21, 95, 18, 5) === 19
+  && (readyCapacityOf(21, 95, 18, 5) ?? 0) < (D20_TRANSITION.counts.readyNeededMax ?? 0)
+  && readyCapacityOf(21, 95, 18) === readyCapacityOf(21, 95, 18, SUPPLY_RUNS_PER_DAY)
+  && readyCapacityOf(21, 95, 18) === Math.floor((21 * 18 * SUPPLY_RUNS_PER_DAY) / 95))
 check('🔴 비용 변동 경계 — 결과당 실측 비용이 30% 상승하면 D20은 $1.20 증명 예산을 넘어 자동으로 열리지 않는다',
   judgeNextPreflight('d20', factsFor('d20', {
     readyCohort: cohortFor('d20', {
@@ -549,8 +569,8 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
 check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 승인 천장 $0.50',
   supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
   && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
-check('🔴 저예산 7회 profile은 앞 5회 몫만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
-  supplyProofBudgetUsd(1.19) === 1.19 * 5 / 7
+check('🔴 저예산 천장은 날짜 계약의 분수 칸(5/7)만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
+  supplyCostProofBudgetUsd('2026-11-05', 1.19) === 1.19 * 5 / 7
   && judgeNextPreflight('d20', factsFor('d20', {
     supplyDailyUsdCap: 1.19,
     readyCohort: cohortFor('d20', { sources: 95, published: 19, lost: 0, scheduled: 1, unknown: 1, usdPerSlotValidResult: 0.0502934 }),
@@ -629,7 +649,7 @@ const pfCases: { name: string; s: GenericStage; o: Partial<PreflightFacts>; want
   { name: '🔴 계약 유효 Persona 모름(읽기 실패)', s: 'd3', o: { contractValidPersonas: null }, want: 'UNKNOWN', code: 'PERSONA_UNKNOWN' },
   { name: '🔴 계약 유효 Persona 0 < D3 하한 24 (2026-09-30 운영 실측) — D1→D3 부터 막힌다', s: 'd3', o: { contractValidPersonas: 0 }, want: 'FAIL', code: 'PERSONA_SHORT' },
   { name: '공급 결과당 비용 $0.025 × 목표 50 > $1.20 — 비용 경고(막지 않는다)', s: 'd50', o: { readyCohort: cohortFor('d50', { usdPerSlotValidResult: 0.025 }) }, want: 'PASS', code: 'SUPPLY_COST_SHORT', lane: 'observe' },
-  { name: '🔴 결말 절반이 모름(공개 5 · 모름 5) → 필요량 상한까지는 못 채운다 → 예측 경고', s: 'd5', o: { readyCohort: cohortFor('d5', { unknown: 5, sources: 150 }) }, want: 'PASS', code: 'READY_REQUIREMENT_UNKNOWN', lane: 'forecast' },
+  { name: '🔴 결말 절반이 모름(공개 5 · 모름 5) → 필요량 상한까지는 못 채운다 → 예측 경고', s: 'd5', o: { readyCohort: cohortFor('d5', { unknown: 5, sources: RUNS * 1.5 }) }, want: 'PASS', code: 'READY_REQUIREMENT_UNKNOWN', lane: 'forecast' },
   { name: '🔴 실측 손실 1 · 같은 cohort 용량 5 → 필요 READY 6 → 처리량 부족(예측 경고 · 산술은 그대로)', s: 'd5', o: { readyCohort: cohortFor('d5', { lost: 1, sources: Math.ceil((RUNS * 6) / 5) }) }, want: 'PASS', code: 'THROUGHPUT_SHORT', lane: 'forecast' },
   { name: '결과당 공급 비용 모름(미연결 · legacy)', s: 'd20', o: { readyCohort: cohortFor('d20', { usdPerSlotValidResult: null }) }, want: 'PASS', code: 'SUPPLY_COST_UNKNOWN', lane: 'observe' },
   { name: '공급 상한 모름', s: 'd20', o: { supplyDailyUsdCap: null }, want: 'PASS', code: 'SUPPLY_COST_UNKNOWN', lane: 'observe' },

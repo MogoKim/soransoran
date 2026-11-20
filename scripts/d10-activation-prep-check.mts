@@ -1038,14 +1038,9 @@ console.log('\n⑯ current 수집 능력의 정본은 관측 하나뿐')
 // ── ⑰ 문서가 실제 계산과 어긋나지 않는다 (P2) ──
 console.log('\n⑰ 문서 정합 — 낡은 숫자·낡은 절차를 남기지 않는다')
 {
-  const sched = read('src/lib/collect-schedule.ts')
   const rb = read(RUNBOOK)
   const ma = read('docs/operations/MASTER-OPERATING-SYSTEM.md')
 
-  /**
-   * 🔴 **주석의 수집량이 실제 계산과 같아야 한다.** 옛 주석은 "지금 등록된 것은 하루 70건"
-   *    이라고 적었는데, 그 70 은 미등록 job 과 조건부 수집 몫을 합치고 성공률도 곱하지 않은 값이다.
-   */
   /**
    * 🔴 **변동 수치를 문서에 박지 않는다.** 검사를 하나 더할 때마다 낡는다.
    */

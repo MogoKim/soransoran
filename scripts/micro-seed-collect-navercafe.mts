@@ -86,6 +86,7 @@ import {
 } from '../src/lib/naver-member-gate'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
+import { writeJsonlAtomic } from './lib/atomic-jsonl.mjs'
 import {
   captureVoiceEvidence, evidenceRowProblems, readEvidenceSalt, voiceEvidenceDataDir, voiceEvidencePathOf,
   type CapturedComment, type VoiceEvidenceRow,
@@ -267,10 +268,11 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  *    실행별 파일이라 섞일 일이 없고, 같은 파일에 두 번 쓰는 것은 `--out` 을 준
  *    수동 실행뿐이다. 그때도 "이번 실행의 결과" 가 파일 내용이어야 한다.
  *    append 였을 때 두 실행이 44행으로 섞여 분석을 한 번 망쳤다.
+ * 🔴 **한 번에 내놓는다**(`writeJsonlAtomic`) — 공급이 같은 시간대에 돌며 이 파일들을 읽는다.
  */
 function writeJsonl(path: string, rows: object[]) {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(''), 'utf-8')
+  writeJsonlAtomic(path, rows)
 }
 
 function writeSecureJsonl(path: string, rows: object[]) {

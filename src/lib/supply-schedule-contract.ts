@@ -1,37 +1,39 @@
 /**
- * 정기 공급 회차 계약 — 🔴 **수치는 정본 하나에서만 온다** (2026-09-22)
+ * 정기 공급 회차 계약 — 🔴 **시각은 바퀴 표(`cycle-schedule.ts`)에서 계산한다. 여기 다시 적지 않는다**
  *
- * 🔴 **왜 이 파일이 있는가.** 보고에서 "하루 2회" 라고 적었는데 실제 launchd
- *    템플릿은 **7회**다. 문서와 값이 갈리면 승인받은 것과 도는 것이 달라진다.
- *    회차·상한·한계를 여기 하나에 두고, 검사가 템플릿과 대조한다.
+ * 왜 이 파일이 있는가:
+ *   공급 job 템플릿 · 정기 회차 판정 · 예산 배분 · 비용 증거가 "공급이 언제 도는가"를 각자 적으면
+ *   한 곳만 바뀐 날 정기 회차가 손 실행으로 읽혀 유료 요청이 막힌다. 회차 시각 · 창 · 회차당 상한을
+ *   여기 하나에 두고 나머지는 전부 여기서 읽는다.
  */
+import { SUPPLY_CYCLE_MINUTES } from './cycle-schedule'
 
-/** 🔴 `com.soransoran.supply-process.plist.template` 의 실제 슬롯 (KST) */
-export const SUPPLY_RUN_SLOTS_KST = [
-  { hour: 6, minute: 15 }, { hour: 8, minute: 15 }, { hour: 12, minute: 15 }, { hour: 14, minute: 15 },
-  { hour: 17, minute: 15 }, { hour: 21, minute: 15 }, { hour: 22, minute: 15 },
-] as const
+export type SupplyRunSlot = { readonly hour: number; readonly minute: number }
 
-/** 🔴 **7회다.** 06:15는 07:00 controller 전에 전날 미완료 READY를 복구한다. */
+/** 🔴 정기 공급 회차 시각(KST) — 수집 바퀴마다 한 번(`SUPPLY_CYCLE_MINUTES`). launchd 템플릿이 이 값으로 생성된다 */
+export const SUPPLY_RUN_SLOTS_KST: readonly SupplyRunSlot[] = Object.freeze(
+  SUPPLY_CYCLE_MINUTES.map((m) => Object.freeze({ hour: Math.floor(m / 60), minute: m % 60 })),
+)
+
 export const SUPPLY_RUNS_PER_DAY = SUPPLY_RUN_SLOTS_KST.length
 
 /**
- * 다음 날이 아니라 **당일 공개 목표**를 증명할 수 있는 공급 슬롯만 센다.
- * 공급 회차는 최장 45분이므로, D3 이상 단계 중 가장 이른 마지막 발행 슬롯(19:00)까지
- * 끝나는 회차만 센다. 21:15·22:15는 다음 날 재고에는 기여해도 같은 날 Dn 증명에는 쓰지 않는다.
+ * 정기 회차 하나의 창 — 회차 시각부터 이만큼 안에 시작한 유료 요청만 그 회차의 것이다.
+ * 막는 사고: 잠들었다 깨어난 회차가 다른 회차의 예산 몫으로 요청을 보낸다.
+ * 🔴 가장 가까운 두 바퀴 사이(60분)에서 공급 지연(`SUPPLY_AFTER_COLLECT_MINUTES`)을 뺀 값 이하여야 창이 겹치지 않는다
+ *    (`cycle:schedule-check` 가 본다).
  */
 export const SUPPLY_RUN_WINDOW_MS = 45 * 60 * 1000
-export const SUPPLY_PROOF_LAST_PUBLISH_MINUTE = 19 * 60
 
 /**
- * 공급 회차 시작 시각을 정본 슬롯 창에 붙인다.
+ * 공급 회차 시작 시각을 정본 회차 창에 붙인다.
  *
- * 정각 문자열을 비교하지 않는다. launchd 지연으로 08:16에 시작한 08:15 회차도 같은 회차다.
- * 반대로 창 밖 시작은 가까운 슬롯으로 추정하지 않고 `null`이다.
+ * 정각 문자열을 비교하지 않는다. launchd 지연으로 1분 늦게 시작한 회차도 같은 회차다.
+ * 반대로 창 밖 시작은 가까운 회차로 추정하지 않고 `null`이다.
  */
 export function supplyRunSlotMinuteOf(
   startMinute: number,
-  slots: readonly { readonly hour: number; readonly minute: number }[] = SUPPLY_RUN_SLOTS_KST,
+  slots: readonly SupplyRunSlot[] = SUPPLY_RUN_SLOTS_KST,
   windowMs: number = SUPPLY_RUN_WINDOW_MS,
 ): number | null {
   const windowMinutes = windowMs / 60_000
@@ -40,17 +42,6 @@ export function supplyRunSlotMinuteOf(
   const starts = slots.map((slot) => slot.hour * 60 + slot.minute).sort((a, b) => a - b)
   return starts.find((minute) => startMinute >= minute && startMinute < minute + windowMinutes) ?? null
 }
-
-export function supplyProofRunSlots(
-  slots: readonly { readonly hour: number; readonly minute: number }[],
-  windowMs: number = SUPPLY_RUN_WINDOW_MS,
-): readonly { readonly hour: number; readonly minute: number }[] {
-  return slots.filter(
-    (slot) => slot.hour * 60 + slot.minute + windowMs / 60_000 <= SUPPLY_PROOF_LAST_PUBLISH_MINUTE,
-  )
-}
-export const SUPPLY_PROOF_RUN_SLOTS_KST = supplyProofRunSlots(SUPPLY_RUN_SLOTS_KST)
-export const SUPPLY_PROOF_RUNS_PER_DAY = SUPPLY_PROOF_RUN_SLOTS_KST.length
 
 /**
  * 🔴 **예산 env 세 개.** 없으면 장부가 fail-closed 로 유료 요청을 보류하고,
@@ -84,90 +75,6 @@ export const SUPPLY_WORKSET_PER_RUN = 20
 export const SUPPLY_JUDGE_REQUESTS_PER_RUN = 20
 export const SUPPLY_DRAFT_REQUESTS_PER_RUN = 80
 export const SUPPLY_REQUESTS_PER_RUN = 100
-
-/**
- * 🔴 **초기 실측 근거: $0.30/day** (2026-09-22 승인 이력).
- *
- *    근거 — 장부 실측(9/19~9/22, 유료 4건 이상인 회차 21개):
- *      회차당 정산 **중앙 $0.0265 · 최대 $0.0535** (5원천 꽉 채운 회차 SHADOW5B)
- *      → 당시 꽉 찬 회차 기준 하루 약 5.6회분. 운영 장부는 늦은 회차 몫을 먼저 보호하고,
- *        그때는 장부가 마지막 회차를 **막는다**(fail-closed). 그것이 의도한 동작이다.
- *
- *    이 문단은 초기 예산의 추적 근거다. 현재 계약 천장은 날짜별 비용 계약이 정하며(11-17 부터 $1.80),
- *    실제 운영은 env 예산과 계약 천장 중 낮은 값으로 막힌다.
- *
- *    🔴 추가 댓글 생성도 같은 공급 장부와 하루 천장을 공유한다. 적용 예산을 판독하지 못하면
- *       유료 요청을 보내지 않고 `NO_BUDGET`으로 닫는다.
- */
-/**
- * 🔴 **계약 천장 $1.20/day** (2026-10-16 D20 준비 · 역사 — 2026-11-17 부터 $1.80, 정본은 날짜별 비용 계약). 위 $0.30 근거와 D10까지 쓰던
- *    $0.50 운영값은 그대로 남긴다 — 천장은 "여기까지 올릴 수 있다" 이지 "이만큼 쓴다" 가 아니다.
- *
- *    🔴 이 변경은 운영 env(`SORAN_LLM_DAILY_BUDGET_USD`)를 쓰지 않는다. D5·D10은 현재 env 값으로
- *       계속 막히고, D20은 D10 operating PASS의 slot-valid 결과당 실측 비용으로 필요한 총액을 계산한 뒤
- *       사람이 env를 올려야만 열린다. 최근 D5 실측 $0.0487/result를 단순 적용하면 D20은 $0.974/day라
- *       옛 $0.50 천장으로는 구조적으로 불가능했고, $1.20은 그 값에 약 23% 여유를 둔 승인 천장이다.
- */
-// 🔴 (2026-11-16) 승인 천장 상수 `SUPPLY_DAILY_USD_APPROVED`·`SUPPLY_DAILY_USD_PROPOSED` 를 지웠다. 천장은 날짜별 비용 계약
-//    (`supply-cost-envelope.ts` 의 `supplyApprovedDailyUsdOf`) 하나가 정한다 — 11-05~11-16 $1.20 · 11-17~ $1.80.
-
-/**
- * 당일 증명 슬롯을 늦은 재고 슬롯보다 먼저 보호하는 운영 profile의 최소 하루 예산.
- * 이 값 미만에서는 옛 7회 동적 배분을 유지하므로 preflight는 앞 5회의 실제 몫만 비용 용량으로 센다.
- */
-export const SUPPLY_PROOF_FIRST_DAILY_USD = 1.20
-
-/**
- * 같은 날 공개 증명에 실제로 쓸 수 있는 공급 예산.
- * proof-first profile은 전액, 옛 7회 동적 profile은 앞 5회 비율만 센다.
- */
-export function supplyProofBudgetUsd(capUsd: number): number {
-  if (!Number.isFinite(capUsd) || capUsd <= 0) return 0
-  return capUsd >= SUPPLY_PROOF_FIRST_DAILY_USD
-    ? capUsd
-    : capUsd * SUPPLY_PROOF_RUNS_PER_DAY / SUPPLY_RUNS_PER_DAY
-}
-
-/**
- * 🔴 **실측 단가** — 장부(`llm-ledger/2026-09-24~27.jsonl`) 정산액을 공급 회차별로 모은 값.
- *    묶음 5 인 23회차(유료 판정 111건 · 생성 70건). 추정에만 쓴다 — 막는 것은 장부다.
- *      판정 1회 평균 $0.002020 (최대 $0.002386) · 생성 1회 평균 $0.003695 (최대 $0.004317)
- *      원천당 판정 0.974회 · 생성 0.722회 (평균)
- */
-export const SUPPLY_MEASURED = Object.freeze({
-  window: '2026-09-24~27 · 23 runs · workset 5',
-  judgeUsdPerCall: 0.002020,
-  judgeUsdPerCallMax: 0.002386,
-  draftUsdPerCall: 0.003695,
-  draftUsdPerCallMax: 0.004317,
-  judgeCallsPerSource: 0.974,
-  draftCallsPerSource: 0.722,
-} as const)
-
-export type SupplySpendEstimate = {
-  /** 실측 평균 호출 수 × 평균 단가 */
-  expectedPerRun: number
-  expectedPerDay: number
-  /** 🔴 상한을 **전부** 쓰고 최대 단가일 때 — judge N · draft 4N */
-  capPerRun: number
-  capPerDay: number
-  /** 하루 예산이 주어졌을 때 기대 지출로 **다 돌 수 있는 회차 수** (정수 · 최대 하루 회차 수) */
-  expectedRunsWithin: (dailyUsd: number) => number
-}
-
-/** 🔴 **묶음 크기 → 하루 지출 추정.** 순수 함수 — 검사와 PR 문구가 같은 값을 쓴다 */
-export function estimateSupplySpend(limit: number, runsPerDay: number = SUPPLY_RUNS_PER_DAY): SupplySpendEstimate {
-  const m = SUPPLY_MEASURED
-  const expectedPerRun = limit * (m.judgeCallsPerSource * m.judgeUsdPerCall + m.draftCallsPerSource * m.draftUsdPerCall)
-  const capPerRun = limit * (1 * m.judgeUsdPerCallMax + 4 * m.draftUsdPerCallMax)
-  return {
-    expectedPerRun,
-    expectedPerDay: expectedPerRun * runsPerDay,
-    capPerRun,
-    capPerDay: capPerRun * runsPerDay,
-    expectedRunsWithin: (dailyUsd) => Math.min(runsPerDay, Math.floor(dailyUsd / expectedPerRun)),
-  }
-}
 
 /**
  * 🔴 **예약 여유 배수.** 입력 토큰 추정치에만 곱한다 — 출력은 `maxOutputTokens` 라

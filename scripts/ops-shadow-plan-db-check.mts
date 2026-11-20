@@ -27,6 +27,7 @@ import { Prisma, PrismaClient } from '@prisma/client'
 import { kstDateString } from '../src/lib/release-canary'
 import { DECISION_WRITER, previousKstDate, STAGE_DECISION_VERSION, validateStoredDecision } from '../src/lib/stage-decision-contract'
 import { createStageDecision } from '../src/lib/stage-decision-repo'
+import { SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-schedule-contract'
 import { requireIsolatedDb } from './lib/auto-ready-audit-fixtures.mjs'
 import { readOnlyDb, REPO_ROOT } from './lib/ops-shadow-io.mjs'
 
@@ -60,9 +61,20 @@ mkdirSync(dataDir, { recursive: true })
 const prev = previousKstDate(kstDateString(new Date()))
 if (prev === null) throw new Error('어제 KST 날짜를 계산하지 못했다')
 const D: string = prev
-const AT = (hhmm: string): string => new Date(`${D}T${hhmm}:00+09:00`).toISOString()
+// 🔴 시각은 전부 "그날 마지막 정기 회차 시각 + n분"으로 만든다 — 정본 시각표에서 계산한다(손으로 적지 않는다)
+const SLOT_MINUTES = SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute).sort((x, y) => x - y)
+const LAST_SLOT_MINUTE = SLOT_MINUTES[SLOT_MINUTES.length - 1]!
+const PREV_SLOT_MINUTE = SLOT_MINUTES[SLOT_MINUTES.length - 2]
+const WINDOW_MINUTES = SUPPLY_RUN_WINDOW_MS / 60_000
+// 가장 늦은 주입 시각(마지막 회차 창이 닫히고 5분 뒤)이 같은 KST 날이어야 이 fixture 가 성립한다
+if (PREV_SLOT_MINUTE === undefined || LAST_SLOT_MINUTE + WINDOW_MINUTES + 5 >= 24 * 60) throw new Error('마지막 정기 회차가 자정에 너무 가깝거나 회차가 하나뿐이다 — fixture 시각을 다시 잡는다')
+const hhmmOf = (minute: number): string => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+/** KST 날짜 `date` 의 자정 + minute 분 + sec 초 */
+const kstAt = (date: string, minute: number, sec = 0): Date => new Date(Date.parse(`${date}T00:00:00+09:00`) + minute * 60_000 + sec * 1_000)
+/** 그날(D) 마지막 정기 회차 시각 + n분 */
+const LAST = (plusMinutes: number): string => kstAt(D, LAST_SLOT_MINUTE + plusMinutes).toISOString()
 const digest = (): string[] => walk(dataDir).map((f) => `${relative(dataDir, f)}:${createHash('sha256').update(readFileSync(f)).digest('hex')}`).sort()
-const runShadow = (nowIso: string = AT('23:00')): ReturnType<typeof spawnSync> => spawnSync(join(REPO_ROOT, 'node_modules/.bin/tsx'),
+const runShadow = (nowIso: string = LAST(WINDOW_MINUTES)): ReturnType<typeof spawnSync> => spawnSync(join(REPO_ROOT, 'node_modules/.bin/tsx'),
   [join(REPO_ROOT, 'scripts/ops-shadow-plan.mts'), `--data-dir=${dataDir}`, `--now=${nowIso}`], {
     cwd: REPO_ROOT, encoding: 'utf-8',
     env: { ...process.env, HOME: home, NODE_OPTIONS: '' },
@@ -86,7 +98,7 @@ try {
   const v = validateStoredDecision({ row, expectKstDate: D })
   if (!v.ok) throw new Error(`fixture 결정이 깨졌다 — ${v.reason}`)
   await createStageDecision(prisma, v.decision)
-  const startUtc = new Date(`${D}T22:15:05+09:00`)
+  const startUtc = kstAt(D, LAST_SLOT_MINUTE, 5)
   const runId = startUtc.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
   // 🔴 완전한 tag — 자연 회차 판정은 정본 `naturalScheduledRunEvidenceAt` 하나다(trigger 만 있는 가짜 tag 는 자연이 아니다)
   const fullTag = (budgetWindow: string): Record<string, unknown> => ({
@@ -97,14 +109,14 @@ try {
   writeFileSync(join(dataDir, `supply-process-${runId}.run.json`), JSON.stringify({
     runId, startedAt: startUtc.toISOString(), status: 'done', completedAt: completedIso,
     jit: { slots: 1, readyFilled: 1, upTo: 0, paidSources: 0, paidBasis: 'noDemand', sourceYieldHigh: null },
-    runTokenShadow: fullTag(`${D} 22:15`),
+    runTokenShadow: fullTag(`${D} ${hhmmOf(LAST_SLOT_MINUTE)}`),
   }))
   const dataBefore = digest()
 
   console.log('\n⑥ 시각 — 회차 시작 전 주입 시각이면 dayClose 0')
-  const rEarly = runShadow(AT('21:00'))
+  const rEarly = runShadow(LAST(-75))
   const earlyLines = walk(home).flatMap((f) => readFileSync(f, 'utf-8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { kind: string; clock: string }))
-  check('🔴 21:00 관측 — 22:15 회차는 아직 미래 · cycle 한 줄 · dayClose 0 · clock injected', rEarly.status === 0
+  check('🔴 마지막 회차 75분 전 관측 — 그 회차는 아직 미래 · cycle 한 줄 · dayClose 0 · clock injected', rEarly.status === 0
     && earlyLines.length === 1 && earlyLines[0]!.kind === 'cycle' && earlyLines[0]!.clock === 'injected', `${String(rEarly.status)} ${String(rEarly.stderr).slice(0, 200)}`)
   check('미래 주입 시각은 거부한다', runShadow(new Date(Date.now() + 3_600_000).toISOString()).status === 2)
   rmSync(join(home, 'Library'), { recursive: true, force: true })
@@ -129,15 +141,15 @@ try {
   const r2 = runShadow()
   const lines2 = readFileSync(join(home, files[0]!), 'utf-8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { kind: string })
   check('🔴 같은 주입 시각으로 다시 돌리면 같은 관측 — 두 줄 그대로(cycle · dayClose 멱등)', r2.status === 0 && lines2.length === 2)
-  const r3 = runShadow(AT('23:05'))
+  const r3 = runShadow(LAST(WINDOW_MINUTES + 5))
   const lines3 = readFileSync(join(home, files[0]!), 'utf-8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { kind: string })
   check('🔴 다른 관측 시각 — cycle 한 줄 추가 · dayClose 는 여전히 한 줄', r3.status === 0
     && lines3.filter((l) => l.kind === 'dayClose').length === 1 && lines3.filter((l) => l.kind === 'cycle').length === 2)
   check('재실행도 DB 쓰기 0', JSON.stringify(await countAll()) === JSON.stringify(after))
 
   console.log('\n⑦ observer — 자연 회차 하나 = 한 줄 · 관측 시각 = tick · backfill 은 marker 만 · 재실행 · 동시 · 가짜 tag 0')
-  // trigger-only 가짜 tag(옛 fixture 모양) — 21:15 슬롯 자리. 자연이 아니므로 observer 는 보지 않는다
-  const fakeStart = new Date(`${D}T21:15:04+09:00`)
+  // trigger-only 가짜 tag(옛 fixture 모양) — 마지막 바로 앞 정기 회차 자리. 자연이 아니므로 observer 는 보지 않는다
+  const fakeStart = kstAt(D, PREV_SLOT_MINUTE, 4)
   const fakeId = fakeStart.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
   writeFileSync(join(dataDir, `supply-process-${fakeId}.run.json`), JSON.stringify({
     runId: fakeId, startedAt: fakeStart.toISOString(), status: 'done', completedAt: new Date(fakeStart.getTime() + 300_000).toISOString(),
@@ -148,12 +160,12 @@ try {
   const D2 = previousKstDate(D)
   if (D2 === null) throw new Error('D-1 을 계산하지 못했다')
   await prisma.stageDecision.deleteMany({ where: { kstDate: D2 } })
-  const oldStart = new Date(`${D2}T22:15:07+09:00`)
+  const oldStart = kstAt(D2, LAST_SLOT_MINUTE, 7)
   const oldId = oldStart.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
   writeFileSync(join(dataDir, `supply-process-${oldId}.run.json`), JSON.stringify({
     runId: oldId, startedAt: oldStart.toISOString(), status: 'done', completedAt: new Date(oldStart.getTime() + 600_000).toISOString(),
     jit: { slots: 1, readyFilled: 1, upTo: 0, paidSources: 0, paidBasis: 'noDemand', sourceYieldHigh: null },
-    runTokenShadow: fullTag(`${D2} 22:15`),
+    runTokenShadow: fullTag(`${D2} ${hhmmOf(LAST_SLOT_MINUTE)}`),
   }))
   const obsData = digest()
   const obsArgs = (outDir: string, nowIso: string | null): string[] => [join(REPO_ROOT, 'scripts/ops-shadow-observer.mts'),
@@ -176,7 +188,7 @@ try {
   const isMarker = (l: ObsLine | undefined): boolean => l !== undefined && l.kind === 'cycle' && l.source.mode === 'backfill'
     && [l.envelope, l.plan, l.observation, l.deficit, l.outcome, l.writer].every((v) => v === null)
   const obsBefore = await countAll()
-  const TICK = AT('22:27')
+  const TICK = LAST(12)
 
   // ── causal — 완료 2분 뒤 tick ──
   const causalDir = join(tmp, 'obs-causal', 'ops-shadow')
@@ -193,7 +205,7 @@ try {
   check('🔴 같은 tick 의 결정 없는 전날 회차 → backfill marker 한 줄(결정 · 장부 · DB 0) · 그날 dayClose 0',
     isMarker(ofRun(c1, oldId)[0]) && ofRun(c1, oldId).length === 1 && !c1.some((l) => l.kstDate === D2 && l.kind === 'dayClose'))
   check('🔴 trigger-only 가짜 tag 회차는 기록 0', c1.length === 3 && !c1.some((l) => l.source.runId === fakeId))
-  const o2 = runObserver(causalDir, AT('22:28'))
+  const o2 = runObserver(causalDir, LAST(13))
   check('🔴 다음 tick 재실행 → 줄 추가 0(seen)', o2.status === 0 && linesOf(causalDir).length === 3, String(o2.stdout).slice(-300))
 
   // ── 동시 3개 ──
@@ -248,7 +260,7 @@ try {
 
   console.log('\n⑥-b 마지막 슬롯의 깨진 회차 기록이면 dayClose 0')
   rmSync(join(home, 'Library'), { recursive: true, force: true })
-  const badStart = new Date(`${D}T22:20:00+09:00`)
+  const badStart = kstAt(D, LAST_SLOT_MINUTE + 5)
   const badId = badStart.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
   writeFileSync(join(dataDir, `supply-process-${badId}.run.json`), '{ broken')
   const rBad = runShadow()

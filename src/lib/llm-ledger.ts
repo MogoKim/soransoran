@@ -16,9 +16,6 @@
  */
 
 import { type CostVerdict } from './llm-pricing'
-import {
-  SUPPLY_PROOF_RUN_SLOTS_KST, SUPPLY_RUN_SLOTS_KST, supplyRunSlotMinuteOf,
-} from './supply-schedule-contract'
 import { parseRunTokenShadowTag } from './supply-run-token'
 import {
   isSupplyCostRecoveryTagged, supplyCostContractOf, supplyCostRecordedBudgetCapOf, supplyCostRequestMetadataEligible,
@@ -151,8 +148,8 @@ export type BlockCode =
  *
  *    장부는 누가 먼저 왔는가만 본다. 그러면 손 실행이 정기 회차의 몫을 먼저 쓴다(2026-09-28 실측).
  *    이 조건이 있으면 그 요청은 `min(하루 예산, 천장) − 쓴 것 − 열린 예약 − 떼어 둔 몫` 안에서만 통과한다.
- *    🔴 값을 여기서 정하지 않는다. 호출부가 넘긴다(공급은 `supplySpendProtectAt` — 슬롯별 동적 배분).
- *       손 실행은 **남은 우선 슬롯 전부**의 몫을, 정기 회차는 **자기 외 우선 슬롯들**의 몫을 떼어 둔 값이다.
+ *    🔴 값을 여기서 정하지 않는다. 호출부가 넘긴다(공급은 `supplySpendProtectAt` — 남은 예산 ÷ 남은 회차).
+ *       손 실행은 **남은 정기 회차 전부**의 몫을, 정기 회차는 **자기 외 남은 회차들**의 몫을 떼어 둔 값이다.
  */
 export type SpendProtect = {
   /** 다른 회차 몫으로 떼어 둔 금액 */
@@ -221,7 +218,7 @@ export type LedgerEntry = {
    *    없거나 `null` 이면 모르는 것이다 — 정기 실측에 넣지 않는다.
    */
   runKind?: 'scheduled' | 'manual' | null
-  /** 🔴 정기 회차면 그 슬롯 이름(`2026-09-29 08:15`). 손 실행이면 `null` */
+  /** 🔴 정기 회차면 그 회차 이름(`YYYY-MM-DD HH:MM` KST). 손 실행이면 `null` */
   runSlot?: string | null
   /**
    * 🔴 **이 요청에 적용한 한도** (2026-09-30) — 공급 장부의 예약·정산 줄에만 실린다. 없으면 모르는 것(옛 줄).
@@ -323,7 +320,7 @@ export type RecordedSupplyBudget = {
 
 /**
  * 그 날 current JIT 공급 요청들이 요청 전에 기록한 하루 상한.
- * late 준비 회차까지 포함하는 whole-day 비용에 쓰며, 현재 env로 과거를 다시 쓰지 않는다.
+ * 그날 전체(whole-day) 비용에 쓰며, 현재 env로 과거를 다시 쓰지 않는다.
  * current 요청이 하나라도 있는데 출처·env 값·계약 천장·적용 cap이 불완전하거나 승인 천장을 넘으면
  * `invalid`로 닫는다. 하루 중 승인 범위 안에서 cap이 올라가거나 내려간 경우에는 가장 큰 유효 cap을 쓴다.
  */
@@ -333,8 +330,7 @@ export function recordedSupplyBudgetOf(entries: readonly LedgerEntry[], kstDate:
   let capUsd: number | null = null
   for (const e of entries) {
     if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
-    // 하루 예산은 해당 요청이 기록한 상한·출처만 판독한다. 콘텐츠 계약 표식은 proof·preflight
-    // provenance의 책임이다. 둘을 섞으면 늦은 다음날 준비 행 하나가 이미 완료된 당일 proof를 뒤집는다.
+    // 하루 예산은 해당 요청이 기록한 상한·출처만 판독한다. 콘텐츠 계약 표식은 비용 표본(provenance) 쪽 책임이다.
     seen = true
     const recordedCap = supplyCostRecordedBudgetCapOf(e, kstDate)
     if (recordedCap === null) return { kind: 'invalid', capUsd: null }
@@ -344,9 +340,10 @@ export function recordedSupplyBudgetOf(entries: readonly LedgerEntry[], kstDate:
 }
 
 /**
- * 그 증명일의 자연 공급 proof 슬롯(06:15~17:15)에 귀속되는 비용 표본.
- * 21:15·22:15는 다음 날 준비이므로 하루 예산에는 남지만 당일 Dn 비용 증거에서는 빠진다.
- * 소속이 모호한 current-day 요청은 버리지 않고 `ineligibleRequests`로 fail-closed 한다.
+ * 그 날 공급 비용 표본 — **그날의 정기 회차 전부**다(바퀴마다 한 번 · 회차를 "당일용 / 다음 날용"으로 가르지 않는다).
+ * 정기 회차 귀속(`supplyCostRequestMetadataEligible`)을 증명하지 못한 유료 요청은 버리지 않고
+ * `ineligibleRequests` 로 닫는다 — 손 실행 · 창 밖 요청 · 깨진 표식이 비용 증거에 숨어들지 못한다.
+ * 🔴 지금 시각표를 읽지 않는다 — 장부에 기록된 회차 표식끼리의 정합만 본다(바퀴 시각을 바꾼 날에도 전날 증거가 그대로 읽힌다).
  */
 export function supplyProofCostObservationOf(
   entries: readonly LedgerEntry[], kstDate: string,
@@ -358,30 +355,13 @@ export function supplyProofCostObservationOf(
     ineligibleRequests: 0, settledUsd: 0, usageUnknownReservedUsd: 0, riskUsd: 0, overrunRequests: 0,
     recordedDailyCapUsd: null,
   }
-  const proofMinutes = new Set(SUPPLY_PROOF_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute))
-  const labelOf = (minute: number): string =>
-    `${kstDate} ${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
-  const proofLabels = new Set([...proofMinutes].map(labelOf))
-  const scheduledMinutes = new Set(SUPPLY_RUN_SLOTS_KST.map((s) => s.hour * 60 + s.minute))
-  const lateMinutes = new Set([...scheduledMinutes].filter((minute) => !proofMinutes.has(minute)))
-  const proofStartMinute = Math.min(...proofMinutes)
-  const proofEndMinute = Math.max(...proofMinutes) + 45
   const expected = supplyCostContractOf(kstDate)
   let recordedCap: number | null = null
   const recoveryRuns = new Set<string>()
   for (const e of entries) {
     if (!isSupplyContentCostStage(e.stage) || e.status === 'blocked') continue
     const started = new Date(e.startedAt)
-    const startedValid = Number.isFinite(started.getTime())
-    const startedDate = startedValid ? ledgerDateOf(started) : null
-    const shifted = startedValid ? new Date(started.getTime() + LEDGER_TZ_OFFSET_MIN * 60_000) : null
-    const startedMinute = shifted === null ? null : shifted.getUTCHours() * 60 + shifted.getUTCMinutes()
-    const actualSlot = startedMinute === null ? null : supplyRunSlotMinuteOf(startedMinute)
-    const exactScheduled = startedDate === kstDate
-      && actualSlot !== null
-      && scheduledMinutes.has(actualSlot)
-      && e.runKind === 'scheduled'
-      && e.runSlot === labelOf(actualSlot)
+    const startedDate = Number.isFinite(started.getTime()) ? ledgerDateOf(started) : null
 
     const token = parseRunTokenShadowTag(e.runTokenShadow)
     const recoveryTagged = isSupplyCostRecoveryTagged(e.runTokenShadow)
@@ -416,23 +396,6 @@ export function supplyProofCostObservationOf(
       out.ineligibleRequests += 1
       continue
     }
-    // 실제 요청 시작이 다음날 준비 슬롯 창이면 당일 공개에 기여할 수 없다.
-    // runId·runKind·runSlot이 손상돼도 늦은 준비 요청을 당일 proof 결함으로 소급하지 않는다.
-    if (startedMinute !== null && actualSlot !== null && lateMinutes.has(actualSlot)) continue
-    if (startedMinute !== null && (startedMinute < proofStartMinute || startedMinute >= proofEndMinute)) {
-      // 증명 구간 밖 요청은 당일 proof와 무관하다. 단, proof 슬롯으로 표식한 요청이
-      // 그 슬롯의 45분 창 밖에서 시작했다면 조용히 빼지 않고 잘못된 귀속으로 닫는다.
-      if (e.runKind === 'scheduled' && typeof e.runSlot === 'string' && proofLabels.has(e.runSlot)) {
-        out.ineligibleRequests += 1
-      }
-      continue
-    }
-    // proof 슬롯·늦은 슬롯·슬롯 밖 실행 모두 라벨과 실제 시간이 정확히 맞아야 한다.
-    if (actualSlot === null || !exactScheduled) {
-      out.ineligibleRequests += 1
-      continue
-    }
-
     const currentMetadata = expected !== null && supplyCostRequestMetadataEligible(e, kstDate)
     if (!currentMetadata) {
       out.ineligibleRequests += 1

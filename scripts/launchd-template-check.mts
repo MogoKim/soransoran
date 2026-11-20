@@ -26,11 +26,13 @@ import {
   PLACEHOLDERS, calendarSlots, leftoverPlaceholders, programArguments, render, valueOf,
 } from './lib/launchd-install.mjs'
 
-import { SUPPLY_PROCESS_SLOTS } from '../src/lib/collect-schedule'
 import { COLLECT_JOB_LABEL, COLLECT_SLOTS } from '../src/lib/collect-sources'
-import { CYCLE_MINUTES } from '../src/lib/cycle-schedule'
+import { CYCLE_MINUTES, SUPPLY_CYCLE_MINUTES } from '../src/lib/cycle-schedule'
+import { SUPPLY_RUN_SLOTS_KST } from '../src/lib/supply-schedule-contract'
+import { LAUNCHD_LABEL_ENV, SUPPLY_PROCESS_LAUNCHD_LABEL, supplyRunKindOf } from '../src/lib/supply-scheduled-reserve'
 import { RETIRED_JOBS } from '../src/lib/runtime-isolation'
 import { COLLECT_ARGS, COLLECT_LOG_NAME, COLLECT_TEMPLATE_PATH, renderCollectTemplate } from './lib/navercafe-collect-template.mjs'
+import { SUPPLY_ARGS, SUPPLY_LOG_NAME, SUPPLY_TEMPLATE_PATH, renderSupplyTemplate } from './lib/supply-process-template.mjs'
 import {
   AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
 } from './lib/auto-ready-audit-template'
@@ -79,17 +81,13 @@ const EXPECTED: Record<string, {
   out: string
   err: string
 }> = {
-  /**
-   * 🔴 **처리기는 수집하지 않는다** (2026-09-11). 이미 생긴 입력만 비운다.
-   *    하루 7회다 — 06:15는 07:00 controller 전 복구, 나머지는 수집 뒤 drain이다.
-   */
-  'com.soransoran.supply-process.plist.template': {
-    label: 'com.soransoran.supply-process',
-    args: ['__NPX__', 'tsx', '__REPO__/scripts/stage-consume-exec.mts', '--by=supply', '--',
-      '__NPX__', 'tsx', '__REPO__/scripts/supply-process.mts', '--live'],
-    slots: [...SUPPLY_PROCESS_SLOTS],
-    out: '__LOGDIR__/supply-process.log',
-    err: '__LOGDIR__/supply-process-error.log',
+  /** 🔴 **처리기는 수집하지 않는다.** 이미 생긴 입력만 비운다 — 수집 바퀴마다 한 번, 수집 뒤에 뜬다 */
+  [`${SUPPLY_PROCESS_LAUNCHD_LABEL}.plist.template`]: {
+    label: SUPPLY_PROCESS_LAUNCHD_LABEL,
+    args: [...SUPPLY_ARGS],
+    slots: [...SUPPLY_RUN_SLOTS_KST],
+    out: `__LOGDIR__/${SUPPLY_LOG_NAME}.log`,
+    err: `__LOGDIR__/${SUPPLY_LOG_NAME}-error.log`,
   },
   [`${COLLECT_JOB_LABEL}.plist.template`]: {
     label: COLLECT_JOB_LABEL,
@@ -123,12 +121,34 @@ check('🔴 검사표가 템플릿 전부를 덮는다 — 표에 없는 템플�
   check('🔴 수집 job 템플릿은 하나다', files.filter((f) => f.includes('collect')).length === 1)
 }
 /**
+ * 🔴 **공급 job 템플릿도 생성된다** — 공급 시각은 바퀴 표에서 계산된다.
+ *    템플릿 시각이 러너의 정기 회차 창과 어긋나면 job 은 뜨는데 유료 요청이 한 건도 나가지 않는다
+ *    (러너는 창 밖에서 시작한 launchd 회차의 유료 요청을 막는다). 그래서 글자 대조에 더해,
+ *    **템플릿이 띄우는 그 분에 러너가 실제로 정기 회차로 판정하는지**를 판정 함수로 본다.
+ */
+{
+  const xml = existsSync(SUPPLY_TEMPLATE_PATH) ? readFileSync(SUPPLY_TEMPLATE_PATH, 'utf-8') : ''
+  check('🔴 [supply-process] 템플릿이 생성 결과와 글자까지 같다', xml === renderSupplyTemplate())
+  const got = calendarSlots(xml).map((x) => x.hour * 60 + x.minute)
+  check('🔴 [supply-process] 예약 시각이 바퀴 표에서 계산한 공급 시각(SUPPLY_CYCLE_MINUTES)과 같다',
+    got.length === SUPPLY_CYCLE_MINUTES.length && got.every((m, i) => m === SUPPLY_CYCLE_MINUTES[i]))
+  check('🔴 [supply-process] 회차마다 그 바퀴의 수집 시각보다 뒤에 뜬다 — 같은 분이거나 앞이면 그 바퀴 글을 못 본다',
+    got.length === CYCLE_MINUTES.length && got.every((m, i) => m > CYCLE_MINUTES[i]!))
+  const label = { [LAUNCHD_LABEL_ENV]: SUPPLY_PROCESS_LAUNCHD_LABEL }
+  const fireAt = (minute: number): Date => new Date(Date.parse('2026-11-21T00:00:00.000+09:00') + minute * 60_000)
+  check('🔴 [supply-process] 템플릿이 띄우는 분마다 러너가 정기 회차로 판정한다(그 분에 시작한 회차)',
+    got.length > 0 && got.every((m) => supplyRunKindOf(label, fireAt(m), undefined, undefined, fireAt(m)).kind === 'scheduled'))
+  check('🔴 [supply-process] 회차마다 서로 다른 정기 회차로 판정된다 — 두 예약이 한 회차 몫을 나눠 쓰지 않는다',
+    new Set(got.map((m) => supplyRunKindOf(label, fireAt(m), undefined, undefined, fireAt(m)).slot)).size === got.length)
+  check('🔴 공급 job 템플릿은 하나다', files.filter((f) => f.includes('supply')).length === 1)
+}
+/**
  * 🔴 **수집 job 과 처리 job 이 서로를 부르지 않는다** (2026-09-11).
  *    한쪽이 다른 쪽을 소유하면 옛 `supply-autopilot` 로 되돌아간 것이다 —
  *    그때는 82cook 하나가 막혀도 네이버 공급까지 멈췄다.
  */
 {
-  const proc = EXPECTED['com.soransoran.supply-process.plist.template']!
+  const proc = EXPECTED[`${SUPPLY_PROCESS_LAUNCHD_LABEL}.plist.template`]!
   check('🔴 처리 job 이 수집기를 부르지 않는다',
     !proc.args.some((a) => /collect|navercafe-run|thin-detail/.test(a)))
   for (const [f, e] of Object.entries(EXPECTED)) {

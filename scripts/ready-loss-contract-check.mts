@@ -21,7 +21,7 @@ import {
   judgeNextPreflight, replenishmentOf, type PreflightFacts, type PreflightVerdict, type ReadyCohortFact,
 } from '../src/lib/stage-ladder-generic'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
-import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
+import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from '../src/lib/supply-schedule-contract'
 import { qualitySignalOf } from '../src/lib/stage-controller'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
 import { cohortFatesOf } from '../src/lib/ready-fate'
@@ -36,7 +36,7 @@ const show = (v: PreflightVerdict): string =>
 const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
 
 /** 🔴 하루 공급 묶음 원천 수 — 원천 수가 이 값이면 raw READY 수가 곧 하루 용량이다 */
-const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
+const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_RUNS_PER_DAY
 /** 🔴 cohort — 기본: 원천 RUNS · 공개 5 · 손실 0 · 예정 0 · 모름 0 · 결과당 비용 $0.01(완전 연결) */
 const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
   const usd = o.usdPerSlotValidResult === undefined ? 0.01 : o.usdPerSlotValidResult
@@ -50,6 +50,11 @@ const cohort = (o: Partial<ReadyCohortFact> = {}): ReadyCohortFact => {
 }
 /** 🔴 raw READY `raw` 건이 하루 용량 `cap` 이 되는 원천 수 */
 const sourcesFor = (raw: number, cap: number): number => Math.floor((raw * RUNS) / cap)
+/**
+ * 🔴 운영 10월 4일 모양의 원천 수 — raw READY 14건(공개 4 + 대기 10)이 하루 용량 8 이 되는 비율.
+ *    원천 수를 손으로 적지 않는다: 하루 정기 회차 수가 바뀌면 같은 원천 수의 용량이 달라져 반례가 다른 것을 잰다.
+ */
+const OP_SOURCES = sourcesFor(14, 8)
 
 /** 🔴 D3 → D5 preflight — target 5 · opportunities 5. 나머지 칸(비용 · Persona · 러너 · 지연)은 GREEN */
 const D5_FACTS = (o: Partial<PreflightFacts> = {}): PreflightFacts => ({
@@ -106,26 +111,26 @@ console.log('\n② 반례 3 — 공개 0 · 손실 > 0 → UNKNOWN (영구 불�
 
 console.log('\n③ 반례 4 · 5 — 대기 행은 성공도 손실도 아니다 (운영 10월 4일 모양)')
 {
-  const op = d5({ published: 4, lost: 0, unknown: 10, sources: 160 })
-  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 원천 160 → 회복 용량 8 · 필요 5~18 → READY_REQUIREMENT_UNKNOWN (충분으로 확정하지 않는다)',
+  const op = d5({ published: 4, lost: 0, unknown: 10, sources: OP_SOURCES })
+  check('🔴 🔴 반례4 공개 4 · 손실 0 · 대기 10 · 같은 원천 → 회복 용량 8 · 필요 5~18 → READY_REQUIREMENT_UNKNOWN (충분으로 확정하지 않는다)',
     fw(op, 'READY_REQUIREMENT_UNKNOWN') && op.counts.readyCapacity === 8
     && op.counts.readyNeededMin === 5 && op.counts.readyNeededMax === 18 && !('readyNeeded' in op.counts), show(op))
-  const base = d5({ published: 4, lost: 0, unknown: 0, sources: 160 })
+  const base = d5({ published: 4, lost: 0, unknown: 0, sources: OP_SOURCES })
   check('🔴 반례5 대기 0 이면 같은 원천에서 용량 2 → THROUGHPUT_SHORT 예측 경고', fw(base, 'THROUGHPUT_SHORT') && base.counts.readyCapacity === 2, show(base))
-  const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, unknown: pending, sources: 160 }))
+  const inflated = [10, 100, 1000].map((pending) => d5({ published: 4, lost: 0, unknown: pending, sources: OP_SOURCES }))
   check('🔴 🔴 반례5 대기만 늘려(10 · 100 · 1000) 용량을 올려도 처리량이 충분으로 확정되지 않는다(예측 경고 남음)',
     inflated.every((v) => fw(v, 'READY_REQUIREMENT_UNKNOWN')),
     inflated.map((v) => `${v.verdict}:${v.counts.readyCapacity}:${v.forecastWarnings.join('+')}`).join(','))
-  const resolved = d5({ published: 14, lost: 0, unknown: 0, sources: 160 })
+  const resolved = d5({ published: 14, lost: 0, unknown: 0, sources: OP_SOURCES })
   check('🔴 같은 행이 전부 공개로 결말 나면(공개 14) PASS — 결말이 판정을 연다', resolved.verdict === 'PASS', show(resolved))
-  const lostAll = d5({ published: 4, lost: 10, unknown: 0, sources: 160 })
-  check('🔴 같은 행이 전부 손실로 결말 나면(손실 10) 필요 18 > 용량 5 → THROUGHPUT_SHORT 예측 경고', fw(lostAll, 'THROUGHPUT_SHORT')
-    && lostAll.counts.readyNeeded === 18, show(lostAll))
+  const lostAll = d5({ published: 4, lost: 10, unknown: 0, sources: OP_SOURCES })
+  check('🔴 같은 행이 전부 손실로 결말 나면(손실 10) 필요 18 > 용량 8 → THROUGHPUT_SHORT 예측 경고', fw(lostAll, 'THROUGHPUT_SHORT')
+    && lostAll.counts.readyNeeded === 18 && lostAll.counts.readyCapacity === 8, show(lostAll))
   const covered = d5({ published: 4, lost: 0, unknown: 10, sources: sourcesFor(14, 18) })
   check('🔴 대기를 전부 손실로 봐도 용량(18)이 채우면 대기는 결과를 못 바꾼다 → 처리량 예측 경고 없음 (현재 증명된 것을 손실 처리하지 않는다)',
     covered.verdict === 'PASS' && covered.counts.readyCapacity === 18
     && !fw(covered, 'READY_REQUIREMENT_UNKNOWN') && !fw(covered, 'THROUGHPUT_SHORT'), show(covered))
-  const opOpp = d5({ published: 4, lost: 0, unknown: 10, sources: 160 }, { slotValidOpportunities: 5 })
+  const opOpp = d5({ published: 4, lost: 0, unknown: 10, sources: OP_SOURCES }, { slotValidOpportunities: 5 })
   check('🔴 현재 슬롯 기회 5 가 충분해도 보충 처리량 예측 경고는 남는다 (기회 ≠ 지속 보충)',
     fw(opOpp, 'READY_REQUIREMENT_UNKNOWN') && !fw(opOpp, 'OPPORTUNITY_SHORT'), show(opOpp))
 }

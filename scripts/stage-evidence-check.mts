@@ -46,10 +46,7 @@ import {
   supplyCostScheduledSlotOf, usesSupplyCostEnvelope, SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE,
   supplyCostContractHistory, validSupplyCostContractHistory,
 } from '../src/lib/supply-cost-envelope'
-import {
-  SUPPLY_PROOF_FIRST_DAILY_USD,
-  SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_RUNS_PER_DAY,
-} from '../src/lib/supply-schedule-contract'
+import { SUPPLY_RUN_SLOTS_KST, SUPPLY_RUN_WINDOW_MS } from '../src/lib/supply-schedule-contract'
 import { budgetWindowShadowOf, supplyRunIdOf } from '../src/lib/supply-run-token'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -238,95 +235,128 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
   check('🔴 공급 회차의 성패는 하루 판정의 입력이 아니다 — 양은 수가 재고 당일 러너는 브레이크 오류 축이 본다',
     !(STAGE_EVIDENCE_CODES as readonly string[]).some((c) => c.startsWith('RUNNER_')))
 
-  // ⑥-b 공급 비용 증거 — 자연 회차 비용 envelope 하나를 쓴다
+  // ⑥-b 공급 비용 증거 — 그날 정기 회차 전부의 비용 envelope 하나를 쓴다
   {
     const base = facts()  // d3 PASS 기준선
     const vNull = judge(base, side({ supplyCostEvidence: null }))
     check('⬚ 공급 장부를 못 읽었다 → UNKNOWN (COST_UNKNOWN)',
       vNull.verdict === 'UNKNOWN' && has(vNull, 'COST_UNKNOWN'), `${vNull.verdict} ${vNull.codes.join(',')}`)
 
-    // helper 자체의 분리 반례 — 옛 whole-day count와 새 proof-slot envelope를 함께 고정한다.
-    const PROOF = '2026-10-16'
+    // 장부 판독 함수 자체의 반례 — 그날 정기 회차 전부가 비용 표본이다(낮 회차와 밤 회차를 가르지 않는다).
+    // 회차 시각은 바퀴 표(`SUPPLY_RUN_SLOTS_KST`)에서 계산한다 — 여기 손으로 적지 않는다.
+    const EFFECTIVE = '2026-11-05'
+    const SLOT_MINUTES = SUPPLY_RUN_SLOTS_KST.map((slot) => slot.hour * 60 + slot.minute).sort((a, b) => a - b)
+    const WINDOW_MINUTES = SUPPLY_RUN_WINDOW_MS / MIN
+    /** 낮 회차(가운데) · 밤 회차(그날 마지막) · 표식 대조용 다른 회차(그날 첫) */
+    const DAY_SLOT = SLOT_MINUTES[Math.floor(SLOT_MINUTES.length / 2)]!
+    const NIGHT_SLOT = SLOT_MINUTES.at(-1)!
+    const FIRST_SLOT = SLOT_MINUTES[0]!
+    const hhmm = (minute: number): string =>
+      `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+    /** KST 그날 자정에서 `minute` 분 `second` 초 뒤의 순간 */
+    const kstAt = (date: string, minute: number, second = 0): string =>
+      new Date(Date.parse(`${date}T00:00:00+09:00`) + minute * MIN + second * 1000).toISOString()
+    const labelOf = (date: string, minute: number): string => `${date} ${hhmm(minute)}`
+    const ledgerRunIdAt = (at: string): string => `${supplyRunIdOf(new Date(at))}-d`
+    const naturalShadow = (slot: string): NonNullable<LedgerEntry['runTokenShadow']> => ({
+      ok: true, code: null, tokenId: `token-${slot}`, trigger: 'scheduled', launchTrigger: 'scheduled',
+      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+    })
+    /** 회차 `slot` 이 시작 2초 뒤에 뜨고, 그 회차 안에서 `startOffsetMin` 분 뒤에 보낸 유료 요청 한 줄의 회차 표식 */
+    const inSlot = (slot: number, startOffsetMin = 1, date = EFFECTIVE): Partial<LedgerEntry> => ({
+      runId: ledgerRunIdAt(kstAt(date, slot, 2)),
+      startedAt: kstAt(date, slot + startOffsetMin), endedAt: kstAt(date, slot + startOffsetMin, 25),
+      runKind: 'scheduled', runSlot: labelOf(date, slot), runTokenShadow: naturalShadow(labelOf(date, slot)),
+    })
     const base0 = (o: Partial<LedgerEntry>): LedgerEntry => ({
-      runId: '20261016-141500-d', stage: 'draftGen', attemptId: 'a', requestNo: 0,
+      runId: 'unset', stage: 'draftGen', attemptId: 'a', requestNo: 0,
       provider: 'google', apiModelId: 'm', model: 'm',
       status: 'usageUnknown', blockCode: null,
       countedInputTokens: 100, maxOutputTokens: 1024, reservedUsd: 0.006, inputTokens: null,
       outputTokens: null, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
       settledUsd: null, pricingVersion: PRICING_VERSION,
-      startedAt: `${PROOF}T14:15:30+09:00`, endedAt: `${PROOF}T14:16:00+09:00`,
-      errorCode: 'TIMEOUT', runKind: 'scheduled', runSlot: `${PROOF} 14:15`,
-      budgetCapUsd: 1.2, budgetSource: 'process-override',
-      sourceKey: 'src-hash-A', supplyContract: SUPPLY_JIT_CONTRACT, ...o,
-    })
-    const EFFECTIVE = '2026-11-05'
-    const ledgerRunIdAt = (at: string): string => `${supplyRunIdOf(new Date(at))}-d`
-    const naturalShadow = (slot: string): NonNullable<LedgerEntry['runTokenShadow']> => ({
-      ok: true, code: null, tokenId: `token-${slot}`, trigger: 'scheduled', launchTrigger: 'scheduled',
-      absorbedTrigger: null, absorbedAt: null, pass: 0, budgetWindow: slot,
+      startedAt: 'unset', endedAt: null,
+      errorCode: 'TIMEOUT', budgetCapUsd: 1.2, budgetSource: 'process-override',
+      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
+      sourceKey: 'src-hash-A', supplyContract: SUPPLY_JIT_CONTRACT, ...inSlot(DAY_SLOT), ...o,
     })
     const newFacts = {
       ...base, kstDate: EFFECTIVE,
       decision: { ...base.decision!, kstDate: EFFECTIVE },
     }
     const settled = Array.from({ length: 20 }, (_, i) => base0({
-      runId: ledgerRunIdAt(`${EFFECTIVE}T14:15:02+09:00`), attemptId: `s-${i}`, requestNo: i,
+      attemptId: `s-${i}`, requestNo: i, sourceKey: `src-${i}`,
       status: 'settled', settledUsd: 0.004, inputTokens: 100, outputTokens: 200, errorCode: null,
-      startedAt: `${EFFECTIVE}T14:15:30+09:00`, endedAt: `${EFFECTIVE}T14:16:00+09:00`,
-      runSlot: `${EFFECTIVE} 14:15`, sourceKey: `src-${i}`,
-      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
-      runTokenShadow: naturalShadow(`${EFFECTIVE} 14:15`),
     }))
-    const proofUnknown = base0({
-      runId: ledgerRunIdAt(`${EFFECTIVE}T14:15:02+09:00`), attemptId: 'u-proof', requestNo: 21,
-      startedAt: `${EFFECTIVE}T14:17:00+09:00`, endedAt: `${EFFECTIVE}T14:17:25+09:00`,
-      runSlot: `${EFFECTIVE} 14:15`, sourceKey: 'src-u-proof',
-      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
-      runTokenShadow: naturalShadow(`${EFFECTIVE} 14:15`),
+    const dayUnknown = base0({ ...inSlot(DAY_SLOT, 2), attemptId: 'u-day', requestNo: 21, sourceKey: 'src-u-day' })
+    const nightUnknown = base0({ ...inSlot(NIGHT_SLOT), attemptId: 'u-night', requestNo: 22, sourceKey: 'src-u-night' })
+    const nightSettled = base0({
+      ...inSlot(NIGHT_SLOT, 3), attemptId: 's-night', requestNo: 23, sourceKey: 'src-s-night',
+      status: 'settled', settledUsd: 0.004, inputTokens: 100, outputTokens: 200, errorCode: null,
     })
-    const lateUnknown = base0({
-      runId: ledgerRunIdAt(`${EFFECTIVE}T21:15:03+09:00`), attemptId: 'u-late', requestNo: 22,
-      startedAt: `${EFFECTIVE}T21:16:00+09:00`, endedAt: `${EFFECTIVE}T21:16:25+09:00`,
-      runSlot: `${EFFECTIVE} 21:15`, sourceKey: 'src-u-late',
-      budgetDailyUsd: 1.2, budgetCeilingUsd: 1.2,
-      runTokenShadow: naturalShadow(`${EFFECTIVE} 21:15`),
-    })
-    check('🟢 실제 UTC runId를 KST 자연 슬롯으로 변환한다 — 06:15·14:15·21:15·22:15',
-      [
-        ['2026-11-05T06:15:04+09:00', `${EFFECTIVE} 06:15`, 6 * 60 + 15],
-        ['2026-11-05T14:15:02+09:00', `${EFFECTIVE} 14:15`, 14 * 60 + 15],
-        ['2026-11-05T21:15:03+09:00', `${EFFECTIVE} 21:15`, 21 * 60 + 15],
-        ['2026-11-05T22:15:03+09:00', `${EFFECTIVE} 22:15`, 22 * 60 + 15],
-      ].every(([at, slot, minute]) => supplyCostScheduledSlotOf({
-        runId: ledgerRunIdAt(at as string), runKind: 'scheduled', runSlot: slot as string,
-      })?.minute === minute))
-    check('🔴 KST를 UTC처럼 적은 가짜 runId는 자연 슬롯 증거가 아니다',
+    const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-12
+    const slotOf = (runAt: string, runSlot: string, runKind: LedgerEntry['runKind'] = 'scheduled') =>
+      supplyCostScheduledSlotOf({ runId: ledgerRunIdAt(runAt), runKind, runSlot })
+    check(`🟢 UTC runId 와 KST 회차 표식이 같은 회차면 그 회차다 — 그날 정기 회차 ${SLOT_MINUTES.length}개 전부`,
+      SLOT_MINUTES.every((slot) => {
+        const got = slotOf(kstAt(EFFECTIVE, slot, 4), labelOf(EFFECTIVE, slot))
+        return got?.minute === slot && got.kstDate === EFFECTIVE
+      }))
+    // 지금 시각표에 없는 옛 회차 시각. 비용 증거는 기록된 표식끼리의 정합만 본다 — 지금 표와 대조하지 않는다.
+    const OFF_TABLE_SLOT = 14 * 60 + 15
+    check('🟢 지금 시각표에 없는 회차 표식도 runId 와 정합이면 통과한다 — 바퀴 시각을 바꾼 날 전날 장부가 그대로 읽힌다',
+      !SLOT_MINUTES.includes(OFF_TABLE_SLOT)
+      && slotOf(kstAt(EFFECTIVE, OFF_TABLE_SLOT, 2), labelOf(EFFECTIVE, OFF_TABLE_SLOT))?.minute === OFF_TABLE_SLOT)
+    check('🔴 표식과 runId 가 서로 다른 회차면 정기 회차 증거가 아니다 (낮 runId · 밤 표식 / 밤 runId · 낮 표식)',
+      slotOf(kstAt(EFFECTIVE, DAY_SLOT, 2), labelOf(EFFECTIVE, NIGHT_SLOT)) === null
+      && slotOf(kstAt(EFFECTIVE, NIGHT_SLOT, 2), labelOf(EFFECTIVE, DAY_SLOT)) === null)
+    check('🔴 runId 가 표식 회차의 창 밖이면 증거가 아니다 — 시작 포함 · 창 끝 제외 · 시작 1초 전 제외',
+      slotOf(kstAt(EFFECTIVE, DAY_SLOT), labelOf(EFFECTIVE, DAY_SLOT))?.minute === DAY_SLOT
+      && slotOf(kstAt(EFFECTIVE, DAY_SLOT + WINDOW_MINUTES - 1, 59), labelOf(EFFECTIVE, DAY_SLOT))?.minute === DAY_SLOT
+      && slotOf(kstAt(EFFECTIVE, DAY_SLOT + WINDOW_MINUTES), labelOf(EFFECTIVE, DAY_SLOT)) === null
+      && slotOf(kstAt(EFFECTIVE, DAY_SLOT - 1, 59), labelOf(EFFECTIVE, DAY_SLOT)) === null)
+    check('🔴 표식 날짜와 runId 날짜가 다르면 증거가 아니다 (같은 시각 · 하루 뒤 runId)',
+      slotOf(kstAt('2026-11-06', DAY_SLOT, 2), labelOf(EFFECTIVE, DAY_SLOT)) === null)
+    check('🔴 모양이 틀린 표식(없는 시각 · 초 포함 · 빈 값)과 손 실행은 회차를 만들지 못한다',
+      slotOf(kstAt(EFFECTIVE, DAY_SLOT, 2), `${EFFECTIVE} 24:00`) === null
+      && slotOf(kstAt(EFFECTIVE, DAY_SLOT, 2), `${EFFECTIVE} ${hhmm(DAY_SLOT)}:00`) === null
+      && slotOf(kstAt(EFFECTIVE, DAY_SLOT, 2), '') === null
+      && slotOf(kstAt(EFFECTIVE, DAY_SLOT, 2), labelOf(EFFECTIVE, DAY_SLOT), 'manual') === null
+      && supplyCostScheduledSlotOf({ runId: 'not-a-run-id', runKind: 'scheduled', runSlot: labelOf(EFFECTIVE, DAY_SLOT) }) === null)
+    check('🔴 KST를 UTC처럼 적은 가짜 runId는 정기 회차 증거가 아니다',
       supplyCostScheduledSlotOf({
-        runId: '20261105-141502-d', runKind: 'scheduled', runSlot: `${EFFECTIVE} 14:15`,
+        runId: `${EFFECTIVE.replace(/-/g, '')}-${hhmm(DAY_SLOT).replace(':', '')}02-d`,
+        runKind: 'scheduled', runSlot: labelOf(EFFECTIVE, DAY_SLOT),
       }) === null)
-    const observation = supplyProofCostObservationOf([...settled, proofUnknown, lateUnknown], EFFECTIVE)
-    check('🟢 새 계약 — 21:15 다음날 준비 미상은 당일 proof 분모에서 제외',
+
+    const observation = supplyProofCostObservationOf([...settled, dayUnknown], EFFECTIVE)
+    check('🟢 낮 회차 — 정산 20 · 미상 1 · 귀속 불명 0 · 당시 예산은 장부에 기록된 상한에서 읽는다',
       observation.settledRequests === 20 && observation.usageUnknownRequests === 1
-      && observation.ineligibleRequests === 0 && observation.recordedDailyCapUsd === 1.2,
+      && observation.ineligibleRequests === 0 && observation.recordedDailyCapUsd === 1.2
+      && near(observation.riskUsd, 20 * 0.004 + 0.006),
       JSON.stringify(observation))
+    const withNight = supplyProofCostObservationOf([...settled, dayUnknown, nightSettled, nightUnknown], EFFECTIVE)
+    check('🟢 밤 회차 요청도 표본에 든다 — 정산 수 · 미상 수 · 위험액에 모두 포함(조용히 빠지지 않는다)',
+      withNight.settledRequests === 21 && withNight.usageUnknownRequests === 2 && withNight.ineligibleRequests === 0
+      && near(withNight.settledUsd, 21 * 0.004) && near(withNight.usageUnknownReservedUsd, 2 * 0.006)
+      && near(withNight.riskUsd, 21 * 0.004 + 2 * 0.006) && withNight.recordedDailyCapUsd === 1.2,
+      JSON.stringify(withNight))
     const boundedSide = side({ supplyCostEvidence: {
       wholeDayCriticalHealth: 'ok',
       envelope: { ...observation, budgetUsd: 1 },
     } })
     const bounded = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, boundedSide)
-    check('🟢 새 계약 — 정산 20 + proof 미상 1, 비율·예약·예산 충족 → PASS',
+    check('🟢 새 계약 — 정산 20 + 미상 1, 비율·예약·예산 충족 → PASS',
       bounded.verdict === 'PASS' && bounded.counts.supplyUsageUnknown === 1,
       `${bounded.verdict} ${bounded.codes.join(',')}`)
-    const lateWholeDayBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
-      cost: [
-        { lane: 'comment', name: '댓글 장부', health: 'ok' },
-        { lane: 'audit', name: '감사 장부', health: 'ok' },
-      ],
-      supplyCostEvidence: boundedSide.supplyCostEvidence,
-    }))
-    check('🟢 새 계약 — 늦은 준비 회차가 만든 whole-day 공급 bad는 끝난 당일 proof를 소급 파괴하지 않는다',
-      lateWholeDayBad.verdict === 'PASS' && !has(lateWholeDayBad, 'COST_BAD'),
-      `${lateWholeDayBad.verdict} ${lateWholeDayBad.codes.join(',')}`)
+    const nightTipsRatio = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({ supplyCostEvidence: {
+      wholeDayCriticalHealth: 'ok',
+      envelope: { ...supplyProofCostObservationOf([...settled, dayUnknown, nightUnknown], EFFECTIVE), budgetUsd: 1 },
+    } }))
+    check('⬚ 밤 회차 미상 1건이 더해지면 정산 비율(20/22)이 95% 아래로 내려가 그날 증거가 UNKNOWN 이다 — 밤 요청이 판정에 실제로 든다',
+      nightTipsRatio.verdict === 'UNKNOWN' && has(nightTipsRatio, 'COST_UNKNOWN')
+      && nightTipsRatio.counts.supplyUsageUnknown === 2,
+      `${nightTipsRatio.verdict} ${nightTipsRatio.codes.join(',')} ${JSON.stringify(nightTipsRatio.counts)}`)
     const criticalWholeDayBad = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
       supplyCostEvidence: boundedSide.supplyCostEvidence === null ? null : {
         ...boundedSide.supplyCostEvidence, wholeDayCriticalHealth: 'bad',
@@ -341,7 +371,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       ],
       supplyCostEvidence: boundedSide.supplyCostEvidence,
     }))
-    failWith('🔴 새 계약 — 댓글·감사 장부 bad는 계속 당일 proof를 막는다', nonSupplyBad, 'COST_BAD')
+    failWith('🔴 새 계약 — 댓글·감사 장부 bad는 계속 그날 증거를 막는다', nonSupplyBad, 'COST_BAD')
     const missingAuditLane = judgeStageEvidence(EFFECTIVE, 'd3', newFacts, side({
       cost: [{ lane: 'comment', name: '댓글 장부', health: 'ok' }],
       supplyCostEvidence: boundedSide.supplyCostEvidence,
@@ -361,129 +391,107 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       envelope: { settledRequests: 20, usageUnknownRequests: 1, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 1.01, budgetUsd: 1 },
     } }))
     failWith('🔴 새 계약 — 예약 포함 위험액이 예산을 넘으면 FAIL', tooRisky, 'COST_BAD')
-    const noReservation = supplyProofCostObservationOf([...settled, { ...proofUnknown, reservedUsd: null }], EFFECTIVE)
+    const noReservation = supplyProofCostObservationOf([...settled, { ...dayUnknown, reservedUsd: null }], EFFECTIVE)
     check('⬚ 새 계약 — 미상 요청의 양수 예약이 없으면 ineligible로 닫힌다',
       noReservation.ineligibleRequests === 1 && noReservation.usageUnknownRequests === 0,
       JSON.stringify(noReservation))
 
-    const productionShape = supplyProofCostObservationOf([...settled, lateUnknown], EFFECTIVE)
-    const productionDayTally = tallyOf([...settled, lateUnknown])
-    check('🟢 11/03 실전 모양 — 늦은 미상은 당일 proof에서만 제외되고 하루 열린 예약에는 남는다',
-      productionShape.settledRequests === 20 && productionShape.usageUnknownRequests === 0
-      && productionShape.ineligibleRequests === 0
-      && productionDayTally.usageUnknownUsd === lateUnknown.reservedUsd
-      && productionDayTally.openReservedUsd === lateUnknown.reservedUsd,
-      `${JSON.stringify(productionShape)} ${JSON.stringify(productionDayTally)}`)
+    const nightOnly = supplyProofCostObservationOf([...settled, nightUnknown], EFFECTIVE)
+    const nightOnlyDayTally = tallyOf([...settled, nightUnknown])
+    check('🟢 밤 회차 미상은 비용 표본과 하루 열린 예약 양쪽에 같은 금액으로 남는다 — 두 판독이 갈리지 않는다',
+      nightOnly.settledRequests === 20 && nightOnly.usageUnknownRequests === 1 && nightOnly.ineligibleRequests === 0
+      && nightOnly.usageUnknownReservedUsd === nightUnknown.reservedUsd
+      && nightOnlyDayTally.usageUnknownUsd === nightUnknown.reservedUsd
+      && nightOnlyDayTally.openReservedUsd === nightUnknown.reservedUsd,
+      `${JSON.stringify(nightOnly)} ${JSON.stringify(nightOnlyDayTally)}`)
 
     const badLabel = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, runSlot: `${EFFECTIVE} 21:15` },
+      ...settled, {
+        ...dayUnknown, runSlot: labelOf(EFFECTIVE, NIGHT_SLOT), runTokenShadow: naturalShadow(labelOf(EFFECTIVE, NIGHT_SLOT)),
+      },
     ], EFFECTIVE)
-    check('⬚ 실제 proof 시각과 늦은 회차 라벨이 다르면 조용히 버리지 않고 ineligible',
+    check('⬚ 낮 회차 runId 에 밤 회차 표식(장부·token 모두)을 붙인 요청은 조용히 버리지 않고 ineligible',
       badLabel.ineligibleRequests === 1 && badLabel.usageUnknownRequests === 0, JSON.stringify(badLabel))
     const badTokenWindow = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, runTokenShadow: naturalShadow(`${EFFECTIVE} 06:15`) },
+      ...settled, { ...dayUnknown, runTokenShadow: naturalShadow(labelOf(EFFECTIVE, FIRST_SLOT)) },
     ], EFFECTIVE)
     check('⬚ 자연 token의 budgetWindow과 장부 runSlot이 다르면 ineligible로 닫는다',
       badTokenWindow.ineligibleRequests === 1 && badTokenWindow.usageUnknownRequests === 0,
       JSON.stringify(badTokenWindow))
     const badStart = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, startedAt: `${EFFECTIVE}T21:16:00+09:00` },
+      ...settled, { ...dayUnknown, startedAt: kstAt(EFFECTIVE, NIGHT_SLOT + 1) },
     ], EFFECTIVE)
-    check('🟢 proof 라벨이 손상돼도 실제 시작이 늦은 준비 회차면 끝난 당일 proof에서 제외',
-      badStart.ineligibleRequests === 0 && badStart.usageUnknownRequests === 0, JSON.stringify(badStart))
-    const manualProof = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, runKind: 'manual', runSlot: null },
-    ], EFFECTIVE)
-    check('⬚ proof 시각의 수동 요청은 숨기지 않고 ineligible — 자연 proof를 만들지 못한다',
-      manualProof.ineligibleRequests === 1 && manualProof.usageUnknownRequests === 0,
-      JSON.stringify(manualProof))
-    const manualAt = (time: string): LedgerEntry => ({
-      ...proofUnknown, attemptId: `manual-${time}`, runKind: 'manual', runSlot: null,
-      startedAt: `${EFFECTIVE}T${time}:00+09:00`, endedAt: `${EFFECTIVE}T${time}:10+09:00`,
+    check('⬚ 낮 회차 표식의 요청이 밤 회차 시각에 시작했으면 조용히 빼지 않고 ineligible — 시작 시각으로 회차를 다시 추측하지 않는다',
+      badStart.ineligibleRequests === 1 && badStart.usageUnknownRequests === 0, JSON.stringify(badStart))
+    // 손 실행(정기 회차 귀속 없음)은 하루 어느 시각에 보냈든 귀속 불명이다 — 시각으로 "증거 밖"이 되는 구간이 없다.
+    const inAnyWindow = (minute: number): boolean =>
+      SLOT_MINUTES.some((slot) => minute >= slot && minute < slot + WINDOW_MINUTES)
+    const GAP_MINUTE = Array.from({ length: 24 * 60 }, (_, minute) => minute).find((minute) => !inAnyWindow(minute)) ?? null
+    if (GAP_MINUTE === null) throw new Error('회차 창이 하루를 전부 덮는다 — 창 사이 시각을 만들 수 없다')
+    const manualAt = (minute: number): LedgerEntry => ({
+      ...dayUnknown, attemptId: `manual-${minute}`, runKind: 'manual', runSlot: null,
+      runId: ledgerRunIdAt(kstAt(EFFECTIVE, minute)),
+      startedAt: kstAt(EFFECTIVE, minute, 5), endedAt: kstAt(EFFECTIVE, minute, 15),
     })
-    const manual1000 = supplyProofCostObservationOf([...settled, manualAt('10:00')], EFFECTIVE)
-    const manual1830 = supplyProofCostObservationOf([...settled, manualAt('18:30')], EFFECTIVE)
-    const manual0530 = supplyProofCostObservationOf([...settled, manualAt('05:30')], EFFECTIVE)
-    check('⬚ 수동 요청 경계 — proof 관측 구간 안 10:00은 ineligible, 05:30·18:30은 proof 표본 밖',
-      manual1000.ineligibleRequests === 1 && manual1000.usageUnknownRequests === 0
-      && manual1830.ineligibleRequests === 0 && manual1830.usageUnknownRequests === 0
-      && manual0530.ineligibleRequests === 0 && manual0530.usageUnknownRequests === 0,
-      JSON.stringify({ manual1000, manual1830, manual0530 }))
-    const legacyDayRow = {
-      ...proofUnknown, attemptId: 'legacy-day-row', startedAt: '2026-11-04T14:16:00+09:00',
-      endedAt: '2026-11-04T14:16:10+09:00', runSlot: '2026-11-04 14:15',
-      runTokenShadow: naturalShadow('2026-11-04 14:15'),
-    }
-    const mixedDate = supplyProofCostObservationOf([...settled, legacyDayRow], EFFECTIVE)
-    check('⬚ 날짜 혼합 — 11-04 producer 행을 11-05 proof에 섞으면 조용히 포함하지 않고 ineligible',
+    const manualTimes: readonly (readonly [string, number])[] = [
+      ['낮 회차 창 안', DAY_SLOT + 10], ['밤 회차 창 안', NIGHT_SLOT + 10], ['어느 회차 창에도 없는 시각', GAP_MINUTE],
+      ['첫 회차 전', Math.max(0, FIRST_SLOT - 30)], ['마지막 회차 창이 끝난 뒤', Math.min(24 * 60 - 1, NIGHT_SLOT + WINDOW_MINUTES + 5)],
+    ]
+    const manualSeen = manualTimes.map(([name, minute]) =>
+      ({ name, minute, o: supplyProofCostObservationOf([...settled, manualAt(minute)], EFFECTIVE) }))
+    check('⬚ 손 실행 유료 요청은 어느 시각이든 귀속 불명 — 회차 창 안 · 창 사이 · 첫 회차 전 · 마지막 회차 뒤 모두 ineligible 1',
+      manualSeen.length === 5
+      && manualSeen.every(({ o }) => o.ineligibleRequests === 1 && o.usageUnknownRequests === 0 && o.settledRequests === 20),
+      JSON.stringify(manualSeen.map(({ name, minute, o }) => [name, minute, o.ineligibleRequests, o.usageUnknownRequests])))
+    const otherDayRow = { ...dayUnknown, ...inSlot(DAY_SLOT, 1, '2026-11-04'), attemptId: 'other-day-row' }
+    const mixedDate = supplyProofCostObservationOf([...settled, otherDayRow], EFFECTIVE)
+    check('⬚ 날짜 혼합 — 11-04 회차의 정합한 행을 11-05 장부에 섞으면 조용히 포함하지 않고 ineligible',
       mixedDate.ineligibleRequests === 1 && mixedDate.settledRequests === 20,
       JSON.stringify(mixedDate))
     const corruptStartedAt = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, startedAt: 'not-an-instant', runSlot: null },
+      ...settled, { ...dayUnknown, startedAt: 'not-an-instant', runSlot: null },
     ], EFFECTIVE)
     check('⬚ 해당 날짜 장부의 손상된 요청 시각은 조용히 버리지 않고 ineligible',
       corruptStartedAt.ineligibleRequests === 1 && corruptStartedAt.usageUnknownRequests === 0,
       JSON.stringify(corruptStartedAt))
     const badPrice = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, pricingVersion: 'old-price' },
+      ...settled, { ...dayUnknown, pricingVersion: 'old-price' },
     ], EFFECTIVE)
     check('⬚ 현재 가격표와 다른 요청은 bounded 근거로 쓰지 않는다',
       badPrice.ineligibleRequests === 1 && badPrice.usageUnknownRequests === 0, JSON.stringify(badPrice))
     const mixedBudget = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, budgetDailyUsd: 0.5, budgetCapUsd: 0.5 },
+      ...settled, { ...dayUnknown, budgetDailyUsd: 0.5, budgetCapUsd: 0.5 },
     ], EFFECTIVE)
-    check('🟢 같은 proof 표본의 승인된 cap이 달라도 가장 큰 유효 cap으로 위험을 판정한다',
+    check('🟢 같은 날 표본의 승인된 cap이 달라도 가장 큰 유효 cap으로 위험을 판정한다',
       mixedBudget.ineligibleRequests === 0 && mixedBudget.usageUnknownRequests === 1
       && mixedBudget.recordedDailyCapUsd === 1.2, JSON.stringify(mixedBudget))
     const missingBudgetSource = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, budgetSource: undefined },
+      ...settled, { ...dayUnknown, budgetSource: undefined },
     ], EFFECTIVE)
     check('⬚ 기록 예산의 출처가 없으면 bounded 근거로 쓰지 않는다',
       missingBudgetSource.ineligibleRequests === 1 && missingBudgetSource.usageUnknownRequests === 0,
       JSON.stringify(missingBudgetSource))
 
-    const at1259 = supplyProofCostObservationOf([
-      ...settled, {
-        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T12:15:02+09:00`),
-        startedAt: `${EFFECTIVE}T12:59:00+09:00`, runSlot: `${EFFECTIVE} 12:15`,
-        runTokenShadow: naturalShadow(`${EFFECTIVE} 12:15`),
-      },
+    const startedAtOffset = (slot: number, offsetMin: number) => supplyProofCostObservationOf([
+      ...settled, { ...dayUnknown, ...inSlot(slot, offsetMin) },
     ], EFFECTIVE)
-    const at1300 = supplyProofCostObservationOf([
-      ...settled, {
-        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T12:15:02+09:00`),
-        startedAt: `${EFFECTIVE}T13:00:00+09:00`, runSlot: `${EFFECTIVE} 12:15`,
-        runTokenShadow: naturalShadow(`${EFFECTIVE} 12:15`),
-      },
+    const windowEdges = [DAY_SLOT, NIGHT_SLOT].map((slot) => ({
+      slot, last: startedAtOffset(slot, WINDOW_MINUTES - 1), past: startedAtOffset(slot, WINDOW_MINUTES),
+    }))
+    check('🟢 회차 창은 시작 포함·45분 끝 제외 — 낮·밤 회차 모두 창 마지막 분은 표본, 창 끝 시각은 ineligible',
+      windowEdges.every(({ last, past }) => last.usageUnknownRequests === 1 && last.ineligibleRequests === 0
+        && past.usageUnknownRequests === 0 && past.ineligibleRequests === 1),
+      JSON.stringify(windowEdges.map(({ slot, last, past }) =>
+        [hhmm(slot), last.usageUnknownRequests, last.ineligibleRequests, past.usageUnknownRequests, past.ineligibleRequests])))
+    const unlabeledNight = supplyProofCostObservationOf([
+      ...settled, { ...nightUnknown, runKind: null },
     ], EFFECTIVE)
-    const at1759 = supplyProofCostObservationOf([
-      ...settled, {
-        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T17:15:02+09:00`),
-        startedAt: `${EFFECTIVE}T17:59:00+09:00`, runSlot: `${EFFECTIVE} 17:15`,
-        runTokenShadow: naturalShadow(`${EFFECTIVE} 17:15`),
-      },
-    ], EFFECTIVE)
-    const at1800 = supplyProofCostObservationOf([
-      ...settled, {
-        ...proofUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T17:15:02+09:00`),
-        startedAt: `${EFFECTIVE}T18:00:00+09:00`, runSlot: `${EFFECTIVE} 17:15`,
-        runTokenShadow: naturalShadow(`${EFFECTIVE} 17:15`),
-      },
-    ], EFFECTIVE)
-    check('🟢 proof 슬롯 창은 시작 포함·45분 끝 제외 — 12:59/17:59 포함, 13:00/18:00 ineligible',
-      at1259.usageUnknownRequests === 1 && at1259.ineligibleRequests === 0
-      && at1759.usageUnknownRequests === 1 && at1759.ineligibleRequests === 0
-      && at1300.usageUnknownRequests === 0 && at1300.ineligibleRequests === 1
-      && at1800.usageUnknownRequests === 0 && at1800.ineligibleRequests === 1)
-    const unlabeledLate = supplyProofCostObservationOf([
-      ...settled, { ...lateUnknown, runKind: null },
-    ], EFFECTIVE)
-    check('🟢 실제 21:15 준비 시각이면 runKind가 손상돼도 이미 끝난 당일 proof에서 제외',
-      unlabeledLate.usageUnknownRequests === 0 && unlabeledLate.ineligibleRequests === 0,
-      JSON.stringify(unlabeledLate))
+    check('⬚ 밤 회차 시각의 요청도 runKind 가 손상되면 조용히 빠지지 않고 ineligible',
+      unlabeledNight.usageUnknownRequests === 0 && unlabeledNight.ineligibleRequests === 1,
+      JSON.stringify(unlabeledNight))
     const manualDifferentCap = recordedSupplyBudgetOf([
       ...settled, {
-        ...lateUnknown, runKind: 'manual', runSlot: null,
+        ...nightUnknown, runKind: 'manual', runSlot: null,
         budgetDailyUsd: 0.5, budgetCapUsd: 0.5,
       },
     ], EFFECTIVE)
@@ -491,49 +499,49 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       manualDifferentCap.kind === 'valid' && manualDifferentCap.capUsd === 1.2,
       JSON.stringify(manualDifferentCap))
     const mixedContractDay = recordedSupplyBudgetOf([
-      ...settled, { ...lateUnknown, supplyContract: 'supply-jit-v1' },
+      ...settled, { ...nightUnknown, supplyContract: 'supply-jit-v1' },
     ], EFFECTIVE)
-    check('🟢 하루 예산은 콘텐츠 계약과 분리 — 늦은 옛 계약 행도 기록 상한·출처가 같으면 예산 근거는 유효',
+    check('🟢 하루 예산은 콘텐츠 계약과 분리 — 옛 계약 행도 기록 상한·출처가 같으면 예산 근거는 유효',
       mixedContractDay.kind === 'valid' && mixedContractDay.capUsd === 1.2,
       JSON.stringify(mixedContractDay))
     const missingDayCap = recordedSupplyBudgetOf([
-      ...settled, { ...lateUnknown, budgetCapUsd: null },
+      ...settled, { ...nightUnknown, budgetCapUsd: null },
     ], EFFECTIVE)
     check('⬚ 계약과 무관하게 하루 기록 상한이 빠지면 예산은 invalid로 닫는다',
       missingDayCap.kind === 'invalid' && missingDayCap.capUsd === null, JSON.stringify(missingDayCap))
     const unapprovedDayCap = recordedSupplyBudgetOf([
       ...settled, {
-        ...lateUnknown, budgetDailyUsd: 2, budgetCeilingUsd: 2, budgetCapUsd: 2,
+        ...nightUnknown, budgetDailyUsd: 2, budgetCeilingUsd: 2, budgetCapUsd: 2,
       },
     ], EFFECTIVE)
     check('🔴 승인 천장보다 큰 기록 cap은 whole-day 예산 근거가 아니다',
       unapprovedDayCap.kind === 'invalid' && unapprovedDayCap.capUsd === null,
       JSON.stringify(unapprovedDayCap))
-    const lateAfterWindow = supplyProofCostObservationOf([
+    const delayedPastWindow = supplyProofCostObservationOf([
       ...settled,
       {
-        ...lateUnknown, runKind: 'manual', runSlot: null,
-        startedAt: `${EFFECTIVE}T22:05:00+09:00`, endedAt: `${EFFECTIVE}T22:05:10+09:00`,
+        // 밤 회차가 창을 넘겨 이어 보낸 요청 — 러너는 창 밖 요청을 손 실행으로 적는다
+        ...nightUnknown, attemptId: 'u-night-delayed', runKind: 'manual', runSlot: null,
+        startedAt: kstAt(EFFECTIVE, NIGHT_SLOT + WINDOW_MINUTES + 5), endedAt: kstAt(EFFECTIVE, NIGHT_SLOT + WINDOW_MINUTES + 5, 10),
       },
       {
-        ...lateUnknown, runId: ledgerRunIdAt(`${EFFECTIVE}T22:15:03+09:00`), attemptId: 'u-late-22',
-        runKind: 'manual', runSlot: null,
-        startedAt: `${EFFECTIVE}T23:05:00+09:00`, endedAt: `${EFFECTIVE}T23:05:10+09:00`,
-        runTokenShadow: naturalShadow(`${EFFECTIVE} 22:15`),
+        // 같은 지연 요청이 회차 표식을 그대로 달고 있는 모양
+        ...nightUnknown, attemptId: 'u-night-delayed-labeled',
+        startedAt: kstAt(EFFECTIVE, NIGHT_SLOT + WINDOW_MINUTES + 5), endedAt: kstAt(EFFECTIVE, NIGHT_SLOT + WINDOW_MINUTES + 5, 10),
       },
     ], EFFECTIVE)
-    check('🟢 45분 창을 벗어난 지연 요청은 manual이며 당일 자연 proof를 얻지 않는다',
-      lateAfterWindow.settledRequests === 20 && lateAfterWindow.usageUnknownRequests === 0
-      && lateAfterWindow.ineligibleRequests === 0, JSON.stringify(lateAfterWindow))
+    check('⬚ 45분 창을 벗어난 지연 요청은 표식이 있든 없든 표본이 아니고, 조용히 빠지지도 않는다 — ineligible 2',
+      delayedPastWindow.settledRequests === 20 && delayedPastWindow.usageUnknownRequests === 0
+      && delayedPastWindow.ineligibleRequests === 2, JSON.stringify(delayedPastWindow))
     const eventProof = supplyProofCostObservationOf([
       ...settled, {
-        ...proofUnknown,
+        ...dayUnknown,
         runTokenShadow: {
-          ...naturalShadow(`${EFFECTIVE} 14:15`), trigger: 'event', launchTrigger: 'event',
+          ...naturalShadow(labelOf(EFFECTIVE, DAY_SLOT)), trigger: 'event', launchTrigger: 'event',
         },
       },
     ], EFFECTIVE)
-    check('🔴 event token은 scheduled 라벨을 흉내 내도 자연 proof를 얻지 못한다',
+    check('🔴 event token은 scheduled 라벨을 흉내 내도 정기 회차 표본이 되지 못한다',
       eventProof.usageUnknownRequests === 0 && eventProof.ineligibleRequests === 1,
       JSON.stringify(eventProof))
     const recoveryStartedAt = `${EFFECTIVE}T07:05:00+09:00`
@@ -546,7 +554,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     }
     const recoveryProof = supplyProofCostObservationOf([
       ...settled, {
-        ...proofUnknown, attemptId: 'u-recovery', runKind: 'manual', runSlot: null,
+        ...dayUnknown, attemptId: 'u-recovery', runKind: 'manual', runSlot: null,
         runId: recoveryRunId,
         startedAt: recoveryStartedAt, endedAt: `${EFFECTIVE}T07:05:10+09:00`,
         sourceKey: 'src-u-recovery', runTokenShadow: recoveryShadow,
@@ -555,20 +563,20 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
     check('🟢 제한 복구 비용은 자연 정산 표본을 바꾸지 않고 당일 위험액에는 들어간다',
       recoveryProof.settledRequests === 20 && recoveryProof.usageUnknownRequests === 0
       && recoveryProof.recoverySettledRequests === 0 && recoveryProof.recoveryUsageUnknownRequests === 1
-      && recoveryProof.recoveryUsageUnknownReservedUsd === proofUnknown.reservedUsd
+      && recoveryProof.recoveryUsageUnknownReservedUsd === dayUnknown.reservedUsd
       && recoveryProof.ineligibleRequests === 0
       && recoveryProof.riskUsd === recoveryProof.settledUsd + recoveryProof.recoveryUsageUnknownReservedUsd,
       JSON.stringify(recoveryProof))
     const duplicateRecoveryRuns = supplyProofCostObservationOf([
       ...settled,
       {
-        ...proofUnknown, attemptId: 'u-recovery-1', runId: recoveryRunId,
+        ...dayUnknown, attemptId: 'u-recovery-1', runId: recoveryRunId,
         runKind: 'manual', runSlot: null, startedAt: recoveryStartedAt,
         endedAt: `${EFFECTIVE}T07:05:10+09:00`, sourceKey: 'src-u-recovery-1',
         runTokenShadow: recoveryShadow,
       },
       {
-        ...proofUnknown, attemptId: 'u-recovery-2',
+        ...dayUnknown, attemptId: 'u-recovery-2',
         runId: ledgerRunIdAt(`${EFFECTIVE}T07:06:00+09:00`),
         runKind: 'manual', runSlot: null, startedAt: `${EFFECTIVE}T07:06:00+09:00`,
         endedAt: `${EFFECTIVE}T07:06:10+09:00`, sourceKey: 'src-u-recovery-2',
@@ -581,7 +589,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       JSON.stringify(duplicateRecoveryRuns))
     const malformedRecovery = supplyProofCostObservationOf([
       ...settled, {
-        ...proofUnknown, attemptId: 'u-recovery-malformed', runId: recoveryRunId,
+        ...dayUnknown, attemptId: 'u-recovery-malformed', runId: recoveryRunId,
         runKind: 'manual', runSlot: null, startedAt: recoveryStartedAt,
         endedAt: `${EFFECTIVE}T07:05:10+09:00`, sourceKey: 'src-u-recovery-malformed',
         runTokenShadow: { ...recoveryShadow, tokenId: '' },
@@ -593,7 +601,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       JSON.stringify(malformedRecovery))
     const recoveryFollowup = supplyProofCostObservationOf([
       ...settled, {
-        ...proofUnknown, attemptId: 'u-recovery-followup', runKind: 'manual', runSlot: null,
+        ...dayUnknown, attemptId: 'u-recovery-followup', runKind: 'manual', runSlot: null,
         runId: recoveryRunId,
         startedAt: recoveryStartedAt, endedAt: `${EFFECTIVE}T07:05:10+09:00`,
         sourceKey: 'src-u-recovery-followup', runTokenShadow: { ...recoveryShadow, pass: 1 },
@@ -604,7 +612,7 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       JSON.stringify(recoveryFollowup))
     const recoveryLate = supplyProofCostObservationOf([
       ...settled, {
-        ...proofUnknown, attemptId: 'u-recovery-late', runKind: 'manual', runSlot: null,
+        ...dayUnknown, attemptId: 'u-recovery-late', runKind: 'manual', runSlot: null,
         runId: ledgerRunIdAt(`${EFFECTIVE}T07:30:00+09:00`),
         startedAt: `${EFFECTIVE}T07:30:00+09:00`, endedAt: `${EFFECTIVE}T07:30:10+09:00`,
         sourceKey: 'src-u-recovery-late', runTokenShadow: recoveryShadow,
@@ -614,9 +622,9 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       recoveryLate.recoveryUsageUnknownRequests === 0 && recoveryLate.ineligibleRequests === 1,
       JSON.stringify(recoveryLate))
     const humanProof = supplyProofCostObservationOf([
-      ...settled, { ...proofUnknown, resolvedBy: 'human' },
+      ...settled, { ...dayUnknown, resolvedBy: 'human' },
     ], EFFECTIVE)
-    check('🔴 사람이 마감한 장부 줄은 자연 proof를 만들지 못한다',
+    check('🔴 사람이 마감한 장부 줄은 정기 회차 표본이 되지 못한다',
       humanProof.usageUnknownRequests === 0 && humanProof.ineligibleRequests === 1,
       JSON.stringify(humanProof))
 
@@ -678,14 +686,15 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
       && !usesSupplyCostEnvelope('2026-11-99') && !usesSupplyCostEnvelope('not-a-date'))
     const contract = supplyCostContractOf(EFFECTIVE)
     const history = supplyCostContractHistory()
-    check('🟢 시행일 계약 창은 계약·가격·예산·출처·proof 몫을 날짜에 고정하고 과거 날짜에는 적용되지 않는다',
+    check('🟢 시행일 계약 창은 계약·가격·예산·출처·저예산 몫(5/7 · $1.20 부터 전액)을 날짜에 고정하고 과거 날짜에는 적용되지 않는다',
       contract?.supplyContract === SUPPLY_JIT_CONTRACT && contract.pricingVersion === PRICING_VERSION
       && contract.approvedDailyUsd === 1.2
       && contract.trustedBudgetSources.join(',') === 'env.local,process,process-override'
-      && contract.proofFullBudgetAtUsd === SUPPLY_PROOF_FIRST_DAILY_USD
-      && contract.proofBudgetNumerator === SUPPLY_PROOF_RUNS_PER_DAY
-      && contract.proofBudgetDenominator === SUPPLY_RUNS_PER_DAY
+      && contract.proofFullBudgetAtUsd === 1.2
+      && contract.proofBudgetNumerator === 5
+      && contract.proofBudgetDenominator === 7
       && supplyCostProofBudgetUsd(EFFECTIVE, 1.19) === 1.19 * 5 / 7
+      && supplyCostProofBudgetUsd(EFFECTIVE, 1.2) === 1.2
       && supplyCostContractOf('2026-11-04') === null, JSON.stringify(contract))
     check('🔴 첫 비용 계약 역사 행은 현재 상수 참조가 아니라 11-05 literal로 불변이고 날짜가 엄격히 증가한다',
       validSupplyCostContractHistory(history)
@@ -704,14 +713,14 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
         && supplyCostProofBudgetUsd('2026-11-17', 1.8) === 1.8 && supplyCostProofBudgetUsd('2026-11-16', 1.2) === 1.2)
     }
     const latestContract = history.at(-1)
-    check('🔴 최신 비용 계약 창은 현재 producer 계약·가격·승인 예산(11-17 · $1.80)·proof 몫과 일치한다',
+    check('🔴 최신 비용 계약 창은 현재 producer 계약·가격·승인 예산(11-17 · $1.80)과 일치하고 저예산 몫 칸은 그대로다',
       latestContract?.supplyContract === SUPPLY_JIT_CONTRACT
       && latestContract.pricingVersion === PRICING_VERSION
       && latestContract.fromKstDate === '2026-11-17' && latestContract.approvedDailyUsd === 1.8
       && latestContract.trustedBudgetSources.join(',') === 'env.local,process,process-override'
-      && latestContract.proofFullBudgetAtUsd === SUPPLY_PROOF_FIRST_DAILY_USD
-      && latestContract.proofBudgetNumerator === SUPPLY_PROOF_RUNS_PER_DAY
-      && latestContract.proofBudgetDenominator === SUPPLY_RUNS_PER_DAY,
+      && latestContract.proofFullBudgetAtUsd === 1.2
+      && latestContract.proofBudgetNumerator === 5
+      && latestContract.proofBudgetDenominator === 7,
       JSON.stringify(latestContract))
     check('🔴 비용 계약 창의 중복·역순·시행일 교체는 validator가 거절한다',
       !validSupplyCostContractHistory([...history, { ...history[0]! }])
@@ -735,17 +744,12 @@ console.log('\n① 증거 판정 — 기준선과 조건별 반례')
 
   // 계약이 리팩터링 중 조용히 약해지지 않게 권위 지점 자체도 고정한다.
   const envelopeSource = readFileSync('src/lib/supply-cost-envelope.ts', 'utf-8')
-  const ledgerSource = readFileSync('src/lib/llm-ledger.ts', 'utf-8')
   const evidenceSource = readFileSync('src/lib/stage-evidence.ts', 'utf-8')
   check('🔴 비용 envelope 시행일·clean 최소 1·bounded 최소 20·95%는 코드 정본 한 곳에 남는다',
     /SUPPLY_COST_ENVELOPE_EFFECTIVE_KST_DATE = '2026-11-05'/.test(envelopeSource)
     && /SUPPLY_COST_ENVELOPE_MIN_CLEAN_SETTLED_REQUESTS = 1/.test(envelopeSource)
     && /SUPPLY_COST_ENVELOPE_MIN_BOUNDED_SETTLED_REQUESTS = 20/.test(envelopeSource)
     && /SUPPLY_COST_ENVELOPE_MIN_SETTLED_RATIO = 0\.95/.test(envelopeSource))
-  check('🔴 실제 늦은 준비 시각은 손상된 tag와 무관하게 당일 proof에서 제외하고 당시 예산을 장부에서 읽는다',
-    /actualSlot !== null && lateMinutes\.has\(actualSlot\)/.test(ledgerSource)
-    && /recordedDailyCapUsd/.test(ledgerSource)
-    && /budgetCapUsd/.test(ledgerSource) && /budgetSource/.test(ledgerSource))
   check('🔴 운영 비용 증거는 optional이 아니다 — 누락을 검사 skip으로 되돌리지 못한다',
     /supplyCostEvidence: SupplyCostEvidence \| null/.test(evidenceSource)
     && !/supplyCostEvidence\?: SupplyCostEvidence/.test(evidenceSource))

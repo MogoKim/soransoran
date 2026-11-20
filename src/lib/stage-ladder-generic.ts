@@ -27,7 +27,7 @@ import {
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES } from './persona-comment-auto-lane'
 import { ladderRowOf } from './ladder-table'
-import { SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
+import { SUPPLY_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
 import {
   FORECAST_WARNING_CODES, type ForecastSupplySignal, type ForecastWarningCode, type StageBlock,
 } from './stage-decision-contract'
@@ -440,19 +440,19 @@ export function readyCapacityOf(
   rawReady: number,
   sources: number,
   worksetPerRun: number = SUPPLY_WORKSET_PER_RUN,
-  proofRunsPerDay: number = SUPPLY_PROOF_RUNS_PER_DAY,
+  runsPerDay: number = SUPPLY_RUNS_PER_DAY,
 ): number | null {
   if (!Number.isFinite(rawReady) || rawReady < 0 || !Number.isFinite(sources) || sources <= 0
     || !Number.isInteger(worksetPerRun) || worksetPerRun <= 0
-    || !Number.isInteger(proofRunsPerDay) || proofRunsPerDay <= 0) return null
-  return Math.floor((rawReady * worksetPerRun * proofRunsPerDay) / sources)
+    || !Number.isInteger(runsPerDay) || runsPerDay <= 0) return null
+  return Math.floor((rawReady * worksetPerRun * runsPerDay) / sources)
 }
 
 /**
  * 🔴 **올라갈 칸의 관문 — D3~D100 같은 구조.** 막는 `codes` 에 FAIL 코드가 하나라도 있으면 FAIL · 없고 모름이 있으면
  *    UNKNOWN. 둘 다 올리지 않는다. 예측 5코드는 `forecastWarnings`, 공급 비용 추정은 `warnings` 로만 낸다 — 판정에 들지 않는다.
  *      · 하루 목표 · 슬롯 — 러너 프로필(`profileOf`) · Persona 하한 — `ladder-table`
- *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간) · 공급 용량 — 회차당 묶음 × 당일 증명 회차
+ *      · 필요 READY — `replenishmentOf`(목표 + 실측 손실 보충 구간) · 공급 용량 — 회차당 묶음 × 하루 정기 회차 수
  *    지연(원천 게시→공개)은 counts 에 찍기만 한다 — 수집→공개는 하루 판정(`stage-evidence`)이 잰다.
  */
 export function judgeNextPreflight(

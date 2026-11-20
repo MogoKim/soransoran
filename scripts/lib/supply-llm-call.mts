@@ -327,13 +327,9 @@ export const SLACK_USAGE_UNKNOWN_NOTIFY: UsageUnknownNotify = (a) =>
  */
 export type ProtectDecision = { kind: SupplyRunKind; why: string; slot?: string | null; protect: SpendProtect | null }
 
-/**
- * 🔴 **보호 판정이 받는 장부 문맥** — 전부 **잠금 안에서** 읽은 것이다.
- *    `historyEntries` 는 어제까지 `SCHEDULED_COST_LOOKBACK_DAYS` 일 줄이고, 못 읽었으면 `null` 이다.
- */
+/** 🔴 **보호 판정이 받는 장부 문맥** — 전부 **잠금 안에서** 읽은 것이다 */
 export type ProtectContext = {
   todayEntries: readonly LedgerEntry[]
-  historyEntries: readonly LedgerEntry[] | null
   dailyUsd: number | null
   /** 🔴 이 세션을 만든 벽시계 시각 — 회차 시작 시각(잠·늦은 복귀 규칙)의 한쪽 근거 */
   sessionStartedAt: Date
@@ -342,8 +338,8 @@ export type ProtectContext = {
 /**
  * 🔴 **회차 시작 시각** (2026-09-29 3차) — min(부모 `SORAN_RUN_AT`, 세션 생성 시각).
  *
- *    부모(`supply-process`)가 자식에게 넘긴 회차 시각이 있으면 그것도 본다 — 08:15 에 시작한 부모가
- *    잠들었다 12:17 에 깨어 **새로 띄운** 초안 자식은 세션 생성이 12:18 이라, 세션 시각만 보면 12:15 창
+ *    부모(`supply-process`)가 자식에게 넘긴 회차 시각이 있으면 그것도 본다 — 아침 회차에 시작한 부모가
+ *    잠들었다 점심 회차 창에서 깨어 **새로 띄운** 초안 자식은 세션 생성 시각만 보면 점심 회차 창
  *    안으로 보인다. 둘 중 **이른 것**을 쓰므로 `SORAN_RUN_AT` 은 판정을 더 엄격하게만 만든다.
  *    🔴 값이 있는데 모양이 틀리면 `null`(모름) → 정기로 인정하지 않는다.
  */
@@ -362,7 +358,7 @@ export function runStartedAtOf(env: NodeJS.ProcessEnv, sessionStartedAt: Date): 
 /**
  * 🔴 **공급 장부의 보호 판정 — 운영 경로는 이것 하나다.**
  *    정기 여부는 launchd 가 넣은 `XPC_SERVICE_NAME` 과 **벽시계**로만 정한다(정본 `supply-scheduled-reserve`).
- *    슬롯 몫은 장부의 최근 정기 회차 실측에서 온다(표본이 모자라면 보수 기본값).
+ *    회차 몫은 남은 하루 예산을 남은 정기 회차 수로 나눈 값이다.
  */
 export function supplyProtectFromEnv(env: NodeJS.ProcessEnv): (now: Date, ctx: ProtectContext) => ProtectDecision {
   return (now, ctx) => {
@@ -370,7 +366,7 @@ export function supplyProtectFromEnv(env: NodeJS.ProcessEnv): (now: Date, ctx: P
     const t = seam?.() ?? now
     return supplySpendProtectAt({
       env, now: t,
-      todayEntries: ctx.todayEntries, historyEntries: ctx.historyEntries, dailyUsd: ctx.dailyUsd,
+      todayEntries: ctx.todayEntries, dailyUsd: ctx.dailyUsd,
       // 🔴 시험 이음매가 걸리면 시작 시각도 그 시각이다(가짜 provider 프로세스 전용 — 아래 주석)
       runStartedAt: seam === null ? runStartedAtOf(env, ctx.sessionStartedAt) : t,
     })
@@ -453,11 +449,6 @@ export class SupplyLlmSession {
   readonly budgetEnv: ReturnType<typeof budgetEnvProvenance> | null
   /** 🔴 정기 회차 몫 보호 — 공급 장부면 언제나 켜져 있다 */
   private readonly protectAt: ((now: Date, ctx: ProtectContext) => ProtectDecision) | null
-  /**
-   * 🔴 **지난 날 장부 캐시** — 정기 실측을 모으려고 읽은 어제 이전 파일. 세션 동안 한 번만 읽는다.
-   *    오늘 파일은 캐시하지 않는다 — 요청마다 잠금 안에서 새로 읽은 것을 쓴다.
-   */
-  private readonly pastDays = new Map<string, LedgerRead>()
   /** 🔴 세션을 만든 벽시계 시각 — 회차 시작 시각의 근거(잠·늦은 복귀 규칙) */
   private readonly createdAt: Date
   /**
@@ -571,7 +562,7 @@ export class SupplyLlmSession {
     }
     // 실행 종류만 본다 — 몫 계산은 여기서 쓰지 않는다
     const kind = this.protectAt(startedAt, {
-      todayEntries: [], historyEntries: null, dailyUsd: this.limits.dailyUsd, sessionStartedAt: this.createdAt,
+      todayEntries: [], dailyUsd: this.limits.dailyUsd, sessionStartedAt: this.createdAt,
     }).kind
     const v = missingTodayLedgerVerdict({ now: startedAt, todayExists: false, recentDaysExist: recent, kind })
     return v.ok ? null : v.reason
@@ -700,10 +691,9 @@ export class SupplyLlmSession {
     /**
      * 🔴 **자연 회차의 꼬리 유료 호출을 시작하지 않는다.**
      *
-     *    과거에는 08:15 자연 회차가 09:00 이후까지 실행되면 이후 요청을 `manual` 로
-     *    재분류해 남은 예산으로 보냈다. 그 요청은 증명 슬롯 밖이라 Dn 재료가 되지 않으면서
-     *    비용과 usageUnknown 만 만들었다. 자연 회차는 자기 슬롯 창 안에서만 새 요청을 시작하고,
-     *    부족분은 다음 자연 슬롯이 이어받는다. 무료 사전 계산과 장부 write보다 먼저 막는다.
+     *    과거에는 정기 회차가 자기 창을 넘겨 돌면 이후 요청을 `manual` 로 재분류해 남은 예산으로
+     *    보냈다. 그 요청은 뒤 회차의 몫을 먹으면서 비용과 usageUnknown 만 만들었다. 정기 회차는
+     *    자기 창 안에서만 새 요청을 시작하고, 부족분은 다음 정기 회차가 이어받는다. 무료 사전 계산과 장부 write보다 먼저 막는다.
      */
     const startWindowClosed = this.scheduledWindowClosedReason(startedAt)
     if (startWindowClosed !== null) {
@@ -827,7 +817,6 @@ export class SupplyLlmSession {
          */
         const decided = this.protectAt === null ? null : this.protectAt(startedAt, {
           todayEntries: read.ok ? read.entries : [],
-          historyEntries: read.ok ? this.historyBefore(date) : null,
           dailyUsd: this.limits.dailyUsd,
           sessionStartedAt: this.createdAt,
         })
@@ -1074,33 +1063,6 @@ export class SupplyLlmSession {
       ...(typeof input.supplyContract === 'string' && input.supplyContract !== '' ? { supplyContract: input.supplyContract } : {}),
       errorCode: null,
     }
-  }
-
-  /**
-   * 🔴 **정기 실측용 장부 이력** — 어제부터 뒤로 `SCHEDULED_COST_LOOKBACK_DAYS` 일(오늘은 넣지 않는다).
-   *    지난 날 하나라도 못 읽으면 `null` 이다 → 보수 기본값(크게 떼어 둔다). 반쪽 이력으로 평균을 내지 않는다.
-   *
-   * 🔴 **어제 장부가 없거나 비었어도 `null` 이다 (2026-09-29 3차).** 정기 회차는 매일 돈다 — 어제 줄이 하나도
-   *    없다는 것은 노트북이 하루 꺼져 있었거나 파일이 사라졌다는 뜻이고, 둘 다 **가장 최근 단가를 모른다**는
-   *    뜻이다. 그때 더 오래된 날의 표본(묶음·모델이 바뀌기 전의 싼 값일 수 있다)으로 몫을 낮추지 않는다.
-   *    그 전 날(2~7일 전)이 없는 것은 빈 날로 본다 — 표본 3개 미만이면 어차피 보수 기본값이다.
-   *    (어제 파일이 **깨진** 경우는 이보다 앞에서 `readRun` 이 실패해 모든 유료 요청이 `LEDGER_ERROR` 다.)
-   */
-  private historyBefore(date: string): LedgerEntry[] | null {
-    const out: LedgerEntry[] = []
-    let d = date
-    for (let i = 0; i < SCHEDULED_COST_LOOKBACK_DAYS; i += 1) {
-      d = previousLedgerDate(d)
-      let r = this.pastDays.get(d)
-      if (r === undefined) {
-        r = this.io.readDay(ledgerPathOf(this.dir, d))
-        this.pastDays.set(d, r)
-      }
-      if (!r.ok) return null
-      if (i === 0 && r.entries.length === 0) return null
-      out.push(...r.entries)
-    }
-    return out
   }
 
   private write(path: string, entry: LedgerEntry): void {

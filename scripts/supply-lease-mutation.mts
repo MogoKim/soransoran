@@ -121,7 +121,7 @@ const MUTATIONS: Mutation[] = [
   {
     name: 'token 이 예산 허가가 된다 — token env 가 있으면 창 밖도 정기로 판정',
     edits: [{ file: F.reserve, find: "  const label = (env[LAUNCHD_LABEL_ENV] ?? '').trim()\n",
-      replace: "  if ((env.SORAN_SUPPLY_RUN_TOKEN ?? '') !== '' && activeSlotAt(now, slots, windowMs) === null) return { kind: 'scheduled', slot: '2026-10-12 08:15', why: 'token' }\n"
+      replace: "  if ((env.SORAN_SUPPLY_RUN_TOKEN ?? '') !== '' && activeSlotAt(now, slots, windowMs) === null) return { kind: 'scheduled', slot: null, why: 'token' }\n"
         + "  const label = (env[LAUNCHD_LABEL_ENV] ?? '').trim()\n" }],
     checks: ['lease'],
   },

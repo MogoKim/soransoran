@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 type Edit = { file: string; find: string; replace: string }
 const F = { facts: 'scripts/lib/stage-preflight-facts.mts' }
 const MUTATIONS: { name: string; edits: Edit[] }[] = [
-  { name: '용량 창 끝이 전날 자정으로 되돌아간다 — preflightWindowsOf (06:15 회차 누락 재현)',
+  { name: '용량 창 끝이 전날 자정으로 되돌아간다 — preflightWindowsOf (결정 직전 회차 누락 재현)',
     edits: [{ file: F.facts, find: '  const to = now\n', replace: '  const to = proofTo\n' }] },
   { name: '용량 창 끝이 전날 자정으로 되돌아간다 — cohort 호출 지점',
     edits: [{ file: F.facts, find: 'windowFrom: win.capacity.from, windowTo: win.capacity.to,', replace: 'windowFrom: win.proof.from, windowTo: win.proof.to,' }] },
