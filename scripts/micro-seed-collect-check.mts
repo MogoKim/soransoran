@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { ARTICLE_URL, computeDedupKey, buildCollected } from './lib/micro-seed-82cook.mjs'
 import {
   assessCandidate, selectionScore, stripTruncationTail, linkCharRatioOf,
-  DETAIL_ONLY_FLAGS, HIGH_ENGAGEMENT_MIN, SHORT_BODY_MAX, LINK_HEAVY_RATIO, SHORT_TITLE_MAX,
+  DETAIL_ONLY_FLAGS, HIGH_ENGAGEMENT_MIN, LINK_HEAVY_RATIO,
 } from './lib/micro-seed-quality.mjs'
 
 // 실측에서 가져온 본문 조각. 원문 전체가 아니라 판정에 필요한 최소만 둔다.
@@ -51,14 +51,14 @@ const bad = (name: string, kind: string, detail: string) => {
 
 // ── ⑱ 목록 단계는 본문 플래그를 매기지 않는다 ───────────
 //    🔴 "본문이 짧다" 와 "본문을 읽지 않았다" 는 다른 것이다.
-//       목록에서 shortBody 를 붙이면 읽지도 않은 글을 짧다고 표시하게 된다.
+//       목록에서 본문 플래그(imageLikelyBody 등)를 붙이면 읽지도 않은 글을 판정하게 된다.
 {
   const list = assessCandidate({ originalTitle: '물로만 세안 3개월이 지났어요.', sourceCommentCount: 6, rawBody: '' })
   const detail = assessCandidate({ originalTitle: '물로만 세안 3개월이 지났어요.', sourceCommentCount: 6, rawBody: '짧은 본문' })
   const listClean = !list.flags.some((f) => (DETAIL_ONLY_FLAGS as readonly string[]).includes(f))
   const stageOk = list.stage === 'list' && detail.stage === 'detail'
   const bodyZero = list.signals.bodyLength === 0
-  const detailFlagged = detail.flags.includes('shortBody')
+  const detailFlagged = detail.flags.includes('imageLikelyBody')
   if (listClean && stageOk && bodyZero && detailFlagged) {
     ok('목록 단계는 본문 플래그를 매기지 않는다', 'policy', `list=${list.flags.join(',')} · stage 구분 O`)
   } else {
@@ -76,11 +76,9 @@ const bad = (name: string, kind: string, detail: string) => {
   const filler = '가'.repeat(400)
   const engageOff = !at(HIGH_ENGAGEMENT_MIN - 1, filler).flags.includes('highEngagement')
   const engageOn = at(HIGH_ENGAGEMENT_MIN, filler).flags.includes('highEngagement')
-  const bodyOn = at(3, '가'.repeat(SHORT_BODY_MAX - 1)).flags.includes('shortBody')
-  const bodyOff = !at(3, '가'.repeat(SHORT_BODY_MAX)).flags.includes('shortBody')
-  const shortT = assessCandidate({ originalTitle: '가'.repeat(SHORT_TITLE_MAX - 1), sourceCommentCount: 1, rawBody: '' })
-  const longT = assessCandidate({ originalTitle: '가'.repeat(SHORT_TITLE_MAX), sourceCommentCount: 1, rawBody: '' })
-  const titleOk = shortT.flags.includes('shortTitle') && !longT.flags.includes('shortTitle')
+  // 🔴 (quality-v30) 짧은 글은 감점하지 않는다 — 두 줄짜리 글도 게시판 글이다. 길이만 다른 두 원천은 점수가 같다
+  const bodyOk = selectionScore(at(3, '가'.repeat(60))) === selectionScore(at(3, filler))
+  const titleOk = selectionScore(at(3, filler, '가가')) === selectionScore(at(3, filler, '가'.repeat(30)))
   // 링크 비중 — URL 40자 / 전체 100자 = 40% 는 걸리고, 400자 중 40자 = 10% 는 안 걸린다
   const url = `https://example.com/${'a'.repeat(20)}`
   const heavy = at(3, `${url}${'가'.repeat(100 - url.length)}`).flags.includes('linkHeavyBody')
@@ -88,17 +86,17 @@ const bad = (name: string, kind: string, detail: string) => {
   const ratioOk = Math.abs(linkCharRatioOf(`${url}${'가'.repeat(100 - url.length)}`) - 0.4) < 0.001
 
   // 🔴 위 검사들은 상수를 **참조**한다 — 상수를 바꾸면 검사도 같이 움직여 아무것도 못 잡는다.
-  //    (역검증에서 실제로 뚫렸다: SHORT_BODY_MAX 를 150→50 으로 바꿔도 통과했다)
+  //    (역검증에서 실제로 뚫렸다: 임계값을 바꿔도 통과했다)
   //    그래서 1차값 자체를 리터럴로 못박는다. 재조정할 때 이 줄도 같이 고치게 되고,
   //    그 diff 가 "임계값을 언제 왜 바꿨는지" 의 기록이 된다.
   const literals =
-    HIGH_ENGAGEMENT_MIN === 5 && SHORT_BODY_MAX === 150 && LINK_HEAVY_RATIO === 0.3 && SHORT_TITLE_MAX === 8
-  if (engageOff && engageOn && bodyOn && bodyOff && titleOk && heavy && light && ratioOk && literals) {
+    HIGH_ENGAGEMENT_MIN === 5 && LINK_HEAVY_RATIO === 0.3
+  if (engageOff && engageOn && bodyOk && titleOk && heavy && light && ratioOk && literals) {
     ok('임계값 경계 — 1차값', 'policy',
-      `댓글 ${HIGH_ENGAGEMENT_MIN} · 본문 ${SHORT_BODY_MAX} · 링크 ${LINK_HEAVY_RATIO} · 제목 ${SHORT_TITLE_MAX} (후보 50건 뒤 재조정)`)
+      `댓글 ${HIGH_ENGAGEMENT_MIN} · 링크 ${LINK_HEAVY_RATIO} · 짧은 본문·제목 감점 없음 (후보 50건 뒤 재조정)`)
   } else {
     bad('임계값 경계 — 1차값', 'policy',
-      `engage=${engageOff && engageOn} body=${bodyOn && bodyOff} title=${titleOk} link=${heavy && light} ratio=${ratioOk} 1차값=${literals}`)
+      `engage=${engageOff && engageOn} shortBodyNoPenalty=${bodyOk} shortTitleNoPenalty=${titleOk} link=${heavy && light} ratio=${ratioOk} 1차값=${literals}`)
   }
 }
 

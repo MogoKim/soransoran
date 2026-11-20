@@ -24,6 +24,9 @@ import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
 
 // ─────────────────────────────────────────────────────────
 // 임계값 — 🔴 1차값이다
+//
+// 🔴 짧은 제목 · 짧은 본문 감점(shortTitle · shortBody)은 quality-v30 에서 지웠다 — 두 줄짜리 글도 게시판 글이고,
+//    초안은 원문의 길이를 따른다. 짧다는 이유로 원천을 뒤로 밀지 않는다.
 // ─────────────────────────────────────────────────────────
 //
 // 근거는 실측이지만 표본이 목록 25건 · 상세 4건뿐이다.
@@ -31,12 +34,8 @@ import { findCjkIdeograph } from '../../src/lib/cjk-ideograph'
 
 /** 댓글이 이만큼 달렸으면 사람들이 반응한 글이다. 실측 상위 24% 지점 */
 export const HIGH_ENGAGEMENT_MIN = 5
-/** 이보다 짧으면 읽을 것이 적다. 발행분 최소 236자 / 미발행분 62자 사이 */
-export const SHORT_BODY_MAX = 150
 /** 본문 글자 중 URL 비중. 미발행분 65% / 발행분 최대 6% 사이 */
 export const LINK_HEAVY_RATIO = 0.3
-/** 이보다 짧은 제목은 맥락이 없다 */
-export const SHORT_TITLE_MAX = 8
 /** 이미지에 기댄 글의 텍스트 잔량 — 본문이 거의 없고 줄도 없다 */
 export const IMAGE_LIKELY_BODY_MAX = 50
 export const IMAGE_LIKELY_LINE_MAX = 2
@@ -48,14 +47,12 @@ export type QualityFlag =
   | 'lowEngagement'
   | 'highEngagement'
   | 'clickbaitTitle'
-  | 'shortTitle'
   | 'titleTruncated'
   | 'targetLikely'
   // 제목 · 본문 어디서든 — 있는 텍스트만 본다
   | 'medicalOrAdLikely'
   | 'quotedOrMediaLikely'
   // 상세 단계 — 본문을 읽어야 판정한다
-  | 'shortBody'
   | 'linkHeavyBody'
   | 'imageLikelyBody'
   | 'personalExperienceLikely'
@@ -69,7 +66,7 @@ export type QualityFlag =
  *    `인간극장에 나왔던…` 도 그렇다. **있는 텍스트만 보는 것**은 억지 계산이 아니다.
  */
 export const DETAIL_ONLY_FLAGS: readonly QualityFlag[] = [
-  'shortBody', 'linkHeavyBody', 'imageLikelyBody', 'personalExperienceLikely', 'practicalConcernLikely',
+  'linkHeavyBody', 'imageLikelyBody', 'personalExperienceLikely', 'practicalConcernLikely',
 ]
 
 export type QualityStage = 'list' | 'detail'
@@ -266,8 +263,6 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
     note('hanjaLanguageFit', [hanja])
   }
 
-  if (stem.length < SHORT_TITLE_MAX) flags.push('shortTitle')
-
   const target = collect(TARGET_LIFE, title)
   if (target.length) {
     flags.push('targetLikely')
@@ -310,7 +305,6 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
   const linkCharRatio = linkCharRatioOf(body)
 
   if (stage === 'detail') {
-    if (bodyLength < SHORT_BODY_MAX) flags.push('shortBody')
     if (linkCharRatio >= LINK_HEAVY_RATIO) flags.push('linkHeavyBody')
     if (bodyLength < IMAGE_LIKELY_BODY_MAX && bodyLineCount <= IMAGE_LIKELY_LINE_MAX) {
       flags.push('imageLikelyBody')
@@ -357,8 +351,6 @@ export function selectionScore(a: QualityAssessment): number {
   // 남 이야기는 우리 회원의 경험담이 아니다. 버리지는 않되 뒤로 민다
   if (a.flags.includes('quotedOrMediaLikely')) score -= 10
   if (a.flags.includes('clickbaitTitle')) score -= 10
-  if (a.flags.includes('shortTitle')) score -= 10
-  if (a.flags.includes('shortBody')) score -= 15
   if (a.flags.includes('linkHeavyBody')) score -= 25
   if (a.flags.includes('imageLikelyBody')) score -= 25
   return score
