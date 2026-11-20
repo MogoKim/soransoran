@@ -17,7 +17,6 @@ import {
   type DraftGateInput, type DraftGateCard, type DraftGatePlan, type DraftGateContext,
 } from '../src/lib/content-core/draft-life-gates'
 import { V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION } from '../src/lib/content-core/pipeline'
-import { buildVoiceEvidence } from '../src/lib/content-core/voice-evidence'
 import { buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt } from './lib/content-core-prompts.mjs'
 import { P13 } from './lib/draft-gate-fixtures.mjs'
 import { cutAtCap } from './lib/life-gate-fixtures.mjs'
@@ -104,15 +103,15 @@ console.log('\n── 실제 생성·검수 프롬프트 경계 ──')
     closingIntent: 'ask', contentRoles: ['conversationSpark'], reason: '', rejection: null,
     planVersion: 'speaker-plan-p7',
   } as never
-  const voice = buildVoiceEvidence({
-    personaCode: 'P13', voiceTokens: ['존댓말'], samples: [], bundleDigest: 'b', sourceDigest: 's',
-  })
-  const draftPrompt = buildV2DraftSystemPrompt({ plan, voice, life: P13, mappings: [] })
-  const reviewPrompt = buildV2ReviewSystemPrompt({ plan, voice, life: P13, mappings: [] })
-  check('초안 프롬프트 판 p16', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p16')
-  check('검수 프롬프트 판 p13', V2_REVIEW_PROMPT_VERSION === 'v2-review-p13')
-  check('초안이 감상·질문·비유·일반 관찰을 허용',
-    draftPrompt.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
+  const draftPrompt = buildV2DraftSystemPrompt({ plan, life: P13, mappings: [] })
+  const reviewPrompt = buildV2ReviewSystemPrompt({ plan, life: P13, mappings: [] })
+  check('초안 프롬프트 판 p17', V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17')
+  check('검수 프롬프트 판 p14', V2_REVIEW_PROMPT_VERSION === 'v2-review-p14')
+  // 🔴 (quality-v30) 초안은 원문의 내용과 꼴을 따른다 — 원문에 없는 감상·질문으로 새 글을 만들라는 줄은 지웠다
+  check('초안이 원문에 없는 감상·당부·질문을 더하지 않고 꼴을 원문에서 따른다',
+    draftPrompt.includes('원문에 없는 사정 · 감상 · 당부 · 질문을 더하지 않습니다')
+    && draftPrompt.includes('## 🔴 낱말은 새로, 꼴은 원문 그대로')
+    && !draftPrompt.includes('감상 · 질문 · 비유 · 연결 문장 · 일반적인 관찰'))
   check('초안이 고위험 생활 사실과 제3자 사건·결과를 금지',
     draftPrompt.includes('배우자 · 자녀 · 부모 · 건강 · 치료 · 돈')
     && draftPrompt.includes('제3자의 사건 · 날짜 · 직접 대사 · 결과'))

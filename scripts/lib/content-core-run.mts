@@ -4,7 +4,7 @@
  * 마스킹된 근거 묶음
  *   → ① 원천 요구 판독 (🔴 Persona 중립 — 자리 · 자격 요구값 · 지킬 사실)
  *   → 🔴 코드가 Persona 확정 (정본 카드로 자격 대조 · 유료 초안 **전**) — 이후 바뀌지 않는다
- *   → ② 원문 근거 + Persona + Voice 로 초안 한 편
+ *   → ② 원문 근거 + 원문의 꼴(`sourceFormOf`) + Persona 생활사로 초안 한 편 (말투 묶음은 출처 기록만 — 요청에 싣지 않는다)
  *   → deterministic (복제 · 개인정보 · 원자적 사실 · 확정 가능한 나이 모순)
  *   → ③ 원문과 초안을 **직접** 견주는 통합 검수
  *   → 사람 판정 한 장
@@ -60,7 +60,7 @@ function kstDateKey(at: Date): string {
   return new Date(at.getTime() + 9 * 3600e3).toISOString().slice(0, 10)
 }
 import {
-  buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
+  buildVoiceEvidence, judgeVoiceReadiness, VOICE_READINESS_LABEL,
 } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { GenerationContract } from '../../src/lib/content-core/pipeline'
@@ -442,7 +442,6 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       lifeContradictions: semantic?.lifeContradictions ?? [],
       voice: {
         contentLeak: semantic?.issues.includes('voiceContentLeak') ?? false,
-        mismatch: semantic?.issues.includes('voiceMismatch') ?? false,
       },
       machineOutcome: outcome, machineReason: reason,
     },
@@ -603,15 +602,15 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
         + ` (제안 ${input.personas.map((p) => p.code).join(',') || '없음'})${narrowNote}`)
   }
 
-  // ── ② 말투 근거 ──
+  // ── ② 말투 근거(출처 기록) ──
   const voice = buildVoiceEvidence({
     personaCode: persona.code, voiceTokens: persona.voiceTokens, samples: persona.samples,
     bundleDigest: persona.bundleDigest, sourceDigest: input.voiceSourceDigest,
   })
   /**
-   * 🔴 **말투 없이 쓰지 않는다 — 묻기 전에 멈춘다** (2026-09-19 실측 보정).
-   *    빈 기준으로 만든 글은 아무의 말투도 아니고, 검수도 같은 빈 값을 받으므로
-   *    **그 사실이 판정에 드러나지 않는다.** 조용히 통과하느니 만들지 않는다.
+   * 🔴 **말투 근거가 서지 않은 화자로 쓰지 않는다 — 묻기 전에 멈춘다.** quality-v30 부터 말투 기준·참고는
+   *    생성·검수 요청에 싣지 않지만, 적재가 그 출처(`voiceProvenance` · 참고 수 > 0)를 요구한다 —
+   *    유료 초안을 만든 뒤 적재에서 버려지느니 여기서 멈춘다.
    */
   const ready = judgeVoiceReadiness(voice)
   if (!ready.ok) {
@@ -620,10 +619,6 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
 
   // ── ③ 초안 한 편 ──
-  /**
-   * 🔴 **정말로 들어갔는지 값으로 본다.** 프롬프트 쪽 조건이 잘못되면 기준이
-   *    조용히 빠진다 — 두 요청 모두 보내기 전에 확인하고, 하나라도 비면 안 보낸다.
-   */
   /**
    * 🔴 **주입된 시계를 쓴다** (2026-09-23). `Date.now()` 를 부르면 같은 입력이
    *    실행 시각에 따라 다른 나이를 내고, 과거 재현도 되지 않는다.
@@ -721,17 +716,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     stance: plan.stance,
   })
   const draftSystem = buildV2DraftSystemPrompt({
-    plan, voice, life: persona, mappings: mapping.mappings, keep: keepRules,
+    plan, life: persona, mappings: mapping.mappings, keep: keepRules,
   })
-  const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona, mappings: mapping.mappings })
-  const voiceless = [
-    ...(voiceStandardMissingFrom(draftSystem, voice) ? ['생성'] : []),
-    ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
-  ]
-  if (voiceless.length > 0) {
-    return blank(plan, dropped, voice, null, noDet, null, notRun('wiringBroken'),
-      'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
-  }
+  const reviewSystem = buildV2ReviewSystemPrompt({ plan, life: persona, mappings: mapping.mappings })
   phase = 'draftGen'
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet, plan }))
   const dC = completionOf(dRes)

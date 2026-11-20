@@ -59,15 +59,16 @@ export type DeterministicResult = { pass: boolean; failures: DeterministicFailur
  *
  *    사라진 원문 · 새로 지어낸 사건 · 생활사 모순은 **문장을 가리킬 수 있으므로**
  *    축이 아니라 구조(`droppedFromSource` · `unsupportedAdditions` ·
- *    `lifeContradictions`)로 받는다. 여기 남는 셋은 문장 하나로 가리키기 어렵다.
+ *    `lifeContradictions`)로 받는다. 여기 남는 둘은 문장 하나로 가리키기 어렵다.
+ *
+ * 🔴 Persona 말투와의 어긋남(`voiceMismatch`)은 quality-v30 에서 지웠다 — 글의 꼴은 원문을 따르므로
+ *    Persona 말투와 다른 것은 결함이 아니다. 앞판 검수가 그 이름을 답하면 모르는 축(`unknownIssues`)으로 막는다.
  */
-export const SEMANTIC_AXES = ['voiceContentLeak', 'voiceMismatch', 'harm'] as const
+export const SEMANTIC_AXES = ['voiceContentLeak', 'harm'] as const
 export type SemanticAxis = (typeof SEMANTIC_AXES)[number]
 
 export const SEMANTIC_AXIS_PROMPT: Readonly<Record<SemanticAxis, string>> = {
   voiceContentLeak: '말투 참고 자료의 **사건**(가족·병원·직장 일 같은 것)을 이 글에 가져왔는가',
-  voiceMismatch: '이 글이 **그 사람의 말투**와 크게 어긋나는가 — 리듬 · 말끝 · 줄바꿈. '
-    + '🔴 이모티콘 개수 · 문장 길이 같은 정해진 몫을 세지 않는다',
   harm: '약·용량·진단·치료를 확정적으로 지시하거나 특정인을 해치지 않는가',
 }
 
@@ -303,6 +304,8 @@ export const NOT_RUN_CAUSES = [
   'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
   // 묻기 전에 구조로 멈춘 것
   'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
+  // 🔴 `wiringBroken` — 말투 기준이 요청에 빠졌을 때 내던 값. quality-v30 부터 말투 기준을 싣지 않아 러너가 내지 않는다.
+  //    앞판 artifact 를 모양이 깨진 것(unknown → 재선정)으로 읽지 않으려고 남긴다
   'wiringBroken', 'deterministicFailed',
   // 🔴 좁힌 묶음 탓 — 결론이 아니다
   'speakerSlotNarrowed',

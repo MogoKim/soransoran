@@ -72,7 +72,11 @@ export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p7'
  * 🔴 **v2-draft-p16 (quality-v29)** — 제목에 원문 제목의 검색어를 남기고(요청의 [보존].제목낱말), 원문에 있는 시간·상황 표현을 살린다.
  * "언제 발행될지 이 글이 모른다" 는 전제를 지웠다 — 글은 쓰인 시간대에 나간다. 원문에 없는 시간대를 지어 붙이지 않는 것은 그대로다.
  */
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p16'
+/**
+ * 🔴 **v2-draft-p17 (quality-v30)** — 낱말은 새로, 꼴은 원문 그대로. "새로 · 감상 · 질문 · 요약하지 않기" 와 Persona 말투 절을 지우고,
+ * 코드가 잰 원문의 꼴(`sourceFormOf` — 글자 수 · 줄 수 · 줄 끝 · 맺음)과 원문 제목 글자 수를 요청에 싣는다. 원문 복제 기준은 그대로다.
+ */
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p17'
 /**
  * 🔴 **v2-review-p8 (2026-10-13 · quality-v8 보정)** — 생활사 모순에 구체적 가족 사실(자녀 수 · 자기 자녀 성별 · 나이대) 줄을 더했다
  *    (`REVIEW_FAMILY_SPECIFICS_LINES`). 다른 축 기준은 그대로다.
@@ -94,7 +98,10 @@ export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p16'
  * 🔴 **v2-review-p13 (quality-v28)** — p12 실측(53건)에서 흔들린 네 곳을 좁힌다: 코드가 넣은 나이는 어느 칸에도 적지 않는다 ·
  * 피로의 일상 표현은 참고, 병명·진단·약·시술은 막음 · 새 전달자는 자리와 무관하게 막음 · 생활사 모순은 카드가 명시한 값과 양립할 수 없을 때만.
  */
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p13'
+/**
+ * 🔴 **v2-review-p14 (quality-v30)** — Persona 말투 어긋남 축(`voiceMismatch`)과 그 말투 기준 줄을 지웠다. 다른 축 기준은 그대로다.
+ */
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p14'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]
