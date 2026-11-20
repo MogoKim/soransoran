@@ -1,12 +1,12 @@
 {
-  "version": "quality-v29",
-  "digest": "b9dddf00898dfa59e5b0e08262331743e40030246e9c613beef46437c1238ea3",
+  "version": "quality-v30",
+  "digest": "4833933ef5d1d4ecddf09479b0f5458beffe5b52790001da6603e5d09b2a15d6",
   "files": {
-    "src/lib/quality-contract.ts": "963a5faf6509945286e2a599ea6e4c0024e55fd53f2dfa6c989acbb05ca18c79",
+    "src/lib/quality-contract.ts": "3795dd185d6621aac03f013bc6750eaaa25f814cd5592f1aa87f5d424fd0444f",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
     "src/lib/content-core/draft-life-gates.ts": "60464ba75050f5eb370ed67e553d189bc7e597ed737ab70d48ce5a9ad6b07c15",
-    "src/lib/content-core/review.ts": "f0096a503e22122aee965e4dd8766b15935fc8dc871da797f00e3b1afee19547",
-    "src/lib/content-core/pipeline.ts": "2e0fda1f2b705b13a3aa7016ea6cfdf380c164ca0529b0607f1f9d1580efb84d",
+    "src/lib/content-core/review.ts": "cfa6d53b5efe22189764d720327e4a1530357b05ae0b9369130dcf5061890f6a",
+    "src/lib/content-core/pipeline.ts": "213d60cf0b820f62c7b8e87c4cd1ac82e7fd34c0bc22d90877c273e7b85c1e5d",
     "src/lib/content-core/evidence.ts": "d27479f1ab3e8490add3e6c6351f4a5c36016b314863173c6604cf6d0dc50558",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "28cc4da6a68ed424fda043aa11ccc9cf7acc15fed16ab2f9845d073c3230f678",
@@ -15,8 +15,8 @@
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "7f3a2d11544fcb9d6a0a5c5d3e9b036405d29cfda897b2bb19b7e019b3b604aa",
-    "scripts/lib/content-core-run.mts": "97f321a1f32d1915c0da29efd7a00d096c81e521970efc5e37ed17e4f66f471b",
-    "scripts/lib/content-core-prompts.mts": "bd0e274430e9b8914583d7655af35854cc5d60fb5e72ead00a475c3471dbc395",
+    "scripts/lib/content-core-run.mts": "03c93342d0b111e56f0e0c795d084c25325b69dd8360ede6ba5e033f1ca731d6",
+    "scripts/lib/content-core-prompts.mts": "8cd08caaa9fe39cef927540104925e9e56831ef9153341be87b7c5486e6a9fe0",
     "src/lib/auto-ready-quality-cohort.ts": "80ca4176a4c40e54119235ec807c0b3cf5407f081f1e88bea8936951cfd8a75c",
     "src/lib/auto-ready-repo.ts": "b2bfd9e170da6a1f0426d339957c2c597bab553a303d95ca315c23ef55ee8452",
     "src/lib/auto-ready-evidence.ts": "769d34a93acc9631ef6f4f4f3491cf882d19ac9638a0a19540c5764654385b5f",
@@ -32,13 +32,19 @@
     "scripts/lib/auto-ready-rule-judge.mts": "d9348652c0ab2d5ab6c98a358fd99408c3a34483895ab3b58fe72deb2a48b293",
     "src/lib/content-core/material-contract.ts": "0e17d2d4e46b14dafa948745406c986c3526a6181998cdba528219b022c40e48",
     "src/lib/content-core/speaker.ts": "ddcc67cbe3c6628070d2ea7761373ece64df35464fcf19b2c5c910fb336a7a30",
-    "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4"
+    "src/lib/content-core/family-specifics.ts": "5d376dcd734b01d4dce610cdce99323bccc6e23b1965fa121f85100f0cb9f1a4",
+    "src/lib/content-core/source-form.ts": "7d52821d5ad61632108fffd4dcb214ae29ef465377ae75311b6049d507c1cfb3"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "공급 회차 시각을 cycle-schedule 에서 계산하도록 옮기고 증명/늦은 회차 상수·지출 추정을 지웠다 — 품질 판정 값(AUTO_READY_CONTRACT · 회차당 상한)은 그대로",
+    "kind": "bump",
+    "reason": "판 quality-v29 → quality-v30",
     "changedFiles": [
-      "src/lib/supply-schedule-contract.ts"
+      "src/lib/quality-contract.ts",
+      "src/lib/content-core/review.ts",
+      "src/lib/content-core/pipeline.ts",
+      "scripts/lib/content-core-run.mts",
+      "scripts/lib/content-core-prompts.mts",
+      "src/lib/content-core/source-form.ts"
     ]
   }
 }

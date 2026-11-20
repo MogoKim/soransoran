@@ -71,6 +71,8 @@ export const FINGERPRINT_FILES = [
   // 🔴 (quality-v8 보정 · 2026-10-13) 구체적 가족 사실 판독 — 화자 계획 · 초안 게이트가 함께 부른다.
   //    이 파일만 바꿔 1인칭 자녀 수 · 성별 · 나이대 허가를 조용히 바꾸지 못하게 지문에 넣는다
   'src/lib/content-core/family-specifics.ts',
+  // 🔴 (quality-v30 · 2026-11-20) 초안 요청에 싣는 원문의 꼴 — 이 파일만 바꿔 생성이 따르는 길이·줄 끝을 조용히 바꾸지 못하게
+  'src/lib/content-core/source-form.ts',
 ] as const
 
 /**
