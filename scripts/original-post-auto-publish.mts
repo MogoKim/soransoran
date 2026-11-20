@@ -57,7 +57,6 @@ import { authoritativeGate, selectAudits } from '../src/lib/auto-ready-repo'
 // 🔴 판정 대기 시한(2026-09-27) — 정본 열림 판정 + 시한 초과 감사. 도장 회차도 시한을 먼저 본다
 import { auditAwareGate, stampRoundAuditAware } from '../src/lib/auto-ready-audit-store'
 import { HEARTBEAT_FLAG, stageInputsOf, describeStageInputs } from './lib/original-post-runner-template'
-import { autoProofNeeded, proofDayOf } from '../src/lib/stage-proof-day'
 import { claimHeartbeatTick, heartbeatInWindow, heartbeatTickKey, HEARTBEAT_TICK_DIR } from './lib/publish-heartbeat-tick.mjs'
 
 const argv = process.argv.slice(2)
@@ -222,14 +221,6 @@ console.log(`\n③-c 규모 설정  ${describeScale(scale)}`)
 for (const n of scale.notes) console.log(`     · ${n}`)
 console.log(`     적용된 발행 상한  일 ${RELEASE_DAILY_CAP}건 · persona 주 ${RELEASE_CAPS.postsPerWeek}건`
   + ` · 최소 ${RELEASE_CAPS.minDaysBetween}일`)
-
-/** 🔴 단계 증명일 자동 target 부족분은 관측한다. 이 수가 source-time 순서를 뒤집지는 않는다. */
-const proofDay = proofDayOf(process.env, RUN_AT)
-const proofAutoMissing = autoProofNeeded(proofDay, stock.autoTargetsToday ?? 0)
-console.log(proofDay === null
-  ? '\n③-p 단계 증명일 아님'
-  : `\n③-p 단계 증명일 ${proofDay.stage} · 자동 target 오늘 ${stock.autoTargetsToday ?? 0}/${proofDay.target}`
-    + (proofAutoMissing > 0 ? ` · 자동 증거 ${proofAutoMissing}건 부족(관측값 · 선택 순서 개입 0)` : ' · 자동 증거 목표 충족'))
 
 // ── ④ 오늘 상황 — 🔴 KST 자정은 기존 함수를 쓴다 ──
 const dayStart = kstDayStart(RUN_AT)

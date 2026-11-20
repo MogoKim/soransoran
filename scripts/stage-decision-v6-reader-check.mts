@@ -127,7 +127,7 @@ check('🔴 경고 enum 은 정확히 원천 기회·처리량·READY 필요량 
 console.log('\n⑥ writer v6 · rollback — 새 결정은 v6 · 전날 v5 행도 유효')
 {
   const d = planStageDecision({
-    kstDate: D, sustainedRelease: 'd10', previousDecision: null, nextPreflight: null, publishedToday: 0,
+    kstDate: D, openStage: 'd10', previousDecision: null, passDays: 0, nextPreflight: null,
     decidedAt: '2026-11-06T22:55:00.000Z',
   })
   const s = safestDecision(D, '2026-11-06T22:55:00.000Z')

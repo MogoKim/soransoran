@@ -1,13 +1,11 @@
 #!/usr/bin/env tsx
 /**
- * 🔴 **단계 증명일 — 자동 target 증거 관측 · 실제 로더 · 계획 · 발행 트랜잭션** (2026-10-19 · 격리 Postgres 전용)
+ * 🔴 **자동 물량 세기 — 실제 로더 · 계획 · 발행 트랜잭션 · 하루 판정의 수** (격리 Postgres 전용)
  *
- *   ① 사람 승인·자동 재고가 함께 있어도 실제 원문 시각 순서가 동일하게 적용된다
- *   ② 자동 재고가 부족하면 사람 글은 나갈 수 있지만 증거는 `PUBLISH_NOT_AUTO_READY` 로 FAIL
- *   ③ 비시험일도 같은 source-time 순서를 쓴다
- *   ④ 증명일 env 는 consumer 가 그날 TRIAL/REPROVE 결정에서만 넣는다 · 날짜가 오늘이 아니면 꺼진다 · v5 SUSTAIN 거절
+ *   ① 사람 승인·자동 재고가 함께 있어도 실제 원문 시각 순서가 동일하게 적용되고, 무인 발행한 자동 글이 그대로 자동 target 으로 세진다
+ *   ② 자동 재고가 부족하면 사람 글은 나갈 수 있지만 하루 판정의 수는 `PUBLISH_SHORT` 로 FAIL — 사람 글은 자동 물량 0
  *
- *   발행은 정본 트랜잭션의 **예약 · 무인** 모드로만 한다 — 증거가 세는 무인 표식이 실제로 남는다.
+ *   발행은 정본 트랜잭션의 **예약 · 무인** 모드로만 한다 — 판정이 세는 무인 표식이 실제로 남는다.
  *   🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구한다. provider 0. raw SQL 0.
  */
 import { PrismaClient } from '@prisma/client'
@@ -23,12 +21,10 @@ import { publishOriginalPostTx, UNATTENDED_PUBLISH_DECIDED_BY } from '../src/lib
 import { planStore } from '../src/lib/original-post-match-store'
 import { kstDateString } from '../src/lib/release-canary'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
-import { autoProofNeeded, proofDayOf, PROOF_DATE_ENV, PROOF_STAGE_ENV } from '../src/lib/stage-proof-day'
-import { consumerEnvOf } from '../src/lib/stage-controller'
 import { validateStoredDecision, STAGE_DECISION_VERSION, DECISION_WRITER, previousKstDate } from '../src/lib/stage-decision-contract'
 import { createStageDecision } from '../src/lib/stage-decision-repo'
 import { readStageEvidenceFacts } from '../src/lib/stage-evidence-repo'
-import { judgeStageEvidence, personaCommentCapFor } from '../src/lib/stage-evidence'
+import { judgeStageEvidence } from '../src/lib/stage-evidence'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch, laneOf } from './lib/publishable-stock.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
 
@@ -123,25 +119,18 @@ const auto = async (voice: string, daysAgo: number) => {
   })).id
 }
 
-/**
- * 🔴 러너 env 모양 — consumer 가 넣는 그대로(2026-09-30 · canary 제거).
- *    증명일(TRIAL d3): release = d3 · 증명일 두 칸. 비시험일(지속 d3 · 증명 후 HOLD): release = d3 · 증명일 칸 없음.
- */
-const envOf = (proof: boolean): Record<string, string> => markedStageEnv({
-  [RELEASE_ENV]: 'd3', [CAPACITY_ENV]: 'd3', [AUTO_READY_ENV]: 'on',
-  ...(proof ? { [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: TODAY } : {}),
-}, TODAY)
+/** 러너 env 모양 — consumer 가 넣는 그대로: 단계 칸 둘과 표식 */
+const ENV: Record<string, string> = markedStageEnv({ [RELEASE_ENV]: 'd3', [CAPACITY_ENV]: 'd3', [AUTO_READY_ENV]: 'on' }, TODAY)
 /** 🔴 증거 기준 시각 — 계획(NOW) · 트랜잭션(TX_BASE) 어느 쪽에서도 게시 72h 안 · 미래 시각 없음 (둘 다 시험 시계) */
 const EVIDENCE_AT = new Date(Math.min(NOW.getTime(), TX_BASE.getTime()))
 
-/** 🔴 러너와 같은 조립 — 로더 → 규모 → 증명일 필요 수 → 계획 */
-const view = async (proof: boolean) => {
-  const E = envOf(proof)
+/** 러너와 같은 조립 — 로더 → 규모 → 계획 */
+const view = async () => {
+  const E = ENV
   const gate = await authoritativeGate(prisma, E)
   const loaded = await loadPublishableStock(prisma, NOW, { autoReadyOpen: gate.open })
   const resolved = resolvePublishScale({ env: E, loaded, now: NOW })
-  const needed = autoProofNeeded(proofDayOf(E, NOW), loaded.autoTargetsToday ?? 0)
-  return { E, gate, loaded, resolved, needed, plan: planPublishBatch({ loaded, caps: resolved.caps, at: NOW }) }
+  return { E, gate, loaded, resolved, plan: planPublishBatch({ loaded, caps: resolved.caps, at: NOW }) }
 }
 let tick = 0
 /** 🔴 예약 · 무인 발행 — 사람 행은 배정 먼저 쓰고, 자동 행은 배정 계획을 트랜잭션에 넘긴다(러너와 같다) */
@@ -167,8 +156,8 @@ const publish = async (v: Awaited<ReturnType<typeof view>>, id: string) => {
   }, { now: () => txNow })
 }
 /** 🔴 한 슬롯 = 러너 한 회차 — 계획의 picked 를 발행 */
-const slot = async (proof: boolean): Promise<string> => {
-  const v = await view(proof)
+const slot = async (): Promise<string> => {
+  const v = await view()
   const id = v.plan.picked?.id
   if (id === undefined) return 'none'
   const r = await publish(v, id)
@@ -176,69 +165,39 @@ const slot = async (proof: boolean): Promise<string> => {
 }
 
 async function main(): Promise<void> {
-  console.log('\n══ 단계 증명일 — 자동 target 증거 관측 (격리 DB) ══')
-
-  console.log('\n④ 증명일 env 의 출처 — consumer · 오늘 날짜')
-  {
-    const row = (state: string, release: string, transition: unknown) => validateStoredDecision({
-      row: { kstDate: TODAY, capacity: 'd10', release, state, reasons: ['x'], blocks: [], dayPinned: false, supply: null,
-        decidedAt: NOW.toISOString(), contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition },
-      expectKstDate: TODAY,
-    })
-    const trial = row('TRIAL', 'd3', { kind: 'TRIAL', trialBase: 'd1', previousKstDate: previousKstDate(TODAY), target: 'd3', basis: 'RETEST' })
-    const te = trial.ok ? consumerEnvOf({ ok: true, decision: trial.decision }) : {}
-    check('🟢 TRIAL(RETEST) 결정 → 증명일 d3 · 오늘', te[PROOF_STAGE_ENV] === 'd3' && te[PROOF_DATE_ENV] === TODAY, JSON.stringify(te))
-    const sustain = row('SUSTAIN', 'd3', { kind: 'SUSTAIN', from: 'd1', to: 'd3' })
-    check('🔴 v5 는 SUSTAIN 결정을 받지 않는다 — 지속 승격 경로가 없다', !sustain.ok, sustain.ok ? 'accepted' : sustain.reason)
-    const reprove = row('REPROVE', 'd3', null)
-    const re = reprove.ok ? consumerEnvOf({ ok: true, decision: reprove.decision }) : {}
-    check('🟢 REPROVE d3 결정 → 증명일 d3 · 공개 d3', re[PROOF_STAGE_ENV] === 'd3' && re.SORAN_RELEASE_STAGE === 'd3',
-      reprove.ok ? JSON.stringify(re) : reprove.reason)
-    const prep = row('PREPARE', 'd1', null)
-    const pe = prep.ok ? consumerEnvOf({ ok: true, decision: prep.decision }) : { [PROOF_STAGE_ENV]: 'x' }
-    check('🔴 PREPARE 날 → 증명일 빈 값(비시험일)', pe[PROOF_STAGE_ENV] === '' && pe[PROOF_DATE_ENV] === '', JSON.stringify(pe))
-    const safe = consumerEnvOf({ ok: false, code: 'BROKEN', fallback: 'safest', reason: '' })
-    check('🔴 결정이 깨졌다(safest) → 증명일 빈 값', safe[PROOF_STAGE_ENV] === '')
-    check('🔴 증명일 날짜가 오늘이 아니면 꺼진다', proofDayOf(markedStageEnv({ [PROOF_STAGE_ENV]: 'd3', [PROOF_DATE_ENV]: previousKstDate(TODAY)! }), NOW) === null)
-    check('🔴 모르는 단계면 꺼진다', proofDayOf(markedStageEnv({ [PROOF_STAGE_ENV]: 'd7', [PROOF_DATE_ENV]: TODAY }), NOW) === null)
-    check('필요 수 — 3 목표 · 오늘 자동 1 → 2 · 비시험일 → 0',
-      autoProofNeeded(proofDayOf(envOf(true), NOW), 1) === 2 && autoProofNeeded(proofDayOf(envOf(false), NOW), 0) === 0)
-  }
+  console.log('\n══ 자동 물량 세기 — 실제 로더 · 발행 · 하루 판정의 수 (격리 DB) ══')
 
   console.log('\n① 사람 재고 6(복구 행 1 포함) · 더 신선한 자동 3 — source-time 순서로 auto 3')
   {
     await wipe(); await personas()
     await human(6, 'P07'); await human(5.5); await human(5); await human(4.5); await human(4); await human(3.5)
     await auto('P01', 1); await auto('P02', 0.8); await auto('P03', 0.6)
-    const v = await view(true)
-    check('게이트 열림 · 오늘 자동 target 0 · 필요 3', v.gate.open && (v.loaded.autoTargetsToday ?? -1) === 0 && v.needed === 3,
-      `${v.gate.reasons.join('·')} · ${v.loaded.autoTargetsToday} · ${v.needed}`)
+    const v = await view()
+    check('게이트 열림 · 오늘 자동 target 0', v.gate.open && (v.loaded.autoTargetsToday ?? -1) === 0,
+      `${v.gate.reasons.join('·')} · ${v.loaded.autoTargetsToday}`)
     check('🔴 더 오래된 사람 복구 행보다 최신 auto가 먼저', v.plan.picked !== null && laneOf(v.plan.picked.decidedBy) === 'auto', String(v.plan.picked?.id))
-    const lanes = [await slot(true), await slot(true), await slot(true)]
+    const lanes = [await slot(), await slot(), await slot()]
     check('🔴 🔴 **최신 세 원천 = auto · auto · auto (전부 발행)**', lanes.join(',') === 'auto:ok,auto:ok,auto:ok', lanes.join(','))
-    const after = await view(true)
-    check('그 뒤 오늘 자동 target 3 · 필요 0(목표를 채웠다)', (after.loaded.autoTargetsToday ?? -1) === 3 && after.needed === 0,
-      `${after.loaded.autoTargetsToday} · ${after.needed}`)
+    const after = await view()
+    check('그 뒤 오늘 자동 target 3', (after.loaded.autoTargetsToday ?? -1) === 3, String(after.loaded.autoTargetsToday))
     const logs = await prisma.personaActivityLog.findMany({ where: { kind: 'post' }, select: { decidedBy: true } })
     check('발행 기록 3 · 전부 무인 표식', logs.length === 3 && logs.every((l) => l.decidedBy === UNATTENDED_PUBLISH_DECIDED_BY), logs.map((l) => l.decidedBy).join(','))
     // 증거 — 그날 결정을 TRIAL d3 로 두고 실제 수집 경로로 물량만 본다
     const dec = validateStoredDecision({ row: { kstDate: TODAY, capacity: 'd10', release: 'd3', state: 'TRIAL', reasons: ['x'], blocks: [],
       dayPinned: false, supply: null, decidedAt: NOW.toISOString(), contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
-      transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: previousKstDate(TODAY), target: 'd3', basis: 'RETEST' } }, expectKstDate: TODAY })
+      transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: previousKstDate(TODAY), target: 'd3', basis: 'PASS' } }, expectKstDate: TODAY })
     if (dec.ok) await createStageDecision(prisma, dec.decision)
-    const facts = await readStageEvidenceFacts(prisma, { kstDate: TODAY, stage: 'd3', decision: dec.ok ? dec.decision : null, now: NOW,
-      commentCapPerPost: personaCommentCapFor('bootstrap-auto') })
+    const facts = await readStageEvidenceFacts(prisma, { kstDate: TODAY, stage: 'd3', decision: dec.ok ? dec.decision : null, now: NOW })
     const ev = judgeStageEvidence(TODAY, 'd3', facts, {
       cost: [
-        { lane: 'supply', name: '공급', health: 'ok' },
         { lane: 'comment', name: '댓글', health: 'ok' },
         { lane: 'audit', name: '감사', health: 'ok' },
-      ], errors: 'ok',
-      supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+      ],
+      supplyCostEvidence: {wholeDayCriticalHealth: 'ok', envelope: {
         settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
       } },
     })
-    check('🟢 증거 — 자동 target 3/3 · PUBLISH_NOT_AUTO_READY 없음', ev.counts.autoTargets === 3 && !ev.codes.includes('PUBLISH_NOT_AUTO_READY'),
+    check('🟢 하루 판정 — 자동 target 3/3 · PUBLISH_SHORT 없음', ev.counts.autoTargets === 3 && !ev.codes.includes('PUBLISH_SHORT'),
       `${ev.verdict} ${ev.codes.join(',')} ${JSON.stringify(ev.counts)}`)
   }
 
@@ -247,40 +206,25 @@ async function main(): Promise<void> {
     await wipe(); await personas()
     await human(6); await human(5.5); await human(5); await human(4.5)
     await auto('P01', 1)
-    const lanes = [await slot(true), await slot(true), await slot(true)]
+    const lanes = [await slot(), await slot(), await slot()]
     check('🟢 혼합 발행 가능 — auto 1 뒤에 사람 글 2 가 나간다', lanes.join(',') === 'auto:ok,human:ok,human:ok', lanes.join(','))
     const dec = validateStoredDecision({ row: { kstDate: TODAY, capacity: 'd10', release: 'd3', state: 'TRIAL', reasons: ['x'], blocks: [],
       dayPinned: false, supply: null, decidedAt: NOW.toISOString(), contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER,
-      transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: previousKstDate(TODAY), target: 'd3', basis: 'RETEST' } }, expectKstDate: TODAY })
+      transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: previousKstDate(TODAY), target: 'd3', basis: 'PASS' } }, expectKstDate: TODAY })
     if (dec.ok) await createStageDecision(prisma, dec.decision)
-    const facts = await readStageEvidenceFacts(prisma, { kstDate: TODAY, stage: 'd3', decision: dec.ok ? dec.decision : null, now: NOW,
-      commentCapPerPost: personaCommentCapFor('bootstrap-auto') })
+    const facts = await readStageEvidenceFacts(prisma, { kstDate: TODAY, stage: 'd3', decision: dec.ok ? dec.decision : null, now: NOW })
     const ev = judgeStageEvidence(TODAY, 'd3', facts, {
       cost: [
-        { lane: 'supply', name: '공급', health: 'ok' },
         { lane: 'comment', name: '댓글', health: 'ok' },
         { lane: 'audit', name: '감사', health: 'ok' },
-      ], errors: 'ok',
-      supplyCostEvidence: { legacyUsageUnknownRequests: 0, wholeDayCriticalHealth: 'ok', envelope: {
+      ],
+      supplyCostEvidence: {wholeDayCriticalHealth: 'ok', envelope: {
         settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1,
       } },
     })
-    check('🔴 🔴 **증거 FAIL — PUBLISH_NOT_AUTO_READY (자동 1 · 사람 2 는 물량 0)**',
-      ev.verdict === 'FAIL' && ev.codes.includes('PUBLISH_NOT_AUTO_READY') && ev.counts.autoTargets === 1 && ev.counts.humanApproved === 2,
+    check('🔴 🔴 **하루 판정 FAIL — PUBLISH_SHORT (자동 1 · 사람 2 는 물량 0)**',
+      ev.verdict === 'FAIL' && ev.codes.includes('PUBLISH_SHORT') && ev.counts.autoTargets === 1 && ev.counts.humanApproved === 2,
       `${ev.verdict} ${ev.codes.join(',')} ${JSON.stringify(ev.counts)}`)
-    const after = await view(true)
-    check('그때 필요 수는 2 로 남는다(사람 글로 채워지지 않는다)', after.needed === 2, String(after.needed))
-  }
-
-  console.log('\n③ 비시험일 — 같은 source-time 순서')
-  {
-    await wipe(); await personas()
-    await human(6); await human(5.5); await human(5)
-    await auto('P01', 1); await auto('P02', 0.8); await auto('P03', 0.6)
-    const v = await view(false)
-    check('비시험일 필요 수 0', v.needed === 0)
-    const lanes = [await slot(false), await slot(false), await slot(false)]
-    check('🔴 🔴 **비시험일도 최신 auto 세 건이 먼저**', lanes.join(',') === 'auto:ok,auto:ok,auto:ok', lanes.join(','))
   }
 
   await wipe()

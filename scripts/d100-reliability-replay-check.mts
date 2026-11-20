@@ -5,20 +5,18 @@
  *   npm run check:d100-reliability-replay
  *
  *   ① preflight — 현재 기회 + 과거 같은 시각 3일 하한의 당일 추가 기회             PREFLIGHT_FULL_DAY_OPPORTUNITY
- *   ② controller — 일시 감속 뒤 기존 인증 단계 복구                               BRAKE_DEMOTION_PERSISTS
- *   ③ 증거 — 과거 proof day는 그날 자연 공급 슬롯 오류만 사용                      EVIDENCE_USES_CURRENT_RUNNER_HEALTH
+ *   ② controller — 일시 감속 뒤 열린 단계 복구(행의 CERTIFIED 칸)                  BRAKE_DEMOTION_PERSISTS
+ *   ③ 판정 — 하루 판정은 러너 건강을 입력으로 받지 않는다                          EVIDENCE_USES_CURRENT_RUNNER_HEALTH
  *   ④ 깨움 — 공급 비예약 경로 폐쇄 + 댓글 사건 깨움만 허용                         SUPPLY_WAKE_NOT_IMPLEMENTED
  *   ⑤ 첫 댓글 시도 기억 — 60분 fail-closed 뒤 손상본 격리·복구                     ATTEMPT_JOURNAL_CORRUPTION_PERMANENT
  *   ⑥ runtime manifest — SHA + 실제 Persona 자산 상태 결속                         RUNTIME_MANIFEST_LACKS_PERSONA_ASSET_IDENTITY
- *   ⑦ 경계 표현 — KST 23:59/00:00 · N-1/N/N+1 · 깨움 중복 · 시도 기억 손상 변형
+ *   ⑦ 경계 표현 — KST 23:59/00:00 · 수의 통과선/N/N+1 · 깨움 중복 · 시도 기억 손상 변형
  *
  * 🔴 판정 규칙은 `scripts/lib/d100-reliability-replay.mts` 의 역사 장부(`BASELINE_GAPS`)가 정한다.
  *    이 검사는 각 시나리오가 과거 `current`가 아니라 교정 `target`과 일치해 `GAP_CLOSED`인지 고정한다.
- *    🔴 단 ② 는 `CERTIFIED_ROLLOUT_PHASE` 가 `READER_READY` 인 판에서 `READER_READY` 여야 한다 — writer 가 꺼진 판을
- *       해소로 보고하지 않는다. writer 활성 릴리스에서만 `GAP_CLOSED` 를 기대한다.
  *
  * 🔴 ③ 의 경계: `scripts/stage-controller.mts` 는 top-level 에서 DB 를 열고 끝나서 import 할 수 없다.
- *    그래서 순수 판정(`judgeStageEvidence` · `sustainedReleaseOf`)은 실제로 부르고, controller 가 전날 증거에
+ *    그래서 순수 판정(`judgeStageEvidence` · `openStageOf`)은 실제로 부르고, controller 가 전날 판정에
  *    어떤 오류 신호를 넣는지(wiring)는 그 파일의 주석을 뺀 원문으로 확인한다. 둘을 따로 보고한다.
  *
  * 🔴 DB 0 · 네트워크 0 · provider 0 · 운영 HOME 0 · 운영 launchctl 0 · 운영 env 0.
@@ -35,7 +33,7 @@ import {
   type Observation, type ReplaySandbox,
 } from './lib/d100-reliability-replay.mjs'
 import {
-  commentCoverageOf, judgeNextPreflight, slotTimesOn,
+  judgeNextPreflight, slotTimesOn,
   type PreflightFacts, type ReadyCohortFact,
 } from '../src/lib/stage-ladder-generic'
 import { minuteOfDay, profileOf, stageRank, type RuntimeStage } from '../src/lib/scale-profile'
@@ -43,30 +41,29 @@ import {
   RUNNER_GRID, futureAdditionalOf, measuredFutureSourceOpportunities, preflightWindowsOf, slotValidOpportunitiesOf,
 } from './lib/stage-preflight-facts.mjs'
 import { PERSONA_CANARY_FLOOR } from '../src/lib/d100-capacity'
-import { AUTO_FIRST_COMMENT_WINDOW_MS, COMMENT_LOOP_DAILY_USD_MAX } from '../src/lib/persona-comment-auto-lane'
+import { AUTO_FIRST_COMMENT_WINDOW_MS, firstCommentDelayMs } from '../src/lib/persona-comment-auto-lane'
+import { countFloorOf } from '../src/lib/ladder-table'
 import {
   SUPPLY_PROOF_RUNS_PER_DAY, SUPPLY_WORKSET_PER_RUN,
 } from '../src/lib/supply-schedule-contract'
 import { supplyApprovedDailyUsdOf } from '../src/lib/supply-cost-envelope'
 import {
-  judgeEvidenceForTarget, judgeStageEvidence, trialPlanOf, trialPlanThrough,
+  judgeEvidenceForTarget, judgeStageEvidence,
   type EvidencePost, type EvidenceSideSignals, type StageEvidenceFacts,
 } from '../src/lib/stage-evidence'
 import { auditTarget } from '../src/lib/auto-ready-v2'
 import {
-  DECISION_WRITER, STAGE_DECISION_VERSION, nextStage, previousKstDate, validateStoredDecision,
-  type TransitionState, type ValidatedStageDecision,
+  DECISION_WRITER, STAGE_DECISION_VERSION, previousKstDate, validateStoredDecision,
+  type ValidatedStageDecision,
 } from '../src/lib/stage-decision-contract'
 import {
-  decideStage, errorSignalOf, qualitySignalOf, sustainedReleaseOf, validateForToday, type HealthSignal,
-  CERTIFIED_ROLLOUT_PHASE, certifiedProvenanceOf,
+  decideStage, errorSignalOf, openStageOf, qualitySignalOf, validateForToday, type HealthSignal,
 } from '../src/lib/stage-controller'
 import { preparedStageOf } from '../src/lib/stage-ladder'
 import { kstDateString } from '../src/lib/release-canary'
 import {
   EVENT_WAKE_ENV, FAKE_LAUNCHCTL_MARK, WAKE_TARGETS, launchctlPath, wakeRunner,
 } from './lib/runner-wake.mjs'
-import { proofDaySupplyHealth, type ProcessRunRead } from './lib/runner-health.mjs'
 import { FOLLOW_UP_FILE, followUpTriggerOf } from './lib/runner-lease.mjs'
 import { ATTEMPT_JOURNAL_FILE, createAttemptStore } from './lib/persona-comment-attempt-store.mjs'
 import {
@@ -107,10 +104,8 @@ const observations = new Map<string, Observation>()
 // ─────────────────────────────────────────────────────────
 
 const GRID = RUNNER_GRID
-const D = '2026-11-02'
-const COMMENT_USD = 0.00222
-const AUDIT_USD = 0.005
-const AUDIT_CAP = 0.30
+// 공급 비용 계약(envelope) 시행 뒤의 날짜 — 그 전 날짜의 하루 판정은 비용을 모른다
+const D = '2026-11-10'
 const SUPPLY_USD_PER_RESULT = 0.008
 const RUNS = SUPPLY_WORKSET_PER_RUN * SUPPLY_PROOF_RUNS_PER_DAY
 const OK_SIGNALS: HealthSignal[] = [
@@ -118,13 +113,12 @@ const OK_SIGNALS: HealthSignal[] = [
 ]
 const SIDE_OK: EvidenceSideSignals = {
   cost: [
-    { lane: 'supply', name: '공급 장부', health: 'ok' },
     { lane: 'comment', name: '댓글 장부', health: 'ok' },
     { lane: 'audit', name: '감사 장부', health: 'ok' },
   ],
-  errors: 'ok',
+
   supplyCostEvidence: {
-    legacyUsageUnknownRequests: 0,
+
     wholeDayCriticalHealth: 'ok',
     envelope: { settledRequests: 20, usageUnknownRequests: 0, overrunRequests: 0, ineligibleRequests: 0, riskUsd: 0.08, budgetUsd: 1 },
   },
@@ -144,39 +138,41 @@ const preflightFacts = (s: RuntimeStage, o: Partial<PreflightFacts> = {}): Prefl
     contractValidPersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
     // 🔴 2026-11-13 — D30 이상 stage-active 하한(canon §4). 기준선은 하한과 같은 수가 active 다
     stageActivePersonas: s === 'd1' ? 1 : PERSONA_CANARY_FLOOR[s],
-    commentUsdPerRequest: COMMENT_USD, commentDailyUsdCap: COMMENT_LOOP_DAILY_USD_MAX,
-    auditUsdPerCall: AUDIT_USD, auditDailyUsdCap: AUDIT_CAP,
-    supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'), runnerHealth: 'ok', ...o,
+    supplyDailyUsdCap: supplyApprovedDailyUsdOf('2026-11-05'),...o,
   }
 }
 
 /**
- * 그날 실제로 일어난 일 — 자동 READY 글 `count` 편이 단계 슬롯에 나가고, 댓글 예약표대로 60분 안 첫 댓글이 붙고,
- * 정본 표본 수만큼 감사가 끝났다. `count` 가 목표를 넘으면 마지막 슬롯 뒤 격자에 덧붙인다(N+1 표현).
+ * 그날 실제로 일어난 일 — 자동 READY 글 `count` 편이 단계 슬롯에 나가고, 첫 댓글이 댓글 러너의 실제 대기(3~9분) 뒤에 붙고,
+ * 추가 댓글 5건이 서로 다른 화자로 이어지고, 정본 표본 수만큼 감사가 끝났다. `count` 가 목표를 넘으면 마지막 슬롯 뒤 격자에 덧붙인다.
  */
-function dayFacts(kstDate: string, stage: RuntimeStage, state: TransitionState, count: number = profileOf(stage).dailyTarget): StageEvidenceFacts {
+function dayFacts(kstDate: string, stage: RuntimeStage, count: number = profileOf(stage).dailyTarget): StageEvidenceFacts {
   const mins = [...profileOf(stage).slots].map(minuteOfDay).sort((a, b) => a - b)
   const midnight = kstAt(kstDate, '00:00').getTime()
   const posts: EvidencePost[] = Array.from({ length: count }, (_, i) => {
     const m = i < mins.length ? mins[i]! : mins[mins.length - 1]! + (i - mins.length + 1) * GRID.gridMinutes
     const t = midnight + m * 60_000
-    const wait = commentCoverageOf(m, GRID).firstWait ?? GRID.gridMinutes
+    const postId = `p-${kstDate}-${i}`
     return {
-      postId: `p-${kstDate}-${i}`, queueId: `q-${kstDate}-${i}`, publishedAtMs: t, unattended: true,
+      postId, queueId: `q-${kstDate}-${i}`, publishedAtMs: t, unattended: true,
       queueRows: 1, publishLogs: 1, authorPersonaId: `a-${i}`, decider: 'auto', release: 'STAMPED_ELIGIBLE',
-      personaComments: [{ personaId: `c-${i}`, createdAtMs: t + wait * 60_000, topLevel: true, provenance: 'auto' }],
+      personaComments: [
+        { personaId: `c-${i}-0`, createdAtMs: t + firstCommentDelayMs(postId) + 30_000, topLevel: true, provenance: 'auto' },
+        ...[1, 2, 3, 4, 5].map((k) => ({ personaId: `c-${i}-${k}`, createdAtMs: t + (k + 1) * 20 * 60_000, topLevel: true, provenance: 'followup' as const })),
+      ],
     }
   })
   const rows = posts.slice(0, auditTarget(posts.length))
-    .map((p) => ({ postId: p.postId, queueId: p.queueId ?? '', judged: true, defectYes: false, retryable: false, overdue: false }))
+    .map((p) => ({ postId: p.postId, queueId: p.queueId ?? '', judged: true }))
   return {
-    kstDate, stage, decision: { kstDate, state, release: stage, decidedBy: DECISION_WRITER },
-    posts, orphanPublishLogs: 0, unloggedPublishes: 0, commentCapPerPost: 1, audits: { rows },
+    kstDate, stage, decision: { kstDate, release: stage, decidedBy: DECISION_WRITER },
+    readAtMs: kstAt(addKstDays(kstDate, 1), '07:00').getTime(),
+    posts, orphanPublishLogs: 0, unloggedPublishes: 0, audits: { rows },
   }
 }
 
 /** controller 가 저장한 평상일 행 — 저장 계약 validator 를 통과한 값만 쓴다 */
-function storedRow(kstDate: string, release: RuntimeStage, state: 'HOLD' | 'REPROVE'): ValidatedStageDecision {
+function storedRow(kstDate: string, release: RuntimeStage, state: 'HOLD' | 'PREPARE'): ValidatedStageDecision {
   const r = validateStoredDecision({
     row: {
       kstDate, capacity: preparedStageOf(release), release, state, reasons: [], blocks: [], dayPinned: false, supply: null,
@@ -200,30 +196,25 @@ const currentErrors = (): HealthSignal => errorSignalOf([
 ])
 
 /**
- * 인증 사다리 — D-2 평상일 HOLD d3 가 exact N PASS → D-1 TRIAL d5 → D-1 증거 PASS(자기 날 러너 정상).
- * ② · ③ 이 같은 출발점에서 갈라진다.
+ * 출발점 — D-2 와 D-1 이 둘 다 d5 를 유지했고 그날 판정이 PASS 다(연속 통과 2일). ② · ③ 이 같은 출발점에서 갈라진다.
  */
 const DM2 = addKstDays(D, -2)
 const DM1 = addKstDays(D, -1)
 const D1 = addKstDays(D, 1)
-const rowDm2 = storedRow(DM2, 'd3', 'HOLD')
-const evDm2 = judgeStageEvidence(DM2, 'd3', dayFacts(DM2, 'd3', 'HOLD'), SIDE_OK)
-const resDm1 = decideStage({
-  kstDate: DM1, decidedAt: kstAt(DM1, '07:00').toISOString(), previousDecision: rowDm2, previousEvidence: evDm2,
-  carriedPlan: null, nextPreflight: judgeNextPreflight('d5', preflightFacts('d5'), GRID), publishedToday: 0, signals: OK_SIGNALS,
-})
-const rowDm1 = validated(resDm1.decision)
-const factsDm1 = dayFacts(DM1, 'd5', rowDm1.state)
+const D2 = addKstDays(D, 2)
+const rowDm2 = storedRow(DM2, 'd5', 'PREPARE')
+const evDm2 = judgeStageEvidence(DM2, 'd5', dayFacts(DM2, 'd5'), SIDE_OK)
+const rowDm1 = storedRow(DM1, 'd5', 'PREPARE')
+const factsDm1 = dayFacts(DM1, 'd5')
 const evDm1Own = judgeStageEvidence(DM1, 'd5', factsDm1, SIDE_OK)
 
 const sandboxes: ReplaySandbox[] = []
 try {
   // ─────────────────────────────────────────────────────────
-  section('⓪ 출발점 — 인증 사다리')
-  check(`D-2 HOLD d3 exact N → 증거 ${evDm2.verdict}`, evDm2.verdict === 'PASS', evDm2.codes.join(','))
-  check(`D-1 결정 ${rowDm1.state}:${rowDm1.release} (d5 시험)`, rowDm1.state === 'TRIAL' && rowDm1.release === 'd5')
-  check(`D-1 자기 날 러너 정상 → 증거 ${evDm1Own.verdict}`, evDm1Own.verdict === 'PASS', evDm1Own.codes.join(','))
-  check('D-1 PASS 면 지속 단계 d5 (인증)', sustainedReleaseOf(rowDm1, evDm1Own) === 'd5')
+  section('⓪ 출발점 — d5 이틀 연속 통과')
+  check(`D-2 d5 → 판정 ${evDm2.verdict}`, evDm2.verdict === 'PASS', evDm2.codes.join(','))
+  check(`D-1 d5 → 판정 ${evDm1Own.verdict}`, evDm1Own.verdict === 'PASS', evDm1Own.codes.join(','))
+  check('열린 단계는 d5 다', openStageOf(rowDm1, rowDm2) === 'd5')
 
   // ─────────────────────────────────────────────────────────
   section('① preflight — 현재 기회 + 측정된 당일 추가 기회')
@@ -272,7 +263,7 @@ try {
     const opportunityGateCurrentOnly = /facts\.slotValidOpportunities < n\) codes\.add\('OPPORTUNITY_SHORT'\)/.test(preflightGateSource)
     // controller 는 preflight 사실을 복사·보정하지 않고 `r.facts` 그대로 넘겨야 한다.
     // 단, 최종 복구 슬롯에서 실제 READY 재고 증가로 검증된 bounded gain 은 별도 options 인자로만 전달한다.
-    const controllerPassesFactsDirectly = /nextPreflight\s*=\s*judgeNextPreflight\(\s*target,\s*r\.facts,\s*RUNNER_GRID,\s*\{\s*boundedRecoveryReadyGain\s*\}\s*\)/
+    const controllerPassesFactsDirectly = /nextPreflight\s*=\s*judgeNextPreflight\(\s*target,\s*r\.facts,\s*RUNNER_GRID\s*\)/
       .test(controllerSource)
     const currentKeys = new Set(currentSources.map((x) => x.key))
     const distinctFuture = futureSources.every((x) => !currentKeys.has(x.key))
@@ -293,7 +284,7 @@ try {
       && unknownFuture.forecastWarnings.includes('OPPORTUNITY_UNKNOWN'))
     check('실제 preflight facts는 현재 snapshot뿐 아니라 측정된 3일 하한을 읽는다', !preflightFactsCurrentOnly)
     check('실제 기회 gate는 현재와 측정된 추가 기회를 합쳐 판정한다', !opportunityGateCurrentOnly)
-    check('실제 controller는 facts를 보정하지 않고 그대로 넘기며 검증된 복구량만 별도 옵션으로 전달한다', controllerPassesFactsDirectly)
+    check('실제 controller는 facts를 보정하지 않고 그대로 넘긴다', controllerPassesFactsDirectly)
     observations.set('PREFLIGHT_FULL_DAY_OPPORTUNITY', {
       verdict: pf.verdict,
       onlyOpportunityShort: pf.codes.length === 1 && pf.codes[0] === 'OPPORTUNITY_SHORT',
@@ -311,128 +302,65 @@ try {
   }
 
   // ─────────────────────────────────────────────────────────
-  section('② controller — 일시 감속 뒤 인증 단계 복구')
+  section('② controller — 일시 감속 뒤 열린 단계 복구')
   {
-    // 현재 errors를 쓰면 과거 증거 오염(시나리오 ③)과 섞인다. 감속 자체만 보려고 quality 축을 나쁘게 둔다.
+    // 감속 자체만 보려고 quality 축을 나쁘게 둔다
     const bad = qualitySignalOf({ unresolvedDefects: 1, missingPosts: 0, retryableFailures: 0, overdueAudits: 0 })
     const d0 = decideStage({
       kstDate: D, decidedAt: kstAt(D, '07:00').toISOString(), previousDecision: rowDm1, previousEvidence: evDm1Own,
-      carriedPlan: null, nextPreflight: judgeNextPreflight('d10', preflightFacts('d10'), GRID), publishedToday: 0,
+      dayBefore: { decision: rowDm2, evidence: evDm2 },
+      nextPreflight: judgeNextPreflight('d10', preflightFacts('d10'), GRID), publishedToday: 0,
       signals: [bad, OK_SIGNALS[1]!, OK_SIGNALS[2]!],
     })
     const row0 = validated(d0.decision)
-    // D 는 감속된 평상일 — 2/3 편(N-1)은 정상 운영이다
-    const ev0 = judgeStageEvidence(D, row0.release, dayFacts(D, row0.release, row0.state, profileOf(row0.release).dailyTarget - 1), SIDE_OK)
-    // controller 와 같은 순서로 이어진 계획을 되짚는다(전날이 HOLD·PREPARE 면 그 앞 증명일까지)
-    const carried = trialPlanThrough([{ decision: rowDm1, evidence: evDm1Own }])
-    const plan1 = trialPlanOf(row0, ev0, carried)
-    const sustained1 = sustainedReleaseOf(row0, ev0, carried)
-    const target1 = plan1 !== null ? (plan1.base === sustained1 ? plan1.target : null) : nextStage(sustained1)
-    // 실제 controller와 같다. 이어진 계획이 없으면 지속 단계의 다음 칸 preflight를 본다.
-    const pfStage = target1
-    const d1 = decideStage({
-      kstDate: D1, decidedAt: kstAt(D1, '07:00').toISOString(), previousDecision: row0, previousEvidence: ev0,
-      carriedPlan: carried, nextPreflight: pfStage === null ? null : judgeNextPreflight(pfStage, preflightFacts(pfStage), GRID),
-      publishedToday: 0, signals: OK_SIGNALS,
+    const ev0 = judgeStageEvidence(D, row0.release, dayFacts(D, row0.release), SIDE_OK)
+    const next = (kstDate: string, prev: ValidatedStageDecision, prevEv: typeof ev0, before: ValidatedStageDecision, signals: HealthSignal[]) => decideStage({
+      kstDate, decidedAt: kstAt(kstDate, '07:00').toISOString(), previousDecision: prev, previousEvidence: prevEv,
+      dayBefore: { decision: before, evidence: evDm1Own },
+      nextPreflight: judgeNextPreflight('d10', preflightFacts('d10'), GRID), publishedToday: 0, signals,
     })
-    // 대조: 감속 평상일도 exact-N이면 그날 공개 d3 PASS가 우선돼 다음 날 d5로 복귀한다.
-    // N-1은 평상 운영이므로 기존 인증 d5와 이어진 d10 계획을 그대로 회복한다.
-    const ev0Exact = judgeStageEvidence(D, row0.release, dayFacts(D, row0.release, row0.state), SIDE_OK)
-    const plan1Exact = trialPlanOf(row0, ev0Exact, carried)
-    const sustained1Exact = sustainedReleaseOf(row0, ev0Exact, carried)
-    const target1Exact = plan1Exact !== null
-      ? (plan1Exact.base === sustained1Exact ? plan1Exact.target : null)
-      : nextStage(sustained1Exact)
-    const d1Exact = decideStage({
-      kstDate: D1, decidedAt: kstAt(D1, '07:00').toISOString(), previousDecision: row0, previousEvidence: ev0Exact,
-      carriedPlan: carried, nextPreflight: target1Exact === null ? null : judgeNextPreflight(target1Exact, preflightFacts(target1Exact), GRID),
-      publishedToday: 0, signals: OK_SIGNALS,
-    })
-    console.log(`   D-1 TRIAL:d5 PASS → D ${row0.state}:${row0.release}(brake ${d0.brake}) → D+1 ${d1.decision.state}:${d1.decision.release}(지속 ${d1.sustained} · 신호 전부 정상)`)
-    check('D 의 감속은 시험·증명일을 열지 않는다', row0.state === 'HOLD' || row0.state === 'PREPARE')
+    const d1 = next(D1, row0, ev0, rowDm1, OK_SIGNALS)
+    // 감속이 이틀 이어져도 열린 단계의 아래 칸에서 더 내려가지 않는다
+    const d1Bad = next(D1, row0, ev0, rowDm1, [bad, OK_SIGNALS[1]!, OK_SIGNALS[2]!])
+    console.log(`   D-1 d5 PASS → D ${row0.state}:${row0.release}(brake ${d0.brake}) → D+1 ${d1.decision.state}:${d1.decision.release}(열린 단계 ${d1.sustained} · 신호 전부 정상)`)
+    check('D 의 감속은 이틀 통과였어도 올리지 않는다', row0.state === 'HOLD' || row0.state === 'PREPARE')
     check('D+1 신호는 전부 정상이고 brake 가 없다', d1.brake === 'none')
-    check('감속일 N-1은 인증 d5를 회복해 준비된 d10 시험을 열고, exact-N은 d5로 안전 복귀한다',
-      d1.decision.state === 'TRIAL' && d1.decision.release === 'd10' && d1.sustained === 'd5'
-      && d1Exact.decision.release === 'd5' && d1Exact.sustained === 'd5')
-    // 🔴 H2 — reader 는 writer 활성 판이 쓸 합성 CERTIFIED 행을 읽는가 · 이 판의 controller 감속 행은 그 칸을 쓰는가
-    const certifiedRow = validateStoredDecision({
-      row: { ...row0, transition: certifiedProvenanceOf('WRITER_ACTIVE', row0.release, 'd5') }, expectKstDate: D,
-    })
-    const readerAcceptsCertified = certifiedRow.ok && certifiedRow.decision.transition?.kind === 'CERTIFIED'
-      && sustainedReleaseOf(certifiedRow.decision, ev0, null) === 'd5'
-    const writerEmitsCertified = row0.transition !== null && row0.transition.kind === 'CERTIFIED'
-    check(`H2 단계 ${CERTIFIED_ROLLOUT_PHASE} — reader 는 합성 CERTIFIED 행을 지속 d5 로 읽는다(이월 계획 없이)`, readerAcceptsCertified)
-    check(`H2 단계 ${CERTIFIED_ROLLOUT_PHASE} — controller 감속 행의 CERTIFIED 쓰기는 단계와 일치한다`,
-      writerEmitsCertified === (CERTIFIED_ROLLOUT_PHASE === 'WRITER_ACTIVE'))
+    check('감속한 날의 통과는 열린 단계의 연속이 아니다 — D+1 은 d5 로 돌아오되 올리지 않는다',
+      d1.decision.release === 'd5' && d1.sustained === 'd5' && d1.passDays === 0 && d1.decision.state !== 'TRIAL')
+    const readerAcceptsCertified = row0.transition?.kind === 'CERTIFIED' && openStageOf(row0) === 'd5'
+    const writerEmitsCertified = row0.transition !== null && row0.transition.kind === 'CERTIFIED' && row0.transition.certified === 'd5'
     observations.set('BRAKE_DEMOTION_PERSISTS', {
       certified: 'd5', day0Brake: d0.brake, day0Operating: row0.release, day0Release: row0.release, day0Evidence: ev0.verdict,
+      day0Raised: d0.decision.state === 'TRIAL',
       day1State: d1.decision.state, day1Sustained: d1.sustained, day1Release: d1.decision.release,
       day1BelowCertified: stageRank(d1.decision.release) < stageRank('d5'),
-      exactNDay1Release: d1Exact.decision.release,
+      secondBrakeDayRelease: d1Bad.decision.release,
       readerAcceptsCertified, writerEmitsCertified,
     })
+    void D2
   }
 
   // ─────────────────────────────────────────────────────────
-  section('③ 증거 — 과거 proof day는 그날 자연 공급 슬롯만')
+  section('③ 판정 — 하루 판정은 러너 건강을 입력으로 받지 않는다')
   {
     const errorsNow = currentErrors()
     const strip = (f: string): string => readFileSync(f, 'utf-8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
     const ctl = strip('scripts/stage-controller.mts')
-    const evidenceBody = ctl.slice(ctl.indexOf('async function evidenceFor('), ctl.indexOf('async function carriedPlanFor('))
-    // 직접 호출 네 곳을 모두 열거한다. 한 곳만 고쳐서 “해소”로 보지 않는다.
+    const evidenceBody = ctl.slice(ctl.indexOf('async function evidenceFor('), ctl.indexOf('const decisionReader ='))
     const callBodies = [...ctl.matchAll(/evidenceFor\(prisma,\s*\{([\s\S]*?)\}\)/g)].map((m) => m[1] ?? '')
-    const currentErrorCallCount = callBodies.filter((body) => {
-      const compact = body.replace(/\s+/g, '')
-      return /errors:(?:observeErrors\(\)|errorSignal)(?:,|$)/.test(compact)
-        || /(?:^|,)errors$/.test(compact)
-    }).length
-    const observerHasNoDate = /function observeErrors\(\): HealthSignal \{/.test(ctl)
-    const usesProofDaySupplyHealth = /proofDaySupplyHealth\(readProcessRuns\(\), i\.kstDate\)/.test(evidenceBody)
-    const processRead: ProcessRunRead = {
-      runs: [
-        ...['06:15', '08:15', '12:15', '14:15', '17:15'].map((time, index) => ({
-          runId: `past-ok-${index}`, startedAt: kstAt(DM1, time).toISOString(), status: 'done' as const,
-          completedAt: new Date(kstAt(DM1, time).getTime() + 15 * 60_000).toISOString(), runtimeSha: 'x',
-          runTokenShadow: {
-            ok: true as const, code: null, tokenId: `token-${time}`, trigger: 'scheduled' as const,
-            launchTrigger: 'scheduled' as const, absorbedTrigger: null, absorbedAt: null,
-            pass: 0, budgetWindow: `${DM1} ${time}`,
-          }, failedStages: [],
-        })),
-        {
-          runId: 'today-fail', startedAt: kstAt(D, '06:15').toISOString(), status: 'failed',
-          completedAt: kstAt(D, '06:20').toISOString(), runtimeSha: 'x',
-          runTokenShadow: {
-            ok: true as const, code: null, tokenId: 'token-fail', trigger: 'scheduled' as const,
-            launchTrigger: 'scheduled' as const, absorbedTrigger: null, absorbedAt: null,
-            pass: 0, budgetWindow: `${D} 06:15`,
-          }, failedStages: ['collect exit 1'],
-        },
-      ],
-      unreadable: 0, unreadableFiles: [],
-    }
-    const historicalHealth = proofDaySupplyHealth(processRead, DM1)
-    const canDistinguishErrorDate = usesProofDaySupplyHealth && historicalHealth === 'ok'
-    const controllerFeedsCurrentErrors = evidenceBody.includes('errors: i.errors.health,')
-      && callBodies.length === 4 && currentErrorCallCount === callBodies.length && observerHasNoDate
-    // 판정은 wiring 관측값에서 유도한다. 하네스가 AS-IS 결과를 상수로 지어내지 않는다.
-    const historicalSide: EvidenceSideSignals = {
-      ...SIDE_OK, errors: controllerFeedsCurrentErrors ? errorsNow.health : historicalHealth,
-    }
-    const past = judgeStageEvidence(DM1, 'd5', factsDm1, historicalSide)
-    const sustainedAfter = sustainedReleaseOf(rowDm1, past)
-    console.log(`   전날 자기 러너 ${evDm1Own.verdict} · 오늘 관측 errors=${errorsNow.health} 를 넣으면 ${past.verdict} [${past.codes.join(',')}] → 지속 ${sustainedAfter}`)
-    console.log(`   wiring(원문) ${JSON.stringify({
-      historicalCallCount: callBodies.length, currentErrorCallCount, observerHasNoDate,
-      usesProofDaySupplyHealth, canDistinguishErrorDate,
-    })}`)
-    check('순수 판정 — 같은 전날 사실 · errors=ok 면 PASS(대조)', evDm1Own.verdict === 'PASS')
-    check('controller 의 과거 증거 호출 4곳을 전부 계약에 넣었다', callBodies.length === 4, String(callBodies.length))
+    const currentErrorCallCount = callBodies.filter((body) => /errors/.test(body)).length
+    const controllerFeedsCurrentErrors = /errors/.test(evidenceBody) || currentErrorCallCount > 0
+    const evidenceTakesRunnerHealth = /errors\s*:/.test(strip('src/lib/stage-evidence.ts').split('export type EvidenceSideSignals')[1]?.split('}')[0] ?? 'errors:')
+    // 오늘 07:00 공급 러너가 실패 중이어도 전날 사실은 같다 — 판정에 그 신호를 넣을 자리가 없다
+    const past = judgeStageEvidence(DM1, 'd5', factsDm1, SIDE_OK)
+    const sustainedAfter = openStageOf(rowDm1, rowDm2)
+    console.log(`   오늘 관측 errors=${errorsNow.health} · 전날 판정 ${past.verdict} [${past.codes.join(',')}] → 열린 단계 ${sustainedAfter}`)
+    check('오늘의 러너 실패는 브레이크 오류 축으로만 간다', errorsNow.health === 'bad')
+    check('controller 가 하루 판정을 부르는 자리가 있다(전날 · 이틀 전 · 조회)', callBodies.length >= 3, String(callBodies.length))
     observations.set('EVIDENCE_USES_CURRENT_RUNNER_HEALTH', {
       controllerFeedsCurrentErrors, historicalCallCount: callBodies.length, currentErrorCallCount,
-      canDistinguishErrorDate,
-      pastVerdict: past.verdict, pastHasRunnerBad: past.codes.includes('RUNNER_BAD'), sustainedAfter,
+      evidenceTakesRunnerHealth,
+      pastVerdict: past.verdict, pastHasRunnerBad: (past.codes as readonly string[]).includes('RUNNER_BAD'), sustainedAfter,
     })
   }
 
@@ -691,11 +619,13 @@ try {
       at2359.at(-1) === D && at0000.capacity.dates.at(-1) === D && at0001.at(-1) === D1, `${at2359.at(-1)} ${at0000.capacity.dates.at(-1)} ${at0001.at(-1)}`)
     check('증명 창 — 전날 증명은 다음 날 00:00 에 닫힌다', at0000.proof.to.getTime() === kstAt(D1, '00:00').getTime())
     const n = profileOf('d5').dailyTarget
-    const ev = (k: number) => judgeEvidenceForTarget(D, 'd5', n, dayFacts(D, 'd5', 'TRIAL', k), SIDE_OK)
-    const [under, exact, over] = [ev(n - 1), ev(n), ev(n + 1)]
-    check(`증명일 N-1(${n - 1}) → FAIL PUBLISH_NOT_AUTO_READY`, under.verdict === 'FAIL' && under.codes.includes('PUBLISH_NOT_AUTO_READY'), under.codes.join(','))
-    check(`증명일 N(${n}) → PASS`, exact.verdict === 'PASS', exact.codes.join(','))
-    check(`증명일 N+1(${n + 1}) → FAIL PUBLISH_OVER`, over.verdict === 'FAIL' && over.codes.includes('PUBLISH_OVER'), over.codes.join(','))
+    const ev = (k: number) => judgeEvidenceForTarget(D, 'd5', n, dayFacts(D, 'd5', k), SIDE_OK)
+    const floor = countFloorOf(n)
+    const [under, atFloor, exact, over] = [ev(floor - 1), ev(floor), ev(n), ev(n + 1)]
+    check(`통과선 아래(${floor - 1}/${n}) → FAIL PUBLISH_SHORT`, under.verdict === 'FAIL' && under.codes.includes('PUBLISH_SHORT'), under.codes.join(','))
+    check(`통과선(${floor}/${n}) → PASS`, atFloor.verdict === 'PASS', atFloor.codes.join(','))
+    check(`N(${n}) → PASS`, exact.verdict === 'PASS', exact.codes.join(','))
+    check(`N+1(${n + 1}) → FAIL PUBLISH_OVER`, over.verdict === 'FAIL' && over.codes.includes('PUBLISH_OVER'), over.codes.join(','))
     const lateEntry = { postPublishedAtMs: kstAt(D, '23:30').getTime(), attemptedAtMs: kstAt(D, '23:30').getTime() }
     check('첫 댓글 시도 기억 TTL 은 자정을 넘어 발행 + 60분(경계 포함)이다',
       isAttemptActive(lateEntry, kstAt(D1, '00:20').getTime()) && isAttemptActive(lateEntry, kstAt(D1, '00:30').getTime())
@@ -708,10 +638,7 @@ try {
     const observed = observations.get(gap.code)
     if (observed === undefined) { check(`${gap.code} — 관측이 없다`, false); continue }
     const verdict = judgeGap(gap, observed)
-    // 🔴 reader 판(`READER_READY`)에서 writer 가 필요한 gap 은 해소로 세지 않는다 — 기대값부터 READER_READY 다
-    const expected = gap.readerReady !== undefined && CERTIFIED_ROLLOUT_PHASE === 'READER_READY' ? 'READER_READY' : 'GAP_CLOSED'
-    const label = `[corrected] ${gap.code} (시나리오 ${gap.scenario}) → ${verdict}${expected === 'GAP_CLOSED' ? '' : ' (writer 활성 전 · 미해소)'}`
-    check(label, verdict === expected, `관측 ${JSON.stringify(observed)} · current ${JSON.stringify(gap.current)} · target ${JSON.stringify(gap.target)}`)
+    check(`[corrected] ${gap.code} (시나리오 ${gap.scenario}) → ${verdict}`, verdict === 'GAP_CLOSED', `관측 ${JSON.stringify(observed)} · current ${JSON.stringify(gap.current)} · target ${JSON.stringify(gap.target)}`)
     console.log(`      ${gap.summary}`)
     console.log(`      관측 ${JSON.stringify(observed)}`)
     console.log(`      current ${JSON.stringify(gap.current)} · target ${JSON.stringify(gap.target)}`)
@@ -722,8 +649,6 @@ try {
   for (const sb of sandboxes) sb.dispose()
 }
 
-const readerOnlyGaps = CERTIFIED_ROLLOUT_PHASE === 'READER_READY' ? BASELINE_GAPS.filter((x) => x.readerReady !== undefined).length : 0
-console.log(`\n${fail === 0 ? '✅' : '🔴'} D100 reliability replay ${pass} pass · ${fail} fail · 교정 계약 GAP_CLOSED ${BASELINE_GAPS.length - readerOnlyGaps}/${BASELINE_GAPS.length}`
-  + ` · READER_READY ${readerOnlyGaps}(CERTIFIED ${CERTIFIED_ROLLOUT_PHASE} — writer 활성 릴리스 전 미해소)`)
+console.log(`\n${fail === 0 ? '✅' : '🔴'} D100 reliability replay ${pass} pass · ${fail} fail · 교정 계약 ${BASELINE_GAPS.length}건`)
 console.log('🔴 DB 0 · 네트워크 0 · provider 0 · 운영 HOME 0 · 운영 launchctl 0\n')
 process.exitCode = fail === 0 ? 0 : 1

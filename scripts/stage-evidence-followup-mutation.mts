@@ -22,6 +22,8 @@ const EV = 'src/lib/stage-evidence.ts'
 const REPO = 'src/lib/stage-evidence-repo.ts'
 const PURE = 'scripts/stage-evidence-check.mts'
 const DB = 'scripts/stage-evidence-db-check.mts'
+// 수·결 통과선의 경계 사례(운영 로그 재생)는 이 검사가 든다
+const POLICY = 'scripts/ladder-policy-check.mts'
 const dbReady = (process.env.SORAN_ISOLATED_DB ?? '').trim() === 'yes-throwaway'
 
 type Mutation = { name: string; file: string; from: string; to: string; check: string }
@@ -40,16 +42,21 @@ const MUTATIONS: Mutation[] = [
   M('추가 댓글 시계 차이 검사 제거', "if (c.createdAtMs - q.decidedAtMs < -AUTO_COMMENT_CLOCK_SKEW_MS) return 'followup-broken'", ''),
   M('추가 댓글 표식을 첫 댓글 표식과 같게', "FOLLOWUP_LANE_ACTIVITY_DECIDED_BY = 'auto-followup'", "FOLLOWUP_LANE_ACTIVITY_DECIDED_BY = 'auto'"),
   // 판정 본체 — 단계 증거
-  M('추가 댓글을 단계 상한·중복에 다시 넣음', 'p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))', 'p.personaComments.filter(() => true)'),
-  M('첫 댓글 상한을 1→10으로 단순 변경', 'if (stage === \'bootstrap-auto\') return AUTO_PERSONA_COMMENTS_PER_POST_MAX', 'if (stage === \'bootstrap-auto\') return PERSONA_COMMENTS_PER_POST_MAX'),
-  M('상한 판정을 전체 댓글로', 'if (cap !== null && stageComments.length > cap)', 'if (cap !== null && p.personaComments.length > cap)'),
-  M('중복 판정을 전체 댓글로', 'for (const c of stageComments) {\n        const k', 'for (const c of p.personaComments) {\n        const k'),
-  M('자기 글 판정을 전체 댓글로', 'const own = stageComments.filter(', 'const own = p.personaComments.filter('),
-  // 🔴 `eligible` 은 이미 추가 댓글을 뺀 `stageComments` 에서 고른다 — 조건 한 칸만 바꾸면 등가 변이다. 실제 회귀(전체 댓글에서 고르고 추가 댓글도 받음)를 넣는다
-  M('추가 댓글을 첫 댓글 증거로', "const eligible = stageComments.filter((c) =>\n        c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId && c.provenance === 'auto')",
-    "const eligible = p.personaComments.filter((c) =>\n        c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId && (c.provenance === 'auto' || c.provenance === 'followup'))"),
-  M('추가 댓글 깨짐을 단계 FAIL 로', "if (c.provenance === 'broken') brokenProv += 1", "if (c.provenance === 'broken') brokenProv += 1\n      }\n      for (const c of p.personaComments) {\n        if (c.provenance === 'followup-broken') brokenProv += 1"),
-  M('추가 댓글 수 미집계', 'followupCount += p.personaComments.length - stageComments.length', ''),
+  M('추가 댓글을 첫 댓글 레인(중복·자기 글·사람 손)에 다시 넣음', 'p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))', 'p.personaComments.filter(() => true)'),
+  M('추가 댓글을 첫 댓글 증거로', "c.provenance === 'auto' && c.topLevel && c.personaId !== null", "(c.provenance === 'auto' || c.provenance === 'followup') && c.topLevel && c.personaId !== null"),
+  M('추가 댓글 깨짐을 무결성에서 뺌', "c.provenance === 'broken' || c.provenance === 'followup-broken'", "c.provenance === 'broken'"),
+  M('글당 댓글에서 추가 댓글을 뺌', "p.personaComments.filter((c) => c.provenance === 'auto' || c.provenance === 'followup')", "p.personaComments.filter((c) => c.provenance === 'auto')"),
+  M('글당 댓글에 출처 없는·깨진 댓글을 넣음', "p.personaComments.filter((c) => c.provenance === 'auto' || c.provenance === 'followup')", 'p.personaComments.filter(() => true)'),
+  // 판정 본체 — 수와 결의 통과선 (2026-11-19 사다리 재설계)
+  M('수 통과선 판정 제거', "if (n < counts.countFloor) codes.add('PUBLISH_SHORT')", ''),
+  M('첫 댓글 창 판정 제거', '\n      && c.createdAtMs >= p.publishedAtMs && c.createdAtMs - p.publishedAtMs <= LADDER_RULE.firstCommentWindowMs)).length', ')).length'),
+  M('첫 댓글 비율 판정 제거', "else if (n > 0 && below(firstOk, firstClosed.length * LADDER_RULE.firstCommentRatio)) codes.add('FIRST_COMMENT_SHORT')", ''),
+  M('창이 안 닫힌 글도 첫 댓글 분모에', 'autoTargets.filter((p) => p.publishedAtMs + LADDER_RULE.firstCommentWindowMs <= facts.readAtMs)', 'autoTargets.filter(() => true)', EV, POLICY),
+  M('닫힌 글이 모자라도 모름으로 두지 않음', 'closed > 0 && closed >= n * LADDER_RULE.closedShareMin', 'closed >= 0', EV, POLICY),
+  M('글당 댓글 통과선 판정 제거', "if (below(total / talkClosed.length, commentDepthFloorOf(targetMean))) codes.add('COMMENT_DEPTH_SHORT')", '', EV, POLICY),
+  M('타인 3명 판정 제거', "if (below(voices, talkClosed.length * row.threeVoicesRatio)) codes.add('THREE_VOICES_SHORT')", '', EV, POLICY),
+  M('타인 3명에 글쓴이를 넣음', '.map((c) => c.personaId).filter((id) => id !== null && id !== p.authorPersonaId)).size >= 3', '.map((c) => c.personaId).filter((id) => id !== null)).size >= 3', EV, POLICY),
+  M('수집→공개가 꺼진 칸인데도 막음', 'if (LADDER_RULE.collectToPublish.gate && n > 0) {', 'if (n > 0) {'),
   // 대화 감사
   M('대화 감사 — 깨진 출처 무시', "if (broken > 0) codes.add('FOLLOWUP_PROVENANCE_BROKEN')", ''),
   M('대화 감사 — 첫 댓글 없는 추가 허용', "if (firstAt === null || fu.some((c) => c.createdAtMs < firstAt)) codes.add('FOLLOWUP_WITHOUT_FIRST')", ''),

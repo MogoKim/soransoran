@@ -1,130 +1,66 @@
 /**
- * 🔴 **단계 승격의 운영 증거 — 날짜가 아니라 그날 실제로 일어난 일로 올린다** (2026-09-29 P0)
+ * 🔴 **단계의 하루 판정 — 양을 늘려도 결이 유지되는가를 그날 실제로 일어난 일로 잰다**
  *
- * 🔴 **왜 생겼나 (운영 반례).**
- *    controller 는 내일 시험 대상을 `nextStage(전날 결정의 release)` 로 골랐다. 전날 시험이
- *    실제로 성공했는지는 보지 않았다. 그래서 09-29 TRIAL d3 는 09:30 글의 첫 Persona 댓글이
- *    60분 안에 붙지 않아 댓글 계약을 이미 어겼는데도, 09-30 07:00 에 D5 · 10-01 07:00 에 D10 을
- *    **날짜만으로** 열 참이었다.
+ *    KST 날짜 D · 단계 S 의 PASS = **무결성 0건** ∧ **수** ∧ **결**. 숫자는 전부 `ladder-table` 에서 읽는다.
  *
- * 🔴 **계약 (마스터 결정 · 사람 승인을 더하지 않는다).**
- *    KST 날짜 D 의 단계 S **운영 PASS** 는 아래 여섯이 **전부** 참일 때만이다.
- *      ① D 의 StageDecision 을 controller 가 자동으로 골랐다 — `decidedBy=controller` ·
- *         상태 TRIAL/REPROVE(증명일) 또는 HOLD/PREPARE(자연 exact-N) · 공개 = S. 수동 실행 · 단계 override · env canary/window ·
- *         사람 승인은 **세지 않는다**.
- *      ② **자동 target 물량** = `profileOf(S).dailyTarget` 이상 — 자동 READY 도장(`AUTO_DECIDER`)으로
- *         만들어져 **무인 러너 표식**으로 예약 발행된 글만 센다(2026-09-29 마스터 최종 보정).
- *         🔴 사람이 승인한 글은 정상 발행·감사 면제일 수 있지만 **자동화 성공 물량으로는 0건**이다.
- *            혼합 물량도 자동 target 만 센다. 모자라면 `PUBLISH_NOT_AUTO_READY`.
- *         🔴 그날 전체 발행(사람 글 포함)이 목표를 넘으면 상한 초과다 → `PUBLISH_OVER`.
- *      ③ 댓글 — 두 판정으로 나눈다 (2026-09-29 마스터 보정).
- *         (a) **첫 댓글 보장** — **자동 target 글마다** Persona 최상위 댓글(글쓴 Persona 아님)이 발행 후
- *             `AUTO_FIRST_COMMENT_WINDOW_MINUTES` 안에 **1건 이상**.
- *             🔴 **자동 출처가 연결된 댓글만 센다** (2026-10-11 Batch A3) — `commentProvenanceOf` 가 `auto` 인 것.
- *                `commentOrigin=PERSONA` 만으로는 증거가 아니다(사람이 어드민에서 낸 Persona 댓글도 PERSONA 다).
- *                연결이 깨진 댓글(로그 없음 · 대상 불일치 · 표식 불일치 · 중복 · 시각 불일치)이 하나라도 있으면
- *                `COMMENT_PROVENANCE_BROKEN` FAIL 이다.
- *         (b) **추가 댓글 계약** — 글당 Persona 댓글 수 ≤ 그 댓글 단계의 상한(`personaCommentCapFor`) ·
- *             같은 Persona 두 번 0 · 자기 글 0. 🔴 "60분 안 2건" 자체는 실패가 아니다 — 상한을 넘을 때만이다.
- *             (bootstrap-auto 의 상한 1 이 "글당 정확히 1건" 을 지금 그대로 지킨다. 장기 구조 상한은 10이다)
- *         (c) 🔴 **추가 댓글은 단계 증거 밖이다** (2026-10-13 · PR #704 E1) — 추가 댓글 표식(`FOLLOWUP_LANE_*`)으로
- *             연결된 댓글(`followup` · `followup-broken`)은 (a) 분자 · (b) 상한 · 중복 · 자기 글 어디에도 세지 않는다.
- *             🔴 첫 댓글 상한을 1→10으로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처는 지금 상한 그대로다.
- *             추가 댓글의 결함은 **대화 감사**(`judgeConversationAudit` · 판정의 `conversation` 칸)에서만 FAIL 이다 —
- *             첫 댓글 성공을 소급해서 지우지 않는다. 두 레인 표식이 섞인 행은 첫 댓글 축의 `broken` 이다(위 FAIL).
- *      ④ 사후 감사 — 🔴 **전수 감사가 아니라 정본 표본 계약이다** (마스터 정본 정정).
- *         그날 자동 target N 에 대해 expected = `auditTarget(N)` = ceil(N × 20%) (N>0 이면 최소 1).
- *         · 중복 없는 표본(글 기준) 수 ≥ expected — 0 이면 `AUDIT_COVERAGE_ZERO`, 미달이면 `AUDIT_COVERAGE_SHORT`
- *         · 표본은 **그날 자동 target 집합**에 속해야 한다(postId · queueId 둘 다) — 밖이면 `AUDIT_OUTSIDE_TARGET`
- *         · 표본은 전부 판정됐고 결함 yes · 재시도 가능 · 시한 초과 · 글 유실 0
- *         🔴 모든 글의 감사를 새 선행조건으로 만들지 않는다 — 그것은 새 병목이다.
- *         · 누가 결정했는지 모르는 글은 자동 target 인지도 모른다 → UNKNOWN(공백을 PASS 로 삼키지 않는다).
- *      ⑤ 중복 0 — Queue→Post 1:1 · 발행 기록 1:1 · (글, Persona) 댓글 1건.
- *      ⑥ 비용 · 러너 정상 — 그날 장부(공급 · 댓글 · 감사)에 막는 코드 0 · 발행/공급 러너 실패 0.
- *      ⑦ 🔴 **공개 증명 행 자체가 지금 원천 → 슬롯 계약을 만족한다** (2026-09-30 · source-slot-v1).
- *         자동 target 글마다 발행 트랜잭션이 같은 트랜잭션에서 남긴 도장(`gateResults.release`)이
- *         `source-slot-v1` · eligible 이어야 한다. 없으면 `RELEASE_CONTRACT_MISSING`, 판이 다르거나 eligible 이
- *         아니면 `STALE_RELEASE` — 둘 다 FAIL 이다. 🔴 이 계약 이전 날의 증거는 이 조항으로 PASS 가 날 수 없다 —
- *         옛 PASS 는 승급 · 이어진 계획 · 지속 단계의 근거가 되지 않는다(같은 단계를 다시 증명한다).
- *         (다음 단계를 채울 기회가 있는가는 정본 `judgeNextPreflight` 가 시험 대상에 대해 본다)
+ *    · **수**   자동 READY 로 만들어져 무인 러너가 낸 글(자동 target) ≥ 목표 편수 × `countRatio`.
+ *               사람이 승인한 글은 정상 발행일 수 있지만 자동 물량으로는 0건이다.
+ *    · **결**   ① 첫 댓글이 창 안에 달린 글의 비율 ② 글당 Persona 댓글 평균(그날 글에 효력이 있던 목표 평균 × `countRatio`)
+ *               ③ 글쓴이 아닌 Persona 3명 이상이 말한 글의 비율 ④ 수집에서 공개까지 걸린 시간의 중앙값.
+ *               **비율로 잰다** — 글 한 편의 누락이 하루를 무효로 만들지 않는다. 창이 아직 닫히지 않은 글은 분모에서 빠진다.
+ *    · **무결성** 숫자를 믿을 수 없게 만드는 것은 한 건이어도 그대로 막는다: 출처가 깨진 댓글 · 사람이 자동 글에 단
+ *               Persona 댓글 · 큐/글/발행 기록 1:1 불일치 · 상한 초과 · release 도장 · 장부 결함 · 감사 표본 부족.
  *
- * 🔴 **fail-closed = 지금 단계에 머문다.** 하나라도 어긋나면 FAIL, 하나라도 못 읽으면 UNKNOWN.
- *    둘 다 PASS 가 아니다 — 올라가지 않고 **같은 단계를 다음 날 다시 시험**한다(`trialPlanOf`).
- *    이 게이트는 하루를 비우지 않는다 — 올라갈 칸을 막을 뿐, 지금 공개 단계는 그대로 둔다.
+ *    여기서 보지 않는 것(다른 곳이 같은 판정을 한다 — 두 번 막지 않는다):
+ *      · 감사 표본의 결함·시한·재시도 → 브레이크 품질 축(`stage-controller.qualitySignalOf`)이 같은 해소 판정으로 그날 감속한다
+ *      · 공급 회차의 성패           → 양은 수가 재고, 당일 러너 결함은 브레이크 오류 축이 본다
+ *      · 글쓴이 겹침                → 발행 트랜잭션의 글쓴이 간격 규칙
  *
- * 🔴 **범위 — 러너 단계 전체(`RUNTIME_STAGES` d1~d50)** (2026-09-29 generic scheduler 배선).
- *    앞판은 D3·D5·D10 까지만 닫았다(`nextStage(d10)` 없음). 이제 `nextStage(d10)=d20` 이고,
- *    D20·D30·D50 도 **같은 여섯 조건 · 같은 본체**로 판정한다. 목표는 `profileOf(S).dailyTarget`.
- *    🔴 D100 은 러너 밖이다(`stage-ladder-generic.resolveCeiling` — 표현은 되지만 열 수 없다).
- *    🔴 다음 칸이 있다고 열리는 것이 아니다 — 승인 천장과 D20 이상 preflight 가 사다리에서 막는다.
- *
+ * 🔴 PASS 가 아니면(FAIL · UNKNOWN) **올리지 않을 뿐**이다. 공개 단계를 내리지 않는다(`stage-ladder`).
  * 🔴 순수 함수다 — DB · 파일 · 시각 조회 0. 모으기는 `stage-evidence-repo` 가 한다.
- * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — **코드와 개수만**.
+ * 🔴 판정 결과에 원문·닉네임·id 를 담지 않는다 — 코드와 개수만.
  */
-import { SAFEST_STAGE, profileOf, stageRank, type RuntimeStage } from './scale-profile'
+import { profileOf, type RuntimeStage } from './scale-profile'
+import { DECISION_WRITER, type ValidatedStageDecision } from './stage-decision-contract'
 import {
-  DECISION_WRITER, isLegacyDecision, nextStage, previousKstDate,
-  type TrialBasis, type ValidatedStageDecision,
-} from './stage-decision-contract'
-import {
-  AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_PERSONA_COMMENTS_PER_POST_MAX, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
+  AUTO_FIRST_COMMENT_WINDOW_MS, AUTO_LANE_DECIDED_BY, AUTO_LANE_ACTIVITY_DECIDED_BY,
 } from './persona-comment-auto-lane'
 import {
   otherPersonaTurnsExceed, PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
-import type { CommentStage } from './persona-comment-stage'
+import { THREAD_DEADLINE_MS, threadMeanSizeAt } from './persona-thread-target'
 import { auditTarget } from './auto-ready-v2'
 import type { Health } from './ops-status'
-import {
-  judgeSupplyCostEnvelope, usesSupplyCostEnvelope, type SupplyCostEvidence,
-} from './supply-cost-envelope'
-
-/** 🔴 왜 PASS 가 아닌가 — 문구가 아니라 코드다 */
-export const STAGE_EVIDENCE_CODES = [
-  // ① 결정
-  'DECISION_MISSING', 'DECISION_NOT_CONTROLLER', 'DECISION_NOT_TRANSITION', 'DECISION_STAGE_MISMATCH',
-  // ② 발행
-  'PUBLISH_NOT_AUTO_READY', 'PUBLISH_OVER', 'PERSONA_REPEAT',
-  // ③ 첫 댓글
-  'COMMENT_MISSING', 'COMMENT_LATE', 'COMMENT_OVER_CAP', 'COMMENT_SELF', 'COMMENT_CAP_UNKNOWN', 'COMMENT_PROVENANCE_BROKEN',
-  /**
-   * 🔴 자동 target 글에 사람이 단 Persona 댓글(출처 `none`)이 있다 — 증명이 사람 손을 탔다 (2026-11-13 · canon §6).
-   *    수동 댓글 자체를 지우지 않는다 — 원래대로 자동 증거(첫 댓글)에서 빠지고, 시행일부터 그날 증명을 FAIL 로 닫는다.
-   *    시행일 전 증거는 다시 읽어도 이 코드를 내지 않는다(`usesManualPersonaProofGate`).
-   */
-  'COMMENT_MANUAL_PERSONA',
-  // ④ 감사
-  'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_ZERO', 'AUDIT_COVERAGE_SHORT', 'AUDIT_OUTSIDE_TARGET',
-  'AUDIT_UNJUDGED', 'AUDIT_DEFECT', 'AUDIT_OVERDUE', 'AUDIT_RETRYABLE', 'AUDIT_MISSING_POST',
-  // ⑤ 중복
-  'DUP_QUEUE', 'DUP_PUBLISH_LOG', 'UNLOGGED_PUBLISH', 'PUBLISH_LOG_ORPHAN', 'DUP_COMMENT',
-  // ⑥ 비용 · 러너
-  'COST_BAD', 'COST_UNKNOWN', 'RUNNER_BAD', 'RUNNER_UNKNOWN',
-  /**
-   * 시행일 전 증거의 옛 하루 전체 `usageUnknown=0` 계약 코드.
-   * 2026-11-05부터는 `COST_UNKNOWN`·`COST_BAD`와 공용 bounded envelope가 권위다.
-   * 과거 FAIL을 소급 승격하지 않기 위해 목록과 판독 경로를 유지한다.
-   */
-  'SUPPLY_USAGE_UNKNOWN',
-  // ⑦ 공개 증명 행의 release 계약 도장
-  'RELEASE_CONTRACT_MISSING', 'STALE_RELEASE',
-  // 못 읽음
-  'READ_ERROR',
-] as const
-export type StageEvidenceCode = (typeof STAGE_EVIDENCE_CODES)[number]
+import { judgeSupplyCostEnvelope, usesSupplyCostEnvelope, type SupplyCostEvidence } from './supply-cost-envelope'
+import { LADDER_RULE, commentDepthFloorOf, countFloorOf, ladderRowOf } from './ladder-table'
 
 /**
- * 🔴 **수동 Persona 댓글 증명 관문 시행일** (2026-11-13 창업자 결정) — 이 KST 날짜부터의 증거만 `COMMENT_MANUAL_PERSONA` 를 낸다.
- *    그 전 날짜(D1~D20 역사 증거 포함)는 다시 판정해도 결과가 바뀌지 않는다.
+ * 🔴 **무결성 코드** — 하나라도 있으면 그날 숫자를 믿을 수 없다. 비율로 풀지 않는다.
+ *    `…_UNKNOWN` · `READ_ERROR` · `AUDIT_COVERAGE_SHORT` 는 "몰라서"다(`UNKNOWN_CODES`) — FAIL 코드가 없을 때 UNKNOWN 이 된다.
  */
-export const MANUAL_PERSONA_PROOF_GATE_FROM_KST = '2026-11-14' as const
-export function usesManualPersonaProofGate(kstDate: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(kstDate) && kstDate >= MANUAL_PERSONA_PROOF_GATE_FROM_KST
-}
+export const INTEGRITY_CODES = [
+  'READ_ERROR',
+  'DECISION_MISSING', 'DECISION_NOT_CONTROLLER', 'DECISION_STAGE_MISMATCH',
+  // 그날 전체 발행(사람 글 포함)이 단계 상한을 넘었다
+  'PUBLISH_OVER',
+  'DUP_QUEUE', 'DUP_PUBLISH_LOG', 'UNLOGGED_PUBLISH', 'PUBLISH_LOG_ORPHAN',
+  // 댓글 — 첫 댓글·추가 댓글 어느 레인이든 출처 연결이 깨졌다 / 자동 글에 사람이 단 Persona 댓글(canon §6)
+  'COMMENT_PROVENANCE_BROKEN', 'COMMENT_MANUAL_PERSONA', 'COMMENT_SELF', 'DUP_COMMENT',
+  // 누가 결정했는지 모르는 글 — 분모를 모른다 / 판정이 끝난 감사 표본이 기대보다 적다 — 품질을 보지 못한 날
+  'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_SHORT',
+  'RELEASE_CONTRACT_MISSING', 'STALE_RELEASE',
+  'COST_BAD', 'COST_UNKNOWN',
+] as const
+/** 🔴 **양의 코드** — 비율이 통과선에 못 미쳤다. `TEXTURE_UNKNOWN` 은 창이 닫힌 글이 너무 적어 결을 잴 수 없다는 뜻이다 */
+export const QUANTITY_CODES = [
+  'PUBLISH_SHORT', 'FIRST_COMMENT_SHORT', 'COMMENT_DEPTH_SHORT', 'THREE_VOICES_SHORT', 'COLLECT_LATENCY_SHORT',
+  'TEXTURE_UNKNOWN',
+] as const
+export const STAGE_EVIDENCE_CODES = [...INTEGRITY_CODES, ...QUANTITY_CODES] as const
+export type StageEvidenceCode = (typeof STAGE_EVIDENCE_CODES)[number]
 
-/** 🔴 PASS 가 아닌 것 중 "몰라서" 인 코드 — FAIL 코드가 하나도 없을 때만 UNKNOWN 이 된다 */
 const UNKNOWN_CODES: readonly StageEvidenceCode[] = [
-  'COST_UNKNOWN', 'RUNNER_UNKNOWN', 'READ_ERROR', 'COMMENT_CAP_UNKNOWN', 'AUDIT_TARGET_UNKNOWN',
+  'READ_ERROR', 'AUDIT_TARGET_UNKNOWN', 'AUDIT_COVERAGE_SHORT', 'COST_UNKNOWN', 'TEXTURE_UNKNOWN',
 ]
 
 export type EvidenceVerdictKind = 'PASS' | 'FAIL' | 'UNKNOWN'
@@ -133,29 +69,18 @@ export type EvidenceVerdictFor<S extends string> = {
   readonly kstDate: string
   readonly stage: S
   readonly verdict: EvidenceVerdictKind
-  /** 🔴 코드만 — 중복 없이 정본 순서 */
+  /** 코드만 — 중복 없이 정본 순서 */
   readonly codes: readonly StageEvidenceCode[]
-  /** 🔴 개수만 — 사람이 어느 조건이 모자랐는지 본다 */
+  /** 개수와 비율만 — 사람이 어느 칸이 모자랐는지 본다 */
   readonly counts: Readonly<Record<string, number>>
   /**
-   * 🔴 **대화 감사(추가 댓글) — 단계 판정(`verdict`)에 들어가지 않는다** (2026-10-13).
-   *    사실을 못 읽었으면 없다. 추가 댓글 결함은 여기서만 FAIL 이다 — 첫 댓글 성공을 지우지 않는다.
+   * 대화 감사(추가 댓글의 구조) — 단계 판정(`verdict`)에 들어가지 않는다. 사실을 못 읽었으면 없다.
+   * 추가 댓글의 **출처 깨짐**만은 판정 숫자(글당 댓글 · 타인 3명)의 근거라 위 `COMMENT_PROVENANCE_BROKEN` 으로도 막는다.
    */
   readonly conversation?: ConversationAudit
 }
 export type StageEvidenceVerdict = EvidenceVerdictFor<RuntimeStage>
 
-/**
- * 🔴 **글당 Persona 댓글 상한 — 댓글 단계의 정본 상수를 그대로 쓴다** (새 숫자 0).
- *    · `bootstrap-auto`             `AUTO_PERSONA_COMMENTS_PER_POST_MAX`(1) — 지금 무인 레인의 "글당 1건"
- *    · `bootstrap-review`·`organic` `PERSONA_COMMENTS_PER_POST_MAX`(10) — 장기 구조 상한
- *    · `shadow`                     0 — 공개 write 가 없는 단계다
- */
-export function personaCommentCapFor(stage: CommentStage): number {
-  if (stage === 'bootstrap-auto') return AUTO_PERSONA_COMMENTS_PER_POST_MAX
-  if (stage === 'shadow') return 0
-  return PERSONA_COMMENTS_PER_POST_MAX
-}
 
 /**
  * 🔴 **자동 첫 댓글 출처** (2026-10-11 Batch A3 · 스키마 변경 0).
@@ -401,18 +326,20 @@ export function judgeConversationAudit(posts: readonly EvidencePost[]): Conversa
   }
 }
 
-/** 🔴 누가 발행을 결정했나 — 사후 감사 대상인지를 가른다 */
+/** 누가 발행을 결정했나 — 자동 target 인지를 가른다 */
 export type PostDecider = 'auto' | 'human' | 'unknown'
 
 /** 그날 발행된 글 하나 — 🔴 제목·본문 없음 */
 export type EvidencePost = {
-  /** 🔴 판정 안에서 감사 표본 소속을 대조하는 데만 쓴다 — 판정 결과에는 싣지 않는다 */
+  /** 판정 안에서 감사 표본 소속을 대조하는 데만 쓴다 — 판정 결과에는 싣지 않는다 */
   postId: string
   /** 이 글을 만든 PUBLISHED Queue 행 — 없으면 null */
   queueId: string | null
-  /** 발행 시각(`publishAt ?? createdAt`) — 첫 댓글 시한의 기준 */
+  /** 공개 시각(발행 기록 시각) — 첫 댓글 창·대화 마감·수집→공개의 기준 */
   publishedAtMs: number
-  /** 🔴 무인 러너 표식이 있는 발행 기록인가 */
+  /** 원천을 수집한 시각(큐의 원문 증거 `capturedAt`) — 못 읽었으면 없다 */
+  capturedAtMs?: number | null
+  /** 무인 러너 표식이 있는 발행 기록인가 */
   unattended: boolean
   /** 이 글을 가리키는 Queue 행 수 — 1 이어야 한다 */
   queueRows: number
@@ -420,76 +347,56 @@ export type EvidencePost = {
   publishLogs: number
   /** 글을 쓴 Persona — 없으면 null */
   authorPersonaId: string | null
-  /** 🔴 Queue 결정자 — 자동 READY(`auto`)만 사후 감사 대상이다 */
+  /** Queue 결정자 — 자동 READY(`auto`)이고 무인 발행인 글만 자동 target 이다 */
   decider: PostDecider
-  /**
-   * 이 글의 살아 있는 Persona 댓글 전부 — 🔴 `provenance` 는 `personaCommentProvenanceOf` 결과다.
-   *    첫 댓글 보장은 `auto` 만 센다 · 추가 댓글(`followup*`)은 단계 증거 밖이고 대화 감사가 본다.
-   */
+  /** 이 글의 살아 있는 Persona 댓글 전부 — `provenance` 는 `personaCommentProvenanceOf` 결과다 */
   personaComments: readonly {
     personaId: string | null
     createdAtMs: number
     topLevel: boolean
     provenance: PersonaCommentProvenance
   }[]
-  /**
-   * 대화 감사용 전체 시간순 장부. 회원·운영자·삭제된 댓글도 포함한다.
-   * 추가 댓글이 있는데 이 사실을 읽지 못하면 fail-closed 다.
-   */
+  /** 대화 감사용 전체 시간순 장부. 회원·운영자·삭제된 댓글도 포함한다 */
   conversationComments?: readonly EvidenceConversationComment[]
-  /**
-   * 🔴 **발행 트랜잭션이 남긴 release 도장 상태**(`releaseStampStatusOf`) — 조항 ⑦.
-   *    Queue 가 없으면 `MISSING` 이다(도장을 확인할 곳이 없다).
-   */
+  /** 발행 트랜잭션이 남긴 release 도장 상태(`releaseStampStatusOf`). Queue 가 없으면 `MISSING` */
   release: 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE'
 }
 
-/**
- * 🔴 단계 칸만 일반화한 사실 묶음 — `StageEvidenceFacts` 는 러너 단계(d1~d50) 판이다.
- *    결정 칸은 `release` 를 문자열로 받는다 — 판정 본체는 결정의 단계가 판정 단계와 같은지만 본다.
- */
+/** 단계 칸만 일반화한 사실 묶음 — 결정 칸은 `release` 를 문자열로 받는다 */
 export type EvidenceFactsFor<S extends string> = Omit<StageEvidenceFacts, 'stage' | 'decision'> & {
   stage: S
-  decision: { kstDate: string; state: string; release: string; decidedBy: string } | null
+  decision: { kstDate: string; release: string; decidedBy: string } | null
 }
 
 export type StageEvidenceFacts = {
   kstDate: string
   stage: RuntimeStage
   /** D 의 저장된 결정 — 없거나 검증에 떨어졌으면 null */
-  decision: Pick<ValidatedStageDecision, 'kstDate' | 'state' | 'release' | 'decidedBy'> | null
+  decision: Pick<ValidatedStageDecision, 'kstDate' | 'release' | 'decidedBy'> | null
+  /**
+   * 사실을 읽은 시각. 첫 댓글 창·대화 마감이 이 시각까지 닫힌 글만 결의 분모에 든다 —
+   * 방금 나간 글에 "아직 댓글이 없다"를 미달로 세지 않는다.
+   */
+  readAtMs: number
   posts: readonly EvidencePost[]
   /** Post 가 없는 발행 기록 · targetId 가 비었거나 Queue 가 없는 기록 */
   orphanPublishLogs: number
   /** Queue 로 발행된 그날 글인데 발행 기록이 없는 것 */
   unloggedPublishes: number
-  /** 🔴 그 날 댓글 단계의 글당 Persona 댓글 상한(`personaCommentCapFor`) — 모르면 null */
-  commentCapPerPost: number | null
   audits: {
-    /** 🔴 그날 고른 감사 + 그날 글의 감사 — **행마다** 따로 본다. postId·queueId 로 표본 소속을 대조한다 */
-    rows: readonly {
-      postId: string; queueId: string
-      judged: boolean; defectYes: boolean; retryable: boolean; overdue: boolean
-    }[]
+    /** 그날 고른 감사 + 그날 글의 감사 — postId·queueId 로 표본 소속을 대조한다 */
+    rows: readonly { postId: string; queueId: string; judged: boolean }[]
   }
 }
 
 export type EvidenceSideSignals = {
-  /**
-   * 그날 장부 판정(정본 `judgeCost`). 시행일 전 공급은 whole-day health를 쓰고,
-   * 시행일부터 공급은 `supplyCostEvidence`만 쓴다. lane을 명시해 이름 문자열로 구분하지 않는다.
-   */
-  cost: readonly { lane: 'supply' | 'comment' | 'audit'; name: string; health: Health }[]
-  /** 발행·공급 러너 최근 회차(정본 `errorSignalOf`) */
-  errors: Health
-  /** 시행일 전 옛 판정과 시행일부터의 자연 proof 비용 envelope. 운영 호출에서 필수다. */
+  /** 그날 댓글·감사 장부 판정(정본 `judgeCost`). 공급은 아래 envelope 하나로 본다 */
+  cost: readonly { lane: 'comment' | 'audit'; name: string; health: Health }[]
+  /** 그날 공급 장부의 중대 무결성과 자연 회차 비용 envelope. 운영 호출에서 필수다 */
   supplyCostEvidence: SupplyCostEvidence | null
 }
 
-/**
- * 🔴 **D 의 운영 PASS 판정.** 못 읽었으면 `facts=null` → UNKNOWN.
- *    FAIL 코드가 하나라도 있으면 FAIL · 없고 모르는 것이 있으면 UNKNOWN · 둘 다 없으면 PASS.
- */
+/** D 의 하루 판정. 못 읽었으면 `facts=null` → UNKNOWN */
 export function judgeStageEvidence(
   kstDate: string, stage: RuntimeStage,
   facts: StageEvidenceFacts | null, side: EvidenceSideSignals | null,
@@ -497,19 +404,17 @@ export function judgeStageEvidence(
   return judgeEvidenceForTarget(kstDate, stage, profileOf(stage).dailyTarget, facts, side)
 }
 
-/**
- * 🔴 **지정 증명일 상태** — `consumerEnvOf` 가 목표 슬롯을 먼저 채우도록 연 날이다.
- *    평상일 HOLD·PREPARE도 자연스럽게 exact N을 채우고 나머지 증거를 전부 만족하면 같은 운영능력의 증거로 인정한다.
- *    N 미만인 평상일은 정상 운영이며, PASS가 아닐 뿐 재시험 빚을 만들지 않는다.
- */
-export const PROOF_STATES: readonly string[] = ['TRIAL', 'REPROVE']
-export const EVIDENCE_STATES: readonly string[] = [...PROOF_STATES, 'HOLD', 'PREPARE']
+const isAutoTarget = (p: EvidencePost): boolean => p.decider === 'auto' && p.unattended
+const round2 = (v: number): number => Math.round(v * 100) / 100
+const medianOf = (xs: readonly number[]): number => {
+  const s = [...xs].sort((a, b) => a - b)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2
+}
 
 /**
- * 🔴 **단계 이름과 하루 목표를 받는 판정 본체** (2026-09-29 generic scheduler 골격).
- *    `judgeStageEvidence` 는 러너 프로필(`profileOf`) 목표로 이것을 부른다 — d1~d10 목표는 예전 `PROFILES` 그대로다.
- *    D100(`stage-ladder-generic`)도 같은 여섯 조건을 **같은 본체**로 판정한다. 판정 규칙을 두 벌로 적지 않는다.
- *    🔴 목표는 호출부가 정본 프로필에서 꺼내 넘긴다 — 여기서 숫자를 만들지 않는다.
+ * 단계 이름과 하루 목표를 받는 판정 본체. 목표 편수는 호출부가 정본 프로필에서 꺼내 넘기고,
+ * 비율과 창은 `ladder-table` 에서 읽는다 — 여기서 숫자를 만들지 않는다.
  */
 export function judgeEvidenceForTarget<S extends string>(
   kstDate: string, stage: S, target: number,
@@ -517,158 +422,132 @@ export function judgeEvidenceForTarget<S extends string>(
 ): EvidenceVerdictFor<S> {
   const codes = new Set<StageEvidenceCode>()
   const counts: Record<string, number> = {}
-  if (facts === null) codes.add('READ_ERROR')
+  const row = ladderRowOf(stage)
+  if (facts === null || row === null) codes.add('READ_ERROR')
   else {
-    // 🔴 다른 날·다른 단계의 사실로 판정하지 않는다
+    // 다른 날·다른 단계의 사실로 판정하지 않는다
     if (facts.kstDate !== kstDate || facts.stage !== stage) codes.add('READ_ERROR')
-    // ① 결정
     const d = facts.decision
-    if (d === null) codes.add('DECISION_MISSING')
+    if (d === null || d.kstDate !== kstDate) codes.add('DECISION_MISSING')
     else {
-      if (d.kstDate !== kstDate) codes.add('DECISION_MISSING')
       if (d.decidedBy !== DECISION_WRITER) codes.add('DECISION_NOT_CONTROLLER')
-      if (!EVIDENCE_STATES.includes(d.state)) codes.add('DECISION_NOT_TRANSITION')
       if (d.release !== stage) codes.add('DECISION_STAGE_MISMATCH')
     }
-    // ② 발행 — 🔴 자동 READY 로 만들어져 무인 러너가 낸 글만 자동 target 이다. 사람 승인 글은 0건으로 센다
-    const autoTargets = facts.posts.filter((p) => p.decider === 'auto' && p.unattended)
+
+    // ── 수
+    const autoTargets = facts.posts.filter(isAutoTarget)
+    const n = autoTargets.length
     counts.target = target
+    counts.countFloor = countFloorOf(target)
     counts.published = facts.posts.length
-    counts.autoTargets = autoTargets.length
+    counts.autoTargets = n
     counts.humanApproved = facts.posts.filter((p) => p.decider === 'human').length
-    if (autoTargets.length < target) codes.add('PUBLISH_NOT_AUTO_READY')
+    if (n < counts.countFloor) codes.add('PUBLISH_SHORT')
     if (facts.posts.length > target) codes.add('PUBLISH_OVER')
-    /**
-     * 🔴 **서로 다른 Persona 로 채운다** (canon §6-3 · 2026-10-01 C9). 자동 target 글의 글쓴이가 겹치면 FAIL.
-     *    소재 다양성의 회차 조건이다 — 소재 라벨 없이 **배정 근거**(글쓴이)로 본다. 글쓴이를 모르는 글도 겹침으로 센다.
-     */
-    const authors = autoTargets.map((p) => p.authorPersonaId ?? '(없음)')
-    counts.distinctAuthors = new Set(authors.filter((a) => a !== '(없음)')).size
-    if (authors.includes('(없음)') || new Set(authors).size < authors.length) codes.add('PERSONA_REPEAT')
-    // ③ 댓글 · ⑤ 중복
-    const cap = facts.commentCapPerPost
-    if (cap === null) codes.add('COMMENT_CAP_UNKNOWN')
-    else counts.commentCap = cap
-    let firstOk = 0
+
+    // ── 무결성: 1:1 · 댓글 출처 · 사람 손
     let brokenProv = 0
-    let manualPersona = 0
     let manualOnTargets = 0
-    let followupCount = 0
     for (const p of facts.posts) {
       if (p.queueRows !== 1) codes.add('DUP_QUEUE')
       if (p.publishLogs !== 1) codes.add('DUP_PUBLISH_LOG')
-      /**
-       * 🔴 **추가 댓글(`followup*`)은 단계 증거의 분자·상한·중복 밖이다** (2026-10-13 · PR #704 E1).
-       *    첫 댓글 상한을 1→10으로 올리지 않는다 — 첫 댓글 레인 · 수동 · 깨진 출처만 지금 상한으로 센다.
-       *    추가 댓글의 결함(출처 · 중복 · 자기 글 · 총량)은 대화 감사(`judgeConversationAudit`)가 따로 본다.
-       */
-      const stageComments = p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))
-      followupCount += p.personaComments.length - stageComments.length
-      // (b) 추가 댓글 계약 — 같은 Persona 두 번 0 · 자기 글 0 · 상한 이내
+      brokenProv += p.personaComments.filter((c) => c.provenance === 'broken' || c.provenance === 'followup-broken').length
+      // 첫 댓글 레인(자동 · 수동 · 깨진 출처)에서는 같은 Persona 두 번 · 글쓴이 자기 댓글이 있을 수 없다
+      const firstLane = p.personaComments.filter((c) => !isFollowupProvenance(c.provenance))
       const byPersona = new Map<string, number>()
-      for (const c of stageComments) {
-        const k = c.personaId ?? '(없음)'
-        byPersona.set(k, (byPersona.get(k) ?? 0) + 1)
-      }
-      if ([...byPersona.values()].some((n) => n > 1)) codes.add('DUP_COMMENT')
-      const own = stageComments.filter((c) => p.authorPersonaId !== null && c.personaId === p.authorPersonaId)
-      if (own.length > 0) codes.add('COMMENT_SELF')
-      if (cap !== null && stageComments.length > cap) codes.add('COMMENT_OVER_CAP')
-      // 🔴 출처가 깨진 댓글 — 어느 글이든 FAIL(자동 표식을 흉내 낸 행 · 반쯤 남은 행)
-      let manualHere = 0
-      for (const c of stageComments) {
-        if (c.provenance === 'broken') brokenProv += 1
-        else if (c.provenance === 'none') { manualPersona += 1; manualHere += 1 }
-      }
-      // (a) 첫 댓글 보장 — 🔴 자동 target 글만 · 60분 안 최상위 · 다른 Persona · **자동 출처 연결** **1건 이상**
-      if (!(p.decider === 'auto' && p.unattended)) continue
-      manualOnTargets += manualHere
-      const eligible = stageComments.filter((c) =>
-        c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId && c.provenance === 'auto')
-      const inWindow = eligible.filter((c) =>
-        c.createdAtMs >= p.publishedAtMs && c.createdAtMs - p.publishedAtMs <= AUTO_FIRST_COMMENT_WINDOW_MS)
-      if (inWindow.length >= 1) firstOk += 1
-      else if (eligible.length > 0) codes.add('COMMENT_LATE')
-      else codes.add('COMMENT_MISSING')
+      for (const c of firstLane) byPersona.set(c.personaId ?? '(없음)', (byPersona.get(c.personaId ?? '(없음)') ?? 0) + 1)
+      if ([...byPersona.values()].some((k) => k > 1)) codes.add('DUP_COMMENT')
+      if (p.authorPersonaId !== null && firstLane.some((c) => c.personaId === p.authorPersonaId)) codes.add('COMMENT_SELF')
+      if (isAutoTarget(p)) manualOnTargets += firstLane.filter((c) => c.provenance === 'none').length
     }
-    counts.firstCommentOk = firstOk
     counts.commentProvenanceBroken = brokenProv
-    counts.manualPersonaComments = manualPersona
-    counts.followupComments = followupCount
+    counts.manualPersonaOnTargets = manualOnTargets
     if (brokenProv > 0) codes.add('COMMENT_PROVENANCE_BROKEN')
-    if (usesManualPersonaProofGate(kstDate)) {
-      counts.manualPersonaOnTargets = manualOnTargets
-      if (manualOnTargets > 0) codes.add('COMMENT_MANUAL_PERSONA')
-    }
+    if (manualOnTargets > 0) codes.add('COMMENT_MANUAL_PERSONA')
     if (facts.orphanPublishLogs > 0) codes.add('PUBLISH_LOG_ORPHAN')
     if (facts.unloggedPublishes > 0) codes.add('UNLOGGED_PUBLISH')
-    // ④ 감사 — 🔴 정본 표본 계약: expected = auditTarget(자동 target N) · 표본은 그 집합 안 · 표본 전부 판정·결함 0
-    const unknownDecider = facts.posts.filter((p) => p.decider === 'unknown').length
-    if (unknownDecider > 0) codes.add('AUDIT_TARGET_UNKNOWN')
+    if (facts.posts.some((p) => p.decider === 'unknown')) codes.add('AUDIT_TARGET_UNKNOWN')
+
+    // ── 무결성: 감사 표본 — 판정이 끝난 표본(글 기준 · 그날 자동 target 안)이 기대만큼 있는가
     const targetKey = new Set(autoTargets.map((p) => `${p.postId}\u0000${p.queueId ?? ''}`))
-    const targetPost = new Set(autoTargets.map((p) => p.postId))
-    const a = facts.audits
-    // 🔴 표본 = 그날 자동 target 집합에 postId·queueId 가 **둘 다** 맞는 행 — 글 기준으로 중복 없이 센다
-    const inSet = a.rows.filter((r) => targetKey.has(`${r.postId}\u0000${r.queueId}`))
-    const outside = a.rows.filter((r) => !targetKey.has(`${r.postId}\u0000${r.queueId}`))
-    const sampled = new Set(inSet.map((r) => r.postId).filter((id) => targetPost.has(id)))
-    const expected = auditTarget(autoTargets.length)
-    counts.auditExpected = expected
-    counts.auditSampled = sampled.size
-    counts.auditRows = a.rows.length
-    if (outside.length > 0) codes.add('AUDIT_OUTSIDE_TARGET')
-    if (autoTargets.length > 0 && sampled.size === 0) codes.add('AUDIT_COVERAGE_ZERO')
-    else if (sampled.size < expected) codes.add('AUDIT_COVERAGE_SHORT')
-    if (inSet.some((r) => !r.judged)) codes.add('AUDIT_UNJUDGED')
-    // 증거일은 그날 자동 target의 감사만 판정한다. 다른 날의 현재 전역 결함·재시도·유실은
-    // controller의 실시간 quality signal이 즉시 막는다. 둘을 섞으면 오늘 결함이 어제 PASS를 소급 오염시킨다.
-    if (inSet.some((r) => r.defectYes)) codes.add('AUDIT_DEFECT')
-    if (inSet.some((r) => r.overdue)) codes.add('AUDIT_OVERDUE')
-    if (inSet.some((r) => r.retryable)) codes.add('AUDIT_RETRYABLE')
-    // ⑦ 🔴 공개 증명 행 — 자동 target 전부가 지금 계약 · eligible 도장을 가져야 한다
-    const stamped = autoTargets.filter((p) => p.release === 'STAMPED_ELIGIBLE').length
-    counts.releaseStamped = stamped
+    const judgedSample = new Set(facts.audits.rows
+      .filter((r) => r.judged && targetKey.has(`${r.postId}\u0000${r.queueId}`)).map((r) => r.postId))
+    counts.auditExpected = auditTarget(n)
+    counts.auditSampled = judgedSample.size
+    if (judgedSample.size < counts.auditExpected) codes.add('AUDIT_COVERAGE_SHORT')
+
+    // ── 무결성: release 도장
+    counts.releaseStamped = autoTargets.filter((p) => p.release === 'STAMPED_ELIGIBLE').length
     if (autoTargets.some((p) => p.release === 'MISSING')) codes.add('RELEASE_CONTRACT_MISSING')
     if (autoTargets.some((p) => p.release === 'STALE')) codes.add('STALE_RELEASE')
-  }
-  // ⑥ 비용 · 러너 — 못 받았으면 모른다
-  if (side === null) { codes.add('COST_UNKNOWN'); codes.add('RUNNER_UNKNOWN') } else {
-    // 새 공급 envelope 시행일부터 whole-day 공급 health를 다시 읽으면 21:15·22:15 다음날 준비가
-    // 이미 끝난 같은 날 proof를 소급 파괴한다. 댓글·감사 health는 계속 그날 전체 계약을 쓴다.
-    const envelopeEnabled = usesSupplyCostEnvelope(kstDate)
-    const costSignals = envelopeEnabled
-      ? side.cost.filter((c) => c.lane !== 'supply')
-      : side.cost
-    const requiredCostLanes: readonly (typeof side.cost[number]['lane'])[] = envelopeEnabled
-      ? ['comment', 'audit']
-      : ['supply', 'comment', 'audit']
-    // 시행일 이후 supply는 envelope로 분리하지만 댓글·감사 lane은 둘 다 있어야 한다.
-    // 하나만 넘긴 호출이 “나머지도 ok”로 오판되지 않게 누락을 UNKNOWN으로 닫는다.
-    const missingCostLane = requiredCostLanes.some((lane) => !costSignals.some((c) => c.lane === lane))
-    if (missingCostLane || costSignals.some((c) => c.health === 'unknown')) codes.add('COST_UNKNOWN')
-    if (costSignals.some((c) => c.health === 'bad')) codes.add('COST_BAD')
-    if (side.errors === 'bad') codes.add('RUNNER_BAD')
-    if (side.errors === 'unknown') codes.add('RUNNER_UNKNOWN')
-    const supplyCost = side.supplyCostEvidence
-    if (supplyCost === null) codes.add('COST_UNKNOWN')
-    else if (!usesSupplyCostEnvelope(kstDate)) {
-      // 시행일 전 증거는 옛 하루 전체·미상 0 계약으로 다시 읽어 소급 승격하지 않는다.
-      counts.supplyUsageUnknown = supplyCost.legacyUsageUnknownRequests
-      if (supplyCost.legacyUsageUnknownRequests > 0) codes.add('SUPPLY_USAGE_UNKNOWN')
-    } else {
-      if (supplyCost.wholeDayCriticalHealth === 'unknown') codes.add('COST_UNKNOWN')
-      if (supplyCost.wholeDayCriticalHealth === 'bad') codes.add('COST_BAD')
-      const envelope = judgeSupplyCostEnvelope(supplyCost.envelope)
-      counts.supplySettledRequests = supplyCost.envelope.settledRequests
-      counts.supplyUsageUnknown = supplyCost.envelope.usageUnknownRequests
-      counts.supplyCostOverrunRequests = supplyCost.envelope.overrunRequests
-      counts.supplyCostIneligibleRequests = supplyCost.envelope.ineligibleRequests
-      if (envelope.settledRatio !== null) counts.supplySettledRatio = envelope.settledRatio
-      if (supplyCost.envelope.riskUsd !== null) counts.supplyCostRiskUsd = supplyCost.envelope.riskUsd
-      if (supplyCost.envelope.budgetUsd !== null) counts.supplyCostBudgetUsd = supplyCost.envelope.budgetUsd
-      if (envelope.kind === 'unknown') codes.add('COST_UNKNOWN')
-      if (envelope.kind === 'bad') codes.add('COST_BAD')
+
+    // ── 결 — 창이 닫힌 글만 분모에 든다. 닫힌 글이 너무 적으면 모름이다
+    const enough = (closed: number): boolean => closed > 0 && closed >= n * LADDER_RULE.closedShareMin
+    // 비율 × 개수의 부동소수 오차로 통과선 위의 값이 미달이 되지 않게
+    const below = (value: number, line: number): boolean => value < line - 1e-9
+    const counted = (p: EvidencePost) => p.personaComments.filter((c) => c.provenance === 'auto' || c.provenance === 'followup')
+
+    // ① 첫 댓글 — 최상위 · 글쓴이 아닌 Persona · 자동 출처 · 공개 뒤 창 안
+    const firstClosed = autoTargets.filter((p) => p.publishedAtMs + LADDER_RULE.firstCommentWindowMs <= facts.readAtMs)
+    const firstOk = firstClosed.filter((p) => p.personaComments.some((c) =>
+      c.provenance === 'auto' && c.topLevel && c.personaId !== null && c.personaId !== p.authorPersonaId
+      && c.createdAtMs >= p.publishedAtMs && c.createdAtMs - p.publishedAtMs <= LADDER_RULE.firstCommentWindowMs)).length
+    counts.firstCommentOk = firstOk
+    counts.firstCommentClosed = firstClosed.length
+    if (n > 0 && !enough(firstClosed.length)) codes.add('TEXTURE_UNKNOWN')
+    else if (n > 0 && below(firstOk, firstClosed.length * LADDER_RULE.firstCommentRatio)) codes.add('FIRST_COMMENT_SHORT')
+
+    // ② 글당 댓글 · ③ 타인 3명 — 대화 마감이 지난 글
+    const talkClosed = autoTargets.filter((p) => p.publishedAtMs + THREAD_DEADLINE_MS <= facts.readAtMs)
+    counts.conversationClosed = talkClosed.length
+    if (n > 0 && !enough(talkClosed.length)) codes.add('TEXTURE_UNKNOWN')
+    else if (n > 0) {
+      const total = talkClosed.reduce((sum, p) => sum + counted(p).length, 0)
+      const targetMean = talkClosed.reduce((sum, p) => sum + threadMeanSizeAt(p.publishedAtMs), 0) / talkClosed.length
+      const voices = talkClosed.filter((p) => new Set(counted(p)
+        .map((c) => c.personaId).filter((id) => id !== null && id !== p.authorPersonaId)).size >= 3).length
+      counts.personaComments = total
+      counts.commentDepthAvg = round2(total / talkClosed.length)
+      counts.commentDepthFloor = round2(commentDepthFloorOf(targetMean))
+      counts.threeVoicesPosts = voices
+      if (below(total / talkClosed.length, commentDepthFloorOf(targetMean))) codes.add('COMMENT_DEPTH_SHORT')
+      if (below(voices, talkClosed.length * row.threeVoicesRatio)) codes.add('THREE_VOICES_SHORT')
     }
+
+    // ④ 수집→공개 — `gate` 가 꺼져 있는 동안은 재고 찍기만 한다
+    const lags = autoTargets.flatMap((p) => (
+      p.capturedAtMs === null || p.capturedAtMs === undefined || p.capturedAtMs > p.publishedAtMs
+        ? [] : [(p.publishedAtMs - p.capturedAtMs) / 3_600_000]))
+    const lagKnown = lags.length > 0 && lags.length >= n * LADDER_RULE.collectKnownShareMin
+    counts.collectKnown = lags.length
+    if (lagKnown) counts.collectToPublishMedianH = round2(medianOf(lags))
+    if (LADDER_RULE.collectToPublish.gate && n > 0) {
+      if (!lagKnown) codes.add('TEXTURE_UNKNOWN')
+      else if (medianOf(lags) > LADDER_RULE.collectToPublish.medianMaxH) codes.add('COLLECT_LATENCY_SHORT')
+    }
+  }
+
+  // ── 무결성: 비용 장부 — 못 받았으면 모른다
+  if (side === null || side.supplyCostEvidence === null) codes.add('COST_UNKNOWN')
+  else {
+    // 댓글·감사 lane 은 둘 다 있어야 한다 — 하나만 넘긴 호출이 "나머지도 ok" 로 읽히지 않게
+    const lanes: readonly ('comment' | 'audit')[] = ['comment', 'audit']
+    if (lanes.some((lane) => !side.cost.some((c) => c.lane === lane)) || side.cost.some((c) => c.health === 'unknown')) codes.add('COST_UNKNOWN')
+    if (side.cost.some((c) => c.health === 'bad')) codes.add('COST_BAD')
+    const supply = side.supplyCostEvidence
+    // 공급 비용 계약(envelope) 이전 날짜는 판정할 근거가 없다 — 모름
+    if (!usesSupplyCostEnvelope(kstDate) || supply.wholeDayCriticalHealth === 'unknown') codes.add('COST_UNKNOWN')
+    if (supply.wholeDayCriticalHealth === 'bad') codes.add('COST_BAD')
+    const envelope = judgeSupplyCostEnvelope(supply.envelope)
+    counts.supplySettledRequests = supply.envelope.settledRequests
+    counts.supplyUsageUnknown = supply.envelope.usageUnknownRequests
+    counts.supplyCostOverrunRequests = supply.envelope.overrunRequests
+    counts.supplyCostIneligibleRequests = supply.envelope.ineligibleRequests
+    if (envelope.settledRatio !== null) counts.supplySettledRatio = envelope.settledRatio
+    if (supply.envelope.riskUsd !== null) counts.supplyCostRiskUsd = supply.envelope.riskUsd
+    if (supply.envelope.budgetUsd !== null) counts.supplyCostBudgetUsd = supply.envelope.budgetUsd
+    if (envelope.kind === 'unknown') codes.add('COST_UNKNOWN')
+    if (envelope.kind === 'bad') codes.add('COST_BAD')
   }
   const ordered = STAGE_EVIDENCE_CODES.filter((c) => codes.has(c))
   const failing = ordered.filter((c) => !UNKNOWN_CODES.includes(c))
@@ -677,133 +556,33 @@ export function judgeEvidenceForTarget<S extends string>(
   return { kstDate, stage, verdict, codes: ordered, counts, ...(conversation === undefined ? {} : { conversation }) }
 }
 
-/** 🔴 결정 reasons 에 남기는 한 줄 — 코드와 개수만 */
+/** 결정 reasons 에 남기는 한 줄 — 코드와 개수만 */
 export function evidenceReasonOf(v: StageEvidenceVerdict): string {
   const n = Object.entries(v.counts).map(([k, x]) => `${k}=${x}`).join(',')
-  // 🔴 대화 감사는 FAIL 일 때만 붙인다 — 단계 판정과 다른 칸이라는 것이 줄에서도 보이게(`CONVERSATION`)
+  // 대화 감사는 FAIL 일 때만 붙인다 — 단계 판정과 다른 칸이라는 것이 줄에서도 보이게(`CONVERSATION`)
   const conv = v.conversation?.verdict === 'FAIL' ? ` CONVERSATION FAIL [${v.conversation.codes.join(',')}]` : ''
   return `EVIDENCE ${v.kstDate} ${v.stage} ${v.verdict}${v.codes.length > 0 ? ` [${v.codes.join(',')}]` : ''}${n === '' ? '' : ` (${n})`}${conv}`
 }
 
 /**
- * 🔴 **사람이 읽는 증거 한 줄** — 코드 이름이 실제와 다른 자리만. 판정에는 쓰지 않는다.
- *    `PUBLISH_NOT_AUTO_READY` 는 "자동 READY 가 아닌 글이 나갔다"가 아니라 **자동 공개 편수가 목표보다 적다**는 뜻이다.
+ * 사람이 읽는 하루 한 줄 — 수와 결 네 칸의 실제 값과 통과선. 판정에는 쓰지 않는다.
+ * 예: `11-19 공개 28/30편(93%) · 첫 댓글 27/28 · 글당 댓글 5.6(통과선 5.4) · 타인 3명 64%(통과선 60%) · 수집→공개 2.4시간(재기만) → PASS`
  */
-export function evidencePlainLineOf(v: StageEvidenceVerdict): string | null {
-  if (!v.codes.includes('PUBLISH_NOT_AUTO_READY')) return null
-  const target = v.counts.target
-  const auto = v.counts.autoTargets
-  if (target === undefined || auto === undefined) return null
-  const human = v.counts.humanApproved ?? 0
-  return `${v.kstDate} 자동 공개 ${auto}편 / 목표 ${target}편 — ${target - auto}편 부족`
-    + (human > 0 ? ` (사람 승인 글 ${human}편은 자동 물량으로 세지 않는다)` : '')
+export function evidencePlainLineOf(v: EvidenceVerdictFor<string>): string | null {
+  const c = v.counts
+  if (c.target === undefined || c.autoTargets === undefined) return null
+  const pct = (a: number, b: number): string => (b > 0 ? `${Math.round((a / b) * 100)}%` : '모름')
+  const row = ladderRowOf(v.stage)
+  const closed = c.conversationClosed ?? 0
+  const parts = [
+    `공개 ${c.autoTargets}/${c.target}편(${pct(c.autoTargets, c.target)})`,
+    `첫 댓글 ${c.firstCommentOk ?? 0}/${c.firstCommentClosed ?? 0}`,
+    c.commentDepthAvg === undefined ? '글당 댓글 모름' : `글당 댓글 ${c.commentDepthAvg}(통과선 ${c.commentDepthFloor})`,
+    c.threeVoicesPosts === undefined ? '타인 3명 모름'
+      : `타인 3명 ${pct(c.threeVoicesPosts, closed)}${row === null ? '' : `(통과선 ${Math.round(row.threeVoicesRatio * 100)}%)`}`,
+    c.collectToPublishMedianH === undefined ? '수집→공개 모름'
+      : `수집→공개 ${c.collectToPublishMedianH}시간(${LADDER_RULE.collectToPublish.gate ? `통과선 ${LADDER_RULE.collectToPublish.medianMaxH}시간` : '재기만'})`,
+  ]
+  const integrity = v.codes.filter((x) => (INTEGRITY_CODES as readonly string[]).includes(x))
+  return `${v.kstDate.slice(5)} ${parts.join(' · ')} → ${v.verdict}${integrity.length > 0 ? ` (무결성 ${integrity.join(',')})` : ''}`
 }
-
-export type TrialPlan = { base: RuntimeStage; target: RuntimeStage; basis: TrialBasis }
-
-/**
- * 🔴 **오늘 무엇을 시험하는가 — 전날 결정 + 전날 운영 증거로만 정한다.**
- *
- *    🔴 **계약 경계** (2026-09-30) — 전날 결정이 옛 판(`isLegacyDecision`)이면 그 위의 PASS · RETEST · 이어진 계획을
- *       쓰지 않는다. 바닥(d1)에서 다시 증명한다(FLOOR). 지속 단계도 같은 규칙이다(`sustainedReleaseOf`).
- *
- *    · 전날 단계 S 가 운영 PASS            → S 의 다음 칸을 시험한다 (`PASS` · 기반 S)
- *      (지정 증명일 또는 평상일의 자연 exact-N 모두 같은 본체로 판정한다)
- *    · 전날이 TRIAL 인데 PASS 가 아니다     → **같은 단계를 다시** 시험한다 (`RETEST` · 기반은 전날 시험 기반)
- *    · 전날 공개가 바닥(d1)이다             → 바닥의 다음 칸을 시험한다 (`FLOOR` · 증명할 아래 칸이 없다)
- *    · 그 밖(증거 없는 d3 이상 유지 날)      → 시험하지 않는다 — 지금 단계를 지킨다(평상일 0..Dn)
- *      (사다리는 다음 칸 preflight 가 PASS 인 날에만 그날을 REPROVE 증명일로 둔다 — 막힌 날은 평상일)
- *
- *    🔴 PASS 는 `kstDate`·`stage` 가 전날 결정과 **정확히** 같은 증거만 받는다 — 다른 날의 PASS 로 올리지 않는다.
- */
-export function trialPlanOf(
-  prev: ValidatedStageDecision, evidence: StageEvidenceVerdict | null, carried: TrialPlan | null = null,
-): TrialPlan | null {
-  if (isLegacyDecision(prev)) {
-    const up = nextStage(SAFEST_STAGE)
-    return up === null ? null : { base: SAFEST_STAGE, target: up, basis: 'FLOOR' }
-  }
-  const passed = evidence !== null && evidence.verdict === 'PASS'
-    && evidence.kstDate === prev.kstDate && evidence.stage === prev.release
-  if (passed) {
-    const up = nextStage(prev.release)
-    return up === null ? null : { base: prev.release, target: up, basis: 'PASS' }
-  }
-  const t = prev.transition
-  if (prev.state === 'TRIAL' && t !== null && t.kind === 'TRIAL') {
-    return { base: t.trialBase, target: prev.release, basis: 'RETEST' }
-  }
-  /**
-   * 🔴 **브레이크 날을 건너 계획을 잇는다** (PR3 · 2026-09-30 자동 승급 부품 보존). `carried` 는 **전날(prev)의 계획**이다.
-   *    전날이 HOLD·PREPARE(증명일 아님 — 운영 신호 브레이크로 시험이 되돌려진 날)이고 그날 공개가 계획의 기반
-   *    이하이면 그 계획을 잇는다. 감속으로 한 칸 낮춘 공개가 인증 기반 자체를 지우지 않게 하기 위함이다.
-   *    🔴 증명일(TRIAL·REPROVE)의 결과는 잇지 않는다 — 그날 증거가 스스로 말한다.
-   */
-  if (carried !== null && CARRY_STATES.includes(prev.state)
-    && stageRank(prev.release) <= stageRank(carried.base)) return carried
-  if (prev.release === SAFEST_STAGE) {
-    const up = nextStage(SAFEST_STAGE)
-    return up === null ? null : { base: SAFEST_STAGE, target: up, basis: 'FLOOR' }
-  }
-  return null
-}
-
-/** 🔴 계획을 잇는 날 — 증명일이 아닌 두 상태뿐이다 */
-const CARRY_STATES: readonly string[] = ['HOLD', 'PREPARE']
-
-/**
- * 🔴 **계획을 잇는 브레이크 날 수의 상한** — 이만큼 넘게 연속으로 막히면 계획을 버린다(오래된 증거로 올리지 않는다).
- *    controller 가 읽는 지난 결정 행 수도 이 값으로 묶인다(PR3 KEEP).
- */
-export const PLAN_CARRY_MAX_DAYS = 3
-
-/**
- * 🔴 **연속된 날들의 결정·증거로 그 다음 날 계획을 되짚는다** — 오래된 날부터. 날짜가 이어지지 않으면 계획을 버린다.
- *    `days` 의 마지막 날이 오늘의 전날이다. 증명일이 아닌 날(HOLD·PREPARE)의 증거는 `null` 이어도 된다(PASS 가 날 수 없다).
- */
-export function trialPlanThrough(
-  days: readonly { decision: ValidatedStageDecision; evidence: StageEvidenceVerdict | null }[],
-): TrialPlan | null {
-  let plan: TrialPlan | null = null
-  let prevDate: string | null = null
-  for (const d of days) {
-    if (prevDate !== null && nextKstDate(prevDate) !== d.decision.kstDate) plan = null
-    plan = trialPlanOf(d.decision, d.evidence, plan)
-    prevDate = d.decision.kstDate
-  }
-  return plan
-}
-
-/**
- * 🔴 controller가 실제 저장 행을 되짚는 검색 정본.
- *
- * 단위 판정(`trialPlanThrough`)과 DB 검색을 각자 구현하면 누락·깨진 행·검색 상한에서
- * 서로 다른 계획을 만들 수 있다. 저장소 접근은 callback으로 주입하되, 날짜 진행과
- * 중단 조건은 이 한 함수만 소유한다.
- */
-export async function carriedTrialPlanFor(
-  previous: ValidatedStageDecision,
-  io: {
-    readDecision: (kstDate: string) => Promise<ValidatedStageDecision | null>
-    readEvidence: (decision: ValidatedStageDecision) => Promise<StageEvidenceVerdict | null>
-  },
-): Promise<TrialPlan | null> {
-  if (!CARRY_STATES.includes(previous.state)) return null
-  const days: { decision: ValidatedStageDecision; evidence: StageEvidenceVerdict | null }[] = []
-  let date = previous.kstDate
-  for (let k = 0; k < PLAN_CARRY_MAX_DAYS; k += 1) {
-    const expectedDate = previousKstDate(date)
-    if (expectedDate === null) break
-    const decision = await io.readDecision(expectedDate)
-    // 🔴 저장소가 다른 날짜 행을 돌려줘도 이어 붙이지 않는다.
-    if (decision === null || decision.kstDate !== expectedDate) break
-    const hold = CARRY_STATES.includes(decision.state)
-    days.unshift({ decision, evidence: await io.readEvidence(decision) })
-    date = expectedDate
-    if (!hold) break
-  }
-  return trialPlanThrough(days)
-}
-
-const nextKstDate = (d: string): string =>
-  new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)

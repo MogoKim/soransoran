@@ -12,7 +12,7 @@
  *       · 지출 가능 여부  `judgeSpend`(llm-ledger) — 같은 함수. 속도 상한은 그 함수의 `protect.ceilingUsd` 입력으로만 준다
  *       · 요청 수 상한    `judgeStageBudget`(supply-workset) — 원천 1건 = judge 1 + draft 최대 4. 공급 러너가 단계 장부 회차
  *                         (`<runId>-j`·`<runId>-d`)에 주는 상한 그대로다(`LEDGER_CAP_ENV`)
- *       · 증명일 여부     `PROOF_STATES`(stage-evidence) — controller 결정의 상태를 읽을 뿐 다시 판정하지 않는다
+ *       · 수의 통과선     `countFloorOf`(ladder-table) — controller 결정의 단계 목표에서 읽을 뿐 다시 판정하지 않는다
  *       · 공급 회차 슬롯  `supplyRunSlotMinuteOf`(supply-schedule-contract)
  *       · 글당 대화 상한  `PERSONA_COMMENTS_PER_POST_MAX`(10 · 구조 상한이지 할당량이 아니다)
  *       · 신선 원천 용량  선택 권위(`selectWorkset` → `judgeSlotRelease`)가 슬롯마다 남긴 판정(`slotAgesH[i]`)에서만 센다 —
@@ -30,7 +30,7 @@ import type { BudgetLimits, DayTally, GateVerdict, ReservationVerdict } from './
 import { judgeSpend } from './llm-ledger'
 import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
 import { paidSourcesFor } from './ready-fate'
-import { PROOF_STATES } from './stage-evidence'
+import { countFloorOf } from './ladder-table'
 import { judgeJitDemand, type SupplyPolicy } from './supply-process'
 import { readSupplySelectionTrace, type TraceReason } from './supply-selection-trace'
 import { judgeStageBudget, WORKSET_TOTAL_PER_SOURCE } from './supply-workset'
@@ -106,14 +106,15 @@ export type ControllerDecisionView = { kstDate: string; state: string; releaseDa
 export type DailyOperatingPlan = {
   version: typeof OPS_SHADOW_VERSION
   kstDate: string
-  /** `proof` = 정확히 N 을 증명하려는 날 · `ordinary` = 0..cap · `unknown` = controller 의도를 못 읽음 */
-  dayKind: 'proof' | 'ordinary' | 'unknown'
+  /** `ordinary` = 0..cap · `unknown` = controller 의도를 못 읽음 */
+  dayKind: 'ordinary' | 'unknown'
   /** 🔴 하루 공개 상한 — **봉투에서만** 온다. controller 목표가 상한이 되지 않는다 */
   publishCap: number
-  exactN: number | null
-  /** controller 결정 — 🔴 관측된 증명 의도 · 이력일 뿐이다. 이 계획의 권위가 아니다 */
+  /** 그날 단계 목표의 수 통과선(사다리 표) — 의도가 봉투 상한을 넘으면 싣지 않는다 */
+  countFloor: number | null
+  /** controller 결정 — 🔴 관측된 의도 · 이력일 뿐이다. 이 계획의 권위가 아니다 */
   controllerIntent: { state: string; target: number } | null
-  /** 의도가 봉투 상한을 넘었는가 — 넘으면 증명 N 을 싣지 않는다(상한이 이긴다) */
+  /** 의도가 봉투 상한을 넘었는가 — 넘으면 통과선을 싣지 않는다(상한이 이긴다) */
   intentExceedsCap: boolean
   authority: 'none'
 }
@@ -123,15 +124,14 @@ export function dailyOperatingPlanOf(
 ): DailyOperatingPlan {
   const base = { version: OPS_SHADOW_VERSION, kstDate, publishCap: env.publishHardCapPerDay, authority: 'none' as const }
   if (decision === null || decision.kstDate !== kstDate || !posInt(decision.releaseDailyTarget)) {
-    return { ...base, dayKind: 'unknown', exactN: null, controllerIntent: null, intentExceedsCap: false }
+    return { ...base, dayKind: 'unknown', countFloor: null, controllerIntent: null, intentExceedsCap: false }
   }
   const intent = { state: decision.state, target: decision.releaseDailyTarget }
   const over = intent.target > env.publishHardCapPerDay
-  const proof = PROOF_STATES.includes(decision.state)
   return {
     ...base,
-    dayKind: proof ? 'proof' : 'ordinary',
-    exactN: proof && !over ? intent.target : null,
+    dayKind: 'ordinary',
+    countFloor: over ? null : countFloorOf(intent.target),
     controllerIntent: intent,
     intentExceedsCap: over,
   }
@@ -487,7 +487,7 @@ export type DailyOutcome = {
   /** 🔴 봉투 상한 — 계획·controller 의도가 아니라 봉투에서 바로 읽는다 */
   publishHardCap: number
   overCap: boolean | null
-  exactNMet: boolean | null
+  countFloorMet: boolean | null
   maxPersonaCommentsPerPost: number | null
   conversationCapRespected: boolean | null
   supplySpentUsd: number | null
@@ -509,7 +509,7 @@ export function dailyOutcomeOf(
     version: OPS_SHADOW_VERSION, kstDate: plan.kstDate,
     publishedAuto: auto, publishHardCap: env.publishHardCapPerDay,
     overCap: auto === null ? null : auto > env.publishHardCapPerDay,
-    exactNMet: auto === null || plan.exactN === null ? null : auto === plan.exactN,
+    countFloorMet: auto === null || plan.countFloor === null ? null : auto >= plan.countFloor,
     maxPersonaCommentsPerPost: maxC,
     conversationCapRespected: maxC === null ? null : maxC <= env.conversationHardCapPerPost,
     supplySpentUsd: spent, supplyBudgetUsd: env.supplyDailyUsd,

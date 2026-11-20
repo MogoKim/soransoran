@@ -12,7 +12,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  ledgerDateOf, recordedSupplyBudgetOf, relevantUsageUnknownCount, supplyProofCostObservationOf, tallyOf,
+  ledgerDateOf, recordedSupplyBudgetOf, supplyProofCostObservationOf, tallyOf,
   type LedgerEntry, type LedgerStage,
 } from '../../src/lib/llm-ledger'
 import {
@@ -140,12 +140,11 @@ export function readCostSignals(
     settleHold: readSettleHoldAsOf(commentDir, targetLedgerDate),
     capUsd: commentLoopLimitsFromEnv(envVals).limits.dailyUsd,
   })
-  // §3.4 — 시행일 전 옛 판정과 시행일부터의 자연 proof 슬롯 envelope를 함께 읽어 소급을 막는다.
+  // §3.4 — 하루 장부의 중대 무결성과 자연 회차 비용 envelope
   const supplyCostEvidence: SupplyCostEvidence | null = s.entries === null ? {
     // 장부를 못 읽은 것은 표본 부족이 아니라 비용 안전장치 자체의 고장이다.
     // envelope 값을 지어내지 않되, stage 증거가 반드시 COST_BAD 로 닫히도록
     // whole-day 축의 hard failure를 보존한다.
-    legacyUsageUnknownRequests: 0,
     wholeDayCriticalHealth: s.error !== null || supplySettleHold !== null ? 'bad' : 'unknown',
     envelope: {
       settledRequests: 0,
@@ -166,7 +165,6 @@ export function readCostSignals(
         ? 'bad'
         : recordedSupplyBudget === null || recordedSupplyBudget.kind === 'invalid' ? 'unknown' : 'ok'
     return {
-      legacyUsageUnknownRequests: relevantUsageUnknownCount(s.entries),
       // 늦은 준비 회차의 단순 usageUnknown은 proof를 소급 파괴하지 않는다. 그러나 그 요청의
       // 기록 예산 출처·상한 자체가 깨졌다면 하루 예산 무결성을 증명할 수 없으므로 UNKNOWN이다.
       wholeDayCriticalHealth,

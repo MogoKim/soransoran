@@ -450,17 +450,17 @@ async function main(): Promise<void> {
       replyParentIds: cs.flatMap((c) => c.parentId === null ? [] : [c.parentId]),
     })
     const factsOf = async (relabel: boolean) => ({
-      kstDate, stage: 'd5' as const, decision: null, posts: [await evPost(relabel)], orphanPublishLogs: 0, unloggedPublishes: 0,
-      commentCapPerPost: 1,
+      kstDate, stage: 'd5' as const, decision: null, readAtMs: Date.now() + 9 * 3_600_000, posts: [await evPost(relabel)], orphanPublishLogs: 0, unloggedPublishes: 0,
+
       audits: { rows: [] },
     })
     const ev = judgeEvidenceForTarget(kstDate, 'd5', 1, await factsOf(false), null)
-    const COMMENT_FAIL = ['COMMENT_OVER_CAP', 'DUP_COMMENT', 'COMMENT_SELF', 'COMMENT_PROVENANCE_BROKEN', 'COMMENT_MISSING', 'COMMENT_LATE']
-    check('🔴 D 단계 증거: 첫 댓글 1건 인정 · 추가 댓글은 상한·중복 밖(COMMENT_* 없음) · followupComments 1',
-      !ev.codes.some((c) => COMMENT_FAIL.includes(c)) && ev.counts.firstCommentOk === 1 && ev.counts.followupComments === 1,
+    const COMMENT_FAIL = ['DUP_COMMENT', 'COMMENT_SELF', 'COMMENT_PROVENANCE_BROKEN', 'COMMENT_MANUAL_PERSONA']
+    check('🔴 하루 판정: 실제 행의 첫 댓글·추가 댓글은 댓글 무결성 코드를 내지 않고 · 글당 댓글에는 둘 다 든다',
+      !ev.codes.some((c) => COMMENT_FAIL.includes(c)) && ev.counts.personaComments === 2,
       `${ev.codes.join(',')} ${JSON.stringify(ev.counts)}`)
     const evBad = judgeEvidenceForTarget(kstDate, 'd5', 1, await factsOf(true), null)
-    check('🔴 대조군 — 같은 행을 수동 출처로 섞으면 COMMENT_OVER_CAP(검사가 빈말이 아니다)', evBad.codes.includes('COMMENT_OVER_CAP'), evBad.codes.join(','))
+    check('🔴 대조군 — 같은 행을 수동 출처로 섞으면 COMMENT_MANUAL_PERSONA(검사가 빈말이 아니다)', evBad.codes.includes('COMMENT_MANUAL_PERSONA'), evBad.codes.join(','))
     check('🔴 대화 감사 PASS(실제 행)', judgeConversationAudit([await evPost(false)]).verdict === 'PASS')
     void readStageEvidenceFacts
     followupOn(false)

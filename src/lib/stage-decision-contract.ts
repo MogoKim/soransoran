@@ -23,8 +23,8 @@ import { RUNTIME_STAGES, SAFEST_STAGE, type RuntimeStage } from './scale-profile
 
 /**
  * 🔴 **판 상수 — 고정 이름이다.** writer alias 가 바뀌어도 이 값들은 바뀌지 않는다.
- *    · v4 — 약한 release 계약 아래의 옛 결정. **읽기만** 한다 — 검증은 통과하지만 `sustainedReleaseOf` ·
- *      `trialPlanOf` 가 바닥(d1)에서 다시 증명하게 만든다(`isLegacyDecision`).
+ *    · v4 — 약한 release 계약 아래의 옛 결정. **읽기만** 한다 — 검증은 통과하지만 열린 단계는 바닥(d1)에서
+ *      다시 시작한다(`isLegacyDecision` → `stage-controller` `openStageOf`).
  *    · v5 — 원천 기회 → 슬롯 계약(`source-slot-v1`)으로 운영한 결정 (2026-09-30).
  *    · v6 — admission 계약 판 (2026-11-06 · canon §3.1·§3.2). 공급·READY 예측은 hard gate 가 아니라 경고이며
  *      `supply` 에 `{forecastWarnings}` 로만 남는다. release(증명) 계약은 그대로라 v5 증거도 현재 계열이다.
@@ -66,10 +66,12 @@ export const DECISION_WRITER = 'controller' as const
 export type DecisionWriter = typeof DECISION_WRITER
 
 /**
+ * 🔴 (2026-11-19 사다리 재설계) 새 사다리는 `REPROVE` · `RETEST` · `FLOOR` 를 쓰지 않는다 — 올림은 `TRIAL`+`PASS`,
+ *    그 밖은 `PREPARE`/`HOLD` 다. 아래 값과 설명은 **저장된 옛 행을 읽기 위해** 남긴다(지우면 옛 행이 깨진 행이 된다).
  * 🔴 **`REPROVE` — 현재 단계 재인증(RETEST)** (2026-09-29 · 2026-10-11 Batch A1 좁힘). 새 증명일 유형이 아니다.
  *    유효한 현재 단계 증명 기반이 없어 이어 갈 authoritative trial plan 이 없고 · **다음 단계 preflight 가 오늘 PASS** 이고 ·
  *    현재 단계 첫 슬롯 전인 날에만 쓴다.
- *    공개 단계는 **올라가지 않는다** — 그날 자동 target 이 목표 슬롯을 먼저 채워(`stage-proof-day`) 내일 판정할
+ *    공개 단계는 **올라가지 않는다** — 그날 자동 target 이 목표 슬롯을 먼저 채워 내일 판정할
  *    운영 증거를 만든다. 🔴 다음 칸이 막힌 날은 REPROVE 가 아니라 평상일(HOLD/PREPARE · 0..Dn)이다.
  *    🔴 앞판에는 이 상태가 없어 PASS 뒤 하루라도 HOLD 가 끼면 그 뒤 증거가 전부
  *       `DECISION_NOT_TRANSITION` 이 되어 **다시는 올라가지 못했다**(지속 승격 밖 영구 정체).
@@ -145,8 +147,8 @@ export type TransitionProvenance =
    * 🔴 **그날 공개가 인증 단계보다 낮은 HOLD·PREPARE** — 운영 신호 brake · lease 안전 HOLD.
    *    낮춘 공개를 다음 날의 지속 단계로 승계하지 않게 인증 권한을 행 하나에 남긴다(이력 검색 없음).
    *    `certified` 는 그날 공개보다 높아야 한다 — 같거나 낮으면 이 칸이 없다(`null`).
-   *    🔴 validator 는 이 칸을 **읽는다**. controller 가 쓰는지는 `CERTIFIED_ROLLOUT_PHASE`(stage-controller)가 정한다 —
-   *       reader 판이 배포·rollback 호환으로 확인된 뒤의 별도 릴리스에서만 writer 를 켠다.
+   *    🔴 validator 가 읽고, controller 는 낮춘 날마다 쓴다(2026-11-19 쓰기 활성 — `certifiedProvenance`).
+   *       열린 단계는 이 칸으로만 다음 날에 넘어간다(`openStageOf`).
    */
   | { readonly kind: 'CERTIFIED'; readonly certified: RuntimeStage }
 
@@ -483,7 +485,7 @@ export function validateStoredDecision(input: {
   } else if (state === 'SUSTAIN') {
     /**
      * 🔴 **v5 는 SUSTAIN 을 쓰지 않는다** (2026-09-30 · source-slot-v1). 지속 단계는 전날 TRIAL 결정 + 그 증거
-     *    PASS 에서만 나온다(`sustainedReleaseOf`) — 날짜 · 연속 일수로 올리는 승격 경로(`judgePromotion`)를 지웠다.
+     *    PASS 에서만 나온다 — 날짜만으로 올리는 승격 경로(`judgePromotion`)를 지웠다. 지금의 올림은 하루 판정 연속 통과다(`stage-ladder`).
      *    옛 v4 행은 읽되 `isLegacyDecision` 이 지속 d1 · 시험 계획 FLOOR 로 다룬다.
      */
     if (isCurrentFamily(contractVersion)) return no(`${contractVersion} 결정은 SUSTAIN 을 쓰지 않는다 — 지속 승격 경로를 지웠다`)
