@@ -24,8 +24,10 @@
 import { BRAND_BANNED_WORDS } from '../../src/lib/content-guard'
 import { promptNoGoExpressions } from '../../src/lib/persona-no-go'
 import { TARGET_DESCRIPTOR_TERMS } from './voice-style-signals.mjs'
+import { M3_LEAK_RUN_MIN } from './voice-m3-contract.mjs'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../../src/lib/comment-policy'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
+import type { FormExample } from '../../src/lib/persona-comment-form'
 
 /** 반응 유형 — voice-comment-signals 의 ReactionType 과 같은 값이다 */
 /**
@@ -68,15 +70,12 @@ const REACTION_GUIDE: Record<ReactionType, string> = {
 export const MAX_OUTPUT_TOKENS = 800
 
 /**
- * 🔴 **고정 목표 길이를 두지 않는다** (2026-09-10, Wave E 정정).
+ * 🔴 **길이 · 끝 모양은 자리마다 뽑은 실제 댓글 하나(꼴 본보기)가 정한다** (2026-11-21).
  *
- *    옛 판에는 `PROMPT_TARGET_MAX_CHARS = 120` 과 "한두 문장" 이 있었다.
- *    근거는 "길수록 같은 리듬을 반복할 자리가 는다" 였는데,
- *    실제 사람 댓글 1,566건을 재보니 **120자를 넘는 것이 15.6%,
- *    문장이 둘을 넘는 것이 42.1%** 였다. 사람의 분포를 절반쯤 잘라내고 있었다.
- *
- *    길이는 이제 **참고 댓글의 관찰된 분포**로 전한다(`VoiceReferenceBundle.lengths`).
- *    `MAX_COMMENT_LENGTH` 는 운영 절대 상한일 뿐 목표가 아니다.
+ *    옛 판은 길이를 말로 시켰다 — 고정 120자, 그다음 참고 댓글 분포, 그다음 "한 줄 · 한두 문장 · 서너 문장" 셋.
+ *    끝 모양 · 문장부호는 모델 기본값(반듯한 "~요.")으로 갔다. 실제 댓글 879개와 운영 댓글 219개를 대 보면
+ *    20자 이하 15% 대 6% · 마침표 끝 18% 대 35% 였다. 이제 `persona-comment-form` 이 뽑은 본보기의 꼴을 건넨다.
+ *    `MAX_COMMENT_LENGTH` 는 운영 절대 상한일 뿐 목표가 아니다(`parseCandidate`).
  */
 
 /**
@@ -191,7 +190,11 @@ export function extractVoiceMarks(texts: readonly string[]): RecentVoiceMarks {
   }
 }
 
-/** Persona 행에서 프롬프트에 필요한 것만. 🔴 userId · nickname 을 받지 않는다 */
+/**
+ * Persona 행에서 프롬프트에 필요한 것만. 🔴 userId · nickname 을 받지 않는다
+ * 🔴 말투 카드(voiceCore · voiceVariations)는 받지 않는다 — 말버릇은 그 사람에게 배정된 실제 댓글(reference)이 전한다.
+ *    카드가 비었는지는 입력 단계(`buildCommentInput` 의 PERSONA_VOICE_MISSING)가 본다.
+ */
 export type PromptPersona = {
   code: string
   ageBand: string | null
@@ -199,8 +202,6 @@ export type PromptPersona = {
   lifeStage: string | null
   /** Json — 7층 구조 §1. 있는 그대로 요약해 넣는다 */
   identity: unknown
-  voiceCore: unknown
-  voiceVariations: unknown
   noGoTopics: readonly string[]
   noGoExpressions: readonly string[]
   forbiddenReactionRoles: readonly string[]
@@ -214,12 +215,12 @@ export type PromptTargetPost = {
 }
 
 export type PromptBlockCode =
-  | 'PERSONA_VOICE_MISSING'
   | 'REACTION_TYPE_INVALID'
   | 'REACTION_ROLE_FORBIDDEN'
   | 'POST_TITLE_EMPTY'
   | 'POST_CONTENT_EMPTY'
   | 'REFERENCE_MISSING'
+  | 'FORM_MISSING'
 
 export type PromptBlock = { code: PromptBlockCode; message: string }
 
@@ -248,19 +249,22 @@ function jsonBrief(v: unknown): string {
 const listOr = (xs: readonly string[], fallback: string): string =>
   xs.length === 0 ? fallback : xs.join(' · ')
 
+/** 🔴 꼴 절 — 값은 userPayload 의 JSON(`꼴` · `본보기`)에 실린다. 규칙보다 먼저, 말버릇 절 바로 아래에 둔다 */
+export const COMMENT_FORM_LINES: readonly string[] = [
+  '## 🔴 이번 댓글의 꼴',
+  '아래 [본보기]는 실제 댓글 하나입니다. 이번 댓글은 이 댓글과 **같은 꼴**로 씁니다 — 내용과 낱말은 빌리지 않습니다.',
+  '- 길이: [꼴].글자수의 0.7~1.3배. 본보기가 한 줄이면 한 줄입니다. 늘리지 않습니다.',
+  '- 끝: [꼴].끝 과 같은 식으로 끝냅니다(예: "…네요"면 "…네요"류, 끊긴 말이면 끊긴 말로). 문장부호도 [꼴].끝부호 그대로 — 마침표가 없으면 찍지 않습니다.',
+  '- ㅋㅋ · ㅎㅎ · ㅠㅠ · ^^ 는 본보기에 있을 때만 씁니다. 없는 오타를 일부러 만들지 않습니다.',
+  '- 끝 모양이 할 말과 도저히 안 맞으면 길이만 맞춥니다. 뜻이 어색한 문장을 만들지 않습니다.',
+]
+
 /**
  * 프롬프트를 만든다.
  *
  * 🔴 막을 것은 여기서 막는다 — 금지 역할로 생성을 요청하면 Gate ⑦ 이 뒤에서 잡지만,
  *    돈을 쓰고 나서 잡는 것과 쓰기 전에 막는 것은 다르다.
  */
-/** 대화 계획이 정한 길이 — 글마다 같은 길이로 달리지 않게 한다 */
-const SEAT_LENGTH_GUIDE: Readonly<Record<'short' | 'normal' | 'long', string>> = {
-  short: '**한 줄**입니다 — 20자 안팎. 한마디면 됩니다.',
-  normal: '**한두 문장**입니다.',
-  long: '**서너 문장**입니다 — 내 경우를 한 토막 풀어 씁니다.',
-}
-
 export function buildPrompt(input: {
   persona: PromptPersona
   post: PromptTargetPost
@@ -281,11 +285,18 @@ export function buildPrompt(input: {
    */
   grounding?: string
   /**
-   * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 프롬프트가 한 글자도 바뀌지 않는다(첫 댓글에는 없다).
-   *    길이를 정해 주고, 가벼운 일상 경험을 자기 이야기로 말하게 한다. 무거운 사실은 그대로 막는다.
+   * 🔴 **이번 자리의 꼴 본보기** — 실제 댓글 하나와 그 꼴(`pickFormExample`). 첫 댓글에도 있다.
+   *    `requireReference` 가 꺼지지 않았는데 없으면 막는다 — 꼴 없이 쓰면 다시 반듯한 "~요." 로 돌아간다.
+   */
+  form?: FormExample
+  /**
+   * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다(첫 댓글에는 없다).
+   *    가벼운 일상 경험을 자기 이야기로 말하게 하고, 이 글의 앞 Persona 댓글 표지를 건넨다. 무거운 사실은 그대로 막는다.
    */
   seat?: {
-    length: 'short' | 'normal' | 'long'; selfFacts: readonly string[]; menopauseExperienced: boolean; spouseStrain: boolean; reply: boolean
+    selfFacts: readonly string[]; menopauseExperienced: boolean; spouseStrain: boolean; reply: boolean
+    /** 이 글의 앞 Persona 댓글 첫 어절 · 말끝 3자 — 표지만(`postPersonaMarksOf`) */
+    postPersonaMarks: { openers: readonly string[]; endings: readonly string[] }
     /**
      * 🔴 글쓴이가 **자기 글**에 답하는 자리. 관문은 자기 글을 그 사람의 근거로 본다(`toGateInput`) — 프롬프트도 같은 것을 말해야 한다.
      *    안 그러면 모델이 자기 글을 남의 글("윗글")로 읽고 자기 일을 "…대요" 같은 전해 듣는 말로 옮긴다.
@@ -309,12 +320,6 @@ export function buildPrompt(input: {
     })
   }
 
-  if (jsonBrief(persona.voiceCore) === '(없음)') {
-    blocks.push({
-      code: 'PERSONA_VOICE_MISSING',
-      message: `${persona.code} 의 voiceCore 가 비어 있습니다 — 말투 없이 생성하지 않습니다`,
-    })
-  }
   if (post.title.trim() === '') {
     blocks.push({ code: 'POST_TITLE_EMPTY', message: '대상 글 제목이 비어 있습니다' })
   }
@@ -334,6 +339,12 @@ export function buildPrompt(input: {
       message: `${persona.code}: 말투 근거(reference)가 없습니다 — 설정만 보고 창작하지 않습니다`,
     })
   }
+  if (input.requireReference !== false && input.form === undefined) {
+    blocks.push({
+      code: 'FORM_MISSING',
+      message: `${persona.code}: 꼴 본보기가 없습니다 — 실제 댓글 풀이 비었습니다`,
+    })
+  }
 
   if (blocks.length > 0) return { ok: false, blocks }
 
@@ -348,14 +359,8 @@ export function buildPrompt(input: {
     ...(dom.grams.length > 0 ? [`- 이 글자 묶음은 이번에 쓰지 않습니다(띄어쓰기 무시): ${dom.grams.join(' · ')}`] : []),
   ]
   const ref = input.reference
-  /**
-   * 🔴 **길이는 관찰값으로 전한다.** 목표를 숫자 하나로 주면 전부 그 길이가 된다 —
-   *    옛 판의 120자가 그랬다. 분포를 주고 "맞출 필요 없다" 고 말한다.
-   */
-  const lengthLine = ref !== undefined && ref.lengths.count > 0
-    ? `참고 댓글은 짧게는 ${ref.lengths.p25}자, 보통 ${ref.lengths.median}자쯤,`
-      + ` 긴 것은 ${ref.lengths.p90}자 넘게도 씁니다.`
-    : '할 말의 크기에 맞춥니다.'
+  const postOpeners = input.seat?.postPersonaMarks.openers ?? []
+  const postEndings = input.seat?.postPersonaMarks.endings ?? []
 
   const systemPrompt = [
     '당신은 한국의 40~60대 여성 커뮤니티에서 활동하는 한 사람입니다.',
@@ -372,9 +377,9 @@ export function buildPrompt(input: {
     //    사람의 말은 규칙에서 나오지 않고 다른 사람의 말에서 온다.
     ...(ref !== undefined && ref.comments.length > 0
       ? [
-        '## 🔴 말투는 아래 실제 댓글에서 가져옵니다 (가장 중요)',
+        '## 당신의 평소 말버릇 (실제 댓글)',
         '같은 또래가 실제로 쓴 댓글입니다. 규칙 목록보다 **이 댓글들이 먼저**입니다.',
-        '어휘 · 생략 · 문장 길이 · 호흡 · 질문하는 방식 · 공감의 세기를 여기서 가져오세요.',
+        '어휘 · 생략 · 말버릇을 여기서 가져오세요.',
         '짧은 표현이나 말버릇은 가깝게 가져와도 됩니다.',
         // 🔴 **"통째로 옮기지 마라" 를 지웠다** (2026-09-10, P0-2 창업자 결정).
         //    맥락과 사실이 맞으면 표현·문장 구조를 가깝게 써도 된다.
@@ -385,36 +390,24 @@ export function buildPrompt(input: {
         '',
       ]
       : []),
-    '## 말투 설정 (버릇이지 틀이 아닙니다)',
-    `기본: ${jsonBrief(persona.voiceCore)}`,
-    `상황별 변주: ${jsonBrief(persona.voiceVariations)}`,
-    '🔴 이 설정과 위 실제 댓글이 어긋나 보이면 **실제 댓글 쪽**을 따릅니다.',
-    '',
+    // 🔴 꼴 — 말버릇 바로 아래, 규칙보다 먼저. 길이 · 끝 모양 · 끝부호를 본보기가 정한다
+    ...(input.form === undefined ? [] : [...COMMENT_FORM_LINES, '']),
     '## 이번에 쓸 반응',
     REACTION_GUIDE[reaction],
-    '',
-    // 🔴 길이 — 고정 목표를 주지 않는다. 분포를 주고 맞추지 말라고 말한다
-    '## 길이',
-    lengthLine,
-    '맞출 필요는 없습니다. 할 말이 짧으면 한 줄이면 되고,',
-    '맥락이 필요하면 두세 문장으로 써도 됩니다. 매번 같은 길이로 쓰지 않습니다.',
-    `(운영 상한 ${MAX_COMMENT_LENGTH}자 · 최소 ${MIN_COMMENT_LENGTH}자 — 목표가 아니라 한계입니다)`,
-    ...(input.seat === undefined ? [] : [`🔴 이번 댓글은 ${SEAT_LENGTH_GUIDE[input.seat.length]}`]),
     '',
     ...(input.seat?.ownPost === true
       ? [
         '## 🔴 이 글은 당신이 쓴 글입니다',
         '아래 글은 남의 글이 아니라 **당신이 직접 쓴 글**이고, 글에 적은 일은 당신이 겪은 일입니다.',
-        '글쓴이로서 댓글에 답합니다. 자기 일은 "~했어요" · "~더라고요" 처럼 **자기 말**로 합니다.',
+        '글쓴이로서 댓글에 답합니다. 자기 일은 자기가 겪은 일로 말합니다.',
         '🔴 자기 일을 "~래요" · "~대요" · "~다더라고요" 처럼 남에게 들은 말투로 옮기지 않습니다.',
         '글에 쓴 낱말을 다시 써도 됩니다. 다만 글의 문장을 길게 다시 옮겨 적지는 않고, 글에 없는 사실을 새로 더하지 않습니다.',
       ]
       : [
-        '## 🔴 원문을 옮기지 않습니다',
-        '윗글에 나온 표현을 **한 조각도 그대로 쓰지 않습니다.** 말을 살짝 바꿔 옮기는 것도 안 됩니다.',
-        '특히 그 사람만의 독특한 말("새벽 세시쯤", "아침이 무겁다" 같은 구체적인 묘사)은',
-        '따라 쓰지 말고, 읽고 **내 안에 남은 느낌만** 내 말로 적습니다.',
-        '증상·시간·상황을 되풀이해 요약하지 않습니다. 그건 읽었다는 표시일 뿐 반응이 아닙니다.',
+        '## 글의 문장을 길게 옮겨 적지 않습니다',
+        // 🔴 숫자는 관문 ① 이 막는 바로 그 값이다(띄어쓰기를 빼고 연속 일치 — `assertNoSourceLeak`)
+        `글에 나온 낱말을 받아서 말하는 것은 괜찮습니다(그것이 댓글입니다). 글의 문장을 ${M3_LEAK_RUN_MIN}자 이상 그대로 옮기지만 않습니다.`,
+        '글 내용을 다시 요약하지 않습니다.',
       ]),
     ...(input.seat?.reply === true
       ? ['🔴 답하는 댓글의 낱말을 되받아 쓰지 않습니다. "네" · "그쵸" · "맞아요" 로 시작하지 말고, 그 말에 **새로 보탤 한 가지**만 적습니다.']
@@ -433,15 +426,15 @@ export function buildPrompt(input: {
         ...(input.seat.ownPost ? [`- 지금 답하는 이 글(「${post.title}」)은 내가 쓴 글이다 — 글에 적은 일은 내가 겪은 일이다`] : []),
         ...(input.grounding !== undefined && input.grounding.trim() !== '' ? [input.grounding.trim()] : []),
         '가벼운 일상 경험 — 본 것 · 해 본 것 · 가 본 곳 · 요즘 몸 상태(잠이 안 온다 · 열이 오른다 · 무릎이 시리다) — 은',
-        '자기 이야기로 말해도 됩니다. "저도 그랬어요" 로 끝내지 말고 **내 경우 한 토막**을 보태면 좋습니다.',
+        '자기 이야기로 말해도 됩니다.',
         '🔴 병명 · 약 이름 · 시술 · 검사 수치는 자기 일로 말하지 않습니다. 가족 · 일 · 사는 곳을 위 사실과 다르게 말하지 않습니다.',
         ...(input.seat.menopauseExperienced ? [] : ['🔴 갱년기를 직접 겪은 것처럼 말하지 않습니다 — 당신은 아직 겪지 않았습니다.']),
         ...(input.seat.spouseStrain ? []
-          // 🔴 자기 글에 답하는 글쓴이에게 "주변에서 봤다로 말하라"고 하면 자기 글의 일을 남의 일로 옮긴다
+          // 🔴 자기 글에 답하는 글쓴이는 자기 글에 쓴 일까지는 말한다 — 그 밖으로 새로 보태는 것만 막는다
           : input.seat.ownPost ? ['🔴 부부 사이의 큰 싸움 · 각방 · 별거 · 이혼은 **이 글에 쓴 것 밖으로** 새로 보태지 않습니다.']
           : [
             '🔴 부부 사이의 큰 싸움 · 말을 안 섞음 · 각방 · 별거 · 이혼을 **자기 일로** 말하지 않습니다 — 위 사실에 그런 일이 없습니다.',
-            '   그런 글에는 공감하거나 묻거나, "주변에서 봤다"로 말합니다.',
+            '   그런 글에는 자기 일로 말하지 않습니다.',
           ]),
       ]
       : input.grounding !== undefined && input.grounding.trim() !== ''
@@ -456,14 +449,12 @@ export function buildPrompt(input: {
         '   **새로 지어내서 말하지 않습니다.**',
         '   "저도 그랬어요" 처럼 짧게 맞장구치는 것은 괜찮습니다 —',
         '   맞장구는 새 사실을 보태지 않기 때문입니다.',
-        '   그 대신 **윗글에 직접 반응**하거나 궁금한 것을 물으면 됩니다.',
       ]),
     '',
     // 🔴 근거가 있든 없든 **항상** 말한다 — 두 갈래 중 한쪽만 두면 계약이 갈린다
     input.seat?.ownPost === true
       ? '🔴 쓸 상황이 없으면 만들지 말고, **댓글에 직접 답하면 됩니다.**'
       : '🔴 쓸 상황이 없으면 만들지 말고, **윗글에 직접 반응하면 됩니다.**',
-    '   짧은 맞장구도, 궁금한 것 하나를 묻는 것도 모두 괜찮습니다.',
     '',
     '## 참고 댓글은 말투 근거입니다',
     '🔴 위 참고 댓글에 담긴 **그 사람들의 경험은 당신의 경험이 아닙니다.**',
@@ -485,7 +476,7 @@ export function buildPrompt(input: {
       : [
         '- 진단·처방·약 이름·용량·시술·검사 수치를 말하지 않습니다. 병원에 가라 마라도 정하지 않습니다.',
         '- 특정 제품 · 업체 · 가게 이름을 권하지 않습니다.',
-        '- 지시하거나 단정하지 않습니다("~하셔야 해요"). 묻는 글에는 "저는 이렇게 했어요" 처럼 **내 경우를 말하는 것**으로 답합니다.',
+        '- 지시하거나 단정하지 않습니다("~하셔야 해요").',
       ]),
     '- 정리된 목록·번호·소제목을 쓰지 않습니다. 사람이 쓴 댓글은 그렇게 생기지 않았습니다.',
     '- 존재하지 않는 가족을 근거로 말하지 않습니다.',
@@ -495,12 +486,16 @@ export function buildPrompt(input: {
     `  ${CLICHE_COMFORT_PHRASES.join(' · ')}`,
     '',
     // 🔴 자기 반복만 남긴다. 첫 글자 회피·어미 미세 통제는 지웠다(실측 근거는 파일 머리 주석)
-    ...(recentOpeners.length > 0 || recentEndings.length > 0 || dominantLines.length > 0
+    ...(recentOpeners.length > 0 || recentEndings.length > 0 || dominantLines.length > 0 || postOpeners.length > 0 || postEndings.length > 0
       ? [
         '## 직전에 쓴 말과 겹치지 않게',
         ...(recentOpeners.length > 0 ? [`- 최근에 이렇게 시작했습니다: ${recentOpeners.join(' · ')}`] : []),
         ...(recentEndings.length > 0 ? [`- 최근에 이렇게 끝냈습니다: ${recentEndings.join(' · ')}`] : []),
         ...dominantLines,
+        // 🔴 같은 글의 앞 Persona 댓글 — 한 글의 댓글들이 같은 말로 열고 닫지 않게(표지만 · 실회원 댓글 제외)
+        ...(postOpeners.length > 0 || postEndings.length > 0
+          ? [`- 이 글의 앞 댓글은 이렇게 시작했습니다: ${listOr(postOpeners, '(없음)')} / 이렇게 끝났습니다: ${listOr(postEndings, '(없음)')} — 같은 말로 열거나 닫지 않습니다.`]
+          : []),
         '  같은 말로 또 열거나 닫지만 않으면 됩니다. 그 밖에는 자유롭게 씁니다.',
         '',
       ]
@@ -519,6 +514,8 @@ export function buildPrompt(input: {
     `제목: ${post.title.trim()}`,
     '본문:',
     post.content.trim(),
+    // 🔴 꼴 값 — 글 새 판과 같은 방식(JSON). 🔴 본보기는 요청에만 실린다 — 저장 레코드(`toCandidateRecord`)에 자리가 없다
+    ...(input.form === undefined ? [] : ['', '[꼴 · 본보기]', JSON.stringify({ 꼴: input.form.꼴, 본보기: input.form.본보기 })]),
   ].join('\n')
 
   return {

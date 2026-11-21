@@ -99,7 +99,7 @@ const persona = await prisma.persona.findUnique({
   where: { code: PERSONA_CODE },
   select: {
     code: true, status: true, ageBand: true, region: true, lifeStage: true,
-    identity: true, voiceCore: true, voiceVariations: true,
+    identity: true,
     noGoTopics: true, noGoExpressions: true, forbiddenReactionRoles: true,
   },
 })
@@ -176,8 +176,6 @@ const plan = buildPrompt({
     region: persona.region,
     lifeStage: persona.lifeStage,
     identity: persona.identity,
-    voiceCore: persona.voiceCore,
-    voiceVariations: persona.voiceVariations,
     noGoTopics: persona.noGoTopics,
     noGoExpressions: persona.noGoExpressions,
     forbiddenReactionRoles: persona.forbiddenReactionRoles,

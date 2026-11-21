@@ -228,7 +228,7 @@ if (WANT_SHADOW) {
      *    그것은 발화가 아니라 글자이고, ⑧ 은 그것으로 말끝·시작어절을 잰다.
      */
     const prompt = buildPromptFromInput(input, t.recentTexts, reference.byCode.get(input.personaCode),
-      { requireReference: reference.byCode.size > 0 })
+      { requireReference: reference.byCode.size > 0, formPool: reference.formPool })
 
     /**
      * 🔴 후보 텍스트가 없으므로 Gate 를 돌릴 수는 없다 —

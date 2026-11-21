@@ -131,11 +131,11 @@ async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: Lea
     const makeGenerate = (
       personaCodes: readonly string[], stage: 'commentGen' | 'commentFollowupGen' = 'commentGen', via: SupplyLlmSession = session,
     ): CommentGenerate => {
-      // 🔴 말투 근거 — Queue CLI 와 같은 규칙: 자산이 있으면 강제, 없으면 buildPrompt 가 판단한다
+      // 🔴 말투 근거 · 꼴 본보기 풀 — Queue CLI 와 같은 규칙: 자산이 있으면 강제, 없으면 buildPrompt 가 판단한다
       const reference = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes })
       return async ({ model, input, recentTexts }) => {
         const prompt = buildPromptFromInput(input, recentTexts, reference.byCode.get(input.personaCode),
-          { requireReference: reference.byCode.size > 0 })
+          { requireReference: reference.byCode.size > 0, formPool: reference.formPool })
         if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
         // 🔴 장부를 지나서만 부른다 — 계산 → 예약 → 요청 → 정산
         const res = await via.call({

@@ -21,10 +21,11 @@ import { sortPersonaCodes } from '../../src/lib/persona-code'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import {
-  judgeReferenceBundle, judgeVoiceEvidence,
+  judgeReferenceBundle, judgeVoiceEvidence, looksLikePostBody,
   REFERENCE_MAX_CHARS, REFERENCE_MIN_CHARS, REFERENCE_MIN_COUNT, REFERENCE_MIN_SAFE_TEXTS,
   type VoiceReferenceBundle,
 } from '../../src/lib/persona-voice-reference'
+import { FORM_EXAMPLE_MAX_CHARS, FORM_EXAMPLE_MIN_CHARS } from '../../src/lib/persona-comment-form'
 import {
   judgeAssetReadiness, judgeAssetShape,
   REFERENCE_CORPUS_FILE, REFERENCE_MANIFEST_FILE,
@@ -62,6 +63,18 @@ import type { SupplementGeneration } from '../../src/lib/persona-reference-suppl
 export function carriesExperience(text: string): boolean {
   if (classifyReaction(text) === 'experience') return true
   return findExperienceClaims(text).length > 0
+}
+
+/**
+ * 🔴 **댓글 꼴 본보기 풀** (2026-11-21) — 참고 댓글 자산의 행에서 `FORM_EXAMPLE_MIN_CHARS`~`FORM_EXAMPLE_MAX_CHARS`자 ·
+ *    글 본문처럼 보이지 않는 것 · 경험담이 아닌 것만 남긴다(남의 경험이 내용으로 새지 않게 — 위 `carriesExperience` 와 같은 기준).
+ *    새로 모으지도 저장하지도 않는다. 정본 자산 879건에서 638건이 남는다(2026-11-21 실측).
+ */
+export function commentFormPool(rows: readonly LocalComment[]): string[] {
+  return [...new Set(rows.map((r) => r.text))].filter((t) => {
+    const n = [...t].length
+    return n >= FORM_EXAMPLE_MIN_CHARS && n <= FORM_EXAMPLE_MAX_CHARS && !looksLikePostBody(t) && !carriesExperience(t)
+  })
 }
 
 const sha16 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 16)
@@ -654,6 +667,8 @@ export function bundlesForPersonas(input: {
   canonicalAsset: boolean
   rows: LocalComment[]
   sourceDigest: string | null
+  /** 🔴 댓글 꼴 본보기 풀 — 같은 자산 행에서 거른다(`commentFormPool`). 자산이 없으면 비어 있다 */
+  formPool: string[]
 } {
   const all = stableAssignment({ repoRoot: input.repoRoot, target: input.target })
   const want = [...new Set(input.personaCodes)]
@@ -681,6 +696,7 @@ export function bundlesForPersonas(input: {
     canonicalAsset: all.canonicalAsset,
     rows: all.rows,
     sourceDigest: all.sourceDigest,
+    formPool: commentFormPool(all.rows),
   }
 }
 

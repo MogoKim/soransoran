@@ -51,7 +51,7 @@ import {
   PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
 import {
-  PLAN_MIN_GAP_MS, THREAD_DEADLINE_MS, planSlotAt, threadPlanOf, unitOf, type PlanLength, type PlanSeatKind,
+  PLAN_MIN_GAP_MS, THREAD_DEADLINE_MS, planSlotAt, threadPlanOf, unitOf, type PlanSeatKind,
 } from './persona-thread-plan'
 import type { PersonaCommentProvenance } from './stage-evidence'
 import type { DecisionStageEnv } from './scale-runtime'
@@ -233,7 +233,7 @@ export type FollowupPostVerdict =
    * `target` · `speaker` · `roles` 는 계획이 먼저 서 보라고 한 자리(`seats[0]`)다. 🔴 한 자리가 막혀도 글은 멈추지 않는다 —
    * 그 자리에 설 사람이 없으면 부르는 쪽이 `seats` 의 다음 자리로 넘어간다(`pickFollowupSeat`).
    */
-  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; length: PlanLength; reason: string }
+  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; reason: string }
   | { verdict: 'WAIT'; notBeforeMs: number | null; reason: string }
   | { verdict: 'STOP'; reason: string }
   | { verdict: 'BLOCK'; reason: string }
@@ -350,7 +350,7 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
     verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, openHooks: here.seats.length,
     key: followupKeyOf(f.postId, b.ordinal), target: first.target, speaker: first.speaker,
     excludePersonaIds: [...b.onPost].sort(),
-    roles: first.roles, seats: here.seats, length: here.length,
+    roles: first.roles, seats: here.seats,
     reason: `추가 ${b.extrasSoFar + 1}/${b.cap} · 계획 ${b.ordinal}번째 · ${seatLabel(first)}`,
   }
 }
@@ -401,9 +401,9 @@ const rolesOf = (shape: ReactionType): ReactionType[] =>
  *      그런 사람이 없으면 새 사람이 남의 댓글에 답한다
  *    답 대상은 Persona 댓글뿐이고 한 댓글에는 답이 하나만 달린다(`replyTargetOpen`).
  */
-export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats: FollowupSeat[]; length: PlanLength; gapMs: number } {
+export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats: FollowupSeat[]; gapMs: number } {
   const slot = planSlotAt(threadPlanOf(f.postId, f.publishedAtMs), ordinal)
-  if (slot === null) return { seats: [], length: 'normal', gapMs: FOLLOWUP_MIN_GAP_MS }
+  if (slot === null) return { seats: [], gapMs: FOLLOWUP_MIN_GAP_MS }
   const author = f.authorPersonaId ?? null
   const consumed = consumedOf(f)
   const byId = new Map(f.comments.map((c) => [c.id, c]))
@@ -439,7 +439,7 @@ export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats:
     const seat = seatOf[k](k === slot.kind ? slot.shape : 'other')
     return seat === null ? [] : [seat]
   })
-  return { seats, length: slot.length, gapMs: slot.gapMs }
+  return { seats, gapMs: slot.gapMs }
 }
 
 /**

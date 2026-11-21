@@ -2,7 +2,7 @@
  * 글 하나의 **대화 계획** — 🔴 순수 함수. DB · 시계 · 네트워크 · provider 없음
  *
  * 계획은 코드가, 말은 모델이 정한다. 글 id 하나로 그 글에 Persona 댓글이 몇 개 달릴지, 자리마다 누가 어디에
- * 어떤 모양·길이로 언제쯤 말할지가 정해진다. 저장하지 않는다 — 같은 글은 언제 다시 세워도 같은 계획이다.
+ * 어떤 모양으로 언제쯤 말할지가 정해진다. 길이는 계획이 정하지 않는다 — 자리마다 뽑는 실제 댓글 본보기의 길이다(`persona-comment-form`). 저장하지 않는다 — 같은 글은 언제 다시 세워도 같은 계획이다.
  *
  * 🔴 숫자는 `persona-thread-target` 의 둘(글당 목표 평균 · 대화 마감)뿐이다. 크기 분포 · 자리 종류 수 · 간격이 거기서 나온다.
  *
@@ -12,7 +12,7 @@
  */
 import { createHash } from 'node:crypto'
 
-import type { ReactionType } from './persona-reaction-roles'
+import { REAL_REACTION_SHARE, type ReactionType } from './persona-reaction-roles'
 import {
   PLAN_AUTHOR_SEATS_MAX, PLAN_MIN_GAP_MS, PLAN_RUNNER_TICK_MS, THREAD_DEADLINE_MS, THREAD_SIZE_MIN, threadMeanSizeAt, threadSizeMaxOf,
 } from './persona-thread-target'
@@ -27,8 +27,6 @@ export function unitOf(...parts: readonly string[]): number {
 
 /** 글에 답(새 사람의 새 댓글) · 글쓴이 답글 · 다른 사람의 답글 */
 export type PlanSeatKind = 'post' | 'author' | 'reply'
-/** 한 줄(20자 안팎) · 한두 문장 · 서너 문장 */
-export type PlanLength = 'short' | 'normal' | 'long'
 
 export type PlanSlot = {
   /** 이 글의 몇 번째 Persona 댓글인가(2부터) */
@@ -36,7 +34,6 @@ export type PlanSlot = {
   kind: PlanSeatKind
   /** 이 자리의 모양 — 한마디(other) · 공감 · 되묻기 · 경험으로 답 */
   shape: ReactionType
-  length: PlanLength
   /** 앞 Persona 댓글에서 이만큼 지난 뒤에 선다 */
   gapMs: number
 }
@@ -58,9 +55,7 @@ export function threadSizeCdfOf(meanSize: number): readonly (readonly [size: num
     return [THREAD_SIZE_MIN + k, k === n ? 1 : acc] as const
   })
 }
-/** 길이 분포(누적) — 한 줄 30% · 한두 문장 50% · 서너 문장 20% */
-const LENGTH_CDF: readonly (readonly [PlanLength, number])[] = [['short', 0.3], ['normal', 0.8], ['long', 1]]
-
+/** 자리 종류가 허용하는 모양 — 그 안에서 실제 몫(`REAL_REACTION_SHARE`)으로 뽑는다 */
 const SHAPES: Readonly<Record<PlanSeatKind, readonly ReactionType[]>> = {
   post: ['other', 'empathy', 'question', 'experience'],
   author: ['other', 'experience', 'question'],
@@ -70,6 +65,20 @@ const SHAPES: Readonly<Record<PlanSeatKind, readonly ReactionType[]>> = {
 const POST_SHARE = 0.5
 const AUTHOR_SHARE = 0.25
 const pick = <T>(cdf: readonly (readonly [T, number])[], u: number): T => (cdf.find(([, upTo]) => u < upTo) ?? cdf[cdf.length - 1]!)[0]
+/** 허용된 모양들의 누적 몫 — 몫 없는 모양은 빠지고 남은 몫을 1로 다시 맞춘다 */
+const shapeCdfOf = (shapes: readonly ReactionType[]): readonly (readonly [ReactionType, number])[] => {
+  const total = shapes.reduce((a, r) => a + (REAL_REACTION_SHARE[r] ?? 0), 0)
+  let acc = 0
+  return shapes.flatMap((r) => {
+    const w = REAL_REACTION_SHARE[r] ?? 0
+    if (w <= 0) return []
+    acc += w / total
+    return [[r, acc] as const]
+  })
+}
+const SHAPE_CDF: Readonly<Record<PlanSeatKind, readonly (readonly [ReactionType, number])[]>> = {
+  post: shapeCdfOf(SHAPES.post), author: shapeCdfOf(SHAPES.author), reply: shapeCdfOf(SHAPES.reply),
+}
 
 /** 자리 종류별 개수 — 4개 이상인 글은 글쓴이 아닌 사람이 3명 이상(첫 댓글 1 + 새 댓글 2)이 되게 한다 */
 function kindCounts(size: number): Record<PlanSeatKind, number> {
@@ -103,14 +112,9 @@ export function threadPlanOf(postId: string, publishedAtMs: number | null = null
   const firstPost = kinds.indexOf('post')
   if (firstPost > 1) { kinds.splice(firstPost, 1); kinds.splice(1, 0, 'post') }
   const gaps = gapsOf(postId, size)
-  let experienceGiven = false
   const slots = kinds.map((kind, i): PlanSlot => {
     const ordinal = i + 2
-    const key = String(ordinal)
-    let shape = SHAPES[kind][Math.floor(unitOf('plan-shape', postId, key) * SHAPES[kind].length)]!
-    // 🔴 첫 "글에 답"은 경험으로 답한다 — 되묻기·공감만 달리는 글을 만들지 않는다
-    if (kind === 'post' && !experienceGiven) { shape = 'experience'; experienceGiven = true }
-    return { ordinal, kind, shape, length: pick(LENGTH_CDF, unitOf('plan-length', postId, key)), gapMs: gaps[i]! }
+    return { ordinal, kind, shape: pick(SHAPE_CDF[kind], unitOf('plan-shape', postId, String(ordinal))), gapMs: gaps[i]! }
   })
   return { size, slots }
 }

@@ -24,7 +24,7 @@ import { comparePersonaCodes } from './persona-code'
 import {
   judgeLifeHistory, readPostRequirements, type PersonaForMatch,
 } from './original-post-persona-match'
-import { COMMENT_REACTION_ROLES } from './persona-reaction-roles'
+import { COMMENT_REACTION_ROLES, isReactionType, REAL_REACTION_SHARE } from './persona-reaction-roles'
 import { roleRoundVerdict, type RoleHistory } from './persona-reserve'
 import { judgeRealMember, type RealMemberProbe } from './real-member-gate'
 import {
@@ -383,7 +383,7 @@ export type PlanInput = {
  *    한 글을 5건까지 채우고 다음 글로 가면, 상한이 걸리는 순간
  *    **댓글 5건짜리 글 하나와 댓글 0건짜리 글 아흔아홉**이 남는다.
  *
- * 🔴 역할도 고르게 쓴다 — 전부 `empathy` 면 커뮤니티가 아니라 응원봇이 된다.
+ * 🔴 역할은 실제 댓글의 몫(`REAL_REACTION_SHARE`)을 따른다 — 고르게 돌리면 질문 · 공감이 실제보다 몇 배 많아진다.
  */
 export function planCommentDistribution(input: PlanInput): PlanResult {
   const items: PlanItem[] = []
@@ -424,9 +424,11 @@ export function planCommentDistribution(input: PlanInput): PlanResult {
   /** 🔴 이 글에 한 건 붙여 본다. 붙일 수 없으면 사유를 모아 null 을 돌려준다 */
   const pickOne = (post: PlannerPost): PlanItem | null => {
     const taken = takenByPost.get(post.id) ?? new Set<string>()
-    // 🔴 지금까지 **가장 적게 쓰인 역할**부터 시도한다
+    // 🔴 **몫에 비해 가장 덜 쓰인 역할**부터 시도한다 — 쓴 수 ÷ 몫 오름차순 · 같으면 몫 큰 순. 몫 없는 역할은 맨 뒤
+    const shareOf = (r: string): number => (isReactionType(r) ? REAL_REACTION_SHARE[r] ?? 0 : 0)
+    const debt = (r: string): number => (shareOf(r) > 0 ? (roleCount[r] ?? 0) / shareOf(r) : Number.POSITIVE_INFINITY)
     const orderedRoles = [...roles].sort(
-      (a, b) => (roleCount[a] ?? 0) - (roleCount[b] ?? 0) || a.localeCompare(b),
+      (a, b) => debt(a) - debt(b) || shareOf(b) - shareOf(a) || a.localeCompare(b),
     )
     // 🔴 이번 회차에 적게 말한 사람 → 최근 창에서 적게 말한 사람 순
     const candidates = [...input.personas].sort(

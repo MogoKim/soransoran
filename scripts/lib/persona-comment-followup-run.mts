@@ -34,7 +34,7 @@ import { isAutoLaneCandidatePost } from '../../src/lib/persona-comment-auto-lane
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
 import { judgePostAuthor, type ModelSelection } from '../../src/lib/persona-comment-release'
 import type { ModelCanon } from '../../src/lib/persona-comment-provenance'
-import { buildCommentInput, selfFactsOf, voiceEvidenceFromAssets, type CommentInput } from '../../src/lib/persona-comment-input'
+import { buildCommentInput, postPersonaMarksOf, selfFactsOf, voiceEvidenceFromAssets, type CommentInput } from '../../src/lib/persona-comment-input'
 import { hasMenopauseExperience, hasSpouseStrain } from '../../src/lib/persona-life-facts'
 import { isAdviceForbidden } from '../../src/lib/persona-reaction-roles'
 import { judgeSourceContext } from '../../src/lib/persona-comment-source-context'
@@ -602,9 +602,11 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           ? (contentOf.get(seatGo.target.commentId) ?? '').slice(0, FOLLOWUP_REPLY_DIGEST_CHARS) : undefined
         // 🔴 오늘 이미 보내 실패한 (글 · Persona · 역할)은 다시 보내지 않는다 — 글쓴이는 남은 역할로 다시 선다
         const roles = seatGo.roles.filter((role) => !spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role })))
-        // 🔴 계획이 정한 길이와, 이 사람이 자기 이야기로 말해도 되는 사실(카드 생활 축 · 자기가 쓴 글 제목 — 이미 있는 칸만)
+        // 🔴 자리 순번(꼴 본보기의 열쇠) · 이 글의 앞 Persona 댓글 표지(실회원 댓글 제외 · 표지만) ·
+        //    이 사람이 자기 이야기로 말해도 되는 사실(카드 생활 축 · 자기가 쓴 글 제목 — 이미 있는 칸만)
         const threadSeat = {
-          length: seatGo.length,
+          ordinal: seatGo.ordinal,
+          postPersonaMarks: postPersonaMarksOf(liveComments.filter((c) => c.commentOrigin === 'PERSONA').map((c) => contentOf.get(c.id) ?? '')),
           selfFacts: selfFactsOf({
             ageBand: pe.ageBand, region: pe.region, identity: pe.identity,
             ownPostTitles: sourcePosts.filter((x) => x.authorPersonaCode === pe.code && x.id !== postId).map((x) => x.title),
