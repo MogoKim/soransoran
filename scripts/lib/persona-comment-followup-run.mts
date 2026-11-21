@@ -57,6 +57,7 @@ import type { AttemptStore } from './persona-comment-attempt-store.mjs'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
 import { judgeStaticVoiceCapability } from '../../src/lib/persona-voice-repeat'
+import { capBlocksForOneMore } from '../../src/lib/persona-cap-usage'
 import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 
 /**
@@ -530,6 +531,16 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const staticLocked = [...seedShareByCode].filter(([, n]) => !judgeStaticVoiceCapability({ seedShare: n }).capable).map(([c]) => c)
   if (staticLocked.length > 0) lines.push(`planner skip 고정 잠금 ${staticLocked.join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
   // 🔴 자격 사실은 한 번 만든다 — 실회원 판정 · 프로필 · 정적 말투 능력은 기존 정본 그대로다(재선정이 이 값을 바꾸지 않는다)
+  /**
+   * 🔴 **카드 상한** (2026-11-21 · 11-20 적재 145건 중 40건이 발행에서 상한으로 닫혔다) — 발행 트랜잭션과 같은 `planCap` 을
+   *    같은 셈법(활동 로그 오늘/7일 + 열린 대기)으로 고르는 순간에 쓴다. 못 읽으면 회차 유료 호출 0(seedUseCount 와 같은 fail-closed).
+   */
+  const capStates = await deps.source.capStates()
+  const capBlockedOf = (code: string): string | null => {
+    if (capStates === null) return null
+    const blocks = capBlocksForOneMore(capStates.get(code))
+    return blocks.length === 0 ? null : blocks.map((b) => b.message).join(' · ')
+  }
   const personaFacts: FollowupPersonaFacts[] = personas.map((pe) => {
     const id = personaIdByCode.get(pe.code) ?? null
     return {
@@ -538,8 +549,11 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       profileComplete: pe.identity !== null && pe.voiceCore !== null && pe.lifeStage !== null && pe.lifeStage.trim() !== '',
       voiceCapable: judgeStaticVoiceCapability({ seedShare: seedShareByCode.get(pe.code) ?? null }).capable,
       followupsToday: id === null ? 0 : fuToday.get(id) ?? 0,
+      capBlocked: capBlockedOf(pe.code),
     }
   })
+  const capFull = personaFacts.filter((p) => p.active && p.capBlocked !== null).map((p) => p.code)
+  if (capFull.length > 0) lines.push(`상한 찬 Persona ${capFull.join(' · ')} — 고르지 않는다(발행 트랜잭션과 같은 planCap)`)
   const ordered = orderFollowupGo(eligibleReady)
   // 🔴 출처 문맥은 글 성격이다. 모르는 글만 이 회차에서 격리하고 정상 글은 계속한다.
   //    회차 전체를 막는 옛 규칙은 한 글이 모든 정상 후보의 용량을 막는 두 번째 starvation이었다.
@@ -571,6 +585,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   if (knownNames === undefined) providerBlockers.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
   // 🔴 seed 공유 수를 못 셌으면 회차 전체 유료 호출 0 — 첫 댓글 materializer 와 같은 정본(그 사람만 빼고 계속하지 않는다)
   for (const [code, n] of seedShareByCode) if (n === null) providerBlockers.push(`seedUseCount (${code} 의 ⑧ seed 재사용 횟수를 세지 못했다)`)
+  if (capStates === null) providerBlockers.push('capStates (카드 상한 사용량을 읽지 못했다)')
 
   const byKey = new Map<string, Planned>()
   const planOf = (input: CommentInput) => byKey.get(`${input.post.id}\u0000${input.personaCode}`)

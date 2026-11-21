@@ -670,6 +670,8 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
     seedUseCount: async () => 1,
+    // 🔴 카드 상한 — 넉넉한 상한 · 사용 0(상한 판정은 아래 전용 검사가 본다)
+    capStates: async () => new Map(personas.map((p) => [p.code, { limits: { dailyCap: 99, weeklyCap: 999 }, used: { usedToday: 0, usedWeek: 0 } }])),
   })
 
   /** 🔴 DB 는 읽기 몇 개만 안다. create · $transaction 등 그 밖의 접근은 `bypass` 에 남는다 — 0 이어야 한다 */

@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Gate ⑧ 후보 귀속 · 글 × Persona 시도 기억 · 고정 잠금 · 회피 표지 · readiness 관측 — 변이 시험 (2026-11-07 D20)
+ * Gate ⑧ 후보 귀속 · 글 × Persona 시도 기억 · 고정 잠금 · 회피 표지 · readiness 관측 · 고르는 순간의 카드 상한 — 변이 시험 (2026-11-07 D20 · 11-21)
  *
  *   npx tsx scripts/persona-voice-repeat-mutation.mts
  *
@@ -21,6 +21,7 @@ const F = {
   prompt: 'scripts/lib/persona-prompt.ts',
   readiness: 'scripts/d20-readiness.mts',
   followup: 'scripts/lib/persona-comment-followup-run.mts',
+  capUsage: 'src/lib/persona-cap-usage.ts',
 }
 const MUTATIONS: { name: string; edits: Edit[] }[] = [
   { name: '후보 소속 제거 — 임계 패턴이 있으면 후보와 무관하게 막는다(옛 영구 잠금)',
@@ -36,6 +37,14 @@ const MUTATIONS: { name: string; edits: Edit[] }[] = [
       replace: "      return { axis, band: baselineOver ? 'regenerate' : band, cause: 'CANDIDATE', baselineShare, afterShare, candidateShare }" }] },
   { name: 'static lock 제거 — seed 공유 Persona 를 유료 호출 전에 빼지 않는다',
     edits: [{ file: F.targets, find: '      if (!fixed.capable) {', replace: '      if (false) {' }] },
+  { name: '카드 상한 필터 제거 — 상한이 찬 Persona 를 첫 댓글 planner 가 고른다(발행에서 닫힌다)',
+    edits: [{ file: F.targets, find: '        if (capBlocks.length > 0) {', replace: '        if (false) {' }] },
+  { name: '카드 상한 — 이번 계획에서 고른 수를 세지 않는다(같은 회차에 상한 넘게 고른다)',
+    edits: [{ file: F.targets, find: '      pickedInPlan.set(combo.personaCode, (pickedInPlan.get(combo.personaCode) ?? 0) + 1)\n', replace: '' }] },
+  { name: '카드 상한 사용량 미상 차단 제거 — 못 읽어도 유료 호출을 연다',
+    edits: [{ file: F.targets, find: '  if (capStates === null) gaps.push(', replace: '  if (false) gaps.push(' }] },
+  { name: '열린 대기 미반영 — 고르는 쪽이 대기 건을 사용으로 세지 않는다',
+    edits: [{ file: F.capUsage, find: '    opts.withOpenQueue\n', replace: '    false\n' }] },
   { name: 'post × Persona 제외 제거 — ⑧ 로 막힌 Persona 를 그 글에서 다른 역할로 다시 고른다',
     edits: [{ file: F.targets, find: '      if (args.voiceFailedPostPersonas?.has(ppKey) === true) {', replace: '      if (false) {' }] },
   { name: 'withAttemptStarted 방어 제거 — ⑧ 뒤 다른 역할 시작 기록을 받아 준다',

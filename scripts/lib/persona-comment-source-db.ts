@@ -17,6 +17,7 @@ import { RECENT_WINDOW_DAYS, roleHistoryOf } from '../../src/lib/persona-reserve
 import type { TargetSource } from './persona-comment-targets'
 import { referenceSeedShareCount, stableAssignment } from './persona-reference-store.mjs'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
+import { countCapUsage, type PersonaCapState } from '../../src/lib/persona-cap-usage'
 
 export function makeDbTargetSource(args: {
   prisma: PrismaClient
@@ -166,6 +167,20 @@ export function makeDbTargetSource(args: {
     seedUseCount: async (personaCode) => {
       // 🔴 ⑧ seed 재사용 = 같은 seed 를 받은 Persona 수(전체 단위 · 계약 §3-⑧). 이력 수가 아니다
       try { return referenceSeedShareCount(referenceByCode(), personaCode) } catch { return null }
+    },
+
+    /**
+     * 🔴 **카드 상한 사실** — 발행 트랜잭션과 같은 셈법(`countCapUsage`)에 열린 대기를 더한다. 못 읽으면 `null`.
+     *    시각은 `now`(생략하면 부르는 순간)다 — 발행 트랜잭션도 자기 순간의 KST 오늘 · 7일로 센다.
+     */
+    capStates: async () => {
+      try {
+        const rows = await prisma.persona.findMany({ select: { id: true, code: true, dailyCap: true, weeklyCap: true } })
+        const used = await countCapUsage(prisma, rows.map((r) => r.id), args.now ?? new Date(), { withOpenQueue: true })
+        return new Map<string, PersonaCapState>(rows.map((r) => [r.code, {
+          limits: { dailyCap: r.dailyCap, weeklyCap: r.weeklyCap }, used: used.get(r.id)!,
+        }]))
+      } catch { return null }
     },
   }
 }

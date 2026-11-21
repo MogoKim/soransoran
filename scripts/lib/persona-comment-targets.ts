@@ -36,6 +36,7 @@ import { judgeRealMember } from '../../src/lib/real-member-gate'
 import { judgeGateInputs } from '../../src/lib/persona-comment-gate-report'
 import { postPersonaKeyOf } from '../../src/lib/persona-comment-attempt-policy'
 import { judgeStaticVoiceCapability } from '../../src/lib/persona-voice-repeat'
+import { capBlocksForOneMore, type PersonaCapState } from '../../src/lib/persona-cap-usage'
 import type { PostAuthorFacts } from '../../src/lib/persona-comment-release'
 import { describeGateInput, toGateInput } from './persona-comment-bridge'
 import type { PipelineTarget } from './persona-comment-pipeline'
@@ -105,6 +106,11 @@ export type TargetSource = {
   knownNames: () => Promise<readonly string[] | undefined>
   /** ⑧ seed 재사용 횟수 — 🔴 못 세면 `null` */
   seedUseCount: (personaCode: string) => Promise<number | null>
+  /**
+   * 🔴 **카드 상한 사실** — Persona code 마다 상한(dailyCap · weeklyCap)과 사용량(발행 트랜잭션과 같은 셈법 + 열린 대기).
+   *    **못 읽으면 `null`** — 그 회차 유료 호출을 막는다(seedUseCount 와 같은 fail-closed).
+   */
+  capStates: () => Promise<ReadonlyMap<string, PersonaCapState> | null>
 }
 
 /**
@@ -222,6 +228,11 @@ export type MaterializeResult = {
    *    지금 축은 seed 공유 하나다. 반복 이력만으로는 빼지 않는다(후보 귀속 판정이라 영구 잠금이 없다).
    */
   voiceStaticLocked: readonly { code: string; codes: readonly string[] }[]
+  /**
+   * 🔴 **한 건 더 달면 카드 상한을 넘어 고르지 않은 Persona** — 발행 트랜잭션과 같은 `planCap` 블록 코드(오늘 · 7일 · 미설정).
+   *    그 글이 다른 사람으로 채워져도 사유가 사라지지 않게 따로 모은다.
+   */
+  capExcluded: readonly { code: string; codes: readonly string[] }[]
 }
 
 /** identity JSON 의 생활사 축 — 🔴 없으면 `undefined`. 0 으로 보정하지 않는다 */
@@ -281,12 +292,13 @@ export async function materializeTargets(args: {
   const commentDigestChars = args.commentDigestChars ?? 60
   const windowStartMs = args.nowMs - args.windowMs
 
-  const [posts, personas, openKeys, recentRoleCounts, knownNames] = await Promise.all([
+  const [posts, personas, openKeys, recentRoleCounts, knownNames, capStates] = await Promise.all([
     args.source.posts(),
     args.source.personas(),
     args.source.openDedupKeys(),
     args.source.recentRoleCounts(),
     args.source.knownNames(),
+    args.source.capStates(),
   ])
 
   const openDedupKeys = new Set(openKeys)
@@ -315,6 +327,14 @@ export async function materializeTargets(args: {
 
   const gaps: string[] = []
   if (knownNames === undefined) gaps.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
+  // 🔴 상한 사용량을 못 읽으면 고르는 순간의 상한 확인이 꺼진다 — 계획은 보여 주되 그 회차 유료 호출은 하지 않는다
+  if (capStates === null) gaps.push('capStates (카드 상한 사용량을 읽지 못했다)')
+  /**
+   * 🔴 **이번 계획에서 이미 고른 수** — 같은 회차에 같은 사람을 여러 글에 고르면 그만큼 상한을 먹는다.
+   *    `feasible` 이 [] 를 돌려주는 순간이 planner 가 그 조합을 고르는 순간이다(그 자리에서 센다).
+   */
+  const pickedInPlan = new Map<string, number>()
+  const capExcluded = new Map<string, Set<string>>()
 
   /**
    * 🔴 **조회 실패를 정상 0건으로 읽지 않는다.**
@@ -473,8 +493,27 @@ export async function materializeTargets(args: {
         attemptExcluded.add(comboKey)
         return [{ code: 'COMBO_ALREADY_ATTEMPTED', message: `${combo.personaCode}/${combo.reactionRole} 는 이 글의 60분 window 안에서 이미 보냈다` }]
       }
+      /**
+       * 🔴 **한 건 더 달면 카드 상한을 넘는 사람은 고르지 않는다** (2026-11-21 · 11-20 P18 사고).
+       *    발행 트랜잭션과 같은 `planCap` · 같은 셈법(활동 로그 오늘/7일) + 열린 대기 + 이번 계획에서 이미 고른 수.
+       *    못 읽었으면(null) 여기서는 거르지 않는다 — 위 gaps 가 그 회차 유료 호출을 막는다.
+       */
+      if (capStates !== null) {
+        const st = capStates.get(combo.personaCode)
+        const extra = pickedInPlan.get(combo.personaCode) ?? 0
+        const capBlocks = capBlocksForOneMore(st === undefined ? null
+          : { limits: st.limits, used: { usedToday: st.used.usedToday + extra, usedWeek: st.used.usedWeek + extra } })
+        if (capBlocks.length > 0) {
+          const seen = capExcluded.get(combo.personaCode) ?? new Set<string>()
+          for (const b of capBlocks) seen.add(b.code)
+          capExcluded.set(combo.personaCode, seen)
+          return capBlocks.map((b) => ({ code: b.code, message: `${combo.personaCode} — ${b.message}` }))
+        }
+      }
       const probe = buildFor(pr, pe, combo.reactionRole)
-      return probe.ok ? [] : probe.blocks.map((b) => ({ code: b.code as never, message: b.message }))
+      if (!probe.ok) return probe.blocks.map((b) => ({ code: b.code as never, message: b.message }))
+      pickedInPlan.set(combo.personaCode, (pickedInPlan.get(combo.personaCode) ?? 0) + 1)
+      return []
     },
   })
   const targets: MaterializedTarget[] = []
@@ -591,5 +630,6 @@ export async function materializeTargets(args: {
       voiceAttemptExcluded: voiceAttemptExcluded.size,
     },
     voiceStaticLocked,
+    capExcluded: [...capExcluded].map(([code, codes]) => ({ code, codes: [...codes].sort() })),
   }
 }

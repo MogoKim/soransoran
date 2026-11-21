@@ -972,7 +972,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 
   // 후보 — 자격 · 격리 · 이번 회차 사용 · 이 글에서 시도함
   const facts = (code: string, o: Partial<Parameters<typeof M.followupPersonaCandidates>[0]['personas'][number]> = {}) => ({
-    code, personaId: `id-${code}`, active: true, realMember: false, profileComplete: true, voiceCapable: true, followupsToday: 0, ...o,
+    code, personaId: `id-${code}`, active: true, realMember: false, profileComplete: true, voiceCapable: true, followupsToday: 0, capBlocked: null, ...o,
   })
   const iso = M.emptyFollowupIsolation()
   M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-iso' }, 'FU_PERSONA_DAY')
@@ -983,10 +983,11 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       facts('pc-ok'), facts('pc-real', { realMember: true }), facts('pc-off', { active: false }),
       facts('pc-noprof', { profileComplete: false }), facts('pc-novoice', { voiceCapable: false }),
       facts('pc-noid', { personaId: null }), facts('pc-iso'), facts('pc-pair'), facts('pc-used'),
+      facts('pc-cap', { capBlocked: '오늘 2건 발행 — dailyCap 2 초과' }),
     ],
     isolation: iso, usedPersonaIds: new Set(['id-pc-used']),
   }).map((c) => c.personaId)
-  check('⑫ 🔴 후보 — 실회원 · 비활성 · 프로필 · 말투 · 격리 · 쌍 · 이번 회차 사용을 전부 빼고 정상 Persona 만 남는다',
+  check('⑫ 🔴 후보 — 실회원 · 비활성 · 프로필 · 말투 · 카드 상한 · 격리 · 쌍 · 이번 회차 사용을 전부 빼고 정상 Persona 만 남는다',
     cands.length === 1 && cands[0] === 'id-pc-ok', cands.join(','))
   const otherPost = M.followupPersonaCandidates({
     postId: 'post-2', personas: [facts('pc-pair')], isolation: iso, usedPersonaIds: new Set(),
@@ -1060,16 +1061,17 @@ const normalizeDiffers = (a: string, b: string): boolean => {
       none.ok ? '' : none.reason)
   }
   // 글쓴이 사유 — 거르는 순서대로 실제 원인 하나
-  const author = { code: 'pc-a', personaId: 'id-a', active: true, realMember: false, profileComplete: true, voiceCapable: true, followupsToday: 0 }
+  const author = { code: 'pc-a', personaId: 'id-a', active: true, realMember: false, profileComplete: true, voiceCapable: true, followupsToday: 0, capBlocked: null }
   const iso = M.emptyFollowupIsolation()
   M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-a' }, 'FU_COMBO_DAY')
   const whyOf = (o: Partial<Parameters<typeof M.followupAuthorUnavailableReason>[0]>) => M.followupAuthorUnavailableReason({
     postId: 'post-1', author, isolation: M.emptyFollowupIsolation(), usedPersonaIds: new Set(), perPersonaDailyMax: 3, ...o,
   })
-  check('⑬ 글쓴이 사유 — 격리 · 이번 회차 사용 · 하루 상한을 가른다 · 설 수 있으면 null',
+  check('⑬ 글쓴이 사유 — 격리 · 이번 회차 사용 · 하루 상한 · 카드 상한을 가른다 · 설 수 있으면 null',
     whyOf({}) === null && (whyOf({ isolation: iso }) ?? '').includes('이미 실패')
     && (whyOf({ usedPersonaIds: new Set(['id-a']) }) ?? '').includes('이번 회차')
-    && (whyOf({ author: { ...author, followupsToday: 3 } }) ?? '').includes('하루 상한 3'))
+    && (whyOf({ author: { ...author, followupsToday: 3 } }) ?? '').includes('하루 상한 3')
+    && (whyOf({ author: { ...author, capBlocked: '최근 7일 8건 발행 — weeklyCap 8 초과' } }) ?? '').includes('weeklyCap 8 초과'))
   // 글쓴이는 자기 글에서 글 × Persona 하루 격리를 받지 않는다 — 남의 글 · Persona 격리는 그대로
   M.addFollowupIsolation(iso, { postId: 'post-2', personaCode: 'pc-a' }, 'FU_COMBO_DAY')
   M.addFollowupIsolation(iso, { postId: 'post-1', personaCode: 'pc-b' }, 'FU_COMBO_DAY')
