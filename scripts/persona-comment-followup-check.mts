@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type * as FollowupModule from '../src/lib/persona-comment-followup'
-import type { ReactionType } from '../src/lib/persona-reaction-roles'
+import { REAL_REACTION_SHARE, type ReactionType } from '../src/lib/persona-reaction-roles'
 import { runPaidCountOf } from '../src/lib/llm-ledger'
 import type { AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
 import { PLAN_MIN_GAP_MS, planSlotAt, threadPlanOf, type ThreadPlan } from '../src/lib/persona-thread-plan'
@@ -386,7 +386,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const g = (postId: string, extras: number) => ({
       postId,
       go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1, key: M.followupKeyOf(postId, extras + 2),
-        target: { kind: 'post' as const, hook: 'question' as const }, speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], length: 'normal' as const, reason: '' },
+        target: { kind: 'post' as const, hook: 'question' as const }, speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], reason: '' },
     })
     let allOk = true
     for (let i = 0; i < 50; i++) {
@@ -404,7 +404,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       postId, publishedAtMs,
       go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1,
         key: M.followupKeyOf(postId, extras + 2), target: { kind: 'post' as const, hook: 'question' as const },
-        speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], length: 'normal' as const, reason: '' },
+        speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], reason: '' },
     })
     const hIds = ['p-h1', 'p-h2', 'p-h3', 'p-h4', 'p-h5']
     // hash 오름차순으로 줄 세우기
@@ -1111,7 +1111,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && runSrc13.includes('!spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role }))'))
 }
 
-// ═════════ ⑭ 대화 계획 — 글 id 하나로 크기 · 자리 · 모양 · 길이 · 간격이 정해진다 ═════════
+// ═════════ ⑭ 대화 계획 — 글 id 하나로 크기 · 자리 · 모양 · 간격이 정해진다(길이는 꼴 본보기가 정한다) ═════════
 {
   const ids = Array.from({ length: 3000 }, (_, i) => `plan-post-${i}`)
   const plans = ids.map((id) => threadPlanOf(id))
@@ -1142,13 +1142,24 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const count = (p: ThreadPlan, k: string) => p.slots.filter((x) => x.kind === k).length
   check('⑭ 🔴 4개 이상인 글은 새 사람의 댓글이 2개 이상(글쓴이 아닌 사람 3명 이상) · 글쓴이 답글은 1~3',
     plans.every((p) => (p.size < 4 || count(p, 'post') >= 2) && count(p, 'author') >= 1 && count(p, 'author') <= 3))
-  check('⑭ 🔴 3개 이상인 글은 세 번째 댓글 안에 "글에 답"이 있고, 첫 "글에 답"은 경험으로 답한다',
-    plans.every((p) => p.size < 3 || (p.slots.slice(0, 2).some((x) => x.kind === 'post')
-      && p.slots.find((x) => x.kind === 'post')!.shape === 'experience')))
+  check('⑭ 🔴 3개 이상인 글은 세 번째 댓글 안에 "글에 답"이 있다',
+    plans.every((p) => p.size < 3 || p.slots.slice(0, 2).some((x) => x.kind === 'post')))
   const all = plans.flatMap((p) => p.slots)
-  const lenShare = (l: string) => all.filter((x) => x.length === l).length / all.length
-  check('⑭ 길이 — 한 줄 30% · 한두 문장 50% · 서너 문장 20%',
-    Math.abs(lenShare('short') - 0.3) < 0.03 && Math.abs(lenShare('normal') - 0.5) < 0.03 && Math.abs(lenShare('long') - 0.2) < 0.03)
+  // 🔴 모양 — 자리 종류가 허용하는 역할 안에서 실제 몫(`REAL_REACTION_SHARE`)으로 뽑는다. 첫 "글에 답"을 경험으로 몰지 않는다
+  const allowed: Record<string, readonly ReactionType[]> = { post: ['other', 'empathy', 'question', 'experience'], author: ['other', 'experience', 'question'], reply: ['other', 'empathy', 'question'] }
+  const shapeOff = Object.entries(allowed).flatMap(([kind, roles]) => {
+    const xs = all.filter((x) => x.kind === kind)
+    const total = roles.reduce((a, r) => a + (REAL_REACTION_SHARE[r] ?? 0), 0)
+    return roles.flatMap((r) => {
+      const got = xs.filter((x) => x.shape === r).length / xs.length
+      const want = (REAL_REACTION_SHARE[r] ?? 0) / total
+      return Math.abs(got - want) < 0.02 ? [] : [`${kind}/${r} ${(got * 100).toFixed(1)}% · 몫 ${(want * 100).toFixed(1)}%`]
+    })
+  })
+  check('⑭ 🔴 모양 — 자리 종류마다 실제 몫 ±2%p(고르게 돌리지 않는다)', shapeOff.length === 0, shapeOff.join(' / '))
+  const firstPostExp = plans.filter((p) => p.slots.find((x) => x.kind === 'post')?.shape === 'experience').length / plans.filter((p) => p.slots.some((x) => x.kind === 'post')).length
+  check('⑭ 🔴 첫 "글에 답"을 경험으로 몰지 않는다 — 다른 자리와 같은 몫', firstPostExp < 0.03, `${(firstPostExp * 100).toFixed(1)}%`)
+  check('⑭ 🔴 자리에 길이 칸이 없다 — 길이는 꼴 본보기의 실제 길이가 정한다', all.every((x) => !('length' in x)))
   check('⑭ 모양은 배정 가능한 역할뿐 · 자리 종류는 셋뿐',
     all.every((x) => ['other', 'empathy', 'question', 'experience'].includes(x.shape) && ['post', 'author', 'reply'].includes(x.kind)))
   // 🔴 이미 댓글이 달린 글 — 살아 있는 Persona 댓글을 채운 자리로 세어 남은 자리만 잇는다(배포 전 글에도 같다)
@@ -1189,22 +1200,25 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     fourth.verdict === 'GO' ? `${fourth.ordinal} ${fourth.speaker.kind}` : `${fourth.verdict} · ${fourth.reason}`)
 }
 
-// ═════════ ⑮ 자리의 입력 — 길이 · 자기 사실 · 일상 경험. 첫 댓글 프롬프트는 한 글자도 바뀌지 않는다 ═════════
+// ═════════ ⑮ 자리의 입력 — 순번 · 앞 Persona 댓글 표지 · 자기 사실 · 일상 경험. 첫 댓글 프롬프트 지문은 고정한다 ═════════
 {
-  const persona = { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] }
+  const persona = { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] }
   const post = { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }
-  const built = (o: Record<string, unknown>) => buildPrompt({ persona, post, requireReference: false, ...o } as never)
+  // 🔴 지어낸 본보기 — 실제 댓글을 저장소에 두지 않는다
+  const form = { 꼴: { 글자수: 12, 줄수: 1, 끝: '네요', 끝부호: '없음', 물음표수: 0, 말줄임수: 0, 이모티콘: false }, 본보기: '그맘 알것같네요 진짜로' }
+  const built = (o: Record<string, unknown>) => buildPrompt({ persona, post, requireReference: false, form, ...o } as never)
   const shaOf = (o: Record<string, unknown>) => createHash('sha256').update(JSON.stringify(built(o))).digest('hex').slice(0, 12)
-  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 자리 도입 전 main 과 대조해 고정한 값이다
-  check('⑮ 🔴 자리 칸이 없으면(첫 댓글) 프롬프트가 도입 전과 바이트 동일하다',
-    shaOf({ reactionType: 'other' }) === 'ea9f95f7cd19' && shaOf({ reactionType: 'experience' }) === '72a2ce655183'
-    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '47e61a85835f',
+  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 2026-11-21 꼴 판(꼴 절 · 말투 카드 · 길이 절 · 질문 권유 삭제)에서 고정한 값이다.
+  //    이 값이 바뀌면 첫 댓글 지시문이 바뀐 것이다 — 자리 칸만 고치려다 첫 댓글을 건드리지 않았는지 본다
+  check('⑮ 🔴 자리 칸이 없으면(첫 댓글) 프롬프트가 꼴 판 고정 지문과 바이트 동일하다',
+    shaOf({ reactionType: 'other' }) === 'a79ad6bfc0b8' && shaOf({ reactionType: 'experience' }) === '12231be6bfd1'
+    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '31f6230f4599',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
-  const seat = { length: 'short', selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
+  const seat = { ordinal: 3, postPersonaMarks: { openers: [], endings: [] }, selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
-  check('⑮ 🔴 자리 — 길이를 정해 주고, 자기 사실과 가벼운 일상 경험을 말하게 한다("들려줄 이야기가 없다"가 아니다)',
-    text.includes('**한 줄**') && text.includes('- 자녀 2명 (고등학생)') && text.includes('가벼운 일상 경험')
-    && !text.includes('들려줄 자기 이야기가 없습니다') && text.includes('내 경우를 말하는 것'))
+  check('⑮ 🔴 자리 — 자기 사실과 가벼운 일상 경험을 말하게 한다("들려줄 이야기가 없다"가 아니다) · 길이 등급 · 경험담 권유가 없다',
+    text.includes('- 자녀 2명 (고등학생)') && text.includes('가벼운 일상 경험')
+    && !text.includes('들려줄 자기 이야기가 없습니다') && !text.includes('내 경우') && !text.includes('**한 줄**') && !text.includes('서너 문장'))
   check('⑮ 🔴 자리 — 병명·약·시술·검사 수치와 제품·업체 권유는 그대로 막고, 갱년기를 안 겪은 사람은 자기 일로 말하지 않는다',
     text.includes('병명 · 약 이름 · 시술 · 검사 수치') && text.includes('특정 제품 · 업체') && text.includes('갱년기를 직접 겪은 것처럼 말하지 않습니다')
     && !JSON.stringify(built({ reactionType: 'experience', seat: { ...seat, menopauseExperienced: true } })).includes('갱년기를 직접 겪은 것처럼'))
@@ -1217,10 +1231,13 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑮ 🔴 글쓴이 답글 — 남의 글에나 맞는 지시("한 조각도 그대로 쓰지 않는다" · "주변에서 봤다" · "윗글에 직접 반응")는 받지 않는다',
     !own.includes('한 조각도 그대로 쓰지 않습니다') && !own.includes('주변에서 봤다') && !own.includes('윗글에 직접 반응')
     && own.includes('이 글에 쓴 것 밖으로'))
-  check('⑮ 🔴 남의 글에 다는 자리 — 자기 글 절이 붙지 않고 옮기지 않기 지시는 그대로다',
-    !text.includes('당신이 직접 쓴 글') && !text.includes('내가 쓴 글이다') && text.includes('한 조각도 그대로 쓰지 않습니다') && text.includes('주변에서 봤다'))
-  const lengths = (['short', 'normal', 'long'] as const).map((length) => JSON.stringify(built({ reactionType: 'other', seat: { ...seat, length } })))
-  check('⑮ 길이 세 등급이 서로 다른 지시로 나간다', lengths[0]!.includes('한 줄') && lengths[1]!.includes('한두 문장') && lengths[2]!.includes('서너 문장') && new Set(lengths).size === 3)
+  check('⑮ 🔴 남의 글에 다는 자리 — 자기 글 절이 붙지 않고, 글의 문장을 길게 옮기지 않기 지시가 있다(낱말을 받는 것은 막지 않는다)',
+    !text.includes('당신이 직접 쓴 글') && !text.includes('내가 쓴 글이다') && text.includes('## 글의 문장을 길게 옮겨 적지 않습니다')
+    && text.includes('글에 나온 낱말을 받아서 말하는 것은 괜찮습니다') && !text.includes('한 조각도 그대로 쓰지 않습니다') && !text.includes('주변에서 봤다'))
+  const marked = JSON.stringify(built({ reactionType: 'other', seat: { ...seat, postPersonaMarks: { openers: ['어머'], endings: ['네요', '더라구'] } } }))
+  check('⑮ 🔴 같은 글의 앞 Persona 댓글 표지 — 있을 때만 한 줄로 나가고, 없으면(첫 댓글 · 빈 표지) 그 줄이 없다',
+    marked.includes('- 이 글의 앞 댓글은 이렇게 시작했습니다: 어머 / 이렇게 끝났습니다: 네요 · 더라구 — 같은 말로 열거나 닫지 않습니다.')
+    && !text.includes('이 글의 앞 댓글은') && !JSON.stringify(built({ reactionType: 'other' })).includes('이 글의 앞 댓글은'))
   const facts = selfFactsOf({
     ageBand: '50대 초반', region: '경기', ownPostTitles: ['아침 산책', '', '둘째 도시락', '셋', '넷'],
     identity: { maritalStatus: '기혼', spouseRelationship: '원만', childrenCount: 2, childrenAgeBands: ['고등학생'], workStatus: '전업', parentCare: '없음', menopauseStatus: '진행중', job: '합성', note: '시험' },
@@ -1230,8 +1247,10 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && selfFactsOf({ ageBand: null, region: null, identity: null, ownPostTitles: [] }).length === 0
     && selfFactsOf({ ageBand: null, region: null, identity: { childrenCount: 0 }, ownPostTitles: [] }).join() === '자녀 없음', facts.join('|'))
   const runSrc15 = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
-  check('⑮ 🔴 run 이 계획의 길이와 자기 사실을 입력에 싣는다 · 첫 댓글 materializer 는 싣지 않는다',
-    runSrc15.includes('length: seatGo.length,') && runSrc15.includes('selfFacts: selfFactsOf({') && /authorReply: true as const \} : \{\}\),\n\s+threadSeat,/.test(runSrc15)
+  check('⑮ 🔴 run 이 자리 순번 · 앞 Persona 댓글 표지(Persona 댓글만) · 자기 사실을 입력에 싣는다 · 첫 댓글 materializer 는 싣지 않는다',
+    runSrc15.includes('ordinal: seatGo.ordinal,')
+    && runSrc15.includes("postPersonaMarks: postPersonaMarksOf(liveComments.filter((c) => c.commentOrigin === 'PERSONA')")
+    && runSrc15.includes('selfFacts: selfFactsOf({') && /authorReply: true as const \} : \{\}\),\n\s+threadSeat,/.test(runSrc15)
     && !readFileSync(join(here, 'lib/persona-comment-targets.ts'), 'utf-8').includes('threadSeat'))
 }
 
@@ -1265,16 +1284,16 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && !hasSpouseStrain({ maritalStatus: '기혼', spouseRelationship: '원만' }) && !hasSpouseStrain({ maritalStatus: '기혼' })
     && !hasSpouseStrain({ maritalStatus: '비혼' }) && !hasSpouseStrain(null))
   const calm = JSON.stringify(buildPrompt({
-    persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] },
+    persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] },
     post: { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }, reactionType: 'experience', requireReference: false,
-    seat: { length: 'normal', selfFacts: ['혼인 — 기혼(원만)'], menopauseExperienced: true, spouseStrain: false, reply: false },
+    seat: { ordinal: 2, postPersonaMarks: { openers: [], endings: [] }, selfFacts: ['혼인 — 기혼(원만)'], menopauseExperienced: true, spouseStrain: false, reply: false },
   } as never))
-  check('⑯ 🔴 프롬프트 — 뒷받침이 없으면 부부 불화를 자기 일로 말하지 말고 공감 · 질문 · "주변에서 봤다"로 말하게 한다',
-    calm.includes('별거 · 이혼을 **자기 일로** 말하지 않습니다') && calm.includes('주변에서 봤다')
+  check('⑯ 🔴 프롬프트 — 뒷받침이 없으면 부부 불화를 자기 일로 말하지 않는다(공감 · 질문 · "주변에서 봤다"를 권하지 않는다)',
+    calm.includes('별거 · 이혼을 **자기 일로** 말하지 않습니다') && calm.includes('그런 글에는 자기 일로 말하지 않습니다.') && !calm.includes('주변에서 봤다')
     && !JSON.stringify(buildPrompt({
-      persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { a: 1 }, voiceVariations: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] },
+      persona: { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] },
       post: { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }, reactionType: 'experience', requireReference: false,
-      seat: { length: 'normal', selfFacts: ['혼인 — 기혼(갈등)'], menopauseExperienced: true, spouseStrain: true, reply: false },
+      seat: { ordinal: 2, postPersonaMarks: { openers: [], endings: [] }, selfFacts: ['혼인 — 기혼(갈등)'], menopauseExperienced: true, spouseStrain: true, reply: false },
     } as never)).includes('별거 · 이혼을 **자기 일로** 말하지 않습니다'))
   // 관문 입력 — 자리 칸이 있는 입력(추가 댓글)에만 실린다
   const base = {
@@ -1283,7 +1302,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     post: { id: 'p', title: '주말 드라마 뭐 보세요', bodyDigest: '요즘 볼 게 없어서요.', boardLabel: 'FREE', existingCommentDigests: [] },
     voice: {}, memory: { has: false, note: '' }, fingerprint: 'x',
   } as unknown as CommentInput
-  const seated = { ...base, post: { ...base.post, threadSeat: { length: 'normal', selfFacts: [], menopauseExperienced: false, spouseStrain: false } } } as CommentInput
+  const seated = { ...base, post: { ...base.post, threadSeat: { ordinal: 2, postPersonaMarks: { openers: [], endings: [] }, selfFacts: [], menopauseExperienced: false, spouseStrain: false } } } as CommentInput
   const text = '저도 그 드라마 봤어요 주말에 몰아서 봤네요'
   const sevenOf = (input: CommentInput) => checkCommentCandidate(toGateInput({ input, text, sourceTexts: [input.post.title, input.post.bodyDigest] }))
     .gates.find((g) => g.gate === '⑦')?.outcome

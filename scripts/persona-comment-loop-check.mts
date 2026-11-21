@@ -922,14 +922,15 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
   // ── 같은 Persona 의 다른 허용 role 은 별 조합 — planner feasible 단계에서 정확한 조합만 뺀다 ──
   {
     const posts = [postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')]
-    const attempted = new Set([dedupKeyOf(TARGET_ID, 'P14', 'empathy')])
+    // 🔴 planner 가 먼저 고르는 역할(몫에 비해 가장 덜 쓰인 것 — 이력 0 이면 몫이 큰 other)을 이미 보낸 조합으로 둔다
+    const attempted = new Set([dedupKeyOf(TARGET_ID, 'P14', 'other')])
     const mat = await materializeTargets({
       source: autoLaneTargetSource(sourceOf(posts, [persona('P14')]), PUBLISHED_MS + 15 * MIN), limit: 6,
       nowMs: PUBLISHED_MS + 15 * MIN, windowMs: RATIO_WINDOW_DAYS * 86_400_000, attemptedCombos: attempted,
     })
     const roles = mat.targets.map((t) => t.target.facts.reactionRole)
-    check('🔴 같은 Persona 의 다른 허용 role 은 별 조합 — empathy 만 빠지고 다른 role 로 이어진다',
-      roles.length > 0 && !roles.includes('empathy') && mat.targets.every((t) => t.target.facts.personaCode === 'P14')
+    check('🔴 같은 Persona 의 다른 허용 role 은 별 조합 — other 만 빠지고 다른 role 로 이어진다',
+      roles.length > 0 && !roles.includes('other') && mat.targets.every((t) => t.target.facts.personaCode === 'P14')
       && mat.counts.attemptExcluded >= 1, `roles ${roles.join(',')} · 제외 ${mat.counts.attemptExcluded}`)
     const plain = await materializeTargets({
       source: autoLaneTargetSource(sourceOf(posts, [persona('P14')]), PUBLISHED_MS + 15 * MIN), limit: 6,

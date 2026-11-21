@@ -21,8 +21,9 @@ import {
 } from '../src/lib/persona-voice-reference'
 import { checkNameCollision, nameConfusion } from './lib/persona-gate-name-collision.mjs'
 import { buildPrompt } from './lib/persona-prompt'
+import { pickFormExample } from '../src/lib/persona-comment-form'
 import {
-  BUNDLE_MAX, carriesExperience, loadCanonAsset, planBundles, referenceSeedShareCount, stableAssignment,
+  BUNDLE_MAX, carriesExperience, commentFormPool, loadCanonAsset, planBundles, referenceSeedShareCount, stableAssignment,
   type LocalComment,
 } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -82,12 +83,14 @@ console.log('\n② provider payload — 안전 예시만')
   check('표의 말투 근거 수 = 관측 총수', plan.table.every((t) => t.anchorComments === t.safeTexts + t.styleOnly && t.anchorComments >= 3))
   const persona = (code: string) => ({
     code, ageBand: '50대 초반', region: '수도권', lifeStage: '자녀 독립기', identity: { maritalStatus: '기혼' },
-    voiceCore: { length: '짧은 문장', register: '존댓말', emoji: '없음' }, voiceVariations: ['a'],
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
   })
+  // 🔴 꼴 본보기도 같은 행의 풀에서 뽑는다 — 경험형 원문이 본보기로 새지 않는지 아래 payload 대조가 함께 본다
+  const formPool = commentFormPool(ROWS)
   const post = { title: '요즘 잠이 안 와요', content: '밤마다 깨요', boardLabel: '갱년기톡' }
   for (const b of plan.bundles) {
-    const pr = buildPrompt({ persona: persona(b.personaCode), post, reactionType: 'empathy', reference: b })
+    const form = pickFormExample({ pool: formPool, postId: `reserve-${b.personaCode}`, ordinal: 1, experience: false })
+    const pr = buildPrompt({ persona: persona(b.personaCode), post, reactionType: 'empathy', reference: b, ...(form === null ? {} : { form }) })
     check(`${b.personaCode} payload 가 선다`, pr.ok)
     if (!pr.ok) continue
     const payload = `${pr.prompt.systemPrompt}\n${pr.prompt.userPayload}`
@@ -202,11 +205,15 @@ console.log('\n⑥ 정본 자산 실물 (로컬만)')
     const expTexts = new Set(canon.rows.filter((r) => carriesExperience(r.text)).map((r) => r.text))
     const speakers = [...new Set(canon.rows.map((r) => r.speakerId))].filter((s) => s !== '')
     let leak = 0
+    // 🔴 꼴 본보기도 같은 자산의 풀에서 뽑는다 — 경험형 원문이 본보기로도 새지 않는지 함께 본다
+    const formPool = commentFormPool(canon.rows)
     for (const b of bundles) {
+      const form = pickFormExample({ pool: formPool, postId: `reserve-${b.personaCode}`, ordinal: 1, experience: false })
       const pr = buildPrompt({
-        persona: { code: b.personaCode, ageBand: '50대', region: '수도권', lifeStage: 'x', identity: {}, voiceCore: { length: '짧은 문장' },
-          voiceVariations: [], noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
+        persona: { code: b.personaCode, ageBand: '50대', region: '수도권', lifeStage: 'x', identity: {},
+          noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
         post: { title: '제목', content: '본문', boardLabel: '자유게시판' }, reactionType: 'empathy', reference: b,
+        ...(form === null ? {} : { form }),
       })
       if (!pr.ok) { leak += 1; continue }
       const payload = `${pr.prompt.systemPrompt}\n${pr.prompt.userPayload}`

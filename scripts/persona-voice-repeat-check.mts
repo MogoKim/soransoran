@@ -294,8 +294,8 @@ console.log('\n⑥ 프롬프트 회피 표지 = Gate 가 막는 패턴 · 원인
   check('🔴 프롬프트 표지가 Gate 와 같은 함수에서 온다 — P14 우세 3-gram 이 실린다',
     marks.dominant.grams.includes('저도요') && JSON.stringify(marks.dominant) === JSON.stringify(dominantRepeatMarks(LOCKED.P14!.prior)))
   const plan = buildPrompt({
-    persona: { code: 'P14', ageBand: '50대', region: '경기', lifeStage: '갱년기', identity: {}, voiceCore: { ending: '요' },
-      voiceVariations: [], noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
+    persona: { code: 'P14', ageBand: '50대', region: '경기', lifeStage: '갱년기', identity: {},
+      noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
     post: { title: '산책 이야기', content: '오늘 산책을 다녀왔어요', boardLabel: 'FREE' },
     reactionType: 'empathy', recentMarks: marks, requireReference: false,
   })

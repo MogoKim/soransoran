@@ -417,8 +417,9 @@ console.log('③ 댓글 분산 planner')
       check('🟢 [F] experience 가 불가능하면 같은 글에서 다음 역할을 고른다',
         r.items.length === 1 && r.items[0]?.postId === 'a'
         && r.items[0]?.reactionRole !== 'experience')
-      check('🟢 [F] 분산 순서는 그대로다 — 남은 역할 중 가장 적게 쓰인 것',
-        r.items[0]?.reactionRole === 'empathy')
+      // 🔴 쓴 수 ÷ 실제 몫(`REAL_REACTION_SHARE`): other 9/0.813 · question 9/0.115 · empathy 5/0.053 — 남은 것 중 other 가 가장 모자라다
+      check('🟢 [F] 분산 순서는 그대로다 — 남은 역할 중 몫에 비해 가장 덜 쓰인 것',
+        r.items[0]?.reactionRole === 'other')
     }
 
     // ② 근거가 있으면 기존대로 experience
@@ -1900,9 +1901,13 @@ console.log('⑧ 역할 어휘 통합 — planner 가 고른 것을 생성기가
     check('🔴 기존 댓글 문맥이 프롬프트에 들어간다', body.includes('이미 달린 댓글'))
     check('🔴 댓글이 없으면 없다고 적는다',
       toPromptPost({ ...built.input, post: { ...post, existingCommentDigests: [] } }).content.includes('아직 댓글이 없습니다'))
+    // 🔴 자기 발화가 없으면 빈 표지 — 카드의 말버릇을 "최근에 이렇게 시작했습니다" 로 넘기지 않는다(쓴 적 없는 말)
+    const none = toRecentMarks([])
+    check('🔴 자기 발화가 없으면 말투 표지가 비어 있다',
+      none.openers.length === 0 && none.endings.length === 0 && none.openerInitials.length === 0 && built.input.voice.openers.length > 0)
     // 🔴 openerInitials 는 빈도를 지녀야 Gate ⑧ 이 잡는 것과 같은 것을 막는다
-    const marks = toRecentMarks(built.input)
-    check('🔴 말투 표지에 빈도가 실린다', marks.openerInitials.every((e) => e.count >= 1))
+    const marks = toRecentMarks(['저도 그래요', '저는 어제 그랬어요', '어머 진짜요'])
+    check('🔴 자기 발화의 말투 표지에 빈도가 실린다', marks.openerInitials.some((e) => e.initial === '저' && e.count === 2))
     // 🔴 Gate 입력에 forbiddenRoles 가 빠지면 관문 ⑦ 이 notRun 이 되어 통과처럼 읽힌다
     const gi = toGateInput({ input: built.input, text: '저도 그런 날이 있어요', sourceTexts: ['무릎이 아파요'] })
     check('🔴 Gate 입력에 forbiddenRoles 가 실린다', gi.forbiddenRoles !== undefined)

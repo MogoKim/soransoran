@@ -67,6 +67,7 @@
     "voice:m3-check": "tsx scripts/voice-m3-check.mts",
     "persona:gate-check": "tsx scripts/persona-gate-check.mts",
     "persona:comment-engine-check": "tsx scripts/persona-comment-engine-check.mts",
+    "persona:comment-form-check": "tsx scripts/persona-comment-form-check.mts",
     "persona:comment-plan": "tsx scripts/persona-comment-plan.mts",
     "persona:comment-eval": "tsx scripts/persona-comment-eval.mts",
     "persona:comment-health": "tsx scripts/persona-comment-health.mts",
