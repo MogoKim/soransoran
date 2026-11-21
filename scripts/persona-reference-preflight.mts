@@ -123,7 +123,7 @@ for (const [code, bundle] of ref.byCode) {
     memory: { has: false, note: '' },
   })
   if (!built.ok) { console.log(`  🔴 ${code} 입력 실패 — ${built.blocks.map((b) => b.code).join(',')}`); continue }
-  const p = buildPromptFromInput(built.input, [], bundle)
+  const p = buildPromptFromInput(built.input, [], bundle, { formPool: ref.formPool })
   if (!p.ok) { console.log(`  🔴 ${code} 프롬프트 실패 — ${p.blocks.map((b) => b.code).join(',')}`); continue }
   payloads.push({ code, role, system: p.prompt.systemPrompt, user: p.prompt.userPayload })
 }
@@ -174,9 +174,8 @@ check(`🟢 근거 댓글이 payload 에 실렸다 (${carried}/${payloads.length
  * 🔴 **`'120자'` 는 목록에서 뺐다** (2026-09-11).
  *
  *    그 항목은 옛 프롬프트의 **고정 길이 지시**("120자 내외로")를 잡으려던 것이다.
- *    그런데 지금 길이 문장은 `${ref.lengths.median}자` 로 **그 Persona 자신의
- *    참고 댓글에서 잰 값**이다(`persona-prompt.ts`). P10 의 중앙값이 마침 120 이라
- *    금지어에 걸렸다 — 잡아야 할 것은 숫자가 아니라 **고정하라는 말**이다.
+ *    길이 값은 이제 자리마다 뽑은 실제 댓글 하나의 꼴 글자 수다(userPayload 의 `꼴.글자수` · `persona-comment-form`).
+ *    그 값이 마침 120이면 숫자 금지어에 걸린다 — 잡아야 할 것은 숫자가 아니라 **고정하라는 말**이다.
  *
  *    숫자 자체를 금지하면 다음 회차에 중앙값이 121 이 되는 순간 검사가 통과한다.
  *    늘 걸리거나 우연히 통과하는 검사는 아무것도 지키지 않는다.
@@ -223,8 +222,8 @@ check('② 근거 없는 Persona 에게 자기 이야기를 지어내지 말라�
  *    재야 하는 것은 "그 길이에 맞춰 써라" 는 **지시 형태**다.
  */
 const FIXED_LENGTH = /\d+\s*자\s*(이내|안팎|정도로|내외|로 맞|에 맞|로 써|로 쓰|씩)/
-check('③ 길이를 숫자 하나로 고정하지 않는다',
-  payloads.every((p) => p.system.includes('맞출 필요는 없습니다')
+check('③ 길이를 숫자 하나로 고정하지 않는다 — 꼴이 정하고, 그 값은 요청에 실린다',
+  payloads.every((p) => p.system.includes('## 🔴 이번 댓글의 꼴') && p.user.includes('\n[꼴]\n')
     && !FIXED_LENGTH.test(p.system) && !p.system.includes('한두 문장')))
 /** 🔴 그 정규식이 실제로 무언가를 잡는지 — 잡지 못하는 가드는 장식이다 */
 check('③ 고정 길이 지시 형태를 실제로 잡는다',

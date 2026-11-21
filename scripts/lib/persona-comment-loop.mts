@@ -498,6 +498,9 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
     if (material.counts.voiceAttemptExcluded > 0) {
       lines.push(`planner skip ⑧ 시도 ${material.counts.voiceAttemptExcluded}건 — 그 글에서 ⑧ 로 막힌 Persona 는 다른 역할로 다시 보내지 않는다`)
     }
+    if (material.capExcluded.length > 0) {
+      lines.push(`planner skip 카드 상한 ${material.capExcluded.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 한 건 더 달면 발행에서 닫힌다(같은 planCap)`)
+    }
     if (material.voiceStaticLocked.length > 0) {
       lines.push(`planner skip 고정 잠금 ${material.voiceStaticLocked.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
     }

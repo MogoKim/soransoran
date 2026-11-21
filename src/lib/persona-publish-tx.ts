@@ -12,7 +12,8 @@ import { judgeRealMember } from './real-member-gate'
 import { judgeLifeHistory, readPostRequirements } from './original-post-persona-match'
 import type { GateLine } from './persona-comment-gate-report'
 import { readConfirmedSelection, verifyProvenance } from './persona-comment-provenance'
-import { requireCapContext, kstDayStart, weekWindowStart } from './persona-cap'
+import { requireCapContext, kstDayStart } from './persona-cap'
+import { countCapUsage } from './persona-cap-usage'
 import type { CandidateStatus } from './persona-candidate-rules'
 import {
   judgeAutoLane, AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY,
@@ -262,15 +263,9 @@ export async function publishCandidateTx(
             },
           })) > 0
 
-      // 🔴 cap 실측. 못 세면 requireCapContext 가 throw 한다 — 0 으로 보정하지 않는다
-      const [usedToday, usedWeek] = await Promise.all([
-        tx.personaActivityLog.count({
-          where: { personaId: row.personaId, kind: 'comment', createdAt: { gte: kstDayStart(now) } },
-        }),
-        tx.personaActivityLog.count({
-          where: { personaId: row.personaId, kind: 'comment', createdAt: { gte: weekWindowStart(now) } },
-        }),
-      ])
+      // 🔴 cap 실측 — 고르는 쪽(첫 댓글 planner · 추가 댓글 후보)과 같은 셈법(`countCapUsage`). 못 세면 requireCapContext 가 throw 한다.
+      //    발행하려는 이 행 자신이 열린 대기라 대기는 더하지 않는다
+      const { usedToday, usedWeek } = (await countCapUsage(tx, [row.personaId], now, { withOpenQueue: false })).get(row.personaId)!
 
       /**
        * 🔴 **댓글 레인 재검사 — 이 트랜잭션 안에서 다시 읽는다** (2026-09-09).

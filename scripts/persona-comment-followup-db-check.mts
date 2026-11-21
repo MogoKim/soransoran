@@ -481,6 +481,29 @@ async function main(): Promise<void> {
     check('🟢 대조 — 같은 상태에서 seed 를 다 세면 추가 댓글 유료 호출이 난다', f2.calls() > 0 && r2.providerCalls > 0, JSON.stringify(r2.lines))
   }
 
+  console.log('\n③-c 🔴 카드 상한 — 고르는 순간에 발행 트랜잭션과 같은 planCap 으로 뺀다 (2026-11-21)')
+  {
+    await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)
+    const a = await persona('P01'); const b = await persona('P02'); await persona('P03'); await persona('P04')
+    const pid = await post(a, 200); await autoFirst(b, pid, 180)
+    const full = { limits: { dailyCap: 2, weeklyCap: 8 }, used: { usedToday: 2, usedWeek: 2 } }
+    const room = { limits: { dailyCap: 2, weeklyCap: 8 }, used: { usedToday: 0, usedWeek: 0 } }
+    const capsOf = (roomy: readonly string[]) => new Map(['P01', 'P02', 'P03', 'P04'].map((c) => [c, roomy.includes(c) ? room : full]))
+    const f = fakeGen()
+    const r = await phase(f.gen, { source: { ...source(), capStates: async () => capsOf([]) } })
+    check('🔴 🔴 모두 상한이 찼으면 아무도 고르지 않는다 — 유료 호출 0 · 추가 댓글 0 · "상한 찬 Persona" 로그',
+      f.calls() === 0 && (await personaRows(pid)).length === 1 && r.lines.some((l) => l.includes('상한 찬 Persona')),
+      `${f.calls()} · ${JSON.stringify(r.lines)}`)
+    const f2 = fakeGen()
+    const r2 = await phase(f2.gen, { source: { ...source(), capStates: async () => null } })
+    check('🔴 상한 사용량을 못 읽으면 회차 유료 호출 0 · 사유를 남긴다(seedUseCount 와 같은 경로)',
+      f2.calls() === 0 && r2.lines.some((l) => l.includes('capStates')), `${f2.calls()} · ${JSON.stringify(r2.lines)}`)
+    const f3 = fakeGen()
+    const r3 = await phase(f3.gen, { source: { ...source(), capStates: async () => capsOf(['P03']) } })
+    check('🟢 대조 — 여유 있는 사람(P03)이 있으면 그 사람으로 유료 호출이 난다', f3.calls() > 0 && r3.providerCalls > 0, JSON.stringify(r3.lines))
+    followupOn(false)
+  }
+
   console.log('\n④ 계획 10건을 마감 안에 다 채운다 — 넘지 않음 · 일반 Persona 두 번까지 · 글쓴이 답글 최대 3회')
   {
     await wipe(); await stageDecisionToday(); writeProfile(PROFILE); followupOn(true)

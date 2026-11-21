@@ -498,6 +498,8 @@ try {
       posts: async () => [post], personas: async () => [persona], openDedupKeys: async () => [],
       recentRoleCounts: async () => ({}), knownNames: async () => ['홍길동'],
       seedUseCount: async () => 1,
+      // 🔴 카드 상한 — 넉넉한 상한 · 사용 0(상한 판정은 아래 전용 검사가 본다)
+      capStates: async () => new Map([persona].map((p) => [p.code, { limits: { dailyCap: 99, weeklyCap: 999 }, used: { usedToday: 0, usedWeek: 0 } }])),
     }
     const makeDb = (): { prisma: PrismaClient; bypass: string[] } => {
       const bypass: string[] = []

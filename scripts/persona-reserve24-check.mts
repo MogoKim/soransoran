@@ -21,8 +21,9 @@ import {
 } from '../src/lib/persona-voice-reference'
 import { checkNameCollision, nameConfusion } from './lib/persona-gate-name-collision.mjs'
 import { buildPrompt } from './lib/persona-prompt'
+import { pickCommentForm } from '../src/lib/persona-comment-form'
 import {
-  BUNDLE_MAX, carriesExperience, loadCanonAsset, planBundles, referenceSeedShareCount, stableAssignment,
+  BUNDLE_MAX, carriesExperience, commentFormPool, loadCanonAsset, planBundles, referenceSeedShareCount, stableAssignment,
   type LocalComment,
 } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -82,18 +83,23 @@ console.log('\n② provider payload — 안전 예시만')
   check('표의 말투 근거 수 = 관측 총수', plan.table.every((t) => t.anchorComments === t.safeTexts + t.styleOnly && t.anchorComments >= 3))
   const persona = (code: string) => ({
     code, ageBand: '50대 초반', region: '수도권', lifeStage: '자녀 독립기', identity: { maritalStatus: '기혼' },
-    voiceCore: { length: '짧은 문장', register: '존댓말', emoji: '없음' }, voiceVariations: ['a'],
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
   })
+  // 🔴 꼴은 같은 행의 풀(경험형 포함)에서 꼴 값만 뽑는다 — 아래 payload 대조가 그 묶음 밖 풀 본문 0 · 경험형 원문 0 을 본다
+  const formPool = commentFormPool(ROWS)
   const post = { title: '요즘 잠이 안 와요', content: '밤마다 깨요', boardLabel: '갱년기톡' }
   for (const b of plan.bundles) {
-    const pr = buildPrompt({ persona: persona(b.personaCode), post, reactionType: 'empathy', reference: b })
+    const form = pickCommentForm({ pool: formPool, postId: `reserve-${b.personaCode}`, ordinal: 1, experience: false })
+    const pr = buildPrompt({ persona: persona(b.personaCode), post, reactionType: 'empathy', reference: b, ...(form === null ? {} : { form }) })
     check(`${b.personaCode} payload 가 선다`, pr.ok)
     if (!pr.ok) continue
     const payload = `${pr.prompt.systemPrompt}\n${pr.prompt.userPayload}`
     check(`🔴 ${b.personaCode} payload — 경험형 원문 0 · 화자 id 0 · 안전 예시 ${b.comments.length}건 전부`,
       !expTexts.some((t) => payload.includes(t)) && !['aaaa', 'bbbb', 'cccc', 'dddd', 'eeee'].some((id) => payload.includes(id))
       && b.comments.every((c) => payload.includes(c.text)))
+    // 그 묶음의 댓글(원래 실리는 것)을 지운 나머지에서 본다 — 짧은 풀 댓글이 묶음 댓글 속 글자와 우연히 겹치는 것은 유출이 아니다
+    const rest = b.comments.reduce((acc, c) => acc.split(c.text).join('\u0000'), payload)
+    check(`🔴 ${b.personaCode} payload — 그 묶음 밖 풀 댓글 본문 0(꼴은 값만)`, form !== null && !formPool.some((t) => rest.includes(t)))
   }
   check('🔴 묶음 타입에 화자 · 원글 자리가 없다(텍스트 · 숫자만)', plan.bundles.every((b) =>
     Object.keys(b).sort().join(',') === 'anchorCount,anchorRatio,comments,lengths,observedCount,personaCode,style,styleOnlyCount,supplementCount'
@@ -202,18 +208,25 @@ console.log('\n⑥ 정본 자산 실물 (로컬만)')
     const expTexts = new Set(canon.rows.filter((r) => carriesExperience(r.text)).map((r) => r.text))
     const speakers = [...new Set(canon.rows.map((r) => r.speakerId))].filter((s) => s !== '')
     let leak = 0
+    // 🔴 꼴은 같은 자산의 풀(경험형 포함)에서 꼴 값만 뽑는다 — 아래 payload 대조가 그 묶음 밖 풀 본문 0 을 함께 본다
+    const formPool = commentFormPool(canon.rows)
     for (const b of bundles) {
+      const form = pickCommentForm({ pool: formPool, postId: `reserve-${b.personaCode}`, ordinal: 1, experience: false })
       const pr = buildPrompt({
-        persona: { code: b.personaCode, ageBand: '50대', region: '수도권', lifeStage: 'x', identity: {}, voiceCore: { length: '짧은 문장' },
-          voiceVariations: [], noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
+        persona: { code: b.personaCode, ageBand: '50대', region: '수도권', lifeStage: 'x', identity: {},
+          noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] },
         post: { title: '제목', content: '본문', boardLabel: '자유게시판' }, reactionType: 'empathy', reference: b,
+        ...(form === null ? {} : { form }),
       })
       if (!pr.ok) { leak += 1; continue }
       const payload = `${pr.prompt.systemPrompt}\n${pr.prompt.userPayload}`
       if ([...expTexts].some((t) => payload.includes(t)) || speakers.some((s) => payload.includes(s))) leak += 1
       if (!b.comments.every((c) => payload.includes(c.text))) leak += 1
+      // 🔴 꼴은 값만 — 그 묶음 밖 풀 댓글 본문이 하나라도 실리면 문제다
+      const rest = b.comments.reduce((acc, c) => acc.split(c.text).join('\u0000'), payload)
+      if (form === null || formPool.some((t) => rest.includes(t))) leak += 1
     }
-    check(`🔴 실물 payload 24건 — 경험형 원문 0 · 화자 id 0 · 안전 예시만 (문제 ${leak})`, leak === 0)
+    check(`🔴 실물 payload 24건 — 경험형 원문 0 · 화자 id 0 · 안전 예시만 · 묶음 밖 풀 본문 0 (문제 ${leak})`, leak === 0)
     const byCode = st.byCode
     check('실물: seed 재사용 1(전 묶음)', bundles.every((b) => referenceSeedShareCount(byCode, b.personaCode) === 1))
     const old = oldAssign(canon.rows, PRODUCTION_PERSONA_CODES)

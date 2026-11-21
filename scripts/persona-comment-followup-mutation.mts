@@ -53,6 +53,8 @@ const MUTATIONS: Mutation[] = [
   { name: '사슬 깊이 제거', from: 'if (ctx.chain.length + 1 > FOLLOWUP_CHAIN_MAX) return', to: 'if (false) return' },
   { name: '같은 Persona 반복 허용', from: '&& !excluded.has(c.personaId)', to: '' },
   { name: 'Persona 하루 상한 제거', from: '&& c.followupsToday < perPersonaDailyMax', to: '' },
+  { name: '카드 상한 찬 후보 허용', from: '    if (p.capBlocked !== null) return []\n', to: '' },
+  { name: '글쓴이 카드 상한 사유 제거', from: '  if (a.capBlocked !== null) return', to: '  if (false) return' },
   { name: '글쓴이 제외 제거', from: 'if (f.authorPersonaId !== null) onPost.add(f.authorPersonaId)', to: '' },
   { name: '중복 문장 허용', from: '>= FOLLOWUP_DUP_JACCARD_MAX)', to: '>= 2)' },
   { name: '같은 도입 허용', from: "blockers.push('🔴 다른 Persona 댓글과 도입이 같다'); break", to: 'continue' },

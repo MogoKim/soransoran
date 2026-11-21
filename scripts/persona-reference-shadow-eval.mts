@@ -28,7 +28,7 @@ import {
 import { buildPromptFromInput, toGateInput } from './lib/persona-comment-bridge'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import {
-  allocateRolesByCorpus, loadCanonAsset, stableAssignment,
+  allocateRolesByCorpus, commentFormPool, loadCanonAsset, stableAssignment,
 } from './lib/persona-reference-store.mjs'
 import { judgeExperienceGrounding } from '../src/lib/persona-experience-grounding'
 import { judgeVoiceSeparation } from '../src/lib/persona-voice-reference'
@@ -142,6 +142,7 @@ console.log(`  확정 모델  ${MODEL} (회차 ${confirmed.canon?.runId})`)
 
 // ── 고정 배정 ──
 const assign = stableAssignment({ repoRoot: process.cwd() })
+const formPool = commentFormPool(assign.rows)
 const ready = PRODUCTION_PERSONA_CODES.filter((c) => assign.byCode.has(c))
 const missing = PRODUCTION_PERSONA_CODES.filter((c) => !assign.byCode.has(c))
 console.log(`\n  정본 ${PRODUCTION_PERSONA_CODES.length}명 · 준비 ${ready.length}명 · 차단 ${missing.length}명`)
@@ -233,7 +234,7 @@ for (const [i, code] of ready.entries()) {
     continue
   }
   const bundle = assign.byCode.get(code)!
-  const prompt = buildPromptFromInput(built.input, [], bundle)
+  const prompt = buildPromptFromInput(built.input, [], bundle, { formPool })
   if (!prompt.ok) {
     inputFailed.push({ code, codes: prompt.blocks.map((b) => b.code) })
     continue

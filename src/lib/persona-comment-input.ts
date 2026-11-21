@@ -22,6 +22,7 @@
 /** 🔴 이번 범위에서 만들지 않는 반응 역할. 기존 정책 그대로다 */
 import { judgeExperienceEligibility } from './persona-voice-reference'
 import { groundingTextOf } from './persona-experience-grounding'
+import { endingOf, hookOf } from './persona-voice-repeat'
 
 export const FORBIDDEN_REACTION_ROLES: readonly string[] = ['advice', 'caution']
 
@@ -84,20 +85,39 @@ export type CommentInputPost = {
    */
   authorReply?: true
   /**
-   * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 프롬프트 · 입력 판정이 한 글자도 바뀌지 않는다(첫 댓글 입력에는 없다).
-   *    길이는 계획이 정하고, `selfFacts` 는 이 사람이 자기 이야기로 말해도 되는 사실이다.
+   * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 첫 댓글 자리(순번 1)다.
+   *    `ordinal` 은 꼴을 고르는 순번이고, `selfFacts` 는 이 사람이 자기 이야기로 말해도 되는 사실이다.
    */
   threadSeat?: ThreadSeat
 }
 
 export type ThreadSeat = {
-  length: 'short' | 'normal' | 'long'
+  /** 이 글의 몇 번째 Persona 댓글 자리인가(2부터) — 꼴 추첨의 열쇠다(`pickCommentForm`) */
+  ordinal: number
+  /**
+   * 이 글에 이미 달린 **Persona 댓글**의 첫 어절 · 말끝 3자(`hookOf` · `endingOf`) — 같은 말로 열고 닫지 않게 한다.
+   *    🔴 표지만 담는다. 본문은 담지 않고, 실회원 댓글은 넣지 않는다.
+   */
+  postPersonaMarks: { openers: readonly string[]; endings: readonly string[] }
   /** Persona 카드의 생활 사실과 자기가 쓴 글 제목 — 🔴 새로 지어낸 것이 아니라 이미 있는 칸에서 읽은 것만 */
   selfFacts: readonly string[]
   /** 갱년기를 겪고 있거나 겪었는가(`hasMenopauseExperience`) — 아니면 자기 일로 말하지 않는다 */
   menopauseExperienced: boolean
   /** 부부 사이가 틀어졌거나 갈라섰는가(`hasSpouseStrain`) — 아니면 부부 불화를 자기 일로 말하지 않는다 */
   spouseStrain: boolean
+}
+
+/** 한 글에서 넘기는 앞 Persona 댓글 표지의 상한(시작 · 끝 각각) */
+export const POST_PERSONA_MARKS_MAX = 8
+
+/**
+ * 🔴 **같은 글의 앞 Persona 댓글 표지** — 첫 어절 · 말끝 3자만(Gate ⑧ 과 같은 추출). 중복을 지우고 최근 것 8개씩.
+ *    부르는 쪽이 Persona 댓글만 넘긴다(실회원 댓글은 넘기지 않는다). 본문은 결과에 남지 않는다.
+ */
+export function postPersonaMarksOf(personaTexts: readonly string[]): ThreadSeat['postPersonaMarks'] {
+  const uniq = (xs: readonly string[]): string[] => [...new Set(xs.filter((x) => x !== ''))].slice(-POST_PERSONA_MARKS_MAX)
+  const texts = personaTexts.map((t) => t.trim()).filter((t) => t !== '')
+  return { openers: uniq(texts.map(hookOf)), endings: uniq(texts.map(endingOf)) }
 }
 
 /**

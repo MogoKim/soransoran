@@ -278,7 +278,7 @@ console.log(`     ② other 포함 ${hasOther ? '🟢 예' : '🔴 아니오'}`
   let lureHits = 0
   let conflict = 0
   for (const inp of inputs) {
-    const pl = buildPromptFromInput(inp, [], reference.byCode.get(inp.persona.code))
+    const pl = buildPromptFromInput(inp, [], reference.byCode.get(inp.persona.code), { formPool: reference.formPool })
     if (!pl.ok) continue
     const sys = pl.prompt.systemPrompt
     for (const l of lures) if (sys.includes(l)) lureHits += 1
@@ -327,7 +327,7 @@ const caller: EvalCaller = async ({ model, input }) => {
    *    없으면 `buildPromptFromInput` 이 `REFERENCE_MISSING` 으로 막고,
    *    막힌 호출은 돈을 쓰지 않는다. 옛 경로(설정만 보고 창작)로 돌아가지 않는다.
    */
-  const prompt = buildPromptFromInput(input, [], reference.byCode.get(input.personaCode))
+  const prompt = buildPromptFromInput(input, [], reference.byCode.get(input.personaCode), { formPool: reference.formPool })
   if (!prompt.ok) {
     return {
       ok: false, rawText: '', inputTokens: 0, outputTokens: 0, reasoningTokens: null,

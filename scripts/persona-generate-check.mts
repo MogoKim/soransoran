@@ -19,6 +19,8 @@ import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../src/lib/comment-policy'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
+import { commentFormOf, type CommentForm } from '../src/lib/persona-comment-form'
+import { M3_LEAK_RUN_MIN } from './lib/voice-m3-contract.mjs'
 
 /**
  * 🔴 시험용 말투 근거. **실제 자산이 아니다** —
@@ -43,6 +45,10 @@ const refBundle = (): VoiceReferenceBundle => {
   return v.bundle
 }
 
+/** 🔴 시험용 꼴 — 지어낸 문장에서 잰 값이다(실제 댓글을 저장소에 두지 않는다 · 꼴 값만 프롬프트에 실린다) */
+const FORM_TEXT = '저희 동네도 요즘 그래요ㅠㅠ'
+const formEx = (): CommentForm => commentFormOf(FORM_TEXT)
+
 let failed = 0
 let passed = 0
 const expect = (label: string, actual: unknown, want: unknown): void => {
@@ -58,8 +64,6 @@ const persona = (): PromptPersona => ({
   region: '수도권',
   lifeStage: '자녀 독립기',
   identity: { maritalStatus: '기혼', childrenCount: 2 },
-  voiceCore: { ending: '~네요', length: '짧음', emoji: '거의 없음' },
-  voiceVariations: [{ mood: '피곤', ending: '~요' }],
   noGoTopics: ['정치', '종교'],
   noGoExpressions: ['대박'],
   forbiddenReactionRoles: ['rebuttal'],
@@ -76,7 +80,7 @@ const codes = (p: ReturnType<typeof buildPrompt>): PromptBlockCode[] =>
 
 console.log('\n══════ ① 기준 입력은 프롬프트를 만든다')
 {
-  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle() })
+  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(), form: formEx() })
   expect('ok', p.ok, true)
   if (p.ok) {
     expect('  maxOutputTokens', p.prompt.maxOutputTokens, MAX_OUTPUT_TOKENS)
@@ -92,57 +96,56 @@ console.log('\n══════ ② 반응 유형 (전수)')
   for (const rt of REACTION_TYPES) {
     const per = persona()
     // rebuttal 은 금지 역할이라 따로 본다
-    const p = buildPrompt({ persona: per, post: post(), reactionType: rt, reference: refBundle() })
+    const p = buildPrompt({ persona: per, post: post(), reactionType: rt, reference: refBundle(), form: formEx() })
     const want = rt !== 'rebuttal'
     if (p.ok !== want) offenders.push(`${rt}=${p.ok}`)
   }
   expect(`${REACTION_TYPES.length}종 전수 — 금지 역할만 차단`, offenders.join(' / '), '')
   expect('isReactionType(알 수 없는 값)', isReactionType('sarcasm'), false)
 
-  const bad = buildPrompt({ persona: persona(), post: post(), reactionType: 'sarcasm', reference: refBundle() })
+  const bad = buildPrompt({ persona: persona(), post: post(), reactionType: 'sarcasm', reference: refBundle(), form: formEx() })
   expect('알 수 없는 유형 → REACTION_TYPE_INVALID', codes(bad).includes('REACTION_TYPE_INVALID'), true)
 
-  const forbidden = buildPrompt({ persona: persona(), post: post(), reactionType: 'rebuttal', reference: refBundle() })
+  const forbidden = buildPrompt({ persona: persona(), post: post(), reactionType: 'rebuttal', reference: refBundle(), form: formEx() })
   expect('금지 역할 → REACTION_ROLE_FORBIDDEN', codes(forbidden).includes('REACTION_ROLE_FORBIDDEN'), true)
 }
 
-console.log('\n══════ ③ 말투 · 글이 없으면 만들지 않는다')
+console.log('\n══════ ③ 꼴 · 글이 없으면 만들지 않는다')
 {
-  const noVoice = persona(); noVoice.voiceCore = null
+  // 🔴 말투 카드 빈칸은 입력 단계(`buildCommentInput` PERSONA_VOICE_MISSING)가 막는다 — 프롬프트는 카드를 받지 않는다
   expect(
-    'voiceCore 없음 → PERSONA_VOICE_MISSING',
-    codes(buildPrompt({ persona: noVoice, post: post(), reactionType: 'empathy', reference: refBundle() })).includes('PERSONA_VOICE_MISSING'),
+    '꼴 없음 → FORM_MISSING',
+    codes(buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle() })).includes('FORM_MISSING'),
     true,
   )
-  const emptyVoice = persona(); emptyVoice.voiceCore = {}
   expect(
-    '빈 객체도 없음으로 본다',
-    codes(buildPrompt({ persona: emptyVoice, post: post(), reactionType: 'empathy', reference: refBundle() })).includes('PERSONA_VOICE_MISSING'),
+    '  근거를 끈 단위 시험에서는 꼴 없이도 만든다',
+    buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', requireReference: false }).ok,
     true,
   )
   const noTitle = post(); noTitle.title = '  '
   expect(
     '제목 공백 → POST_TITLE_EMPTY',
-    codes(buildPrompt({ persona: persona(), post: noTitle, reactionType: 'empathy', reference: refBundle() })).includes('POST_TITLE_EMPTY'),
+    codes(buildPrompt({ persona: persona(), post: noTitle, reactionType: 'empathy', reference: refBundle(), form: formEx() })).includes('POST_TITLE_EMPTY'),
     true,
   )
   const noBody = post(); noBody.content = ''
   expect(
     '본문 없음 → POST_CONTENT_EMPTY',
-    codes(buildPrompt({ persona: persona(), post: noBody, reactionType: 'empathy', reference: refBundle() })).includes('POST_CONTENT_EMPTY'),
+    codes(buildPrompt({ persona: persona(), post: noBody, reactionType: 'empathy', reference: refBundle(), form: formEx() })).includes('POST_CONTENT_EMPTY'),
     true,
   )
 }
 
 console.log('\n══════ ④ 🔴 금지어가 프롬프트에 지침으로 들어간다 (Gate ⑤ 와 같은 상수)')
 {
-  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle() })
+  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(), form: formEx() })
   const sys = p.ok ? p.prompt.systemPrompt : ''
   const missing = BRAND_BANNED_WORDS.filter((w) => !sys.includes(w))
   expect(`브랜드 금칙어 ${BRAND_BANNED_WORDS.length}종 전부 명시`, missing.join(','), '')
   expect('  No-Go 주제가 들어간다', sys.includes('정치') && sys.includes('종교'), true)
   expect('  No-Go 표현이 들어간다', sys.includes('대박'), true)
-  expect('  길이 정책이 들어간다', sys.includes(String(MAX_COMMENT_LENGTH)), true)
+  expect('  꼴 절이 들어간다', sys.includes('## 🔴 이번 댓글의 꼴'), true)
   expect('  진단·처방 금지가 들어간다', sys.includes('진단'), true)
   expect('  출처 언급 금지가 들어간다', sys.includes('카페'), true)
 }
@@ -165,7 +168,7 @@ console.log('\n══════ ⑩ 🔴 A안 — 최근 발화 말투 표지 
 
   const withMarks = buildPrompt({
     persona: persona(), post: post(), reactionType: 'empathy',
-    recentMarks: marks, reference: refBundle(),
+    recentMarks: marks, reference: refBundle(), form: formEx(),
   })
   const sys = withMarks.ok ? withMarks.prompt.systemPrompt : ''
   expect('최근 시작어절이 프롬프트에 실린다', sys.includes('최근에 이렇게 시작했습니다'), true)
@@ -174,7 +177,7 @@ console.log('\n══════ ⑩ 🔴 A안 — 최근 발화 말투 표지 
   expect('🔴 본문은 실리지 않는다', sys.includes('밤마다 뒤척이다 새벽에 깨요'), false)
 
   const without = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(),
+    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(), form: formEx(),
   })
   const sysNo = without.ok ? without.prompt.systemPrompt : ''
   expect('표지가 없으면 그 섹션도 없다', sysNo.includes('최근에 이렇게 시작했습니다'), false)
@@ -191,7 +194,7 @@ console.log('\n══════ ⑫ 🔴 Wave E — 억지 생활 장면 유�
  */
 {
   const p = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(),
+    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(), form: formEx(),
   })
   const sys = p.ok ? p.prompt.systemPrompt : ''
 
@@ -228,7 +231,7 @@ console.log('\n══════ ⑫ 🔴 Wave E — 억지 생활 장면 유�
     sys.includes('윗글에 직접 반응하면 됩니다'), true)
 
   // ── 그래도 남아야 하는 안전 규칙 ──
-  expect('🟢 원문 유출 금지는 남는다', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
+  expect('🟢 글의 문장을 길게 옮기지 않기는 남는다', sys.includes('## 글의 문장을 길게 옮겨 적지 않습니다'), true)
   /**
    * 🔴 **금지 문구가 아니라 grounding 계약으로 막는다** (2026-09-10, P0-1).
    *    "생활 장면을 만들지 마라" 같은 문구는 다른 형태의 지어내기를 막지 못했다 —
@@ -252,7 +255,7 @@ console.log('\n══════ ⑬ 🔴 Wave E — 말투 근거(reference)�
 {
   const bundle = refBundle()
   const p = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy', reference: bundle,
+    persona: persona(), post: post(), reactionType: 'empathy', reference: bundle, form: formEx(),
   })
   const sys = p.ok ? p.prompt.systemPrompt : ''
 
@@ -266,11 +269,14 @@ console.log('\n══════ ⑬ 🔴 Wave E — 말투 근거(reference)�
    *    옛 프롬프트가 정확히 그 실수를 했고 주석에 스스로 적어 두었다.
    */
   expect('🔴 근거가 금지 목록보다 앞에 온다',
-    sys.indexOf('말투는 아래 실제 댓글에서') < sys.indexOf('## 절대 하지 않는 것'), true)
-  expect('🔴 근거가 말투 설정보다 앞에 온다',
-    sys.indexOf('말투는 아래 실제 댓글에서') < sys.indexOf('## 말투 설정'), true)
-  expect('🟢 설정과 어긋나면 실제 댓글을 따르라고 한다',
-    sys.includes('실제 댓글 쪽**을 따릅니다') || sys.includes('실제 댓글 쪽'), true)
+    sys.indexOf('## 당신의 평소 말버릇 (실제 댓글)') >= 0 && sys.indexOf('## 당신의 평소 말버릇 (실제 댓글)') < sys.indexOf('## 절대 하지 않는 것'), true)
+  // 🔴 꼴 절은 말버릇 바로 아래 · 반응 · 규칙보다 앞이다
+  expect('🔴 꼴 절이 말버릇 다음 · 반응 절 앞에 온다',
+    sys.indexOf('## 당신의 평소 말버릇') < sys.indexOf('## 🔴 이번 댓글의 꼴')
+    && sys.indexOf('## 🔴 이번 댓글의 꼴') < sys.indexOf('## 이번에 쓸 반응'), true)
+  // 🔴 말투 카드(voiceCore · voiceVariations)를 싣지 않는다 — 글 새 판과 같다
+  expect('🔴 말투 설정 절이 없다', sys.includes('## 말투 설정') || sys.includes('상황별 변주'), false)
+  expect('🔴 말버릇 절은 길이 · 호흡을 가져오라고 하지 않는다', sys.includes('문장 길이 · 호흡'), false)
   /**
    * 🔴 **"통째로 옮기지 마라" 를 지웠다** (2026-09-10, P0-2 창업자 결정).
    *    맥락과 사실이 맞으면 표현·문장 구조를 가깝게 써도 된다 —
@@ -280,11 +286,11 @@ console.log('\n══════ ⑬ 🔴 Wave E — 말투 근거(reference)�
   expect('🟢 표현이 가까워도 된다고 말한다',
     sys.includes('표현이나 문장 구조가 가까워도 괜찮습니다'), true)
 
-  // 🔴 길이는 관찰된 분포로 전한다 — 숫자 하나를 목표로 주지 않는다
-  expect('🟢 참고 댓글의 길이 분포를 전한다', sys.includes('참고 댓글은 짧게는'), true)
-  expect('🟢 맞출 필요 없다고 말한다', sys.includes('맞출 필요는 없습니다'), true)
-  expect(`🟢 운영 상한 ${MAX_COMMENT_LENGTH}자는 한계로만 말한다`,
-    sys.includes('목표가 아니라 한계입니다'), true)
+  // 🔴 길이는 꼴이 정한다 — 참고 댓글 분포 · "## 길이" 절을 싣지 않는다
+  expect('🔴 길이 절 · 참고 댓글 길이 분포가 없다', sys.includes('## 길이') || sys.includes('참고 댓글은 짧게는'), false)
+  const user = p.ok ? p.prompt.userPayload : ''
+  expect('🟢 꼴 값만 userPayload 의 JSON 으로 실린다(그 댓글 본문은 없다)',
+    user.includes(JSON.stringify({ 꼴: formEx() })) && !user.includes(FORM_TEXT) && !sys.includes(FORM_TEXT), true)
 
   // 🔴 근거가 없으면 만들지 않는다 (fail-closed)
   const noRef = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
@@ -300,12 +306,14 @@ console.log('\n══════ ⑬ 🔴 Wave E — 말투 근거(reference)�
 console.log('\n══════ ⑨ 🔴 #9 실패(② 원문 공유)를 겨냥한 지시')
 {
   const p = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(),
+    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(), form: formEx(),
   })
   const sys = p.ok ? p.prompt.systemPrompt : ''
-  expect('② 원문 조각 금지가 명시된다', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
-  expect('  살짝 바꿔 옮기기도 금지', sys.includes('말을 살짝 바꿔 옮기는 것도 안 됩니다'), true)
-  expect('  증상·상황 요약 금지', sys.includes('되풀이해 요약하지 않습니다'), true)
+  // 🔴 숫자는 관문 ① 의 값을 읽는다 — 낱말을 받는 것은 막지 않고 긴 옮겨 적기만 막는다
+  expect('② 글의 문장 옮겨 적기 금지 — 관문 ① 과 같은 글자 수', sys.includes(`글의 문장을 ${M3_LEAK_RUN_MIN}자 이상 그대로 옮기지만 않습니다.`), true)
+  expect('  낱말을 받는 것은 괜찮다고 말한다', sys.includes('글에 나온 낱말을 받아서 말하는 것은 괜찮습니다'), true)
+  expect('  글 내용 요약 금지', sys.includes('글 내용을 다시 요약하지 않습니다.'), true)
+  expect('🔴 "한 조각도" · "내 안에 남은 느낌만" 이 없다', sys.includes('한 조각도 그대로') || sys.includes('내 안에 남은 느낌만'), false)
   expect('방법 안내 금지가 명시된다', sys.includes('방법을 알려주지 않습니다'), true)
   expect('  판단 금지가 명시된다', sys.includes('판단하지 않습니다'), true)
 }

@@ -60,6 +60,18 @@ export const COMMENT_REACTION_ROLES: readonly ReactionType[] = [
 ]
 
 /**
+ * 🔴 **실제 댓글의 역할 몫 — 역할을 고를 때 쓰는 단 한 곳** (2026-11-21).
+ *
+ *    위 실측과 같은 측정이다 — 정본 참고 댓글 자산 879건을 `classifyReaction`(scripts/lib/voice-comment-signals.mts)으로
+ *    잰 값: other 715 · question 101 · empathy 47 · experience 6 (rebuttal 7 · information 3 은 배정하지 않는 역할이라 몫이 없다).
+ *    대화 계획(`persona-thread-plan`)은 자리가 허용하는 역할 안에서 이 몫으로 뽑고,
+ *    planner(`persona-comment-planner`)는 몫에 비해 덜 쓰인 역할부터 고른다. 고르게 돌리지 않는다.
+ */
+export const REAL_REACTION_SHARE: Readonly<Partial<Record<ReactionType, number>>> = {
+  other: 0.813, question: 0.115, empathy: 0.053, experience: 0.007,
+}
+
+/**
  * 🔴 **Gate ⑤ 의 `adviceForbidden` 은 이 정본에서 파생한다.**
  *
  *    앞선 판은 대상 materializer 가 `adviceForbidden: false` 를 **고정**으로 넘겼다.

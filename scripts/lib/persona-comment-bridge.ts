@@ -16,8 +16,9 @@
  */
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import { groundingTextOf } from '../../src/lib/persona-experience-grounding'
+import { pickCommentForm } from '../../src/lib/persona-comment-form'
 import {
-  buildPrompt, extractVoiceMarks, MAX_RECENT_MARKS,
+  buildPrompt, extractVoiceMarks,
   type PromptPersona, type PromptPlan, type PromptTargetPost, type RecentVoiceMarks,
 } from './persona-prompt'
 
@@ -34,8 +35,6 @@ export function toPromptPersona(input: CommentInput): PromptPersona {
     region: p.region,
     lifeStage: p.lifeStage,
     identity: p.identity,
-    voiceCore: p.voiceCore,
-    voiceVariations: p.voiceVariations,
     noGoTopics: p.noGoTopics,
     noGoExpressions: p.noGoExpressions,
     forbiddenReactionRoles: p.forbiddenReactionRoles,
@@ -76,31 +75,14 @@ export function toPromptPost(input: CommentInput): PromptTargetPost {
 }
 
 /**
- * `VoiceEvidence` → `RecentVoiceMarks`.
+ * 자기 발화 → `RecentVoiceMarks`. 규칙은 Gate ⑧ 과 같은 `extractVoiceMarks` 하나다.
  *
- * 🔴 `openerInitials` 는 **빈도를 지니고 있어야** Gate ⑧ 이 잡는 것과 같은 것을 막는다.
- *    표지 목록만 넘기고 빈도를 버리면, 네 번 반복한 글자와 한 번 쓴 글자가 같아 보인다.
- * 🔴 자기 발화가 있으면 그쪽의 실제 규칙(`extractVoiceMarks`)을 쓴다 —
- *    같은 규칙을 여기서 다시 쓰지 않는다.
+ * 🔴 **자기 발화가 없으면 빈 표지다** (2026-11-21). 옛 판은 말투 카드의 말버릇을 "최근에 이렇게 시작했습니다" 로 넘겼다 —
+ *    쓴 적 없는 말을 썼다고 말하는 것이다. 자기 발화가 없으면 ⑧ 반복 축도 돌지 않으니 막힐 패턴도 없다.
  */
-export function toRecentMarks(input: CommentInput, recentTexts: readonly string[] = []): RecentVoiceMarks {
+export function toRecentMarks(recentTexts: readonly string[] = []): RecentVoiceMarks {
   if (recentTexts.length > 0) return extractVoiceMarks(recentTexts)
-  const openers = input.voice.openers.slice(0, MAX_RECENT_MARKS)
-  const endings = input.voice.endings.slice(0, MAX_RECENT_MARKS)
-  const counts = new Map<string, number>()
-  for (const o of openers) {
-    const initial = o.trim().charAt(0)
-    if (initial === '') continue
-    counts.set(initial, (counts.get(initial) ?? 0) + 1)
-  }
-  return {
-    openers,
-    endings,
-    openerInitials: [...counts].map(([initial, count]) => ({ initial, count }))
-      .sort((a, b) => b.count - a.count || a.initial.localeCompare(b.initial)),
-    // 🔴 자기 발화가 없으면 ⑧ 반복 축이 돌지 않는다 — 막힐 패턴도 없다
-    dominant: { endings: [], hooks: [], grams: [] },
-  }
+  return { openers: [], endings: [], openerInitials: [], dominant: { endings: [], hooks: [], grams: [] } }
 }
 
 /**
@@ -116,15 +98,26 @@ export function buildPromptFromInput(
    *    여기서 우회하지 않는다. 설정만 보고 창작하는 옛 경로로 돌아가지 않기 위해서다.
    */
   reference?: VoiceReferenceBundle,
-  opts: { requireReference?: boolean } = {},
+  /**
+   * 🔴 `formPool` — 꼴 풀(`bundlesForPersonas().formPool`). 자리(글 · 순번 — 첫 댓글은 1)마다 꼴 하나를 결정적으로 뽑는다(본문은 넘기지 않는다).
+   *    풀이 비면 꼴이 없고, 근거를 강제하는 경로에서는 `buildPrompt` 가 `FORM_MISSING` 으로 막는다.
+   */
+  opts: { requireReference?: boolean; formPool?: readonly string[] } = {},
 ): PromptPlan {
+  const form = pickCommentForm({
+    pool: opts.formPool ?? [],
+    postId: input.post.id,
+    ordinal: input.post.threadSeat?.ordinal ?? 1,
+    experience: input.reactionRole === 'experience',
+  })
   return buildPrompt({
     persona: toPromptPersona(input),
     post: toPromptPost(input),
     reactionType: input.reactionRole,
-    recentMarks: toRecentMarks(input, recentTexts),
+    recentMarks: toRecentMarks(recentTexts),
     reference,
     requireReference: opts.requireReference,
+    ...(form === null ? {} : { form }),
     // 🔴 생성과 검증이 **같은 grounding** 을 본다 (P0-1)
     grounding: groundingTextOf({ identity: input.persona.identity, memory: input.memory }),
     // 🔴 추가 댓글만 — 첫 댓글 입력에는 이 칸이 없어 프롬프트가 한 글자도 바뀌지 않는다

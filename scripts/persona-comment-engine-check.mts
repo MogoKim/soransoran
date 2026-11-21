@@ -148,6 +148,8 @@ import {
   hashRun, listRuns, pointLatest, runIdOf, savePaidRun, LATEST_FILE,
 } from './lib/persona-comment-eval-store'
 import { NO_MEMORY_NOTE as NOTE_UNUSED } from '../src/lib/persona-comment-input'
+import { capBlocksForOneMore, countCapUsage, type PersonaCapState } from '../src/lib/persona-cap-usage'
+import { kstDayStart } from '../src/lib/persona-cap'
 void NOTE_UNUSED
 
 let pass = 0
@@ -417,8 +419,9 @@ console.log('③ 댓글 분산 planner')
       check('🟢 [F] experience 가 불가능하면 같은 글에서 다음 역할을 고른다',
         r.items.length === 1 && r.items[0]?.postId === 'a'
         && r.items[0]?.reactionRole !== 'experience')
-      check('🟢 [F] 분산 순서는 그대로다 — 남은 역할 중 가장 적게 쓰인 것',
-        r.items[0]?.reactionRole === 'empathy')
+      // 🔴 쓴 수 ÷ 실제 몫(`REAL_REACTION_SHARE`): other 9/0.813 · question 9/0.115 · empathy 5/0.053 — 남은 것 중 other 가 가장 모자라다
+      check('🟢 [F] 분산 순서는 그대로다 — 남은 역할 중 몫에 비해 가장 덜 쓰인 것',
+        r.items[0]?.reactionRole === 'other')
     }
 
     // ② 근거가 있으면 기존대로 experience
@@ -1900,9 +1903,13 @@ console.log('⑧ 역할 어휘 통합 — planner 가 고른 것을 생성기가
     check('🔴 기존 댓글 문맥이 프롬프트에 들어간다', body.includes('이미 달린 댓글'))
     check('🔴 댓글이 없으면 없다고 적는다',
       toPromptPost({ ...built.input, post: { ...post, existingCommentDigests: [] } }).content.includes('아직 댓글이 없습니다'))
+    // 🔴 자기 발화가 없으면 빈 표지 — 카드의 말버릇을 "최근에 이렇게 시작했습니다" 로 넘기지 않는다(쓴 적 없는 말)
+    const none = toRecentMarks([])
+    check('🔴 자기 발화가 없으면 말투 표지가 비어 있다',
+      none.openers.length === 0 && none.endings.length === 0 && none.openerInitials.length === 0 && built.input.voice.openers.length > 0)
     // 🔴 openerInitials 는 빈도를 지녀야 Gate ⑧ 이 잡는 것과 같은 것을 막는다
-    const marks = toRecentMarks(built.input)
-    check('🔴 말투 표지에 빈도가 실린다', marks.openerInitials.every((e) => e.count >= 1))
+    const marks = toRecentMarks(['저도 그래요', '저는 어제 그랬어요', '어머 진짜요'])
+    check('🔴 자기 발화의 말투 표지에 빈도가 실린다', marks.openerInitials.some((e) => e.initial === '저' && e.count === 2))
     // 🔴 Gate 입력에 forbiddenRoles 가 빠지면 관문 ⑦ 이 notRun 이 되어 통과처럼 읽힌다
     const gi = toGateInput({ input: built.input, text: '저도 그런 날이 있어요', sourceTexts: ['무릎이 아파요'] })
     check('🔴 Gate 입력에 forbiddenRoles 가 실린다', gi.forbiddenRoles !== undefined)
@@ -3928,6 +3935,8 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
     seedUseCount: async () => 1,
+    // 🔴 카드 상한 — 넉넉한 상한 · 사용 0(상한 판정은 아래 전용 검사가 본다)
+    capStates: async () => new Map([persona].map((p) => [p.code, { limits: { dailyCap: 99, weeklyCap: 999 }, used: { usedToday: 0, usedWeek: 0 } }])),
     ...over,
   })
 
@@ -4026,6 +4035,56 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
       check(`🔴 seed 공유 ${shared} — 후보와 무관하게 ⑧ 이 막으므로 유료 호출 전에 뺀다(VOICE_STATIC_LOCKED · 대상 0)`,
         locked.targets.length === 0 && locked.voiceStaticLocked.some((x) => x.codes.includes('SEED_REUSE_LOCKED'))
         && locked.plan.skipped.some((s) => s.blocks.some((b) => b.code === 'VOICE_STATIC_LOCKED')))
+    }
+    // 🔴 카드 상한 — 고르는 순간에 발행 트랜잭션과 같은 planCap 으로 뺀다(2026-11-21 · 11-20 P18 이 상한을 채운 채 골려 발행에서 닫혔다)
+    {
+      const other: SourcePersona = { ...persona, code: 'P03' }
+      const room: PersonaCapState = { limits: { dailyCap: 2, weeklyCap: 8 }, used: { usedToday: 0, usedWeek: 0 } }
+      const capRun = (caps: Record<string, PersonaCapState>, posts: SourcePost[] = [post]) => materializeTargets({
+        source: makeSource({ posts: async () => posts, personas: async () => [persona, other], capStates: async () => new Map(Object.entries(caps)) }),
+        limit: 5, nowMs: NOW, windowMs: 7 * DAY,
+      })
+      const capSkipped = (m: Awaited<ReturnType<typeof capRun>>, code: string): boolean =>
+        m.capExcluded.some((x) => x.code === 'P01' && x.codes.includes(code))
+      const base = await capRun({ P01: room, P03: room })
+      check('🟢 [cap] 대조 — 둘 다 여유면 순서대로 P01 을 고른다', base.targets[0]?.target.facts.personaCode === 'P01')
+      const daily = await capRun({ P01: { ...room, used: { usedToday: 2, usedWeek: 2 } }, P03: room })
+      check('🔴 [cap] ① 오늘 상한이 찬 P01 은 고르지 않고 다음 사람(P03)을 고른다 · 사유를 남긴다(DAILY_CAP_EXCEEDED)',
+        daily.targets.length === 1 && daily.targets[0]?.target.facts.personaCode === 'P03' && capSkipped(daily, 'DAILY_CAP_EXCEEDED'))
+      const weekly = await capRun({ P01: { ...room, used: { usedToday: 0, usedWeek: 8 } }, P03: room })
+      check('🔴 [cap] ① 7일 상한이 찬 P01 도 같다(WEEKLY_CAP_EXCEEDED)',
+        weekly.targets[0]?.target.facts.personaCode === 'P03' && capSkipped(weekly, 'WEEKLY_CAP_EXCEEDED'))
+      const unset = await capRun({ P03: room })
+      check('🔴 [cap] 상한 사실이 없는 사람은 발행처럼 막는다(DAILY_CAP_UNSET)',
+        unset.targets[0]?.target.facts.personaCode === 'P03' && capSkipped(unset, 'DAILY_CAP_UNSET'))
+      // 🔴 ② 같은 회차 — 한 사람을 여러 글에 고르면 그만큼 상한을 먹는다
+      const twoPosts = await capRun({ P01: { ...room, limits: { dailyCap: 1, weeklyCap: 8 } }, P03: { ...room, used: { usedToday: 2, usedWeek: 2 } } },
+        [post, { ...post, id: 'p2' }])
+      check('🔴 [cap] ② 같은 회차에 상한 1 인 P01 을 두 글에 고르지 않는다(이번 계획에서 고른 수를 센다)',
+        twoPosts.targets.length === 1 && twoPosts.targets[0]?.target.facts.personaCode === 'P01' && capSkipped(twoPosts, 'DAILY_CAP_EXCEEDED'))
+      const unread = await materializeTargets({ source: makeSource({ capStates: async () => null }), limit: 5, nowMs: NOW, windowMs: 7 * DAY })
+      check('🔴 [cap] 상한 사용량을 못 읽으면 그 회차 유료 호출을 하지 않는다(gaps · seedUseCount 와 같은 경로)',
+        !unread.providerAllowed && unread.gaps.some((g) => g.startsWith('capStates')))
+      // 🔴 ② 셈법 — 발행 트랜잭션과 같은 활동 로그 오늘/7일 + 고르는 쪽만 열린 대기를 더한다
+      const now = new Date(NOW)
+      const fakeDb = {
+        personaActivityLog: {
+          groupBy: async (q: { where: { createdAt: { gte: Date } } }) =>
+            (q.where.createdAt.gte.getTime() === kstDayStart(now).getTime()
+              ? [{ personaId: 'a', _count: { _all: 1 } }] : [{ personaId: 'a', _count: { _all: 3 } }]),
+        },
+        personaApprovalQueue: { groupBy: async () => [{ personaId: 'a', _count: { _all: 1 } }] },
+      } as unknown as Parameters<typeof countCapUsage>[0]
+      const withOpen = await countCapUsage(fakeDb, ['a', 'b'], now, { withOpenQueue: true })
+      const published = await countCapUsage(fakeDb, ['a', 'b'], now, { withOpenQueue: false })
+      check('🔴 [cap] ② 열린 대기를 오늘 · 7일 모두에 더한다 · 발행 쪽 셈은 더하지 않는다 · 0건인 사람도 결과에 있다',
+        JSON.stringify(withOpen.get('a')) === JSON.stringify({ usedToday: 2, usedWeek: 4 })
+        && JSON.stringify(published.get('a')) === JSON.stringify({ usedToday: 1, usedWeek: 3 })
+        && JSON.stringify(withOpen.get('b')) === JSON.stringify({ usedToday: 0, usedWeek: 0 }))
+      const limits = { dailyCap: 2, weeklyCap: 8 }
+      check('🔴 [cap] ② 대기 1건을 세면 상한 2 인 사람에게 세 번째를 적재하지 않는다(안 세면 열린다)',
+        capBlocksForOneMore({ limits, used: withOpen.get('a')! }).some((b) => b.code === 'DAILY_CAP_EXCEEDED')
+        && capBlocksForOneMore({ limits, used: published.get('a')! }).length === 0)
     }
     const shortPrior = await materializeTargets({
       source: makeSource({
@@ -4507,6 +4566,8 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
     seedUseCount: async () => 1,
+    // 🔴 카드 상한 — 넉넉한 상한 · 사용 0(상한 판정은 아래 전용 검사가 본다)
+    capStates: async () => new Map([persona].map((p) => [p.code, { limits: { dailyCap: 99, weeklyCap: 999 }, used: { usedToday: 0, usedWeek: 0 } }])),
     ...over,
   })
   const mat = (over: Partial<TargetSource> = {}): Promise<Awaited<ReturnType<typeof materializeTargets>>> =>

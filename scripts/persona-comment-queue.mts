@@ -308,7 +308,7 @@ const result = await runEnqueuePipeline({
     const ctx = ctxOf(input.post.id, input.personaCode, input.reactionRole)
     if (ctx === undefined) return { ok: false, text: null, errorCode: 'NO_GATE_CONTEXT' }
     const prompt = buildPromptFromInput(input, ctx.recentTexts, reference.byCode.get(input.personaCode),
-      { requireReference: reference.byCode.size > 0 })
+      { requireReference: reference.byCode.size > 0, formPool: reference.formPool })
     if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
     /**
      * 🔴 **장부를 지나서 부른다** (2026-09-21).
