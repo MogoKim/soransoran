@@ -348,6 +348,8 @@ console.log('\n══════ ⑦ 🔴 대화 맥락은 참고하되, 말투
     // 🔴 seed 공유 1 = 아무와도 voice seed 를 공유하지 않는다(⑧ seed 축 통과 · 운영 실측값). 이 절은 대화 맥락 계약만 본다 —
     //    공유 2 이상은 후보와 무관하게 ⑧ 이 막는 고정 잠금이라 planner 가 유료 호출 전에 빼고(VOICE_STATIC_LOCKED) 대상이 0 이 된다
     seedUseCount: async () => 1,
+    // 🔴 카드 상한 — 넉넉한 상한 · 사용 0(상한 판정은 아래 전용 검사가 본다)
+    capStates: async () => new Map([persona].map((p) => [p.code, { limits: { dailyCap: 99, weeklyCap: 999 }, used: { usedToday: 0, usedWeek: 0 } }])),
   })
 
   const memberOnly = [{ origin: 'MEMBER', content: MEMBER_TEXT, personaCode: null }]

@@ -25,6 +25,7 @@ import {
   judgeLifeHistory, readPostRequirements, type PersonaForMatch,
 } from './original-post-persona-match'
 import { COMMENT_REACTION_ROLES, isReactionType, REAL_REACTION_SHARE } from './persona-reaction-roles'
+import type { CapBlockCode } from './persona-cap'
 import { roleRoundVerdict, type RoleHistory } from './persona-reserve'
 import { judgeRealMember, type RealMemberProbe } from './real-member-gate'
 import {
@@ -150,6 +151,8 @@ export type PlanBlockCode =
   | 'VOICE_STATIC_LOCKED'
   /** 🔴 같은 글 60분 window 안에서 이 Persona 가 이미 ⑧ 로 막혔다 — 역할만 바꿔 다시 보내지 않는다(첫 댓글 lane 전용) */
   | 'PERSONA_VOICE_ATTEMPTED'
+  /** 🔴 한 건 더 달면 카드 상한을 넘는다 — 발행 트랜잭션과 같은 `planCap` 블록 그대로 · `feasible` 이 유료 호출 전에 뺀다 */
+  | CapBlockCode
   | 'NO_ELIGIBLE_PERSONA'
   | 'LIMIT_EXHAUSTED'
 

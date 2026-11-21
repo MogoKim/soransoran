@@ -712,6 +712,11 @@ export type FollowupPersonaFacts = {
   /** `judgeStaticVoiceCapability` — 후보와 무관하게 ⑧ 이 막는 Persona 는 false */
   voiceCapable: boolean
   followupsToday: number
+  /**
+   * 🔴 한 건 더 달면 카드 상한(dailyCap · weeklyCap)을 넘는가 — 넘으면 그 사유, 아니면 null.
+   *    발행 트랜잭션과 같은 `planCap` · 같은 셈법(활동 로그 + 열린 대기)으로 부르는 쪽이 만든다(`capBlocksForOneMore`).
+   */
+  capBlocked: string | null
 }
 
 /**
@@ -728,6 +733,8 @@ export function followupPersonaCandidates(i: {
 }): FollowupPersonaCandidate[] {
   return i.personas.flatMap((p) => {
     if (p.personaId === null || !p.active || p.realMember || !p.profileComplete || !p.voiceCapable) return []
+    // 🔴 상한이 찬 사람은 고르지 않는다 — 고른 뒤 발행 트랜잭션에서 닫히면 유료 생성을 버리고 그 자리도 빈다
+    if (p.capBlocked !== null) return []
     if (i.usedPersonaIds.has(p.personaId)) return []
     if (followupIsolationReason(i.isolation, { postId: i.postId, personaCode: p.code }) !== null) return []
     return [{ personaId: p.personaId, eligible: true, followupsToday: p.followupsToday }]
@@ -763,6 +770,7 @@ export function followupAuthorUnavailableReason(i: {
   if (a.realMember) return `글쓴이 ${a.code} 에 실회원 계정이 붙어 있다`
   if (!a.profileComplete) return `글쓴이 ${a.code} 의 프로필이 덜 찼다`
   if (!a.voiceCapable) return `글쓴이 ${a.code} 는 말투 고정 잠금이다`
+  if (a.capBlocked !== null) return `글쓴이 ${a.code} — ${a.capBlocked}`
   if (i.usedPersonaIds.has(a.personaId)) return `글쓴이 ${a.code} 는 이번 회차에 이미 다른 글에 썼다`
   const iso = followupIsolationReason(i.isolation, { postId: i.postId, personaCode: a.code })
   if (iso !== null) return iso

@@ -61,7 +61,7 @@ const PERSONAS: Persona[] = [
 const factsOf = (ps: readonly Persona[]): import('../src/lib/persona-comment-followup').FollowupPersonaFacts[] =>
   ps.map((p) => ({
     code: p.code, personaId: p.id, active: true, realMember: p.realMember === true, profileComplete: true, voiceCapable: true,
-    followupsToday: 0,
+    followupsToday: 0, capBlocked: null,
   }))
 type Slot = { postId: string; postPublishedAtMs: number }
 const slotsOf = (...ids: string[]): Slot[] => ids.map((postId) => ({ postId, postPublishedAtMs: PUB }))
