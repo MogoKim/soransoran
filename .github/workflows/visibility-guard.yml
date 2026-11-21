@@ -298,6 +298,7 @@ jobs:
         run: |
           npm run check:best
           npm run check:comment-thread
+          npm run check:observers
           # 🔴 첫 댓글 뒤 선택적 추가 댓글(PR #704 · 기본 OFF) — 순수 판정 · 첫 댓글 프롬프트 바이트 동일 · 트랜잭션 판정,
           #    그리고 막는 줄 하나를 지우면 반드시 FAIL 하는지(변이 · 임시 디렉터리만). 새 step 이 아니다(무조건 step 상한 불변)
           npm run check:persona-followup
