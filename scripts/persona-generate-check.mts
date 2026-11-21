@@ -19,7 +19,7 @@ import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../src/lib/comment-policy'
 import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
-import { commentFormOf, type FormExample } from '../src/lib/persona-comment-form'
+import { commentFormOf, type CommentForm } from '../src/lib/persona-comment-form'
 import { M3_LEAK_RUN_MIN } from './lib/voice-m3-contract.mjs'
 
 /**
@@ -45,9 +45,9 @@ const refBundle = (): VoiceReferenceBundle => {
   return v.bundle
 }
 
-/** 🔴 시험용 꼴 본보기 — 지어낸 문장이다(실제 댓글을 저장소에 두지 않는다) */
+/** 🔴 시험용 꼴 — 지어낸 문장에서 잰 값이다(실제 댓글을 저장소에 두지 않는다 · 꼴 값만 프롬프트에 실린다) */
 const FORM_TEXT = '저희 동네도 요즘 그래요ㅠㅠ'
-const formEx = (): FormExample => ({ 꼴: commentFormOf(FORM_TEXT), 본보기: FORM_TEXT })
+const formEx = (): CommentForm => commentFormOf(FORM_TEXT)
 
 let failed = 0
 let passed = 0
@@ -110,11 +110,11 @@ console.log('\n══════ ② 반응 유형 (전수)')
   expect('금지 역할 → REACTION_ROLE_FORBIDDEN', codes(forbidden).includes('REACTION_ROLE_FORBIDDEN'), true)
 }
 
-console.log('\n══════ ③ 꼴 본보기 · 글이 없으면 만들지 않는다')
+console.log('\n══════ ③ 꼴 · 글이 없으면 만들지 않는다')
 {
   // 🔴 말투 카드 빈칸은 입력 단계(`buildCommentInput` PERSONA_VOICE_MISSING)가 막는다 — 프롬프트는 카드를 받지 않는다
   expect(
-    '꼴 본보기 없음 → FORM_MISSING',
+    '꼴 없음 → FORM_MISSING',
     codes(buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle() })).includes('FORM_MISSING'),
     true,
   )
@@ -286,11 +286,11 @@ console.log('\n══════ ⑬ 🔴 Wave E — 말투 근거(reference)�
   expect('🟢 표현이 가까워도 된다고 말한다',
     sys.includes('표현이나 문장 구조가 가까워도 괜찮습니다'), true)
 
-  // 🔴 길이는 꼴 본보기가 정한다 — 참고 댓글 분포 · "## 길이" 절을 싣지 않는다
+  // 🔴 길이는 꼴이 정한다 — 참고 댓글 분포 · "## 길이" 절을 싣지 않는다
   expect('🔴 길이 절 · 참고 댓글 길이 분포가 없다', sys.includes('## 길이') || sys.includes('참고 댓글은 짧게는'), false)
   const user = p.ok ? p.prompt.userPayload : ''
-  expect('🟢 꼴 · 본보기가 userPayload 의 JSON 으로 실린다',
-    user.includes(JSON.stringify({ 꼴: formEx().꼴, 본보기: FORM_TEXT })), true)
+  expect('🟢 꼴 값만 userPayload 의 JSON 으로 실린다(그 댓글 본문은 없다)',
+    user.includes(JSON.stringify({ 꼴: formEx() })) && !user.includes(FORM_TEXT) && !sys.includes(FORM_TEXT), true)
 
   // 🔴 근거가 없으면 만들지 않는다 (fail-closed)
   const noRef = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })

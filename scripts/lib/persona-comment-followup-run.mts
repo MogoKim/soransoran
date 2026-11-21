@@ -602,7 +602,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
           ? (contentOf.get(seatGo.target.commentId) ?? '').slice(0, FOLLOWUP_REPLY_DIGEST_CHARS) : undefined
         // 🔴 오늘 이미 보내 실패한 (글 · Persona · 역할)은 다시 보내지 않는다 — 글쓴이는 남은 역할로 다시 선다
         const roles = seatGo.roles.filter((role) => !spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role })))
-        // 🔴 자리 순번(꼴 본보기의 열쇠) · 이 글의 앞 Persona 댓글 표지(실회원 댓글 제외 · 표지만) ·
+        // 🔴 자리 순번(꼴 추첨의 열쇠) · 이 글의 앞 Persona 댓글 표지(실회원 댓글 제외 · 표지만) ·
         //    이 사람이 자기 이야기로 말해도 되는 사실(카드 생활 축 · 자기가 쓴 글 제목 — 이미 있는 칸만)
         const threadSeat = {
           ordinal: seatGo.ordinal,

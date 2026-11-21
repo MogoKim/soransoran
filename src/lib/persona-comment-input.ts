@@ -86,13 +86,13 @@ export type CommentInputPost = {
   authorReply?: true
   /**
    * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다. 없으면 첫 댓글 자리(순번 1)다.
-   *    `ordinal` 은 꼴 본보기를 고르는 순번이고, `selfFacts` 는 이 사람이 자기 이야기로 말해도 되는 사실이다.
+   *    `ordinal` 은 꼴을 고르는 순번이고, `selfFacts` 는 이 사람이 자기 이야기로 말해도 되는 사실이다.
    */
   threadSeat?: ThreadSeat
 }
 
 export type ThreadSeat = {
-  /** 이 글의 몇 번째 Persona 댓글 자리인가(2부터) — 꼴 본보기 추첨의 열쇠다(`pickFormExample`) */
+  /** 이 글의 몇 번째 Persona 댓글 자리인가(2부터) — 꼴 추첨의 열쇠다(`pickCommentForm`) */
   ordinal: number
   /**
    * 이 글에 이미 달린 **Persona 댓글**의 첫 어절 · 말끝 3자(`hookOf` · `endingOf`) — 같은 말로 열고 닫지 않게 한다.

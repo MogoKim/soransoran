@@ -27,7 +27,7 @@ import { TARGET_DESCRIPTOR_TERMS } from './voice-style-signals.mjs'
 import { M3_LEAK_RUN_MIN } from './voice-m3-contract.mjs'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../../src/lib/comment-policy'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
-import type { FormExample } from '../../src/lib/persona-comment-form'
+import type { CommentForm } from '../../src/lib/persona-comment-form'
 
 /** 반응 유형 — voice-comment-signals 의 ReactionType 과 같은 값이다 */
 /**
@@ -70,11 +70,11 @@ const REACTION_GUIDE: Record<ReactionType, string> = {
 export const MAX_OUTPUT_TOKENS = 800
 
 /**
- * 🔴 **길이 · 끝 모양은 자리마다 뽑은 실제 댓글 하나(꼴 본보기)가 정한다** (2026-11-21).
+ * 🔴 **길이 · 줄 · 말끝 종류는 자리마다 뽑은 실제 댓글 하나의 꼴이 정한다** (2026-11-21).
  *
  *    옛 판은 길이를 말로 시켰다 — 고정 120자, 그다음 참고 댓글 분포, 그다음 "한 줄 · 한두 문장 · 서너 문장" 셋.
  *    끝 모양 · 문장부호는 모델 기본값(반듯한 "~요.")으로 갔다. 실제 댓글 879개와 운영 댓글 219개를 대 보면
- *    20자 이하 15% 대 6% · 마침표 끝 18% 대 35% 였다. 이제 `persona-comment-form` 이 뽑은 본보기의 꼴을 건넨다.
+ *    20자 이하 15% 대 6% · 마침표 끝 18% 대 35% 였다. 이제 `persona-comment-form` 이 잰 꼴 값만 건넨다(그 댓글 본문은 건네지 않는다).
  *    `MAX_COMMENT_LENGTH` 는 운영 절대 상한일 뿐 목표가 아니다(`parseCandidate`).
  */
 
@@ -250,16 +250,17 @@ const listOr = (xs: readonly string[], fallback: string): string =>
   xs.length === 0 ? fallback : xs.join(' · ')
 
 /**
- * 🔴 꼴 절 — 값은 userPayload 의 JSON(`꼴` · 있으면 `본보기`)에 실린다. 규칙보다 먼저, 말버릇 절 바로 아래에 둔다.
- *    문장은 언제나 [꼴] 값 기준이다 — 본보기가 경험담이라 빠진 자리도 같은 문장을 받는다(갈래 없음).
+ * 🔴 꼴 절 — 값은 userPayload 의 JSON(`꼴`)에 실린다. 규칙보다 먼저, 말버릇 절 바로 아래에 둔다.
+ *    🔴 꼴은 글자가 아니라 종류다(말끝 넷 · 한 줄/여러 줄) — 끝 3글자 · 줄 수를 글자 그대로 맞추게 하자 어색한 문장이 나왔다(11-21 실측).
  */
 export const COMMENT_FORM_LINES: readonly string[] = [
   '## 🔴 이번 댓글의 꼴',
-  '아래 [꼴]은 실제 댓글 하나에서 잰 값입니다. 이번 댓글은 그 꼴로 씁니다. [본보기]가 붙어 있으면 그 실제 댓글이고, 내용과 낱말은 빌리지 않습니다.',
-  '- 길이: [꼴].글자수의 0.7~1.3배. [꼴].줄수가 1이면 한 줄입니다. 늘리지 않습니다.',
-  '- 끝: [꼴].끝 과 같은 식으로 끝냅니다(예: "…네요"면 "…네요"류, 끊긴 말이면 끊긴 말로). 문장부호도 [꼴].끝부호 그대로 — 마침표가 없으면 찍지 않습니다.',
-  '- ㅋㅋ · ㅎㅎ · ㅠㅠ · ^^ 는 [꼴].이모티콘이 있을 때만 씁니다. 없는 오타를 일부러 만들지 않습니다.',
-  '- 끝 모양이 할 말과 도저히 안 맞으면 길이만 맞춥니다. 뜻이 어색한 문장을 만들지 않습니다.',
+  '아래 [꼴]은 실제 댓글 하나에서 잰 값입니다. 이번 댓글은 그 꼴로 씁니다.',
+  '- 길이: [꼴].글자수의 0.7~1.3배. 늘리지 않습니다.',
+  '- 줄: [꼴].줄 이 "한 줄"이면 줄을 바꾸지 않습니다. "여러 줄"이면 2~4줄로, 말이 끊기는 자리에서만 줄을 바꿉니다.',
+  '- 말끝: [꼴].말끝 이 "요"면 "…요/…죠", "다"면 "…다/…네/…음", "끊김"이면 "…는데/…해서"처럼 말을 맺지 않고 끊고, "명사"면 낱말 하나로 끝냅니다. 말이 되는 문장으로만 — 뜻이 어색해지면 말끝은 따르지 않아도 됩니다.',
+  '- 문장부호: [꼴].끝부호 그대로. 마침표가 없으면 찍지 않습니다.',
+  '- ㅋㅋ · ㅎㅎ · ^^ 는 [꼴].이모티콘이 있고 **글이 가벼운 이야기일 때만** 씁니다. 아프거나 속상한 글에는 쓰지 않습니다(ㅠㅠ 는 됩니다). 없는 오타를 일부러 만들지 않습니다.',
 ]
 
 /**
@@ -288,10 +289,10 @@ export function buildPrompt(input: {
    */
   grounding?: string
   /**
-   * 🔴 **이번 자리의 꼴 본보기** — 실제 댓글 하나에서 잰 꼴과, 경험담이 아니면 그 댓글(`pickFormExample`). 첫 댓글에도 있다.
+   * 🔴 **이번 자리의 꼴** — 실제 댓글 하나에서 잰 값(`pickCommentForm`). 그 댓글 본문은 받지 않는다. 첫 댓글에도 있다.
    *    `requireReference` 가 꺼지지 않았는데 없으면 막는다 — 꼴 없이 쓰면 다시 반듯한 "~요." 로 돌아간다.
    */
-  form?: FormExample
+  form?: CommentForm
   /**
    * 🔴 **대화 계획의 자리** — 추가 댓글에만 있다(첫 댓글에는 없다).
    *    가벼운 일상 경험을 자기 이야기로 말하게 하고, 이 글의 앞 Persona 댓글 표지를 건넨다. 무거운 사실은 그대로 막는다.
@@ -345,7 +346,7 @@ export function buildPrompt(input: {
   if (input.requireReference !== false && input.form === undefined) {
     blocks.push({
       code: 'FORM_MISSING',
-      message: `${persona.code}: 꼴 본보기가 없습니다 — 실제 댓글 풀이 비었습니다`,
+      message: `${persona.code}: 꼴이 없습니다 — 실제 댓글 풀이 비었습니다`,
     })
   }
 
@@ -393,7 +394,7 @@ export function buildPrompt(input: {
         '',
       ]
       : []),
-    // 🔴 꼴 — 말버릇 바로 아래, 규칙보다 먼저. 길이 · 끝 모양 · 끝부호를 본보기가 정한다
+    // 🔴 꼴 — 말버릇 바로 아래, 규칙보다 먼저. 길이 · 줄 · 말끝 종류 · 끝부호를 꼴 값이 정한다
     ...(input.form === undefined ? [] : [...COMMENT_FORM_LINES, '']),
     '## 이번에 쓸 반응',
     REACTION_GUIDE[reaction],
@@ -479,7 +480,7 @@ export function buildPrompt(input: {
       : [
         '- 진단·처방·약 이름·용량·시술·검사 수치를 말하지 않습니다. 병원에 가라 마라도 정하지 않습니다.',
         '- 특정 제품 · 업체 · 가게 이름을 권하지 않습니다.',
-        '- 지시하거나 단정하지 않습니다("~하셔야 해요").',
+        '- 지시하거나 단정하지 않습니다("~하셔야 해요" · "~하는 게 낫습니다"). 아픈 몸을 어떻게 하라고 말하지 않습니다.',
       ]),
     '- 정리된 목록·번호·소제목을 쓰지 않습니다. 사람이 쓴 댓글은 그렇게 생기지 않았습니다.',
     '- 존재하지 않는 가족을 근거로 말하지 않습니다.',
@@ -517,10 +518,8 @@ export function buildPrompt(input: {
     `제목: ${post.title.trim()}`,
     '본문:',
     post.content.trim(),
-    // 🔴 꼴 값 — 글 새 판과 같은 방식(JSON). 🔴 본보기는 요청에만 실린다 — 저장 레코드(`toCandidateRecord`)에 자리가 없다
-    //    본보기가 경험담이라 null 이면 `본보기` 키를 싣지 않는다(꼴 값만)
-    ...(input.form === undefined ? [] : ['', '[꼴 · 본보기]', JSON.stringify(input.form.본보기 === null
-      ? { 꼴: input.form.꼴 } : { 꼴: input.form.꼴, 본보기: input.form.본보기 })]),
+    // 🔴 꼴 값 — 글 새 판과 같은 방식(JSON) · 꼴 값만 싣는다(그 댓글 본문은 없다)
+    ...(input.form === undefined ? [] : ['', '[꼴]', JSON.stringify({ 꼴: input.form })]),
   ].join('\n')
 
   return {

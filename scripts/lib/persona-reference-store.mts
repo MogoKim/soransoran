@@ -25,7 +25,7 @@ import {
   REFERENCE_MAX_CHARS, REFERENCE_MIN_CHARS, REFERENCE_MIN_COUNT, REFERENCE_MIN_SAFE_TEXTS,
   type VoiceReferenceBundle,
 } from '../../src/lib/persona-voice-reference'
-import { FORM_EXAMPLE_MAX_CHARS, FORM_EXAMPLE_MIN_CHARS, type FormPoolEntry } from '../../src/lib/persona-comment-form'
+import { FORM_POOL_MAX_CHARS, FORM_POOL_MIN_CHARS } from '../../src/lib/persona-comment-form'
 import {
   judgeAssetReadiness, judgeAssetShape,
   REFERENCE_CORPUS_FILE, REFERENCE_MANIFEST_FILE,
@@ -66,18 +66,15 @@ export function carriesExperience(text: string): boolean {
 }
 
 /**
- * 🔴 **댓글 꼴 본보기 풀** (2026-11-21) — 참고 댓글 자산의 행에서 `FORM_EXAMPLE_MIN_CHARS`~`FORM_EXAMPLE_MAX_CHARS`자 ·
- *    글 본문처럼 보이지 않는 것만 남긴다. 🔴 경험담은 **빼지 않고 표시한다**(위 `carriesExperience` 와 같은 기준) —
- *    빼면 풀이 실제보다 짧아지고, 뽑힌 경험담은 `pickFormExample` 이 꼴 값만 건넨다(본문은 건네지 않는다).
- *    새로 모으지도 저장하지도 않는다. 정본 자산 879건에서 794건이 남는다(2026-11-21 실측).
+ * 🔴 **댓글 꼴 풀** (2026-11-21) — 참고 댓글 자산의 행에서 `FORM_POOL_MIN_CHARS`~`FORM_POOL_MAX_CHARS`자 ·
+ *    글 본문처럼 보이지 않는 것만 남긴다. 경험담도 남긴다 — 빼면 풀이 실제보다 짧아진다. 꼴 값만 쓰고 본문은 생성에 건네지 않으므로
+ *    (`pickCommentForm`) 남의 경험이 내용으로 샐 자리가 없다. 새로 모으지도 저장하지도 않는다. 정본 879건에서 794건이 남는다.
  */
-export function commentFormPool(rows: readonly LocalComment[]): FormPoolEntry[] {
-  return [...new Set(rows.map((r) => r.text))]
-    .filter((t) => {
-      const n = [...t].length
-      return n >= FORM_EXAMPLE_MIN_CHARS && n <= FORM_EXAMPLE_MAX_CHARS && !looksLikePostBody(t)
-    })
-    .map((text) => ({ text, experience: carriesExperience(text) }))
+export function commentFormPool(rows: readonly LocalComment[]): string[] {
+  return [...new Set(rows.map((r) => r.text))].filter((t) => {
+    const n = [...t].length
+    return n >= FORM_POOL_MIN_CHARS && n <= FORM_POOL_MAX_CHARS && !looksLikePostBody(t)
+  })
 }
 
 const sha16 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 16)
@@ -670,8 +667,8 @@ export function bundlesForPersonas(input: {
   canonicalAsset: boolean
   rows: LocalComment[]
   sourceDigest: string | null
-  /** 🔴 댓글 꼴 본보기 풀 — 같은 자산 행에서 거른다(`commentFormPool` · 경험담 표시). 자산이 없으면 비어 있다 */
-  formPool: FormPoolEntry[]
+  /** 🔴 댓글 꼴 풀 — 같은 자산 행에서 거른다(`commentFormPool`). 꼴 값만 쓴다. 자산이 없으면 비어 있다 */
+  formPool: string[]
 } {
   const all = stableAssignment({ repoRoot: input.repoRoot, target: input.target })
   const want = [...new Set(input.personaCodes)]

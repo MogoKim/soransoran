@@ -1111,7 +1111,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     && runSrc13.includes('!spentRoleKeys.has(attemptKeyOf({ postId, personaCode: pe.code, reactionRole: role }))'))
 }
 
-// ═════════ ⑭ 대화 계획 — 글 id 하나로 크기 · 자리 · 모양 · 간격이 정해진다(길이는 꼴 본보기가 정한다) ═════════
+// ═════════ ⑭ 대화 계획 — 글 id 하나로 크기 · 자리 · 모양 · 간격이 정해진다(길이는 꼴이 정한다) ═════════
 {
   const ids = Array.from({ length: 3000 }, (_, i) => `plan-post-${i}`)
   const plans = ids.map((id) => threadPlanOf(id))
@@ -1159,7 +1159,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑭ 🔴 모양 — 자리 종류마다 실제 몫 ±2%p(고르게 돌리지 않는다)', shapeOff.length === 0, shapeOff.join(' / '))
   const firstPostExp = plans.filter((p) => p.slots.find((x) => x.kind === 'post')?.shape === 'experience').length / plans.filter((p) => p.slots.some((x) => x.kind === 'post')).length
   check('⑭ 🔴 첫 "글에 답"을 경험으로 몰지 않는다 — 다른 자리와 같은 몫', firstPostExp < 0.03, `${(firstPostExp * 100).toFixed(1)}%`)
-  check('⑭ 🔴 자리에 길이 칸이 없다 — 길이는 꼴 본보기의 실제 길이가 정한다', all.every((x) => !('length' in x)))
+  check('⑭ 🔴 자리에 길이 칸이 없다 — 길이는 꼴(뽑은 실제 댓글의 길이)이 정한다', all.every((x) => !('length' in x)))
   check('⑭ 모양은 배정 가능한 역할뿐 · 자리 종류는 셋뿐',
     all.every((x) => ['other', 'empathy', 'question', 'experience'].includes(x.shape) && ['post', 'author', 'reply'].includes(x.kind)))
   // 🔴 이미 댓글이 달린 글 — 살아 있는 Persona 댓글을 채운 자리로 세어 남은 자리만 잇는다(배포 전 글에도 같다)
@@ -1204,15 +1204,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 {
   const persona = { code: 'P01', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기', identity: {}, noGoTopics: ['정치'], noGoExpressions: [], forbiddenReactionRoles: [] }
   const post = { title: '요즘 밤마다 잠이 안 와요', content: '새벽 세 시만 되면 눈이 떠져요.', boardLabel: 'FREE' }
-  // 🔴 지어낸 본보기 — 실제 댓글을 저장소에 두지 않는다
-  const form = { 꼴: { 글자수: 12, 줄수: 1, 끝: '네요', 끝부호: '없음', 물음표수: 0, 말줄임수: 0, 이모티콘: false }, 본보기: '그맘 알것같네요 진짜로' }
+  // 🔴 지어낸 꼴 값 — 실제 댓글을 저장소에 두지 않는다
+  const form = { 글자수: 12, 줄: '한 줄', 말끝: '요', 끝부호: '없음', 물음표수: 0, 말줄임수: 0, 이모티콘: false }
   const built = (o: Record<string, unknown>) => buildPrompt({ persona, post, requireReference: false, form, ...o } as never)
   const shaOf = (o: Record<string, unknown>) => createHash('sha256').update(JSON.stringify(built(o))).digest('hex').slice(0, 12)
-  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 2026-11-21 꼴 판(꼴 절은 [꼴] 기준 문장 · 말투 카드 · 길이 절 · 질문 권유 삭제)에서 고정한 값이다.
+  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 2026-11-21 꼴 판(꼴 값만 · 말끝 종류 · 한 줄/여러 줄 · 말투 카드 · 길이 절 · 질문 권유 삭제)에서 고정한 값이다.
   //    이 값이 바뀌면 첫 댓글 지시문이 바뀐 것이다 — 자리 칸만 고치려다 첫 댓글을 건드리지 않았는지 본다
   check('⑮ 🔴 자리 칸이 없으면(첫 댓글) 프롬프트가 꼴 판 고정 지문과 바이트 동일하다',
-    shaOf({ reactionType: 'other' }) === 'f8447ce21107' && shaOf({ reactionType: 'experience' }) === 'f88174d7ec57'
-    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '2e9318612314',
+    shaOf({ reactionType: 'other' }) === 'd14cd9056d9a' && shaOf({ reactionType: 'experience' }) === '9b321e0f5d9c'
+    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '37e618a32173',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
   const seat = { ordinal: 3, postPersonaMarks: { openers: [], endings: [] }, selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
