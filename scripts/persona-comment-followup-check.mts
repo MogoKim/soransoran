@@ -1211,8 +1211,8 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 2026-11-21 꼴 판(꼴 값만 · 말끝 종류 · 한 줄/여러 줄 · 말투 카드 · 길이 절 · 질문 권유 삭제)에서 고정한 값이다.
   //    이 값이 바뀌면 첫 댓글 지시문이 바뀐 것이다 — 자리 칸만 고치려다 첫 댓글을 건드리지 않았는지 본다
   check('⑮ 🔴 자리 칸이 없으면(첫 댓글) 프롬프트가 꼴 판 고정 지문과 바이트 동일하다',
-    shaOf({ reactionType: 'other' }) === 'd14cd9056d9a' && shaOf({ reactionType: 'experience' }) === '9b321e0f5d9c'
-    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '37e618a32173',
+    shaOf({ reactionType: 'other' }) === 'ce9a314e76aa' && shaOf({ reactionType: 'experience' }) === 'b92a074f285d'
+    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '6ef8ae4688c5',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
   const seat = { ordinal: 3, postPersonaMarks: { openers: [], endings: [] }, selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
