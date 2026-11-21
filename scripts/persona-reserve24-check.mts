@@ -85,8 +85,11 @@ console.log('\n② provider payload — 안전 예시만')
     code, ageBand: '50대 초반', region: '수도권', lifeStage: '자녀 독립기', identity: { maritalStatus: '기혼' },
     noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
   })
-  // 🔴 꼴 본보기도 같은 행의 풀에서 뽑는다 — 경험형 원문이 본보기로 새지 않는지 아래 payload 대조가 함께 본다
+  // 🔴 꼴은 같은 행의 풀(경험형 포함)에서 뽑는다 — 경험형이 뽑히면 본보기는 null 이고, 아래 payload 대조가 원문 0 을 함께 본다
   const formPool = commentFormPool(ROWS)
+  const picks = Array.from({ length: 300 }, (_, i) => pickFormExample({ pool: formPool, postId: `reserve-pick-${i}`, ordinal: 1, experience: false })!)
+  check('🔴 경험형이 뽑히면 본보기가 null — 경험형 원문은 본보기로 나가지 않는다',
+    picks.some((x) => x.본보기 === null) && picks.every((x) => x.본보기 === null || !carriesExperience(x.본보기)))
   const post = { title: '요즘 잠이 안 와요', content: '밤마다 깨요', boardLabel: '갱년기톡' }
   for (const b of plan.bundles) {
     const form = pickFormExample({ pool: formPool, postId: `reserve-${b.personaCode}`, ordinal: 1, experience: false })
@@ -205,8 +208,11 @@ console.log('\n⑥ 정본 자산 실물 (로컬만)')
     const expTexts = new Set(canon.rows.filter((r) => carriesExperience(r.text)).map((r) => r.text))
     const speakers = [...new Set(canon.rows.map((r) => r.speakerId))].filter((s) => s !== '')
     let leak = 0
-    // 🔴 꼴 본보기도 같은 자산의 풀에서 뽑는다 — 경험형 원문이 본보기로도 새지 않는지 함께 본다
+    // 🔴 꼴은 같은 자산의 풀(경험형 포함)에서 뽑는다 — 경험형이 뽑히면 본보기 null · 아래 payload 대조가 원문 0 을 함께 본다
     const formPool = commentFormPool(canon.rows)
+    const realPicks = Array.from({ length: 1000 }, (_, i) => pickFormExample({ pool: formPool, postId: `reserve-real-${i}`, ordinal: 1, experience: false })!)
+    check('🔴 실물: 경험형이 뽑히면 본보기가 null — 경험형 원문은 본보기로 나가지 않는다',
+      realPicks.some((x) => x.본보기 === null) && realPicks.every((x) => x.본보기 === null || !expTexts.has(x.본보기)))
     for (const b of bundles) {
       const form = pickFormExample({ pool: formPool, postId: `reserve-${b.personaCode}`, ordinal: 1, experience: false })
       const pr = buildPrompt({

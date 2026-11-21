@@ -16,7 +16,7 @@
  */
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import { groundingTextOf } from '../../src/lib/persona-experience-grounding'
-import { pickFormExample } from '../../src/lib/persona-comment-form'
+import { pickFormExample, type FormPoolEntry } from '../../src/lib/persona-comment-form'
 import {
   buildPrompt, extractVoiceMarks,
   type PromptPersona, type PromptPlan, type PromptTargetPost, type RecentVoiceMarks,
@@ -102,7 +102,7 @@ export function buildPromptFromInput(
    * 🔴 `formPool` — 꼴 본보기 풀(`bundlesForPersonas().formPool`). 자리(글 · 순번 — 첫 댓글은 1)마다 하나를 결정적으로 뽑는다.
    *    풀이 비면 본보기가 없고, 근거를 강제하는 경로에서는 `buildPrompt` 가 `FORM_MISSING` 으로 막는다.
    */
-  opts: { requireReference?: boolean; formPool?: readonly string[] } = {},
+  opts: { requireReference?: boolean; formPool?: readonly FormPoolEntry[] } = {},
 ): PromptPlan {
   const form = pickFormExample({
     pool: opts.formPool ?? [],

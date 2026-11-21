@@ -5,8 +5,8 @@
  *   npm run persona:comment-form-check
  *
  * ① `commentFormOf` 가 지어낸 댓글 꼴(한 줄 · 두 줄 · ㅋㅋ · ㅠㅠ · ^^ · 말줄임 · 물음 · 느낌표 · 물결 · 부호 없음)을 잰 값
- * ② 같은 (글 · 순번) → 같은 본보기 · 자산 행 순서와 무관 · 경험 자리는 41자 이상 · 빈 풀은 null
- * ③ 1,000 자리 추첨의 길이 분포가 풀의 분포와 ±3%p (지어낸 풀 · 정본 자산이 있으면 실제 풀도)
+ * ② 같은 (글 · 순번) → 같은 본보기 · 자산 행 순서와 무관 · 경험담이 뽑히면 꼴만(본보기 null) · 경험 자리는 41자 이상 · 빈 풀은 null
+ * ③ 1,000 자리 추첨의 길이 분포가 풀(경험담 포함)의 분포와 ±3%p · 실제 풀의 20자 이하가 실제 댓글과 ±2%p (자산이 있으면)
  * ④ 대화 계획 10,000편의 모양이 실제 몫 ±2%p · planner 가 몫에 비해 덜 쓰인 역할부터 고른다
  * ⑤ 지시문 — 꼴 절이 말버릇 바로 아래에 있고, 지운 문구가 없다 · 꼴 값은 userPayload JSON 으로 · 본보기가 비면 막는다
  * ⑥ 본보기 본문이 저장 레코드(`toCandidateRecord`)와 생성 경로 로그에 들어가지 않는다
@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  commentFormOf, FORM_EXAMPLE_MAX_CHARS, FORM_EXAMPLE_MIN_CHARS, FORM_EXPERIENCE_MIN_CHARS, pickFormExample, type CommentForm,
+  commentFormOf, FORM_EXAMPLE_MAX_CHARS, FORM_EXAMPLE_MIN_CHARS, FORM_EXPERIENCE_MIN_CHARS, pickFormExample, type CommentForm, type FormPoolEntry,
 } from '../src/lib/persona-comment-form'
 import { COMMENT_REACTION_ROLES, REAL_REACTION_SHARE, type ReactionType } from '../src/lib/persona-reaction-roles'
 import { threadPlanOf } from '../src/lib/persona-thread-plan'
@@ -26,7 +26,7 @@ import { postPersonaMarksOf } from '../src/lib/persona-comment-input'
 import {
   ALLOWED_RECORD_KEYS, assertNoStoredSource, buildPrompt, toCandidateRecord, type PromptPersona,
 } from './lib/persona-prompt'
-import { commentFormPool, loadCanonAsset } from './lib/persona-reference-store.mjs'
+import { carriesExperience, commentFormPool, loadCanonAsset } from './lib/persona-reference-store.mjs'
 import { classifyReaction } from './lib/voice-comment-signals.mjs'
 import { judgeReferenceBundle } from '../src/lib/persona-voice-reference'
 
@@ -69,36 +69,46 @@ console.log('\n① commentFormOf — 지어낸 댓글의 꼴')
 // ─────────────────────────────────────────────────────────
 console.log('\n② pickFormExample — 결정적 · 순서 무관 · 경험 자리 · 빈 풀')
 // ─────────────────────────────────────────────────────────
-/** 🔴 지어낸 풀 — 길이가 고르게 퍼진 400개(5~160자) */
+/** 🔴 지어낸 풀 — 길이가 고르게 퍼진 400개(5~160자) · 다섯 중 하나를 경험담으로 표시한다 */
 const SYLL = '가나다라마바사아자차카타파하'
-const fakePool = Array.from({ length: 400 }, (_, i) => {
+const fakePool: FormPoolEntry[] = Array.from({ length: 400 }, (_, i) => {
   const n = FORM_EXAMPLE_MIN_CHARS + ((i * 37) % (FORM_EXAMPLE_MAX_CHARS - FORM_EXAMPLE_MIN_CHARS + 1))
-  return `${i}번 ${Array.from({ length: n }, (_, k) => SYLL[(i + k) % SYLL.length]).join('')}`.slice(0, n)
+  return { text: `${i}번 ${Array.from({ length: n }, (_, k) => SYLL[(i + k) % SYLL.length]).join('')}`.slice(0, n), experience: i % 5 === 0 }
 })
+const expTexts = new Set(fakePool.filter((e) => e.experience).map((e) => e.text))
 {
   const a = pickFormExample({ pool: fakePool, postId: 'post-a', ordinal: 3, experience: false })
   const b = pickFormExample({ pool: [...fakePool].reverse(), postId: 'post-a', ordinal: 3, experience: false })
-  check('같은 (글 · 순번) → 같은 본보기 — 풀의 행 순서가 뒤집혀도 같다', a !== null && same(a, b), `${a?.본보기} · ${b?.본보기}`)
-  check('본보기의 꼴 = commentFormOf(본보기)', a !== null && same(a.꼴, commentFormOf(a.본보기)))
-  const ordinals = new Set(Array.from({ length: 8 }, (_, i) => pickFormExample({ pool: fakePool, postId: 'post-a', ordinal: i + 1, experience: false })?.본보기))
-  check('같은 글의 자리마다 본보기가 갈린다(8자리 중 7종 이상)', ordinals.size >= 7, String(ordinals.size))
+  check('같은 (글 · 순번) → 같은 꼴 · 같은 본보기 — 풀의 행 순서가 뒤집혀도 같다', a !== null && same(a, b), `${JSON.stringify(a)} · ${JSON.stringify(b)}`)
+  const many = Array.from({ length: 500 }, (_, i) => pickFormExample({ pool: fakePool, postId: `pick-${i}`, ordinal: 1, experience: false })!)
+  check('본보기가 있으면 꼴 = commentFormOf(본보기)', many.every((x) => x.본보기 === null || same(x.꼴, commentFormOf(x.본보기))))
+  // 🔴 경험담이 뽑히면 꼴 값만 — 본보기 본문은 건네지 않는다(남의 경험이 내용으로 새지 않게)
+  const nulls = many.filter((x) => x.본보기 === null).length
+  check('🔴 경험담이 뽑히면 본보기가 null · 경험담 본문은 한 번도 본보기로 나가지 않는다',
+    nulls > 50 && many.every((x) => x.본보기 === null || !expTexts.has(x.본보기)), `null ${nulls}/500`)
+  const ordinals = new Set(Array.from({ length: 8 }, (_, i) => JSON.stringify(pickFormExample({ pool: fakePool, postId: 'post-a', ordinal: i + 1, experience: false }))))
+  check('같은 글의 자리마다 꼴이 갈린다(8자리 중 7종 이상)', ordinals.size >= 7, String(ordinals.size))
   const exp = Array.from({ length: 200 }, (_, i) => pickFormExample({ pool: fakePool, postId: `exp-${i}`, ordinal: 2, experience: true }))
-  check(`경험으로 답하는 자리는 ${FORM_EXPERIENCE_MIN_CHARS}자 이상에서만 뽑는다`, exp.every((x) => x !== null && len(x.본보기) >= FORM_EXPERIENCE_MIN_CHARS))
-  check('빈 풀 → null · 경험 자리에 쓸 긴 본보기가 없으면 null',
+  check(`경험으로 답하는 자리는 ${FORM_EXPERIENCE_MIN_CHARS}자 이상에서만 뽑는다`, exp.every((x) => x !== null && x.꼴.글자수 >= FORM_EXPERIENCE_MIN_CHARS))
+  check('빈 풀 → null · 경험 자리에 쓸 긴 댓글이 없으면 null',
     pickFormExample({ pool: [], postId: 'p', ordinal: 1, experience: false }) === null
-    && pickFormExample({ pool: ['짧은 댓글이에요'], postId: 'p', ordinal: 1, experience: true }) === null)
+    && pickFormExample({ pool: [{ text: '짧은 댓글이에요', experience: false }], postId: 'p', ordinal: 1, experience: true }) === null)
+  check('같은 글자의 칸이 여럿이면 하나라도 경험담이면 경험담으로 본다',
+    pickFormExample({ pool: [{ text: '같은 글자 댓글이에요', experience: false }, { text: '같은 글자 댓글이에요', experience: true }], postId: 'p', ordinal: 1, experience: false })?.본보기 === null)
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 길이 분포 — 1,000 자리 추첨이 풀의 분포 ±3%p')
+console.log('\n③ 길이 분포 — 1,000 자리 추첨이 풀(경험담 포함)의 분포 ±3%p')
 // ─────────────────────────────────────────────────────────
 const BINS: readonly (readonly [number, number])[] = [[5, 20], [21, 40], [41, 80], [81, 160]]
-const shareIn = (xs: readonly string[], [lo, hi]: readonly [number, number]): number => xs.filter((t) => len(t) >= lo && len(t) <= hi).length / xs.length
-const drawCheck = (name: string, pool: readonly string[]): void => {
-  const draws = Array.from({ length: 1000 }, (_, i) => pickFormExample({ pool, postId: `len-${i}`, ordinal: 1 + (i % 6), experience: false })!.본보기)
-  const off = BINS.filter((b) => Math.abs(shareIn(draws, b) - shareIn(pool, b)) > 0.03)
+/** 길이는 꼴의 글자수(빈 줄 · 줄바꿈 제외)로 잰다 — 지시문이 맞추라고 하는 값과 같은 눈금 */
+const shareIn = (lens: readonly number[], [lo, hi]: readonly [number, number]): number => lens.filter((n) => n >= lo && n <= hi).length / lens.length
+const drawCheck = (name: string, pool: readonly FormPoolEntry[]): void => {
+  const draws = Array.from({ length: 1000 }, (_, i) => pickFormExample({ pool, postId: `len-${i}`, ordinal: 1 + (i % 6), experience: false })!.꼴.글자수)
+  const base = [...new Set(pool.map((e) => e.text))].map((t) => commentFormOf(t).글자수)
+  const off = BINS.filter((b) => Math.abs(shareIn(draws, b) - shareIn(base, b)) > 0.03)
   check(`${name} — 구간 4개(≤20 · 21~40 · 41~80 · 81~160) 모두 ±3%p`, off.length === 0,
-    BINS.map((b) => `${b[0]}-${b[1]} 추첨 ${(shareIn(draws, b) * 100).toFixed(1)}% · 풀 ${(shareIn(pool, b) * 100).toFixed(1)}%`).join(' / '))
+    BINS.map((b) => `${b[0]}-${b[1]} 추첨 ${(shareIn(draws, b) * 100).toFixed(1)}% · 풀 ${(shareIn(base, b) * 100).toFixed(1)}%`).join(' / '))
 }
 drawCheck('지어낸 풀', fakePool)
 {
@@ -108,8 +118,18 @@ drawCheck('지어낸 풀', fakePool)
   } else {
     const pool = commentFormPool(canon.rows)
     check(`실제 풀 — 정본 ${canon.rows.length}건에서 300건 이상 남는다(${pool.length})`, pool.length >= 300)
-    check('실제 풀 — 5~160자뿐이다', pool.every((t) => len(t) >= FORM_EXAMPLE_MIN_CHARS && len(t) <= FORM_EXAMPLE_MAX_CHARS))
+    check('실제 풀 — 5~160자뿐이고 경험담을 빼지 않고 표시한다',
+      pool.every((e) => len(e.text) >= FORM_EXAMPLE_MIN_CHARS && len(e.text) <= FORM_EXAMPLE_MAX_CHARS)
+      && pool.every((e) => e.experience === carriesExperience(e.text)) && pool.some((e) => e.experience))
     drawCheck('실제 풀', pool)
+    const picks = Array.from({ length: 1000 }, (_, i) => pickFormExample({ pool, postId: `real-${i}`, ordinal: 1, experience: false })!)
+    check('🔴 실제 풀 — 본보기로 나가는 본문에 경험담 0 · 경험담이 뽑힌 자리는 본보기 null',
+      picks.every((x) => x.본보기 === null || !carriesExperience(x.본보기)) && picks.some((x) => x.본보기 === null))
+    // 🔴 풀이 실제 댓글의 길이 분포를 따른다 — 경험담을 빼던 판은 20자 이하가 실제보다 5%p 넘게 많았다
+    const real = canon.rows.map((r) => commentFormOf(r.text).글자수).filter((n) => n >= FORM_EXAMPLE_MIN_CHARS)
+    const poolLens = pool.map((e) => commentFormOf(e.text).글자수)
+    check('실제 풀 — 20자 이하 비율이 실제 댓글 전체와 ±2%p', Math.abs(shareIn(poolLens, [0, 20]) - shareIn(real, [0, 20])) <= 0.02,
+      `풀 ${(shareIn(poolLens, [0, 20]) * 100).toFixed(1)}% · 실제 ${(shareIn(real, [0, 20]) * 100).toFixed(1)}%`)
   }
 }
 
@@ -208,6 +228,15 @@ const DELETED = [
       check(`${v.name}/${reactionType}: 본보기 본문은 system 에 없다(값은 요청 끝 JSON 하나)`, !sys.includes(FORM_TEXT))
     }
   }
+  // 🔴 본보기가 경험담이라 빠진 자리 — 지시문은 한 글자도 다르지 않고(언제나 [꼴] 기준), 요청 JSON 에 본보기 키가 없다
+  const withEx = buildPrompt({ persona: PERSONA, post: POST, reactionType: 'other', reference: REF, form: FORM })
+  const noEx = buildPrompt({ persona: PERSONA, post: POST, reactionType: 'other', reference: REF, form: { 꼴: FORM.꼴, 본보기: null } })
+  check('🔴 본보기 null — 지시문은 본보기가 있을 때와 같고, 요청 JSON 은 꼴만 싣는다(본보기 키 없음)',
+    withEx.ok && noEx.ok && withEx.prompt.systemPrompt === noEx.prompt.systemPrompt
+    && same(JSON.parse(noEx.prompt.userPayload.split('\n').at(-1) ?? ''), { 꼴: FORM.꼴 }) && !noEx.prompt.userPayload.includes('본보기"'))
+  check('지시문 꼴 절은 [꼴] 값 기준 문장이다(줄수 · 이모티콘)',
+    withEx.ok && withEx.prompt.systemPrompt.includes('[꼴].줄수가 1이면 한 줄입니다') && withEx.prompt.systemPrompt.includes('[꼴].이모티콘이 있을 때만')
+    && withEx.prompt.systemPrompt.includes('아래 [꼴]은 실제 댓글 하나에서 잰 값입니다.'))
   const blocked = buildPrompt({ persona: PERSONA, post: POST, reactionType: 'other', reference: REF })
   check('🔴 근거를 강제하는 경로에서 본보기가 없으면 FORM_MISSING 으로 막는다', !blocked.ok && blocked.blocks.some((b) => b.code === 'FORM_MISSING'))
   const marks = postPersonaMarksOf(['어머 저도 그래요', '  ', '저는 괜찮더라구요ㅋㅋ', '어머 진짜요?'])

@@ -249,13 +249,16 @@ function jsonBrief(v: unknown): string {
 const listOr = (xs: readonly string[], fallback: string): string =>
   xs.length === 0 ? fallback : xs.join(' · ')
 
-/** 🔴 꼴 절 — 값은 userPayload 의 JSON(`꼴` · `본보기`)에 실린다. 규칙보다 먼저, 말버릇 절 바로 아래에 둔다 */
+/**
+ * 🔴 꼴 절 — 값은 userPayload 의 JSON(`꼴` · 있으면 `본보기`)에 실린다. 규칙보다 먼저, 말버릇 절 바로 아래에 둔다.
+ *    문장은 언제나 [꼴] 값 기준이다 — 본보기가 경험담이라 빠진 자리도 같은 문장을 받는다(갈래 없음).
+ */
 export const COMMENT_FORM_LINES: readonly string[] = [
   '## 🔴 이번 댓글의 꼴',
-  '아래 [본보기]는 실제 댓글 하나입니다. 이번 댓글은 이 댓글과 **같은 꼴**로 씁니다 — 내용과 낱말은 빌리지 않습니다.',
-  '- 길이: [꼴].글자수의 0.7~1.3배. 본보기가 한 줄이면 한 줄입니다. 늘리지 않습니다.',
+  '아래 [꼴]은 실제 댓글 하나에서 잰 값입니다. 이번 댓글은 그 꼴로 씁니다. [본보기]가 붙어 있으면 그 실제 댓글이고, 내용과 낱말은 빌리지 않습니다.',
+  '- 길이: [꼴].글자수의 0.7~1.3배. [꼴].줄수가 1이면 한 줄입니다. 늘리지 않습니다.',
   '- 끝: [꼴].끝 과 같은 식으로 끝냅니다(예: "…네요"면 "…네요"류, 끊긴 말이면 끊긴 말로). 문장부호도 [꼴].끝부호 그대로 — 마침표가 없으면 찍지 않습니다.',
-  '- ㅋㅋ · ㅎㅎ · ㅠㅠ · ^^ 는 본보기에 있을 때만 씁니다. 없는 오타를 일부러 만들지 않습니다.',
+  '- ㅋㅋ · ㅎㅎ · ㅠㅠ · ^^ 는 [꼴].이모티콘이 있을 때만 씁니다. 없는 오타를 일부러 만들지 않습니다.',
   '- 끝 모양이 할 말과 도저히 안 맞으면 길이만 맞춥니다. 뜻이 어색한 문장을 만들지 않습니다.',
 ]
 
@@ -285,7 +288,7 @@ export function buildPrompt(input: {
    */
   grounding?: string
   /**
-   * 🔴 **이번 자리의 꼴 본보기** — 실제 댓글 하나와 그 꼴(`pickFormExample`). 첫 댓글에도 있다.
+   * 🔴 **이번 자리의 꼴 본보기** — 실제 댓글 하나에서 잰 꼴과, 경험담이 아니면 그 댓글(`pickFormExample`). 첫 댓글에도 있다.
    *    `requireReference` 가 꺼지지 않았는데 없으면 막는다 — 꼴 없이 쓰면 다시 반듯한 "~요." 로 돌아간다.
    */
   form?: FormExample
@@ -515,7 +518,9 @@ export function buildPrompt(input: {
     '본문:',
     post.content.trim(),
     // 🔴 꼴 값 — 글 새 판과 같은 방식(JSON). 🔴 본보기는 요청에만 실린다 — 저장 레코드(`toCandidateRecord`)에 자리가 없다
-    ...(input.form === undefined ? [] : ['', '[꼴 · 본보기]', JSON.stringify({ 꼴: input.form.꼴, 본보기: input.form.본보기 })]),
+    //    본보기가 경험담이라 null 이면 `본보기` 키를 싣지 않는다(꼴 값만)
+    ...(input.form === undefined ? [] : ['', '[꼴 · 본보기]', JSON.stringify(input.form.본보기 === null
+      ? { 꼴: input.form.꼴 } : { 꼴: input.form.꼴, 본보기: input.form.본보기 })]),
   ].join('\n')
 
   return {
