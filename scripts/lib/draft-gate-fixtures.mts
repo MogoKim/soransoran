@@ -377,7 +377,7 @@ export const FIXTURE_NOW = new Date('2026-09-26T03:00:00.000Z')
  *    운영 원천의 흔한 모양이다(사진 수는 대부분 세지 않았다).
  */
 export const sourceMetaOf = (fx: GateFixture): Omit<DraftGateSource, 'title' | 'body'> => ({
-  site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null,
+  site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null, bodyLength: null,
   ...fx.sourceMeta,
 })
 export const gateContextOf = (fx: GateFixture): DraftGateContext => ({

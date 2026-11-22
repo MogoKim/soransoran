@@ -124,6 +124,7 @@ import {
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
+import { closedCutBody } from '../src/lib/content-core/evidence'
 import type { DraftGatePlan, DraftGateSource } from '../src/lib/content-core/draft-life-gates'
 import {
   ARTIFACT_VERSION, violatesArtifact, type HumanReviewArtifact,
@@ -587,6 +588,11 @@ type Meta = {
    *    🔴 **양수만 증거다** — 수집기 여럿이 세지 않고 `0` 을 적는다. `null` 은 파일에 칸이 없다는 뜻이다.
    */
   imageCount: number | null
+  /**
+   * 🔴 **수집기가 자르기 전 본문 길이** — `bodyHead` 와 **같은 줄**에서 온 값이다. 이것으로 수집 때 잘렸는지 안다
+   *    (`isCutAtCollection`). 칸이 없거나 0 이면 `null`(모른다).
+   */
+  bodyLength: number | null
 }
 
 /**
@@ -601,7 +607,7 @@ const isoOrNull = (v: string): Date | null => {
 }
 const gateSourceMetaOf = (m: Meta): Omit<DraftGateSource, 'title' | 'body'> => ({
   site: m.site, postedAt: isoOrNull(m.sourcePostedAt), capturedAt: isoOrNull(m.sourceCapturedAt),
-  imageCount: m.imageCount,
+  imageCount: m.imageCount, bodyLength: m.bodyLength,
 })
 
 /**
@@ -641,6 +647,8 @@ function loadMeta(): Map<string, Meta> {
         const was = out.get(key)
         const keep = (next: string, prev: string | undefined): string =>
           next !== '' ? next : (prev ?? '')
+        // 🔴 원래 길이는 그 bodyHead 를 남긴 줄의 값이다 — 다른 줄의 길이와 섞으면 잘림 판정이 틀린다
+        const len = typeof r.bodyLength === 'number' && Number.isFinite(r.bodyLength) && r.bodyLength > 0 ? r.bodyLength : null
         out.set(key, {
           title: t, site: S(r.sourceSite), bodyHead: keep(S(r.bodyHead), was?.bodyHead),
           axis: keep(S(r.axis), was?.axis), lane: keep(S(r.lane), was?.lane), angle: '',
@@ -653,6 +661,7 @@ function loadMeta(): Map<string, Meta> {
           imageCount: typeof r.imageCount === 'number' && Number.isFinite(r.imageCount) && r.imageCount > 0
             ? r.imageCount
             : (was?.imageCount ?? (typeof r.imageCount === 'number' && Number.isFinite(r.imageCount) ? r.imageCount : null)),
+          bodyLength: S(r.bodyHead) !== '' ? len : (was?.bodyLength ?? null),
         })
       }
     }
@@ -1185,7 +1194,7 @@ async function main(): Promise<void> {
           plan, card: card ?? null,
           context: {
             at: RUN_AT,
-            source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
+            source: { title: maskSensitive(meta.title), body: closedCutBody(meta.bodyHead, meta.bodyLength), ...gateSourceMetaOf(meta) },
           },
         },
       }

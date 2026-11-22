@@ -99,7 +99,8 @@ export function judgeGoldRow(r: FounderGoldRow): { cls: GoldClass; codes: string
     context: {
       at: new Date(r.runAt),
       source: {
-        title: s.title, body: s.body, site: s.site, imageCount: s.imageCount,
+        // 🔴 gold 원천은 저장된 300자뿐이다 — 원래 길이를 모른다(수집 상한에 닿았는지만 본다)
+        title: s.title, body: s.body, bodyLength: null, site: s.site, imageCount: s.imageCount,
         postedAt: s.postedAt === null ? null : new Date(s.postedAt),
         capturedAt: s.capturedAt === null ? null : new Date(s.capturedAt),
       },

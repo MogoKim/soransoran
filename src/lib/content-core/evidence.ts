@@ -39,11 +39,14 @@ export const REPEAT_MIN_CHARS = 20
 export const COLLECTION_TRIM_SLACK = 10
 
 /**
- * 본문이 수집 상한에 닿았는가 — 닿았을 때만 "뒤가 잘렸을 수 있다".
- * 🔴 잘림을 묻는 자리는 전부 이 함수를 쓴다. 상한에 닿지 않은 글의 끝은 글쓴이가 끝낸 자리다.
+ * 본문이 수집 때 잘렸는가 — 상한에 닿았고, 원래 길이(`bodyLength` · 수집기가 자르기 전)를 알면 그것이 남긴 본문보다 길다.
+ * 원래 길이를 모르면(`null`) 상한에 닿았는지만 본다.
+ * 🔴 잘림을 묻는 자리는 전부 이 함수를 쓴다. 상한에 닿지 않았거나 원래 길이만큼 다 남은 글의 끝은 글쓴이가 끝낸 자리다.
  */
-export function isCutAtCollection(body: string): boolean {
-  return body.trim().length > EVIDENCE_CHAR_BUDGET - COLLECTION_TRIM_SLACK
+export function isCutAtCollection(body: string, originalLength: number | null = null): boolean {
+  const n = body.trim().length
+  if (n <= EVIDENCE_CHAR_BUDGET - COLLECTION_TRIM_SLACK) return false
+  return originalLength === null || !(originalLength > 0) || originalLength > n
 }
 
 /**
@@ -241,6 +244,35 @@ const TAIL_DECORATION_RE = /[\sㄱ-ㅎㅏ-ㅣTt~^*;:()<>'"`,._=+\-|/\\!…♡♥
  */
 export function closesSentence(text: string): boolean {
   return CLOSING_RE.test(text.replace(TAIL_DECORATION_RE, ''))
+}
+
+/** 공백 하나만으로 문장 끝으로 보는 낱말 끝 — 두 글자 이상이고 `요` · `죠` · `니다` 로 끝난다 */
+const WORD_CLOSING_RE = /[가-힣](?:요|죠|니다)$/
+
+/**
+ * 🔴 **수집 때 잘린 본문은 마지막으로 끝맺은 자리까지만 남긴다** (2026-11-22 — 초안이 "말을 꺼냈더니" 로 끝난 채 공개됐다).
+ *    수집기는 앞 300자만 남긴다(`bodyHead`). 잘린 조각을 받은 생성은 "원문이 끝나는 곳에서 끝냅니다" 를 따라 그 자리에서 멈췄다.
+ *    근거 묶음을 만들기 **전에** 자른다 — 계획 · 생성 · 검수는 끊긴 조각을 보지 않고, 꼴(`sourceFormOf`)도 자른 본문으로 잰다.
+ *    · 잘렸는가는 `isCutAtCollection(본문, 원래 길이)` 하나로 본다. 잘리지 않은 본문은 한 글자도 바꾸지 않는다
+ *    · 두 벌 이어 붙은 본문은 앞 벌이 온전한 글이다 — 그대로 둔다(근거 묶음이 걷는다)
+ *    · 끝맺은 자리 = 줄바꿈 · 문장부호 앞에서 `closesSentence` 인 낱말, 또는 공백 앞 낱말이 `요` · `죠` · `니다` 로 끝난 곳.
+ *      `다` · `네` · `음` 끝은 문장 안에도 흔해(`다 먹고` · `네 번` · `처음`) 공백만으로는 끝으로 보지 않는다
+ *    · 본문의 마지막 조각은 잘린 자리다 — 끝맺어 보여도 쓰지 않는다(낱말 가운데서 잘렸을 수 있다)
+ *    · 끝맺은 자리가 하나도 없으면 그대로 둔다 — 초안 게이트 `truncatedSourceCompletion` 이 그 본문만 본다
+ *    🔴 저장 원문(300자)을 늘리지 않는다 — 그 안에서 줄이기만 한다.
+ */
+export function closedCutBody(body: string, originalLength: number | null): string {
+  const t = S(body)
+  if (!isCutAtCollection(t, originalLength) || collapseRepeatedBody(t).collapsed) return t
+  let end = 0
+  for (const m of t.matchAll(/\s+/g)) {
+    const at = m.index ?? 0
+    const word = t.slice(0, at).match(/\S+$/)?.[0] ?? ''
+    const bare = word.replace(TAIL_DECORATION_RE, '')
+    const marked = m[0].includes('\n') || /[.!?？。…]/.test(word.slice(bare.length)) || /[?？]$/.test(bare)
+    if ((marked && closesSentence(word)) || WORD_CLOSING_RE.test(bare)) end = at
+  }
+  return end > 0 ? t.slice(0, end).trim() : t
 }
 
 /**

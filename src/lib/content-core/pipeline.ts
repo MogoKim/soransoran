@@ -17,8 +17,10 @@
  *    입력이 바뀌었으므로 옛 판독·초안·검수 artifact 와 캐시를 새 계약으로 재사용하지 않는다.
  *    v2.3 (2026-10-14) — 짧은 구조 판독인 speakerPlan 만 Gemini thinking 을 `low` 로 고정한다.
  *    기본 dynamic thinking 이 1,200-token 상한을 소진해 JSON 이 잘린 운영 손실을 줄인다.
+ *    v2.4 (2026-11-22 · quality-v31) — 세 단계가 읽는 본문이 수집 때 잘린 끝을 걷은 본문이다(`closedCutBody`).
+ *    입력이 바뀌었으므로 옛 판독·초안·검수 artifact 와 캐시를 새 계약으로 재사용하지 않는다.
  */
-export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.3'
+export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.4'
 
 /**
  * 🔴 **p5 (2026-09-23)** — 계획 요청의 출력 계약이 바뀌었다.

@@ -34,6 +34,9 @@ const ENGINE_CHECK = 'scripts/persona-comment-engine-check.mts'
 const FU_CHECK = 'scripts/persona-comment-followup-check.mts'
 const EV_CHECK = 'scripts/stage-evidence-check.mts'
 const FORM_CHECK = 'scripts/source-form-check.mts'
+const CORE_CHECK = 'scripts/content-core-v2-check.mts'
+const LIFE_CHECK = 'scripts/draft-life-gates-check.mts'
+const EVID = 'src/lib/content-core/evidence.ts'
 
 type Mutation = { name: string; file: string; from: string; to: string; check: string }
 const M = (name: string, file: string, check: string, from: string, to: string): Mutation => ({ name, file, from, to, check })
@@ -87,6 +90,22 @@ const MUTATIONS: Mutation[] = [
   M('초안 지시문이 꼴 절을 싣지 않음', PROMPTS, FORM_CHECK, '    ...DRAFT_FORM_LINES,\n', ''),
   M('줄 끝 모양을 공백째 잼', 'src/lib/content-core/source-form.ts', FORM_CHECK,
     "lastChars(l.replace(/\\s+/g, ''), LINE_END_CHARS)", 'lastChars(l, LINE_END_CHARS)'),
+  // ── 수집 때 잘린 원문은 끝맺은 자리까지 걷는다 (quality-v31 · content-core-v2.4 · draft-gates-v14) ──
+  M('runContentCore 가 걷지 않은 본문으로 근거 묶음을 만듦', 'scripts/lib/content-core-run.mts', CORE_CHECK,
+    'const sourceBody = closedCutBody(input.maskedBody, input.sourceMeta.bodyLength)', 'const sourceBody = input.maskedBody'),
+  M('closedCutBody 가 자르지 않음', EVID, FORM_CHECK,
+    '  return end > 0 ? t.slice(0, end).trim() : t\n', '  return t\n'),
+  M('잘림 판정이 원래 길이를 버림', EVID, FORM_CHECK,
+    '  return originalLength === null || !(originalLength > 0) || originalLength > n\n', '  return true\n'),
+  M('두 벌 본문도 자름', EVID, FORM_CHECK, ' || collapseRepeatedBody(t).collapsed) return t', ') return t'),
+  M('공백 앞 다·네·음 낱말도 끝으로 봄', EVID, FORM_CHECK,
+    'const WORD_CLOSING_RE = /[가-힣](?:요|죠|니다)$/', 'const WORD_CLOSING_RE = /[가-힣](?:요|죠|니다|다|네|음)$/'),
+  M('잘린 원문 게이트가 원래 길이를 버림', 'src/lib/content-core/draft-life-gates.ts', LIFE_CHECK,
+    '  const tail = openTailOf(src.body, src.bodyLength)', '  const tail = openTailOf(src.body, null)'),
+  M('캐시 채택 게이트 원천이 걷지 않은 본문', 'scripts/micro-seed-auto-draft.mts', LIFE_CHECK,
+    'body: closedCutBody(meta.bodyHead, meta.bodyLength), ...gateSourceMetaOf(meta)', 'body: meta.bodyHead, ...gateSourceMetaOf(meta)'),
+  M('원천 메타에 원래 길이를 싣지 않음', 'scripts/micro-seed-auto-draft.mts', FORM_CHECK,
+    'imageCount: m.imageCount, bodyLength: m.bodyLength,', 'imageCount: m.imageCount, bodyLength: null,'),
   // ── C · 400 요청 모양 거부 ──
   M('400 도 다음 후보로 재시도', PIPE, ENGINE_CHECK,
     'if (!res.ok && requestShapeRejected(res.errorCode)) {', 'if (false) {'),

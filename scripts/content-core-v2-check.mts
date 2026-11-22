@@ -190,6 +190,8 @@ const run = (o: {
   cap?: number
   /** 🔴 좁히기 전의 전체 후보 수 — 주지 않으면 `personas` 가 곧 전체다 */
   poolSize?: number
+  /** 🔴 수집기가 자르기 전 본문 길이 — 주지 않으면 모른다(`null`) */
+  bodyLength?: number | null
 }): Promise<HumanReviewArtifact> => {
   SENT = []
   return runContentCore({
@@ -197,7 +199,7 @@ const run = (o: {
     artifactId: randomUUID().replace(/-/g, ''),
     sourceSite: FX_SITE, sourceArticleId: o.id, title: o.title, maskedBody: o.body,
     // 🔴 (quality-v3) 회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상 — 이 검사의 원문은 시점·출처 축을 부르지 않는다
-    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null },
+    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null, bodyLength: o.bodyLength ?? null },
     personas: o.personas ?? ALL,
     /**
      * 🔴 **넘긴 목록이 곧 전체다** — 따로 주지 않는 한.
@@ -842,6 +844,31 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
   check('🔴 계획 지시가 kind 가 곧 evidenceRef 라고 말한다',
     buildSpeakerPlanSystemPrompt().includes('곧 `evidenceRef` 다'))
 
+  // 🔴 (quality-v31) 수집 때 잘린 원문 — 세 단계가 끝맺은 자리까지 걷은 본문을 본다. 지어낸 문장이다
+  {
+    const kept = `${SRC.C.body}\n그날 일은 그렇게 지나갔어요`
+    const head = `${kept}\n${'다음 주에는 사장님이 사람을 더 뽑겠다고 하시길래 제가 먼저 말을 꺼냈더니 '.repeat(6)}`.slice(0, EVIDENCE_CHAR_BUDGET)
+    const cut = await run({ id: SRC.C.id, title: SRC.C.title, body: head, bodyLength: 820, personas: [partTime],
+      canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+        protectedFacts: [fact('number', '3시간', 'head'), fact('number', '9명', 'head')],
+        contentRoles: ['usefulAnswer', 'conversationSpark'],
+        speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT_C } })
+    const planSent = JSON.parse(sentOf('speakerPlan')[0]!.payload) as { 원문: { spans: { kind: string; text: string }[]; bodyLength: number } }
+    const draftSent = JSON.parse(sentOf('draftGen')[0]?.payload ?? '{}') as { 원문?: string; 꼴?: { 끝맺음: string } }
+    check('🔴 🔴 **잘린 원문 — 계획 · 생성 요청에 끊긴 조각이 없고 끝맺은 줄로 끝난다**',
+      head.length === EVIDENCE_CHAR_BUDGET && head.includes('말을 꺼냈더니')
+      && planSent.원문.spans.every((x) => !x.text.includes('말을 꺼냈더니'))
+      && planSent.원문.bodyLength === kept.length && cut.evidence.bodyLength === kept.length
+      && draftSent.원문 !== undefined && !draftSent.원문.includes('말을 꺼냈더니')
+      && draftSent.꼴?.끝맺음 === '일은 그렇게 지나갔어요', JSON.stringify({ n: planSent.원문.bodyLength, end: draftSent.꼴?.끝맺음 }))
+    const whole = await run({ id: SRC.C.id, title: SRC.C.title, body: head, bodyLength: head.length, personas: [partTime],
+      canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+        protectedFacts: [fact('number', '3시간', 'head'), fact('number', '9명', 'head')],
+        contentRoles: ['usefulAnswer', 'conversationSpark'],
+        speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT_C } })
+    check('🔴 원래 길이만큼 다 남은 원문은 한 글자도 걷지 않는다', whole.evidence.bodyLength === head.trim().length)
+  }
+
   // 🔴 🔴 C 의 알바 근거가 **title** 에서 검증된다
   check('🔴 🔴 **C — 알바 근거가 title 로 검증되어 SELF 가 유지된다**',
     probe.plan.stance === 'SELF_EXPERIENCE' && probe.plan.personaCode === 'P01'
@@ -1277,7 +1304,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
       && readGenerationContract(null) === null)
   }
   check('🔴 판 번호가 새 계약을 담는다',
-    CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.3'
+    CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.4'
     && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**

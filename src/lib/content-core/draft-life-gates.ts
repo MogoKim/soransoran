@@ -120,8 +120,11 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  * `draft-gates-v13` (quality-v27) — **잘린 원문 판정을 사실에 맞춘다.** 원문이 수집 상한에 닿았을 때만 "잘렸다"를 묻고
  *    (`isCutAtCollection`), 끝맺는 말 뒤에 붙은 표정(자모 · 물결 · 이모지)은 걷고 본다(`closesSentence`).
  *    갱년기 경험 판정은 `persona-life-facts` 하나를 쓴다.
+ *
+ * `draft-gates-v14` (quality-v31) — **잘린 원문은 생성 전에 끝맺은 자리까지 걷는다**(`closedCutBody`). 그래서 이 게이트가 볼
+ *    원문은 걷을 자리가 없던 본문뿐이다. 잘렸는가는 원래 길이(`bodyLength`)로 본다 — 상한 근처에서 글쓴이가 끝낸 글은 묻지 않는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v13'
+export const DRAFT_GATE_VERSION = 'draft-gates-v14'
 
 /**
  * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
@@ -306,9 +309,11 @@ export type DraftGateContext = {
   source: DraftGateSource | null
 }
 export type DraftGateSource = {
-  /** 🔴 모델에 준 것과 같은 원문 — 마스킹된 제목 · `bodyHead` (근거 packet 을 만든 그 글자) */
+  /** 🔴 모델에 준 것과 같은 원문 — 마스킹된 제목 · `closedCutBody(bodyHead, bodyLength)` (근거 packet 을 만든 그 글자) */
   title: string
   body: string
+  /** 🔴 수집기가 자르기 전 본문 길이 — `null` 은 모른다(그때는 수집 상한에 닿았는지만 본다) */
+  bodyLength: number | null
   /** 🔴 원천 사이트(`navercafe:wgang` …) — 비어 있으면 모른다 */
   site: string
   /** 🔴 원문이 올라온 시각 · 우리가 가져온 시각. `capturedAt` 을 `postedAt` 대신 쓰지 않는다 */
@@ -1308,13 +1313,13 @@ const stemOf = (w: string): string => w.replace(PARTICLE_TAIL_RE, '').slice(0, 2
 const squash = (s: string): string => s.replace(/\s+/g, '')
 
 /**
- * 🔴 **원문이 수집 상한에서 잘려 끝을 맺지 못했다** — 상한에 닿았고(`isCutAtCollection`) 끝 줄이
- *    끝맺는 말로 끝나지 않는다(`closesSentence`). 상한에 닿지 않은 글은 글쓴이가 거기서 끝낸 것이다.
- *    한두 글자 조각(`야`)은 앞 줄에 붙여 본다. **수집 반복**(본문 일부가 두 번 캡처돼 두 번째가 중간에
- *    끊김)은 잘림이 아니다 — 끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다.
+ * 🔴 **원문이 수집 때 잘려 끝을 맺지 못했다** — 잘렸고(`isCutAtCollection` · 원래 길이) 끝 줄이
+ *    끝맺는 말로 끝나지 않는다(`closesSentence`). 생성 전에 끝맺은 자리까지 걷으므로(`closedCutBody`) 여기 남는 것은
+ *    끝맺은 자리가 하나도 없던 본문이다. 한두 글자 조각(`야`)은 앞 줄에 붙여 본다. **수집 반복**(본문 일부가 두 번 캡처돼
+ *    두 번째가 중간에 끊김)은 잘림이 아니다 — 끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다.
  */
-function openTailOf(sourceBody: string): string | null {
-  if (!isCutAtCollection(sourceBody)) return null
+function openTailOf(sourceBody: string, bodyLength: number | null): string | null {
+  if (!isCutAtCollection(sourceBody, bodyLength)) return null
   const lines = sourceBody.split(/\n+/).map((x) => x.trim()).filter((x) => /[가-힣]/.test(x))
   if (lines.length === 0) return null
   let tail = lines[lines.length - 1]!
@@ -1342,7 +1347,7 @@ function openTailOf(sourceBody: string): string | null {
 function judgeTruncatedCompletion(title: string, body: string, ctx: DraftGateContext): LifeHit[] {
   const src = ctx.source
   if (src === null) return []
-  const tail = openTailOf(src.body)
+  const tail = openTailOf(src.body, src.bodyLength)
   if (tail === null) return []
   const tailStems = [...new Set((tail.match(HANGUL_WORD_RE) ?? []).map(stemOf).filter((s) => s.length === 2))]
   const known = squash(`${src.title}\n${src.body}`)
