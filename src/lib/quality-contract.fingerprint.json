@@ -1,12 +1,12 @@
 {
-  "version": "quality-v32",
-  "digest": "c2d86a7a887f612058863837a546846b3c29f7f6f0a7112c52c76709e84b7d4f",
+  "version": "quality-v33",
+  "digest": "997a55360e7f762da776f55d71a5bac628da2f842f71504efa78d330c565dd05",
   "files": {
-    "src/lib/quality-contract.ts": "b6ae38ac029334be5a1ffd8963b45c665af7f7b5823a5c568d74b92fd76b974e",
+    "src/lib/quality-contract.ts": "f735d11d3738310b5c6d89710430e068a8ff6dbc9bb10b093778a812bbd901bd",
     "src/lib/semantic-summary-codes.ts": "50b05bd3570e2745c5538a31bf4d858e690bbcdcfc969e477c68c89badddbdcc",
-    "src/lib/content-core/draft-life-gates.ts": "78e903627d533975c5efb338aa447b26c41dbe3fa2c56e5ea676e1257348ebd2",
+    "src/lib/content-core/draft-life-gates.ts": "9932027e88ab0a9fc680847ff25d697704c59822133caa7bfb20fa9e086e7d0d",
     "src/lib/content-core/review.ts": "cfa6d53b5efe22189764d720327e4a1530357b05ae0b9369130dcf5061890f6a",
-    "src/lib/content-core/pipeline.ts": "6f6b1967eba15998afabb9df919aa7f85661df01d14fe8f61d7257cee2cc2937",
+    "src/lib/content-core/pipeline.ts": "407a6edc89b67991949e267f17ce690a9df7a2a8ceb6132a52c6476abb4dd523",
     "src/lib/content-core/evidence.ts": "64cbab6168372eb79f634f0a7e47d6a5892be71f903b440b00d4424bd1419a11",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
     "src/lib/micro-seed-auto-draft.ts": "28cc4da6a68ed424fda043aa11ccc9cf7acc15fed16ab2f9845d073c3230f678",
@@ -23,7 +23,7 @@
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
     "src/lib/persona-pool-card.ts": "f3784f43966de78ff62b8d8a84b89692a11493b9f3b543c5a95f26ef7e3fbb2f",
     "src/lib/persona-cap.ts": "0f059da6c9a0b3030702823957f74ebc0cc6a68bc1de1fa1a52d4019dd093517",
-    "src/lib/founder-gold.ts": "d66abd4005b3e7e4770f41c10d0ba4a777012f96ea14e935dcd71cd1fba59c2d",
+    "src/lib/founder-gold.ts": "2d11ce3cb907aa69bc2dbef3af5c46fb5224f00edcb8737c46bd6006d82f9557",
     "src/lib/founder-gold-v1.data.ts": "a97edb21abf315ae4005c3d1561db1111f514f014226581c08679c6d41b74f78",
     "src/lib/persona-no-go.ts": "043c734ff551c93a5e5cfe18ebaf56c0b5087232efb0ecc75581ffdaf6bf4318",
     "src/lib/auto-ready-defect-resolution.ts": "8df39a11c25842864c3f537bc2a34af628663fdbff3409720b2f081c06db1136",
@@ -37,10 +37,12 @@
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v31 → quality-v32",
+    "reason": "판 quality-v32 → quality-v33",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/content-core/pipeline.ts"
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/founder-gold.ts"
     ]
   }
 }

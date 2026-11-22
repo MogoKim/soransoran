@@ -68,8 +68,6 @@ export const DRAFT_GATE_CODES = [
   'mediaDependentDraft',
   /** 🔴 (v3) 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다 */
   'truncatedSourceCompletion',
-  /** 🔴 (v4) 받아칠 거리가 없는 하소연 — 계획이 대화 촉발 하나뿐인 vent 인데 묻는 말도 없다 */
-  'thinVentDraft',
   /** 🔴 1인칭 허가(selfBasis) 없이 자기 생활사를 주장한다 */
   'unwarrantedSelfClaim',
   /** 🔴 (v5) 글쓴이의 말버릇 금지 · 전원 공통 금지(Pool §7-2)를 썼다 — 판정은 `persona-no-go` 하나(댓글 Gate ⑦⑧ 와 같다) */
@@ -123,8 +121,11 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *
  * `draft-gates-v14` (quality-v31) — **잘린 원문은 생성 전에 끝맺은 자리까지 걷는다**(`closedCutBody`). 그래서 이 게이트가 볼
  *    원문은 걷을 자리가 없던 본문뿐이다. 잘렸는가는 원래 길이(`bodyLength`)로 본다 — 상한 근처에서 글쓴이가 끝낸 글은 묻지 않는다.
+ *
+ * `draft-gates-v15` (quality-v33) — **받아칠 거리가 없는 하소연(`thinVentDraft`) 판정을 지웠다**(2026-11-22 창업자 결정).
+ *    묻지 않고 끝나는 하소연도 게시판 글이다 — 질문을 덧붙인 초안만 살아남게 하던 규칙이다. 글의 꼴과 맺음은 원문을 따른다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v14'
+export const DRAFT_GATE_VERSION = 'draft-gates-v15'
 
 /**
  * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
@@ -175,8 +176,6 @@ export const DRAFT_LIFE_REVIEW_CODES = [
   'staleTimeClaim', 'externalCommunityClaim', 'mediaDependentDraft', 'truncatedSourceCompletion',
   /** 🔴 (v3) 계획이 `noLifeFactNeeded` 인데 자기 가족사를 명시해 말한다 — `selfBasis=null` 은 여전히 확정(AUTO_HOLD)이다 */
   'unwarrantedSelfClaim',
-  /** 🔴 (v4) 소프트 품질로 시작했지만 quality-v25부터 Content Core HOLD */
-  'thinVentDraft',
 ] as const satisfies readonly DraftGateCode[]
 export type DraftLifeReviewCode = (typeof DRAFT_LIFE_REVIEW_CODES)[number]
 export type DraftLifeReview = { code: DraftLifeReviewCode; detail: string }
@@ -193,7 +192,6 @@ export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   staleTimeClaim: '🔴 원문이 올라온 날에만 맞는 명절·실시간 현장 표현을 게시 시점의 지금처럼 말한다',
   externalCommunityClaim: '🔴 다른 커뮤니티에서 본 회원·글의 움직임을 이 곳에서 본 것처럼 말한다',
   truncatedSourceCompletion: '🔴 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다',
-  thinVentDraft: '🟡 받아칠 거리가 없는 짧은 하소연 — 공감·경험·답을 부르는 자리가 없다',
 }
 
 export type DraftGateFailure = { code: DraftGateCode; detail: string }
@@ -205,12 +203,6 @@ export type DraftGatePlan = {
   warrants: readonly { fact: string; evidenceText?: string }[]
   /** 원문에서 검증된 원자 사실. 가족 건강 주체의 생략을 작성자 질병으로 오인하지 않는 근거로만 쓴다. */
   protectedFacts?: readonly { text: string }[]
-  /**
-   * 🔴 (v4) 계획이 정한 마무리와 글의 역할 — 소프트 품질(`thinVentDraft`)만 읽는다. 없으면 판정하지 않는다.
-   *    정본 `SpeakerPlan` · artifact `plan` 둘 다 이 칸을 가진다.
-   */
-  closingIntent?: string | null
-  contentRoles?: readonly string[]
 }
 
 /**
@@ -335,10 +327,7 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const core = judgeCoreGates(input)
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
   const ctx = judgeSourceContext(input.title, input.body, input.context)
-  const basis = [
-    ...judgeNoLifeFactClaims(input.title, input.body, input.plan),
-    ...judgeThinVent(input.title, input.body, input.plan),
-  ]
+  const basis = judgeNoLifeFactClaims(input.title, input.body, input.plan)
   /**
    * 🔴 (v9) **글쓴이 No-Go** — 판정은 `persona-no-go` 하나. 개인 소재·말버릇과 전원 공통 금지.
    *    배정에서 원천 소재를 먼저 막고, 생성이 새로 끌어온 금지 소재도 여기서 다시 막는다.
@@ -1021,21 +1010,6 @@ function judgeFinanceSelf(title: string, body: string, plan: DraftGatePlan | nul
     if (hit !== null && firstPersonNow(frames, i, hit.at, [])) out.push(f.clause)
   })
   return out
-}
-
-/**
- * 🔴 (v4 · 창업자 gold #1 · 소프트 품질) **받아칠 거리가 없는 하소연.** 계획 스스로 마무리를 `vent` 로,
- *    역할을 대화 촉발(`conversationSpark`) **하나만** 골랐고(공감 경험 · 쓸 만한 답 · 발견 없음) 묻는 말도 없다.
- *    공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않고, 나머지는 Content Core가 HOLD한다.
- *    🔴 계획에 이 칸이 없으면 판정하지 않는다(소프트 신호라 모름을 결함으로 세지 않는다).
- */
-function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
-  const roles = plan?.contentRoles
-  if (plan === null || plan.closingIntent !== 'vent' || roles === undefined || roles.length === 0) return []
-  if (!roles.every((r) => r === 'conversationSpark')) return []
-  const asks = `${title}\n${body}`.split(/(?<=[.!?？。])\s+|\n+/).some((x) => /[?？]/.test(x) || QUESTION_END_RE.test(x.trim()))
-  if (asks) return []
-  return [{ code: 'thinVentDraft', detail: `계획 vent · 역할 ${roles.join('·')} · 묻는 말 없음` }]
 }
 
 /**

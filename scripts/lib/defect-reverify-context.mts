@@ -78,8 +78,6 @@ export function makeReverifyContextLoader(opts: { artifactDir?: string; poolDocP
         plan: {
           selfBasis: typeof plan.selfBasis === 'string' ? plan.selfBasis : null,
           warrants,
-          closingIntent: typeof plan.closingIntent === 'string' ? plan.closingIntent : null,
-          contentRoles: Array.isArray(plan.contentRoles) ? plan.contentRoles.filter((x): x is string => typeof x === 'string') : [],
         },
         card,
         source: {

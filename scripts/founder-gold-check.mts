@@ -2,9 +2,9 @@
 /**
  * 창업자 gold 검사 — 🔴 **quality-v4 의 열림 근거가 사실인가** (2026-09-28)
  *
- *   ① 재생 — 지금 초안 게이트가 창업자 판정 30건을 그대로 재현한다
- *      (통과 22 과차단 0 · 중대 결함 3 확정 차단 · 수정 2 · 폐기 6 자동 READY 0)
- *   ② 불변 — 고정 digest · 1~30 순서 · id · 판정 · 결함 표시. 변조 반례는 전부 닫힘이어야 한다
+ *   ① 재생 — 지금 초안 게이트가 창업자 판정 30건을 그대로 재현한다(founder-gold-v2 기대)
+ *      (통과 23 과차단 0 · 중대 결함 3 확정 차단 · 수정 2 · 폐기 5 자동 READY 0 — #1 은 2026-11-22 결정으로 통과 재분류)
+ *   ② 불변 — 고정 digest · 1~30 순서 · id · 판정 · 결함 표시 · 재분류. 변조 반례는 전부 닫힘이어야 한다
  *   ③ 카드 스냅샷 = 정본 카드(게이트 칸)
  *   ④ 러너 경로 — 새 생성 · 캐시 채택 둘 다 `runContentCore → pickV2` 로 같은 답
  *   ⑤ 열림 근거 — gold 재현 · 사람 중대 결함 0 일 때만 증거 충족 · 스위치 · 감사 결함은 그대로 닫는다
@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs'
 import {
   replayFounderGold, founderGoldDigestOf, founderGoldShapeProblems, describeFounderGold, goldWant,
-  FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE, type FounderGoldRow,
+  FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_RECLASSIFIED, FOUNDER_GOLD_SHAPE, FOUNDER_GOLD_VERSION, type FounderGoldRow,
 } from '../src/lib/founder-gold'
 import { FOUNDER_GOLD_V1_ROWS } from '../src/lib/founder-gold-v1.data'
 import { applyFounderGoldBasis, type QualityCohortVerdict } from '../src/lib/auto-ready-quality-cohort'
@@ -41,7 +41,7 @@ console.log(`   ${describeFounderGold(g)}`)
 for (const r of g.results) {
   check(`#${String(r.n).padStart(2)} 기대 ${r.want} · 지금 ${r.got}${r.codes.length ? ` (${r.codes.join(',')})` : ''}`, r.ok)
 }
-check('🔴 🔴 **30/30 재현 · 통과 과차단 0 · 결함 누출 0 · 수정·폐기 자동 READY 0**',
+check('🔴 🔴 **30/30 재현(v2 기대) · 통과 과차단 0 · 결함 누출 0 · 수정·폐기 자동 READY 0**',
   g.pass && g.counts.ok === 30 && g.counts.overBlockedPass === 0 && g.counts.leakedHard === 0 && g.counts.autoReadyNonPass === 0,
   g.reasons.join(' · '))
 
@@ -50,6 +50,18 @@ check('데이터 digest = 고정값', founderGoldDigestOf(FOUNDER_GOLD_V1_ROWS) 
 check('모양 = 창업자 확정값(30 · 통과 22 · 수정 2 · 폐기 6 · 결함 3)', founderGoldShapeProblems(FOUNDER_GOLD_V1_ROWS).length === 0
   && FOUNDER_GOLD_SHAPE.pass.length === 22 && FOUNDER_GOLD_SHAPE.edit.length === 2
   && FOUNDER_GOLD_SHAPE.decline.length === 6 && FOUNDER_GOLD_SHAPE.hardDefect.length === 3)
+// 🔴 (v2) 재분류 — #1 하나 · v1 기록(폐기 · 사유)은 그대로 · 근거가 적혀 있다 · 나머지 29건 기대는 v1 판정 그대로
+{
+  const r1 = FOUNDER_GOLD_V1_ROWS[0]!
+  const x = FOUNDER_GOLD_RECLASSIFIED
+  check('gold 판 = founder-gold-v2 · 재분류 #1 하나', FOUNDER_GOLD_VERSION === 'founder-gold-v2' && x.length === 1 && x[0]!.n === 1)
+  check('🔴 #1 의 v1 기록은 남는다 — 폐기 · "글이 밋밋하고 가치가 낮음"',
+    r1.verdict === 'decline' && r1.reason === '비하가 아니라 글이 밋밋하고 가치가 낮음' && x[0]!.recorded === 'decline')
+  check('#1 재분류 근거 = 2026-11-22 창업자 결정',
+    x[0]!.reason === '2026-11-22 창업자 결정 — 질문 없는 하소연 보류 규칙 삭제. 그 글은 옛 판이 지어낸 밋밋한 하소연이었고 지금은 글이 원문을 따른다.')
+  check('🔴 나머지 29건 기대 = v1 판정 그대로', FOUNDER_GOLD_V1_ROWS.slice(1).every((r) =>
+    goldWant(r) === (r.hardDefect ? 'hold' : r.verdict === 'pass' ? 'pass' : 'notAuto')) && goldWant(r1) === 'pass')
+}
 {
   const tamper: [string, (rows: FounderGoldRow[]) => FounderGoldRow[]][] = [
     ['#4 중대 결함 표시를 지운다(판정 완화)', (r) => { r[3]!.hardDefect = false; return r }],
@@ -64,14 +76,25 @@ check('모양 = 창업자 확정값(30 · 통과 22 · 수정 2 · 폐기 6 · �
     const t = replayFounderGold(f(clone()))
     check(`🔴 변조 — ${label} → 재현 실패(닫힘)`, !t.pass, t.reasons.slice(0, 2).join(' · '))
   }
+  const R = FOUNDER_GOLD_RECLASSIFIED
+  const rtamper: [string, typeof R][] = [
+    ['재분류에 #5(폐기)를 더한다', [...R, { ...R[0]!, n: 5, queueId: FOUNDER_GOLD_V1_ROWS[4]!.queueId }]],
+    ['재분류에 #4(중대 결함)를 더한다', [...R, { ...R[0]!, n: 4, queueId: FOUNDER_GOLD_V1_ROWS[3]!.queueId }]],
+    ['#1 재분류를 지운다', []],
+    ['#1 재분류 근거를 비운다', [{ ...R[0]!, reason: '' }]],
+  ]
+  for (const [label, rc] of rtamper) {
+    const t = replayFounderGold(FOUNDER_GOLD_V1_ROWS, rc)
+    check(`🔴 변조 — ${label} → 재현 실패(닫힘)`, !t.pass, t.reasons.slice(0, 2).join(' · '))
+  }
 }
 
-// 🔴 행 판정 자체 — 폐기 행(#1)이 게이트를 통과하게 되면 그 행은 불일치다(digest 와 별개로 · 변이 V16)
+// 🔴 행 판정 자체 — 폐기 행(#5)이 게이트를 통과하게 되면 그 행은 불일치다(digest 와 별개로 · 변이 V16)
 {
   const t = clone()
-  t[0]!.plan = { ...t[0]!.plan, closingIntent: 'share' }
-  const r1 = replayFounderGold(t).results.find((x) => x.n === 1)!
-  check('🔴 🔴 **폐기 행이 게이트를 통과하게 되면 그 행 = 불일치(자동 READY 누출로 센다)**', r1.got === 'pass' && !r1.ok, JSON.stringify(r1))
+  t[4]!.draft = { ...t[4]!.draft, body: '요즘 날씨가 부쩍 쌀쌀하네요.' }
+  const r5 = replayFounderGold(t).results.find((x) => x.n === 5)!
+  check('🔴 🔴 **폐기 행이 게이트를 통과하게 되면 그 행 = 불일치(자동 READY 누출로 센다)**', r5.got === 'pass' && !r5.ok, JSON.stringify(r5))
   const t2 = clone()
   t2[3]!.draft = { ...t2[3]!.draft, body: '요즘 젊은 분들은 차례 안 지내나요?' }
   const r4 = replayFounderGold(t2).results.find((x) => x.n === 4)!
@@ -127,7 +150,7 @@ console.log('\n⑤ 열림 근거 — gold 재현 + 사람 중대 결함 0 일 �
 console.log('\n⑥ 품질 계약 — gold 가 digest 에 들어갔다')
 {
   const c = qualityContractComponents() as Record<string, any>
-  check(`판 = quality-v32 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v32')
+  check(`판 = quality-v33 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v33')
   check('digest 구성에 열림 근거 · gold 판 · 고정 digest · 모양이 있다',
     c.evidenceBasis === 'founderGold' && c.founderGold?.digest === FOUNDER_GOLD_PINNED_DIGEST
     && JSON.stringify(c.founderGold?.shape) === JSON.stringify(FOUNDER_GOLD_SHAPE))

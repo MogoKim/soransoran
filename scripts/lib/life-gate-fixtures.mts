@@ -703,7 +703,6 @@ export type SourcePhrase = {
   body: string
   plan?: {
     selfBasis: string | null; warrants: { fact: string; evidenceText?: string }[]
-    closingIntent?: string | null; contentRoles?: string[]
   }
   source?: Partial<DraftGateSource>
   want: string
@@ -906,11 +905,8 @@ export const V4_PHRASES: readonly SourcePhrase[] = [
   { card: 'P19', title: '보험', body: '보험 리모델링 해 보신 분 계세요?', plan: NOLIFE, want: 'pass' },
   { card: 'P19', title: '보험', body: '친구가 보험을 갈아탔대요.', plan: NOLIFE, want: 'pass' },
   { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: LIFE, want: 'pass' },
-  // 받아칠 거리가 없는 하소연(소프트 품질) — Content Core HOLD
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'hold:thinVentDraft' },
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['experienceResonance', 'conversationSpark'] }, want: 'pass' },
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요. 다들 어떠세요?', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'pass' },
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'share', contentRoles: ['conversationSpark'] }, want: 'pass' },
+  // 🔴 묻지 않고 끝나는 하소연도 게시판 글이다 — 받아칠 거리 판정(thinVentDraft)은 quality-v33 에서 지웠다
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: NOLIFE, want: 'pass' },
   // 🔴 창업자가 통과시킨 소재 — 논쟁 · 이혼 · 돈 · 건강 질문은 소재로 막지 않는다
   { card: 'P16', title: '이혼', body: '다들 어느 정도 마음이어야 이혼을 결심하시나요?', want: 'pass' },
   { card: 'P10', title: '치즈', body: '치즈 매일 챙겨 먹는 거 몸에 안 좋을까요?', want: 'pass' },
