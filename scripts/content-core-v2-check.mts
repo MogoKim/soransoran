@@ -1304,7 +1304,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
       && readGenerationContract(null) === null)
   }
   check('🔴 판 번호가 새 계약을 담는다',
-    CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.4'
+    CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.5'
     && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
   /**

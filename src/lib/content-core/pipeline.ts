@@ -19,8 +19,10 @@
  *    기본 dynamic thinking 이 1,200-token 상한을 소진해 JSON 이 잘린 운영 손실을 줄인다.
  *    v2.4 (2026-11-22 · quality-v31) — 세 단계가 읽는 본문이 수집 때 잘린 끝을 걷은 본문이다(`closedCutBody`).
  *    입력이 바뀌었으므로 옛 판독·초안·검수 artifact 와 캐시를 새 계약으로 재사용하지 않는다.
+ *    v2.5 (2026-11-22 · quality-v32) — draftGen 도 thinking 을 `low` 로 고정한다. 11-21 운영 42건에서 출력 토큰의 약 84% 가
+ *    생각이었고 12건이 2,000 상한을 생각으로 다 써 잘렸다(초안 지출의 35%).
  */
-export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.4'
+export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.5'
 
 /**
  * 🔴 **p5 (2026-09-23)** — 계획 요청의 출력 계약이 바뀌었다.
@@ -123,7 +125,7 @@ export const STAGE_MODEL = Object.freeze({
 /** Gemini 단계의 reasoning 깊이. null 은 provider 기본값을 그대로 쓴다. */
 export const STAGE_THINKING_LEVEL = Object.freeze({
   speakerPlan: 'low',
-  draftGen: null,
+  draftGen: 'low',
   semanticReview: null,
 } as const) satisfies Readonly<Record<ContentCoreStage, 'low' | null>>
 

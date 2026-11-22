@@ -106,6 +106,9 @@ const MUTATIONS: Mutation[] = [
     'body: closedCutBody(meta.bodyHead, meta.bodyLength), ...gateSourceMetaOf(meta)', 'body: meta.bodyHead, ...gateSourceMetaOf(meta)'),
   M('원천 메타에 원래 길이를 싣지 않음', 'scripts/micro-seed-auto-draft.mts', FORM_CHECK,
     'imageCount: m.imageCount, bodyLength: m.bodyLength,', 'imageCount: m.imageCount, bodyLength: null,'),
+  // ── 초안 생성 생각 수준 low (quality-v32 · content-core-v2.5) ──
+  M('draftGen 생각 수준을 provider 기본값으로 되돌림', 'src/lib/content-core/pipeline.ts', 'scripts/supply-chain-e2e-check.mts',
+    "  draftGen: 'low',\n  semanticReview: null,", '  draftGen: null,\n  semanticReview: null,'),
   // ── C · 400 요청 모양 거부 ──
   M('400 도 다음 후보로 재시도', PIPE, ENGINE_CHECK,
     'if (!res.ok && requestShapeRejected(res.errorCode)) {', 'if (false) {'),

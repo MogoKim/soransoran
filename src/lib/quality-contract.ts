@@ -253,8 +253,11 @@ import {
  * "말을 꺼냈더니" 로 끝난 채 채택·공개됐다 — 지시문대로 원문이 끝나는 곳에서 멈췄다. 원래 길이(`bodyLength`)를 초안 단계까지
  * 싣고, 근거 묶음을 만들기 전에 마지막으로 끝맺은 자리까지 자른다(`closedCutBody` · `content-core-v2.4`). 잘린 원문 게이트는
  * 걷을 자리가 없던 본문만 보고, 잘림을 원래 길이로 판정한다(`draft-gates-v14`). 막는 검사는 더하지 않았다.
+ *
+ * `quality-v32` (2026-11-22) = **초안 생성도 생각 수준 `low`.** 출력 상한 2,000 을 생각이 다 써 초안이 잘리던 손실을 줄인다
+ * (`STAGE_THINKING_LEVEL.draftGen` · `content-core-v2.5`). 지시문 · 게이트 · 검수는 그대로다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v31'
+export const QUALITY_CONTRACT_VERSION = 'quality-v32'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
