@@ -9,7 +9,7 @@
  * ③ v1은 wave6 10명만 추가한다
  * ④ v2는 동결 v1 + wave7 20명을 추가해 production 60명을 덮는다
  * ⑤ 손상 v2는 v1로 조용히 후퇴하지 않고 base30만 유지한다
- * ⑥ v3는 동결 v2 + 다음 cohort 를 더하고 기존 60명 배정을 바꾸지 않는다 · 투입 전 기준선은 데이터에서 고른다
+ * ⑥ v3는 동결 v2 + wave8 43명을 더해 production 103명을 덮고 기존 60명 배정을 바꾸지 않는다 · 투입 전 기준선은 데이터에서 고른다
  * ⑦ 글 생성 경로는 배정을 따로 계산하지 않는다
  */
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -33,9 +33,9 @@ const { VOICE_SAMPLE_MAX } = await import('../src/lib/content-core/voice-evidenc
 const BASE_CODES = PRODUCTION_PERSONA_CODES.slice(0, 30)
 const V1_CODES = COHORTS['wave6-d20-canary'].codes
 const V2_CODES = COHORTS['wave7-d30'].codes
-/** 다음 cohort — 승인 전 fixture 의 코드(코드 universe 밖) */
+const V3_CODES = COHORTS['wave8-d50'].codes
 const D50_FIXTURE = loadExpansionFixture(repoRoot, 'scripts/__fixtures__/persona-expansion-d50.json')
-const V3_CODES = D50_FIXTURE.ok ? D50_FIXTURE.fixture.candidates.map((c) => c.code) : []
+const PRIOR_CODES = [...BASE_CODES, ...V1_CODES, ...V2_CODES]
 
 let pass = 0
 let fail = 0
@@ -93,9 +93,9 @@ check('🔴 후보마다 말투 지문·표본이 앞판 계산과 같다', voic
 console.log('\n② 글 생성과 댓글이 같은 Persona 배정을 쓴다')
 const comment0 = bundlesForPersonas({ repoRoot, personaCodes: PRODUCTION_PERSONA_CODES })
 check('🔴 글 생성 말투 지문 = 댓글 묶음 지문', voice0.candidates.every((c) => c.bundleDigest === bundleDigestOf(comment0.byCode.get(c.code))))
-check('스냅샷 없이는 base30만 서고 신규 30명은 막힌다',
+check('스냅샷 없이는 base30만 서고 신규 73명은 막힌다',
   BASE_CODES.every((code) => comment0.byCode.has(code))
-  && [...V1_CODES, ...V2_CODES].every((code) => !comment0.byCode.has(code)))
+  && [...V1_CODES, ...V2_CODES, ...V3_CODES].every((code) => !comment0.byCode.has(code)))
 
 console.log('\n③ v1 스냅샷 — base30 그대로 · wave6 10명 활성')
 const planV1 = planSupplementSnapshot({
@@ -134,8 +134,9 @@ const voiceV2 = authorCodes()
 check('🔴 wave7 20명이 글쓴이 후보에 들어온다', V2_CODES.every((code) => voiceV2.has(code)))
 const voiceV2Snapshot = new Map(loadVoice().candidates.map((c) => [c.code, c]))
 const comment2 = bundlesForPersonas({ repoRoot, personaCodes: PRODUCTION_PERSONA_CODES })
-check('🔴 production 60명 댓글 묶음이 모두 선다', PRODUCTION_PERSONA_CODES.every((code) => comment2.byCode.has(code)))
-const outside = bundlesForPersonas({ repoRoot, personaCodes: ['P64', 'P65', 'P66'] })
+check('🔴 기존 60명 댓글 묶음이 모두 서고 wave8 은 v3 전까지 막힌다',
+  PRIOR_CODES.every((code) => comment2.byCode.has(code)) && V3_CODES.every((code) => !comment2.byCode.has(code)))
+const outside = bundlesForPersonas({ repoRoot, personaCodes: ['P107', 'P108', 'P109'] })
 check('🔴 정본 밖 코드는 댓글 묶음을 받지 않는다', outside.byCode.size === 0 && outside.blocks.some((b) => b.includes('production 정본 universe 밖')))
 
 console.log('\n⑤ 손상 v2 — base30만 유지 · v1로 조용히 후퇴 금지')
@@ -151,7 +152,8 @@ check('손상 사유를 숨기지 않는다', brokenV2.blocks.some((b) => b.incl
 
 console.log('\n⑥ v3 스냅샷 — v2 동결 · 다음 cohort 묶음 · 기존 60 배정 불변 · 투입 전 기준선')
 writeFileSync(supplementPaths(2).corpus, planV2.assetText, { mode: 0o600 })
-check('준비 — 다음 cohort fixture 를 읽는다', D50_FIXTURE.ok && V3_CODES.length > 0, D50_FIXTURE.ok ? '' : D50_FIXTURE.problems.join(' / '))
+check('준비 — wave8 fixture 코드 = cohort 코드', D50_FIXTURE.ok && D50_FIXTURE.fixture.candidates.map((c) => c.code).join(',') === V3_CODES.join(','),
+  D50_FIXTURE.ok ? '' : D50_FIXTURE.problems.join(' / '))
 const restoredV2 = stableAssignment({ repoRoot })
 check('v2 복구 뒤 배정이 ④ 와 같다', PRODUCTION_PERSONA_CODES.every((code) => JSON.stringify(restoredV2.byCode.get(code)) === JSON.stringify(saV2.byCode.get(code))))
 const v2Frozen = (saV2.supplementByCode.size > 0 ? [...saV2.supplementByCode.values()] : [])
@@ -169,15 +171,16 @@ check('v3가 정본 경로에 기록된다', writtenV3.ok)
 const saV3 = stableAssignment({ repoRoot })
 check('배정 정본이 v3 동결 묶음 전부를 읽는다', saV3.supplementByCode.size === V1_CODES.length + V2_CODES.length + V3_CODES.length,
   String(saV3.supplementByCode.size))
-check('🔴 v3 후에도 production 60명 배정은 한 글자도 바뀌지 않는다',
-  PRODUCTION_PERSONA_CODES.every((code) => JSON.stringify(saV3.byCode.get(code)) === JSON.stringify(saV2.byCode.get(code))))
+check('🔴 v3 후에도 기존 60명 배정은 한 글자도 바뀌지 않는다',
+  PRIOR_CODES.every((code) => JSON.stringify(saV3.byCode.get(code)) === JSON.stringify(saV2.byCode.get(code))))
 const afterV3Authors = new Map(loadVoice().candidates.map((c) => [c.code, JSON.stringify(c)]))
-const authorDrift = [...afterV3Authors.entries()].filter(([code, value]) => JSON.stringify(voiceV2Snapshot.get(code)) !== value)
-check('🔴 v3 후에도 production 글쓴이·말투가 그대로다', authorDrift.length === 0 && afterV3Authors.size === voiceV2Snapshot.size,
-  authorDrift.slice(0, 1).map(([code]) => `${code} 글쓴이 입력이 v2 때와 다르다`).join(''))
-const notYet = bundlesForPersonas({ repoRoot, personaCodes: V3_CODES })
-check('🔴 등록 전 다음 cohort 코드는 v3에 묶음이 있어도 댓글 묶음을 받지 않는다',
-  notYet.byCode.size === 0 && notYet.blocks.some((b) => b.includes('production 정본 universe 밖')))
+const authorDrift = [...voiceV2Snapshot.keys()].filter((code) => JSON.stringify(voiceV2Snapshot.get(code)) !== afterV3Authors.get(code))
+check('🔴 v3 후에도 기존 글쓴이·말투가 그대로다', authorDrift.length === 0 && voiceV2Snapshot.size > 0,
+  authorDrift.slice(0, 1).map((code) => `${code} 글쓴이 입력이 v2 때와 다르다`).join(''))
+check('🔴 wave8 43명이 v3 뒤 글쓴이 후보에 들어온다', V3_CODES.every((code) => afterV3Authors.has(code)))
+const comment3 = bundlesForPersonas({ repoRoot, personaCodes: PRODUCTION_PERSONA_CODES })
+check('🔴 v3 뒤 production 103명 댓글 묶음이 모두 선다',
+  PRODUCTION_PERSONA_CODES.length === 103 && PRODUCTION_PERSONA_CODES.every((code) => comment3.byCode.has(code)))
 const baselineD50 = preInsertVoiceBaseline({ repoRoot, cohortCodes: V3_CODES })
 const baselineWave7 = preInsertVoiceBaseline({ repoRoot, cohortCodes: V2_CODES })
 const baselineWave6 = preInsertVoiceBaseline({ repoRoot, cohortCodes: V1_CODES })
@@ -190,7 +193,7 @@ check('🔴 v2 기준선 배정 = v3 기록 전 활성 배정(기존 60)',
 writeFileSync(supplementPaths(3).corpus, '{"broken":', { mode: 0o600 })
 const brokenV3 = stableAssignment({ repoRoot })
 check('🔴 손상 v3는 v2로 후퇴하지 않고 보충 Persona 를 모두 막는다',
-  [...V1_CODES, ...V2_CODES].every((code) => !brokenV3.byCode.has(code)) && brokenV3.blocks.some((b) => b.includes('보충 말투 스냅샷')))
+  [...V1_CODES, ...V2_CODES, ...V3_CODES].every((code) => !brokenV3.byCode.has(code)) && brokenV3.blocks.some((b) => b.includes('보충 말투 스냅샷')))
 const baselineBroken = preInsertVoiceBaseline({ repoRoot, cohortCodes: V3_CODES })
 check('🔴 깨진 세대를 건너뛰어 기준선을 고르지 않는다', !baselineBroken.ok && baselineBroken.code === 'VOICE_BASELINE_INVALID')
 writeFileSync(supplementPaths(3).corpus, planV3.assetText, { mode: 0o600 })

@@ -97,14 +97,14 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
 {
   const doc = readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')
   const { cards, problems } = parsePoolDoc(doc)
-  check('🔴 현재 정본 카드 61장을 전부 읽는다', cards.length === 61)
+  check('🔴 현재 정본 카드 104장을 전부 읽는다', cards.length === 104)
   check('🔴 파싱 문제 0건', problems.length === 0)
   // 🔴 P31 · P33 은 VOICE_TOO_CLOSE 로 카드가 없다(2026-10-08 wave5)
-  check('코드가 P01~P30 · P32 · P34~P63 이다',
+  check('코드가 P01~P30 · P32 · P34~P106 이다',
     cards.map((c) => c.code).join(',') === [
       ...Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`),
       'P32',
-      ...Array.from({ length: 30 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
+      ...Array.from({ length: 73 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
     ].join(','))
   check('🔴 카드마다 제목이 있다', cards.every((c) => c.title.trim() !== ''))
   check('🔴 카드마다 성격이 있다', cards.every((c) => c.personality.length >= 3))
@@ -113,8 +113,8 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
     cards.every((c) => (c.childrenCount > 0) === (c.childrenAgeBands.length > 0)))
   check('variation 이 전부 5~8개다', cards.every((c) => c.variationCount >= 5 && c.variationCount <= 8))
   // 🔴 마지막 카드가 뒤 절을 먹지 않는다 — 코드펜스로 자르지 않으면 여기서 걸린다
-  check('🔴 마지막 카드(P63)가 뒤 절을 먹지 않는다',
-    cards.at(-1)?.code === 'P63' && cards.at(-1)?.variationCount === 5)
+  check('🔴 마지막 카드(P106)가 뒤 절을 먹지 않는다',
+    cards.at(-1)?.code === 'P106' && cards.at(-1)?.variationCount === 5)
   check('혼인 상태를 전부 읽었다', cards.every((c) => c.maritalStatus !== ''))
   // 🔴 얇은 축이 실재함을 문서로 확인한다 — 중고등 자녀는 소수다
   // 🔴 측정 기록 — wave4 시점(P01~P25) 에 얇은 축이 실재했다. wave5(2026-10-08) 가 더해져 두터워진 것은 기록을 바꾸지 않는다
