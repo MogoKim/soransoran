@@ -161,7 +161,7 @@ const run = (o: {
   return runContentCore({
     artifactId: randomUUID().replace(/-/g, ''), sourceSite: 'navercafe:fixture', sourceArticleId: SRC.id,
     title: SRC.title, maskedBody: SRC.body,
-    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null },
+    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null, bodyLength: null },
     personas: o.personas ?? ALL, personaPoolSize: (o.personas ?? ALL).length, voiceSourceDigest: 'asset000000000',
     contract, ask: o.ask ?? scriptedAsk(o.script ?? {}), now: NOW, callCap: o.cap ?? V2_CALL_CAP,
     ...(o.retryCap === undefined ? { retryCap: GENERATION_RETRY_MAX } : { retryCap: o.retryCap }),

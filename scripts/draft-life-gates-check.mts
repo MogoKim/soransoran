@@ -33,7 +33,7 @@ import type { DraftGateContext } from '../src/lib/content-core/draft-life-gates'
  */
 const NEUTRAL: DraftGateContext = {
   at: FIXTURE_NOW,
-  source: { title: '', body: '', site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null },
+  source: { title: '', body: '', bodyLength: null, site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null },
 }
 
 /** 🔴 운영 실측 6 + 마스터 재검토 반례 6 — 셋 다(게이트 · 러너 경로 · 캐시) 같은 목록을 돈다 */
@@ -589,8 +589,8 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v30 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v30')
-    check(`초안 게이트 판 = draft-gates-v13 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v13')
+    check(`품질 계약 판 = quality-v33 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v33')
+    check(`초안 게이트 판 = draft-gates-v15 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v15')
     check('digest 구성에 생활 판정 코드 · advisory · 판정 누락 fail-closed가 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReview) === JSON.stringify({
@@ -658,7 +658,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
     check('🔴 🔴 **runContentCore 에 sourceMeta: gateSourceMetaOf(meta)**', /sourceMeta:\s*gateSourceMetaOf\(meta\)/.test(code))
     check('🔴 🔴 **pickV2 초안 게이트 context 가 같은 함수 · 같은 원문 · 회차 시각(RUN_AT)**',
-      /context:\s*\{\s*at:\s*RUN_AT,\s*source:\s*\{\s*title:\s*maskSensitive\(meta\.title\),\s*body:\s*meta\.bodyHead,\s*\.\.\.gateSourceMetaOf\(meta\)\s*\}/.test(code))
+      /context:\s*\{\s*at:\s*RUN_AT,\s*source:\s*\{\s*title:\s*maskSensitive\(meta\.title\),\s*body:\s*closedCutBody\(meta\.bodyHead,\s*meta\.bodyLength\),\s*\.\.\.gateSourceMetaOf\(meta\)\s*\}/.test(code))
     check('🔴 runContentCore 는 같은 원문(maskSensitive(meta.title) · meta.bodyHead)을 받는다',
       /title:\s*maskSensitive\(meta\.title\),\s*maskedBody:\s*meta\.bodyHead/.test(code))
     check('🔴 gateSourceMetaOf 는 postedAt 을 sourcePostedAt 에서만 읽는다(capturedAt 으로 대신하지 않는다)',
@@ -666,7 +666,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       /postedAt:\s*isoOrNull\(m\.sourcePostedAt\),/.test(code) && /capturedAt:\s*isoOrNull\(m\.sourceCapturedAt\),/.test(code))
     const core = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     check('🔴 runContentCore 의 결정 단계 게이트가 at: input.now · 모델에 준 원문을 쓴다',
-      /at:\s*input\.now,\s*source:\s*\{\s*title:\s*input\.title,\s*body:\s*input\.maskedBody,\s*\.\.\.input\.sourceMeta\s*\}/.test(core))
+      /at:\s*input\.now,\s*source:\s*\{\s*title:\s*input\.title,\s*body:\s*sourceBody,\s*\.\.\.input\.sourceMeta\s*\}/.test(core))
   }
 }
 
@@ -860,7 +860,7 @@ console.log('\n⑬ 🔴 (quality-v13 · 운영 D5 결함) 가족 주장 — 숫�
   const V12_MARK = { version: 'quality-v12', digest: '8ff1640313d552bd9da2ae7dabc69d25e67ec8d61c2b34315959ceec605828a3' }
   const current = currentQualityContract()
   check('🔴 v12 표식 행은 현재 품질 계약 행이 아니다 → legacy(결함 해소 대상이 될 수 있다)',
-    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && current.version === 'quality-v30' && current.digest !== V12_MARK.digest)
+    !isCurrentQualityContract({ [QUALITY_CONTRACT_KEY]: V12_MARK }) && current.version === 'quality-v33' && current.digest !== V12_MARK.digest)
   const aud = {
     queueId: 'cmvfr8glb0001xm4r2n7abt2z', postId: 'cmvfvauqy0001xmui1bz7u95n', selectedAtN: 1, selectedTarget: 1,
     selectedAt: new Date('2026-10-20T00:30:00.000Z'), publishedTitleHash: digestOf(exact.title), publishedBodyHash: digestOf(exact.body),

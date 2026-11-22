@@ -68,8 +68,6 @@ export const DRAFT_GATE_CODES = [
   'mediaDependentDraft',
   /** 🔴 (v3) 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다 */
   'truncatedSourceCompletion',
-  /** 🔴 (v4) 받아칠 거리가 없는 하소연 — 계획이 대화 촉발 하나뿐인 vent 인데 묻는 말도 없다 */
-  'thinVentDraft',
   /** 🔴 1인칭 허가(selfBasis) 없이 자기 생활사를 주장한다 */
   'unwarrantedSelfClaim',
   /** 🔴 (v5) 글쓴이의 말버릇 금지 · 전원 공통 금지(Pool §7-2)를 썼다 — 판정은 `persona-no-go` 하나(댓글 Gate ⑦⑧ 와 같다) */
@@ -120,8 +118,14 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  * `draft-gates-v13` (quality-v27) — **잘린 원문 판정을 사실에 맞춘다.** 원문이 수집 상한에 닿았을 때만 "잘렸다"를 묻고
  *    (`isCutAtCollection`), 끝맺는 말 뒤에 붙은 표정(자모 · 물결 · 이모지)은 걷고 본다(`closesSentence`).
  *    갱년기 경험 판정은 `persona-life-facts` 하나를 쓴다.
+ *
+ * `draft-gates-v14` (quality-v31) — **잘린 원문은 생성 전에 끝맺은 자리까지 걷는다**(`closedCutBody`). 그래서 이 게이트가 볼
+ *    원문은 걷을 자리가 없던 본문뿐이다. 잘렸는가는 원래 길이(`bodyLength`)로 본다 — 상한 근처에서 글쓴이가 끝낸 글은 묻지 않는다.
+ *
+ * `draft-gates-v15` (quality-v33) — **받아칠 거리가 없는 하소연(`thinVentDraft`) 판정을 지웠다**(2026-11-22 창업자 결정).
+ *    묻지 않고 끝나는 하소연도 게시판 글이다 — 질문을 덧붙인 초안만 살아남게 하던 규칙이다. 글의 꼴과 맺음은 원문을 따른다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v13'
+export const DRAFT_GATE_VERSION = 'draft-gates-v15'
 
 /**
  * 🔴 **창의 계약 분류** (quality-v12) — 창업자 승인 의미 경계.
@@ -172,8 +176,6 @@ export const DRAFT_LIFE_REVIEW_CODES = [
   'staleTimeClaim', 'externalCommunityClaim', 'mediaDependentDraft', 'truncatedSourceCompletion',
   /** 🔴 (v3) 계획이 `noLifeFactNeeded` 인데 자기 가족사를 명시해 말한다 — `selfBasis=null` 은 여전히 확정(AUTO_HOLD)이다 */
   'unwarrantedSelfClaim',
-  /** 🔴 (v4) 소프트 품질로 시작했지만 quality-v25부터 Content Core HOLD */
-  'thinVentDraft',
 ] as const satisfies readonly DraftGateCode[]
 export type DraftLifeReviewCode = (typeof DRAFT_LIFE_REVIEW_CODES)[number]
 export type DraftLifeReview = { code: DraftLifeReviewCode; detail: string }
@@ -190,7 +192,6 @@ export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   staleTimeClaim: '🔴 원문이 올라온 날에만 맞는 명절·실시간 현장 표현을 게시 시점의 지금처럼 말한다',
   externalCommunityClaim: '🔴 다른 커뮤니티에서 본 회원·글의 움직임을 이 곳에서 본 것처럼 말한다',
   truncatedSourceCompletion: '🔴 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다',
-  thinVentDraft: '🟡 받아칠 거리가 없는 짧은 하소연 — 공감·경험·답을 부르는 자리가 없다',
 }
 
 export type DraftGateFailure = { code: DraftGateCode; detail: string }
@@ -202,12 +203,6 @@ export type DraftGatePlan = {
   warrants: readonly { fact: string; evidenceText?: string }[]
   /** 원문에서 검증된 원자 사실. 가족 건강 주체의 생략을 작성자 질병으로 오인하지 않는 근거로만 쓴다. */
   protectedFacts?: readonly { text: string }[]
-  /**
-   * 🔴 (v4) 계획이 정한 마무리와 글의 역할 — 소프트 품질(`thinVentDraft`)만 읽는다. 없으면 판정하지 않는다.
-   *    정본 `SpeakerPlan` · artifact `plan` 둘 다 이 칸을 가진다.
-   */
-  closingIntent?: string | null
-  contentRoles?: readonly string[]
 }
 
 /**
@@ -306,9 +301,11 @@ export type DraftGateContext = {
   source: DraftGateSource | null
 }
 export type DraftGateSource = {
-  /** 🔴 모델에 준 것과 같은 원문 — 마스킹된 제목 · `bodyHead` (근거 packet 을 만든 그 글자) */
+  /** 🔴 모델에 준 것과 같은 원문 — 마스킹된 제목 · `closedCutBody(bodyHead, bodyLength)` (근거 packet 을 만든 그 글자) */
   title: string
   body: string
+  /** 🔴 수집기가 자르기 전 본문 길이 — `null` 은 모른다(그때는 수집 상한에 닿았는지만 본다) */
+  bodyLength: number | null
   /** 🔴 원천 사이트(`navercafe:wgang` …) — 비어 있으면 모른다 */
   site: string
   /** 🔴 원문이 올라온 시각 · 우리가 가져온 시각. `capturedAt` 을 `postedAt` 대신 쓰지 않는다 */
@@ -330,10 +327,7 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const core = judgeCoreGates(input)
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
   const ctx = judgeSourceContext(input.title, input.body, input.context)
-  const basis = [
-    ...judgeNoLifeFactClaims(input.title, input.body, input.plan),
-    ...judgeThinVent(input.title, input.body, input.plan),
-  ]
+  const basis = judgeNoLifeFactClaims(input.title, input.body, input.plan)
   /**
    * 🔴 (v9) **글쓴이 No-Go** — 판정은 `persona-no-go` 하나. 개인 소재·말버릇과 전원 공통 금지.
    *    배정에서 원천 소재를 먼저 막고, 생성이 새로 끌어온 금지 소재도 여기서 다시 막는다.
@@ -1019,21 +1013,6 @@ function judgeFinanceSelf(title: string, body: string, plan: DraftGatePlan | nul
 }
 
 /**
- * 🔴 (v4 · 창업자 gold #1 · 소프트 품질) **받아칠 거리가 없는 하소연.** 계획 스스로 마무리를 `vent` 로,
- *    역할을 대화 촉발(`conversationSpark`) **하나만** 골랐고(공감 경험 · 쓸 만한 답 · 발견 없음) 묻는 말도 없다.
- *    공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않고, 나머지는 Content Core가 HOLD한다.
- *    🔴 계획에 이 칸이 없으면 판정하지 않는다(소프트 신호라 모름을 결함으로 세지 않는다).
- */
-function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
-  const roles = plan?.contentRoles
-  if (plan === null || plan.closingIntent !== 'vent' || roles === undefined || roles.length === 0) return []
-  if (!roles.every((r) => r === 'conversationSpark')) return []
-  const asks = `${title}\n${body}`.split(/(?<=[.!?？。])\s+|\n+/).some((x) => /[?？]/.test(x) || QUESTION_END_RE.test(x.trim()))
-  if (asks) return []
-  return [{ code: 'thinVentDraft', detail: `계획 vent · 역할 ${roles.join('·')} · 묻는 말 없음` }]
-}
-
-/**
  * 🔴 (v6 · 2026-10-01 운영 감사 결함 yes 1건) **1인칭 만남·대화·들음** — `어제 60대 분과 이야기를 나누다 들었는데요`.
  *    P04 · 자리 QUESTION · `selfBasis=null` 초안이 원문 글쓴이의 만남을 **자기 만남**으로 옮겼다. 원문에는 있었다
  *    (`어제 60대 만났는데`) — 🔴 **원문에 있다는 것은 허가가 아니다**(위 생활 일관성 원칙과 같다).
@@ -1308,13 +1287,13 @@ const stemOf = (w: string): string => w.replace(PARTICLE_TAIL_RE, '').slice(0, 2
 const squash = (s: string): string => s.replace(/\s+/g, '')
 
 /**
- * 🔴 **원문이 수집 상한에서 잘려 끝을 맺지 못했다** — 상한에 닿았고(`isCutAtCollection`) 끝 줄이
- *    끝맺는 말로 끝나지 않는다(`closesSentence`). 상한에 닿지 않은 글은 글쓴이가 거기서 끝낸 것이다.
- *    한두 글자 조각(`야`)은 앞 줄에 붙여 본다. **수집 반복**(본문 일부가 두 번 캡처돼 두 번째가 중간에
- *    끊김)은 잘림이 아니다 — 끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다.
+ * 🔴 **원문이 수집 때 잘려 끝을 맺지 못했다** — 잘렸고(`isCutAtCollection` · 원래 길이) 끝 줄이
+ *    끝맺는 말로 끝나지 않는다(`closesSentence`). 생성 전에 끝맺은 자리까지 걷으므로(`closedCutBody`) 여기 남는 것은
+ *    끝맺은 자리가 하나도 없던 본문이다. 한두 글자 조각(`야`)은 앞 줄에 붙여 본다. **수집 반복**(본문 일부가 두 번 캡처돼
+ *    두 번째가 중간에 끊김)은 잘림이 아니다 — 끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다.
  */
-function openTailOf(sourceBody: string): string | null {
-  if (!isCutAtCollection(sourceBody)) return null
+function openTailOf(sourceBody: string, bodyLength: number | null): string | null {
+  if (!isCutAtCollection(sourceBody, bodyLength)) return null
   const lines = sourceBody.split(/\n+/).map((x) => x.trim()).filter((x) => /[가-힣]/.test(x))
   if (lines.length === 0) return null
   let tail = lines[lines.length - 1]!
@@ -1342,7 +1321,7 @@ function openTailOf(sourceBody: string): string | null {
 function judgeTruncatedCompletion(title: string, body: string, ctx: DraftGateContext): LifeHit[] {
   const src = ctx.source
   if (src === null) return []
-  const tail = openTailOf(src.body)
+  const tail = openTailOf(src.body, src.bodyLength)
   if (tail === null) return []
   const tailStems = [...new Set((tail.match(HANGUL_WORD_RE) ?? []).map(stemOf).filter((s) => s.length === 2))]
   const known = squash(`${src.title}\n${src.body}`)

@@ -424,7 +424,7 @@ async function runOf(c: Case, ask: Ask) {
   return runContentCore({
     artifactId: randomUUID().replace(/-/g, ''), sourceSite: 'navercafe:fixture', sourceArticleId: c.id,
     title: c.title, maskedBody: c.rawBody,
-    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null },
+    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null, bodyLength: null },
     personas: PERSONAS, personaPoolSize: PERSONAS.length, voiceSourceDigest: 'asset000000000',
     contract: {
       sourceInputHash: `fx${c.id}00000000000000`, pipelineVersion: CONTENT_CORE_PIPELINE_VERSION, promptVersion: CONTENT_CORE_PROMPT_VERSION,

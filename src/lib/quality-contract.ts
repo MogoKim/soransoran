@@ -248,8 +248,20 @@ import {
  * 과 Persona 말투 절을 지우고 코드가 잰 원문의 꼴(`source-form.ts`)을 요청에 싣는다(`v2-draft-p17`). 꼴을 막던 규칙을 지웠다:
  * 의미 검수의 Persona 말투 어긋남(`v2-review-p14`) · 원천 점수의 짧은 글 감점.
  * 원문 복제 기준(연속 6어절 · 25자 · 덮임 35%)은 그대로다. 막는 검사는 더하지 않았다.
+ *
+ * `quality-v31` (2026-11-22) = **수집 때 잘린 원문은 끝맺은 자리까지 걷고 건넨다.** 원문 800자 글이 앞 300자만 보고
+ * "말을 꺼냈더니" 로 끝난 채 채택·공개됐다 — 지시문대로 원문이 끝나는 곳에서 멈췄다. 원래 길이(`bodyLength`)를 초안 단계까지
+ * 싣고, 근거 묶음을 만들기 전에 마지막으로 끝맺은 자리까지 자른다(`closedCutBody` · `content-core-v2.4`). 잘린 원문 게이트는
+ * 걷을 자리가 없던 본문만 보고, 잘림을 원래 길이로 판정한다(`draft-gates-v14`). 막는 검사는 더하지 않았다.
+ *
+ * `quality-v32` (2026-11-22) = **초안 생성도 생각 수준 `low`.** 출력 상한 2,000 을 생각이 다 써 초안이 잘리던 손실을 줄인다
+ * (`STAGE_THINKING_LEVEL.draftGen` · `content-core-v2.5`). 지시문 · 게이트 · 검수는 그대로다.
+ *
+ * `quality-v33` (2026-11-22 창업자 결정) = **질문 없는 하소연도 게시판 글이다.** 초안 게이트 `thinVentDraft` 를 지웠다
+ * (`draft-gates-v15` · `content-core-v2.6`). 그 규칙 하나로 막히던 창업자 gold #1 은 v1 기록(폐기 · 사유)을 남긴 채 기대만
+ * 통과로 다시 분류했다(`founder-gold-v2`). 나머지 29건의 기대는 그대로다. 막는 검사는 더하지 않았다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v30'
+export const QUALITY_CONTRACT_VERSION = 'quality-v33'
 
 /**
  * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에

@@ -141,11 +141,11 @@ async function main(): Promise<void> {
     check('🔴 🔴 **계획 뒤 감사 행이 바뀌었다 → changed · write 0**', c2?.kind === 'changed' && c2.written === 0
       && resolutionsOf((await queueOf(A.queueId)).editDiff).length === 0, JSON.stringify(c2))
     await prisma.autoReadyAudit.update({ where: { queueId: A.queueId }, data: { note: savedNote } })
-    // 원천 artifact 의 계획이 바뀌었다(재검증 입력이 다르다)
+    // 원천 artifact 의 계획이 바뀌었다(재검증 입력이 다르다) — 재검증이 실제로 읽는 칸(근거 목록)을 바꾼다
     const p3 = await planDefectResolution(prisma, { queueId: A.queueId, contextOf, now: new Date() })
     const art = f.artifacts.find((x) => x.artifactId === A.artifactId)!
     const savedPlan = art.plan
-    art.plan = { ...rec(savedPlan), closingIntent: 'share' }
+    art.plan = { ...rec(savedPlan), warrants: [{ fact: 'work', evidenceText: '지어낸 근거 한 줄' }] }
     flushArtifacts(f)
     const c3 = p3.kind === 'plan' ? await applyDefectResolution(prisma, { plan: p3.plan, contextOf, now: new Date() }) : null
     check('🔴 계획 뒤 재검증 입력이 바뀌었다 → changed · write 0', c3?.kind === 'changed' && c3.written === 0, JSON.stringify(c3))

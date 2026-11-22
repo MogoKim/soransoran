@@ -214,8 +214,8 @@ console.log('\n⑦ (quality-v13) 글 쪽 — 프롬프트 · 최종 초안 게�
     && /isNoGoExpressionItem\(item\)/.test(src('src/lib/persona-pool-card.ts'))
     && /noGoHits\(/.test(src('src/lib/content-core/draft-life-gates.ts'))
     && /noGoHits\(/.test(src('src/lib/original-post-persona-match.ts')))
-  check('품질 계약 v30 · 초안 게이트 v13 · 초안 프롬프트 p17', QUALITY_CONTRACT_VERSION === 'quality-v30'
-    && DRAFT_GATE_VERSION === 'draft-gates-v13' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17')
+  check('품질 계약 v33 · 초안 게이트 v15 · 초안 프롬프트 p17', QUALITY_CONTRACT_VERSION === 'quality-v33'
+    && DRAFT_GATE_VERSION === 'draft-gates-v15' && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p17')
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail — DB 0 · 네트워크 0\n`)

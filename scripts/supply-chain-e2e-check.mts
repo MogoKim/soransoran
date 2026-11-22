@@ -211,8 +211,8 @@ console.log('\n②-b 🔴 🔴 단계마다 제 출력 상한으로 나갔다 (2
   check('🔴 🔴 **speakerPlan 은 1200 으로 나갔다**',
     caps[0]?.gemini === true && caps[0]?.max === STAGE_MAX_OUTPUT_TOKENS.speakerPlan
     && STAGE_MAX_OUTPUT_TOKENS.speakerPlan === 1200, String(caps[0]?.max))
-  check('🔴 speakerPlan 만 thinking low 로 나갔다',
-    caps[0]?.thinking === 'low' && caps[1]?.thinking === null && caps[2]?.thinking === null,
+  check('🔴 speakerPlan · draftGen 은 thinking low, 의미 검수는 provider 기본값으로 나갔다',
+    caps[0]?.thinking === 'low' && caps[1]?.thinking === 'low' && caps[2]?.thinking === null,
     caps.map((c) => c.thinking ?? 'default').join(','))
   check('🔴 🔴 **draftGen 은 2000 으로 나갔다** — 본문이 들어갈 자리다',
     caps[1]?.gemini === true && caps[1]?.max === STAGE_MAX_OUTPUT_TOKENS.draftGen

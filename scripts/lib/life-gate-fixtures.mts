@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
 import type { DraftGateCode, DraftLifeReviewCode, DraftGateSource } from '../../src/lib/content-core/draft-life-gates'
+import { closedCutBody } from '../../src/lib/content-core/evidence'
 import { FIXTURE_NOW, type GateFixture } from './draft-gate-fixtures.mjs'
 
 export type LifeFixture = GateFixture & {
@@ -42,9 +43,14 @@ const CAP_FILLER = [
   '저녁은 대충 남은 반찬으로 때우고 일찍 누웠답니다', '이번 주는 약속이 겹쳐서 주말에도 쉬지를 못했어요',
   '동네 마트 세일이라 들렀다가 생각보다 많이 사 버렸고요', '그 덕에 가계부 쓰다가 한숨이 절로 나왔습니다',
 ]
-export function cutAtCap(body: string): string {
+/** 🔴 끝맺은 자리가 하나도 없는 채움 줄 — 수집 때 잘렸어도 생성 전에 걷을 자리가 없는 본문(`closedCutBody` 가 그대로 둔다) */
+const OPEN_FILLER = [
+  '어제는 종일 비가 와서 빨래를 하나도 못 널었고', '장 본 것도 냉장고에 다 못 넣고 식탁에 그대로 뒀고',
+  '택배 상자는 현관에 사흘째 쌓여 있는데 뜯을 틈도 없고', '그 와중에 보일러 점검 온다는 연락까지 받았고',
+]
+export function cutAtCap(body: string, filler: readonly string[] = CAP_FILLER): string {
   let lead = ''
-  for (let i = 0; lead.length + body.length + 2 < 300; i++) lead += `${CAP_FILLER[i % CAP_FILLER.length]} ${i}\n`
+  for (let i = 0; lead.length + body.length + 2 < 300; i++) lead += `${filler[i % filler.length]} ${i}\n`
   return `${lead}\n${body}`.slice(-300)
 }
 
@@ -292,10 +298,11 @@ const BEFORE = new Date(FIXTURE_NOW.getTime() - 3 * 24 * 60 * 60 * 1000)
 /** 🔴 올라온 시각을 모른다 — 운영 #9 · #7 · #19 의 candidates 는 세 시각이 비어 있다 */
 const UNKNOWN_TIME = { postedAt: null, capturedAt: null } as const
 
+/** 🔴 (quality-v31) 끝맺은 자리가 없는 잘린 원문 — 생성 전에 걷을 자리가 없어 모델이 끊긴 끝을 본다(이 게이트가 볼 원문) */
 const SRC_DOG = {
   title: '우리 개의 한밤 만찬 고발합니다',
-  body: cutAtCap('베란다 열어 둔 채로 잠들었더니 녀석이 쓰레기봉투를 뒤져 매운 양념뼈를 죄다 씹어 놨어요\n\n'
-    + '안방 러그 위에까지 뼈다귀가 굴러다니고\n\n남편이 새벽 산책 다녀와 사료를 주니까\n\n야'),
+  body: cutAtCap('베란다 열어 둔 채로 잠들었더니 녀석이 쓰레기봉투를 뒤져 매운 양념뼈를 죄다 씹어 놓았고\n\n'
+    + '안방 러그 위에까지 뼈다귀가 굴러다니고\n\n남편이 새벽 산책 다녀와 사료를 주니까\n\n야', OPEN_FILLER),
 }
 const SRC_SCARF = {
   title: '뜨개 완성작 평가 부탁해요',
@@ -696,7 +703,6 @@ export type SourcePhrase = {
   body: string
   plan?: {
     selfBasis: string | null; warrants: { fact: string; evidenceText?: string }[]
-    closingIntent?: string | null; contentRoles?: string[]
   }
   source?: Partial<DraftGateSource>
   want: string
@@ -754,6 +760,18 @@ export const SOURCE_PHRASES: readonly SourcePhrase[] = [
   { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
     source: { title: '강아지 사고', body: cutAtCap('강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야') },
     want: 'hold:truncatedSourceCompletion' },
+  // 🔴 (draft-gates-v14) 원래 길이로 잘림을 안다 — 걷을 자리가 없던 본문만 남아 이 게이트가 본다
+  { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
+    source: { title: '강아지 사고', body: cutAtCap('강아지가 밤새 갈비를 뜯었고\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야', OPEN_FILLER), bodyLength: 800 },
+    want: 'hold:truncatedSourceCompletion' },
+  // 🔴 생성 전에 끝맺은 자리까지 걷은 본문 — 모델이 끊긴 조각을 보지 않았다. 같은 초안도 이 게이트로는 통과
+  { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
+    source: { title: '강아지 사고', body: closedCutBody(cutAtCap('강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야'), 800), bodyLength: 800 },
+    want: 'pass' },
+  // 🔴 상한에 닿았어도 원래 길이만큼 다 남았으면 글쓴이가 거기서 끝낸 것이다
+  { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
+    source: { title: '강아지 사고', body: cutAtCap('강아지가 밤새 갈비를 뜯었고\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까\n야', OPEN_FILLER), bodyLength: 300 },
+    want: 'pass' },
   // 🔴 원문이 끝맺었으면 같은 초안도 통과
   { card: 'P04', title: '강아지', body: '남편이 아침 산책 다녀와서 밥을 챙겨 주니 본체만체하네요.',
     source: { title: '강아지 사고', body: '강아지가 밤새 갈비를 뜯었어요\n아침에 산책 다녀와서 남편이 밥을 챙겨 주니까 본체만체하네요' },
@@ -887,11 +905,8 @@ export const V4_PHRASES: readonly SourcePhrase[] = [
   { card: 'P19', title: '보험', body: '보험 리모델링 해 보신 분 계세요?', plan: NOLIFE, want: 'pass' },
   { card: 'P19', title: '보험', body: '친구가 보험을 갈아탔대요.', plan: NOLIFE, want: 'pass' },
   { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: LIFE, want: 'pass' },
-  // 받아칠 거리가 없는 하소연(소프트 품질) — Content Core HOLD
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'hold:thinVentDraft' },
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['experienceResonance', 'conversationSpark'] }, want: 'pass' },
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요. 다들 어떠세요?', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'pass' },
-  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'share', contentRoles: ['conversationSpark'] }, want: 'pass' },
+  // 🔴 묻지 않고 끝나는 하소연도 게시판 글이다 — 받아칠 거리 판정(thinVentDraft)은 quality-v33 에서 지웠다
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: NOLIFE, want: 'pass' },
   // 🔴 창업자가 통과시킨 소재 — 논쟁 · 이혼 · 돈 · 건강 질문은 소재로 막지 않는다
   { card: 'P16', title: '이혼', body: '다들 어느 정도 마음이어야 이혼을 결심하시나요?', want: 'pass' },
   { card: 'P10', title: '치즈', body: '치즈 매일 챙겨 먹는 거 몸에 안 좋을까요?', want: 'pass' },
