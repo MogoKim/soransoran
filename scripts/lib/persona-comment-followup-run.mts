@@ -184,17 +184,26 @@ const emptyPhase = (outcome: FollowupPhaseReport['outcome'], reason: string): Fo
  *    부르는 쪽은 스위치가 on 일 때만 부른다(OFF 면 이 읽기도 0).
  *    · 단계: **consumer 가 넣은 결정 env**(`decisionStageEnv` — 결정 표식이 있을 때만). 러너는 결정 표를 직접 읽지 않는다
  *      (stage-ladder-check 의 adapter 호출 계약). 표식이 없으면 null → 0건 — 댓글 러너가 consumer 를 거치기 전에는 켜지지 않는다
- *    · 대화 감사: 오늘(KST) 그 단계 증거 사실로 `judgeConversationAudit` — 못 읽으면 undefined → 0건
+ *    · 대화 감사: 대화가 열린 글의 날짜(오늘 · 마감 `FOLLOWUP_POST_AGE_MAX_MS` 안이면 어제도)의 증거 사실로
+ *      `judgeConversationAudit` — 자정 뒤 어제 글에 붙는 추가 댓글도 같은 감사 안에 둔다. 못 읽으면 undefined → 0건
  */
+/**
+ * 🔴 **대화 감사가 읽는 글 날짜(KST)** — 대화가 아직 열린 글이 공개됐을 수 있는 날 전부.
+ *    오늘과 `now − 마감(FOLLOWUP_POST_AGE_MAX_MS)` 의 날짜 — 자정부터 마감 시간 동안은 어제도 든다. 오래된 날짜가 앞이다.
+ */
+export function conversationAuditDatesOf(now: Date): string[] {
+  return [...new Set([kstDateString(new Date(now.getTime() - FOLLOWUP_POST_AGE_MAX_MS)), kstDateString(now)])]
+}
+
 export async function readFollowupContext(i: {
   prisma: PrismaClient; now: Date; env: Readonly<Record<string, string | undefined>>; readText: (path: string) => string
 }): Promise<{ profile: unknown; runtimeStage: string | null; conversationAudit: unknown }> {
-  const kstDate = kstDateString(i.now)
-  // 🔴 오늘 결정 · 정본 단계 · 공개 ≤ 천장 — 트랜잭션과 같은 판정
+  const openDates = conversationAuditDatesOf(i.now)
+  // 🔴 오늘(그날 결정 전이면 전날) 결정 · 정본 단계 · 공개 ≤ 천장 — 트랜잭션과 같은 판정
   const stage = followupStageOf(decisionStageEnv(i.env), i.now).stage
-  const conversationAudit = stage === null ? undefined : await readStageEvidenceFacts(i.prisma, {
+  const conversationAudit = stage === null ? undefined : await Promise.all(openDates.map((kstDate) => readStageEvidenceFacts(i.prisma, {
     kstDate, stage, decision: null, now: i.now,
-  }).then((f) => judgeConversationAudit(f.posts)).catch(() => undefined)
+  }))).then((fs) => judgeConversationAudit(fs.flatMap((f) => f.posts))).catch(() => undefined)
   return { profile: readFollowupProfileRaw(i.env, i.readText), runtimeStage: stage, conversationAudit }
 }
 
