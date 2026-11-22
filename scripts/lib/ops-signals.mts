@@ -82,7 +82,7 @@ export type CostSignals = {
   supplyLedger: CostVerdict
   /** 공급 장부 안의 댓글 단계만 쓴 금액(옛 경로) */
   commentSpentUsd: number | null
-  /** 🔴 무인 댓글 루프 전용 장부 — 상한은 `SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`(기본·최대 0.20) */
+  /** 🔴 무인 댓글 루프 전용 장부 — 상한은 `SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`(기본 $0.20 · 코드 천장 `COMMENT_LOOP_DAILY_USD_MAX` · env 는 낮추기만 한다) */
   commentLedger: CostVerdict
   /** 감사 전용 장부 — 공급과 섞이지 않는다 */
   auditLedger: CostVerdict

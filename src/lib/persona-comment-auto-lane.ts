@@ -218,11 +218,13 @@ export const COMMENT_LOOP_BUDGET_ENV = {
 } as const
 
 /**
- * 🔴 **하루 절대 상한(USD).** env 가 이보다 크면 이 값으로 내린다 — 올릴 수 없다.
- *    2026-10-16 D20 준비: D10 실측에서 산출한 첫 댓글 + 추가 댓글 비용을 담을 수 있게 최대 $0.50.
- *    이 값은 소비 목표가 아니며 운영 env를 쓰지 않는다.
+ * 🔴 **하루 절대 상한(USD) — 코드 천장.** env 가 이보다 크면 이 값으로 내린다 — env 로는 낮추기만 한다.
+ *    운영 하루 상한은 env(`SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`)가 정한다. 이 값은 소비 목표가 아니다.
+ *    $0.90 의 근거(2026-11-23 · D50 준비): 유료 호출 1회 정산 약 $0.00176 · 집계되는 댓글 1개당 약 $0.0022 —
+ *    D30(11-22) 댓글 188개가 하루 약 $0.41, D50(글 50편)은 하루 댓글 약 300~390개 · 약 $0.69~0.86 이다.
+ *    창업자 11-19 승인 하루 총비용(D30 $3.00 · D50 $5.00) 안이다 — 공급 승인 천장 $1.80 + 댓글 $0.90 + 감사 $0.30 = $3.00.
  */
-export const COMMENT_LOOP_DAILY_USD_MAX = 0.5
+export const COMMENT_LOOP_DAILY_USD_MAX = 0.9
 /** env 가 없을 때의 기본값 — 🔴 D10까지 쓰던 $0.20을 유지한다. D20은 실측 뒤 env를 명시해야 한다 */
 export const COMMENT_LOOP_DAILY_USD_DEFAULT = 0.2
 /** **첫 댓글** 한 회차 유료 요청 상한 기본값. 추가 댓글은 자기 장부 회차와 자기 상한(profile)을 쓴다(`followupRunRequestCap`) */

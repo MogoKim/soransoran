@@ -65,7 +65,7 @@ launchd 회차(followupEligibleFor: scheduled — 정기 · 사건 깨움 · 복
 
 ## 3. 비용 · 상한 · kill switch
 
-- 장부: 같은 댓글 장부(`persona-comment-ledger`) · 같은 하루 상한(env 가 정한다 — 기본 $0.20 · 코드 천장 $0.50) · **단계 `commentFollowupGen`** — 첫 댓글(`commentGen`)과 줄이 나뉜다.
+- 장부: 같은 댓글 장부(`persona-comment-ledger`) · 같은 하루 상한(env 가 정한다 — 기본 $0.20 · 코드 천장 $0.90) · **단계 `commentFollowupGen`** — 첫 댓글(`commentGen`)과 줄이 나뉜다.
   유료 생성 문(장부 판정)이 닫혀 있으면 추가 댓글 생성도 0.
 - 공유 장부 잔량에서 **오늘 남은 첫 댓글 의무**(지금 대기 + 그날 단계 목표 중 아직 공개되지 않은 자리) × 1건 예약액을 먼저 뗀다.
   1건 예약액 = 확정 모델 단가 × 댓글 호출 모양 × 여유 배수. 단가를 모르면 0건.
@@ -79,7 +79,7 @@ launchd 회차(followupEligibleFor: scheduled — 정기 · 사건 깨움 · 복
   러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 이 모듈은 단계 칸 env 를 직접 읽지 않는다.
   profile 의 값은 계산식 `deriveCommentScale`(§4-3)이 낸 것을 옮겨 적는다.
 - 구조 상한은 운영 예산을 확대하지 않는다. 첫 댓글 부트스트랩 계산은 글당 자리 기준 5와 하루 절대 500을 유지하고,
-  추가 댓글에는 그 기준을 쓰지 않는다. 공유 장부 하루 상한의 기본값은 $0.20(`COMMENT_LOOP_DAILY_USD_DEFAULT`)이고 env 로 $0.50 까지 올릴 수 있다.
+  추가 댓글에는 그 기준을 쓰지 않는다. 공유 장부 하루 상한의 기본값은 $0.20(`COMMENT_LOOP_DAILY_USD_DEFAULT`)이고 env 로 코드 천장 $0.90(`COMMENT_LOOP_DAILY_USD_MAX`)까지 올릴 수 있다.
   운영 수량은 §9 의 승인 profile 이 정하고, 바꾸려면 승인 파일을 새로 써야 한다.
 - kill switch: `PersonaGlobalSwitch` — 회차와 트랜잭션 둘 다.
 
