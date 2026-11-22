@@ -11,7 +11,9 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
-import { autogenCodeOf, RETIRED_AUTOGEN_CODES, type Cadence } from '../src/lib/persona-autogen'
+import {
+  AUTOGEN_AGE_BANDS, autogenCodeOf, birthDateFor, EXPANSION_AGE_BANDS, RETIRED_AUTOGEN_CODES, type Cadence,
+} from '../src/lib/persona-autogen'
 import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import {
   COHORT_EXPANSION_FIXTURES, COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT,
@@ -169,6 +171,10 @@ check('🔴 CLI 는 --apply · --execute 를 거부한다', /a === '--apply' \|\
 check('CLI 는 LLM·provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(|generateCreative/i.test(cli))
 check('🔴 보충 말투 근거는 --db 없이는 회원 대조 전에 거부한다',
   cli.includes("if (USE_VOICE_EVIDENCE && !USE_DB) fail('--voice-evidence"))
+check('🔴 증거 시각 상한은 기록 도구와 같은 판독기로 읽고 같은 뜻으로 넘긴다',
+  cli.includes("parseEvidenceUntil(arg('evidence-until'), NOW)")
+  && cli.includes('until: EVIDENCE_UNTIL.until')
+  && cli.includes("if (EVIDENCE_UNTIL.iso !== null && !USE_VOICE_EVIDENCE) fail("))
 check('보충 말투 근거는 익명 행만 append-only 말투 풀에 넘긴다',
   cli.includes('readUsableVoiceEvidence({')
   && cli.includes('voicePoolFor({ repoRoot, newCodes: batchCodes, supplementalRows })'))
@@ -231,6 +237,9 @@ check('반례 — 20명 전원 같은 자녀 구성 → BATCH_MONOCULTURE',
   rules(mut(() => ({ childrenCount: 2, childrenAgeBands: ['중고등', '초등'] }))).includes('BATCH_MONOCULTURE'))
 check('반례 — 20명 전원 40대 → CORE_DECADE_NOT_PLURALITY',
   rules(mut((s, i) => ({ ageBand: i % 2 === 0 ? '40대 중반' : '40대 후반', code: s.code }))).includes('CORE_DECADE_NOT_PLURALITY'))
+// 🔴 30대도 십년대로 센다(2026-11-23) — 30대가 50대보다 많아지는 묶음을 잡는다(옛 `[4-6]0대` 는 30대를 세지 않고 지나갔다)
+check('🔴 반례 — 30대가 50대보다 많아지면 → CORE_DECADE_NOT_PLURALITY (30대도 센다)',
+  rules(mut((s, i) => ({ ageBand: i % 2 === 0 ? '30대 초반' : '30대 후반', code: s.code })), existing.slice(0, 10)).includes('CORE_DECADE_NOT_PLURALITY'))
 check('반례 — 20명 전원 같은 성격어 → PERSONALITY_TERM_OVERUSED',
   rules(mut((s) => ({ personality: [...s.personality.slice(0, 2), '정 많음'] }))).includes('PERSONALITY_TERM_OVERUSED'))
 check('반례 — 돌봄 없음 20명 → POPULATION_AXIS_DOMINANT',
@@ -264,8 +273,22 @@ check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(
 check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p44, { nameSets: { memberNames: [p44.displayName], personaNames: [] } }), 'NAME_COLLISION'))
 check('반례 — 묶음 안 같은 이름 → NAME_BATCH_CONFUSABLE 만',
   only(conf(p44, { names: new Map([...batchNames, ['P45', p44.displayName]]) }), 'NAME_BATCH_CONFUSABLE'))
-check('반례 — 대상 밖 연령대 → AGE_OUT_OF_AUDIENCE 포함',
-  conf(edit({ lifePatch: { ageBand: '30대 후반' } })).includes('AGE_OUT_OF_AUDIENCE'))
+check('반례 — 대상 밖 연령대(20대 후반 · 60대 중반) → AGE_OUT_OF_AUDIENCE 포함',
+  conf(edit({ lifePatch: { ageBand: '20대 후반' } })).includes('AGE_OUT_OF_AUDIENCE')
+  && conf(edit({ lifePatch: { ageBand: '60대 중반' } })).includes('AGE_OUT_OF_AUDIENCE'))
+// 🔴 30대는 확장 관문 대상이다(창업자 2026-11-18 · 11-19 · 11-22) — 그 밖의 나이 규칙은 그대로, 자동 골격은 30대를 만들지 않는다
+check('🔴 확장 관문 나이대 = 30대 초반·중반·후반 + 자동 골격 나이대 · 자동 골격에는 30대가 없다',
+  EXPANSION_AGE_BANDS.join(',') === ['30대 초반', '30대 중반', '30대 후반', ...AUTOGEN_AGE_BANDS].join(',')
+  && AUTOGEN_AGE_BANDS.every((b) => !b.startsWith('30대')) && birthDateFor('30대 후반', 94) === null)
+const d50Read = loadExpansionFixture(repoRoot, 'scripts/__fixtures__/persona-expansion-d50.json')
+const d50 = d50Read.ok ? d50Read.fixture.candidates : []
+const d50Thirties = d50.filter((c) => c.life.ageBand.startsWith('30대'))
+const d50Names = new Map(d50.map((c) => [c.code, c.displayName]))
+check('🔴 d50 fixture 의 30대 10명은 AGE_OUT_OF_AUDIENCE 없이 충돌 0 (대조 집합 빈 값)',
+  d50Thirties.length === 10 && d50Thirties.every((c) => conf(c, { names: d50Names }).length === 0),
+  d50Thirties.filter((c) => conf(c, { names: d50Names }).length > 0).map((c) => `${c.code}:${conf(c, { names: d50Names }).join(',')}`).join(' '))
+check('🔴 30대 카드도 생일 ↔ 나이대 규칙은 그대로다 — 30대 후반 카드에 40대 생일 → AGE_LIFE_CONFLICT',
+  d50Thirties.length > 0 && conf({ ...d50Thirties[0]!, life: { ...d50Thirties[0]!.life, birthDate: '1980-01-01' } }, { names: d50Names }).includes('AGE_LIFE_CONFLICT'))
 check('반례 — 생일이 나이대와 어긋난다 → AGE_LIFE_CONFLICT 만', only(conf(edit({ lifePatch: { birthDate: '1990-01-01' } })), 'AGE_LIFE_CONFLICT'))
 check('반례 — 관심사 1개 → INTEREST_COUNT 만', only(conf(edit({ interests: ['등산'] })), 'INTEREST_COUNT'))
 check('반례 — 관심사가 자기 noGo 를 품는다 → INTEREST_NOGO_CONFLICT 만',

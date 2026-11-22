@@ -373,7 +373,8 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
   const lengthLine = doc.split('\n').find((l) => l.startsWith('문장 길이')) ?? ''
   const groups = new Map<string, string[]>()
   for (const seg of lengthLine.replace(/^문장 길이\s*/, '').split('·')) {
-    const m = /^\s*(\S+)\s+((?:P\d{2}\s*)+)$/.exec(seg.trim())
+    // 🔴 세 자리 코드(P100~)까지 읽는다 — 두 자리만 받으면 P100 이 든 밴드가 통째로 사라진다
+    const m = /^\s*(\S+)\s+((?:P\d{2,3}\s*)+)$/.exec(seg.trim())
     if (m !== null) groups.set(m[1]!, m[2]!.trim().split(/\s+/))
   }
   check('🔴 §7-1 문장 길이 줄을 읽는다 — 짧음·중간·긴 세 묶음', groups.size === 3)
@@ -385,7 +386,7 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
    *    그중 셋은 단순 누락이고 하나(P09)만 근거가 없는 것이었다.
    */
   const unknownLine = doc.split('\n').find((l) => l.startsWith('길이 미상')) ?? ''
-  const unknownCodes = (unknownLine.match(/P\d{2}/g) ?? [])
+  const unknownCodes = (unknownLine.match(/P\d{2,3}/g) ?? [])
   check('🔴 §7-1 에 명시적 `길이 미상` 줄이 있다', unknownCodes.length > 0)
 
   /** §7-1 밴드 이름 → 매칭 밴드 */

@@ -5,6 +5,8 @@
  *   npx tsx scripts/persona-expansion.mts --fixture=<path> # 오프라인 — 정본 카드 · 말투 자산 · fixture
  *   npx tsx scripts/persona-expansion.mts --db --fixture=<path> # + 운영 DB read-only (계약 유효 · 집중도 · Gate ⑥-B · cadence)
  *   npx tsx scripts/persona-expansion.mts --db --voice-evidence --fixture=<path> # + 익명 보충 말투 근거 read-only
+ *   npx tsx scripts/persona-expansion.mts --db --voice-evidence --evidence-until=<ISO> --fixture=<path>
+ *       # 🔴 근거를 그 시각까지로 묶는다 — `persona:reference-supplement-build` 에 같은 값을 주면 같은 묶음이 나온다
  *   npx tsx scripts/persona-expansion.mts --fixture=<path> --json=<out.json>
  *
  * 🔴 **켜는 명령이 없다.** `--apply` 를 받으면 거부한다. 활성화는 runbook 의 순서대로
@@ -34,7 +36,9 @@ import type { ExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { judgeExpansionBatch, loadExpansionFixture, nameSpaceCapacity } from './lib/persona-expansion-gate.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
-import { readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir } from './lib/voice-evidence-capture.mjs'
+import {
+  parseEvidenceUntil, readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir,
+} from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import type { LocalComment } from './lib/persona-reference-store.mjs'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
@@ -51,6 +55,10 @@ if (argv.some((a) => a === '--apply' || a.startsWith('--apply=') || a === '--exe
 const USE_DB = argv.includes('--db')
 const USE_VOICE_EVIDENCE = argv.includes('--voice-evidence')
 if (USE_VOICE_EVIDENCE && !USE_DB) fail('--voice-evidence 는 정확한 회원·Persona 제외 집합이 필요하므로 --db 와 함께 써야 한다')
+const NOW = new Date()
+const untilRead = parseEvidenceUntil(arg('evidence-until'), NOW)
+const EVIDENCE_UNTIL = untilRead.ok ? untilRead : fail(untilRead.reason)
+if (EVIDENCE_UNTIL.iso !== null && !USE_VOICE_EVIDENCE) fail('--evidence-until 은 보충 근거를 읽을 때만 뜻이 있다 — --voice-evidence 와 함께 쓴다')
 const FIXTURE = arg('fixture') ?? PROPOSED_COHORTS[0]?.fixture
   ?? fail('--fixture=<path> 가 필요하다 — 승격 대기 중인 제안 cohort 가 없다')
 const JSON_OUT = arg('json')
@@ -137,7 +145,8 @@ if (USE_VOICE_EVIDENCE) {
     dataDir: arg('voice-evidence-dir') ?? voiceEvidenceDataDir(),
     salt,
     members: { memberNames: measuredMembers, personaNames: measuredFacts.nameSets.personaNames ?? [] },
-    now: new Date(),
+    now: NOW,
+    until: EVIDENCE_UNTIL.until,
   })
   supplementalRows = evidence.rows
   supplementalStatus = evidence.status
@@ -178,6 +187,8 @@ if (supplementalStatus !== null) {
   console.log(`  보충 근거   파일 ${supplementalStatus.files} · 사용 행 ${supplementalStatus.usableRows}`
     + ` · 화자 ${voice.supplementalSpeakers} · 자격 ${voice.supplementalEligible}`
     + ` · 정본 중복 제외 ${voice.supplementalExcluded} · 원문/식별자 출력 0`)
+  console.log(`  증거 상한   ${EVIDENCE_UNTIL.iso ?? '없음 — 지금까지 쌓인 근거 전부'}`
+    + ` · 상한 뒤 제외 ${supplementalStatus.dropped.AFTER_EVIDENCE_UNTIL}행`)
 }
 console.log(`  이름 공간   후보 합집합 ${names.space} · canary 뒤 서로·기존과 Gate ⑥-B pass ${names.free}`
   + (names.bound === 'upper' ? ' (상한 — 회원·기존 Persona 이름 미대조, --db 로 정확히)' : ' (회원·기존 Persona 대조)'))
@@ -252,7 +263,8 @@ console.log(`🟡 read-only — DB write 0 · 활성화 0 · ${batch.ok ? 'canar
 if (JSON_OUT !== null) {
   writeFileSync(JSON_OUT, `${JSON.stringify({
     mode: USE_DB ? 'db-read-only' : 'offline',
-    now: Date.now(),
+    now: NOW.getTime(),
+    evidenceUntil: EVIDENCE_UNTIL.iso,
     current: facts === null ? null : {
       contractValid: facts.reserve.contractValid, activeRows: facts.reserve.activeRows,
       activeNotContractValid: facts.reserve.activeNotContractValid,

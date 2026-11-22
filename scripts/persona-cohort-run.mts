@@ -44,7 +44,7 @@ import type { NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { parseExpansionFixture, type ExpansionFixture } from './lib/persona-expansion-gate.mjs'
 import { modeCadence, type Cadence } from '../src/lib/persona-autogen'
 import { buildCohortSeeds, judgeCohortVoice, serializeSeeds } from './lib/persona-cohort-seed.mjs'
-import { stableAssignment } from './lib/persona-reference-store.mjs'
+import { preInsertVoiceBaseline, stableAssignment } from './lib/persona-reference-store.mjs'
 
 const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 const DRAFT: PersonaStatus = 'draft'
@@ -367,12 +367,15 @@ if (STEP === 'seed') {
       fail(`정본 말투 자산이 아니다 — ${sa.origin} · ${sa.blocks.join(' / ')}`)
     }
     const existing = PRODUCTION_PERSONA_CODES.filter((code) => !M.codes.includes(code))
-    // 🔴 현재 v2를 자기 자신과 비교하지 않는다. wave7 이전 40명의 동결 v1
-    // 배정을 재현해, 새 스냅샷이 기존 말투를 한 바이트라도 바꿨는지 판정한다.
-    const before = stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })
+    // 🔴 지금 활성 세대를 자기 자신과 비교하지 않는다. 이 cohort 코드가 없는 가장 최근 동결 세대의
+    // 배정을 재현해, 새 스냅샷이 기존 말투를 한 바이트라도 바꿨는지 판정한다(세대는 데이터에서 고른다).
+    const baselineRead = preInsertVoiceBaseline({ repoRoot: process.cwd(), cohortCodes: M.codes })
+    if (!baselineRead.ok) await prisma.$disconnect()
+    const baseline = baselineRead.ok ? baselineRead : fail(`[${baselineRead.code}] ${baselineRead.reason}`)
+    const before = baseline.assignment
     if (!before.canonicalAsset || before.rows.length === 0) {
       await prisma.$disconnect()
-      fail(`투입 전 동결 v1 배정을 읽지 못했다 — ${before.origin}`)
+      fail(`투입 전 동결 v${baseline.generation} 배정을 읽지 못했다 — ${before.origin}`)
     }
     const base = new Map(existing.flatMap((code) => {
       const bundle = before.byCode.get(code)
@@ -381,7 +384,7 @@ if (STEP === 'seed') {
     const baselineMissing = existing.filter((code) => !base.has(code))
     if (baselineMissing.length > 0) {
       await prisma.$disconnect()
-      fail(`[VOICE_BASELINE_MISSING] 동결 v1에 기존 production 묶음이 없다: ${baselineMissing.join(',')}`)
+      fail(`[VOICE_BASELINE_MISSING] 동결 v${baseline.generation}에 기존 production 묶음이 없다: ${baselineMissing.join(',')}`)
     }
     const voiceProblems = judgeCohortVoice({ cohortCodes: M.codes, existingCodes: existing, base, full: sa.byCode })
     if (voiceProblems.length > 0) { await prisma.$disconnect(); fail(voiceProblems.join(' / ')) }

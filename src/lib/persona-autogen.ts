@@ -199,6 +199,15 @@ const MENOPAUSE_BY_AGE: Readonly<Record<string, string>> = {
 }
 export const AUTOGEN_AGE_BANDS = Object.keys(MENOPAUSE_BY_AGE)
 
+/**
+ * 🔴 **확장 관문이 받는 나이대** — 사람이 설계한 확장 fixture 의 대상 연령 (2026-11-23).
+ *    창업자 결정(2026-11-18 · 11-19 · 11-22): 30대 여성 Persona 를 전체의 10% 로 넣고 단계 하한 수에 센다.
+ *    그래서 관문은 30대 초반·중반·후반을 받는다. 그 밖의 나이 규칙은 그대로다 — 20대 · 60대 중반 이상은 여전히
+ *    `AGE_OUT_OF_AUDIENCE` 이고, 생일 ↔ 나이대 · 갱년기 · 자녀 터울 · 은퇴는 `lifeProblems` 가 같은 기준으로 본다.
+ *    🔴 자동 골격(`AUTOGEN_AGE_BANDS` · `birthDateFor`)은 30대를 만들지 않는다 — 30대 카드는 사람이 설계한 fixture 로만 온다.
+ */
+export const EXPANSION_AGE_BANDS: readonly string[] = ['30대 초반', '30대 중반', '30대 후반', ...AUTOGEN_AGE_BANDS]
+
 /** 🔴 자녀 구성 후보 — 매칭이 아는 밴드(`CHILD_AGE_BANDS`)만 쓴다 */
 const KID_PROFILES: ReadonlyArray<{ count: number; bands: ChildAgeBand[] }> = [
   { count: 0, bands: [] },

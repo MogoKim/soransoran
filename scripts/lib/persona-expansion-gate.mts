@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { BRAND_BANNED_WORDS } from '../../src/lib/content-guard'
 import { CHILD_AGE_BANDS } from '../../src/lib/original-post-persona-match'
 import {
-  AUTOGEN_AGE_BANDS, lifeProblems, voiceCoreFromBundle, type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
+  EXPANSION_AGE_BANDS, lifeProblems, voiceCoreFromBundle, type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
 } from '../../src/lib/persona-autogen'
 import { judgeCreativeQuality } from '../../src/lib/persona-creative'
 import {
@@ -181,7 +181,7 @@ export function judgeCandidateConflicts(c: ExpansionCandidateFixture, ctx: Confl
   }
 
   // ── 연령 ──
-  if (!AUTOGEN_AGE_BANDS.includes(c.life.ageBand)) add('AGE_OUT_OF_AUDIENCE', `${c.life.ageBand} — 대상 ${AUTOGEN_AGE_BANDS.join('·')}`)
+  if (!EXPANSION_AGE_BANDS.includes(c.life.ageBand)) add('AGE_OUT_OF_AUDIENCE', `${c.life.ageBand} — 대상 ${EXPANSION_AGE_BANDS.join('·')}`)
   const lp = lifeProblems(c.life)
   if (lp.length > 0) add('AGE_LIFE_CONFLICT', lp.join(' / '))
 
