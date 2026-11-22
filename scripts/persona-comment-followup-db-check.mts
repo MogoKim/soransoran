@@ -1061,7 +1061,8 @@ async function main(): Promise<void> {
       await phase(g.gen)
       check('🔴 결정 없음 → 표식 없음 → provider 0 · 추가 0', (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
     }
-    // (다) 🔴 (2026-11-22) 그날 결정 전 — 오늘 결정이 없으면 consumer 가 전날 결정의 공개 단계로 잇는다(공급과 같은 readSupplyHeadStart)
+    // (다) 🔴 (2026-11-22 댓글 · 2026-11-23 발행) 그날 결정 전 — 오늘 결정이 없으면 consumer 가 전날 결정의 공개 단계로 잇는다
+    //    (공급과 같은 readSupplyHeadStart · 댓글만 브레이크 날 제외)
     {
       const y = kstDateString(new Date(Date.now() - 86_400_000))
       const y2 = kstDateString(new Date(Date.now() - 2 * 86_400_000))
@@ -1099,13 +1100,35 @@ async function main(): Promise<void> {
         check('🔴 어제 행 없음 · 그제 결정만 → 표식 없음 → provider 0 · 추가 0',
           (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
       }
-      // (다-마) 발행 consumer 는 어제 결정으로 가지 않는다 — 그날 결정만
+      // (다-마) 🔴 (2026-11-23 · 밤 3) 발행 consumer 도 그날 결정 전에는 전날 결정으로 잇는다 — 공개가 하루 전체라
+      //    자정~그날 결정(01:50) 사이 새벽 자리를 낸다. 공급 · 댓글과 같은 readSupplyHeadStart → headStartFor
       {
         await setup()
         await storeDecision(y)
         const c = consume({}, 'publish')
-        check('🔴 발행 consumer — 어제 결정만 있으면 표식 없음 · safest d1(그날 결정만 따른다)',
-          c.status === 0 && (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && c.env.SORAN_RELEASE_STAGE === 'd1', `${c.note} ${JSON.stringify(c.env)}`)
+        check('🟢 발행 consumer — 어제 결정만(정상) → 어제 표식 · 공개 d5 · 천장 d5 로 잇는다',
+          c.status === 0 && c.env.SORAN_STAGE_DECISION_DATE === y && c.env.SORAN_RELEASE_STAGE === STAGE && c.env.SORAN_CAPACITY_STAGE === STAGE,
+          `${c.note} ${JSON.stringify(c.env)}`)
+      }
+      // (다-바) 어제가 브레이크로 낮춘 날 → 발행은 어제 공개(이미 낮춘 d5)를 잇는다 · 같은 행에서 댓글은 0(비대칭 그대로)
+      {
+        await setup()
+        await storeDecision(y, { braked: true })
+        const pub = consume({}, 'publish')
+        const com = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+        check('🔴 어제가 브레이크로 낮춘 날 — 발행 consumer 는 어제 공개 d5(이미 낮춘 값)를 잇고 · 같은 행에서 댓글 consumer 는 표식 없음',
+          pub.status === 0 && pub.env.SORAN_STAGE_DECISION_DATE === y && pub.env.SORAN_RELEASE_STAGE === STAGE && pub.env.SORAN_CAPACITY_STAGE === STAGE
+          && com.status === 0 && (com.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && com.note.includes('브레이크'),
+          `${pub.note} ${JSON.stringify(pub.env)} · ${com.note}`)
+      }
+      // (다-사) 어제 행 없음 · 그제 결정만 → 발행도 이틀 전은 읽지 않는다 → 표식 없음 · safest d1
+      {
+        await setup()
+        await storeDecision(y2)
+        const c = consume({}, 'publish')
+        check('🔴 발행 consumer — 어제 행 없음 · 그제 결정만 → 표식 없음 · safest d1',
+          c.status === 0 && (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && c.env.SORAN_RELEASE_STAGE === 'd1' && c.env.SORAN_CAPACITY_STAGE === 'd1',
+          `${c.note} ${JSON.stringify(c.env)}`)
       }
     }
     // (라) 위조·오래된 env — consumer 를 거치지 않고 손으로 넣은 값
