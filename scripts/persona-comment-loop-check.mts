@@ -379,7 +379,8 @@ console.log('\n⑦ schedule 템플릿 · 배포 quiesce')
   check('🔴 로그가 Documents 밖이다', !/<string>[^<]*\/Documents\/[^<]*\.log<\/string>/.test(xml))
   check('🔴 RunAtLoad false', xml.includes('<key>RunAtLoad</key><false/>'))
   const mins = COMMENT_RUNNER_SLOTS.map((s) => s.hour * 60 + s.minute)
-  const maxGap = mins.slice(1).reduce((m, x, i) => Math.max(m, x - mins[i]!), 0)
+  // 🔴 자정을 넘는 마지막→첫 회차 간격까지 센다(24시간 격자)
+  const maxGap = mins.slice(1).reduce((m, x, i) => Math.max(m, x - mins[i]!), mins[0]! + 24 * 60 - mins[mins.length - 1]!)
   check(`🔴 회차 간격 최대 ${maxGap}분 ≤ 첫 댓글 시한 ${FIRST_COMMENT_MAX_MINUTES}분`, maxGap <= FIRST_COMMENT_MAX_MINUTES)
   // 🔴 (2026-09-28) 60분 안에 한 번뿐이면 관문 한 번 막힘이 그 글의 첫 댓글을 통째로 잃는다
   check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ${maxGap}분 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,

@@ -195,7 +195,7 @@ export function judgeCatchUp(input: {
   const nowMinute = kstMinuteOfDay(t)
   /**
    * 🔴 **창을 넘긴 backlog 는 버린다.** 늦게라도 내는 것이 늘 나은 것이 아니다 —
-   *    22시 넘어 올린 글은 첫 댓글을 밤새 기다리고, 아침의 첫인상이 그 글이 된다.
+   *    발행 창(08:00~22:00) 밖에 새 글을 내지 않는다 — 22시 넘어 올린 글은 읽는 사람 없는 밤에 대화만 쌓이고, 아침의 첫인상이 그 글이 된다.
    */
   if (nowMinute > PUBLISH_WINDOW_END_MINUTE) {
     return blocked(

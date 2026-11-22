@@ -6,10 +6,8 @@ import {
   BOOTSTRAP_DAILY_MAX, BOOTSTRAP_SLOTS_PER_POST, countManagedPosts, judgeBootstrapBudget,
 } from '../src/lib/persona-comment-bootstrap-budget'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
-import {
-  planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES,
-  RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
-} from './lib/persona-comment-runner-template'
+import { planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
+import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
 import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
 import { PUBLISH_RUNNER_ARGS } from './lib/original-post-runner-template'
@@ -1443,10 +1441,9 @@ check('🔴 다른 Gate 실패는 그대로 막는다고 적는다',
 /** 🔴 schedule 실측을 문서가 그대로 적는다 */
 {
   const plan = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
-  check('🔴 슬롯 수·간격·야간 공백을 실제 계산과 같이 적는다',
+  check('🔴 슬롯 수·간격(자정 포함)을 실제 계산과 같이 적는다',
     master.includes(`회차당 25건 × **${plan.runs}회**`)
-    && master.includes(`회차 간격 최대 ${plan.maxGapMinutes}분`)
-    && master.includes(`야간 공백 ${plan.nightGapMinutes}분`))
+    && master.includes(`회차 간격 최대 ${plan.maxGapMinutes}분(자정 포함)`))
   check('🔴 60분 계약을 슬롯이 실제로 만족한다',
     plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
 }
@@ -1458,12 +1455,12 @@ check('🔴 번호를 당기지 않고 옛 행의 ②·④ 줄은 읽을 때 버
   master.includes('②·④ 는 없는 번호다') && master.includes('`judgeGateReport` 가 읽을 때 버린다'))
 check('🔴 지운 ② 코퍼스 읽기를 살아 있는 것처럼 적지 않는다',
   !master.includes('loadCanonCorpusTexts') && !master.includes('frequencyLookup'))
-/** 🔴 운영 창 계약 — 글 발행도 같은 창 안이어야 한다 */
-check('🔴 운영 창을 08~22 로 못박는다',
-  master.includes('#### 🔴 운영 창 계약 — 08~22시')
-  && master.includes('24시간으로 만들지 않는다'))
-check('🔴 글 발행도 같은 창 안에 배치해야 한다고 적는다',
-  master.includes('관리형 글 발행도 같은 창 안에 배치해야 한다'))
+/** 🔴 운영 창 계약 — 발행은 08~22시 · 댓글은 24시간(2026-11-22 · 11-19 승인 묶음 C) */
+check('🔴 운영 창 계약을 발행 08~22시 · 댓글 24시간으로 적는다',
+  master.includes('#### 🔴 운영 창 계약 — 발행 08~22시 · 댓글 24시간')
+  && !master.includes('24시간으로 만들지 않는다'))
+check('🔴 관리형 글 발행은 08~22시 창 안에만 배치한다고 적는다',
+  master.includes('관리형 글 발행은 08:00~22:00 창 안에만 배치한다'))
 check('🔴 글 100/day 확장은 별도 승인 대상이라고 적는다',
   master.includes('글 파이프라인을 100/day 로 확장하는 것은 여전히 별도 승인 대상이다'))
 /**
@@ -1476,10 +1473,10 @@ check('🔴 글 100/day 확장은 별도 승인 대상이라고 적는다',
 {
   const commentMins = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX).slots
     .map(minuteOfDay).sort((a, b) => a - b)
-  const winStart = RUNNER_WINDOW_START_HOUR * 60
-  const winEnd = RUNNER_WINDOW_END_HOUR * 60
+  const winStart = PUBLISH_WINDOW_START_MINUTE
+  const winEnd = PUBLISH_WINDOW_END_MINUTE
   const allPostMins = RELEASE_STAGES.flatMap((st) => PROFILES[st].slots.map(minuteOfDay))
-  check('🔴 모든 공개 슬롯이 댓글 운영 창 안이다 (코드 대조)',
+  check('🔴 모든 공개 슬롯이 발행 창 안이다 (코드 대조)',
     allPostMins.length > 0 && allPostMins.every((m) => m >= winStart && m <= winEnd))
   check('🔴 모든 공개 슬롯의 첫 댓글이 60분 안이다 (코드 대조)',
     allPostMins.every((m) => {

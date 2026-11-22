@@ -37,7 +37,7 @@ import { type RuntimeStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { judgeRecovery, latestSlotAtOrBefore, RECOVERY_SLOT_GRACE_MS } from '../src/lib/runner-recovery'
 import { staleAfterFromSlots } from '../src/lib/supply-health'
-import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS } from './lib/persona-comment-runner-template'
+import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
 import {
   publishFailing, supplyFailing,
   type JobObservation,
@@ -747,8 +747,10 @@ console.log('\n⑥ 복구 판정')
   check('🔴 댓글 러너가 복구 대상이다 · 정책 slot · 기존 넷은 stale 그대로',
     RECOVERABLE_LABELS.includes(COMMENT_RUNNER_LABEL) && RECOVERY_POLICY_OF[COMMENT_RUNNER_LABEL] === 'slot'
     && RECOVERABLE_LABELS.filter((l) => l !== COMMENT_RUNNER_LABEL).every((l) => RECOVERY_POLICY_OF[l] === undefined))
-  check('🔴 왜 slot 인가 — stale 판정은 댓글 러너에 밤 공백 × 2 = 20시간 이상이라 60분 계약에 늦다',
-    staleAfterFromSlots(cslots) >= 20 * 3_600_000, `${staleAfterFromSlots(cslots)}`)
+  // 🔴 (2026-11-22) 24시간 격자에서 stale 은 최대 간격 20분 × 2 가 아니라 바닥 3시간이다 — 그래도 60분 계약보다 늦다
+  check('🔴 왜 slot 인가 — stale 판정은 댓글 러너에 바닥 3시간이라 60분 첫 댓글 계약에 늦다',
+    staleAfterFromSlots(cslots) === 3 * 3_600_000 && staleAfterFromSlots(cslots) > FIRST_COMMENT_MAX_MINUTES * 60_000,
+    `${staleAfterFromSlots(cslots)}`)
   check('정상 — 지난 슬롯 뒤 회차가 있었다 → 건드리지 않는다', judgeRecovery(cbase).action === 'skip', judgeRecovery(cbase).reason)
   const missed = { ...cbase, lastRunAt: new Date(due.getTime() - 20 * 60_000).toISOString() }
   check('🔴 실제 누락 — 지난 예약 슬롯 뒤 회차가 없다 → 한 번 깨운다', judgeRecovery(missed).action === 'kickstart', judgeRecovery(missed).reason)
@@ -768,11 +770,12 @@ console.log('\n⑥ 복구 판정')
     judgeRecovery({ ...missed, state: 'unknown' }).action === 'skip' && judgeRecovery({ ...missed, state: 'unloaded' }).action === 'skip'
     && judgeRecovery({ ...missed, running: true }).action === 'skip' && judgeRecovery({ ...cbase, lastRunAt: null }).action === 'skip'
     && judgeRecovery({ ...missed, lastRecoveryAt: 'unreadable' }).action === 'skip')
-  const morning = kst('2026-10-12T07:30:00')
-  const lastNight = latestSlotAtOrBefore(cslots, morning)!
-  check('🔴 밤 공백은 누락이 아니다 — 07:30 · 어제 마지막 슬롯 뒤 회차 있음 → skip',
-    judgeRecovery({ ...cbase, now: morning, lastRunAt: new Date(lastNight.getTime() + 5_000).toISOString() }).action === 'skip'
-    && lastNight.getTime() < kst('2026-10-12T00:00:00').getTime())
+  // 🔴 (2026-11-22) 24시간 격자 — 밤 공백이 없다. 자정을 넘는 슬롯도 같은 규칙으로 본다
+  const afterMidnight = kst('2026-10-12T00:05:00')
+  const lastNight = latestSlotAtOrBefore(cslots, afterMidnight)!
+  check('🔴 자정 직후는 누락이 아니다 — 00:05 · 어제 23:47 슬롯 뒤 회차 있음 → skip',
+    judgeRecovery({ ...cbase, now: afterMidnight, lastRunAt: new Date(lastNight.getTime() + 5_000).toISOString() }).action === 'skip'
+    && lastNight.getTime() === kst('2026-10-11T23:47:00').getTime())
   const rr0 = readFileSync('scripts/runner-recover.mts', 'utf-8')
   check('🔴 복구 실행기가 label 의 정책을 판정에 넘긴다', /policy: RECOVERY_POLICY_OF\[label\] \?\? 'stale'/.test(rr0))
   check('🔴 일반 runner-recover 공급 복구는 닫혀 있고 recovery 표식으로 예약 회차를 흉내 내지 않는다',
