@@ -341,7 +341,7 @@ export function consumerEnvOf(o: ConsumeOutcome): Record<string, string> {
 }
 
 /**
- * 🔴 **아침 공급 회차의 미리 사기 env** — 그날 결정이 아직 없을 때 공급 러너에만 넣는다(`readSupplyHeadStart`).
+ * 🔴 **그날 결정 전 회차의 env** — 그날 결정이 아직 없을 때 공급·댓글 러너에만 넣는다(`readSupplyHeadStart` → `headStartFor`).
  *    두 단계 칸 모두 전날이 지킨 단계 · 표식은 그 전날 결정의 날짜(출처)다.
  */
 export function supplyHeadStartEnvOf(h: { stage: RuntimeStage; previousKstDate: string }): Record<string, string> {

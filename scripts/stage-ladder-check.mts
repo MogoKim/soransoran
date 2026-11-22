@@ -24,7 +24,7 @@ import {
 } from '../src/lib/stage-ladder'
 import {
   ensureStageDecision, consumeStageDecision, validateStoredDecision,
-  controllerEnabled, readSupplyHeadStart, CONTROLLER_ENV, ENSURE_STEPS, DECISION_CONSUMERS,
+  controllerEnabled, headStartFor, readSupplyHeadStart, CONTROLLER_ENV, ENSURE_STEPS, DECISION_CONSUMERS,
   STORED_COLUMNS, decisionToRow, rowToDecisionInput, decisionKeyOf,
 } from '../src/lib/stage-decision-store'
 import { STAGE_DECISION_V5 } from '../src/lib/stage-decision-contract'
@@ -1076,11 +1076,23 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
       && Object.keys(env).length === 3
       && scale.releaseStage === 'd30' && scale.capacityStage === 'd30' && scale.source === 'env'
   })())
-  check('🔴 🔴 **미리 사기는 공급 · "그날 결정이 아직 없다" 한 갈래뿐 — 발행·댓글 · 깨진 행 · kill switch 는 그대로 safest**', (() => {
+  // 🔴 (2026-11-22) 댓글도 같은 경로 — 24시간 댓글 러너가 자정~그날 결정 전에 전날 공개 단계로 추가 댓글을 잇는다
+  const headBraked = await headOf(prevRow('d20', { capacity: 'd30', state: 'PREPARE', transition: { kind: 'CERTIFIED', certified: 'd30' } }))
+  check('🔴 전날 공개가 열린 단계보다 낮은 날(브레이크 CERTIFIED d30 · 공개 d20) → braked · 평상일 · 올린 날은 braked 아님',
+    headBraked.ok && headBraked.braked && headBraked.stage === 'd20' && headPlain.ok && !headPlain.braked && headTrial.ok && !headTrial.braked,
+    JSON.stringify([headBraked, headPlain, headTrial]))
+  check('🔴 🔴 **이어 가기 consumer — 공급은 그대로 · 댓글은 브레이크 날이 아닐 때만 · 발행은 늘 거절**',
+    headStartFor('supply', headBraked).ok && headStartFor('supply', headPlain).ok
+    && headStartFor('comment', headPlain).ok && headStartFor('comment', headTrial).ok
+    && !headStartFor('comment', headBraked).ok
+    && !headStartFor('publish', headPlain).ok && !headStartFor('publish', headTrial).ok
+    && !headStartFor('comment', headNone).ok && !headStartFor('comment', headBroken).ok && !headStartFor('comment', headWrongDay).ok)
+  check('🔴 🔴 **이어 가기는 "그날 결정이 아직 없다" 한 갈래 · 발행 아님 · headStartFor 를 지난다 — 깨진 행 · kill switch 는 그대로 safest**', (() => {
     const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
     return (exec.match(/supplyHeadStartEnvOf\(/g) ?? []).length === 1
-      && /if \(BY === 'supply' && !outcome\.ok && outcome\.code === 'NO_DECISION' && prisma !== null\) \{/.test(exec)
+      && /if \(BY !== 'publish' && !outcome\.ok && outcome\.code === 'NO_DECISION' && prisma !== null\) \{/.test(exec)
       && /const yesterday = kstDateString\(new Date\(NOW\.getTime\(\) - 864e5\)\)/.test(exec)
+      && /const head = headStartFor\(BY, await readSupplyHeadStart\(/.test(exec)
       && /if \(head\.ok\) \{\s+overrides = supplyHeadStartEnvOf\(head\)/.test(exec)
       && !/stageDecision\.(create|update|upsert)|insert\(/.test(exec)
   })())

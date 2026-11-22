@@ -141,9 +141,15 @@ const cap = publishCapacityOf(GRID)
 console.log(`   유효 발행 분 ${valid.length}개 (격자 ${GRID.gridMinutes}분 · 회차당 ${GRID.perRunMax}건 · 댓글 회차 ${GRID.commentSlots.length}개 · 시도 ${GRID.attempts}회) → 하루 용량 ${cap}건`)
 {
   const mins = COMMENT_RUNNER_SLOTS.map(minuteOfDay)
-  const gaps = mins.slice(1).map((m, i) => m - mins[i]!)
-  check(`댓글 러너 ${COMMENT_RUNNER_SLOTS.length}회/day · 최대 간격 ${Math.max(...gaps)}분 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
-    COMMENT_RUNNER_SLOTS.length === 43 && Math.max(...gaps) <= 20 && COMMENT_RUNNER_MAX_GAP_MINUTES === 20)
+  // 🔴 자정을 넘는 마지막→첫 회차 간격까지 센다 — 하루 어느 20분 구간에도 회차가 있다
+  const gaps = [...mins.slice(1).map((m, i) => m - mins[i]!), mins[0]! + 24 * 60 - mins[mins.length - 1]!]
+  check(`댓글 러너 ${COMMENT_RUNNER_SLOTS.length}회/day · 자정 포함 최대 간격 ${Math.max(...gaps)}분 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
+    COMMENT_RUNNER_SLOTS.length === 72 && Math.max(...gaps) <= 20 && COMMENT_RUNNER_MAX_GAP_MINUTES === 20)
+  // 🔴 24시간 격자 — 옛 낮 창의 첫 회차(08:07)와 :07 위상을 하루 전체로 잇는다. 시간마다 정확히 3회
+  const perHour = Array.from({ length: 24 }, (_, h) => COMMENT_RUNNER_SLOTS.filter((x) => x.hour === h).length)
+  check('🔴 댓글 러너는 하루 24시간 :07 · :27 · :47 에 돈다 — 시간마다 3회 · 08:07 포함',
+    COMMENT_RUNNER_SLOTS.every((x) => x.minute % 20 === 7) && perHour.every((n) => n === 3)
+    && mins.includes(8 * 60 + 7), perHour.join(','))
 }
 check('유효 발행 분은 전부 창(08:00~22:00) 안 · 격자 위 · 60분 안 댓글 3회',
   valid.every((m) => m >= PUBLISH_WINDOW_START_MINUTE && m <= PUBLISH_WINDOW_END_MINUTE && m % GRID.gridMinutes === 0
@@ -173,9 +179,10 @@ for (const s of ['d20', 'd30', 'd50'] as const) {
 check('🔴 GitHub 예약 합집합은 d1~d10 그대로 10회 — D20 이상은 로컬 heartbeat 격자로 돈다(yml 불변)', allStageCronLines().length === 10)
 const g100 = genericProfileOf('d100', GRID)
 check(`🔴 [blocker 실측] d100 은 지금 러너로 담을 수 없다 — 용량 ${cap} < 100`, !g100.ok && cap < 100)
-check('반례 — 22시에 가까운 슬롯은 시도 3회가 안 돼 계약 위반', verifyGenericProfile({
+// 🔴 댓글 회차가 끊긴 격자(옛 08:07~22:00 창)에서는 22시에 가까운 슬롯이 시도 3회가 안 된다 — 시도 계약은 그대로 막는다
+check('반례 — 댓글 회차가 22시에 끝나는 격자에서 21:40 슬롯은 시도 3회가 안 돼 계약 위반', verifyGenericProfile({
   dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 21, minute: 40, count: 1 }],
-}, GRID).some((p) => p.includes('댓글 시도')))
+}, { ...GRID, commentSlots: GRID.commentSlots.filter((c) => minuteOfDay(c) <= PUBLISH_WINDOW_END_MINUTE) }).some((p) => p.includes('댓글 시도')))
 check('반례 — 격자 밖 분(09:35)은 계약 위반', verifyGenericProfile({
   dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 9, minute: 35, count: 1 }],
 }, GRID).some((p) => p.includes('격자')))

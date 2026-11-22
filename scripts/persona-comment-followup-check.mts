@@ -46,7 +46,7 @@ import { sourceTextsOf } from './lib/persona-comment-targets'
 import type { CommentInput } from '../src/lib/persona-comment-input'
 import { decisionStageEnv } from '../src/lib/scale-runtime'
 import { kstDateString } from '../src/lib/release-canary'
-import { followupEligibleFor } from './lib/persona-comment-followup-run.mjs'
+import { conversationAuditDatesOf, followupEligibleFor } from './lib/persona-comment-followup-run.mjs'
 import { COMMENT_CONSUMER_BY, COMMENT_RUNNER_MAX_GAP_MINUTES, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
 import { DECISION_CONSUMERS } from '../src/lib/stage-decision-store'
 import { PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
@@ -717,9 +717,15 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   })
   const ok = M.followupStageOf(env(today, 'd5', 'd10'), NOW)
   check('⑨ 오늘 결정(공개 d5 · 천장 d10) → d5', ok.stage === 'd5', ok.reason)
+  // 🔴 (2026-11-22) 그날 결정 전 — consumer 가 넣은 전날 결정 표식(두 칸 = 전날 공개 단계)을 받는다
+  const head = M.followupStageOf(env('2026-10-13', 'd20', 'd20'), NOW)
+  check('⑨ 🔴 그날 결정 전 · 어제 날짜 표식(consumer 가 넣은 전날 결정 d20) → d20', head.stage === 'd20', head.reason)
+  const AFTER_MIDNIGHT = new Date('2026-10-13T15:10:00Z') // 10-14 00:10 KST
+  const night = M.followupStageOf(env('2026-10-13', 'd20', 'd20'), AFTER_MIDNIGHT)
+  check('⑨ 🔴 자정 직후(00:10 KST) 전날 표식 → 그 단계', night.stage === 'd20', night.reason)
   const bad: [string, ReturnType<typeof env>][] = [
     ['결정 표식 없음(consumer 미경유)', env(undefined, 'd5', 'd10')],
-    ['어제 날짜 표식(오래된 결정)', env('2026-10-13', 'd5', 'd10')],
+    ['이틀 전 날짜 표식(낡은 결정)', env('2026-10-12', 'd5', 'd10')],
     ['다른 날짜 표식(미래)', env('2026-10-15', 'd5', 'd10')],
     ['표식 모양이 아님', env('today', 'd5', 'd10')],
     ['정본에 없는 공개 단계(위조)', env(today, 'd7', 'd10')],
@@ -730,6 +736,17 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     const v = M.followupStageOf(e, NOW)
     check(`⑨ 🔴 ${name} → 단계 없음(추가 댓글 0)`, v.stage === null, v.reason)
   }
+  // 🔴 (2026-11-22) 대화 감사 날짜 — 자정 뒤 마감(8시간) 동안은 어제 글도 같은 감사 안에 둔다
+  const auditAt = (iso: string) => conversationAuditDatesOf(new Date(iso)).join(',')
+  check('⑨ 🔴 대화 감사 — 00:10 KST 는 어제·오늘 글을 함께 읽는다', auditAt('2026-10-13T15:10:00Z') === '2026-10-13,2026-10-14', auditAt('2026-10-13T15:10:00Z'))
+  check('⑨ 🔴 대화 감사 — 07:59 KST 까지 어제 글을 읽는다', auditAt('2026-10-13T22:59:00Z') === '2026-10-13,2026-10-14', auditAt('2026-10-13T22:59:00Z'))
+  check('⑨ 대화 감사 — 08:00 KST 부터는 오늘 글만(어제 글의 대화는 마감이 지났다)', auditAt('2026-10-13T23:00:00Z') === '2026-10-14', auditAt('2026-10-13T23:00:00Z'))
+  check('⑨ 🔴 회차 준비 읽기가 그 날짜 전부의 증거 사실을 합쳐 감사한다(오늘 하나로 줄이지 않는다)', (() => {
+    const run = readFileSync(join(here, 'lib/persona-comment-followup-run.mts'), 'utf-8')
+    return /const openDates = conversationAuditDatesOf\(i\.now\)/.test(run)
+      && /await Promise\.all\(openDates\.map\(\(kstDate\) => readStageEvidenceFacts\(/.test(run)
+      && /judgeConversationAudit\(fs\.flatMap\(\(f\) => f\.posts\)\)/.test(run)
+  })())
   // 🔴 회차 자격 — 정기 · --live · 스위치 on 만
   const on = { SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' }
   check('⑨ 정기 회차 · --live · 스위치 on → 추가 댓글 단계', followupEligibleFor({ live: true, trigger: 'scheduled', env: on }).ok)

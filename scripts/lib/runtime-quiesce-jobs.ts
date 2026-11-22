@@ -14,6 +14,8 @@
  *    · 자동 READY 감사 러너 `com.soransoran.auto-ready-audit` (2026-09-28) — 설치는 선택이다
  *    · 무인 댓글 루프 `com.soransoran.persona-comment-runner` (2026-09-28 · Track B) — 설치는 선택이다.
  *      회차가 checkout 중에 뜨면 반쯤 바뀐 트리로 발행 트랜잭션을 연다 — 감사 러너와 같은 이유다.
+ *      (2026-11-22) 예약표가 바뀐 배포에서는 옛 설치본 그대로 되올리고, 새 원문은 `ops:loop-install --apply` 가 깐다
+ *      (`OPS_LOOP_TEMPLATE_DEFER_LABELS`).
  *    · ops shadow observer `com.soransoran.ops-shadow-observer` (2026-11-11 · Phase 2 · 권위 0) — 60초마다 같은 runtime
  *      트리의 코드를 import 한다. checkout 중에 뜨면 반쯤 바뀐 트리를 읽는다. 설치는 ops-loop 설치기가 한다.
  */
