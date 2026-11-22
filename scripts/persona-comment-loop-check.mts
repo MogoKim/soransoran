@@ -4,7 +4,7 @@
  *
  *   ① 무인 레인 규칙(`judgeAutoLane`) — 60분 · 글당 1건 · 자기 글 · 실사용자 3건 · 단계·주체·상태
  *   ② 생성 전 대상 필터 · 글당 첫 대상만
- *   ③ 예산 env — 기본 $0.20 · D20 승인 천장 $0.50 · 잘못 쓴 값은 보류
+ *   ③ 예산 env — 기본 $0.20 · 코드 천장 $0.90(env 는 낮추기만) · 잘못 쓴 값은 보류
  *   ④ 🔴 실제 장부 세션(댓글 전용 디렉터리)이 하루 상한에서 **요청 전에** 막는다 — 생성 fetch 0
  *   ⑤ 댓글 1건의 실제 비용 계산(가격표 정본 · 운영 장부 실측 토큰)
  *   ⑥ 오케스트레이터 — 단계·모델이 아니면 provider 0 · write 0 · 관문 정본 그대로
@@ -156,12 +156,14 @@ console.log('\n③ 예산 env — 기본값 · 상한 · 잘못 쓴 값')
   const d = commentLoopLimitsFromEnv({})
   check('🟢 env 가 없으면 기본값 — 하루 $0.20 · 회차 6 · 여유 1.5',
     d.limits.dailyUsd === 0.2 && d.limits.runRequestCap === 6 && d.limits.headroomMultiplier === 1.5)
-  check('🔴 기본값 $0.20은 그대로이고 D20용 승인 천장만 $0.50이다',
-    COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
-  const d20 = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.5' })
-  check('🟢 D20 실측 뒤 env $0.50까지는 그대로 읽는다', d20.limits.dailyUsd === 0.5)
+  check('🔴 기본값 $0.20은 그대로이고 코드 천장은 $0.90이다(D50 준비 · 11-19 승인 총비용 안)',
+    COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.9)
+  const atCap = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.9' })
+  check('🟢 env $0.90(천장)까지는 그대로 읽는다', atCap.limits.dailyUsd === 0.9)
+  const prev = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.5' })
+  check('🟢 env $0.50(옛 천장)은 그대로 읽는다 — 천장을 올려도 운영값은 env 를 바꿀 때까지 그대로다', prev.limits.dailyUsd === 0.5)
   const hi = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '5' })
-  check('🔴 🔴 **env 가 $5 여도 승인 천장 $0.50으로 내린다**', hi.limits.dailyUsd === 0.5)
+  check('🔴 🔴 **env 가 $5 여도 코드 천장 $0.90으로 내린다**', hi.limits.dailyUsd === 0.9)
   const lo = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.05' })
   check('🟢 낮추는 것은 된다 — $0.05', lo.limits.dailyUsd === 0.05)
   const bad = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.2O' })
