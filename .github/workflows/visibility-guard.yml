@@ -699,6 +699,8 @@ jobs:
           npm run persona:voice-evidence-check
           npm run persona:reference-supplement-check
           npm run persona:voice-consumer-check
+          # 새 묶음 voiceBand 상한 — 말투 배정이 판정과 같은 식으로 고르는가 + 변이(2026-11-23)
+          npm run persona:voice-band-cap-check
           npm run d20:readiness-check
 
       # 🔴 **실제 OS 프로세스 2개로 락 경쟁을 붙인다.**

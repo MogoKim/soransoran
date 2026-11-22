@@ -229,7 +229,9 @@ console.log('\n⑥ 정본 자산 실물 (로컬만)')
     check(`🔴 실물 payload 24건 — 경험형 원문 0 · 화자 id 0 · 안전 예시만 · 묶음 밖 풀 본문 0 (문제 ${leak})`, leak === 0)
     const byCode = st.byCode
     check('실물: seed 재사용 1(전 묶음)', bundles.every((b) => referenceSeedShareCount(byCode, b.personaCode) === 1))
-    const old = oldAssign(canon.rows, PRODUCTION_PERSONA_CODES)
+    // 🔴 옛 판(사전순 정렬)은 두 자리 코드 universe 에서만 돌았다. 세 자리 코드(P100~)를 넣으면 모사가 사전순으로
+    //    P10 과 P11 사이에 끼워 스스로 밀린다 — 실제 배정은 숫자순(`sortPersonaCodes`)이라 운영 배정과 무관하다(2026-11-23 · wave8)
+    const old = oldAssign(canon.rows, PRODUCTION_PERSONA_CODES.filter((c) => /^P\d{2}$/.test(c)))
     const moved = [...old].filter(([c, t]) => JSON.stringify(st.byCode.get(c)?.comments.map((x) => x.text)) !== JSON.stringify(t))
     check(`🔴 실물: 옛 판에서 서 있던 ${old.size}명의 원문 그대로 (바뀐 것 ${moved.length})`, old.size === 18 && moved.length === 0)
   }

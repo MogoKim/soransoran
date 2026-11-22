@@ -5,7 +5,6 @@
  * Persona codes receive immutable, derived bundles from this separate asset.
  * The asset contains no author identifiers, URLs, or source article data.
  */
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 
@@ -23,31 +22,43 @@ export const SUPPLEMENT_ASSET_VERSION = 1
  * only this prefix may use the legacy assignment; later codes fail closed.
  */
 export const SUPPLEMENT_BASE_PERSONA_COUNT = 30
-export const SUPPLEMENT_CORPUS_FILE = join(
-  homedir(), 'Library', 'Application Support', 'soransoran',
-  'persona-reference', 'supplement-v1.json',
-)
-export const SUPPLEMENT_MANIFEST_FILE = join(REFERENCE_DIR, 'supplement-v1-manifest.json')
-export const SUPPLEMENT_CORPUS_FILE_V2 = join(
-  homedir(), 'Library', 'Application Support', 'soransoran',
-  'persona-reference', 'supplement-v2.json',
-)
-export const SUPPLEMENT_MANIFEST_FILE_V2 = join(REFERENCE_DIR, 'supplement-v2-manifest.json')
-export type SupplementGeneration = 1 | 2
+
+/**
+ * 🔴 **이 코드가 아는 보충 세대** — append-only. 새 cohort 의 묶음은 다음 세대 하나로 쓴다
+ *    (v1 wave6 · v2 wave7 · v3 wave8). 세대를 늘릴 때 고치는 곳은 이 목록 하나다 —
+ *    기록 도구는 마지막 세대를 쓰고 그 직전 세대를 동결 입력으로 읽는다.
+ *
+ * 🔴 runtime 은 이 목록 밖 세대 파일을 읽지 않는다. 그래서 순서가 무결성이다:
+ *    다음 세대 파일은 그 세대를 **모르는** runtime 이 돌 때 먼저 기록하고(옛 코드는 무시한다),
+ *    그 세대를 아는 코드를 배포해야 배포기가 source · target Persona 자산 식별자를 각각 잰다.
+ */
+export const SUPPLEMENT_GENERATIONS = [1, 2, 3] as const
+export type SupplementGeneration = (typeof SUPPLEMENT_GENERATIONS)[number]
+export const SUPPLEMENT_LATEST_GENERATION: SupplementGeneration =
+  SUPPLEMENT_GENERATIONS[SUPPLEMENT_GENERATIONS.length - 1]!
+
+/** 바로 앞 세대 — 첫 세대면 null(그 앞은 정본 말뭉치뿐이다) */
+export function previousSupplementGeneration(generation: SupplementGeneration): SupplementGeneration | null {
+  const at = SUPPLEMENT_GENERATIONS.indexOf(generation)
+  return at <= 0 ? null : SUPPLEMENT_GENERATIONS[at - 1]!
+}
 
 export function supplementPaths(generation: SupplementGeneration): { corpus: string; manifest: string } {
-  return generation === 2
-    ? { corpus: SUPPLEMENT_CORPUS_FILE_V2, manifest: SUPPLEMENT_MANIFEST_FILE_V2 }
-    : { corpus: SUPPLEMENT_CORPUS_FILE, manifest: SUPPLEMENT_MANIFEST_FILE }
+  return {
+    corpus: join(REFERENCE_DIR, `supplement-v${generation}.json`),
+    manifest: join(REFERENCE_DIR, `supplement-v${generation}-manifest.json`),
+  }
 }
 
 /**
- * 🔴 v2 파일이 하나라도 보이면 v2만 읽는다. v2가 반쪽이면 v1으로 조용히 후퇴하지 않고
- *    호출부가 SUPPLEMENT_PARTIAL 로 막는다. 둘 다 없을 때만 동결 v1을 쓴다.
+ * 🔴 가장 높은 세대의 파일이 하나라도 보이면 그 세대만 읽는다. 반쪽이면 앞 세대로 조용히 후퇴하지 않고
+ *    호출부가 SUPPLEMENT_PARTIAL 로 막는다. 어느 세대 파일도 없을 때만 v1 경로(부재)를 돌려준다.
  */
 export function activeSupplementPaths(): { generation: SupplementGeneration; corpus: string; manifest: string } {
-  const v2 = supplementPaths(2)
-  if (existsSync(v2.corpus) || existsSync(v2.manifest)) return { generation: 2, ...v2 }
+  for (const generation of [...SUPPLEMENT_GENERATIONS].reverse()) {
+    const paths = supplementPaths(generation)
+    if (existsSync(paths.corpus) || existsSync(paths.manifest)) return { generation, ...paths }
+  }
   return { generation: 1, ...supplementPaths(1) }
 }
 
