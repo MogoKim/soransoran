@@ -58,9 +58,9 @@ const DAY = 24 * HOUR
 const kst = (day: string, hm: string): Date => new Date(`${day}T${hm}:00+09:00`)
 const TODAY = '2026-11-18'
 const TOMORROW = '2026-11-19'
-/** 낮 회차 17:15 · 저녁 회차 22:15(공개 창이 끝난 뒤) */
+/** 낮 회차 17:15 · 운영 창이 끝난 뒤 23:55(마지막 틱 23:50 뒤 — 창은 하루 전체 · 2026-11-23) */
 const NOON = kst(TODAY, '17:15')
-const EVENING = kst(TODAY, '22:15')
+const EVENING = kst(TODAY, '23:55')
 /** 🔴 하루 20편 단계 — 오늘 16편이 나갔다. 17:15 에 남은 공개 기회는 4개(d20 슬롯 17~20번째) + 내일 첫 자리 */
 const E = markedStageEnv({ [RELEASE_ENV]: 'd20', [CAPACITY_ENV]: 'd20' }, TODAY)
 /**
@@ -200,12 +200,12 @@ async function main(): Promise<void> {
   }
 
   // ─────────────────────────────────────────────────────────
-  console.log('\n② 저녁 회차(22:15) — 공개 창이 끝났다 · 지평은 내일 첫 자리 하나')
+  console.log('\n② 운영 창이 끝난 뒤(23:55) — 오늘 회수 기회 0 · 지평은 내일 첫 자리 하나')
   // ─────────────────────────────────────────────────────────
   {
     const snap = await snapshot(prisma, { env: E, now: EVENING })
     const jit = snap.jit
-    check('fixture — 지평 1자리(내일 08:00) · 빈 자리 1', jit !== null && jit.slots === 1 && jit.unfilled.length === 1
+    check('fixture — 지평 1자리(내일 첫 자리) · 빈 자리 1', jit !== null && jit.slots === 1 && jit.unfilled.length === 1
       && kstDateString(jit.horizon[0]!) === TOMORROW, JSON.stringify(jit?.horizon.map((d) => d.toISOString())))
     check('수요 1 — 내일 자리 하나만 산다', jit !== null && jit.fillable.length === 1
       && judgeJitDemand({ slots: jit.slots, readyFilled: jit.readyFilled, writable: jit.fillable.length }).upTo === 1)

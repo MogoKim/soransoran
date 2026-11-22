@@ -4,9 +4,11 @@
  * 🔴 등록(`~/Library/LaunchAgents` 에 두기 · `launchctl load`)은 되돌리기 어려운 쪽이라 별도 승인이다.
  *    이 파일은 파일을 쓰지 않는다. `launchd:template-check` 가 렌더 결과를 검사한다.
  *
- * 🔴 **왜 30분마다인가** — 발행 창(08:00~22:00 KST)에 나간 글의 감사가 늦어도 한 간격 안에 판정되게.
+ * 🔴 **왜 하루 전체 30분마다인가** (2026-11-23 · 옛 08:10~23:40 32회) — 발행 창이 하루 전체라, 언제 나간 글이든
+ *    감사가 늦어도 한 간격 안에 판정되게. 새벽 글의 감사가 아침까지 밀려 판정 대기 시한을 넘기지 않고(넘기면 자동
+ *    도장·발행이 닫힌다), 결정(01:50) 전에 한 번 다시 돈다(재시도 가능 실패 한 건이 그날 품질 신호를 굳히지 않는다).
  *    판정 대기 시한(`AUDIT_OVERDUE_HOURS`)은 이 간격의 여러 배다 — 한두 번 못 깨도 닫지 않고,
- *    러너가 죽었으면 같은 날 안에 닫는다. 마지막 회차(23:40)는 22:00 발행분을 판정한다.
+ *    러너가 죽었으면 같은 날 안에 닫는다.
  * 🔴 판정 대기가 0 이면 러너는 DB 를 한 번 읽고 끝난다 — 제공사 호출 0.
  * 🔴 맥이 자면 돌지 않는다(launchd 계약). 그 경우는 판정 대기 시한이 도장·발행을 닫는다.
  */
@@ -14,7 +16,6 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { runnerPathValue, type RunnerPlistInput } from './original-post-runner-template'
-import { AUDIT_OVERDUE_HOURS } from '../../src/lib/auto-ready-audit-store'
 
 /** 🔴 깨우는 시각 하나 — 시·분만 (발행 슬롯의 건수 칸은 여기 없다) */
 export type AuditSlot = { hour: number; minute: number }
@@ -24,33 +25,41 @@ export const AUDIT_RUNNER_SCRIPT = 'scripts/auto-ready-audit.mts'
 /** 🔴 예약 실행은 기록한다(`--apply`). 그래도 스위치가 꺼져 있으면 표를 읽지 않고 끝난다 */
 export const AUDIT_RUNNER_ARGS: readonly string[] = ['--apply']
 
-export const AUDIT_WINDOW_START_MINUTE = 8 * 60 + 10
-export const AUDIT_WINDOW_END_MINUTE = 23 * 60 + 40
+/** 🔴 깨는 간격(분) — 판정 대기 시한은 이 간격의 4배 이상이어야 한다(`auto-ready:audit-check`) */
 export const AUDIT_INTERVAL_MINUTES = 30
+/** 🔴 위상 — 매시 :10 · :40(옛 08:10 시작과 같은 위상 · 정시와 반 시 발행 틱에서 10분 뒤) */
+export const AUDIT_PHASE_MINUTE = 10
 
-/** 🔴 깨우는 시각 — 08:10 부터 23:40 까지 30분마다(32회). 손으로 적지 않고 창에서 만든다 */
+const DAY_MINUTES = 24 * 60
+
+/** 🔴 깨우는 시각 — 00:10 부터 23:40 까지 30분마다(48회). 손으로 적지 않고 간격 · 위상에서 만든다 */
 export function auditRunnerSlots(): AuditSlot[] {
   const out: AuditSlot[] = []
-  for (let m = AUDIT_WINDOW_START_MINUTE; m <= AUDIT_WINDOW_END_MINUTE; m += AUDIT_INTERVAL_MINUTES) {
+  for (let m = AUDIT_PHASE_MINUTE; m < DAY_MINUTES; m += AUDIT_INTERVAL_MINUTES) {
     out.push({ hour: Math.floor(m / 60), minute: m % 60 })
   }
   return out
 }
 
 /**
- * 🔴 **슬롯 계약** — 비었거나, 창 안 간격이 판정 대기 시한의 1/4 을 넘거나, 발행 창 끝(22:00) 뒤
- *    회차가 없으면 문제다. 건강한 러너가 시한을 건드리지 않아야 시한이 "러너가 멈췄다" 는 뜻이 된다.
+ * 🔴 **슬롯 계약 — 하루 어느 30분에도 회차가 있다.** 비었거나, 순서가 어긋났거나, 자정을 넘는 마지막→첫 간격까지 세어
+ *    한 간격(`AUDIT_INTERVAL_MINUTES`)보다 긴 틈이 있으면 문제다. 발행이 하루 전체라 감사가 비는 시간대가 없어야
+ *    건강한 러너가 시한을 건드리지 않고, 시한이 "러너가 멈췄다" 는 뜻이 된다.
  */
 export function verifyAuditSlots(slots: readonly AuditSlot[]): string[] {
   const problems: string[] = []
   if (slots.length === 0) return ['감사 러너 슬롯이 없다 — 예약이 사라졌다']
   const mins = slots.map((s) => s.hour * 60 + s.minute)
+  const label = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
   for (let i = 1; i < mins.length; i += 1) {
     if (mins[i]! <= mins[i - 1]!) problems.push(`슬롯 순서가 어긋났다 (${i})`)
-    if (mins[i]! - mins[i - 1]! > (AUDIT_OVERDUE_HOURS * 60) / 4) problems.push(`창 안 간격 ${mins[i]! - mins[i - 1]!}분 — 시한의 1/4 초과`)
   }
-  if (Math.max(...mins) <= 22 * 60) problems.push('발행 창 끝(22:00) 뒤 감사 회차가 없다')
-  if (Math.min(...mins) < 8 * 60) problems.push('08:00 전 슬롯이 있다 — 발행 창 밖에서 깨울 이유가 없다')
+  const gaps = mins.map((m, i) => ({ from: m, gap: (i + 1 < mins.length ? mins[i + 1]! : mins[0]! + DAY_MINUTES) - m }))
+  for (const g of gaps) {
+    if (g.gap > AUDIT_INTERVAL_MINUTES) {
+      problems.push(`${label(g.from)} 뒤 ${g.gap}분 동안 감사 회차가 없다 — 하루 어느 ${AUDIT_INTERVAL_MINUTES}분에도 회차가 있어야 한다(자정 포함)`)
+    }
+  }
   return problems
 }
 
@@ -111,4 +120,5 @@ export const AUDIT_RUNNER_INSTALL_STEPS: readonly string[] = [
   `④ plist 를 ~/Library/LaunchAgents/${AUDIT_RUNNER_LABEL}.plist 로 쓴다`,
   '⑤ plutil -lint 로 문법을 확인한다',
   '⑥ launchctl load 로 올리고 launchctl print 로 실제 경로가 runtime 인지 대조한다',
+  '      설치 뒤 템플릿(예약표)이 바뀌면 runtime:deploy 다음 npm run ops:loop-install -- --apply 가 새 원문으로 교체한다',
 ]

@@ -44,22 +44,21 @@ import {
   type RuntimeStage,
 } from './scale-profile'
 import { slotOfCron } from './scale-workflow-render'
+import { HEARTBEAT_INTERVAL_MINUTES, cycleLabel } from './cycle-schedule'
+
+/** 발행기와 JIT 공급이 함께 쓰는 catch-up 기회 간격 — 정의는 하루 시간표(`cycle-schedule`) 하나다 */
+export { HEARTBEAT_INTERVAL_MINUTES }
 
 /**
- * 🔴 **당일 운영 창.** 밀린 슬롯을 아무 때나 메우지 않는다 —
- *    22시가 넘어 올린 글은 첫 댓글까지 밤을 넘기고(§9.5-g), 아침에 처음 온 사람은
- *    "댓글 하나 없는 어젯밤 글" 을 본다. 그 글은 **없는 것보다 나쁘다.**
+ * 🔴 **당일 운영 창 — 하루 전체(00:00 ~ 마지막 10분 틱 23:50)** (2026-11-23 · 11-19 승인 묶음 C).
+ *    댓글 러너가 24시간 돌아 밤에 나간 글도 60분 안에 첫 댓글을 받는다 — 22시에 공개를 멈출 이유가 사라졌다.
+ *    새벽 글은 새벽에 나간다(옛 판은 22:00~08:00 공개 0 이라 밤 바퀴 글이 아침에 나갔다).
  *
- *    창 밖의 backlog 는 버린다. 다음 날 첫 슬롯부터 다시 센다.
+ *    하루 경계는 그대로다 — catch-up 은 KST 달력일 안에서만 센다. 마지막 틱 뒤의 backlog 는 버리고
+ *    다음 날 첫 슬롯부터 다시 센다(전날 몫을 자정 뒤로 끌고 가지 않는다).
  */
-export const PUBLISH_WINDOW_START_MINUTE = 8 * 60
-export const PUBLISH_WINDOW_END_MINUTE = 22 * 60
-
-/**
- * 발행기와 JIT 공급이 함께 쓰는 catch-up 기회 간격.
- * 공급이 다른 간격을 가정하면 만들 수 없는 시각의 글을 준비하거나, 실제로 남은 기회를 놓친다.
- */
-export const HEARTBEAT_INTERVAL_MINUTES = 10
+export const PUBLISH_WINDOW_START_MINUTE = 0
+export const PUBLISH_WINDOW_END_MINUTE = 24 * 60 - HEARTBEAT_INTERVAL_MINUTES
 
 /**
  * 🔴 **한 회차가 낼 수 있는 최대 건수.**
@@ -194,12 +193,12 @@ export function judgeCatchUp(input: {
 
   const nowMinute = kstMinuteOfDay(t)
   /**
-   * 🔴 **창을 넘긴 backlog 는 버린다.** 늦게라도 내는 것이 늘 나은 것이 아니다 —
-   *    발행 창(08:00~22:00) 밖에 새 글을 내지 않는다 — 22시 넘어 올린 글은 읽는 사람 없는 밤에 대화만 쌓이고, 아침의 첫인상이 그 글이 된다.
+   * 🔴 **창을 넘긴 backlog 는 버린다.** 마지막 틱(23:50) 뒤에는 오늘 몫을 메우지 않는다 —
+   *    밀린 몫을 자정 뒤로 끌고 가면 다음 날 하루 상한과 섞인다. 다음 날은 첫 슬롯부터 다시 센다.
    */
   if (nowMinute > PUBLISH_WINDOW_END_MINUTE) {
     return blocked(
-      `운영 창(${slotLabel({ hour: 8, minute: 0 })}~${slotLabel({ hour: 22, minute: 0 })} KST)이 끝났다`
+      `운영 창(${cycleLabel(PUBLISH_WINDOW_START_MINUTE)}~${cycleLabel(PUBLISH_WINDOW_END_MINUTE)} KST)이 끝났다`
       + ' — 밀린 슬롯은 오늘 메우지 않는다',
       { publishedToday, slotKst, ownSlot },
     )
@@ -262,7 +261,7 @@ export type DaySimulation = {
   target: number
   /** 목표를 채우는가 */
   meetsTarget: boolean
-  /** 운영 창(08:00~22:00) 안에 도착한 트리거 수 */
+  /** 운영 창(`PUBLISH_WINDOW_*`) 안에 도착한 트리거 수 */
   triggersInWindow: number
   /** 창을 넘겨 도착해 버려진 트리거 수 */
   triggersAfterWindow: number

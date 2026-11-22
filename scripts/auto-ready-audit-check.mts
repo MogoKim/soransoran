@@ -29,7 +29,7 @@ import { ruleAuditJudge, RULE_JUDGE_MODEL, RULE_JUDGE_PROMPT_VERSION } from './l
 import { auditLedgerDir, auditLimitsFromEnv, offSemanticProvider, paidSemanticProvider, semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
 import { MATERIAL_CONTRACT_LINES } from '../src/lib/content-core/material-contract'
 import {
-  AUDIT_INTERVAL_MINUTES, AUDIT_RUNNER_ARGS, AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
+  AUDIT_INTERVAL_MINUTES, AUDIT_PHASE_MINUTE, AUDIT_RUNNER_ARGS, AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
 } from './lib/auto-ready-audit-template'
 import { AUDIT_POOL_DOC } from './lib/auto-ready-audit-context.mjs'
 
@@ -330,8 +330,22 @@ console.log('\n⑦ 🔴 운영자 신고 근거 — 비면 받지 않는다')
 console.log('\n⑧ 🔴 🔴 감사 러너 launchd 템플릿 — 코드가 렌더한다 · 설치하지 않는다')
 {
   const slots = auditRunnerSlots()
-  check('🔴 🔴 **슬롯이 있다 — 08:10~23:40 · 30분마다 32회**', slots.length === 32 && slots[0]!.hour === 8 && slots[0]!.minute === 10 && slots.at(-1)!.hour === 23 && slots.at(-1)!.minute === 40)
+  // 🔴 (2026-11-23) 발행이 하루 전체라 감사도 하루 전체 — 00:10~23:40 · 30분마다 48회(옛 08:10~23:40 32회)
+  check('🔴 🔴 **슬롯이 있다 — 00:10~23:40 · 30분마다 48회 · 매시 :10 · :40**', slots.length === 48 && slots[0]!.hour === 0 && slots[0]!.minute === 10
+    && slots.at(-1)!.hour === 23 && slots.at(-1)!.minute === 40 && slots.every((s) => s.minute % AUDIT_INTERVAL_MINUTES === AUDIT_PHASE_MINUTE))
+  {
+    // 🔴 하루 어느 30분 구간에도 회차가 있다 — 자정을 넘는 23:40 → 00:10 까지
+    const mins = slots.map((s) => s.hour * 60 + s.minute)
+    const covered = Array.from({ length: 24 * 60 }, (_, t) => mins.some((m) => ((m - t + 24 * 60) % (24 * 60)) < AUDIT_INTERVAL_MINUTES))
+    check('🔴 🔴 **하루 어느 분에서 시작해도 30분 안에 감사 회차가 온다(자정 포함)**', covered.every(Boolean))
+  }
   check('🔴 🔴 **슬롯 계약 통과 · 빈 슬롯은 문제로 잡힌다**', verifyAuditSlots(slots).length === 0 && verifyAuditSlots([]).length > 0)
+  // 🔴 반례 — 옛 08:10~23:40 예약표는 밤 8시간 반(23:40 → 08:10)이 비어 계약 위반 · 한 회차만 빠져도(03:10) 위반
+  check('🔴 반례 — 옛 08:10~23:40 예약표는 자정 넘는 빈 시간 때문에 계약 위반이다',
+    verifyAuditSlots(slots.filter((s) => s.hour * 60 + s.minute >= 8 * 60 + 10)).some((p) => p.includes('23:40 뒤 510분')))
+  check('🔴 반례 — 새벽 회차 하나(03:10)가 빠져도 계약 위반이다',
+    verifyAuditSlots(slots.filter((s) => !(s.hour === 3 && s.minute === 10))).some((p) => p.includes('02:40 뒤 60분')))
+  check('🔴 반례 — 순서가 어긋나면 계약 위반이다', verifyAuditSlots([...slots].reverse()).some((p) => p.includes('순서')))
   check('🔴 판정 대기 시한은 감사 간격의 4배 이상 — 건강한 러너가 시한을 건드리지 않는다', AUDIT_OVERDUE_HOURS * 60 >= 4 * AUDIT_INTERVAL_MINUTES)
   const xml = renderAuditRunnerPlist({ runtimeRoot: '/rt', npxPath: '/nvm/bin/npx', logDir: '/Users/x/Library/Logs/soransoran', nodeBinDir: '/nvm/bin' })
   const cal = [...xml.matchAll(/<dict><key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer><\/dict>/g)]

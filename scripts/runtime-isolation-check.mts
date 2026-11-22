@@ -76,7 +76,7 @@ const REQUIRE_RUNTIME = process.argv.includes('--require-runtime')
 /**
  * 🔴 **runtime:deploy 전환 전용 유예 스위치** (2026-10-29 · D20 rollout 순서).
  *
- *    배포기는 잠시 멈춘 ops-loop 소유 job(runner-recover·stage-controller·observer·댓글 러너)을 **옛 설치본 그대로** 되올린다.
+ *    배포기는 잠시 멈춘 ops-loop 소유 job(runner-recover·stage-controller·observer·댓글 러너·감사 러너)을 **옛 설치본 그대로** 되올린다.
  *    strict 검사는 그 옛 원문 ≠ 새 템플릿으로 막혀, 새 원문을 설치할 ops-loop-install 까지 가지 못했다.
  *    이 스위치는 그 둘의 **설치본 원문 불일치 하나만** pending 으로 돌린다 — 나머지는 전부 strict 그대로다.
  *    🔴 `--require-runtime` 없이는 쓸 수 없다(exit 2) — 관측 없는 유예는 통과를 꾸며 낸다.
@@ -2020,14 +2020,14 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [QI] runtime 템플릿을 render 하지 못하면 실패(fail-closed)', !j({ expectedXml: null }).ok)
 
     // ── 🔴 [D20] ops-loop 원문 유예 — runtime:deploy 전환 전용 · 원문 불일치 **하나만** · 소유 label 셋만 ──
-    const OPS_OWNED = [RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL, OPS_SHADOW_OBSERVER_LABEL, COMMENT_RUNNER_LABEL] as const
+    const OPS_OWNED = [RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL, OPS_SHADOW_OBSERVER_LABEL, COMMENT_RUNNER_LABEL, AJOB] as const
     const opsJ = (label: string, o: Partial<In> = {}) => {
       const plist = `/Users/x/Library/LaunchAgents/${label}.plist`
       return judgeOptionalRuntimeJob(base({ label, expectedPlistPath: plist, loadedPlistPath: plist, ...o }))
     }
     // 옛 설치본 그대로 되올린 상태 — 새 템플릿 render 와 원문만 다르다
     const STALE: Partial<In> = { expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }
-    check('🔴 [D20] 유예 가능 label 은 ops-loop 설치기 소유 정본의 runner-recover·stage-controller·ops-shadow-observer·persona-comment-runner 넷뿐이다(문자열 drift 0)',
+    check('🔴 [D20] 유예 가능 label 은 ops-loop 설치기 소유 정본의 runner-recover·stage-controller·ops-shadow-observer·persona-comment-runner·auto-ready-audit 다섯뿐이다(문자열 drift 0)',
       JSON.stringify([...OPS_LOOP_TEMPLATE_DEFER_LABELS].sort()) === JSON.stringify([...OPS_OWNED].sort()))
     for (const L of OPS_OWNED) {
       const strict = opsJ(L, STALE)
@@ -2071,8 +2071,8 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       const ghost = opsJ(OPS_SHADOW_OBSERVER_LABEL, { installedXml: null, installedArgs: [], installedWorkingDirectory: null, deferOpsLoopTemplate: true })
       check('🔴 [D20-O] observer 설치본 없이 loaded → 유예 플래그여도 FAIL(선택 설치가 느슨한 통과가 아니다)', !ghost.ok)
     }
-    // 🔴 (2026-11-22) 댓글 러너는 이제 ops-loop 설치기 소유다(위 OPS_OWNED 가 같은 반례를 돈다) — 남은 비소유는 감사·발행 러너
-    for (const L of [AJOB, PUBLISH_RUNNER_LABEL]) {
+    // 🔴 (2026-11-22) 댓글 러너 · (2026-11-23) 감사 러너는 이제 ops-loop 설치기 소유다(위 OPS_OWNED 가 같은 반례를 돈다) — 남은 비소유는 발행 러너
+    for (const L of [PUBLISH_RUNNER_LABEL]) {
       const v = opsJ(L, { ...STALE, deferOpsLoopTemplate: true })
       check(`🔴 [D20] ops-loop 소유가 아닌 ${L} 는 유예 플래그로도 원문 불일치를 미루지 못한다`, !v.ok && v.pending.length === 0)
     }

@@ -20,6 +20,7 @@ import { judgePostAuthor } from './persona-comment-release'
 import {
   countManagedPosts, type ManagedCount, type ManagedPostFacts,
 } from './persona-comment-bootstrap-budget'
+import { AUTO_FIRST_COMMENT_WINDOW_MS } from './persona-comment-auto-lane'
 import {
   isExternalSourcedBody, pickPostVisibility, POST_VISIBILITY_SELECT,
 } from './post-visibility'
@@ -34,6 +35,12 @@ export type PostReader = Pick<PrismaClient, 'post'>
 /**
  * 오늘(KST 하루) 공개된 글 중 bootstrap 대상이 될 수 있는 자리 수.
  *
+ * 🔴 **하한은 KST 자정과 "지금 − 첫 댓글 시한(60분)" 중 이른 쪽이다** (2026-11-23 · 공개 하루 전체).
+ *    23:5x 에 나간 글의 첫 댓글 회차는 글이 열리기를 기다리다(3~9분) 자정을 넘어 00:0x 에 돈다. 하한이 자정이면
+ *    그 글이 예산에서 빠지고, 새 날 글이 아직 없으면 예산 0 → 첫 댓글 0 이다. 첫 댓글 시한 안의 어제 글만 더 세고,
+ *    하루 절대 상한은 오늘 댓글 수로 따로 누른다(`judgeBootstrapBudget`) — 상한은 늘지 않는다.
+ *    🔴 하한은 이 함수 **안에서** 정한다 — 회차(러너 · 큐 · 관측)와 발행 트랜잭션 재검사가 같은 답을 낸다.
+ *
  * 🔴 **읽지 못하면 회차를 죽이지 않고 그 글만 뺀다.** 다만 조회 자체가 실패하면
  *    `null` 을 돌려준다 — 그때는 예산이 0 이어야 한다(fail-closed).
  */
@@ -41,8 +48,9 @@ export async function countManagedPostsToday(
   db: PostReader, dayStart: Date, now: Date,
 ): Promise<ManagedCount | null> {
   try {
+    const from = new Date(Math.min(dayStart.getTime(), now.getTime() - AUTO_FIRST_COMMENT_WINDOW_MS))
     const rows = await db.post.findMany({
-      where: { status: 'PUBLISHED', createdAt: { gte: dayStart, lte: now } },
+      where: { status: 'PUBLISHED', createdAt: { gte: from, lte: now } },
       select: {
         source: true,
         // 🔴 3축은 정본 select 를 쓴다 — 손으로 고르면 판정 입력이 갈라진다(C-2)

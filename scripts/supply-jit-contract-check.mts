@@ -98,8 +98,9 @@ console.log('\n① 반례 — 슬롯 5 · slot-valid READY 5 → 수요 0 · 유
 
 console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는다 (JIT 커버리지 = 자동 READY 만)')
 {
-  // 🔴 23:00 KST — 오늘 슬롯은 지났다. 가까운 지평은 다음 첫 기회 1칸이다(2026-10-11 Batch A2 · 옛: 내일 capacity 5칸)
-  const late = new Date('2026-10-04T23:00:00+09:00')
+  // 🔴 23:55 KST — 운영 창 마지막 틱(23:50) 뒤라 오늘 회수 기회는 없다. 가까운 지평은 다음 첫 기회 1칸이다
+  //    (2026-10-11 Batch A2 · 옛: 내일 capacity 5칸). 창이 하루 전체라 23:00 에는 아직 회수 기회가 남는다
+  const late = new Date('2026-10-04T23:55:00+09:00')
   const g = gate(late.getTime() - 2 * H)
   const row = (id: string, decidedBy: string): Record<string, unknown> => ({ id, decidedBy, gateResults: g, matchedPersonaId: null })
   const view = (rows: Record<string, unknown>[]): { loaded: LoadedStock; resolved: ResolvedScale } => ({

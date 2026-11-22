@@ -219,7 +219,7 @@ async function main(): Promise<number> {
   log(`   ${TODAY} · ${APPLY ? '--apply' : 'dry-run'} · ${CONTROLLER_ENV}=${flagOn ? 'on' : 'off'}`)
 
   /**
-   * 🔴 결정 직전 바퀴의 공급 회차가 아직 Queue 도장을 마치지 않았으면 07:00 결정은 불완전한 재고를 보게 된다.
+   * 🔴 결정 직전 바퀴의 공급 회차가 아직 Queue 도장을 마치지 않았으면 그날 결정은 불완전한 재고를 보게 된다.
    *    apply만 커널 lease 뒤로 미룬다. 앞 예약들은 DB read/write 0으로 물러나고 다음 예약이 다시 본다.
    *    마지막 예약에도 끝나지 않으면 부분 재고로 올리지 않고 HOLD만 기록한다.
    *    probe 실패도 free로 간주하지 않는다. dry-run은 관측이므로 계속 계산한다.

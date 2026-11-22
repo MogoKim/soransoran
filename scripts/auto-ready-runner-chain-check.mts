@@ -282,13 +282,13 @@ async function main(): Promise<void> {
    *    어느 시각에도 "재고가 없어" 로 끝나면 안 된다(앞판의 5 fail 이 이 모양이었다).
    *      00:00 KST · 09:29:59 KST → 첫 슬롯 전 — 발행 0 · exit 0
    *      09:30:00 KST            → d1 슬롯 정각 — 발행 1
-   *      22:01 KST               → 운영 창 뒤 — 발행 0 · exit 0 (밀린 슬롯은 메우지 않는다)
+   *      23:51 KST               → 운영 창(00:00~23:50) 뒤 — 발행 0 · exit 0 (밀린 슬롯은 메우지 않는다)
    */
   const edges = [
     { label: '00:00 KST 자정', at: new Date('2026-09-30T15:00:00.000Z'), publish: 0, why: /첫 슬롯\(09:30 KST\)이 아직 오지 않았다/ },
     { label: '09:29:59 KST 첫 슬롯 직전', at: new Date('2026-10-01T00:29:59.000Z'), publish: 0, why: /첫 슬롯\(09:30 KST\)이 아직 오지 않았다/ },
     { label: '09:30:00 KST 첫 슬롯 정각', at: new Date('2026-10-01T00:30:00.000Z'), publish: 1, why: null },
-    { label: '22:01 KST 운영 창 뒤', at: new Date('2026-10-01T13:01:00.000Z'), publish: 0, why: /운영 창\(08:00~22:00 KST\)이 끝났다/ },
+    { label: '23:51 KST 운영 창 뒤', at: new Date('2026-10-01T14:51:00.000Z'), publish: 0, why: /운영 창\(00:00~23:50 KST\)이 끝났다/ },
   ] as const
   for (const e of edges) {
     console.log(`\n── D 시각 경계 ${e.label} ──`)
