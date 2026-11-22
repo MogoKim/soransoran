@@ -5,7 +5,8 @@
  *   npx tsx scripts/day-window-mutation.mts
  *
  *   하루 전체 발행 창 · 바퀴 비중 자리(`cycleSlots`) · 자정 넘는 댓글 회차 · 발행도 그날 결정 전에는 전날 결정으로 ·
- *   결정 기준 01:50 — 고친 줄을 하나씩 되돌리거나 바꾸면 그 계약을 재는 검사가 반드시 FAIL 해야 한다.
+ *   결정 기준 01:50 · 감사 24시간(결정 전 새벽 자리의 감사 재시도) — 고친 줄을 하나씩 되돌리거나 바꾸면
+ *   그 계약을 재는 검사가 반드시 FAIL 해야 한다.
  *   한 변이라도 살아남으면 exit 1.
  *
  * 🔴 worktree 를 고치지 않는다. `src` · `scripts` 를 OS 임시 디렉터리에 복사하고 나머지는 symlink 로 잇는다.
@@ -24,6 +25,7 @@ const CATCHUP = 'src/lib/publish-slot-catchup.ts'
 const GENERIC = 'src/lib/stage-ladder-generic.ts'
 const STORE = 'src/lib/stage-decision-store.ts'
 const EXEC = 'scripts/stage-consume-exec.mts'
+const AUDIT = 'scripts/lib/auto-ready-audit-template.ts'
 
 /** 검사 실행 인자 — npm 스크립트와 같은 tsconfig 로 돈다 */
 const CHECKS = {
@@ -31,6 +33,8 @@ const CHECKS = {
   scheduler: ['tsx', '--tsconfig', 'tsconfig.ops.json', 'scripts/stage-scheduler-check.mts'],
   ladder: ['tsx', 'scripts/stage-ladder-check.mts'],
   loop: ['tsx', 'scripts/ops-loop-check.mts'],
+  audit: ['tsx', 'scripts/auto-ready-audit-check.mts'],
+  supplyCycle: ['tsx', 'scripts/supply-cycle-check.mts'],
 } as const
 type CheckName = keyof typeof CHECKS
 
@@ -61,6 +65,17 @@ const MUTATIONS: Mutation[] = [
   // ④ 결정 기준 01:50
   M('결정 기준을 옛 07:00 으로 되돌린다', CYCLE,
     'export const STAGE_DECISION_BASE_MINUTE = at(1, 50)', 'export const STAGE_DECISION_BASE_MINUTE = at(7, 0)', 'loop'),
+  // ③ 감사 24시간 · R5 결정 기준은 결정 전 새벽 자리의 감사 재시도 뒤
+  M('감사 예약을 옛 08:10 시작으로 되돌린다', AUDIT,
+    'for (let m = AUDIT_PHASE_MINUTE; m < DAY_MINUTES; m += AUDIT_INTERVAL_MINUTES) {',
+    'for (let m = 8 * 60 + AUDIT_PHASE_MINUTE; m < DAY_MINUTES; m += AUDIT_INTERVAL_MINUTES) {', 'audit'),
+  M('감사 계약이 자정 넘는 빈 시간을 보지 않는다', AUDIT,
+    '  const gaps = mins.map((m, i) => ({ from: m, gap: (i + 1 < mins.length ? mins[i + 1]! : mins[0]! + DAY_MINUTES) - m }))',
+    '  const gaps = mins.slice(0, -1).map((m, i) => ({ from: m, gap: mins[i + 1]! - m }))', 'audit'),
+  M('감사 위상을 :20 · :50 으로 늦춘다(00:50 자리의 재시도가 결정 뒤로 밀린다)', AUDIT,
+    'export const AUDIT_PHASE_MINUTE = 10', 'export const AUDIT_PHASE_MINUTE = 20', 'supplyCycle'),
+  M('결정 기준을 감사 재시도 전(01:30)으로 당긴다', CYCLE,
+    'export const STAGE_DECISION_BASE_MINUTE = at(1, 50)', 'export const STAGE_DECISION_BASE_MINUTE = at(1, 30)', 'supplyCycle'),
 ]
 
 const dir = mkdtempSync(join(tmpdir(), 'day-window-mut-'))
