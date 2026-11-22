@@ -42,7 +42,7 @@ import { classifyReaction } from './voice-comment-signals.mjs'
 import {
   assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot,
 } from './persona-reference-supplement-store.mjs'
-import { supplementFallbackPartition } from '../../src/lib/persona-reference-supplement'
+import { SUPPLEMENT_GENERATIONS, supplementFallbackPartition } from '../../src/lib/persona-reference-supplement'
 import type { SupplementGeneration } from '../../src/lib/persona-reference-supplement'
 
 /**
@@ -513,9 +513,10 @@ export function stableAssignment(input: {
   target?: number
   /**
    * Expansion provenance only. Runtime callers omit this and read the active
-   * generation. A cohort verifier passes the previous generation so it can
-   * prove that the new append-only snapshot did not rewrite an old Persona's
-   * frozen voice bundle.
+   * generation. A cohort verifier passes the baseline generation chosen by
+   * `preInsertVoiceBaseline` (the newest frozen generation without the cohort)
+   * so it can prove that the new append-only snapshot did not rewrite an old
+   * Persona's frozen voice bundle.
    */
   supplementGeneration?: SupplementGeneration
 }): {
@@ -615,6 +616,46 @@ export function stableAssignment(input: {
     sourceDigest: canon.sourceDigest ?? sha16(JSON.stringify(rows.map((r) => r.text).sort())),
     supplementByCode: supplement.ok ? new Map(supplement.byCode) : new Map(),
   }
+}
+
+/**
+ * 🔴 **투입 전 기준선** — 이 cohort 코드를 하나도 담지 않은 **가장 최근 동결 세대**의 배정 (2026-11-23).
+ *
+ *    cohort seed 와 DB seed 직전 검사는 "새 세대가 기존 Persona 말투를 한 바이트도 바꾸지 않았다" 를
+ *    기준선 ↔ 지금 활성 배정으로 증명한다. 기준선 세대를 숫자로 박으면(옛 v1 고정) 다음 cohort 에서
+ *    직전 회차 Persona 가 기준선에 없어 막히고, 숫자를 하나 더 올리면 새 세대를 자기 자신과 비교해 아무것도 증명하지 않는다.
+ *    그래서 세대를 **데이터에서** 고른다 — 가장 높은 세대부터 내려가며 이 cohort 코드를 담은 세대는 건너뛰고,
+ *    처음 만나는 세대가 기준선이다. 기준선은 이 cohort 를 담을 수 없으므로 자기 비교가 구조적으로 없다.
+ *
+ *    🔴 깨졌거나 반쪽인 세대는 건너뛰지 않고 멈춘다(`VOICE_BASELINE_INVALID`). 없는 세대는 아직 쓰지 않은 것이라 건너뛴다.
+ *       끝까지 못 찾으면 `VOICE_BASELINE_MISSING` — 기존 Persona 를 덮는 기준선 없이 투입하지 않는다.
+ */
+export function preInsertVoiceBaseline(input: { repoRoot: string; cohortCodes: readonly string[] }):
+  | { ok: true; generation: SupplementGeneration; assignment: ReturnType<typeof stableAssignment> }
+  | { ok: false; code: 'VOICE_BASELINE_MISSING' | 'VOICE_BASELINE_INVALID'; reason: string } {
+  const canon = loadCanonAsset()
+  const canonDigest = canon.sourceDigest
+  if (!canon.ok || canonDigest === null || canon.rows.length === 0) {
+    return { ok: false, code: 'VOICE_BASELINE_INVALID', reason: `정본 말투 자산이 아니다 — ${canon.reason}` }
+  }
+  const cohort = new Set(input.cohortCodes)
+  for (const generation of [...SUPPLEMENT_GENERATIONS].reverse()) {
+    const snapshot = readSupplementSnapshot({
+      baseSourceDigest: canonDigest,
+      generation,
+      baseAssignmentDigestFor: (codes) => {
+        const base = planBundles({ rows: canon.rows, personaCodes: codes })
+        return assignmentDigest(new Map(base.bundles.map((bundle) => [bundle.personaCode, bundle])), codes)
+      },
+    })
+    if (!snapshot.ok && snapshot.code === 'SUPPLEMENT_ABSENT') continue
+    if (!snapshot.ok) {
+      return { ok: false, code: 'VOICE_BASELINE_INVALID', reason: `보충 v${generation} ${snapshot.code} — ${snapshot.reason}` }
+    }
+    if ([...snapshot.byCode.keys()].some((code) => cohort.has(code))) continue
+    return { ok: true, generation, assignment: stableAssignment({ repoRoot: input.repoRoot, supplementGeneration: generation }) }
+  }
+  return { ok: false, code: 'VOICE_BASELINE_MISSING', reason: '이 cohort 코드를 담지 않은 동결 보충 세대가 없다' }
 }
 
 /**

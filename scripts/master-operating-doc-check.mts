@@ -7,9 +7,9 @@ import {
 } from '../src/lib/persona-comment-bootstrap-budget'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import { planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
-import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
+import { HEARTBEAT_INTERVAL_MINUTES, PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
-import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
+import { PROFILES, RUNTIME_STAGES, minuteOfDay, profileOf } from '../src/lib/scale-profile'
 import { PUBLISH_RUNNER_ARGS } from './lib/original-post-runner-template'
 import { AUTHORITY_TREE, brokenLinksOf, guideTextOf } from './lib/active-doc-authority.mjs'
 
@@ -383,9 +383,13 @@ function REQUIRED(): ReadonlyArray<readonly [string, boolean]> {
     ['**비용 단가의 표본**', '하루 목표 ÷ 3 올림', '같은 72시간 창의 모든 품질 계약', '합치는 것은 비용 단가 한 칸뿐이다',
       '재고와 수율은 현재 품질 계약 표본만 센다'].every((t) => d100Goal.includes(t))
     && !d100Goal.includes('rolling 72h cohort') && !d100Goal.includes('완전 정산된 소표본을 이유 없이 막지 않되')])
-  out.push(['canon 이 결정 전 공급 회차의 수요 단계 예외를 §3 과 §6 에 적는다 — 발행·댓글은 그날 결정만',
-    d100Goal.includes('**결정 전 공급 회차의 수요 단계**') && d100Goal.includes('공급 수요만 전날 결정이 지킨 단계로 센다')
-    && d100Goal.split('발행과 댓글은 언제나 그날 결정만 따른다').length - 1 === 2])
+  // 🔴 (2026-11-23) 공개 하루 전체 — 그날 결정(01:50) 전 회차는 공급 · 댓글 · 발행 모두 전날 결정이 지킨 단계로 잇는다(댓글은 브레이크 날 제외).
+  //    옛 문장("발행과 댓글은 언제나 그날 결정만" · "시험일이면 기반 단계")은 코드(`headStartFor` · 전날 release)와 다르다 — 남으면 FAIL
+  out.push(['canon 이 결정 전 회차의 단계(공급 · 댓글 · 발행이 전날 결정으로 · 결정 01:50)를 §3 과 §6 에 적는다',
+    d100Goal.includes('**결정 전 회차의 단계**')
+    && d100Goal.split('그날 결정 전에는 공급 · 댓글 · 발행 모두 전날 결정이').length - 1 === 2
+    && d100Goal.includes('그날 결정은 01:50 에 돈다') && d100Goal.includes('그날 결정(01:50) 전 회차다')
+    && !d100Goal.includes('발행과 댓글은 언제나 그날 결정만 따른다') && !d100Goal.includes('시험 대상 단계가 아니라 그 기반 단계다')])
   out.push(['canon §13 이 82cook 을 수집원에서 뺐다고 적고 필수 수집원이라고 하지 않는다',
     d100Goal.includes('## 13. 82cook — 수집원에서 뺐다') && !d100Goal.includes('필수 수집원이다') && !d100Goal.includes('향후 82cook')])
   out.push(['NORTH-STAR 가 지금 단계의 목적(검색 유입 · 비회원 가입 · 초기 실회원)을 적고 canon 이 그 절을 가리킨다',
@@ -1455,12 +1459,13 @@ check('🔴 번호를 당기지 않고 옛 행의 ②·④ 줄은 읽을 때 버
   master.includes('②·④ 는 없는 번호다') && master.includes('`judgeGateReport` 가 읽을 때 버린다'))
 check('🔴 지운 ② 코퍼스 읽기를 살아 있는 것처럼 적지 않는다',
   !master.includes('loadCanonCorpusTexts') && !master.includes('frequencyLookup'))
-/** 🔴 운영 창 계약 — 발행은 08~22시 · 댓글은 24시간(2026-11-22 · 11-19 승인 묶음 C) */
-check('🔴 운영 창 계약을 발행 08~22시 · 댓글 24시간으로 적는다',
-  master.includes('#### 🔴 운영 창 계약 — 발행 08~22시 · 댓글 24시간')
-  && !master.includes('24시간으로 만들지 않는다'))
-check('🔴 관리형 글 발행은 08~22시 창 안에만 배치한다고 적는다',
-  master.includes('관리형 글 발행은 08:00~22:00 창 안에만 배치한다'))
+/** 🔴 운영 창 계약 — 발행 · 댓글 · 감사 24시간 · 결정 01:50(2026-11-23 · 11-19 승인 묶음 C) */
+check('🔴 운영 창 계약을 발행 · 댓글 · 감사 24시간으로 적는다',
+  master.includes('#### 🔴 운영 창 계약 — 발행 · 댓글 · 감사 24시간 · 결정 01:50')
+  && !master.includes('24시간으로 만들지 않는다') && !master.includes('발행 08~22시 · 댓글 24시간'))
+check('🔴 관리형 글 발행은 하루 전체 창에 바퀴 비중으로 배치한다고 적는다(옛 08~22시 문장 없음)',
+  master.includes('관리형 글 발행은 하루 전체(00:00~23:50) 창에 바퀴 비중으로 배치한다')
+  && !master.includes('관리형 글 발행은 08:00~22:00 창 안에만 배치한다'))
 check('🔴 글 100/day 확장은 별도 승인 대상이라고 적는다',
   master.includes('글 파이프라인을 100/day 로 확장하는 것은 여전히 별도 승인 대상이다'))
 /**
@@ -1475,16 +1480,18 @@ check('🔴 글 100/day 확장은 별도 승인 대상이라고 적는다',
     .map(minuteOfDay).sort((a, b) => a - b)
   const winStart = PUBLISH_WINDOW_START_MINUTE
   const winEnd = PUBLISH_WINDOW_END_MINUTE
-  const allPostMins = RELEASE_STAGES.flatMap((st) => PROFILES[st].slots.map(minuteOfDay))
-  check('🔴 모든 공개 슬롯이 발행 창 안이다 (코드 대조)',
+  // 🔴 (2026-11-23) 러너 단계 전부(d1~d50) — D20 이상은 바퀴 비중 자리라 새벽 · 자정 근처 자리가 있다
+  const allPostMins = RUNTIME_STAGES.flatMap((st) => profileOf(st).slots.map(minuteOfDay))
+  check('🔴 모든 공개 슬롯이 발행 창 안이다 (코드 대조 · d1~d50)',
     allPostMins.length > 0 && allPostMins.every((m) => m >= winStart && m <= winEnd))
-  check('🔴 모든 공개 슬롯의 첫 댓글이 60분 안이다 (코드 대조)',
-    allPostMins.every((m) => {
-      const next = commentMins.find((c) => c >= m)
-      return next !== undefined && next - m <= FIRST_COMMENT_MAX_MINUTES
+  check('🔴 모든 공개 슬롯의 첫 댓글이 60분 안이다 (코드 대조 · 자정 넘는 회차 포함)',
+    commentMins.length > 0 && allPostMins.every((m) => {
+      const next = commentMins.find((c) => c >= m) ?? commentMins[0]! + 24 * 60
+      return next - m <= FIRST_COMMENT_MAX_MINUTES
     }))
-  check('🔴 00:05 슬롯이 어느 단계에도 남아 있지 않다',
-    !RELEASE_STAGES.some((st) => PROFILES[st].slots.some((s) => s.hour === 0 && s.minute === 5)))
+  // 🔴 옛 00:05 같은 격자 밖 자리는 heartbeat 가 늦게 낸다 — 자리가 전부 10분 격자 위인지 코드에 묻는다
+  check('🔴 모든 공개 슬롯이 heartbeat 10분 격자 위다 — 00:05 같은 격자 밖 자리가 없다',
+    allPostMins.every((m) => m % HEARTBEAT_INTERVAL_MINUTES === 0))
 }
 /** 🔴 Persona 하루 1건 폐기를 기록으로 남긴다 */
 check('🔴 Persona 하루 1건 폐기를 역사로 남긴다',

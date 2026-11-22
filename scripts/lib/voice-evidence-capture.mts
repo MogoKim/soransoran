@@ -153,16 +153,43 @@ export const EVIDENCE_READ_DROP_CODES = [
   'SALT_MISSING',
   'SALT_ROTATED',
   'EXPIRED',
+  'AFTER_EVIDENCE_UNTIL',
   'MALFORMED',
   'REAL_MEMBER_UNMEASURED',
   'REAL_MEMBER_SPEAKER',
 ] as const
 export type EvidenceReadDropCode = (typeof EVIDENCE_READ_DROP_CODES)[number]
 
+const EVIDENCE_UNTIL_FORM = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/
+
+/**
+ * 🔴 **증거 시각 상한** `--evidence-until=<ISO>` — 계획 도구(`persona:expansion`)와 기록 도구
+ *    (`persona:reference-supplement-build`)가 이 함수 하나로 같은 뜻으로 읽는다: `capturedAt` 이 상한 이하인 근거만 쓴다.
+ *    수집기는 하루 내내 근거를 더하므로, 낮에 카드 말투를 렌더한 묶음과 밤 apply 묶음이 같으려면 두 실행이
+ *    같은 상한을 받아야 한다. 시간대가 적힌 ISO 만 받는다(지역 시각 모호성 0) · 지금보다 뒤는 상한이 아니다.
+ *    값은 정규형(`toISOString`)으로 바꿔 돌려준다 — 승인 digest 와 manifest 사유에 그 글자를 쓴다.
+ */
+export function parseEvidenceUntil(raw: string | null, now: Date):
+  | { ok: true; until: Date | null; iso: string | null }
+  | { ok: false; reason: string } {
+  if (raw === null) return { ok: true, until: null, iso: null }
+  const value = raw.trim()
+  if (!EVIDENCE_UNTIL_FORM.test(value) || Number.isNaN(Date.parse(value))) {
+    return { ok: false, reason: `--evidence-until 은 시간대가 적힌 ISO 시각이어야 한다 (예: 2026-11-23T03:00:00Z) — 받은 값 "${value}"` }
+  }
+  const until = new Date(value)
+  if (until.getTime() > now.getTime()) {
+    return { ok: false, reason: `--evidence-until ${until.toISOString()} 이 지금(${now.toISOString()})보다 뒤다 — 미래 시각은 상한이 아니다` }
+  }
+  return { ok: true, until, iso: until.toISOString() }
+}
+
 export function rowsFromVoiceEvidence(lines: readonly unknown[], context: {
   salt: EvidenceSalt
   members: { memberNames: readonly string[]; personaNames?: readonly string[] } | null
   now: Date
+  /** 🔴 증거 시각 상한 — 이 시각 뒤에 수집된 근거는 읽지 않는다(`parseEvidenceUntil`). 없으면 상한 없음 */
+  until?: Date | null
 }): { rows: PublicCommentRow[]; read: number; dropped: Record<EvidenceReadDropCode, number> } {
   const dropped = Object.fromEntries(EVIDENCE_READ_DROP_CODES.map((code) => [code, 0])) as Record<EvidenceReadDropCode, number>
   const valid: VoiceEvidenceRow[] = []
@@ -179,6 +206,7 @@ export function rowsFromVoiceEvidence(lines: readonly unknown[], context: {
       .map((name) => memberKeyOf(validSalt.salt, name)),
   )
   const cutoff = context.now.getTime() - VOICE_EVIDENCE_RETENTION_DAYS * 86_400_000
+  const ceiling = context.until === undefined || context.until === null ? null : context.until.getTime()
   const realSpeakers = new Set(valid
     .filter((row) => row.saltId === validSalt.saltId && memberKeys.has(row.memberKey))
     .map((row) => row.speakerHash))
@@ -186,6 +214,7 @@ export function rowsFromVoiceEvidence(lines: readonly unknown[], context: {
   for (const row of valid) {
     if (row.saltId !== validSalt.saltId) { dropped.SALT_ROTATED += 1; continue }
     if (Date.parse(row.capturedAt) < cutoff) { dropped.EXPIRED += 1; continue }
+    if (ceiling !== null && Date.parse(row.capturedAt) > ceiling) { dropped.AFTER_EVIDENCE_UNTIL += 1; continue }
     if (realSpeakers.has(row.speakerHash)) { dropped.REAL_MEMBER_SPEAKER += 1; continue }
     rows.push({ source: row.source, articleId: row.articleId, author: row.speakerHash, text: row.text })
   }

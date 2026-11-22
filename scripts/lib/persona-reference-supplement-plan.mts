@@ -20,8 +20,14 @@ export function planSupplementSnapshot(input: {
   saltId: string
   generatedAt: string
   reason: string
-  /** 이미 운영에서 동결된 append-only 묶음. 새 계획보다 항상 우선하고 v2에 바이트 의미 그대로 포함한다. */
+  /** 이미 운영에서 동결된 append-only 묶음. 새 계획보다 항상 우선하고 다음 세대에 바이트 의미 그대로 포함한다. */
   frozenBundles?: readonly VoiceReferenceBundle[]
+  /**
+   * 🔴 증거 시각 상한(ISO) — 이 시각까지 수집된 근거만 계획에 들어왔다는 표시. 주면 승인 digest 에 들어간다:
+   *    낮에 같은 상한으로 렌더한 카드 말투와 밤 apply 묶음이 같다는 것을 digest 하나로 확인한다.
+   *    다른 상한으로 다시 계획하면 묶음이 우연히 같아도 digest 가 달라져 apply 가 멈춘다.
+   */
+  evidenceUntil?: string
 }): {
   ok: boolean
   problems: string[]
@@ -104,8 +110,10 @@ export function planSupplementSnapshot(input: {
     assetText,
     manifestText,
     // Approval digest excludes audit-only time/reason so dry-run and apply can
-    // agree while preserving the exact semantic assignment.
+    // agree while preserving the exact semantic assignment. The evidence upper
+    // bound is semantic input, so it is bound when present.
     planDigest: sha256(JSON.stringify({
+      ...(input.evidenceUntil === undefined ? {} : { evidenceUntil: input.evidenceUntil }),
       asset: {
         version: asset.version,
         baseSourceDigest: asset.baseSourceDigest,

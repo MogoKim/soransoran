@@ -12,10 +12,10 @@
  *    · 그날 결정이 검증을 통과했다 → 공개·천장 = 결정 · **표식**(`STAGE_DECISION_MARK_ENV` = 결정 날짜)을 함께 넣는다
  *    · 결정이 없다 · 깨졌다 · DB 를 못 읽었다 · `STAGE_CONTROLLER_ENABLED` 가 on 이 아니다(kill switch)
  *      → 가장 안전한 d1 (사후에 만들지 않는다)
- *    · 🔴 예외 하나 — **공급·댓글(`--by=supply|comment`)이고 그날 결정이 아직 없을 때만** 전날 결정이 지킨 단계로 간다
- *      (`readSupplyHeadStart` → `headStartFor`). 그날 결정(07:00)보다 먼저 도는 새벽 공급 회차가 아침 슬롯 글을 미리 사고,
- *      24시간 도는 댓글 러너가 자정 뒤 열린 대화를 잇기 위해서다. 댓글은 전날이 브레이크로 낮춘 날이면 잇지 않는다.
- *      결정 행은 만들지 않는다. 🔴 발행은 이 예외를 타지 않는다 — 그날 결정이 없으면 d1 이다.
+ *    · 🔴 예외 하나 — **그날 결정이 아직 없을 때만** 공급 · 댓글 · 발행이 전날 결정이 지킨 단계로 간다
+ *      (`readSupplyHeadStart` → `headStartFor`). 그날 결정(01:50)보다 먼저 도는 새벽 공급 회차가 새벽 자리 글을 사고,
+ *      24시간 도는 댓글 러너가 자정 뒤 열린 대화를 잇고, 하루 전체 발행이 자정~결정 사이 새벽 자리를 내기 위해서다.
+ *      댓글은 전날이 브레이크로 낮춘 날이면 잇지 않는다. 결정 행은 만들지 않는다. 전날 결정도 없거나 깨졌으면 d1 이다.
  *
  * 🔴 **자동 실행의 유일한 문이다** (2026-09-30 · Lane A 단일 실행 authority).
  *    · 옛 legacy 경로(flag off → 아무것도 넣지 않고 `.env.local` 단계가 이기던 것)는 지웠다.
@@ -23,7 +23,7 @@
  *    · 워크플로 · launchd 템플릿 · package.json 이 발행/공급 러너를 이 문 없이 부르면
  *      `stage-authority-graph`(runtime-isolation-check ⑦)가 CI 에서 막는다.
  *
- * 🔴 DB write 0. 읽기는 오늘 결정 한 행(그날 결정 전 공급·댓글 회차만 전날 행 하나 더)뿐이다.
+ * 🔴 DB write 0. 읽기는 오늘 결정 한 행(그날 결정 전 회차만 전날 행 하나 더)뿐이다.
  */
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
@@ -98,14 +98,14 @@ if (!followupOn) {
     note = outcome.ok
       ? `${today} 결정 ${outcome.decision.state} · 공개 ${outcome.decision.release} · 천장 ${outcome.decision.capacity}`
       : `${outcome.code} → ${outcome.fallback} — ${outcome.reason}`
-    // 🔴 공급·댓글 · 그날 결정이 "아직 없을" 때만(깨진 행 · kill switch 는 그대로 safest) — 전날이 지킨 단계로 잇는다
-    if (BY !== 'publish' && !outcome.ok && outcome.code === 'NO_DECISION' && prisma !== null) {
+    // 🔴 그날 결정이 "아직 없을" 때만(깨진 행 · kill switch 는 그대로 safest) — 전날이 지킨 단계로 잇는다
+    if (!outcome.ok && outcome.code === 'NO_DECISION' && prisma !== null) {
       const yesterday = kstDateString(new Date(NOW.getTime() - 864e5))
       const io = stageDecisionIo(prisma as PrismaClient, yesterday)
       const head = headStartFor(BY, await readSupplyHeadStart({ read: io.read, validate: io.validate }))
       if (head.ok) {
         overrides = supplyHeadStartEnvOf(head)
-        note = `${today} 결정이 아직 없다 — ${BY} 는 전날(${head.previousKstDate}) 결정이 지킨 ${head.stage} 로 간다(발행은 그날 결정만 따른다)`
+        note = `${today} 결정이 아직 없다 — ${BY} 는 전날(${head.previousKstDate}) 결정이 지킨 ${head.stage} 로 간다`
       } else note = `${note} · ${head.reason}`
     }
   } catch (e) {
