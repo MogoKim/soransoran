@@ -4,19 +4,30 @@
  *
  * Default is read-only. Apply writes only the deploy-independent 0600 snapshot;
  * it never writes the DB, calls a provider, creates a Persona, or changes stage.
+ *
+ * Generation is not a literal here: it writes the latest generation this code
+ * knows (`SUPPLEMENT_LATEST_GENERATION`) and freezes the one right before it.
+ * The default fixture is the approved fixture of the single runnable cohort.
+ * `--evidence-until=<ISO>` bounds the evidence exactly like `persona:expansion`.
  */
 import { execFileSync } from 'node:child_process'
-import { dirname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { PrismaClient } from '@prisma/client'
 
+import { checkCohortKeys, COHORT_EXPANSION_FIXTURES, COHORTS, RUNNABLE_COHORTS } from '../src/lib/persona-cohort'
+import {
+  activeSupplementPaths, previousSupplementGeneration, SUPPLEMENT_LATEST_GENERATION,
+} from '../src/lib/persona-reference-supplement'
 import { loadExpansionFixture } from './lib/persona-expansion-gate.mjs'
 import { readExpansionFacts } from './lib/persona-expansion-facts.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { fillDbConnection, readEnvKeys } from './lib/ops-signals.mjs'
 import {
-  readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir,
+  parseEvidenceUntil, readEvidenceSalt, VOICE_EVIDENCE_SALT_ENV, voiceEvidenceDataDir,
 } from './lib/voice-evidence-capture.mjs'
 import { readUsableVoiceEvidence } from './lib/voice-evidence-status.mjs'
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
@@ -43,10 +54,25 @@ const APPROVED_DIGEST = arg('digest')
 const REASON = (arg('reason') ?? '').trim()
 const FIXTURE_ARG = arg('fixture')
 const EVIDENCE_DIR_ARG = arg('voice-evidence-dir')
-const FIXTURE = FIXTURE_ARG ?? 'scripts/__fixtures__/persona-expansion-d30.json'
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
+const NOW = new Date()
 
 if (!has('--db')) fail('--db 가 필요하다 — 정확한 회원·Persona 제외 집합 없이 증거를 고정하지 않는다', 2)
+
+/** 🔴 쓰는 세대 = 이 코드가 아는 마지막 세대 · 동결 입력 = 그 직전 세대(append-only) */
+const WRITE_GENERATION = SUPPLEMENT_LATEST_GENERATION
+const FROZEN_GENERATION = previousSupplementGeneration(WRITE_GENERATION)
+  ?? fail(`v${WRITE_GENERATION} 앞에 동결 세대가 없다 — 첫 세대는 이 도구로 쓰지 않는다`, 2)
+const until = parseEvidenceUntil(arg('evidence-until'), NOW)
+const EVIDENCE_UNTIL = until.ok ? until : fail(until.reason, 2)
+/** 🔴 기본 fixture — 승인 fixture 가 등록된 runnable cohort 가 정확히 하나일 때 그 fixture 다 */
+const registeredFixtures = RUNNABLE_COHORTS.flatMap((id) => {
+  const approved = COHORT_EXPANSION_FIXTURES[id]
+  return approved === undefined ? [] : [{ id, ...approved }]
+})
+const DEFAULT_FIXTURE = registeredFixtures.length === 1 ? registeredFixtures[0]! : null
+const FIXTURE = FIXTURE_ARG ?? DEFAULT_FIXTURE?.path
+  ?? fail('--fixture=<path> 가 필요하다 — 승인 fixture 가 등록된 runnable cohort 가 하나가 아니다', 2)
 
 function git(args: readonly string[]): string | null {
   try {
@@ -67,6 +93,13 @@ function guardProduction(): { databaseUrl: string; directUrl: string } {
   if (REASON === '') problems.push('--reason=<사유> 가 필요하다')
   if ((process.env.SORAN_ISOLATED_DB ?? '') !== '') problems.push('SORAN_ISOLATED_DB 가 설정돼 있다')
   if (FIXTURE_ARG !== null) problems.push('운영 apply 는 정본 fixture 만 쓴다')
+  if (DEFAULT_FIXTURE === null) problems.push('운영 apply 는 승인 fixture 가 등록된 runnable cohort 하나가 있어야 한다')
+  else {
+    let digest: string | null = null
+    try { digest = createHash('sha256').update(readFileSync(join(process.cwd(), DEFAULT_FIXTURE.path), 'utf-8')).digest('hex') }
+    catch { digest = null }
+    if (digest !== DEFAULT_FIXTURE.sha256) problems.push(`승인 fixture ${DEFAULT_FIXTURE.path} digest 가 등록값과 다르다`)
+  }
   if (EVIDENCE_DIR_ARG !== null) problems.push('운영 apply 는 정본 evidence 디렉터리만 쓴다')
   const env = readEnvKeys(['DATABASE_URL', 'DIRECT_URL'])
   const databaseUrl = env.values.DATABASE_URL ?? ''
@@ -117,16 +150,22 @@ if (!canon.ok) fail(`canonical reference: ${canon.code}`)
 const canonDigest = canon.sourceDigest ?? fail('canonical reference digest 가 없다')
 const frozen = readSupplementSnapshot({
   baseSourceDigest: canonDigest,
-  generation: 1,
+  generation: FROZEN_GENERATION,
   baseAssignmentDigestFor: (codes) => {
     const base = planBundles({ rows: canon.rows, personaCodes: codes })
     return assignmentDigest(new Map(base.bundles.map((bundle) => [bundle.personaCode, bundle])), codes)
   },
 })
-const validFrozen = frozen.ok ? frozen : fail(`동결 v1 supplement: ${frozen.code}`)
+const validFrozen = frozen.ok ? frozen : fail(`동결 v${FROZEN_GENERATION} supplement: ${frozen.code}`)
 const fixture = loadExpansionFixture(process.cwd(), FIXTURE)
 const validFixture = fixture.ok ? fixture.fixture : fail(`fixture: ${fixture.problems.join(' / ')}`)
 const newCodes = validFixture.candidates.map((candidate) => candidate.code)
+if (APPLY && DEFAULT_FIXTURE !== null) {
+  // 🔴 운영 apply 의 새 묶음은 정확히 runnable cohort 전원이다 — 한 명이라도 다르면 쓰지 않는다
+  if (validFixture.cohort !== DEFAULT_FIXTURE.id) fail(`fixture cohort ${validFixture.cohort} ≠ runnable ${DEFAULT_FIXTURE.id}`)
+  const scope = checkCohortKeys(COHORTS[DEFAULT_FIXTURE.id], newCodes)
+  if (scope.length > 0) fail(`fixture 범위가 runnable cohort 와 다르다 — ${scope.join(' / ')}`)
+}
 
 const prisma = new PrismaClient()
 let evidence: ReturnType<typeof readUsableVoiceEvidence>
@@ -137,7 +176,8 @@ try {
     dataDir: EVIDENCE_DIR_ARG ?? voiceEvidenceDataDir(),
     salt: validSalt,
     members: { memberNames: members, personaNames: facts.nameSets.personaNames ?? [] },
-    now: new Date(),
+    now: NOW,
+    until: EVIDENCE_UNTIL.until,
   })
 } finally {
   await prisma.$disconnect()
@@ -145,6 +185,7 @@ try {
 
 if (evidence.status.insecureFiles > 0) fail(`권한이 느슨한 evidence 파일 ${evidence.status.insecureFiles}개`)
 const generatedAt = new Date().toISOString()
+const reasonText = REASON === '' ? 'dry-run' : REASON
 const plan = planSupplementSnapshot({
   canonRows: canon.rows,
   extraRows: evidence.rows,
@@ -154,12 +195,17 @@ const plan = planSupplementSnapshot({
   baseSourceDigest: canonDigest,
   saltId: validSalt.saltId,
   generatedAt,
-  reason: REASON === '' ? 'dry-run' : REASON,
+  // 🔴 manifest 사유에 상한을 남긴다 — 어떤 근거 창으로 묶음을 고정했는지가 기록에 남는다
+  reason: EVIDENCE_UNTIL.iso === null ? reasonText : `${reasonText} · evidence-until=${EVIDENCE_UNTIL.iso}`,
+  ...(EVIDENCE_UNTIL.iso === null ? {} : { evidenceUntil: EVIDENCE_UNTIL.iso }),
 })
 
 console.log('\nPersona reference supplement - read-only plan')
+console.log(`generation active v${activeSupplementPaths().generation} / frozen v${FROZEN_GENERATION} / write v${WRITE_GENERATION}`)
+console.log(`fixture ${FIXTURE} (${validFixture.cohort})`)
 console.log(`base ${validFrozen.asset.baseCodes.length} / frozen ${validFrozen.asset.bundles.length} / new ${newCodes.length}`)
-console.log(`evidence files ${evidence.status.files} / usable ${evidence.status.usableRows}`)
+console.log(`evidence-until ${EVIDENCE_UNTIL.iso ?? '없음 — 지금까지 쌓인 근거 전부'}`)
+console.log(`evidence files ${evidence.status.files} / usable ${evidence.status.usableRows} / after-until ${evidence.status.dropped.AFTER_EVIDENCE_UNTIL}`)
 console.log(`speakers ${evidence.status.speakers} / eligible ${evidence.status.eligible} / near-miss ${evidence.status.nearMiss}`)
 console.log(`bundles canon ${plan.fromCanon.length} / supplemental ${plan.fromExtra.length}`)
 console.log(`digest ${plan.planDigest}`)
@@ -172,15 +218,16 @@ if (!APPLY) {
   process.exit(0)
 }
 if (APPROVED_DIGEST !== plan.planDigest) fail('승인 digest 가 지금 계획과 다르다')
-const written = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText, generation: 2 })
+const written = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText, generation: WRITE_GENERATION })
 const completedWrite = written.ok ? written : fail(written.reason)
 const verified = readSupplementSnapshot({
   baseSourceDigest: canonDigest,
+  generation: WRITE_GENERATION,
   baseAssignmentDigestFor: (codes) => {
     const base = planBundles({ rows: canon.rows, personaCodes: codes })
     return assignmentDigest(new Map(base.bundles.map((bundle) => [bundle.personaCode, bundle])), codes)
   },
 })
 const completedRead = verified.ok ? verified : fail(`기록 후 검증 실패 ${verified.code}`)
-console.log(`SNAPSHOT_${completedWrite.action.toUpperCase()} bundles=${completedRead.byCode.size} saltId=${completedRead.manifest.saltId}`)
+console.log(`SNAPSHOT_${completedWrite.action.toUpperCase()} generation=v${WRITE_GENERATION} bundles=${completedRead.byCode.size} saltId=${completedRead.manifest.saltId}`)
 console.log('DB write 0 / provider 0 / activation 0')

@@ -7,9 +7,11 @@ const home = mkdtempSync(join(tmpdir(), 'persona-reference-supplement-'))
 process.env.HOME = home
 
 const {
-  SUPPLEMENT_CORPUS_FILE, SUPPLEMENT_MANIFEST_FILE, SUPPLEMENT_MANIFEST_FILE_V2,
-  activeSupplementPaths, judgeSupplementAsset, supplementFallbackPartition,
+  SUPPLEMENT_GENERATIONS, SUPPLEMENT_LATEST_GENERATION, activeSupplementPaths, judgeSupplementAsset,
+  previousSupplementGeneration, supplementFallbackPartition, supplementPaths,
 } = await import('../src/lib/persona-reference-supplement')
+const SUPPLEMENT_CORPUS_FILE = supplementPaths(1).corpus
+const SUPPLEMENT_MANIFEST_FILE = supplementPaths(1).manifest
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const {
   assignmentDigest, mergeSupplementAssignment, readSupplementSnapshot, selectFrozenSupplementBundle,
@@ -98,14 +100,14 @@ try {
     baseAssignmentDigestFor: () => baseDigest,
   })
 
-  const first = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText })
+  const first = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText, generation: 1 })
   check('first write succeeds', first.ok && first.action === 'write')
   check('files are mode 0600',
     (await import('node:fs')).statSync(SUPPLEMENT_CORPUS_FILE).mode % 0o1000 === 0o600
     && (await import('node:fs')).statSync(SUPPLEMENT_MANIFEST_FILE).mode % 0o1000 === 0o600)
   const loaded = read()
   check('written snapshot verifies', loaded.ok && loaded.byCode.size === 2)
-  const again = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText })
+  const again = writeSupplementSnapshot({ assetText: plan.assetText, manifestText: plan.manifestText, generation: 1 })
   check('same snapshot is idempotent', again.ok && again.action === 'noop')
 
   const changed = planSupplementSnapshot({
@@ -118,7 +120,7 @@ try {
     generatedAt: '2026-10-15T01:00:00.000Z',
     reason: 'changed',
   })
-  const conflict = writeSupplementSnapshot({ assetText: changed.assetText, manifestText: changed.manifestText })
+  const conflict = writeSupplementSnapshot({ assetText: changed.assetText, manifestText: changed.manifestText, generation: 1 })
   check('different snapshot never overwrites', !conflict.ok)
   const auditOnly = planSupplementSnapshot({
     canonRows: canon,
@@ -132,6 +134,18 @@ try {
   })
   check('approval digest ignores audit time and reason', auditOnly.planDigest === plan.planDigest)
   check('semantic evidence change changes approval digest', changed.planDigest !== plan.planDigest)
+  const bounded = (evidenceUntil: string | undefined, generatedAt: string) => planSupplementSnapshot({
+    canonRows: canon, extraRows: extra, baseCodes, newCodes, baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12), generatedAt, reason: 'bounded', ...(evidenceUntil === undefined ? {} : { evidenceUntil }),
+  })
+  const untilDay = bounded('2026-11-23T03:00:00.000Z', '2026-11-23T04:00:00.000Z')
+  const untilNight = bounded('2026-11-23T03:00:00.000Z', '2026-11-23T15:00:00.000Z')
+  check('same evidence upper bound keeps the approval digest across day and night runs',
+    untilDay.planDigest === untilNight.planDigest)
+  check('evidence upper bound is bound into the approval digest',
+    untilDay.planDigest !== plan.planDigest && untilDay.planDigest !== bounded('2026-11-23T05:00:00.000Z', '2026-11-23T04:00:00.000Z').planDigest)
+  check('no evidence upper bound keeps the old approval digest shape',
+    bounded(undefined, '2026-11-23T04:00:00.000Z').planDigest === plan.planDigest)
 
   check('wrong base source fails closed', !readSupplementSnapshot({
     baseSourceDigest: 'c'.repeat(16), baseAssignmentDigestFor: () => baseDigest,
@@ -213,12 +227,51 @@ try {
   const v2Loaded = read()
   check('active v2 snapshot verifies and covers frozen plus appended bundles',
     v2Loaded.ok && v2Loaded.byCode.size === 4)
+  const SUPPLEMENT_MANIFEST_FILE_V2 = supplementPaths(2).manifest
   const v2Manifest = readFileSync(SUPPLEMENT_MANIFEST_FILE_V2, 'utf8')
   rmSync(SUPPLEMENT_MANIFEST_FILE_V2)
   const partialV2 = read()
   check('partial v2 fails closed instead of silently falling back to v1',
     !partialV2.ok && partialV2.code === 'SUPPLEMENT_PARTIAL')
   writeFileSync(SUPPLEMENT_MANIFEST_FILE_V2, v2Manifest, { encoding: 'utf8', mode: 0o600 })
+
+  // ── 세대는 목록 하나가 정한다 · 다음 세대는 직전 세대를 동결 입력으로 받는다 ──
+  check('code knows generations 1..3 and the latest is 3',
+    SUPPLEMENT_GENERATIONS.join(',') === '1,2,3' && SUPPLEMENT_LATEST_GENERATION === 3)
+  check('previous generation is derived, the first has none',
+    previousSupplementGeneration(3) === 2 && previousSupplementGeneration(2) === 1 && previousSupplementGeneration(1) === null)
+  check('generation paths follow one naming rule',
+    SUPPLEMENT_GENERATIONS.every((g) => supplementPaths(g).corpus.endsWith(`supplement-v${g}.json`)
+      && supplementPaths(g).manifest.endsWith(`supplement-v${g}-manifest.json`)))
+  const v3 = planSupplementSnapshot({
+    canonRows: canon,
+    extraRows: rows('v3', 2),
+    baseCodes,
+    newCodes: ['P64', 'P100'],
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-23T00:00:00.000Z',
+    reason: 'append generation three',
+    frozenBundles: v2.asset.bundles,
+  })
+  check('v3 plan keeps every frozen v2 bundle and appends after them in numeric code order',
+    v3.ok && v3.asset.bundles.map((bundle) => bundle.personaCode).join(',') === 'P34,P35,P36,P37,P64,P100')
+  check('v3 plan preserves frozen v2 bundle bytes',
+    JSON.stringify(v3.asset.bundles.slice(0, 4)) === JSON.stringify(v2.asset.bundles))
+  const v3Write = writeSupplementSnapshot({ assetText: v3.assetText, manifestText: v3.manifestText, generation: 3 })
+  check('v3 write succeeds without touching v1 or v2', v3Write.ok && v3Write.action === 'write'
+    && readFileSync(SUPPLEMENT_MANIFEST_FILE_V2, 'utf8') === v2Manifest)
+  check('runtime selects complete v3 over v2', activeSupplementPaths().generation === 3)
+  const v3Loaded = read()
+  check('active v3 snapshot verifies and covers frozen plus appended bundles', v3Loaded.ok && v3Loaded.byCode.size === 6)
+  const v3Corpus = readFileSync(supplementPaths(3).corpus, 'utf8')
+  rmSync(supplementPaths(3).corpus)
+  const partialV3 = read()
+  check('partial v3 fails closed instead of silently falling back to v2',
+    !partialV3.ok && partialV3.code === 'SUPPLEMENT_PARTIAL' && activeSupplementPaths().generation === 3)
+  writeFileSync(supplementPaths(3).corpus, v3Corpus, { encoding: 'utf8', mode: 0o600 })
+  const explicitV2 = readSupplementSnapshot({ baseSourceDigest: sourceDigest, baseAssignmentDigestFor: () => baseDigest, generation: 2 })
+  check('an explicit generation read never falls back to another generation', explicitV2.ok && explicitV2.byCode.size === 4)
 
   const cli = readFileSync(join(process.cwd(), 'scripts/persona-reference-supplement-build.mts'), 'utf8')
   check('production apply reads canonical DB addresses',
@@ -228,6 +281,21 @@ try {
     && /process\.env\.DIRECT_URL = canonical\.directUrl/.test(cli))
   check('production apply rejects fixture and evidence directory overrides',
     /FIXTURE_ARG !== null/.test(cli) && /EVIDENCE_DIR_ARG !== null/.test(cli))
+  const code = cli.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  check('build tool writes the latest known generation and freezes the one before it — no generation literal',
+    /const WRITE_GENERATION = SUPPLEMENT_LATEST_GENERATION/.test(code)
+    && /previousSupplementGeneration\(WRITE_GENERATION\)/.test(code)
+    && /generation: FROZEN_GENERATION/.test(code)
+    && /generation: WRITE_GENERATION/.test(code)
+    && !/generation: \d/.test(code))
+  check('build tool default fixture comes from the runnable cohort registry, not a path literal',
+    /COHORT_EXPANSION_FIXTURES\[id\]/.test(code) && !/persona-expansion-d\d+\.json/.test(code))
+  check('production apply verifies the registered fixture digest and cohort scope',
+    /digest !== DEFAULT_FIXTURE\.sha256/.test(code) && /checkCohortKeys\(COHORTS\[DEFAULT_FIXTURE\.id\], newCodes\)/.test(code))
+  check('build tool reads evidence with the shared upper bound and binds it into the digest',
+    /parseEvidenceUntil\(arg\('evidence-until'\), NOW\)/.test(code)
+    && /until: EVIDENCE_UNTIL\.until/.test(code)
+    && /evidenceUntil: EVIDENCE_UNTIL\.iso/.test(code))
 } finally {
   rmSync(home, { recursive: true, force: true })
 }

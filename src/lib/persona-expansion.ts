@@ -405,7 +405,8 @@ function personalityOwners(subjects: readonly DiversitySubject[]): Map<string, s
 const decadeShares = (subjects: readonly DiversitySubject[]): Map<string, number> => {
   const m = new Map<string, number>()
   for (const s of subjects) {
-    const d = /^([4-6]0대)/.exec(s.ageBand)?.[1]
+    // 🔴 30대도 센다(2026-11-23) — 30대가 들어온 집단에서 50대가 여전히 가장 큰 십년대인지 본다
+    const d = /^(\d0대)/.exec(s.ageBand)?.[1]
     if (d !== undefined) m.set(d, (m.get(d) ?? 0) + 1)
   }
   return m
