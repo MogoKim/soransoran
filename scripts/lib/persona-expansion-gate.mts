@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { BRAND_BANNED_WORDS } from '../../src/lib/content-guard'
 import { CHILD_AGE_BANDS } from '../../src/lib/original-post-persona-match'
 import {
-  EXPANSION_AGE_BANDS, lifeProblems, voiceCoreFromBundle, type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
+  EXPANSION_AGE_BANDS, lifeProblems, voiceBandOfBundle, type AutogenCandidate, type Cadence, type LifeSkeleton, type PersonaCreative,
 } from '../../src/lib/persona-autogen'
 import { judgeCreativeQuality } from '../../src/lib/persona-creative'
 import {
@@ -29,7 +29,6 @@ import {
 import { verifyNamePolicy } from '../../src/lib/persona-nickname-candidates'
 import { nicknameSpace } from '../../src/lib/persona-nickname-space'
 import { COMMON_NO_GO_PHRASES } from '../../src/lib/persona-no-go'
-import { readLengthBand } from '../../src/lib/original-post-persona-match'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import { judgeAutogenBatch, type AutogenVerdict } from './persona-autogen.mjs'
@@ -335,8 +334,8 @@ export function judgeExpansionBatch(input: {
     existing: input.existingCards.filter((c) => prodSet.has(c.code)).map(diversitySubjectOfCard),
     batch: cands.map((c) => {
       const v = input.voiceByCode.get(c.code)
-      // 🔴 말투 근거가 없으면 문체 밴드도 없다 — 지어내지 않는다
-      const band = v === undefined ? null : readLengthBand(voiceCoreFromBundle(v.bundle).length)
+      // 🔴 말투 근거가 없으면 문체 밴드도 없다 — 지어내지 않는다 · 밴드 함수는 말투 배정의 상한과 같은 하나다
+      const band = v === undefined ? null : voiceBandOfBundle(v.bundle)
       return diversitySubjectOf(c.code, c.life, c.creative, band)
     }),
   })

@@ -429,6 +429,18 @@ export type DiversityVerdict = {
 }
 
 /**
+ * 🔴 **묶음 단일 품종 — 한 식** (2026-11-23). 한 값이 새 묶음의 `BATCH_SHARE_MAX` 를 넘는가(그 축을 잰 사람이 `BATCH_MIN_SIZE` 이상일 때만).
+ *    판정(`judgePopulationDiversity`)과 말투 배정(`planAppendOnlyBundles` 의 voiceBand 상한)이 이 함수 하나를 쓴다 —
+ *    배정이 다른 식으로 세면, 배정이 "지켰다" 고 낸 묶음을 판정이 막는다(wave8 보통 33/43).
+ */
+export function batchMonocultureProblem(t: { axis: DiversityAxis; value: string; count: number; total: number }):
+  { rule: 'BATCH_MONOCULTURE'; detail: string } | null {
+  return t.total >= BATCH_MIN_SIZE && t.count / t.total > BATCH_SHARE_MAX
+    ? { rule: 'BATCH_MONOCULTURE', detail: `묶음 ${t.axis}=${t.value} ${t.count}/${t.total} > ${BATCH_SHARE_MAX * 100}%` }
+    : null
+}
+
+/**
  * 🔴 **새 묶음이 집단을 기울이는가.** 기존 집단만으로 이미 넘은 한계는, 묶음이 그것을 더 키울 때만 막는다.
  */
 export function judgePopulationDiversity(input: {
@@ -457,10 +469,8 @@ export function judgePopulationDiversity(input: {
   const batchTop = topShares(input.batch)
   if (input.batch.length >= BATCH_MIN_SIZE) {
     for (const t of batchTop) {
-      if (t.total >= BATCH_MIN_SIZE && t.share > BATCH_SHARE_MAX) {
-        problems.push({ rule: 'BATCH_MONOCULTURE',
-          detail: `묶음 ${t.axis}=${t.value} ${t.count}/${t.total} > ${BATCH_SHARE_MAX * 100}%` })
-      }
+      const p = batchMonocultureProblem(t)
+      if (p !== null) problems.push(p)
     }
   }
 

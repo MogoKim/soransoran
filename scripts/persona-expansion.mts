@@ -189,6 +189,12 @@ if (supplementalStatus !== null) {
     + ` · 정본 중복 제외 ${voice.supplementalExcluded} · 원문/식별자 출력 0`)
   console.log(`  증거 상한   ${EVIDENCE_UNTIL.iso ?? '없음 — 지금까지 쌓인 근거 전부'}`
     + ` · 상한 뒤 제외 ${supplementalStatus.dropped.AFTER_EVIDENCE_UNTIL}행`)
+  // 🔴 배정이 판정과 같은 식으로 새 묶음 voiceBand 상한을 지킨 결과 — 코드 · 밴드 · 수만(원문 0)
+  const bandCap = voice.voiceBandCap
+  console.log(`  말투 밴드   새 묶음 상한 교체 ${bandCap.replaced.length}자리`
+    + `${bandCap.replaced.length === 0 ? '' : ` (${bandCap.replaced.map((r) => `${r.code} ${r.from}→${r.to}`).join(' · ')})`}`
+    + ` · 건너뛴 여분 문체 거리 ${bandCap.skipped.tooClose} · seed 공유 ${bandCap.skipped.seedShared}`
+    + (bandCap.problems.length === 0 ? '' : ` · 🔴 남은 넘침 ${bandCap.problems.map((p) => p.detail).join(' / ')}`))
 }
 console.log(`  이름 공간   후보 합집합 ${names.space} · canary 뒤 서로·기존과 Gate ⑥-B pass ${names.free}`
   + (names.bound === 'upper' ? ' (상한 — 회원·기존 Persona 이름 미대조, --db 로 정확히)' : ' (회원·기존 Persona 대조)'))

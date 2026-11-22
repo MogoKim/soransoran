@@ -50,6 +50,15 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 const speakerId = (prefix: string, n: number): string => createHash('sha256').update(`${prefix}${n}`).digest('hex').slice(0, 12)
 const rowsOf = (prefix: string, speakers: number) => Array.from({ length: speakers }, (_, s) =>
   Array.from({ length: 3 }, (_, i) => ({ speakerId: speakerId(prefix, s), text: `${prefix} 의견 ${s}-${i} 정말 그렇네요 반갑습니다` }))).flat()
+/**
+ * 🔴 보충 화자는 길이 밴드를 섞는다(짧게 · 보통 · 길게 차례) — 한 밴드가 묶음의 70% 를 넘는 합성 cohort 는
+ *    기록이 판정과 같은 코드(BATCH_MONOCULTURE)로 막는다(2026-11-23 · voiceBand 상한). 실제 wave6 · wave7 도 섞여 있었다.
+ */
+const mixedRowsOf = (prefix: string, speakers: number) => Array.from({ length: speakers }, (_, s) =>
+  Array.from({ length: 3 }, (_, i) => ({
+    speakerId: speakerId(prefix, s),
+    text: `${prefix} 의견 ${s}-${i} 정말 그렇네요 반갑습니다${' 정말 그렇네요'.repeat([0, 1, 7][s % 3]!)}`,
+  }))).flat()
 
 // 정본 화자 32: base30을 안정적으로 배정하고 2명의 여유를 둔 운영 모양.
 const canonRows = rowsOf('ca', 32)
@@ -90,7 +99,7 @@ check('스냅샷 없이는 base30만 서고 신규 30명은 막힌다',
 
 console.log('\n③ v1 스냅샷 — base30 그대로 · wave6 10명 활성')
 const planV1 = planSupplementSnapshot({
-  canonRows: canon.rows, extraRows: rowsOf('v1', V1_CODES.length), baseCodes: BASE_CODES, newCodes: V1_CODES,
+  canonRows: canon.rows, extraRows: mixedRowsOf('v1', V1_CODES.length), baseCodes: BASE_CODES, newCodes: V1_CODES,
   baseSourceDigest: sourceDigest, saltId: 'c'.repeat(12), generatedAt: '2026-10-15T00:00:00.000Z', reason: 'fixture v1',
 })
 check('v1 계획이 선다(base30 배정 변동 0)', planV1.ok, planV1.problems.join(' / '))
@@ -110,7 +119,7 @@ check('🔴 v1은 base30 + wave6 10명만 덮고 wave7은 막는다',
 
 console.log('\n④ v2 스냅샷 — v1 동결 · wave7 20명 추가 · production 60')
 const planV2 = planSupplementSnapshot({
-  canonRows: canon.rows, extraRows: rowsOf('v2', V2_CODES.length), baseCodes: BASE_CODES, newCodes: V2_CODES,
+  canonRows: canon.rows, extraRows: mixedRowsOf('v2', V2_CODES.length), baseCodes: BASE_CODES, newCodes: V2_CODES,
   frozenBundles: planV1.asset.bundles,
   baseSourceDigest: sourceDigest, saltId: 'd'.repeat(12), generatedAt: '2026-11-14T00:00:00.000Z', reason: 'fixture v2',
 })
@@ -147,7 +156,7 @@ const restoredV2 = stableAssignment({ repoRoot })
 check('v2 복구 뒤 배정이 ④ 와 같다', PRODUCTION_PERSONA_CODES.every((code) => JSON.stringify(restoredV2.byCode.get(code)) === JSON.stringify(saV2.byCode.get(code))))
 const v2Frozen = (saV2.supplementByCode.size > 0 ? [...saV2.supplementByCode.values()] : [])
 const planV3 = planSupplementSnapshot({
-  canonRows: canon.rows, extraRows: rowsOf('v3', V3_CODES.length), baseCodes: BASE_CODES, newCodes: V3_CODES,
+  canonRows: canon.rows, extraRows: mixedRowsOf('v3', V3_CODES.length), baseCodes: BASE_CODES, newCodes: V3_CODES,
   frozenBundles: v2Frozen,
   baseSourceDigest: sourceDigest, saltId: 'e'.repeat(12), generatedAt: '2026-11-23T00:00:00.000Z', reason: 'fixture v3',
 })

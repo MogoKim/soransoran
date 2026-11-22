@@ -105,11 +105,21 @@ const assetManifest = JSON.parse(readFileSync(asset.manifest, 'utf-8')) as { sou
 // 임시 HOME의 합성 행만 쓰고 운영 자산은 읽지 않는다.
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const canonRows = assetRows.map((row) => ({ speakerId: row.speakerId, text: row.content }))
-const extraRows = (prefix: string, codes: readonly string[]) => codes.flatMap((_, speakerIndex) => [
-  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 차분히 읽어 보니 마음이 놓이네요 (${prefix})` },
-  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 무리하지 말고 천천히 쉬어 가세요 (${prefix})` },
-  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 서두르지 않아도 괜찮으니 편하게 나눠요 (${prefix})` },
-])
+// 🔴 보충 화자는 길이 밴드를 섞는다(보통 · 짧게 · 길게 차례) — 한 밴드가 묶음의 70% 를 넘는 합성 cohort 는
+//    기록이 판정과 같은 코드(BATCH_MONOCULTURE)로 막는다(2026-11-23 · voiceBand 상한). 실제 wave6 · wave7 도 섞여 있었다.
+const SAYINGS = [
+  ['차분히 읽어 보니 마음이 놓이네요', '마음이 놓이네요'],
+  ['무리하지 말고 천천히 쉬어 가세요', '천천히 쉬어 가세요'],
+  ['서두르지 않아도 괜찮으니 편하게 나눠요', '편하게 나눠요'],
+] as const
+const extraRows = (prefix: string, codes: readonly string[]) => codes.flatMap((_, speakerIndex) => SAYINGS.map(([body, short]) => ({
+  speakerId: `${prefix}-extra-${speakerIndex}`,
+  text: [
+    `${speakerIndex + 1}번째 말벗처럼 ${body} (${prefix})`,
+    `${speakerIndex + 1}번째 ${short} (${prefix})`,
+    `${speakerIndex + 1}번째 말벗처럼 ${body} ${'정말 그렇네요 '.repeat(5).trim()} (${prefix})`,
+  ][speakerIndex % 3]!,
+})))
 const supplementV1 = planSupplementSnapshot({
   canonRows,
   extraRows: extraRows('v1', V1_CODES),

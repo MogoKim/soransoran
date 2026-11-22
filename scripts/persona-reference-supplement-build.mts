@@ -208,6 +208,11 @@ console.log(`evidence-until ${EVIDENCE_UNTIL.iso ?? '없음 — 지금까지 쌓
 console.log(`evidence files ${evidence.status.files} / usable ${evidence.status.usableRows} / after-until ${evidence.status.dropped.AFTER_EVIDENCE_UNTIL}`)
 console.log(`speakers ${evidence.status.speakers} / eligible ${evidence.status.eligible} / near-miss ${evidence.status.nearMiss}`)
 console.log(`bundles canon ${plan.fromCanon.length} / supplemental ${plan.fromExtra.length}`)
+const bandCap = plan.voiceBandCap
+console.log(`voice-band cap replaced ${bandCap.replaced.length}`
+  + `${bandCap.replaced.length === 0 ? '' : ` (${bandCap.replaced.map((r) => `${r.code} ${r.from}→${r.to}`).join(' · ')})`}`
+  + ` / skipped too-close ${bandCap.skipped.tooClose} · seed-shared ${bandCap.skipped.seedShared}`
+  + ` / baseline ${bandCap.baseline === null ? '-' : bandCap.baseline.toFixed(3)}`)
 console.log(`digest ${plan.planDigest}`)
 for (const problem of plan.problems) console.log(`BLOCK ${problem}`)
 

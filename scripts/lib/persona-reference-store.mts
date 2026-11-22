@@ -23,8 +23,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   judgeReferenceBundle, judgeVoiceEvidence, looksLikePostBody,
   REFERENCE_MAX_CHARS, REFERENCE_MIN_CHARS, REFERENCE_MIN_COUNT, REFERENCE_MIN_SAFE_TEXTS,
+  voiceSeparationBaseline, voiceTooClose,
   type VoiceReferenceBundle,
 } from '../../src/lib/persona-voice-reference'
+import { voiceBandOfBundle } from '../../src/lib/persona-autogen'
+import { batchMonocultureProblem } from '../../src/lib/persona-expansion'
+import type { LengthBand } from '../../src/lib/original-post-persona-match'
 import { FORM_POOL_MAX_CHARS, FORM_POOL_MIN_CHARS } from '../../src/lib/persona-comment-form'
 import {
   judgeAssetReadiness, judgeAssetShape,
@@ -434,6 +438,7 @@ export function speakerSupply(rows: readonly LocalComment[]): { speakers: number
  *         같은 사람 · 같은 원천일 수 있어 뺀다(같은 말투를 이름만 바꿔 복제하지 않는다)
  *
  *    🔴 보충 화자가 아무리 많아도 ①은 정본 행만 본다 — 운영 Persona 의 묶음은 보충 코퍼스와 무관하다.
+ *    ③′ ③ 의 자리 중 새 묶음 voiceBand 상한을 넘는 자리만 다음 순위 여분으로 바꾼다(`capNewVoiceBands` — 판정과 같은 식)
  */
 export function planAppendOnlyBundles(input: {
   canonRows: readonly LocalComment[]
@@ -451,6 +456,7 @@ export function planAppendOnlyBundles(input: {
   extraEligibleSpeakers: number
   excludedExtraSpeakers: number
   productionDrift: string[]
+  voiceBandCap: VoiceBandCap
 } {
   const digest = (b: VoiceReferenceBundle | undefined): string =>
     b === undefined ? '∅' : sha16(JSON.stringify(b.comments.map((c) => c.text)))
@@ -474,24 +480,151 @@ export function planAppendOnlyBundles(input: {
     .map((r) => r.speakerId))
   const extra = input.extraRows.filter((r) => !tainted.has(r.speakerId))
   const extraSupply = speakerSupply(extra)
-  const extraAssignable = planBundles({
+  // 🔴 보충 화자 순위(안전 원문 많은 순 · 동수 화자 id 순) — 공급 수를 세고, voiceBand 상한의 여분도 이 순서로 고른다
+  const extraRanked = planBundles({
     rows: extra,
     personaCodes: Array.from({ length: 999 }, (_, index) => `VE${String(index + 1).padStart(3, '0')}`),
     target: input.target,
-  }).bundles.length
+  }).bundles
   const remaining = input.newCodes.filter((c) => !byCode.has(c))
   const fromExtra: string[] = []
   if (remaining.length > 0 && extra.length > 0) {
     const plan = planBundles({ rows: extra, personaCodes: remaining, target: input.target })
     for (const b of plan.bundles) { byCode.set(b.personaCode, b); fromExtra.push(b.personaCode) }
   }
+  // ── ③′ 새 묶음 voiceBand 상한 — 판정이 막는 것을 고르는 단계에서 같은 식으로 피한다 ──
+  const voiceBandCap = capNewVoiceBands({
+    byCode, fromCanon, fromExtra, ranked: extraRanked, digest,
+    // 🔴 운영 묶음 = 판정의 문체 거리 기준과 같은 집합 — 이미 동결·배정된 묶음이 이기고, 없으면 정본 배정(①)
+    operating: () => {
+      const occupiedBy = new Map((input.occupiedBundles ?? []).map((bundle) => [bundle.personaCode, bundle]))
+      return [...new Set(input.productionCodes)].flatMap((code) => {
+        const bundle = occupiedBy.get(code) ?? baseBy.get(code)
+        return bundle === undefined ? [] : [bundle]
+      })
+    },
+  })
   return {
     byCode, fromCanon, fromExtra,
     extraSpeakers: extraSupply.speakers,
-    extraEligibleSpeakers: extraAssignable,
+    extraEligibleSpeakers: extraRanked.length,
     excludedExtraSpeakers: tainted.size,
     productionDrift,
+    voiceBandCap,
   }
+}
+
+/** 🔴 새 묶음 voiceBand 상한의 결과 — 코드 · 밴드 · 수만 담는다(원문 · 화자 id 0) */
+export type VoiceBandCap = {
+  /** 상한을 넘어 바꾼 자리 — 코드순 */
+  replaced: { code: string; from: LengthBand; to: LengthBand }[]
+  /** 판정과 같은 식에 걸려 건너뛴 여분 화자 수 — 문체 거리(VOICE_TOO_CLOSE) · seed 공유(VOICE_SPEAKER_DUPLICATE) */
+  skipped: { tooClose: number; seedShared: number }
+  /**
+   * 문체 거리 기준(운영 묶음 최소 분리). 바꿀 자리가 없으면 재지 않는다(null).
+   * 운영 묶음이 2개 미만이어도 null — 그때는 통과를 보일 수 없어 바꾸지 않는다(판정도 VOICE_SEPARATION_UNMEASURED)
+   */
+  baseline: number | null
+  /** 🔴 바꿀 화자가 모자라 남은 넘침 — 판정(`judgePopulationDiversity`)과 같은 식 · 같은 코드(BATCH_MONOCULTURE) */
+  problems: { rule: 'BATCH_MONOCULTURE'; detail: string }[]
+}
+
+/**
+ * 🔴 **새 묶음 voiceBand 상한 — 판정이 막는 것을 고르는 단계에서 같은 식으로 피한다** (2026-11-23 · wave8 막힘).
+ *
+ *    ③ 은 "안전 원문 많은 순 상위 N명" 만 본다. 상위 화자가 한 길이 밴드에 몰리면(wave8 실측 보통 33/43)
+ *    판정(`judgePopulationDiversity` BATCH_MONOCULTURE)이 묶음을 막는다. 고르는 쪽이 판정의 정의를 그대로 쓴다 —
+ *      밴드      `voiceBandOfBundle`                          판정(`persona-expansion-gate`)이 새 후보 밴드를 재는 함수
+ *      상한      `batchMonocultureProblem`                    판정이 묶음 단일 품종을 막는 식(BATCH_SHARE_MAX · BATCH_MIN_SIZE)
+ *      문체 거리 `voiceSeparationBaseline` · `voiceTooClose`  판정(`judgeAutogenBatch` ③ VOICE_TOO_CLOSE)의 기준 · 식
+ *      seed 공유 `referenceSeedShareCount`                    판정(VOICE_SPEAKER_DUPLICATE)이 세는 식
+ *    🔴 문턱을 바꾸거나 새 규칙을 더하지 않는다. 상한만 지키고 하한 쿼터는 없다.
+ *
+ *    ① 정본에서 받은 자리는 먼저 세고 바꾸지 않는다. 보충 자리는 코드순으로 세다가 상한을 넘는 자리만 고른다.
+ *    ② 그 자리만 **다음 순위 여분 중 상한 안 밴드이고 판정과 같은 식을 통과하는 첫 화자**로 바꾼다(순위순 · 결정적).
+ *    ③ 바꿀 화자가 없으면 원래 묶음을 둔다(빈 자리를 만들지 않는다) — 남은 넘침은 판정과 같은 코드로 돌려주고,
+ *       기록(`planSupplementSnapshot`)이 그 코드로 막는다. 조용히 넘어가지 않는다.
+ *    🔴 운영 코드 · 동결 묶음 · 정본에서 받은 새 코드는 건드리지 않는다 — 바꾸는 것은 이번 세대 보충 자리뿐이다.
+ */
+function capNewVoiceBands(input: {
+  byCode: Map<string, VoiceReferenceBundle>
+  fromCanon: readonly string[]
+  fromExtra: readonly string[]
+  /** 보충 화자 순위순 묶음 — 여분은 여기서 이미 앉은 화자를 뺀 것이다 */
+  ranked: readonly VoiceReferenceBundle[]
+  digest: (b: VoiceReferenceBundle | undefined) => string
+  /** 운영 묶음 — 바꿀 자리가 있을 때만 잰다 */
+  operating: () => VoiceReferenceBundle[]
+}): VoiceBandCap {
+  const bandAt = (code: string): LengthBand | null => {
+    const bundle = input.byCode.get(code)
+    return bundle === undefined ? null : voiceBandOfBundle(bundle)
+  }
+  const extraSeats = sortPersonaCodes(input.fromExtra)
+  const seats = [...input.fromCanon, ...extraSeats]
+  // 🔴 분모는 판정과 같다 — 밴드를 잴 수 있는 새 자리 수(말투 근거가 없는 자리는 판정도 그 축에서 뺀다)
+  const total = seats.filter((code) => bandAt(code) !== null).length
+  const count = new Map<LengthBand, number>()
+  const take = (band: LengthBand): void => { count.set(band, (count.get(band) ?? 0) + 1) }
+  const roomFor = (band: LengthBand): boolean =>
+    batchMonocultureProblem({ axis: 'voiceBand', value: band, count: (count.get(band) ?? 0) + 1, total }) === null
+
+  // ① 넘는 자리 — 정본 자리는 먼저 센다(바꾸지 않는다) · 보충 자리는 코드순이라 앞 자리가 남는다
+  for (const code of input.fromCanon) { const band = bandAt(code); if (band !== null) take(band) }
+  const over: string[] = []
+  for (const code of extraSeats) {
+    const band = bandAt(code)
+    if (band === null) continue
+    if (roomFor(band)) take(band)
+    else over.push(code)
+  }
+
+  // ② 넘는 자리만 — 다음 순위 여분 중 상한 안 밴드이고 판정과 같은 식을 통과하는 첫 화자
+  const replaced: VoiceBandCap['replaced'] = []
+  const skipped = { tooClose: 0, seedShared: 0 }
+  let baseline: number | null = null
+  if (over.length > 0) {
+    const operating = input.operating()
+    baseline = voiceSeparationBaseline(operating)
+    const overSet = new Set(over)
+    // 🔴 남는 자리 전부를 상대로 본다(앞 자리만이 아니다) — 판정은 뒤 코드를 앞 코드와 견주므로,
+    //    교체 화자가 뒤 자리와 가까우면 그 뒤 자리가 VOICE_TOO_CLOSE 로 격리된다
+    const kept = seats.filter((code) => !overSet.has(code)).map((code) => ({ ...input.byCode.get(code)!, personaCode: code }))
+    const seated = new Set([...input.byCode.values()].map(input.digest))
+    const spares = input.ranked.filter((bundle) => !seated.has(input.digest(bundle)))
+    const chosen: VoiceReferenceBundle[] = []
+    for (const code of over) {
+      const from = bandAt(code)!
+      let placed: VoiceReferenceBundle | null = null
+      for (let j = 0; baseline !== null && j < spares.length;) {
+        const to = voiceBandOfBundle(spares[j]!)
+        if (to === null || !roomFor(to)) { j += 1; continue }
+        const mine = { ...spares[j]!, personaCode: code }
+        const others = [...operating, ...kept, ...chosen]
+        // 🔴 상대는 늘기만 한다 — 여기서 걸린 여분은 뒤 자리에서도 걸린다(다시 세지 않게 뺀다)
+        if (voiceTooClose(mine, others, baseline) !== null) { spares.splice(j, 1); skipped.tooClose += 1; continue }
+        const share = referenceSeedShareCount(new Map([...others.map((b) => [b.personaCode, b] as const), [code, mine] as const]), code)
+        if (share === null || share > 1) { spares.splice(j, 1); skipped.seedShared += 1; continue }
+        spares.splice(j, 1)
+        placed = mine
+        break
+      }
+      // 🔴 바꿀 화자가 없다 — 원래 묶음을 둔다(빈 자리를 만들지 않는다). 남은 넘침은 ③ 이 판정과 같은 코드로 돌려준다
+      if (placed === null) { take(from); continue }
+      input.byCode.set(code, placed)
+      chosen.push(placed)
+      const to = voiceBandOfBundle(placed)!
+      take(to)
+      replaced.push({ code, from, to })
+    }
+  }
+
+  // ③ 남은 넘침 — 판정과 같은 식 · 같은 코드
+  const problems = [...count.entries()].flatMap(([value, n]) => {
+    const p = batchMonocultureProblem({ axis: 'voiceBand', value, count: n, total })
+    return p === null ? [] : [p]
+  })
+  return { replaced, skipped, baseline, problems }
 }
 
 /**

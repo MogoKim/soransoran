@@ -5,7 +5,7 @@ import {
 } from '../../src/lib/persona-reference-supplement'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import {
-  planAppendOnlyBundles, planBundles, type LocalComment,
+  planAppendOnlyBundles, planBundles, type LocalComment, type VoiceBandCap,
 } from './persona-reference-store.mjs'
 import {
   assignmentDigest, serializeSupplementAsset, serializeSupplementManifest, sha256,
@@ -38,6 +38,8 @@ export function planSupplementSnapshot(input: {
   planDigest: string
   fromCanon: string[]
   fromExtra: string[]
+  /** 새 묶음 voiceBand 상한 — 바꾼 자리 · 건너뛴 여분 · 남은 넘침(남으면 위 problems 에도 있다) */
+  voiceBandCap: VoiceBandCap
 } {
   const baseCodes = sortPersonaCodes(new Set(input.baseCodes))
   const newCodes = sortPersonaCodes(new Set(input.newCodes))
@@ -60,6 +62,8 @@ export function planSupplementSnapshot(input: {
   if (plan.productionDrift.length > 0) problems.push(`BASE_DRIFT:${plan.productionDrift.join(',')}`)
   const missing = newCodes.filter((code) => !plan.byCode.has(code))
   if (missing.length > 0) problems.push(`BUNDLE_MISSING:${missing.join(',')}`)
+  // 🔴 새 묶음 voiceBand 가 상한을 넘는 채로 남으면(바꿀 여분이 모자람) 동결하지 않는다 — 판정과 같은 식 · 같은 코드
+  for (const p of plan.voiceBandCap.problems) problems.push(`${p.rule}:${p.detail}`)
   const plannedBundles = newCodes.flatMap((code) => {
     const bundle = plan.byCode.get(code)
     return bundle === undefined ? [] : [{ ...bundle, personaCode: code }]
@@ -129,5 +133,6 @@ export function planSupplementSnapshot(input: {
     })),
     fromCanon: plan.fromCanon,
     fromExtra: plan.fromExtra,
+    voiceBandCap: plan.voiceBandCap,
   }
 }

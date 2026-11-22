@@ -18,7 +18,7 @@
  *    여기 있는 것은 골격 생성 · 말투 관찰값 · 카드 렌더러 · seed 조립뿐이다.
  */
 import { PERSONA_CODE_MAX, personaCodeNumber as personaCodeNumberOf, personaCodeOf } from './persona-code'
-import { CHILD_AGE_BANDS, type ChildAgeBand } from './original-post-persona-match'
+import { CHILD_AGE_BANDS, readLengthBand, type ChildAgeBand, type LengthBand } from './original-post-persona-match'
 import { ANCHOR_BASE_DATE, checkLifeConsistency, exactAgeOn, bandOfAge } from './persona-birth-anchor'
 import { coverageOf, gainOf, THIN_THRESHOLD, type AxisSubject } from './persona-axis-coverage'
 import { MARITAL_VALUES } from './persona-card-verify'
@@ -475,6 +475,14 @@ export function voiceCoreFromBundle(b: VoiceReferenceBundle): SeedVoiceCore {
     register: polite ? '존댓말' : '구어체',
     emoji: c.jamo + c.deco > 0.3 ? '가끔' : '없음',
   }
+}
+
+/**
+ * 🔴 **새 후보의 문체 밴드 — 배정된 묶음에서 잰다** (2026-11-23). 집단 다양성 판정(`persona-expansion-gate`)과
+ *    말투 배정의 voiceBand 상한(`planAppendOnlyBundles`)이 이 함수 하나를 쓴다. 카드에 적힌 글자가 아니라 묶음이 정한다.
+ */
+export function voiceBandOfBundle(b: VoiceReferenceBundle): LengthBand | null {
+  return readLengthBand(voiceCoreFromBundle(b).length)
 }
 
 /**
