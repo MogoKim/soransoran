@@ -97,14 +97,14 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
 {
   const doc = readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')
   const { cards, problems } = parsePoolDoc(doc)
-  check('🔴 현재 정본 카드 61장을 전부 읽는다', cards.length === 61)
+  check('🔴 현재 정본 카드 104장을 전부 읽는다', cards.length === 104)
   check('🔴 파싱 문제 0건', problems.length === 0)
   // 🔴 P31 · P33 은 VOICE_TOO_CLOSE 로 카드가 없다(2026-10-08 wave5)
-  check('코드가 P01~P30 · P32 · P34~P63 이다',
+  check('코드가 P01~P30 · P32 · P34~P106 이다',
     cards.map((c) => c.code).join(',') === [
       ...Array.from({ length: 30 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`),
       'P32',
-      ...Array.from({ length: 30 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
+      ...Array.from({ length: 73 }, (_, i) => `P${String(i + 34).padStart(2, '0')}`),
     ].join(','))
   check('🔴 카드마다 제목이 있다', cards.every((c) => c.title.trim() !== ''))
   check('🔴 카드마다 성격이 있다', cards.every((c) => c.personality.length >= 3))
@@ -113,8 +113,8 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
     cards.every((c) => (c.childrenCount > 0) === (c.childrenAgeBands.length > 0)))
   check('variation 이 전부 5~8개다', cards.every((c) => c.variationCount >= 5 && c.variationCount <= 8))
   // 🔴 마지막 카드가 뒤 절을 먹지 않는다 — 코드펜스로 자르지 않으면 여기서 걸린다
-  check('🔴 마지막 카드(P63)가 뒤 절을 먹지 않는다',
-    cards.at(-1)?.code === 'P63' && cards.at(-1)?.variationCount === 5)
+  check('🔴 마지막 카드(P106)가 뒤 절을 먹지 않는다',
+    cards.at(-1)?.code === 'P106' && cards.at(-1)?.variationCount === 5)
   check('혼인 상태를 전부 읽었다', cards.every((c) => c.maritalStatus !== ''))
   // 🔴 얇은 축이 실재함을 문서로 확인한다 — 중고등 자녀는 소수다
   // 🔴 측정 기록 — wave4 시점(P01~P25) 에 얇은 축이 실재했다. wave5(2026-10-08) 가 더해져 두터워진 것은 기록을 바꾸지 않는다
@@ -373,7 +373,8 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
   const lengthLine = doc.split('\n').find((l) => l.startsWith('문장 길이')) ?? ''
   const groups = new Map<string, string[]>()
   for (const seg of lengthLine.replace(/^문장 길이\s*/, '').split('·')) {
-    const m = /^\s*(\S+)\s+((?:P\d{2}\s*)+)$/.exec(seg.trim())
+    // 🔴 세 자리 코드(P100~)까지 읽는다 — 두 자리만 받으면 P100 이 든 밴드가 통째로 사라진다
+    const m = /^\s*(\S+)\s+((?:P\d{2,3}\s*)+)$/.exec(seg.trim())
     if (m !== null) groups.set(m[1]!, m[2]!.trim().split(/\s+/))
   }
   check('🔴 §7-1 문장 길이 줄을 읽는다 — 짧음·중간·긴 세 묶음', groups.size === 3)
@@ -385,7 +386,7 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
    *    그중 셋은 단순 누락이고 하나(P09)만 근거가 없는 것이었다.
    */
   const unknownLine = doc.split('\n').find((l) => l.startsWith('길이 미상')) ?? ''
-  const unknownCodes = (unknownLine.match(/P\d{2}/g) ?? [])
+  const unknownCodes = (unknownLine.match(/P\d{2,3}/g) ?? [])
   check('🔴 §7-1 에 명시적 `길이 미상` 줄이 있다', unknownCodes.length > 0)
 
   /** §7-1 밴드 이름 → 매칭 밴드 */

@@ -379,6 +379,26 @@ export function judgeVoiceSeparation(bundles: readonly VoiceReferenceBundle[]): 
 }
 
 /**
+ * 🔴 **VOICE_TOO_CLOSE 의 기준 — 운영 묶음끼리 가장 가까운 거리** (2026-11-23 · `judgeAutogenBatch` ③ 에서 옮김).
+ *    운영 Persona 들이 서로 떨어진 것보다 더 가까우면 "이미 있는 누구와 같은 말투" 다. 새 임계값을 만들지 않는다.
+ *    운영 묶음이 2개 미만이면 기준을 잴 수 없다 — `null`(모른다).
+ *    후보 판정(`judgeAutogenBatch`)과 말투 배정의 voiceBand 교체(`planAppendOnlyBundles`)가 이 둘을 같이 쓴다.
+ */
+export function voiceSeparationBaseline(production: readonly VoiceReferenceBundle[]): number | null {
+  return production.length >= 2 ? judgeVoiceSeparation(production).minDistance : null
+}
+
+/** 🔴 **VOICE_TOO_CLOSE 의 식** — `mine` 이 `others` 중 가장 가까운 묶음과 기준보다 가까우면 그 상대 · 거리, 아니면 null */
+export function voiceTooClose(
+  mine: VoiceReferenceBundle,
+  others: readonly VoiceReferenceBundle[],
+  baseline: number,
+): { nearest: string; distance: number } | null {
+  const near = judgeVoiceSeparation([mine, ...others]).perBundle.find((p) => p.personaCode === mine.personaCode)
+  return near !== undefined && near.distance < baseline ? { nearest: near.nearest, distance: near.distance } : null
+}
+
+/**
  * 🔴 **참고 댓글의 사실을 Persona 경험으로 가져오지 못하게 한다** (P0-5).
  *
  *    reference 는 **어휘·호흡·길이·질문 방식**의 근거다. 겪은 일의 근거가 아니다.

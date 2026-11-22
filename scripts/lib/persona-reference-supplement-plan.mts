@@ -5,7 +5,7 @@ import {
 } from '../../src/lib/persona-reference-supplement'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import {
-  planAppendOnlyBundles, planBundles, type LocalComment,
+  planAppendOnlyBundles, planBundles, type LocalComment, type VoiceBandCap,
 } from './persona-reference-store.mjs'
 import {
   assignmentDigest, serializeSupplementAsset, serializeSupplementManifest, sha256,
@@ -20,8 +20,14 @@ export function planSupplementSnapshot(input: {
   saltId: string
   generatedAt: string
   reason: string
-  /** 이미 운영에서 동결된 append-only 묶음. 새 계획보다 항상 우선하고 v2에 바이트 의미 그대로 포함한다. */
+  /** 이미 운영에서 동결된 append-only 묶음. 새 계획보다 항상 우선하고 다음 세대에 바이트 의미 그대로 포함한다. */
   frozenBundles?: readonly VoiceReferenceBundle[]
+  /**
+   * 🔴 증거 시각 상한(ISO) — 이 시각까지 수집된 근거만 계획에 들어왔다는 표시. 주면 승인 digest 에 들어간다:
+   *    낮에 같은 상한으로 렌더한 카드 말투와 밤 apply 묶음이 같다는 것을 digest 하나로 확인한다.
+   *    다른 상한으로 다시 계획하면 묶음이 우연히 같아도 digest 가 달라져 apply 가 멈춘다.
+   */
+  evidenceUntil?: string
 }): {
   ok: boolean
   problems: string[]
@@ -32,6 +38,8 @@ export function planSupplementSnapshot(input: {
   planDigest: string
   fromCanon: string[]
   fromExtra: string[]
+  /** 새 묶음 voiceBand 상한 — 바꾼 자리 · 건너뛴 여분 · 남은 넘침(남으면 위 problems 에도 있다) */
+  voiceBandCap: VoiceBandCap
 } {
   const baseCodes = sortPersonaCodes(new Set(input.baseCodes))
   const newCodes = sortPersonaCodes(new Set(input.newCodes))
@@ -54,6 +62,8 @@ export function planSupplementSnapshot(input: {
   if (plan.productionDrift.length > 0) problems.push(`BASE_DRIFT:${plan.productionDrift.join(',')}`)
   const missing = newCodes.filter((code) => !plan.byCode.has(code))
   if (missing.length > 0) problems.push(`BUNDLE_MISSING:${missing.join(',')}`)
+  // 🔴 새 묶음 voiceBand 가 상한을 넘는 채로 남으면(바꿀 여분이 모자람) 동결하지 않는다 — 판정과 같은 식 · 같은 코드
+  for (const p of plan.voiceBandCap.problems) problems.push(`${p.rule}:${p.detail}`)
   const plannedBundles = newCodes.flatMap((code) => {
     const bundle = plan.byCode.get(code)
     return bundle === undefined ? [] : [{ ...bundle, personaCode: code }]
@@ -104,8 +114,10 @@ export function planSupplementSnapshot(input: {
     assetText,
     manifestText,
     // Approval digest excludes audit-only time/reason so dry-run and apply can
-    // agree while preserving the exact semantic assignment.
+    // agree while preserving the exact semantic assignment. The evidence upper
+    // bound is semantic input, so it is bound when present.
     planDigest: sha256(JSON.stringify({
+      ...(input.evidenceUntil === undefined ? {} : { evidenceUntil: input.evidenceUntil }),
       asset: {
         version: asset.version,
         baseSourceDigest: asset.baseSourceDigest,
@@ -121,5 +133,6 @@ export function planSupplementSnapshot(input: {
     })),
     fromCanon: plan.fromCanon,
     fromExtra: plan.fromExtra,
+    voiceBandCap: plan.voiceBandCap,
   }
 }
