@@ -258,12 +258,17 @@ console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 실제 catch-u
     shortDay.length === 4
     && shortDay.slice(0, 3).map((d) => d.toISOString()).join(',') === ['21:20', '21:30', '21:40']
       .map((hm) => at(hm).toISOString()).join(','), `${shortDay.map((d) => d.toISOString()).join(',')}`)
-  const nearClose = upcomingSlots({ now: at('21:55'), publishedToday: 3, release: PROFILES.d5 })
-  check('🔴 운영 창 직전 3/5 — 22:00 한 건만 회수하고 나머지는 다음 날로 넘긴다',
-    nearClose.length === 2 && nearClose[0]!.toISOString() === at('22:00').toISOString()
+  // 🔴 (2026-11-23) 운영 창은 하루 전체 — 22:00 뒤에도 catch-up 이 23:50 틱까지 이어진다
+  const evening = upcomingSlots({ now: at('21:55'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 22시 직전 3/5 — 창이 이어지므로 22:00 · 22:10 두 건을 회수 기회로 센다 + 다음 첫 기회',
+    evening.length === 3 && evening.slice(0, 2).map((d) => d.toISOString()).join(',') === ['22:00', '22:10'].map((hm) => at(hm).toISOString()).join(',')
+    && evening[2]!.toISOString() === tomorrowFirst(PROFILES.d5), `${evening.map((d) => d.toISOString()).join(',')}`)
+  const nearClose = upcomingSlots({ now: at('23:45'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 운영 창 직전 3/5 — 마지막 틱(23:50) 한 건만 회수하고 나머지는 다음 날로 넘긴다',
+    nearClose.length === 2 && nearClose[0]!.toISOString() === at('23:50').toISOString()
     && nearClose[1]!.toISOString() === tomorrowFirst(PROFILES.d5), `${nearClose.length}`)
-  const afterClose = upcomingSlots({ now: at('22:15'), publishedToday: 3, release: PROFILES.d5 })
-  check('🔴 운영 창 뒤 부족분은 되살리지 않는다 — 다음 첫 기회만',
+  const afterClose = upcomingSlots({ now: at('23:55'), publishedToday: 3, release: PROFILES.d5 })
+  check('🔴 운영 창 뒤(23:55) 부족분은 되살리지 않는다 — 다음 첫 기회만',
     afterClose.length === 1 && afterClose[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${afterClose.length}`)
   // 반례⑥ 열린 d10 증명일 — 그날 남은 d10 슬롯이 든다
   const proof = upcomingSlots({ now: at('12:00'), publishedToday: 3, release: PROFILES.d10 })

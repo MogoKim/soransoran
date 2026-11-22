@@ -589,14 +589,15 @@ export type OptionalJobVerdict = {
 }
 
 /**
- * 🔴 **설치본 원문(템플릿 바이트) 불일치를 유예할 수 있는 label — ops-loop-install 이 소유한 것뿐이다** (2026-10-29 · 2026-11-11 observer · 2026-11-22 댓글 러너 추가).
+ * 🔴 **설치본 원문(템플릿 바이트) 불일치를 유예할 수 있는 label — ops-loop-install 이 소유한 것뿐이다** (2026-10-29 · 2026-11-11 observer · 2026-11-22 댓글 러너 · 2026-11-23 감사 러너 추가).
  *
  *    runtime:deploy 는 잠시 멈춘 이 job 들을 **옛 설치본 그대로** 되올린다(render·write 하지 않는다 — 소유자가 아니다).
  *    그 직후의 strict 격리 검사는 옛 원문 ≠ 새 템플릿으로 막혀, 정작 새 원문을 설치할 ops-loop-install 까지
  *    가지 못했다. 그래서 runtime:deploy 의 마지막 격리 검사만 `--defer-ops-loop-templates` 로 **원문 불일치 하나**를
  *    유예하고, ops-loop-install 이 설치 뒤 strict 로 다시 잰다.
  *    🔴 경로 · 설치/loaded · loaded 인자/WD · HEAD=pin · 추적 스크립트 · unknown/unloaded · render 실패는 유예하지 않는다.
- *    🔴 label 문자열은 `scripts/lib/ops-loop-templates.ts` · `persona-comment-runner-template.ts` 정본과 같아야 한다 — 격리 검사 fixture 가 대조한다.
+ *    🔴 label 문자열은 `scripts/lib/ops-loop-templates.ts` · `persona-comment-runner-template.ts` · `auto-ready-audit-template.ts`
+ *       정본과 같아야 한다 — 격리 검사 fixture 가 대조한다.
  */
 export const OPS_LOOP_TEMPLATE_DEFER_LABELS: readonly string[] = [
   'com.soransoran.runner-recover',
@@ -605,6 +606,8 @@ export const OPS_LOOP_TEMPLATE_DEFER_LABELS: readonly string[] = [
   'com.soransoran.ops-shadow-observer',
   // 2026-11-22 — 댓글 러너도 설치돼 있으면 ops-loop 설치기가 새 원문으로 교체한다(첫 설치는 persona:comment-loop-install)
   'com.soransoran.persona-comment-runner',
+  // 2026-11-23 — 감사 러너(24시간 예약표)도 설치돼 있으면 ops-loop 설치기가 새 원문으로 교체한다(첫 설치는 감사 러너 설치 절차)
+  'com.soransoran.auto-ready-audit',
 ]
 
 /**

@@ -32,11 +32,14 @@ const MUTATIONS: Mutation[] = [
   // 시각 — 수집 뒤 · 다음 수집 전 · 창이 겹치지 않는다
   M('공급이 수집과 같은 분에 뜬다', CYCLE, 'export const SUPPLY_AFTER_COLLECT_MINUTES = 15', 'export const SUPPLY_AFTER_COLLECT_MINUTES = 0'),
   M('공급 지연이 다음 바퀴를 넘긴다', CYCLE, 'export const SUPPLY_AFTER_COLLECT_MINUTES = 15', 'export const SUPPLY_AFTER_COLLECT_MINUTES = 65'),
-  M('공급 지연이 커서 창이 겹치고 아침 결정을 넘긴다', CYCLE, 'export const SUPPLY_AFTER_COLLECT_MINUTES = 15', 'export const SUPPLY_AFTER_COLLECT_MINUTES = 40'),
+  M('공급 지연이 커서 첫 공급 회차의 유료 창 뒤에 미룰 결정 예약이 남지 않는다', CYCLE, 'export const SUPPLY_AFTER_COLLECT_MINUTES = 15', 'export const SUPPLY_AFTER_COLLECT_MINUTES = 50'),
   M('새벽 바퀴에는 공급 회차가 없다', CONTRACT, 'SUPPLY_CYCLE_MINUTES.map((m) => Object.freeze(', 'SUPPLY_CYCLE_MINUTES.slice(2).map((m) => Object.freeze('),
   M('회차 창을 두 시간으로 늘린다', CONTRACT, 'export const SUPPLY_RUN_WINDOW_MS = 45 * 60 * 1000', 'export const SUPPLY_RUN_WINDOW_MS = 120 * 60 * 1000'),
-  // 아침 결정 — 공급을 기다릴 예약
-  M('결정 예약에서 가운데 재시도를 뺀다', LOOP, 'return [60, 40, 20, 5, 2].map((before) => {', 'return [60, 40, 2].map((before) => {'),
+  // 그날 결정 — 공급을 기다릴 예약(기준 01:50 + 오프셋)
+  M('결정 예약에서 가운데 재시도를 뺀다', LOOP,
+    'const STAGE_CONTROLLER_OFFSETS: readonly number[] = [0, 20, 40, FINAL_DECISION_OFFSET_MINUTES, FINAL_DECISION_OFFSET_MINUTES + 3]',
+    'const STAGE_CONTROLLER_OFFSETS: readonly number[] = [0, FINAL_DECISION_OFFSET_MINUTES, FINAL_DECISION_OFFSET_MINUTES + 3]'),
+  M('최종 판정을 첫 공급 회차의 유료 창 안으로 당긴다', LOOP, 'const FINAL_DECISION_OFFSET_MINUTES = 55', 'const FINAL_DECISION_OFFSET_MINUTES = 5'),
   // 예산 — 남은 예산 ÷ 남은 회차
   M('회차가 남은 예산 전부를 자기 몫으로 본다', RESERVE, 'const shareUsd = k === 0 ? 0 : basisUsd / k', 'const shareUsd = basisUsd'),
   M('끝난 회차 · 손 실행이 쓴 금액을 남은 예산에서 빼지 않는다', RESERVE, 'const basisUsd = Math.max(0, cap - (used - pendingSpent))', 'const basisUsd = cap'),
