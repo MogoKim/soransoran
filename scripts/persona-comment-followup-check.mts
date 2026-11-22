@@ -1210,11 +1210,12 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const form = { 글자수: 12, 줄: '한 줄', 말끝: '요', 끝부호: '없음', 물음표수: 0, 말줄임수: 0, 이모티콘: false }
   const built = (o: Record<string, unknown>) => buildPrompt({ persona, post, requireReference: false, form, ...o } as never)
   const shaOf = (o: Record<string, unknown>) => createHash('sha256').update(JSON.stringify(built(o))).digest('hex').slice(0, 12)
-  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 2026-11-21 꼴 판(꼴 값만 · 말끝 종류 · 한 줄/여러 줄 · 말투 카드 · 길이 절 · 질문 권유 삭제)에서 고정한 값이다.
+  // 🔴 자리 칸이 없는 입력(첫 댓글)의 프롬프트 지문 — 2026-11-21 꼴 판(꼴 값만 · 말끝 종류 · 한 줄/여러 줄 · 말투 카드 · 길이 절 · 질문 권유 삭제)에
+  //    2026-11-22 문장부호 줄(끝부호는 댓글 맨 끝 한 곳 — 줄마다 붙이지 않는다)을 바꿔 쓴 판에서 고정한 값이다.
   //    이 값이 바뀌면 첫 댓글 지시문이 바뀐 것이다 — 자리 칸만 고치려다 첫 댓글을 건드리지 않았는지 본다
   check('⑮ 🔴 자리 칸이 없으면(첫 댓글) 프롬프트가 꼴 판 고정 지문과 바이트 동일하다',
-    shaOf({ reactionType: 'other' }) === 'ce9a314e76aa' && shaOf({ reactionType: 'experience' }) === 'b92a074f285d'
-    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '6ef8ae4688c5',
+    shaOf({ reactionType: 'other' }) === 'e3233416c76c' && shaOf({ reactionType: 'experience' }) === '0a2bfb7f2edd'
+    && shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' }) === '46a626dc5495',
     `${shaOf({ reactionType: 'other' })} ${shaOf({ reactionType: 'experience' })} ${shaOf({ reactionType: 'other', grounding: '작년에 무릎 수술을 받았다' })}`)
   const seat = { ordinal: 3, postPersonaMarks: { openers: [], endings: [] }, selfFacts: ['자녀 2명 (고등학생)'], menopauseExperienced: false, spouseStrain: false, reply: true, ownPost: false }
   const text = JSON.stringify(built({ reactionType: 'experience', seat }))
