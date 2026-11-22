@@ -922,6 +922,9 @@ jobs:
           # 🔴 D1→D100 한 사다리 — 운영 decideStage 를 여러 날 돌린다 · 이틀 연속 통과 뒤 한 칸 · 천장 d10 이면 D20 0 ·
           #    올라갈 칸 관문 · 슬롯/비용/롤백. 새 step 이 아니다
           npm run stage:scheduler-check
+          # 🔴 24시간 공개(2026-11-23) — 하루 전체 창 · 바퀴 비중 자리 · 자정 넘는 댓글 회차 · 발행도 그날 결정 전에는 전날 결정 ·
+          #    결정 기준 01:50 의 고친 줄을 되돌리면 각 검사가 FAIL 하는가(변이 · worktree 변경 0). 새 step 이 아니다
+          npm run check:day-window-mutation
       # 🔴 D100 생동감 계약 — 순수 fixture (DB 0 · provider 0 · build 0).
       #    필요 READY = 증명일 목표 + 실측 손실(모르면 UNKNOWN) · JIT 부족분만 유료 · 현재 계약 cohort 만 비용 근거 ·
       #    정치 판정 authority 하나(연예 분리 · 정책 낱말은 정치 문맥과 함께만 · 한자는 언어 핏 사유).

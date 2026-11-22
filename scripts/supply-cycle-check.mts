@@ -5,7 +5,7 @@
  * 재는 것 (정책 하나에 절 하나):
  *   ① 공급 회차는 바퀴마다 한 번, 그 바퀴의 수집 뒤 · 다음 바퀴의 수집 전에 뜬다 — 시각은 바퀴 표에서 계산된다
  *   ② 그 시각에 뜬 회차를 러너가 정기 회차로 판정한다 · 회차 창은 겹치지 않고 자정을 넘지 않는다
- *   ③ 아침 결정(controller)이 직전 공급 회차를 기다렸다가 판정할 예약을 갖고 있다
+ *   ③ 그날 결정(controller · 01:50)이 직전 공급 회차를 기다렸다가 판정할 예약을 갖고 있다
  *   ④ 예산은 남은 예산 ÷ 남은 회차다 — 회차 수가 바뀌어도 식이 그대로다
  *   ⑤ 새 시각표로 하루를 정상 운영한 장부는 비용 증거가 모름(COST_UNKNOWN)이 아니다 ·
  *      시각표를 바꾸기 전날의 장부도 그대로 읽힌다 · 손 실행 · 다른 회차 표식은 여전히 모름으로 닫힌다
@@ -82,13 +82,13 @@ console.log('\n② 그 시각에 뜬 회차가 정기 회차다 · 창은 겹치
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 아침 결정은 직전 공급 회차를 기다렸다가 판정할 예약이 있다')
+console.log('\n③ 그날 결정은 직전 공급 회차를 기다렸다가 판정할 예약이 있다')
 // ─────────────────────────────────────────────────────────
 {
   const controller = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
   const before = SLOT_MIN.filter((m) => m < STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST)
   const lastEnd = Math.max(...before) + WINDOW_MIN
-  check('결정 전 공급 회차가 있다(자정~아침 바퀴)', before.length > 0, before.map(cycleLabel).join(' '))
+  check('결정 전 공급 회차가 있다(자정 뒤 첫 바퀴)', before.length > 0, before.map(cycleLabel).join(' '))
   check('결정 전 마지막 공급 회차의 유료 창이 최종 결정 시각 전에 끝난다',
     lastEnd <= STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST, `${cycleLabel(lastEnd)} ≤ ${cycleLabel(STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST)}`)
   const retry = controller.filter((m) => m >= lastEnd && stageControllerLeaseDisposition('busy', at(DAY, m)) === 'defer')

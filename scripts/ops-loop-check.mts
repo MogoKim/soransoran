@@ -48,14 +48,14 @@ import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from '
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  stageControllerLeaseDisposition,
+  stageControllerLeaseDisposition, STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST,
   OPS_LOOP_INSTALL_STEPS, RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS,
   KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OPS_SHADOW_OBSERVER_LABEL,
 } from './lib/ops-loop-templates'
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { applyInstall, desiredPlists, observerIntentOf, observerWanted, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
-import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
+import { CYCLES, STAGE_DECISION_BASE_MINUTE, cycleLabel, cyclePublishWindow } from '../src/lib/cycle-schedule'
 import { OPS_LOOP_TEMPLATE_DEFER_LABELS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 import { programArguments, render, valueOf } from './lib/launchd-install.mjs'
 import {
@@ -528,13 +528,20 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
       && /stageControllerLeaseDisposition\(supplyLease, NOW\)/.test(mainSrc)
       && /disposition === 'safe-hold'[\s\S]{0,150}holdForSupplyLease/.test(mainSrc)
       && /supplyLease === 'busy' \? 0 : 1/.test(mainSrc))
-  check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
-    stageControllerLeaseDisposition('free', new Date('2026-10-30T07:00:00+09:00')) === 'proceed'
-    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:54:00+09:00')) === 'defer'
-    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T07:20:00+09:00')) === 'defer'
-    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:55:00+09:00')) === 'safe-hold'
-    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T08:01:00+09:00')) === 'safe-hold'
-    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T08:16:00+09:00')) === 'safe-hold')
+  {
+    // 🔴 예약 시각은 정본(stageControllerSlots)에서 읽는다 — 01:50 첫 예약 · 02:45 최종
+    const kstAt = (minute: number): Date => new Date(Date.parse('2026-10-30T00:00:00+09:00') + minute * 60_000)
+    const [first, second] = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
+    const FINAL = STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST
+    check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
+      stageControllerLeaseDisposition('free', kstAt(first!)) === 'proceed'
+      && stageControllerLeaseDisposition('busy', kstAt(FINAL - 1)) === 'defer'
+      && stageControllerLeaseDisposition('unknown', kstAt(second!)) === 'defer'
+      && stageControllerLeaseDisposition('busy', kstAt(FINAL)) === 'safe-hold'
+      && stageControllerLeaseDisposition('unknown', kstAt(FINAL + 6)) === 'safe-hold'
+      && stageControllerLeaseDisposition('busy', kstAt(FINAL + 21)) === 'safe-hold'
+      && FINAL === 2 * 60 + 45)
+  }
   const holdStart = cli.indexOf('async function holdForSupplyLease(')
   const holdEnd = cli.indexOf('async function evidenceOnly(', holdStart)
   const holdSrc = holdStart >= 0 && holdEnd > holdStart ? cli.slice(holdStart, holdEnd) : ''
@@ -618,14 +625,22 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
   const sc = renderStageControllerPlist(input)
   const slots = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
-  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 다섯 번(07:55 최종 + 07:58 fallback)',
-    slots.length === 5 && slots.at(-2) === PUBLISH_WINDOW_START_MINUTE - 5
-    && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 2
-    && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE)
-    && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  // 🔴 (2026-11-23) 결정은 전날이 닫힌 뒤 — 기준(STAGE_DECISION_BASE_MINUTE) 01:50 + [0,20,40,55,58]
+  check('🔴 controller 는 01:50 · 02:10 · 02:30 · 02:45(최종) · 02:48(fallback) — 기준 시각에서 · 오름차순 · 다섯 번',
+    slots.map(cycleLabel).join(' ') === '01:50 02:10 02:30 02:45 02:48'
+    && slots[0] === STAGE_DECISION_BASE_MINUTE && slots.at(-2) === STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST
+    && slots.every((m, i) => i === 0 || m > slots[i - 1]!), slots.map(cycleLabel).join(' '))
+  check('🔴 결정 기준은 전날 마지막 바퀴(22:20)의 공개 창이 닫힌 뒤다 — 자정을 넘는 전날 몫이 다 나간 다음',
+    STAGE_DECISION_BASE_MINUTE >= cyclePublishWindow(CYCLES.length - 1)!.end - 24 * 60)
+  {
+    const cal = [...sc.matchAll(/<dict><key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer><\/dict>/g)]
+      .map((m) => Number(m[1]) * 60 + Number(m[2]))
+    check('🔴 controller plist 의 StartCalendarInterval 이 다섯 예약 그대로다(음수 · 24시 넘는 분 없음)',
+      JSON.stringify(cal) === JSON.stringify(slots) && cal.every((m) => m >= 0 && m < 24 * 60))
+  }
   check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 다섯 슬롯 대조가 필수다',
     OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('controller plist 는 아직 갱신되지 않는다'))
-    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55·07:58 다섯 슬롯 대조'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes(`${slots.map(cycleLabel).join('·')} 다섯 슬롯 대조`))
     && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('runtime deploy 만 하고 끝내지 않는다')))
   check('controller 는 runtime 의 스크립트를 --apply 로 부른다', sc.includes('<string>/r/scripts/stage-controller.mts</string>') && sc.includes('<string>--apply</string>')
     && sc.includes('<key>WorkingDirectory</key><string>/r</string>'))

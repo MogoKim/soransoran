@@ -68,6 +68,17 @@ export const SUPPLY_CYCLE_MINUTES: readonly number[] = Object.freeze(CYCLES.map(
  */
 export const HEARTBEAT_INTERVAL_MINUTES = 10
 
+/**
+ * 🔴 **그날 단계 결정의 기준 시각**(KST 자정에서 센 분) — controller 는 이 분부터 다섯 번 깬다(`ops-loop-templates`).
+ *    공개는 자정에도 이어지고(그날 결정 전 회차는 전날 결정이 지킨 단계로) 올리는 판정은 전날이 닫힌 뒤 한다.
+ *    01:50 인 이유 — 바퀴 표 · 감사 회차가 바뀌면 이 값부터 다시 본다(검사가 관계를 잰다):
+ *      ① 전날 마지막 바퀴(22:20)의 공개 창이 닫힌 뒤다(01:30) — 자정을 넘는 전날 몫이 다 나갔다
+ *      ② 결정 전에 나간 새벽 자리의 감사가 한 번 다시 돌 시간이 지났다(00:50 글 → 감사 01:10 · 재시도 01:40 + 한 틱).
+ *         재시도 가능 감사 실패 한 건은 품질 신호를 나쁨으로 만든다 — 제공사 일시 오류 한 번이 그날 단계를 굳히지 않는다
+ *      ③ 첫 바퀴(01:00) 공급 회차의 유료 창이 끝난 뒤에도 미룰 수 있는 예약이 남는다(최종 판정 = 기준 + 55분)
+ */
+export const STAGE_DECISION_BASE_MINUTE = at(1, 50)
+
 const DAY_MINUTES = 24 * 60
 
 /** `HH:MM` — 로그 · launchd 템플릿 · 문서가 같은 표기를 쓴다 */
