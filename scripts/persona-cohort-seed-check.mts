@@ -212,24 +212,29 @@ console.log('⑦ CLI 연결')
     runner.includes('const expected = buildCohortSeeds({')
     && runner.includes('const expectedRaw = serializeSeeds(M.codes, expectedSeeds)')
     && runner.includes('SEED_PROVENANCE_MISMATCH'))
-  const usesFrozenV1Baseline = (source: string): boolean =>
-    /const before = stableAssignment\(\{ repoRoot: process\.cwd\(\), supplementGeneration: 1 \}\)/.test(source)
+  const usesPreInsertBaseline = (source: string): boolean =>
+    /const baselineRead = preInsertVoiceBaseline\(\{ repoRoot: process\.cwd\(\), cohortCodes: [A-Za-z.]+ \}\)/.test(source)
+    && /const before = baseline\.assignment/.test(source)
     && /const bundle = before\.byCode\.get\(code\)/.test(source)
     && /judgeCohortVoice\(\{ cohortCodes: [A-Za-z.]+, existingCodes: existing, base, full: sa\.byCode \}\)/.test(source)
     && !/planBundles\(\{ rows: sa\.rows, personaCodes: existing \}\)/.test(source)
-  check('🔴 seed dry-run과 DB 적용 직전 검사가 모두 동결 supplement v1을 기존 40명 기준선으로 쓴다',
-    usesFrozenV1Baseline(cli) && usesFrozenV1Baseline(runner))
-  const selfComparisonMutation = cli.replace(
-    'stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 1 })',
-    'stableAssignment({ repoRoot: process.cwd() })',
-  )
+    // 🔴 세대 숫자를 박지 않는다 — 기준선 세대는 데이터(이 cohort 코드가 없는 가장 최근 동결 세대)에서 고른다
+    && !/supplementGeneration: \d/.test(source)
+  check('🔴 seed dry-run과 DB 적용 직전 검사가 모두 "이 cohort 가 없는 가장 최근 동결 세대"를 기존 Persona 기준선으로 쓴다',
+    usesPreInsertBaseline(cli) && usesPreInsertBaseline(runner))
+  const selfComparisonMutation = cli.replace('const before = baseline.assignment', 'const before = sa')
   const lookupMutation = cli.replace(
     'const bundle = before.byCode.get(code)',
     'const bundle = sa.byCode.get(code)',
   )
-  check('🔴 배선 변이 — 현재 v2를 자기 자신과 비교하면 하네스가 잡는다',
-    selfComparisonMutation !== cli && !usesFrozenV1Baseline(selfComparisonMutation)
-    && lookupMutation !== cli && !usesFrozenV1Baseline(lookupMutation))
+  const pinnedGenerationMutation = cli.replace(
+    'const before = baseline.assignment',
+    'const before = stableAssignment({ repoRoot: process.cwd(), supplementGeneration: 2 })',
+  )
+  check('🔴 배선 변이 — 지금 활성 세대를 자기 자신과 비교하거나 · 활성 배정에서 꺼내거나 · 세대 숫자를 박으면 하네스가 잡는다',
+    selfComparisonMutation !== cli && !usesPreInsertBaseline(selfComparisonMutation)
+    && lookupMutation !== cli && !usesPreInsertBaseline(lookupMutation)
+    && pinnedGenerationMutation !== cli && !usesPreInsertBaseline(pinnedGenerationMutation))
 }
 
 console.log(`\n${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

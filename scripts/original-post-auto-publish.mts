@@ -41,7 +41,8 @@ import { captureLagOf, voiceInputOf } from '../src/lib/original-post-auto-publis
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart, NORMAL_NO_PUBLISH_CODES } from '../src/lib/original-post-publish'
 import { applyScale, describeScale } from '../src/lib/scale-runtime'
-import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
+import { judgeCatchUp, PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE, type TriggerKind } from '../src/lib/publish-slot-catchup'
+import { cycleLabel } from '../src/lib/cycle-schedule'
 import { judgeDayGuard } from '../src/lib/release-canary'
 import { describePrepared } from '../src/lib/supply-candidates'
 import { describeRelease } from '../src/lib/source-slot-release'
@@ -129,7 +130,8 @@ if (HEARTBEAT) {
   if (TRIGGER !== 'local') fail(`${HEARTBEAT_FLAG} 는 --trigger=local 과만 쓴다 — 지금 ${TRIGGER}`)
   console.log(`\n⓪-h heartbeat 틱 ${heartbeatTickKey(RUN_AT)} (${kst(RUN_AT)})`)
   if (!heartbeatInWindow(RUN_AT)) {
-    console.log('   운영 창(08:00~22:00 KST) 밖 heartbeat — DB 0 · 발행 0 · 정상 종료\n')
+    console.log(`   운영 창(${cycleLabel(PUBLISH_WINDOW_START_MINUTE)}~${cycleLabel(PUBLISH_WINDOW_END_MINUTE)} KST) 밖 heartbeat`
+      + ' — DB 0 · 발행 0 · 정상 종료\n')
     process.exit(0)
   }
   if (APPLY) {

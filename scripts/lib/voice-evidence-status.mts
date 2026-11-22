@@ -26,6 +26,8 @@ export function readUsableVoiceEvidence(input: {
   salt: EvidenceSalt
   members: { memberNames: readonly string[]; personaNames?: readonly string[] } | null
   now: Date
+  /** 🔴 증거 시각 상한(`parseEvidenceUntil`) — 계획 도구와 기록 도구가 같은 값을 넘긴다 */
+  until?: Date | null
 }): { rows: LocalComment[]; status: VoiceEvidenceStatus } {
   const dropped = Object.fromEntries(EVIDENCE_READ_DROP_CODES.map((code) => [code, 0])) as Record<EvidenceReadDropCode, number>
   const lines: unknown[] = []
@@ -43,7 +45,7 @@ export function readUsableVoiceEvidence(input: {
       try { lines.push(JSON.parse(line) as unknown) } catch { lines.push(null) }
     }
   }
-  const read = rowsFromVoiceEvidence(lines, { salt: input.salt, members: input.members, now: input.now })
+  const read = rowsFromVoiceEvidence(lines, { salt: input.salt, members: input.members, now: input.now, until: input.until ?? null })
   for (const code of EVIDENCE_READ_DROP_CODES) dropped[code] += read.dropped[code]
   const supply = speakerSupply(read.rows.map((row) => ({ speakerId: row.author ?? '', text: row.text })))
   return {

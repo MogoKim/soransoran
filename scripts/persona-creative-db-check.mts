@@ -137,7 +137,7 @@ async function discover(count: number, label: string): Promise<Discovery> {
   const hw = personaCodeNumber(highWater) ?? Number.NaN
   const retired = Object.keys(RETIRED_AUTOGEN_CODES)
   check(`[발견 ${label}] dry-run 종료 0 · provider 0 · DB write 0`, r.run.status === 0 && r.paid === 0 && same(b, await counts()), r.out.slice(-400))
-  check(`[발견 ${label}] 후보 정확히 ${count}명 · 코드 형식 P\\d{2} · 중복 0`, codes.length === count && codes.every((c) => /^P\d{2}$/.test(c))
+  check(`[발견 ${label}] 후보 정확히 ${count}명 · 코드 형식 P\\d{2,3} · 중복 0`, codes.length === count && codes.every((c) => /^P\d{2,3}$/.test(c))
     && new Set(codes).size === count, codes.join(' '))
   check(`[발견 ${label}] 🔴 폐기 코드(${retired.join(' · ')}) 0 · 전원 high-water(${highWater}) 뒤 · 숫자 오름차순`,
     codes.every((c) => !retired.includes(c)) && codes.every((c) => personaCodeNumber(c)! > hw)
@@ -188,7 +188,7 @@ try {
   check('creative 말고 다른 이유로 막힌 후보는 부르지 않는다', generated.every((c) => !skipped.includes(c)))
   check('생성 대상 + 부르지 않은 후보 = 전체 후보', generated.length + skipped.split(' ').filter(Boolean).length === CODES.length, skipped)
   check('생성된 후보는 전부 운영 판정 valid', generated.every((c) => statusOf(g.out, c) === 'valid'),
-    (g.out.split('── 후보 판정')[1] ?? '').split('\n').filter((l) => /^  P\d\d  /.test(l)).join(' | '))
+    (g.out.split('── 후보 판정')[1] ?? '').split('\n').filter((l) => /^  P\d{2,3}  /.test(l)).join(' | '))
   check('valid 수 = 생성 수', validOf(g.out) === generated.length, String(validOf(g.out)))
   const file = existsSync(out1) ? JSON.parse(readFileSync(out1, 'utf-8')) as Record<string, PersonaCreative> : {}
   check('결과 파일 = 생성된 코드만 · --supplement 모양', JSON.stringify(Object.keys(file).sort()) === JSON.stringify(generated)
@@ -325,7 +325,7 @@ try {
     check('🔴 기존 Persona 는 압축(제목 · 성격)만', payload !== null && payload.avoid.every((a) => JSON.stringify(Object.keys(a)) === '["title","personality"]'))
     check('🔴 batch PASS — 형식 parsed · 품질 PASS', /🔴 batch PASS — 형식 parsed · 품질 PASS/.test(g7.out), (/batch (PASS|FAIL)[^\n]*/.exec(g7.out) ?? [''])[0])
     check('🔴 정상 6명 → 전원 canonical valid', validOf(g7.out) === 6 && SIX.every((c) => statusOf(g7.out, c) === 'valid'),
-      (g7.out.split('── 후보 판정')[1] ?? '').split('\n').filter((l) => /^  P\d\d  /.test(l)).join(' | '))
+      (g7.out.split('── 후보 판정')[1] ?? '').split('\n').filter((l) => /^  P\d{2,3}  /.test(l)).join(' | '))
     const f7 = existsSync(out7) ? JSON.parse(readFileSync(out7, 'utf-8')) as Record<string, PersonaCreative> : {}
     check('결과 파일 = 6명 그대로 (--supplement 모양)', SIX.every((c) => JSON.stringify(f7[c]) === JSON.stringify(good[c])) && Object.keys(f7).length === 6)
     const providerSent = JSON.parse(readFileSync(goodFile, 'utf-8')) as Record<string, { noGoExpressions: string[] }>

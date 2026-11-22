@@ -11,7 +11,8 @@
  *    목록에서 하나를 빼면 fixture 의 행동 시험이 곧바로 빨개진다.
  *
  *    · 발행 러너 `com.soransoran.original-post-runner` (2026-09-20)
- *    · 자동 READY 감사 러너 `com.soransoran.auto-ready-audit` (2026-09-28) — 설치는 선택이다
+ *    · 자동 READY 감사 러너 `com.soransoran.auto-ready-audit` (2026-09-28) — 설치는 선택이다.
+ *      (2026-11-23) 예약표가 바뀐 배포에서는 옛 설치본 그대로 되올리고, 새 원문은 `ops:loop-install --apply` 가 깐다.
  *    · 무인 댓글 루프 `com.soransoran.persona-comment-runner` (2026-09-28 · Track B) — 설치는 선택이다.
  *      회차가 checkout 중에 뜨면 반쯤 바뀐 트리로 발행 트랜잭션을 연다 — 감사 러너와 같은 이유다.
  *      (2026-11-22) 예약표가 바뀐 배포에서는 옛 설치본 그대로 되올리고, 새 원문은 `ops:loop-install --apply` 가 깐다

@@ -842,7 +842,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
   })
   /**
    * 🔴 **자동 READY 마감 — 공통 DB 마감 단계** (2026-10-27). 적재 뒤 · 같은 lease 안에서 정본 도장 회차를 부른다.
-   *    07:00 controller 전에 아침 바퀴 공급이 적재한 자동 적격 행의 도장을 끝내 재고 상태를 확정한다.
+   *    결정(controller) 전에 그 바퀴 공급이 적재한 자동 적격 행의 도장을 끝내 재고 상태를 확정한다.
    *    🔴 lease 를 쥔 live 회차만 — dry-run · 스위치 닫힘 · 증명 없음은 부르지 않는다(DB write 0).
    *    🔴 시각은 마감 시각이다 — 감사 시한 초과를 회차 시작 시각으로 재면 그만큼 늦게 닫힌다.
    *    🔴 Queue 도장만 쓴다 — Post · Persona 배정 · ActivityLog 를 만들지 않는다.

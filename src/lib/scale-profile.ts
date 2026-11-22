@@ -11,7 +11,9 @@
  *    설정을 읽지 못하면 **가장 안전한 단계로 떨어진다**(fail-closed).
  *
  * 🔴 이 파일은 계산만 한다. DB 도 네트워크도 없다. env 는 주입받는다.
+ *    import 는 하루 시간표(`cycle-schedule` — import 0) 하나다. D20 이상 슬롯이 그 바퀴 표에서 나온다.
  */
+import { cycleSlots } from './cycle-schedule'
 
 /** 🔴 재고를 며칠치로 잡는가 */
 export const HORIZON_DAYS = 14
@@ -94,17 +96,16 @@ export const SAFEST_STAGE: ReleaseStage = 'd1'
  *    산술 하한(`ceil(70/4)=18명`)은 생활사 hardFilter 를 반영하지 못한다.
  */
 /**
- * 🔴 **모든 슬롯은 발행 창(08:00~22:00) 안에 있다** (2026-09-12).
+ * 🔴 **모든 슬롯은 발행 창 안에 있고, 발행 뒤 60분 안에 댓글 회차가 돈다** (2026-09-12 · 2026-11-23).
  *
- *    옛 판은 네 단계 전부 `00:05 KST` 를 포함했다. 러너의 하루 상한이 KST 자정에 열리므로
- *    그 직후를 노린 것이었는데, §9.5-g 의 확정 계약과 충돌했다:
- *    **새 관리형 글의 첫 댓글은 60분 안에** 붙어야 하고 그때 댓글 runner 는 08:07~22:00 에만 돌았다.
- *    00:05 에 올린 글은 첫 댓글까지 **8시간 이상** 기다렸다 — 계약 위반이었다.
- *    (2026-11-22) 댓글 runner 는 이제 24시간 20분 간격으로 돈다 — 발행 창은 그대로 08:00~22:00 이다.
+ *    옛 판은 네 단계 전부 `00:05 KST` 를 포함했다. 그때 댓글 runner 는 08:07~22:00 에만 돌아
+ *    00:05 에 올린 글은 첫 댓글까지 **8시간 이상** 기다렸다 — "첫 댓글은 60분 안" 계약 위반이었다.
+ *    (2026-11-22) 댓글 runner 가 24시간 20분 간격으로 돌고, (2026-11-23) 발행 창도 하루 전체가 됐다.
+ *    밤 자리가 막혔던 이유(밤에는 첫 댓글이 없다)가 사라졌다 — 새벽 글은 새벽에 나간다.
  *
  * 🔴 **지켜야 할 계약은 넷이다** — 포함 관계는 여기 없다.
  *      ① 단계별 슬롯 수 = `dailyTarget`
- *      ② 모든 슬롯이 발행 창 08:00~22:00 안
+ *      ② 모든 슬롯이 발행 창(`PUBLISH_WINDOW_*`) 안
  *      ③ 댓글 runner 가동 전제에서 다음 댓글 회차까지 60분 이하
  *      ④ 워크플로우가 `allStageCronLines()` 를 빠짐없이 예약
  *
@@ -157,8 +158,8 @@ export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
  *    D20 이상은 **로컬 heartbeat(10분 격자)** 로만 돈다. 슬롯이 전부 그 격자 위에 있어서
  *    정시판 예약 없이도 catch-up 이 도래한 슬롯을 낸다(`stage-scheduler-check` 가 격자·창·첫 댓글 3회를 본다).
  *
- * 🔴 **D100 은 여기 없다.** 지금 러너(격자 10분 · 회차당 1건 · 첫 댓글 3회 시도)는 하루 85건까지만
- *    담고, 댓글 하루 상한 $0.20 은 첫 댓글 100건을 사지 못한다. 천장으로 **표현**은 되지만
+ * 🔴 **D100 은 여기 없다.** 지금 러너(격자 10분 · 회차당 1건)로는 바퀴 몫(`cycleSlots`)이 짧은 바퀴의
+ *    공개 창 틱 수를 넘어 담지 못하고, 댓글 하루 상한 $0.20 은 첫 댓글 100건을 사지 못한다. 천장으로 **표현**은 되지만
  *    (`stage-ladder-generic.resolveCeiling`) 열 수 있는 천장은 d50 이다.
  *
  * 🔴 **이 목록에 있다고 열리는 것이 아니다.** 목록은 scheduler/profile 지원일 뿐이고, 시험은 preflight 의 hard gate
@@ -170,35 +171,38 @@ export type RuntimeStage = (typeof RUNTIME_STAGES)[number]
 
 /** 🔴 D20 이상 Persona 발행 간격 — 새 숫자가 아니라 d10 운영값 그대로다 */
 const EXTENDED_CAPS = { postsPerWeek: PROFILES.d10.postsPerWeek, minDaysBetween: PROFILES.d10.minDaysBetween }
-const at = (hm: readonly (readonly [number, number])[]): Slot[] => hm.map(([hour, minute]) => ({ hour, minute, count: 1 }))
+
+export type SlotDerivation =
+  | { ok: true; slots: Slot[] }
+  | { ok: false; problems: readonly string[] }
 
 /**
- * 🔴 **러너 프로필 — d1~d10 은 `PROFILES` 그대로, D20 이상은 파생 슬롯.**
- *    D20 이상 슬롯은 `stage-ladder-generic.deriveSlots(n, 러너 격자)` 의 결과를 **그대로** 적었다 —
- *    창(08:00~22:00) 안 · heartbeat 10분 격자 위 · 발행 뒤 60분 안 댓글 회차 3번 이상 · 한 분에 한 건.
- *    `stage-scheduler-check` 가 여기 적힌 값과 파생값을 대조한다(손으로 고치면 CI 가 막는다).
+ * 🔴 **하루 n 건의 바퀴 비중 슬롯** — 정본 `cycleSlots`(바퀴 몫을 그 바퀴의 공개 창에 편 분)를 슬롯 모양으로만 바꾼다.
+ *    한 분에 한 건(count 1). 담기지 않으면(바퀴 몫 > 그 창의 틱 수) 만들지 않는다 — 늦은 자리로 메우지 않는다.
+ */
+export function cycleSlotsOf(n: number): SlotDerivation {
+  const d = cycleSlots(n)
+  return d.ok
+    ? { ok: true, slots: d.minutes.map((m) => ({ hour: Math.floor(m / 60), minute: m % 60, count: 1 })) }
+    : { ok: false, problems: d.problems }
+}
+
+/** 담기지 않으면 빈 슬롯 — 프로필 계약(`verifyProfile`)이 막고, 그 단계 관문은 `SLOTS_INFEASIBLE` 로 닫힌다 */
+const derivedSlots = (n: number): Slot[] => {
+  const d = cycleSlotsOf(n)
+  return d.ok ? d.slots : []
+}
+
+/**
+ * 🔴 **러너 프로필 — d1~d10 은 `PROFILES` 그대로, D20 이상은 바퀴 비중 슬롯(`cycleSlotsOf`)을 계산한다.**
+ *    숫자는 바퀴 표(`cycle-schedule`) 한 곳이다 — 손으로 옮긴 슬롯 표가 없다.
+ *    `stage-scheduler-check` 가 창 · heartbeat 격자 · 발행 뒤 60분 안 댓글 회차 3번 · 바퀴별 몫을 대조한다.
  */
 export const RUNTIME_PROFILES: Readonly<Record<RuntimeStage, ScaleProfile>> = {
   ...PROFILES,
-  d20: {
-    dailyTarget: 20, ...EXTENDED_CAPS,
-    slots: at([[8, 0], [8, 40], [9, 30], [10, 10], [11, 0], [11, 40], [12, 30], [13, 10], [13, 50], [14, 40],
-      [15, 20], [16, 10], [16, 50], [17, 30], [18, 20], [19, 0], [19, 50], [20, 30], [21, 20], [22, 0]]),
-  },
-  d30: {
-    dailyTarget: 30, ...EXTENDED_CAPS,
-    slots: at([[8, 0], [8, 30], [9, 0], [9, 30], [10, 0], [10, 20], [10, 50], [11, 20], [11, 50], [12, 20],
-      [12, 50], [13, 20], [13, 50], [14, 20], [14, 50], [15, 10], [15, 40], [16, 10], [16, 40], [17, 10],
-      [17, 40], [18, 10], [18, 40], [19, 10], [19, 40], [20, 0], [20, 30], [21, 0], [21, 30], [22, 0]]),
-  },
-  d50: {
-    dailyTarget: 50, ...EXTENDED_CAPS,
-    slots: at([[8, 0], [8, 20], [8, 30], [8, 50], [9, 10], [9, 30], [9, 40], [10, 0], [10, 20], [10, 30],
-      [10, 50], [11, 10], [11, 30], [11, 40], [12, 0], [12, 20], [12, 30], [12, 50], [13, 10], [13, 30],
-      [13, 40], [14, 0], [14, 20], [14, 30], [14, 50], [15, 10], [15, 30], [15, 40], [16, 0], [16, 20],
-      [16, 30], [16, 50], [17, 10], [17, 30], [17, 40], [18, 0], [18, 20], [18, 30], [18, 50], [19, 10],
-      [19, 30], [19, 40], [20, 0], [20, 20], [20, 30], [20, 50], [21, 10], [21, 30], [21, 40], [22, 0]]),
-  },
+  d20: { dailyTarget: 20, ...EXTENDED_CAPS, slots: derivedSlots(20) },
+  d30: { dailyTarget: 30, ...EXTENDED_CAPS, slots: derivedSlots(30) },
+  d50: { dailyTarget: 50, ...EXTENDED_CAPS, slots: derivedSlots(50) },
 }
 
 export const isRuntimeStage = (v: unknown): v is RuntimeStage =>

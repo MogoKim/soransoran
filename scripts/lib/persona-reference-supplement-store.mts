@@ -10,7 +10,7 @@ import {
 import {
   SUPPLEMENT_ASSET_VERSION, activeSupplementPaths, supplementPaths,
   judgeSupplementAsset, judgeSupplementManifest,
-  type SupplementalReferenceAsset, type SupplementalReferenceManifest,
+  type SupplementGeneration, type SupplementalReferenceAsset, type SupplementalReferenceManifest,
 } from '../../src/lib/persona-reference-supplement'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 
@@ -93,7 +93,8 @@ export type SupplementSnapshotRead =
 export function readSupplementSnapshot(input: {
   baseSourceDigest: string
   baseAssignmentDigestFor: (codes: readonly string[]) => string
-  generation?: 1 | 2
+  /** 없으면 runtime 과 같은 활성 세대 — 세대를 주면 그 세대만 읽는다(앞 세대로 후퇴하지 않는다) */
+  generation?: SupplementGeneration
 }): SupplementSnapshotRead {
   const paths = input.generation === undefined
     ? activeSupplementPaths()
@@ -161,9 +162,10 @@ function sameOrMissing(path: string, expected: string): 'missing' | 'same' | 'co
 export function writeSupplementSnapshot(input: {
   assetText: string
   manifestText: string
-  generation?: 1 | 2
+  /** 🔴 쓰는 세대는 언제나 명시한다 — 숨은 기본 세대로 동결 파일 자리에 쓰지 않는다 */
+  generation: SupplementGeneration
 }): { ok: true; action: 'write' | 'noop' } | { ok: false; reason: string } {
-  const paths = supplementPaths(input.generation ?? 1)
+  const paths = supplementPaths(input.generation)
   const assetState = sameOrMissing(paths.corpus, input.assetText)
   const manifestState = sameOrMissing(paths.manifest, input.manifestText)
   if (assetState === 'conflict' || manifestState === 'conflict') {

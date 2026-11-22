@@ -38,6 +38,7 @@ import { resolveScale } from '../src/lib/scale-runtime'
 import { judgeRecovery, latestSlotAtOrBefore, RECOVERY_SLOT_GRACE_MS } from '../src/lib/runner-recovery'
 import { staleAfterFromSlots } from '../src/lib/supply-health'
 import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
+import { AUDIT_RUNNER_LABEL, renderAuditRunnerPlist } from './lib/auto-ready-audit-template'
 import {
   publishFailing, supplyFailing,
   type JobObservation,
@@ -48,14 +49,14 @@ import { PUBLISH_RUN_MAX_AGE_MS, readPublishRunRecord, recordPublishRun } from '
 import { parsePublishRunRecord, type PublishRunRead } from '../src/lib/job-health'
 import {
   renderKeepAwakePlist, renderStageControllerPlist, renderRunnerRecoverPlist, stageControllerSlots,
-  stageControllerLeaseDisposition,
+  stageControllerLeaseDisposition, STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST,
   OPS_LOOP_INSTALL_STEPS, RECOVERABLE_LABELS, RECOVERY_POLICY_OF, CAFFEINATE_ARGS,
   KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OPS_SHADOW_OBSERVER_LABEL,
 } from './lib/ops-loop-templates'
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { applyInstall, desiredPlists, observerIntentOf, observerWanted, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { ALWAYS_RUNNING_LABELS } from './lib/host-migrate.mjs'
-import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
+import { CYCLES, STAGE_DECISION_BASE_MINUTE, cycleLabel, cyclePublishWindow } from '../src/lib/cycle-schedule'
 import { OPS_LOOP_TEMPLATE_DEFER_LABELS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
 import { programArguments, render, valueOf } from './lib/launchd-install.mjs'
 import {
@@ -528,13 +529,20 @@ function inputs(o: Partial<ControllerInputs>): ControllerInputs {
       && /stageControllerLeaseDisposition\(supplyLease, NOW\)/.test(mainSrc)
       && /disposition === 'safe-hold'[\s\S]{0,150}holdForSupplyLease/.test(mainSrc)
       && /supplyLease === 'busy' \? 0 : 1/.test(mainSrc))
-  check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
-    stageControllerLeaseDisposition('free', new Date('2026-10-30T07:00:00+09:00')) === 'proceed'
-    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:54:00+09:00')) === 'defer'
-    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T07:20:00+09:00')) === 'defer'
-    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T07:55:00+09:00')) === 'safe-hold'
-    && stageControllerLeaseDisposition('unknown', new Date('2026-10-30T08:01:00+09:00')) === 'safe-hold'
-    && stageControllerLeaseDisposition('busy', new Date('2026-10-30T08:16:00+09:00')) === 'safe-hold')
+  {
+    // 🔴 예약 시각은 정본(stageControllerSlots)에서 읽는다 — 01:50 첫 예약 · 02:45 최종
+    const kstAt = (minute: number): Date => new Date(Date.parse('2026-10-30T00:00:00+09:00') + minute * 60_000)
+    const [first, second] = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
+    const FINAL = STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST
+    check('controller lease 순수 판정 — free는 진행 · 마지막 예약 전 busy/unknown은 연기 · 그 뒤에는 늦게 깨어나도 안전 HOLD',
+      stageControllerLeaseDisposition('free', kstAt(first!)) === 'proceed'
+      && stageControllerLeaseDisposition('busy', kstAt(FINAL - 1)) === 'defer'
+      && stageControllerLeaseDisposition('unknown', kstAt(second!)) === 'defer'
+      && stageControllerLeaseDisposition('busy', kstAt(FINAL)) === 'safe-hold'
+      && stageControllerLeaseDisposition('unknown', kstAt(FINAL + 6)) === 'safe-hold'
+      && stageControllerLeaseDisposition('busy', kstAt(FINAL + 21)) === 'safe-hold'
+      && FINAL === 2 * 60 + 45)
+  }
   const holdStart = cli.indexOf('async function holdForSupplyLease(')
   const holdEnd = cli.indexOf('async function evidenceOnly(', holdStart)
   const holdSrc = holdStart >= 0 && holdEnd > holdStart ? cli.slice(holdStart, holdEnd) : ''
@@ -618,14 +626,22 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
   const sc = renderStageControllerPlist(input)
   const slots = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
-  check('🔴 controller 는 발행 창(08:00) 전에 돈다 · 오름차순 · 다섯 번(07:55 최종 + 07:58 fallback)',
-    slots.length === 5 && slots.at(-2) === PUBLISH_WINDOW_START_MINUTE - 5
-    && slots.at(-1) === PUBLISH_WINDOW_START_MINUTE - 2
-    && slots.every((m) => m < PUBLISH_WINDOW_START_MINUTE)
-    && slots.every((m, i) => i === 0 || m > slots[i - 1]!))
+  // 🔴 (2026-11-23) 결정은 전날이 닫힌 뒤 — 기준(STAGE_DECISION_BASE_MINUTE) 01:50 + [0,20,40,55,58]
+  check('🔴 controller 는 01:50 · 02:10 · 02:30 · 02:45(최종) · 02:48(fallback) — 기준 시각에서 · 오름차순 · 다섯 번',
+    slots.map(cycleLabel).join(' ') === '01:50 02:10 02:30 02:45 02:48'
+    && slots[0] === STAGE_DECISION_BASE_MINUTE && slots.at(-2) === STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST
+    && slots.every((m, i) => i === 0 || m > slots[i - 1]!), slots.map(cycleLabel).join(' '))
+  check('🔴 결정 기준은 전날 마지막 바퀴(22:20)의 공개 창이 닫힌 뒤다 — 자정을 넘는 전날 몫이 다 나간 다음',
+    STAGE_DECISION_BASE_MINUTE >= cyclePublishWindow(CYCLES.length - 1)!.end - 24 * 60)
+  {
+    const cal = [...sc.matchAll(/<dict><key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer><\/dict>/g)]
+      .map((m) => Number(m[1]) * 60 + Number(m[2]))
+    check('🔴 controller plist 의 StartCalendarInterval 이 다섯 예약 그대로다(음수 · 24시 넘는 분 없음)',
+      JSON.stringify(cal) === JSON.stringify(slots) && cal.every((m) => m >= 0 && m < 24 * 60))
+  }
   check('🔴 rollout은 runtime deploy만으로 끝내지 않는다 — ops-loop 설치 계획·적용과 controller 다섯 슬롯 대조가 필수다',
     OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('controller plist 는 아직 갱신되지 않는다'))
-    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('07:00·07:20·07:40·07:55·07:58 다섯 슬롯 대조'))
+    && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes(`${slots.map(cycleLabel).join('·')} 다섯 슬롯 대조`))
     && OPS_LOOP_INSTALL_STEPS.some((s) => s.includes('runtime deploy 만 하고 끝내지 않는다')))
   check('controller 는 runtime 의 스크립트를 --apply 로 부른다', sc.includes('<string>/r/scripts/stage-controller.mts</string>') && sc.includes('<string>--apply</string>')
     && sc.includes('<key>WorkingDirectory</key><string>/r</string>'))
@@ -679,8 +695,9 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   //    제거는 의도가 remove 일 때만 · snapshot 뒤 · 교체 전
   check('🔴 공식 설치기 apply — observer 설치 · 제거는 명시 의도(observerIntentOf)에서만 · desired 한 번 · 제거는 snapshot 뒤',
     (installer.match(/desiredPlists\(/g) ?? []).length === 1
-    && /const desired = desiredPlists\(publishMode, input, \{ observer: observerWanted\(observerIntent\), comment: commentInstalled \}\)/.test(installer)
+    && /const desired = desiredPlists\(publishMode, input, \{ observer: observerWanted\(observerIntent\), comment: commentInstalled, audit: auditInstalled \}\)/.test(installer)
     && /const commentInstalled = readInstalled\(agentDir, COMMENT_RUNNER_LABEL\) !== null/.test(installer)
+    && /const auditInstalled = readInstalled\(agentDir, AUDIT_RUNNER_LABEL\) !== null/.test(installer)
     && /const outcome = applyInstall\(desired, runtimeRoot,/.test(installer)
     && (installer.match(/removeInstalled\(agentDir, OPS_SHADOW_OBSERVER_LABEL\)/g) ?? []).length === 1
     && /if \(observerIntent === 'remove'\) \{\n  bootout\(OPS_SHADOW_OBSERVER_LABEL\)/.test(installer)
@@ -815,10 +832,12 @@ console.log('\n⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 �
     const run = parseLaunchdRunInfo(print)
     return { label: L, installed: true, state: print === null ? 'unknown' : 'loaded', stateReason: '', run, launchdFailing: failingFromLaunchd(run) }
   }
-  // 07:00 판정 — 전날 22:00 회차가 22:01 에 끝났고 22:29 에 배포(재등록)됐다
-  const NOW7 = new Date('2026-09-30T07:00:00+09:00')
-  const rec = (exitCode: number, finishedAt = '2026-09-29T22:01:00+09:00', label = L): PublishRunRead => ({
-    kind: 'ok', record: { v: 1, label, startedAt: '2026-09-29T22:00:05+09:00', finishedAt, exitCode },
+  // 판정 — 직전 heartbeat 회차가 판정 9분 전에 끝났고, 그 뒤 배포(재등록)로 launchd 가 종료 값을 잊었다
+  const NOW7 = new Date('2026-09-30T01:50:00+09:00')
+  const MIN = 60_000
+  const ago = (ms: number): Date => new Date(NOW7.getTime() - ms)
+  const rec = (exitCode: number, finishedAt: Date = ago(9 * MIN), label = L, startedAt: Date = new Date(finishedAt.getTime() - 55_000)): PublishRunRead => ({
+    kind: 'ok', record: { v: 1, label, startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), exitCode },
   })
   const pf = (print: string | null, read: PublishRunRead, now = NOW7): boolean | null => publishFailing(pubObs(print), read, now, PUBLISH_RUN_MAX_AGE_MS)
   const supOk = { label: 'com.soransoran.supply-process', loaded: true, failing: false }
@@ -834,13 +853,19 @@ console.log('\n⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 �
   check('🔴 재등록 + 마지막 회차 실패(exit 1) → 실패(true)', pf(PRINT_NEVER, rec(1)) === true)
   check('🔴 재등록 + 마지막 회차 실행 불가(127) → 실패(true)', pf(PRINT_NEVER, rec(127)) === true)
   check('🔴 재등록 + 오래된 기록(최대 나이 초과) → 모름(null)',
-    pf(PRINT_NEVER, rec(0, '2026-09-28T22:01:00+09:00')) === null
-    && pf(PRINT_NEVER, rec(0), new Date(Date.parse('2026-09-29T22:01:00+09:00') + PUBLISH_RUN_MAX_AGE_MS + 60_000)) === null)
-  check('밤 공백은 최대 나이 안이다 — 22:01 끝난 회차를 07:40 판정이 읽는다',
-    pf(PRINT_NEVER, rec(0), new Date('2026-09-30T07:40:00+09:00')) === false)
+    pf(PRINT_NEVER, rec(0, ago(PUBLISH_RUN_MAX_AGE_MS + MIN))) === null
+    && pf(PRINT_NEVER, rec(0), new Date(ago(9 * MIN).getTime() + PUBLISH_RUN_MAX_AGE_MS + MIN)) === null)
+  // 🔴 (2026-11-23) 발행 창이 하루 전체라 창 밖 공백은 마지막 틱(23:50) 뒤 10분뿐 — 최대 나이 = 그 공백 + 두 틱 = 30분
+  {
+    const lastTick = rec(0, new Date('2026-09-29T23:51:00+09:00'))
+    check('창 밖 공백 + 두 틱 = 최대 나이 30분 — 23:51 에 끝난 회차를 다음 날 00:20 판정은 읽고 00:22 판정은 모른다',
+      PUBLISH_RUN_MAX_AGE_MS === 30 * MIN
+      && pf(PRINT_NEVER, lastTick, new Date('2026-09-30T00:20:00+09:00')) === false
+      && pf(PRINT_NEVER, lastTick, new Date('2026-09-30T00:22:00+09:00')) === null)
+  }
   check('🔴 재등록 + 다른 label 기록(수동 실행 등) → 모름(null)', pf(PRINT_NEVER, rec(0, undefined, 'application.com.x.1')) === null)
-  check('🔴 재등록 + 미래에 끝난 기록 → 모름(null)', pf(PRINT_NEVER, rec(0, '2026-09-30T08:00:00+09:00')) === null)
-  check('🔴 재등록 + 끝난 시각이 시작보다 이르다 → 모름(null)', pf(PRINT_NEVER, rec(0, '2026-09-29T21:00:00+09:00')) === null)
+  check('🔴 재등록 + 미래에 끝난 기록 → 모름(null)', pf(PRINT_NEVER, rec(0, new Date(NOW7.getTime() + 10 * MIN))) === null)
+  check('🔴 재등록 + 끝난 시각이 시작보다 이르다 → 모름(null)', pf(PRINT_NEVER, rec(0, ago(9 * MIN), L, ago(5 * MIN))) === null)
   check('🔴 launchd 가 종료 값을 갖고 있으면 그것이 이긴다 — exit 1 은 성공 기록이 있어도 실패',
     pf(PRINT_FAIL, rec(0)) === true && pf(PRINT_OK, rec(1)) === false)
   check('🔴 launchctl 을 못 읽었으면 성공 기록이 있어도 모름', pf(null, rec(0)) === null)
@@ -929,21 +954,34 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   const OBS = OPS_SHADOW_OBSERVER_LABEL
   const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OBS] as const
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
-  const desired = desiredPlists('fixed', input, { observer: true, comment: false })
+  const desired = desiredPlists('fixed', input, { observer: true, comment: false, audit: false })
   check('교체 대상은 발행·controller·복구·keep-awake(+ 설치 의도가 있으면 ops shadow observer) — 모두 같은 적용 · snapshot · rollback 경로를 탄다',
     JSON.stringify([...desired.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, OBS])
-    && JSON.stringify([...desiredPlists('fixed', input, { observer: false, comment: false }).keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA]))
+    && JSON.stringify([...desiredPlists('fixed', input, { observer: false, comment: false, audit: false }).keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA]))
   // 🔴 (2026-11-22) 댓글 러너 — 설치돼 있을 때만 교체 대상(새 원문 = 정본 renderCommentRunnerPlist) · 미설치면 넣지 않는다
   {
-    const withComment = desiredPlists('fixed', input, { observer: false, comment: true })
+    const withComment = desiredPlists('fixed', input, { observer: false, comment: true, audit: false })
     check('🔴 댓글 러너가 설치돼 있으면 교체 대상에 들고 원문은 정본 템플릿 그대로다 · 미설치면 들지 않는다',
       JSON.stringify([...withComment.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, COMMENT_RUNNER_LABEL])
       && withComment.get(COMMENT_RUNNER_LABEL) === renderCommentRunnerPlist(input)
-      && !desiredPlists('fixed', input, { observer: true, comment: false }).has(COMMENT_RUNNER_LABEL))
+      && !desiredPlists('fixed', input, { observer: true, comment: false, audit: false }).has(COMMENT_RUNNER_LABEL))
     check('🔴 댓글 러너 — 배포 quiesce · ops-loop 원문 유예 소유 · 늘 떠 있는 job 아님(회차 중이면 설치기가 막는다)',
       DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL) && OPS_LOOP_TEMPLATE_DEFER_LABELS.includes(COMMENT_RUNNER_LABEL)
       && !ALWAYS_RUNNING_LABELS.includes(COMMENT_RUNNER_LABEL) && !RUNTIME_JOBS.includes(COMMENT_RUNNER_LABEL)
       && runningBlockers(withComment.keys(), (l) => l === COMMENT_RUNNER_LABEL).length === 1)
+  }
+  // 🔴 (2026-11-23) 감사 러너 — 댓글 러너와 같은 꼴: 설치돼 있을 때만 교체 대상(새 원문 = 정본 renderAuditRunnerPlist · 24시간 48회)
+  {
+    const withAudit = desiredPlists('fixed', input, { observer: false, comment: false, audit: true })
+    check('🔴 감사 러너가 설치돼 있으면 교체 대상에 들고 원문은 정본 템플릿(하루 48회) 그대로다 · 미설치면 들지 않는다',
+      JSON.stringify([...withAudit.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, AUDIT_RUNNER_LABEL])
+      && withAudit.get(AUDIT_RUNNER_LABEL) === renderAuditRunnerPlist(input)
+      && (withAudit.get(AUDIT_RUNNER_LABEL)!.match(/<key>Hour<\/key>/g) ?? []).length === 48
+      && !desiredPlists('fixed', input, { observer: true, comment: true, audit: false }).has(AUDIT_RUNNER_LABEL))
+    check('🔴 감사 러너 — 배포 quiesce · ops-loop 원문 유예 소유 · 늘 떠 있는 job 아님(회차 중이면 설치기가 막는다)',
+      DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL) && OPS_LOOP_TEMPLATE_DEFER_LABELS.includes(AUDIT_RUNNER_LABEL)
+      && !ALWAYS_RUNNING_LABELS.includes(AUDIT_RUNNER_LABEL) && !RUNTIME_JOBS.includes(AUDIT_RUNNER_LABEL)
+      && runningBlockers(withAudit.keys(), (l) => l === AUDIT_RUNNER_LABEL).length === 1)
   }
   // 🔴 observer 설치 의도 — merge · 배포만으로는 설치되지 않는다(플래그 없으면 지금 상태 유지)
   check('🔴 observer 의도 — 플래그 없음: 설치본 있으면 keep · 없으면 absent · on: install/keep · off: remove/absent · 그 밖은 null',
@@ -1010,7 +1048,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       const agentDir = join(home, 'Library', 'LaunchAgents')
       mkdirSync(agentDir, { recursive: true })
       writeFileSync(join(agentDir, `${PUBLISH_RUNNER_LABEL}.plist`),
-        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: false, comment: false }).get(PUBLISH_RUNNER_LABEL)!)
+        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: false, comment: false, audit: false }).get(PUBLISH_RUNNER_LABEL)!)
       writeFileSync(join(agentDir, 'com.soransoran.supply-process.plist'), render(readFileSync(tplRel, 'utf-8'), {
         npx: npxBesideNode, node: process.execPath, repo: rt, nodebin: nodeBinDir, logdir: logDir,
       }))
@@ -1066,7 +1104,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       check('설치기 plan · --observer=on · 미설치 → 신규', on.status === 0 && obsLine(on.out).includes('신규'), on.out.slice(-400))
       check('설치기 plan · --observer 에 on/off 밖의 값 → exit 2', plan([], ['--observer=yes']).status === 2)
       const obsInstalled = join(agentDir, `${OBS}.plist`)
-      writeFileSync(obsInstalled, desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: true, comment: false }).get(OBS)!)
+      writeFileSync(obsInstalled, desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: true, comment: false, audit: false }).get(OBS)!)
       const keep = plan([], [])
       check('🔴 설치기 plan · 플래그 없음 · observer 설치돼 있으면 keep(새 원문 대조 · 최신)', keep.status === 0 && obsLine(keep.out).includes('최신'), keep.out.slice(-400))
       const off = plan([], ['--observer=off'])
@@ -1074,6 +1112,19 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
         off.status === 0 && obsLine(off.out).includes('제거') && existsSync(obsInstalled), off.out.slice(-400))
       check('🔴 설치기 plan · --observer=off 여도 observer 가 돌고 있으면 막는다', plan([OBS], ['--observer=off']).status === 1)
       rmSync(obsInstalled)
+      // 🔴 (2026-11-23) 감사 러너 — 미설치면 교체하지 않고 계획 줄에 "미설치" 를 남긴다(조용히 건너뛰지 않는다) ·
+      //    옛 원문으로 설치돼 있으면 교체 대상 · 회차가 돌고 있으면 막는다
+      const auditLine = (out: string): string => out.split('\n').find((l) => l.includes(AUDIT_RUNNER_LABEL)) ?? ''
+      check('🔴 설치기 plan · 감사 러너 미설치 → "미설치" 줄 · 교체 대상 아님 · 적용 가능',
+        dflt.status === 0 && auditLine(dflt.out).includes('미설치') && !/신규|교체|최신/.test(auditLine(dflt.out)), dflt.out.slice(-600))
+      const auditInstalledPath = join(agentDir, `${AUDIT_RUNNER_LABEL}.plist`)
+      writeFileSync(auditInstalledPath, renderAuditRunnerPlist({ runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir })
+        .replace('<key>RunAtLoad</key>', '<!-- 옛 예약표 -->\n    <key>RunAtLoad</key>'))
+      const auditPlan = plan([], [])
+      check('🔴 설치기 plan · 감사 러너가 옛 원문으로 설치돼 있으면 교체 대상 · 적용 가능',
+        auditPlan.status === 0 && auditLine(auditPlan.out).includes('교체'), auditPlan.out.slice(-600))
+      check('🔴 설치기 plan · 감사 러너 회차가 돌고 있으면 막는다(교체 대상이라서)', plan([AUDIT_RUNNER_LABEL], []).status === 1)
+      rmSync(auditInstalledPath)
       const calls = existsSync(callLog) ? readFileSync(callLog, 'utf-8').trim().split('\n') : []
       check('🔴 plan 은 가짜 launchctl 을 실제로 불렀고(print) 그 밖의 하위 명령은 0이다',
         calls.length > 0 && calls.every((c) => c.startsWith('print ')), calls.slice(0, 5).join(' | '))
@@ -1096,7 +1147,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
     failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
     isolationOk?: boolean
   } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
-    const old = desiredPlists('heartbeat', input, { observer: true, comment: false })
+    const old = desiredPlists('heartbeat', input, { observer: true, comment: false, audit: false })
     const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
     const written = new Map(old)
     const outcome = applyInstall(desired, '/r', {
