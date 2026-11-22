@@ -7,9 +7,12 @@
  * ① `sourceFormOf` 가 실제 원문 꼴(두 줄 · 마침표 없음 · ㅋㅋ 끝 · 빈 줄 많음 · 한 줄 · 빈 본문 …)을 잰 값
  * ② 초안 지시문에 "낱말은 새로, 꼴은 원문 그대로" 절이 있고 지운 문장이 없다
  * ③ 생성 요청 페이로드에 `꼴` 이 실리고 그 값이 원문 본문(제목 제외 · 보이는 부분)의 `sourceFormOf` 와 같다
+ * ④ 수집 때 잘린 원문은 근거 묶음 전에 끝맺은 자리까지 걷는다(`closedCutBody`) — 잘리지 않은 원문은 한 글자도 안 바뀐다
  * 🔴 네트워크 0 · provider 0 · DB 0. 실제 함수를 돌려 값을 본다.
  */
-import { buildEvidencePacket } from '../src/lib/content-core/evidence'
+import { readFileSync } from 'node:fs'
+
+import { buildEvidencePacket, closedCutBody, closesSentence, EVIDENCE_CHAR_BUDGET } from '../src/lib/content-core/evidence'
 import { sourceFormOf, SOURCE_FORM_LINE_SHAPES_MAX, type SourceForm } from '../src/lib/content-core/source-form'
 import { buildV2DraftPayload, buildV2DraftSystemPrompt, DRAFT_FORM_LINES } from './lib/content-core-prompts.mjs'
 import type { PersonaLifeContract, SpeakerPlan } from '../src/lib/content-core/speaker'
@@ -147,6 +150,58 @@ console.log('\n③ 생성 요청 페이로드 — 꼴이 실리고 원문 본문
     fullForm.줄수 === 3 && fullForm.끝맺음 === '다들 이런 날 있죠..' && fullForm.말줄임 === 1 && fullForm.울음웃음 === 1, JSON.stringify(fullForm))
   const cutForm = (JSON.parse(buildV2DraftPayload({ packet: cut, plan })) as { 꼴: SourceForm }).꼴
   check('잘린 원문 꼴 — 보이는 부분만 잰다(원문 40줄보다 적다)', cutForm.줄수 > 0 && cutForm.줄수 < 40, String(cutForm.줄수))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n④ 수집 때 잘린 원문 — 근거 묶음 전에 끝맺은 자리까지 걷는다')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 지어낸 문장이다(제3자 원문 아님). 수집기처럼 앞 300자에서 자른다 — 끝 줄은 "말을 꺼냈더니" 에서 끊긴다
+  const CLOSED = [
+    '요즘 아침마다 동네 공원을 한 바퀴씩 걸어요', '처음엔 십 분도 힘들었는데 이제는 삼십 분은 거뜬하네요',
+    '같이 걷는 이웃 언니가 생겨서 더 재미있어요.', '언니는 저보다 다섯 살 많은데 걸음이 훨씬 빠르답니다',
+    '걷고 나서 마시는 보리차 한 잔이 그렇게 시원할 수가 없죠', '비 오는 날은 아파트 계단을 오르내리는데 그것도 운동이 되더라고요',
+    '주말에는 남편도 따라 나오는데 십 분 만에 벤치에 앉아 버려요', '그래도 같이 나와 주는 게 어디냐 싶어 웃고 말아요',
+    '무릎이 좀 걱정이었는데 아직까지는 괜찮아요ㅎㅎ',
+  ].join('\n')
+  const OPEN = '\n어제는 언니가 갑자기 다른 길로 가 보자고 해서 따라갔는데 처음 보는 골목이 나오길래 제가 먼저 말을 꺼냈더니 언니가 웃으면서 이 길은 예전에 언니가 살던 동네로 가는 길이라고 하면서 한참을 서서'
+  const FULL = `${CLOSED}${OPEN}`
+  const HEAD = FULL.slice(0, EVIDENCE_CHAR_BUDGET)
+  check('표본 — 앞 300자가 끝맺지 못한 조각으로 끝난다', HEAD.length === EVIDENCE_CHAR_BUDGET && FULL.length > HEAD.length
+    && !closesSentence(HEAD.split('\n').pop() ?? ''), HEAD.slice(-20))
+  const cut = closedCutBody(HEAD, FULL.length)
+  check('🔴 잘린 원문 → 마지막으로 끝맺은 줄까지 남는다(끊긴 조각이 없다)', cut === CLOSED, cut.slice(-30))
+  check('🔴 남은 본문의 끝은 끝맺은 말이다', closesSentence(cut.split('\n').pop() ?? ''))
+  check('🔴 원래 길이를 모르면 상한에 닿았는지로 본다 — 같은 결과', closedCutBody(HEAD, null) === CLOSED)
+  // 🔴 원래 길이만큼 다 남은 글 — 상한 근처에서 글쓴이가 끝낸 것이다. 한 글자도 바꾸지 않는다
+  check('🔴 잘리지 않은 원문(원래 길이 = 남긴 길이)은 그대로', closedCutBody(HEAD, HEAD.length) === HEAD)
+  check('🔴 상한에 닿지 않은 짧은 원문은 그대로(끝맺지 않았어도)', closedCutBody('오늘 김장했는데 허리가 끊어질듯', 800) === '오늘 김장했는데 허리가 끊어질듯')
+  check('두 벌 이어 붙은 본문은 그대로 — 앞 벌이 온전한 글이다(근거 묶음이 걷는다)',
+    closedCutBody(`${CLOSED}\n${CLOSED}`.slice(0, EVIDENCE_CHAR_BUDGET), 2 * CLOSED.length + 1) === `${CLOSED}\n${CLOSED}`.slice(0, EVIDENCE_CHAR_BUDGET).trim())
+  // 🔴 끝맺은 자리가 하나도 없다 — 자르지 않는다(초안 게이트 truncatedSourceCompletion 이 이 본문만 본다)
+  const NONE = Array.from({ length: 20 }, (_, i) => `시장 가는 길에 생선 가게 앞에서 한참 서 있다가 ${i}번째로`).join(' ').slice(0, EVIDENCE_CHAR_BUDGET)
+  check('🔴 끝맺은 자리가 없으면 그대로', NONE.length === EVIDENCE_CHAR_BUDGET && closedCutBody(NONE, 900) === NONE.trim())
+  // 🔴 공백 앞 `다`·`네`·`음` 은 문장 안에도 흔하다 — 줄바꿈·문장부호 없이는 끝으로 보지 않는다
+  const MID = `${'가'.repeat(150)}요 그래서 다 같이 처음 네 번이나 갔다 ${'나'.repeat(150)}`.slice(0, EVIDENCE_CHAR_BUDGET)
+  check('공백 앞 `다`·`네`·`음` 낱말에서 자르지 않는다 — `요` 낱말까지', closedCutBody(MID, 900) === `${'가'.repeat(150)}요`)
+
+  // 🔴 걷은 본문이 근거 묶음 · 생성 요청에 그대로 간다 — 꼴도 걷은 본문으로 잰다
+  const packet = buildEvidencePacket({ sourceArticleId: 's-cut', title: '공원 걷기', maskedBody: cut })
+  const visible = packet.spans.filter((s) => s.kind !== 'title').map((s) => s.text).join('\n')
+  const raw = JSON.parse(buildV2DraftPayload({ packet, plan: planOf('SELF_EXPERIENCE', 'none') })) as { 원문: string; 꼴: SourceForm }
+  check('🔴 생성 요청 [원문] 에 끊긴 조각이 없다', !raw.원문.includes('말을 꺼냈더니') && raw.원문.includes('괜찮아요ㅎㅎ'))
+  check('🔴 꼴은 걷은 본문으로 잰다 — 끝맺음이 끝맺은 줄이다', same(raw.꼴, sourceFormOf(visible)) && raw.꼴.끝맺음 === '아직까지는 괜찮아요ㅎㅎ', raw.꼴.끝맺음)
+
+  // 🔴 배선 — 근거 묶음과 초안 게이트가 같은 함수 · 같은 입력(저장 본문 · 원래 길이)으로 걷은 본문을 본다
+  const run = readFileSync('scripts/lib/content-core-run.mts', 'utf8')
+  const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf8')
+  // 🔴 초안 게이트 원천 두 자리(runContentCore · pickV2)의 글자는 draft-life-gates-check 가 본다
+  check('🔴 runContentCore — 걷은 본문으로 근거 묶음을 만든다',
+    run.includes('const sourceBody = closedCutBody(input.maskedBody, input.sourceMeta.bodyLength)')
+    && run.includes('title: input.title, maskedBody: sourceBody,'))
+  check('🔴 원래 길이를 bodyHead 와 같은 줄에서 읽어 원천 메타에 싣는다',
+    draft.includes('imageCount: m.imageCount, bodyLength: m.bodyLength,')
+    && draft.includes("bodyLength: S(r.bodyHead) !== '' ? len : (was?.bodyLength ?? null),"))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

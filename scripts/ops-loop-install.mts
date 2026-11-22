@@ -2,6 +2,7 @@
 /**
  * 무인 운영 루프 공식 설치기. 기본은 계획만이며 `--apply`만 변경한다.
  * 발행 러너의 현재 trigger(fixed/heartbeat)를 보존하고 controller·recover·keep-awake를 설치한다.
+ * 🔴 댓글 러너는 설치돼 있으면 새 원문으로 교체한다(미설치면 설치하지 않는다 — 첫 설치는 persona:comment-loop-install).
  * 🔴 ops shadow observer(권위 0)는 **명시할 때만** 바뀐다 — 플래그 없으면 지금 상태 유지(설치돼 있으면 새 원문 · 없으면 없는 채로),
  *    `--observer=on` 설치 · `--observer=off` 제거(snapshot 에 실어 rollback 이 되살린다). merge · 배포만으로는 설치되지 않는다.
  * 판정·적용 순서는 `lib/ops-loop-install-core.mts` 에 있다(검사가 가짜 launchctl 로 실행해 본다).
@@ -20,6 +21,7 @@ import {
 } from './lib/launchd-install.mjs'
 import { applyInstall, desiredPlists, observerIntentOf, observerWanted, runningBlockers } from './lib/ops-loop-install-core.mjs'
 import { OPS_SHADOW_OBSERVER_LABEL } from './lib/ops-loop-templates'
+import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import {
   PUBLISH_HEARTBEAT_ARGS, PUBLISH_RUNNER_ARGS, PUBLISH_RUNNER_LABEL, type RunnerTriggerMode,
   judgeLaunchdRunMarker, plistEnvironmentOf,
@@ -118,7 +120,9 @@ if (installedPublish === null) problems.push('발행 러너 설치본이 없다'
 else if (!fixedShape) problems.push('발행 러너 인자를 알아볼 수 없다 — trigger를 추측하지 않는다')
 
 const observerIntent = observerIntentOf(observerFlag, readInstalled(agentDir, OPS_SHADOW_OBSERVER_LABEL) !== null)!
-const desired = desiredPlists(publishMode, input, { observer: observerWanted(observerIntent) })
+// 🔴 댓글 러너는 설치돼 있을 때만 새 원문으로 교체한다(첫 설치는 persona:comment-loop-install)
+const commentInstalled = readInstalled(agentDir, COMMENT_RUNNER_LABEL) !== null
+const desired = desiredPlists(publishMode, input, { observer: observerWanted(observerIntent), comment: commentInstalled })
 /** 🔴 바뀌는 label 전부 — 교체 대상 + 제거할 observer. 실행 중 판정 · snapshot 이 이 목록을 쓴다 */
 const touched: string[] = [...desired.keys(), ...(observerIntent === 'remove' ? [OPS_SHADOW_OBSERVER_LABEL] : [])]
 for (const [label, xml] of desired) {

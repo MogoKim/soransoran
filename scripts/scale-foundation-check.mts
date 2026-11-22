@@ -37,10 +37,8 @@ import { calendarSlots, programArguments } from './lib/launchd-install.mjs'
 import { renderPublishRunnerPlist } from './lib/original-post-runner-template'
 import { AUTHORITY_RENDER_INPUT } from './lib/stage-authority-repo'
 // 🔴 댓글 슬롯의 정본 — 여기서 시각을 다시 적지 않는다
-import {
-  planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES,
-  RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
-} from './lib/persona-comment-runner-template'
+import { planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
+import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
 import { BOOTSTRAP_DAILY_MAX } from '../src/lib/persona-comment-bootstrap-budget'
 import {
   COHORTS, EXCLUDED_CODES, cohortOf, verifyManifest, verifyAllCohorts, stageOf,
@@ -560,10 +558,10 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
     })))
 
   // ─────────────────────────────────────────────────────────
-  // 🔴 **모든 공개 슬롯이 댓글 운영 창 안에 있고, 첫 댓글이 60분 안에 붙는가**
+  // 🔴 **모든 공개 슬롯이 발행 창 안에 있고, 첫 댓글이 60분 안에 붙는가**
   //
-  //    §9.5-g 확정 계약: 댓글 창 08:00~22:00 · 첫 댓글 60분 이내 ·
-  //    관리형 글도 같은 창 안에 발행. 창 밖 발행은 계약 위반이다.
+  //    §9.5-g 확정 계약: 발행 창 08:00~22:00 · 첫 댓글 60분 이내. 창 밖 발행은 계약 위반이다.
+  //    (2026-11-22) 댓글 runner 는 24시간 돈다 — 창은 발행 쪽 정본(`PUBLISH_WINDOW_*`)에서 읽는다.
   //    옛 판은 네 단계 전부 00:05 를 포함해 첫 댓글까지 8시간 넘게 걸렸다.
   //
   //    🔴 **시각을 여기 복제하지 않는다.** PROFILES 와 planRunnerSchedule 이 각각 정본이고
@@ -572,15 +570,15 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
   {
     const runner = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
     const commentMins = runner.slots.map(minuteOfDay).sort((a, b) => a - b)
-    const WIN_START = RUNNER_WINDOW_START_HOUR * 60
-    const WIN_END = RUNNER_WINDOW_END_HOUR * 60
+    const WIN_START = PUBLISH_WINDOW_START_MINUTE
+    const WIN_END = PUBLISH_WINDOW_END_MINUTE
 
     check('🔴 댓글 runner 슬롯이 실제로 있다 (대조 대상이 비면 시험이 성립하지 않는다)',
       commentMins.length > 0)
 
     for (const stage of RELEASE_STAGES) {
       const slots = PROFILES[stage].slots.map(minuteOfDay)
-      check(`🔴 ${stage} 슬롯이 전부 댓글 창 ${RUNNER_WINDOW_START_HOUR}:00~${RUNNER_WINDOW_END_HOUR}:00 안이다`,
+      check(`🔴 ${stage} 슬롯이 전부 발행 창 ${WIN_START / 60}:00~${WIN_END / 60}:00 안이다`,
         slots.every((m) => m >= WIN_START && m <= WIN_END))
       check(`🔴 ${stage} 모든 글의 첫 댓글이 ${FIRST_COMMENT_MAX_MINUTES}분 안에 붙는다`,
         slots.every((m) => {

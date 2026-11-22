@@ -987,7 +987,7 @@ async function main(): Promise<void> {
     followupOn(false)
   }
 
-  console.log('\n⑪ E6 — 실제 consumer(stage-consume-exec --by=comment) 가 넣은 오늘 결정으로만 돈다')
+  console.log('\n⑪ E6 — 실제 consumer(stage-consume-exec --by=comment) 가 넣은 오늘 결정(그날 결정 전이면 전날 결정)으로만 돈다')
   {
     const HERE = dirname(fileURLToPath(import.meta.url))
     const ROOT = join(HERE, '..')
@@ -997,22 +997,23 @@ async function main(): Promise<void> {
     mkdirSync(canon, { recursive: true })
     writeFileSync(join(canon, 'env.local'), 'STAGE_CONTROLLER_ENABLED=on\n')
     const CWD = mkdtempSync(join(tmpdir(), 'soran-consume-cwd-')) // 🔴 .env.local 없는 작업 디렉터리
-    const consume = (over: Record<string, string | undefined>): { env: Record<string, string>; note: string; status: number | null } => {
+    const consume = (over: Record<string, string | undefined>, by: 'comment' | 'publish' = 'comment'): { env: Record<string, string>; note: string; status: number | null } => {
       const env: Record<string, string> = {}
       for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
       for (const k of ['SORAN_STAGE_DECISION_DATE', 'SORAN_RELEASE_STAGE', 'SORAN_CAPACITY_STAGE', 'SORAN_PERSONA_COMMENT_FOLLOWUP']) delete env[k]
       for (const [k, v] of Object.entries(over)) if (v === undefined) delete env[k]; else env[k] = v
-      const r = spawnSync(TSX, [join(ROOT, 'scripts', 'stage-consume-exec.mts'), '--by=comment', '--print'], { cwd: CWD, env, encoding: 'utf-8' })
+      const r = spawnSync(TSX, [join(ROOT, 'scripts', 'stage-consume-exec.mts'), `--by=${by}`, '--print'], { cwd: CWD, env, encoding: 'utf-8' })
       const out: Record<string, string> = {}
       for (const line of (r.stdout ?? '').split('\n')) { const m = /^([A-Z_]+)=(.*)$/.exec(line); if (m !== null) out[m[1]!] = m[2]! }
       return { env: out, note: (r.stderr ?? '').trim(), status: r.status }
     }
-    const storeDecision = async (kstDate: string): Promise<void> => {
+    /** 🔴 `braked` — 브레이크가 공개를 열린 단계(d10) 아래 d5 로 낮춘 날(CERTIFIED d10 · PREPARE) */
+    const storeDecision = async (kstDate: string, o: { braked?: boolean } = {}): Promise<void> => {
       const v = validateStoredDecision({
         row: {
-          kstDate, capacity: 'd10', release: STAGE, state: 'HOLD', reasons: ['fixture'], blocks: [], dayPinned: false, supply: null,
+          kstDate, capacity: 'd10', release: STAGE, state: o.braked === true ? 'PREPARE' : 'HOLD', reasons: ['fixture'], blocks: [], dayPinned: false, supply: null,
           decidedAt: new Date(`${kstDate}T07:00:00+09:00`).toISOString(), contractVersion: STAGE_DECISION_VERSION,
-          decidedBy: DECISION_WRITER, transition: null,
+          decidedBy: DECISION_WRITER, transition: o.braked === true ? { kind: 'CERTIFIED', certified: 'd10' } : null,
         },
         expectKstDate: kstDate,
       })
@@ -1060,21 +1061,58 @@ async function main(): Promise<void> {
       await phase(g.gen)
       check('🔴 결정 없음 → 표식 없음 → provider 0 · 추가 0', (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
     }
-    // (다) 다른 날짜(어제) 결정만 있음 → consumer 는 오늘 키로만 읽는다 → 0
+    // (다) 🔴 (2026-11-22) 그날 결정 전 — 오늘 결정이 없으면 consumer 가 전날 결정의 공개 단계로 잇는다(공급과 같은 readSupplyHeadStart)
     {
-      const { pid } = await setup()
       const y = kstDateString(new Date(Date.now() - 86_400_000))
-      await storeDecision(y)
-      const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
-      applyConsumed(c.env)
-      const g = fakeGen()
-      await phase(g.gen)
-      check('🔴 어제 결정만 → 표식 없음 → provider 0 · 추가 0', (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
+      const y2 = kstDateString(new Date(Date.now() - 2 * 86_400_000))
+      // (다-가) 어제 결정이 정상(평상일) → 어제 날짜 표식 · 그 공개 단계 → 추가 댓글이 선다
+      {
+        const { pid } = await setup()
+        await storeDecision(y)
+        const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+        applyConsumed(c.env)
+        const g = fakeGen()
+        const r = await phase(g.gen)
+        check('🟢 어제 결정만(정상) → consumer 가 어제 표식 · 공개 d5 로 잇는다 → 추가 댓글 1건',
+          c.status === 0 && c.env.SORAN_STAGE_DECISION_DATE === y && c.env.SORAN_RELEASE_STAGE === STAGE && c.env.SORAN_CAPACITY_STAGE === STAGE
+          && (await personaRows(pid)).length === 2 && r.outcome === 'RAN', `${c.note} ${JSON.stringify(c.env)} ${r.reason}`)
+      }
+      // (다-나) 어제가 브레이크로 낮춘 날 → 표식 없음 → 0
+      {
+        const { pid } = await setup()
+        await storeDecision(y, { braked: true })
+        const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+        applyConsumed(c.env)
+        const g = fakeGen()
+        await phase(g.gen)
+        check('🔴 어제가 브레이크로 낮춘 날 → 표식 없음 → provider 0 · 추가 0',
+          (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && c.note.includes('브레이크') && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
+      }
+      // (다-다) 어제 행 없음 · (다-라) 그제 결정만 → 이틀 전은 읽지 않는다 → 0
+      {
+        const { pid } = await setup()
+        await storeDecision(y2)
+        const c = consume({ SORAN_PERSONA_COMMENT_FOLLOWUP: 'on' })
+        applyConsumed(c.env)
+        const g = fakeGen()
+        await phase(g.gen)
+        check('🔴 어제 행 없음 · 그제 결정만 → 표식 없음 → provider 0 · 추가 0',
+          (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && g.calls() === 0 && (await personaRows(pid)).length === 1, c.note)
+      }
+      // (다-마) 발행 consumer 는 어제 결정으로 가지 않는다 — 그날 결정만
+      {
+        await setup()
+        await storeDecision(y)
+        const c = consume({}, 'publish')
+        check('🔴 발행 consumer — 어제 결정만 있으면 표식 없음 · safest d1(그날 결정만 따른다)',
+          c.status === 0 && (c.env.SORAN_STAGE_DECISION_DATE ?? '') === '' && c.env.SORAN_RELEASE_STAGE === 'd1', `${c.note} ${JSON.stringify(c.env)}`)
+      }
     }
     // (라) 위조·오래된 env — consumer 를 거치지 않고 손으로 넣은 값
     {
       const forged: [string, Record<string, string>][] = [
-        ['어제 표식(오래된 프로세스)', { SORAN_STAGE_DECISION_DATE: kstDateString(new Date(Date.now() - 86_400_000)), SORAN_RELEASE_STAGE: STAGE, SORAN_CAPACITY_STAGE: 'd10' }],
+        // 🔴 (2026-11-22) 어제 표식은 그날 결정 전 consumer 가 넣는 값이라 받는다 — 낡은 표식은 이틀 전부터다
+        ['그제 표식(오래된 프로세스)', { SORAN_STAGE_DECISION_DATE: kstDateString(new Date(Date.now() - 2 * 86_400_000)), SORAN_RELEASE_STAGE: STAGE, SORAN_CAPACITY_STAGE: 'd10' }],
         ['공개 > 천장', { SORAN_STAGE_DECISION_DATE: today, SORAN_RELEASE_STAGE: 'd20', SORAN_CAPACITY_STAGE: 'd10' }],
         ['정본 밖 단계', { SORAN_STAGE_DECISION_DATE: today, SORAN_RELEASE_STAGE: 'd7', SORAN_CAPACITY_STAGE: 'd10' }],
         ['천장 없음', { SORAN_STAGE_DECISION_DATE: today, SORAN_RELEASE_STAGE: STAGE }],

@@ -18,7 +18,7 @@
  * 🔴 **v1 의 생성·검수 계약을 가져오지 않는다.** 다만 금지 낱말 · 복제 · 자기 나이
  *    정본은 공유한다 — 저장소에 한 벌이어야 하는 안전 기준이다.
  */
-import { buildEvidencePacket, evidenceText, violatesEvidenceBudget }
+import { buildEvidencePacket, closedCutBody, evidenceText, violatesEvidenceBudget }
   from '../../src/lib/content-core/evidence'
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
 import { isPersonalInfo, missingProtectedFacts } from '../../src/lib/content-core/source-facts'
@@ -219,6 +219,7 @@ export type RunInput = {
   sourceArticleId: string
   /** 🔴 이미 마스킹된 값이다 */
   title: string
+  /** 🔴 저장된 본문(`bodyHead`) 그대로 — 수집 때 잘린 끝은 여기서 걷는다(`sourceMeta.bodyLength`) */
   maskedBody: string
   /**
    * 🔴 **원천 사실** (2026-09-28 quality-v3) — 초안 게이트의 시점 · 출처 · 자료 축이 읽는다.
@@ -395,8 +396,13 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     status: 'notRequired', first: null,
   }
 
+  /**
+   * 🔴 **모델이 볼 본문** — 수집 때 잘린 본문은 끝맺은 자리까지 걷는다(`closedCutBody`). 근거 묶음 · 꼴 · 초안 게이트가
+   *    이 글자를 함께 본다. 캐시 채택 자리(`pickV2`)도 같은 함수 · 같은 입력(저장 본문 · 원래 길이)으로 만든다.
+   */
+  const sourceBody = closedCutBody(input.maskedBody, input.sourceMeta.bodyLength)
   const packet: SourceEvidencePacket = buildEvidencePacket({
-    sourceArticleId: input.sourceArticleId, title: input.title, maskedBody: input.maskedBody,
+    sourceArticleId: input.sourceArticleId, title: input.title, maskedBody: sourceBody,
   })
   const budgetProblems = violatesEvidenceBudget(packet)
 
@@ -809,7 +815,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     // 🔴 (quality-v3) 모델에 준 그 원문과 회차 시각 — 캐시 채택 자리(`pickV2`)와 같은 값이다
     context: {
       at: input.now,
-      source: { title: input.title, body: input.maskedBody, ...input.sourceMeta },
+      source: { title: input.title, body: sourceBody, ...input.sourceMeta },
     },
   })) failures.push(g)
   const det: DeterministicResult = { pass: failures.length === 0, failures }

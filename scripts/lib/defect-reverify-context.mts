@@ -78,12 +78,11 @@ export function makeReverifyContextLoader(opts: { artifactDir?: string; poolDocP
         plan: {
           selfBasis: typeof plan.selfBasis === 'string' ? plan.selfBasis : null,
           warrants,
-          closingIntent: typeof plan.closingIntent === 'string' ? plan.closingIntent : null,
-          contentRoles: Array.isArray(plan.contentRoles) ? plan.contentRoles.filter((x): x is string => typeof x === 'string') : [],
         },
         card,
         source: {
-          title: src.rawTitle, body: src.rawBody, site: S(cand.sourceSite),
+          // 🔴 artifact 원문 근거는 모델이 본 그 글자다 — 원래 길이는 남지 않는다
+          title: src.rawTitle, body: src.rawBody, bodyLength: null, site: S(cand.sourceSite),
           postedAt: dateOrNull(cand.sourcePostedAt), capturedAt: dateOrNull(cand.sourceCapturedAt), imageCount: null,
         },
         at,

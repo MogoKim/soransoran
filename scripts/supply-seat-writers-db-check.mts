@@ -21,7 +21,7 @@ import {
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
 } from '../src/lib/micro-seed-supply-autofill'
-import { CAPACITY_ENV, RELEASE_ENV } from '../src/lib/scale-profile'
+import { CAPACITY_ENV, RELEASE_ENV, profileOf } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { MACHINE_REVIEWED_BY } from '../src/lib/original-post-auto-publish'
@@ -61,8 +61,15 @@ const TOMORROW = '2026-11-19'
 /** 낮 회차 17:15 · 저녁 회차 22:15(공개 창이 끝난 뒤) */
 const NOON = kst(TODAY, '17:15')
 const EVENING = kst(TODAY, '22:15')
-/** 🔴 하루 20편 단계 — 오늘 16편이 나갔다. 17:15 에 남은 공개 기회는 4개(19:10 · 19:50 · 20:30 · 21:10) + 내일 첫 자리 */
+/** 🔴 하루 20편 단계 — 오늘 16편이 나갔다. 17:15 에 남은 공개 기회는 4개(d20 슬롯 17~20번째) + 내일 첫 자리 */
 const E = markedStageEnv({ [RELEASE_ENV]: 'd20', [CAPACITY_ENV]: 'd20' }, TODAY)
+/**
+ * 🔴 **17번째 d20 슬롯 — 16편이 나간 뒤 처음 도래하는 자리.** 시각은 정본(`profileOf('d20').slots`)에서 읽는다 —
+ *    슬롯 표가 다시 계산돼도(2026-11-22 댓글 24시간 격자) 이 검사가 옛 시각에 묶이지 않는다.
+ */
+const NEXT_SLOT = profileOf('d20').slots[16]!
+const NEXT_SLOT_AT = kst(TODAY, `${String(NEXT_SLOT.hour).padStart(2, '0')}:${String(NEXT_SLOT.minute).padStart(2, '0')}`)
+if (NEXT_SLOT_AT.getTime() <= NOON.getTime()) throw new Error(`fixture — 17번째 d20 슬롯 ${NEXT_SLOT_AT.toISOString()} 이 낮 회차(17:15) 뒤가 아니다`)
 const scale = resolveScale(E)
 
 const machineGate = (voiceCode: string, at: Date, id: string) => ({
@@ -230,7 +237,7 @@ async function main(): Promise<void> {
 
     /** 실제 러너를 dry-run 으로 띄운다 — DB write 0 · 로그만 읽는다 */
     const r = spawnSync(join(process.cwd(), 'node_modules', '.bin', 'tsx'), ['scripts/original-post-auto-publish.mts', '--trigger=local'], {
-      env: { ...process.env, ...E, [RUN_AT_ENV]: kst(TODAY, '19:10').toISOString() }, encoding: 'utf-8',
+      env: { ...process.env, ...E, [RUN_AT_ENV]: NEXT_SLOT_AT.toISOString() }, encoding: 'utf-8',
     })
     const out = `${r.stdout}\n${r.stderr}`
     const unfilled = /SLOT_UNFILLED (\{.*\})/.exec(out)

@@ -5138,8 +5138,11 @@ console.log('㊺ bootstrap 단계 — 아무도 없을 때 먼저 말을 건다'
     const plan = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
     check('🟢 500/day schedule 의 회차 간격이 60분 계약 안이다',
       plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
-    check('🔴 야간 공백은 사실대로 낸다 — 0 이라고 말하지 않는다',
-      plan.nightGapMinutes > 0)
+    // 🔴 (2026-11-22) 옛 "야간 공백 > 0" 은 08~22 창의 사실이었다 — 24시간 격자에서는 하루 어느 20분 구간에도 회차가 있다
+    check('🔴 자정을 넘는 마지막→첫 회차 간격까지 20분 이하다 — 밤에도 공백이 없다',
+      plan.slots.length > 1
+      && plan.slots[0]!.hour * 60 + plan.slots[0]!.minute + 24 * 60
+        - (plan.slots[plan.slots.length - 1]!.hour * 60 + plan.slots[plan.slots.length - 1]!.minute) <= COMMENT_RUNNER_MAX_GAP_MINUTES)
     check('🔴 회차가 1회면 간격은 0 이 아니라 null 이다',
       planRunnerSchedule(1).maxGapMinutes === null)
     check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,

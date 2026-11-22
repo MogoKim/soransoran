@@ -72,7 +72,10 @@ launchd 회차(followupEligibleFor: scheduled — 정기 · 사건 깨움 · 복
 - 수량 상한은 **승인 profile 파일**(`followup-profile-v1`)에서만 온다: `{ stage · dailyCount · dailyUsd · runMax · perPersonaDailyMax · approvedBy · approvedAt }`.
   파일 없음 · 손상 · 단계 ≠ 그날 단계 · 사람 승인 없음(`machine:` 포함) → 0건. 트랜잭션도 같은 파일을 다시 읽는다.
   그날 단계는 **consumer 가 넣은 결정 env** 로만 안다 — 정본 읽기 문 `decisionStageEnv` 결과를 `followupStageOf` 가 판정한다
-  (회차·트랜잭션 같은 함수): 표식 날짜 = 오늘(KST) · 공개·천장이 정본 단계 · 공개 ≤ 천장. 아니면 단계 모름 → 0건.
+  (회차·트랜잭션 같은 함수): 표식 날짜 = 오늘(KST) 또는 그날 결정 전 consumer 가 넣은 전날 결정의 날짜(어제) ·
+  공개·천장이 정본 단계 · 공개 ≤ 천장. 아니면 단계 모름 → 0건. (2026-11-22) 댓글 러너가 24시간 돌아, 자정~그날 결정 전에는
+  consumer 가 공급과 같은 `readSupplyHeadStart` → `headStartFor` 로 전날 공개 단계를 넣는다 — 전날 행 없음 · 깨짐 · 브레이크로
+  낮춘 날이면 넣지 않는다(→ 0건). 대화 감사는 오늘 글과 마감(8시간) 안의 어제 글을 함께 읽는다(`conversationAuditDatesOf`).
   러너·트랜잭션은 결정 표를 직접 읽지 않는다(`stage:ladder-check` adapter 계약). 이 모듈은 단계 칸 env 를 직접 읽지 않는다.
   profile 의 값은 계산식 `deriveCommentScale`(§4-3)이 낸 것을 옮겨 적는다.
 - 구조 상한은 운영 예산을 확대하지 않는다. 첫 댓글 부트스트랩 계산은 글당 자리 기준 5와 하루 절대 500을 유지하고,
@@ -182,7 +185,7 @@ launchd 회차(followupEligibleFor: scheduled — 정기 · 사건 깨움 · 복
 | E3 | 홈·베스트 랭킹의 Persona 댓글 합산 분리(Batch F · C-03) | ✅ #706 (main · Production) — 홈 인기 신호는 실회원 사람 수 · Persona·운영 댓글 제외 · 비회원 상한 3. `/best`(best-v2)는 원래 실회원 전용이라 변경 없음 |
 | E4 | North Star 와 병렬인 제한 canary 정책 · D10 profile 사람 승인 | ✅ 2026-10-14 창업자 승인. Persona·운영자 활동은 North Star 에서 제외하고 첫 댓글·실회원·비용·중복·감사·kill switch·rollback 불변 |
 | E5 | 런타임 반영 — 보조 Mac runtime 배포 · 댓글 러너 plist 재설치 · env 2개 · profile 파일 | ✅ 2026-10-15 확인 — runtime `6f28fc3`, E6 plist, switch ON, D10 profile 설치(2026-10-19 운영 공통 profile 로 교체) |
-| E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 코드·설치 모두 확인 — `stage-consume-exec --by=comment` 뒤 `persona-comment-loop --live`. 스위치 OFF면 consumer 결정 읽기 0 · 오늘 결정만(`followupStageOf`) |
+| E6 | 댓글 러너를 consumer(`stage-consume-exec --by=comment`) 경유로 | ✅ 코드·설치 모두 확인 — `stage-consume-exec --by=comment` 뒤 `persona-comment-loop --live`. 스위치 OFF면 consumer 결정 읽기 0 · 오늘 결정(그날 결정 전이면 전날 결정 · 2026-11-22)만(`followupStageOf`) |
 
 ## 8. 추가 발견 · 제안
 

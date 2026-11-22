@@ -15,6 +15,7 @@ import {
   type FollowupCommentRow, type FollowupPostVerdict,
 } from '../src/lib/persona-comment-followup'
 import { threadPlanOf } from '../src/lib/persona-thread-plan'
+import { COMMENT_RUNNER_SLOTS } from './lib/persona-comment-runner-template'
 
 const [file, day] = process.argv.slice(2)
 if (file === undefined || day === undefined) { console.error('사용법: <글 목록 파일> <YYYY-MM-DD>'); process.exit(2) }
@@ -41,11 +42,10 @@ if (posts.length === 0) { console.error(`${day} 글을 찾지 못했다`); proce
 const PERSONAS = Array.from({ length: 63 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`)
 const dayOf = (ms: number): string => new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10)
 
-/** 러너 회차 — 08:07~22:00 · 20분마다. 글이 공개된 날과 그다음 날을 돈다 */
+/** 러너 회차 — 정본 예약표(`COMMENT_RUNNER_SLOTS` · 24시간 20분 간격) 그대로. 글이 공개된 날과 그다음 날을 돈다 */
 function ticks(): number[] {
-  const out: number[] = []
-  for (const d of [day!, dayOf(at(day!, '12:00') + 24 * 60 * MIN)]) for (let t = at(d, '08:07'); t <= at(d, '22:00'); t += 20 * MIN) out.push(t)
-  return out
+  const hm = (s: { hour: number; minute: number }): string => `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`
+  return [day!, dayOf(at(day!, '12:00') + 24 * 60 * MIN)].flatMap((d) => COMMENT_RUNNER_SLOTS.map((s) => at(d, hm(s))))
 }
 
 function run(o: { passRate: number; dailyCount: number; runMax: number; perPersonaDailyMax: number }) {

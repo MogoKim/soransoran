@@ -26,7 +26,7 @@ const NOW = new Date('2026-10-18T09:00:00+09:00')
 /** 원천·시각 중립 컨텍스트 — 시점·외부 커뮤니티 축이 개입하지 않는다 */
 const CTX: DraftGateContext = {
   at: NOW,
-  source: { title: '', body: '', site: 'navercafe:test', postedAt: NOW, capturedAt: NOW, imageCount: null },
+  source: { title: '', body: '', bodyLength: null, site: 'navercafe:test', postedAt: NOW, capturedAt: NOW, imageCount: null },
 }
 const CARD_BASE: DraftGateCard = { childrenCount: 1, childrenAgeBands: ['중고등'], maritalStatus: '기혼' }
 /** selfBasis=null — 1인칭 허가 없는 자리 */
@@ -183,7 +183,7 @@ console.log(`\n── BLOCK: ${CREATIVITY_BLOCK_CLASS.SOURCE_DISTORTION} / trunc
 {
   const ctxTrunc: DraftGateContext = {
     at: NOW,
-    source: { title: '남편이 아침에', body: cutAtCap('남편이 아침을 주니까 / 야'), site: 'navercafe:test', postedAt: NOW, capturedAt: NOW, imageCount: null },
+    source: { title: '남편이 아침에', body: cutAtCap('남편이 아침을 주니까 / 야'), bodyLength: null, site: 'navercafe:test', postedAt: NOW, capturedAt: NOW, imageCount: null },
   }
   const i1: DraftGateInput = {
     title: '남편 이야기',

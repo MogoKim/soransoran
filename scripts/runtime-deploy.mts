@@ -6,7 +6,7 @@
  *    그 SHA 로 옮기고 → offline 게이트를 돌리고 → manifest/pin 을 준비하고 → job 을 올리고
  *    (올라온 것을 확인하고) → **실제 loaded 경로**를 대조하고 →
  *    `runtime:isolation-check --require-runtime --defer-ops-loop-templates` 까지 통과해야 runtime 단계가 끝난다.
- * 🔴 **그래도 배포 완료가 아니다.** 이 검사는 ops-loop 소유 job(runner-recover·stage-controller)의
+ * 🔴 **그래도 배포 완료가 아니다.** 이 검사는 ops-loop 소유 job(runner-recover·stage-controller·observer·댓글 러너)의
  *    설치본 원문 불일치만 pending 으로 유예한다 — `npm run ops:loop-install -- --apply` 가 새 원문을 설치하고
  *    **유예 없는 strict** 격리 검사를 통과해야 배포 완료다.
  * 🔴 하나라도 실패하면 되돌린다. 되돌리다 하나가 실패해도 **나머지를 계속 시도**하고,

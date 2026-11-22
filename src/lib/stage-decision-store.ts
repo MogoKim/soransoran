@@ -29,6 +29,7 @@ import {
   DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision,
   type StageDecision, type ValidatedStageDecision, type ValidateResult, type DecisionWriter,
 } from './stage-decision-contract'
+import { openStageHeldBy } from './stage-ladder'
 
 
 export { DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision }
@@ -131,15 +132,18 @@ export async function consumeStageDecision(io: {
 }
 
 /**
- * 🔴 **그날 결정이 아직 없는 아침 공급 회차의 수요 단계 — 전날 결정이 이미 지킨 단계** (공급 전용).
- *    자정~07:00 사이 바퀴의 공급 회차는 그날 결정(07:00)보다 먼저 돈다. 가장 안전한 단계(d1)로 돌면 그날 아침 슬롯을 채울 글을 사지 못한다.
+ * 🔴 **그날 결정이 아직 없는 회차의 단계 — 전날 결정이 이미 지킨 단계** (공급 · 댓글).
+ *    자정~그날 결정(07:00~07:58) 사이의 공급 회차와 댓글 회차는 그날 결정보다 먼저 돈다.
+ *    · 공급 — 가장 안전한 단계(d1)로 돌면 그날 아침 슬롯을 채울 글을 사지 못한다
+ *    · 댓글 — (2026-11-22) 댓글 러너가 24시간 돈다. d1 로 돌면 밤사이 열린 대화의 추가 댓글이 0 이 된다
  *    전날 행이 검증을 통과하면 **전날의 공개 단계**(`release`)를 쓴다. 미달이어도 공개 단계는 내려가지 않으므로
  *    (2026-11-19 사다리 재설계) 오늘 결정보다 높을 일은 운영 신호 감속(한 칸)뿐이다.
- *    🔴 결정 행을 만들지도 고치지도 않는다. 공개(발행)·댓글은 이 값을 받지 않는다 — 그날 결정만 따른다.
- *    전날 행이 없거나 깨졌으면 `ok: false` — 부르는 쪽이 가장 안전한 단계로 간다.
+ *    `braked` — 전날 공개가 열린 단계보다 낮았다(브레이크가 낮춘 날 · `openStageHeldBy` 와 같은 구조 판정).
+ *    🔴 결정 행을 만들지도 고치지도 않는다. 공개(발행)는 이 값을 받지 않는다 — 그날 결정만 따른다(`headStartFor`).
+ *    전날 행이 없거나 깨졌으면 `ok: false` — 부르는 쪽이 가장 안전한 단계로 간다. 이틀 전 행은 읽지 않는다.
  */
 export type SupplyHeadStart =
-  | { ok: true; stage: ValidatedStageDecision['release']; previousKstDate: string }
+  | { ok: true; stage: ValidatedStageDecision['release']; previousKstDate: string; braked: boolean }
   | { ok: false; reason: string }
 
 export async function readSupplyHeadStart(io: {
@@ -155,7 +159,20 @@ export async function readSupplyHeadStart(io: {
   const d = v.decision
   // 전날 공개 단계 그대로다. 올린 날(TRIAL)도 그 단계다 — 판정이 미달이어도 사다리는 되돌리지 않는다
   const stage = d.release
-  return { ok: true, stage, previousKstDate: d.kstDate }
+  return { ok: true, stage, previousKstDate: d.kstDate, braked: openStageHeldBy(d) !== d.release }
+}
+
+/**
+ * 🔴 **전날 결정으로 이어 가도 되는 consumer** — 공급은 그대로 · 댓글은 브레이크로 낮춘 날이 아닐 때만 · 발행은 없음.
+ *    브레이크가 낮춘 날은 운영 신호가 나빴던 날이다 — 그날 결정 없이 밤사이 추가 댓글을 열지 않는다(안전 쪽 · 지금처럼 0).
+ */
+export function headStartFor(by: DecisionConsumer, head: SupplyHeadStart): SupplyHeadStart {
+  if (by === 'publish') return { ok: false, reason: '발행은 그날 결정만 따른다' }
+  if (!head.ok) return head
+  if (by === 'comment' && head.braked) {
+    return { ok: false, reason: `전날(${head.previousKstDate}) 공개 ${head.stage} 는 브레이크가 낮춘 단계다 — 추가 댓글은 잇지 않는다` }
+  }
+  return head
 }
 
 /**

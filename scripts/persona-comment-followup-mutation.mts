@@ -128,7 +128,9 @@ const MUTATIONS: Mutation[] = [
   { name: '트랜잭션 최소 간격 제거', from: 'if (f.nowMs - b.lastPersonaMs < FOLLOWUP_MIN_GAP_MS) blockers.push', to: 'if (false) blockers.push' },
   { name: '🔴 글쓴이 반복 예외를 blocker가 있어도 전달', from: 'personaRepeatAllowed: ok && personaRepeatAllowed', to: 'personaRepeatAllowed' },
   // ── E6 그날 결정 ──
-  { name: '🔴 표식 없음·오늘이 아닌 표식 허용(오래된·다른 날짜)', from: 'if (d.markDate !== kstDateString(now)) {', to: 'if (false) {' },
+  { name: '🔴 표식 없음·오늘·어제가 아닌 표식 허용(이틀 낡음·다른 날짜)', from: 'if (d.markDate !== today && d.markDate !== yesterday) {', to: 'if (false) {' },
+  { name: '🔴 그날 결정 전 전날 표식 거절(자정 뒤 추가 댓글 0 으로 되돌림)', from: 'if (d.markDate !== today && d.markDate !== yesterday) {', to: 'if (d.markDate !== today) {' },
+  { name: '🔴 이틀 전 표식을 어제로 받음', from: 'const yesterday = kstDateString(new Date(now.getTime() - 864e5))', to: 'const yesterday = kstDateString(new Date(now.getTime() - 2 * 864e5))' },
   { name: '정본 밖 단계 허용', from: 'if (!isRuntimeStage(d.release) || !isRuntimeStage(d.capacity)) return', to: 'if (false) return' },
   { name: '🔴 공개 > 천장 허용', from: 'if (RUNTIME_STAGES.indexOf(d.release) > RUNTIME_STAGES.indexOf(d.capacity)) {', to: 'if (false) {' },
 ]

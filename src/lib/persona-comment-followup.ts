@@ -1070,26 +1070,31 @@ export function readFollowupProfileRaw(
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 그날 단계 — consumer 가 넣은 **오늘** 결정만 받는다 (E6)
+// 🔴 그날 단계 — consumer 가 넣은 오늘 결정 · 그날 결정 전이면 전날 결정 (E6 · 2026-11-22)
 // ─────────────────────────────────────────────────────────
 
 /**
  * 🔴 **추가 댓글이 믿는 그날 단계.** 회차(`readFollowupContext`)와 발행 트랜잭션이 **같은 함수**를 쓴다.
  *    입력은 단계 env 의 유일한 읽기 문(`decisionStageEnv`) 결과뿐이다 — 이 파일은 단계 칸을 직접 읽지 않는다.
+ *    · 표식 날짜 = 오늘(KST) — 그날 결정
+ *    · 표식 날짜 = 어제(KST) — 그날 결정이 아직 없을 때 consumer 가 넣은 전날 결정(`readSupplyHeadStart` → `headStartFor`).
+ *      브레이크로 낮춘 전날 · 전날 행 없음은 consumer 가 표식을 넣지 않는다(→ 아래 null)
  *    · 표식 없음(consumer 미경유 · 수동 실행 · consumer 가 OFF 로 safest 를 넣음) → null
- *    · 표식 날짜 ≠ 오늘(KST) — 어제 띄운 프로세스 · 손으로 적은 옛 표식 → null
+ *    · 이틀 이상 낡은 표식 · 미래 표식 · 손으로 적은 옛 표식 → null
  *    · 공개·천장이 정본 단계 이름이 아니다 · 공개 > 천장(consumer 가 낼 수 없는 모양 — 위조) → null
  */
 export function followupStageOf(d: DecisionStageEnv, now: Date): { stage: RuntimeStage | null; reason: string } {
-  // 🔴 표식 없음(markDate null)도 "오늘이 아님" 하나로 막는다 — 같은 판정을 두 줄로 쓰지 않는다
-  if (d.markDate !== kstDateString(now)) {
-    return { stage: null, reason: d.markDate === null ? '그날 결정 표식이 없다(consumer 미경유) — 추가 댓글 0' : `결정 표식 ${d.markDate} 이 오늘(KST)이 아니다 — 추가 댓글 0` }
+  const today = kstDateString(now)
+  const yesterday = kstDateString(new Date(now.getTime() - 864e5))
+  // 🔴 표식 없음(markDate null)도 "오늘·어제가 아님" 하나로 막는다 — 같은 판정을 두 줄로 쓰지 않는다
+  if (d.markDate !== today && d.markDate !== yesterday) {
+    return { stage: null, reason: d.markDate === null ? '그날 결정 표식이 없다(consumer 미경유) — 추가 댓글 0' : `결정 표식 ${d.markDate} 이 오늘·어제(KST)가 아니다 — 추가 댓글 0` }
   }
   if (!isRuntimeStage(d.release) || !isRuntimeStage(d.capacity)) return { stage: null, reason: '결정 단계 값이 정본 이름이 아니다(fail-closed)' }
   if (RUNTIME_STAGES.indexOf(d.release) > RUNTIME_STAGES.indexOf(d.capacity)) {
     return { stage: null, reason: `공개 ${d.release} > 천장 ${d.capacity} — consumer 가 낼 수 없는 모양이다(fail-closed)` }
   }
-  return { stage: d.release, reason: `오늘 결정 · 공개 ${d.release} · 천장 ${d.capacity}` }
+  return { stage: d.release, reason: `${d.markDate === today ? '오늘 결정' : '그날 결정 전 · 전날 결정'} · 공개 ${d.release} · 천장 ${d.capacity}` }
 }
 
 // ─────────────────────────────────────────────────────────

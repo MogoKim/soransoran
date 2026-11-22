@@ -18,6 +18,7 @@ import {
   PUBLISH_RUNNER_LABEL, judgeLaunchdRunMarker, launchctlEnvironmentOf, renderRunnerPlistFor,
   type RunnerPlistInput, type RunnerTriggerMode,
 } from './original-post-runner-template'
+import { COMMENT_RUNNER_LABEL, renderCommentRunnerPlist } from './persona-comment-runner-template'
 import { parseLaunchctlPrint } from '../../src/lib/runtime-isolation'
 
 /**
@@ -39,8 +40,13 @@ export const observerWanted = (intent: ObserverIntent): boolean => intent === 'i
 /**
  * 교체 대상 job 과 기대 plist — 🔴 keep-awake 도 여기 있으므로 bootout·교체·bootstrap·검증을 똑같이 거친다.
  * 🔴 ops shadow observer(권위 0)는 **설치 의도가 있을 때만** 넣는다(`observerIntentOf`) — 넣으면 같은 snapshot · rollback · strict 격리를 거친다.
+ * 🔴 (2026-11-22) 댓글 러너는 **이미 설치돼 있을 때만** 넣는다 — 새 원문으로 교체한다. 첫 설치는 `persona:comment-loop-install` 이다.
+ *    runtime:deploy 는 이 job 을 옛 설치본 그대로 되올리고(`DEPLOY_QUIESCE_JOBS`) 원문 대조를 유예한다(`OPS_LOOP_TEMPLATE_DEFER_LABELS`) —
+ *    슬롯(예약표)이 바뀐 배포에서 새 원문을 까는 곳이 여기다.
  */
-export function desiredPlists(publishMode: RunnerTriggerMode, input: RunnerPlistInput, o: { observer: boolean }): Map<string, string> {
+export function desiredPlists(
+  publishMode: RunnerTriggerMode, input: RunnerPlistInput, o: { observer: boolean; comment: boolean },
+): Map<string, string> {
   const out = new Map<string, string>([
     [PUBLISH_RUNNER_LABEL, renderRunnerPlistFor(publishMode, input)],
     [STAGE_CONTROLLER_LABEL, renderStageControllerPlist(input)],
@@ -48,6 +54,7 @@ export function desiredPlists(publishMode: RunnerTriggerMode, input: RunnerPlist
     [KEEP_AWAKE_LABEL, renderKeepAwakePlist({ logDir: input.logDir })],
   ])
   if (o.observer) out.set(OPS_SHADOW_OBSERVER_LABEL, renderOpsShadowObserverPlist(input))
+  if (o.comment) out.set(COMMENT_RUNNER_LABEL, renderCommentRunnerPlist(input))
   return out
 }
 
