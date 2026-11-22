@@ -235,7 +235,7 @@ async function main(): Promise<void> {
    */
   {
     const { GOLD_FIXTURES } = await import('./lib/founder-gold-fixtures.mjs')
-    const { goldWant } = await import('../src/lib/founder-gold')
+    const { goldWant, FOUNDER_GOLD_RECLASSIFIED } = await import('../src/lib/founder-gold')
     for (const cachedAdopt of [false, true]) {
       const tag = cachedAdopt ? '캐시 채택' : '새 생성'
       console.log(`\n⑤ (quality-v4) 창업자 gold 30 · ${tag} 경로 → 실제 적재기`)
@@ -276,6 +276,7 @@ async function main(): Promise<void> {
         return Array.isArray(g?.holds) ? (g!.holds as unknown[]).map(String) : []
       }
       const counts = { pass: 0, hold: 0, notAuto: 0 }
+      const reclassifiedPassed: number[] = []
       for (const { row, fx } of GOLD_FIXTURES) {
         const want = goldWant(row)
         const h = holdsOf(fx.draft.title)
@@ -283,10 +284,14 @@ async function main(): Promise<void> {
           : want === 'hold' ? h === null
             : h === null || h.some((x) => x.startsWith(DRAFT_LIFE_REVIEW_HOLD))
         if (ok) counts[want] += 1
+        if (ok && want === 'pass' && row.verdict !== 'pass') reclassifiedPassed.push(row.n)
         check(`${tag} · gold #${row.n} ${want} → ${h === null ? '큐 행 없음' : `holds ${JSON.stringify(h)}`}`, ok)
       }
-      check(`🔴 🔴 **${tag} · gold 적재 결과 — 통과 22 경고 없음 · 결함 3 큐 0 · 수정·폐기 5 자동 READY 0**`,
-        counts.pass === 22 && counts.hold === 3 && counts.notAuto === 5, JSON.stringify(counts))
+      // 🔴 (founder-gold-v2) 통과 23 = 창업자 통과 22 + 정책이 바뀌어 다시 분류한 #1 하나. 남은 수정·폐기 4편은 여전히 자동 READY 0
+      check(`🔴 🔴 **${tag} · gold 적재 결과 — 통과 23(창업자 통과 22 + 재분류 #1) 경고 없음 · 결함 3 큐 0 · 수정·폐기 4 자동 READY 0**`,
+        counts.pass === 23 && counts.hold === 3 && counts.notAuto === 4
+        && JSON.stringify(reclassifiedPassed) === '[1]' && JSON.stringify(FOUNDER_GOLD_RECLASSIFIED.map((x) => x.n)) === '[1]',
+        JSON.stringify({ ...counts, reclassifiedPassed }))
       check(`${tag} · 같은 원천 큐 중복 0`, new Set(rows.map((x) => x.sourceRawContentId)).size === rows.length)
     }
     await prisma.originalPostApprovalQueue.deleteMany({})
