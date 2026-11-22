@@ -159,21 +159,21 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n④ 🔴 22:00 경계 · 22:00 이후 · 자정 뒤 전날 backlog 0')
+  console.log('\n④ 🔴 운영 창 끝(23:50) 경계 · 그 뒤 · 자정 뒤 전날 backlog 0 — 창은 하루 전체(2026-11-23)')
   {
     await wipe()
     evidenceAt = K('2026-10-08T00:00:00')
     const ids = [await cand(), await cand(), await cand()]
-    // d10 · 하루 목표 10 · 22:00 에는 도래 10 — 오늘 9건을 이미 냈다고 둔다(ActivityLog 를 그 날짜로)
+    // d10 · 하루 목표 10 · 23:50 에는 도래 10 — 오늘 9건을 이미 냈다고 둔다(ActivityLog 를 그 날짜로)
     const u = await prisma.user.create({ data: { nickname: '기록' }, select: { id: true } })
     const pz = await prisma.persona.create({ data: { code: 'SZ', userId: u.id, status: 'active' }, select: { id: true } })
     for (let k = 0; k < 9; k += 1) {
       await prisma.personaActivityLog.create({ data: { personaId: pz.id, kind: 'post', targetId: `seed-${k}`, gateStatus: 'PASS', decidedBy: 'operator', createdAt: K('2026-10-08T12:00:00') } })
     }
-    const r22 = await scheduled(ids[0]!, K('2026-10-08T22:00:00'), 'd10', envOf('d10'), 9)
-    check('🔴 🔴 **22:00 정각 — 창 안 · 도래 10 · 발행 9 → 10번째 발행**', r22.kind === 'published', JSON.stringify(r22))
-    const r2201 = await scheduled(ids[1]!, K('2026-10-08T22:01:00'), 'd10', envOf('d10'), 9)
-    check('🔴 🔴 **22:01 — 운영 창 밖 → SLOT_CLOSED · 쓰기 0**', r2201.kind === 'blocked' && r2201.code === 'SLOT_CLOSED' && (await q(ids[1]!)).status === 'APPROVED', JSON.stringify(r2201))
+    const r2350 = await scheduled(ids[0]!, K('2026-10-08T23:50:00'), 'd10', envOf('d10'), 9)
+    check('🔴 🔴 **23:50 정각(마지막 틱) — 창 안 · 도래 10 · 발행 9 → 10번째 발행**', r2350.kind === 'published', JSON.stringify(r2350))
+    const r2351 = await scheduled(ids[1]!, K('2026-10-08T23:51:00'), 'd10', envOf('d10'), 9)
+    check('🔴 🔴 **23:51 — 운영 창 밖 → SLOT_CLOSED · 쓰기 0**', r2351.kind === 'blocked' && r2351.code === 'SLOT_CLOSED' && (await q(ids[1]!)).status === 'APPROVED', JSON.stringify(r2351))
     // 자정 뒤 — 전날 밀린 슬롯을 메우지 않는다(새 날짜의 첫 슬롯 전)
     await wipe()
     evidenceAt = K('2026-10-09T00:00:00')
@@ -208,10 +208,10 @@ async function main(): Promise<void> {
     await wipe()
     evidenceAt = K('2026-10-11T00:00:00')
     const [a, b] = [await cand(), await cand()]
-    const at = K('2026-10-11T03:00:00') // 🔴 운영 창 밖 · 도래 슬롯 0 — 예약이면 막혔을 시각
+    const at = K('2026-10-11T03:00:00') // 🔴 d1 도래 슬롯 0(첫 슬롯 09:30) — 예약이면 막혔을 시각
     const m1 = await publishOriginalPostTx(prisma, { queueId: a, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 1 } }, { now: () => at })
     const m2 = await publishOriginalPostTx(prisma, { queueId: b, publishedToday: 1, mode: { kind: 'manual-live', dailyCap: 1 } }, { now: () => at })
-    check('🔴 🔴 **manual-live — 창 밖에서도 1건 발행(슬롯 게이트 미적용) · 두 번째는 기존 DAILY_CAP**',
+    check('🔴 🔴 **manual-live — 도래 슬롯 0 에서도 1건 발행(슬롯 게이트 미적용) · 두 번째는 기존 DAILY_CAP**',
       m1.kind === 'published' && m2.kind === 'blocked' && m2.code === 'DAILY_CAP', `${m1.kind}/${JSON.stringify(m2)}`)
   }
 

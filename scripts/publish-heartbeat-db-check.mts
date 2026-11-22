@@ -23,7 +23,7 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
-import { catchUpDailyCeiling, dueCountAt, kstMinuteOfDay } from '../src/lib/publish-slot-catchup'
+import { catchUpDailyCeiling, dueCountAt, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from '../src/lib/publish-slot-catchup'
 import { PROFILES, RELEASE_STAGES, minuteOfDay } from '../src/lib/scale-profile'
 import { heartbeatWakeTimes, PUBLISH_HEARTBEAT_ARGS } from './lib/original-post-runner-template'
 import { heartbeatInWindow, heartbeatTickKey } from './lib/publish-heartbeat-tick.mjs'
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
       if (w === null) continue
       if (w.r.kind === 'published') { pubAt.push(hhmm(m)); if (m < first) early += 1 }
       else if (!(w.r.kind === 'blocked' && (w.r.code === 'SLOT_CLOSED' || w.r.code === 'SLOT_CONSUMED'))) badCode += 1
-      if ((await countToday(at(date, m))) > Math.min(dueCountAt(stage, Math.min(m, 1320)), PROFILES[stage].dailyTarget)) overDue += 1
+      if ((await countToday(at(date, m))) > Math.min(dueCountAt(stage, Math.min(m, PUBLISH_WINDOW_END_MINUTE)), PROFILES[stage].dailyTarget)) overDue += 1
     }
     const want = [...PROFILES[stage].slots].map(minuteOfDay).sort((a, b) => a - b).map(hhmm)
     const d = await dupFree()
@@ -179,17 +179,20 @@ async function main(): Promise<void> {
     }
     check('🔴 🔴 **09:00~15:00 절전 → 15:07 wake 부터 한 틱에 1건씩 메운다**',
       pub.slice(0, 6).join(',') === '08:10,15:07,15:10,15:20,15:30,15:40', pub.join(','))
-    const late = await wake(at(date, 23 * 60 + 40), 'd10', envOf('d10'))
+    // 🔴 운영 창은 하루 전체(마지막 틱 23:50) — 그 뒤에 깬 wake 만 창 밖이다
+    const late = await wake(at(date, 23 * 60 + 55), 'd10', envOf('d10'))
     const before = await countToday(at(date, 12 * 60))
-    check('🔴 🔴 **18:00 부터 절전 → 23:40 wake — 밀린 슬롯(19:00·20:30)을 메우지 않는다(SLOT_CLOSED)**',
+    check('🔴 🔴 **18:00 부터 절전 → 23:55 wake(마지막 틱 뒤) — 밀린 슬롯(19:00·20:30)을 메우지 않는다(SLOT_CLOSED)**',
       late?.r.kind === 'blocked' && late.r.code === 'SLOT_CLOSED' && before === 8, `${JSON.stringify(late?.r)} · 오늘 ${before}`)
+    const n0 = await wake(K('2026-10-11T00:00:00'), 'd10', envOf('d10'))
     const n1 = await wake(K('2026-10-11T07:50:00'), 'd10', envOf('d10'))
     const n2 = await wake(K('2026-10-11T08:10:00'), 'd10', envOf('d10'))
     const n3 = await wake(K('2026-10-11T08:20:00'), 'd10', envOf('d10'))
-    check('🔴 🔴 **다음 날 — 전날 backlog 0 (07:50 CLOSED · 08:10 1건 · 08:20 CONSUMED)**',
-      n1?.r.kind === 'blocked' && n1.r.code === 'SLOT_CLOSED' && n2?.r.kind === 'published'
+    check('🔴 🔴 **다음 날 — 전날 backlog 0 (00:00 CLOSED · 07:50 CLOSED · 08:10 1건 · 08:20 CONSUMED)**',
+      n0?.r.kind === 'blocked' && n0.r.code === 'SLOT_CLOSED'
+      && n1?.r.kind === 'blocked' && n1.r.code === 'SLOT_CLOSED' && n2?.r.kind === 'published'
       && n3?.r.kind === 'blocked' && n3.r.code === 'SLOT_CONSUMED' && (await countToday(K('2026-10-11T12:00:00'))) === 1,
-      `${JSON.stringify(n1?.r)} / ${n2?.r.kind} / ${JSON.stringify(n3?.r)}`)
+      `${JSON.stringify(n0?.r)} / ${JSON.stringify(n1?.r)} / ${n2?.r.kind} / ${JSON.stringify(n3?.r)}`)
     check('🔴 중복 0', (await dupFree()).ok, (await dupFree()).detail)
   }
 
@@ -313,7 +316,7 @@ async function main(): Promise<void> {
     }
     if (!heartbeatInWindow(now)) {
       check(`🔴 창 밖(${tick}) — 두 wake 모두 DB 0 으로 정상 종료`,
-        a.code === 0 && b.code === 0 && [a, b].every((x) => x.out.includes('운영 창(08:00~22:00 KST) 밖 heartbeat')), `${a.code}/${b.code}`)
+        a.code === 0 && b.code === 0 && [a, b].every((x) => x.out.includes('운영 창(00:00~23:50 KST) 밖 heartbeat')), `${a.code}/${b.code}`)
     } else if (!sameTick) {
       check(`🔴 틱 경계(${tick})를 넘겨 이번 회차는 미관측 — 통과로 세지 않는다`, false)
     } else {

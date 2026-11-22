@@ -815,10 +815,12 @@ console.log('\n⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 �
     const run = parseLaunchdRunInfo(print)
     return { label: L, installed: true, state: print === null ? 'unknown' : 'loaded', stateReason: '', run, launchdFailing: failingFromLaunchd(run) }
   }
-  // 07:00 판정 — 전날 22:00 회차가 22:01 에 끝났고 22:29 에 배포(재등록)됐다
-  const NOW7 = new Date('2026-09-30T07:00:00+09:00')
-  const rec = (exitCode: number, finishedAt = '2026-09-29T22:01:00+09:00', label = L): PublishRunRead => ({
-    kind: 'ok', record: { v: 1, label, startedAt: '2026-09-29T22:00:05+09:00', finishedAt, exitCode },
+  // 판정 — 직전 heartbeat 회차가 판정 9분 전에 끝났고, 그 뒤 배포(재등록)로 launchd 가 종료 값을 잊었다
+  const NOW7 = new Date('2026-09-30T01:50:00+09:00')
+  const MIN = 60_000
+  const ago = (ms: number): Date => new Date(NOW7.getTime() - ms)
+  const rec = (exitCode: number, finishedAt: Date = ago(9 * MIN), label = L, startedAt: Date = new Date(finishedAt.getTime() - 55_000)): PublishRunRead => ({
+    kind: 'ok', record: { v: 1, label, startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), exitCode },
   })
   const pf = (print: string | null, read: PublishRunRead, now = NOW7): boolean | null => publishFailing(pubObs(print), read, now, PUBLISH_RUN_MAX_AGE_MS)
   const supOk = { label: 'com.soransoran.supply-process', loaded: true, failing: false }
@@ -834,13 +836,19 @@ console.log('\n⑦ 발행 재등록 — 배포 뒤 never exited 는 마지막 �
   check('🔴 재등록 + 마지막 회차 실패(exit 1) → 실패(true)', pf(PRINT_NEVER, rec(1)) === true)
   check('🔴 재등록 + 마지막 회차 실행 불가(127) → 실패(true)', pf(PRINT_NEVER, rec(127)) === true)
   check('🔴 재등록 + 오래된 기록(최대 나이 초과) → 모름(null)',
-    pf(PRINT_NEVER, rec(0, '2026-09-28T22:01:00+09:00')) === null
-    && pf(PRINT_NEVER, rec(0), new Date(Date.parse('2026-09-29T22:01:00+09:00') + PUBLISH_RUN_MAX_AGE_MS + 60_000)) === null)
-  check('밤 공백은 최대 나이 안이다 — 22:01 끝난 회차를 07:40 판정이 읽는다',
-    pf(PRINT_NEVER, rec(0), new Date('2026-09-30T07:40:00+09:00')) === false)
+    pf(PRINT_NEVER, rec(0, ago(PUBLISH_RUN_MAX_AGE_MS + MIN))) === null
+    && pf(PRINT_NEVER, rec(0), new Date(ago(9 * MIN).getTime() + PUBLISH_RUN_MAX_AGE_MS + MIN)) === null)
+  // 🔴 (2026-11-23) 발행 창이 하루 전체라 창 밖 공백은 마지막 틱(23:50) 뒤 10분뿐 — 최대 나이 = 그 공백 + 두 틱 = 30분
+  {
+    const lastTick = rec(0, new Date('2026-09-29T23:51:00+09:00'))
+    check('창 밖 공백 + 두 틱 = 최대 나이 30분 — 23:51 에 끝난 회차를 다음 날 00:20 판정은 읽고 00:22 판정은 모른다',
+      PUBLISH_RUN_MAX_AGE_MS === 30 * MIN
+      && pf(PRINT_NEVER, lastTick, new Date('2026-09-30T00:20:00+09:00')) === false
+      && pf(PRINT_NEVER, lastTick, new Date('2026-09-30T00:22:00+09:00')) === null)
+  }
   check('🔴 재등록 + 다른 label 기록(수동 실행 등) → 모름(null)', pf(PRINT_NEVER, rec(0, undefined, 'application.com.x.1')) === null)
-  check('🔴 재등록 + 미래에 끝난 기록 → 모름(null)', pf(PRINT_NEVER, rec(0, '2026-09-30T08:00:00+09:00')) === null)
-  check('🔴 재등록 + 끝난 시각이 시작보다 이르다 → 모름(null)', pf(PRINT_NEVER, rec(0, '2026-09-29T21:00:00+09:00')) === null)
+  check('🔴 재등록 + 미래에 끝난 기록 → 모름(null)', pf(PRINT_NEVER, rec(0, new Date(NOW7.getTime() + 10 * MIN))) === null)
+  check('🔴 재등록 + 끝난 시각이 시작보다 이르다 → 모름(null)', pf(PRINT_NEVER, rec(0, ago(9 * MIN), L, ago(5 * MIN))) === null)
   check('🔴 launchd 가 종료 값을 갖고 있으면 그것이 이긴다 — exit 1 은 성공 기록이 있어도 실패',
     pf(PRINT_FAIL, rec(0)) === true && pf(PRINT_OK, rec(1)) === false)
   check('🔴 launchctl 을 못 읽었으면 성공 기록이 있어도 모름', pf(null, rec(0)) === null)

@@ -25,8 +25,11 @@ export const PUBLISH_RUN_DIR = join(homedir(), 'Library', 'Application Support',
 const LAST_FILE = 'last.json'
 
 /**
- * 🔴 **기록이 믿을 만한 최대 나이** — 발행 창 밖 공백(22:00→08:00) + heartbeat 두 칸.
+ * 🔴 **기록이 믿을 만한 최대 나이** — 발행 창 밖 공백 + heartbeat 두 칸.
+ *    창이 하루 전체(00:00~23:50)라 공백은 마지막 틱 뒤 10분뿐이다 — 최대 나이는 30분이다.
  *    그보다 오래된 기록은 "그 사이 한 번도 안 돌았다" 는 뜻일 수 있다 — 모른다로 둔다.
+ *    🔴 발행 러너가 30분 넘게 내려가 있다가 결정(controller) 직전에 다시 올라오면(그 사이 회차 0) 그날 오류 신호가
+ *       모름이 된다 — 배포 창은 결정 앞을 비운다(`CURRENT-MILESTONE` 배포 창).
  */
 export const PUBLISH_RUN_MAX_AGE_MS =
   (24 * 60 - (PUBLISH_WINDOW_END_MINUTE - PUBLISH_WINDOW_START_MINUTE) + 2 * HEARTBEAT_INTERVAL_MINUTES) * 60_000

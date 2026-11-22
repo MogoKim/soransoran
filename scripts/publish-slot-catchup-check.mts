@@ -17,8 +17,9 @@ import { readFileSync } from 'node:fs'
 
 import {
   judgeCatchUp, simulateDay, dueSlotsAt, dueCountAt, kstMinuteOfDay, catchUpDailyCeiling,
-  PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE, PER_RUN_MAX,
+  HEARTBEAT_INTERVAL_MINUTES, PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE, PER_RUN_MAX,
 } from '../src/lib/publish-slot-catchup'
+import { cycleLabel } from '../src/lib/cycle-schedule'
 import { spawnSync } from 'node:child_process'
 
 import {
@@ -58,8 +59,10 @@ console.log('① 시간축 — KST 하루 경계')
   // 🔴 UTC 15시 이후에 어제로 밀리던 자리 — setUTCHours(-9) 회귀
   check('🔴 [회귀] UTC 15시 직후(= KST 자정 직후)가 어제로 밀리지 않는다',
     kstMinuteOfDay(new Date('2026-09-14T15:01:00Z')) === 1)
-  check('🟢 운영 창은 08:00~22:00 이다',
-    PUBLISH_WINDOW_START_MINUTE === 480 && PUBLISH_WINDOW_END_MINUTE === 1320)
+  // 🔴 (2026-11-23) 하루 전체 — 00:00 부터 마지막 heartbeat 틱(23:50)까지. 숫자는 격자 간격에서 나온다
+  check('🟢 운영 창은 하루 전체 00:00~23:50 이다(마지막 10분 틱)',
+    PUBLISH_WINDOW_START_MINUTE === 0 && PUBLISH_WINDOW_END_MINUTE === 24 * 60 - HEARTBEAT_INTERVAL_MINUTES
+    && PUBLISH_WINDOW_END_MINUTE === 1430)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -113,12 +116,13 @@ console.log('\n④ 🔴 결함 재주입 ② — GitHub run 이 늦게 도착한
   // 🔴 어제 예약이 오늘 넘어와 도착해도 같다 — 판정은 **오늘 발행 수**로 한다
   check('🔴 어제 예약이 오늘 도착해도 오늘 몫을 넘기지 않는다',
     !judgeCatchUp({ stage: 'd1', now: atKst(9, 40), trigger: 'schedule', cron, publishedToday: 1 }).run)
-  // 🔴 창을 넘겨 도착하면 버린다
-  const tooLate = judgeCatchUp({ stage: 'd1', now: atKst(22, 30), trigger: 'schedule', cron, publishedToday: 0 })
-  check('🔴 22시를 넘겨 도착하면 밀린 것을 메우지 않는다', !tooLate.run)
-  check('🔴 그 사유가 운영 창으로 남는다', tooLate.reason.includes('운영 창'))
-  check('🟢 21:59 이면 아직 창 안이다',
-    judgeCatchUp({ stage: 'd1', now: atKst(21, 59), trigger: 'schedule', cron, publishedToday: 0 }).run)
+  // 🔴 창을 넘겨 도착하면 버린다 — 창은 하루 전체이고 마지막 틱(23:50) 뒤만 밖이다
+  const tooLate = judgeCatchUp({ stage: 'd1', now: atKst(23, 51), trigger: 'schedule', cron, publishedToday: 0 })
+  check('🔴 마지막 틱(23:50)을 넘겨 도착하면 밀린 것을 메우지 않는다', !tooLate.run)
+  check('🔴 그 사유가 운영 창(00:00~23:50)으로 남는다', tooLate.reason.includes('운영 창(00:00~23:50 KST)'))
+  check('🟢 23:50 이면 아직 창 안이다 · 22:30 도 창 안이다(옛 22:00 끝이 아니다)',
+    judgeCatchUp({ stage: 'd1', now: atKst(23, 50), trigger: 'schedule', cron, publishedToday: 0 }).run
+    && judgeCatchUp({ stage: 'd1', now: atKst(22, 30), trigger: 'schedule', cron, publishedToday: 0 }).run)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -489,7 +493,7 @@ console.log('\n⑫ 🔴 실제 트리거 도착 시각으로 본 **단계별 실
   })
 
   const inWindow = github.filter((d) => kstMinuteOfDay(d) <= PUBLISH_WINDOW_END_MINUTE).length
-  console.log(`\n  ⓒ GitHub 실측 — 도착 ${github.length}회 중 22:00 KST 이전 **${inWindow}회**`
+  console.log(`\n  ⓒ GitHub 실측 — 도착 ${github.length}회 중 창 끝 ${cycleLabel(PUBLISH_WINDOW_END_MINUTE)} KST 이전 **${inWindow}회**`
     + ` · 창 밖 ${github.length - inWindow}회`)
   check('🔴 [실측] GitHub 도착 중 일부는 운영 창을 넘긴다 — 그 회차는 버려진다',
     inWindow < github.length)
@@ -514,13 +518,13 @@ console.log('\n⑫ 🔴 실제 트리거 도착 시각으로 본 **단계별 실
 
   /**
    * 🔴 **핵심 사실 — GitHub 만으로는 d10 목표를 못 채운다.**
-   *    22:00 이전 도착이 슬롯 수보다 적고, 한 회차가 1건이므로 그 이상은 불가능하다.
+   *    창 끝(23:50) 이전 도착이 슬롯 수보다 적고, 한 회차가 1건이므로 그 이상은 불가능하다.
    *    🔴 "지금 배치라서 7건" 이 아니라 **"창 안 도착 수 < 슬롯 수면 미달"** 이 계약이다 —
    *       배치가 바뀌어도 이 부등식은 그대로 성립한다.
    */
   const d10 = simulateDay({ stage: 'd10', arrivals: github })
   console.log(`\n  🔴 d10 · GitHub 실측만으로는 ${d10.published}/${d10.target}건`
-    + ` — 22:00 이전 도착 ${d10.triggersInWindow}회 · 창 밖 ${d10.triggersAfterWindow}회`)
+    + ` — 창 끝 이전 도착 ${d10.triggersInWindow}회 · 창 밖 ${d10.triggersAfterWindow}회`)
   check('🔴 [실측 재현] d10 은 GitHub 예약만으로 하루 목표를 채우지 못한다', !d10.meetsTarget)
   check('🔴 그 상한은 "창 안 도착 수" 다 — 회차당 1건이므로 그 이상은 불가능하다',
     d10.published <= d10.triggersInWindow)
