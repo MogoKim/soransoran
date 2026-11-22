@@ -170,7 +170,7 @@ export const DEPLOY_STEPS: readonly string[] = [
   + ' (🔴 render·write 하지 않는다 — 공급 job 과 책임을 섞지 않는다)',
   '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime --defer-ops-loop-templates',
   '⑫ 여기까지 통과하면 runtime 단계가 끝난다 — 🔴 **배포 완료는 아직 아니다**.'
-  + ' ops-loop 소유 job(runner-recover·stage-controller)의 원문 유예가 남아 있을 수 있다',
+  + ' ops-loop 소유 job(runner-recover·stage-controller·observer·댓글 러너)의 원문 유예가 남아 있을 수 있다',
   '⑫-b 🔴 `ops:loop-install --apply` 가 새 원문을 설치하고 **유예 없는 strict** 격리 검사까지 통과해야 "배포 완료" 다',
   '🔴 어느 단계든 실패하면 ⑬ 으로 간다',
   '⑬ rollback(best-effort) — 🔴 **다 내리고 → 파일을 원래대로 → 원래 돌던 것만 올린다**:'

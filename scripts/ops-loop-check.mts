@@ -37,7 +37,7 @@ import { type RuntimeStage } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { judgeRecovery, latestSlotAtOrBefore, RECOVERY_SLOT_GRACE_MS } from '../src/lib/runner-recovery'
 import { staleAfterFromSlots } from '../src/lib/supply-health'
-import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
+import { COMMENT_RUNNER_LABEL, COMMENT_RUNNER_SLOTS, FIRST_COMMENT_MAX_MINUTES, renderCommentRunnerPlist } from './lib/persona-comment-runner-template'
 import {
   publishFailing, supplyFailing,
   type JobObservation,
@@ -679,7 +679,8 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   //    제거는 의도가 remove 일 때만 · snapshot 뒤 · 교체 전
   check('🔴 공식 설치기 apply — observer 설치 · 제거는 명시 의도(observerIntentOf)에서만 · desired 한 번 · 제거는 snapshot 뒤',
     (installer.match(/desiredPlists\(/g) ?? []).length === 1
-    && /const desired = desiredPlists\(publishMode, input, \{ observer: observerWanted\(observerIntent\) \}\)/.test(installer)
+    && /const desired = desiredPlists\(publishMode, input, \{ observer: observerWanted\(observerIntent\), comment: commentInstalled \}\)/.test(installer)
+    && /const commentInstalled = readInstalled\(agentDir, COMMENT_RUNNER_LABEL\) !== null/.test(installer)
     && /const outcome = applyInstall\(desired, runtimeRoot,/.test(installer)
     && (installer.match(/removeInstalled\(agentDir, OPS_SHADOW_OBSERVER_LABEL\)/g) ?? []).length === 1
     && /if \(observerIntent === 'remove'\) \{\n  bootout\(OPS_SHADOW_OBSERVER_LABEL\)/.test(installer)
@@ -928,10 +929,22 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
   const OBS = OPS_SHADOW_OBSERVER_LABEL
   const BLOCKING = [PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, OBS] as const
   const input = { runtimeRoot: '/r', npxPath: '/n/npx', logDir: '/l', nodeBinDir: '/n' }
-  const desired = desiredPlists('fixed', input, { observer: true })
+  const desired = desiredPlists('fixed', input, { observer: true, comment: false })
   check('교체 대상은 발행·controller·복구·keep-awake(+ 설치 의도가 있으면 ops shadow observer) — 모두 같은 적용 · snapshot · rollback 경로를 탄다',
     JSON.stringify([...desired.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, OBS])
-    && JSON.stringify([...desiredPlists('fixed', input, { observer: false }).keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA]))
+    && JSON.stringify([...desiredPlists('fixed', input, { observer: false, comment: false }).keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA]))
+  // 🔴 (2026-11-22) 댓글 러너 — 설치돼 있을 때만 교체 대상(새 원문 = 정본 renderCommentRunnerPlist) · 미설치면 넣지 않는다
+  {
+    const withComment = desiredPlists('fixed', input, { observer: false, comment: true })
+    check('🔴 댓글 러너가 설치돼 있으면 교체 대상에 들고 원문은 정본 템플릿 그대로다 · 미설치면 들지 않는다',
+      JSON.stringify([...withComment.keys()]) === JSON.stringify([PUBLISH_RUNNER_LABEL, STAGE_CONTROLLER_LABEL, RUNNER_RECOVER_LABEL, KA, COMMENT_RUNNER_LABEL])
+      && withComment.get(COMMENT_RUNNER_LABEL) === renderCommentRunnerPlist(input)
+      && !desiredPlists('fixed', input, { observer: true, comment: false }).has(COMMENT_RUNNER_LABEL))
+    check('🔴 댓글 러너 — 배포 quiesce · ops-loop 원문 유예 소유 · 늘 떠 있는 job 아님(회차 중이면 설치기가 막는다)',
+      DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL) && OPS_LOOP_TEMPLATE_DEFER_LABELS.includes(COMMENT_RUNNER_LABEL)
+      && !ALWAYS_RUNNING_LABELS.includes(COMMENT_RUNNER_LABEL) && !RUNTIME_JOBS.includes(COMMENT_RUNNER_LABEL)
+      && runningBlockers(withComment.keys(), (l) => l === COMMENT_RUNNER_LABEL).length === 1)
+  }
   // 🔴 observer 설치 의도 — merge · 배포만으로는 설치되지 않는다(플래그 없으면 지금 상태 유지)
   check('🔴 observer 의도 — 플래그 없음: 설치본 있으면 keep · 없으면 absent · on: install/keep · off: remove/absent · 그 밖은 null',
     observerIntentOf(null, false) === 'absent' && observerIntentOf(null, true) === 'keep'
@@ -997,7 +1010,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       const agentDir = join(home, 'Library', 'LaunchAgents')
       mkdirSync(agentDir, { recursive: true })
       writeFileSync(join(agentDir, `${PUBLISH_RUNNER_LABEL}.plist`),
-        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: false }).get(PUBLISH_RUNNER_LABEL)!)
+        desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: false, comment: false }).get(PUBLISH_RUNNER_LABEL)!)
       writeFileSync(join(agentDir, 'com.soransoran.supply-process.plist'), render(readFileSync(tplRel, 'utf-8'), {
         npx: npxBesideNode, node: process.execPath, repo: rt, nodebin: nodeBinDir, logdir: logDir,
       }))
@@ -1053,7 +1066,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
       check('설치기 plan · --observer=on · 미설치 → 신규', on.status === 0 && obsLine(on.out).includes('신규'), on.out.slice(-400))
       check('설치기 plan · --observer 에 on/off 밖의 값 → exit 2', plan([], ['--observer=yes']).status === 2)
       const obsInstalled = join(agentDir, `${OBS}.plist`)
-      writeFileSync(obsInstalled, desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: true }).get(OBS)!)
+      writeFileSync(obsInstalled, desiredPlists('fixed', { runtimeRoot: rt, npxPath: npxBesideNode, logDir, nodeBinDir }, { observer: true, comment: false }).get(OBS)!)
       const keep = plan([], [])
       check('🔴 설치기 plan · 플래그 없음 · observer 설치돼 있으면 keep(새 원문 대조 · 최신)', keep.status === 0 && obsLine(keep.out).includes('최신'), keep.out.slice(-400))
       const off = plan([], ['--observer=off'])
@@ -1083,7 +1096,7 @@ console.log('\n⑧ 설치기 — keep-awake 만 실행 중 예외 · 적용은 k
     failBootstrap?: string; printOverride?: (label: string, out: string | null) => string | null; restoreOk?: boolean
     isolationOk?: boolean
   } = {}): { outcome: ReturnType<typeof applyInstall>; sim: Sim } => {
-    const old = desiredPlists('heartbeat', input, { observer: true })
+    const old = desiredPlists('heartbeat', input, { observer: true, comment: false })
     const sim: Sim = { calls: [], restores: 0, loaded: new Map(old) }
     const written = new Map(old)
     const outcome = applyInstall(desired, '/r', {

@@ -112,6 +112,7 @@ export const COMMENT_RUNNER_INSTALL_STEPS: readonly string[] = [
   '⑤ 설치 — (runtime 에서) npm run persona:comment-loop-install -- --apply',
   '      = render → ~/Library/LaunchAgents/com.soransoran.persona-comment-runner.plist → plutil -lint → launchctl load → print 대조',
   '⑥ npm run runtime:isolation-check -- --require-runtime 으로 경로·인자·원문·SHA 를 대조한다',
+  '      설치 뒤 템플릿(예약표)이 바뀌면 runtime:deploy 다음 npm run ops:loop-install -- --apply 가 새 원문으로 교체한다',
   '⑦ 되돌리기 — launchctl unload 후 plist 를 보관소로 옮기거나, 더 빠르게 SORAN_PERSONA_COMMENT_STAGE 를 내린다',
 ]
 
