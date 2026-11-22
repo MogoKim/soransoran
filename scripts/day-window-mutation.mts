@@ -5,7 +5,7 @@
  *   npx tsx scripts/day-window-mutation.mts
  *
  *   하루 전체 발행 창 · 바퀴 비중 자리(`cycleSlots`) · 자정 넘는 댓글 회차 · 발행도 그날 결정 전에는 전날 결정으로 ·
- *   결정 기준 01:50 · 감사 24시간(결정 전 새벽 자리의 감사 재시도) — 고친 줄을 하나씩 되돌리거나 바꾸면
+ *   결정 기준 01:50 · 감사 24시간(결정 전 새벽 자리의 감사 재시도) · 자정 넘는 첫 댓글 예산 — 고친 줄을 하나씩 되돌리거나 바꾸면
  *   그 계약을 재는 검사가 반드시 FAIL 해야 한다.
  *   한 변이라도 살아남으면 exit 1.
  *
@@ -26,6 +26,7 @@ const GENERIC = 'src/lib/stage-ladder-generic.ts'
 const STORE = 'src/lib/stage-decision-store.ts'
 const EXEC = 'scripts/stage-consume-exec.mts'
 const AUDIT = 'scripts/lib/auto-ready-audit-template.ts'
+const BOOTSTRAP = 'src/lib/persona-comment-bootstrap-source.ts'
 
 /** 검사 실행 인자 — npm 스크립트와 같은 tsconfig 로 돈다 */
 const CHECKS = {
@@ -35,6 +36,7 @@ const CHECKS = {
   loop: ['tsx', 'scripts/ops-loop-check.mts'],
   audit: ['tsx', 'scripts/auto-ready-audit-check.mts'],
   supplyCycle: ['tsx', 'scripts/supply-cycle-check.mts'],
+  engine: ['tsx', 'scripts/persona-comment-engine-check.mts'],
 } as const
 type CheckName = keyof typeof CHECKS
 
@@ -76,6 +78,10 @@ const MUTATIONS: Mutation[] = [
     'export const AUDIT_PHASE_MINUTE = 10', 'export const AUDIT_PHASE_MINUTE = 20', 'supplyCycle'),
   M('결정 기준을 감사 재시도 전(01:30)으로 당긴다', CYCLE,
     'export const STAGE_DECISION_BASE_MINUTE = at(1, 50)', 'export const STAGE_DECISION_BASE_MINUTE = at(1, 30)', 'supplyCycle'),
+  // ⑤ 자정 근처 첫 댓글 — 예산 하한 = min(KST 자정, 지금 − 60분)
+  M('첫 댓글 예산 하한을 KST 자정으로 되돌린다(23:55 글이 00:05 회차 예산에서 빠진다)', BOOTSTRAP,
+    "      where: { status: 'PUBLISHED', createdAt: { gte: from, lte: now } },",
+    "      where: { status: 'PUBLISHED', createdAt: { gte: dayStart, lte: now } },", 'engine'),
 ]
 
 const dir = mkdtempSync(join(tmpdir(), 'day-window-mut-'))

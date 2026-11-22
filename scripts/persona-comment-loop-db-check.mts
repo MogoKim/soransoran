@@ -233,6 +233,38 @@ async function main(): Promise<void> {
     check('🔴 다음 회차 — provider 0 · 댓글 그대로 1건', f2.calls() === 0 && r2.providerCalls === 0 && (await personaComments(pid)).length === 1)
   }
 
+  /**
+   * 🔴 **자정을 넘는 첫 댓글** (2026-11-23 · 공개 하루 전체) — 23:55 글의 첫 댓글 회차가 다음 날 00:05 에 돈다.
+   *    옛 예산은 KST 자정부터 센 글만 자리로 봐서 이 글이 빠지고, 새 날 글이 없으면 "오늘 남은 자리 0" 으로 첫 댓글 0 이었다.
+   *    회차 시각은 주입한다(오늘 00:05 · 글은 어제 23:55 — 시나리오 ① 과 같은 10분 나이). 트랜잭션 재검사도 같은 시각이다.
+   */
+  console.log('\n①-b 🔴 자정 넘는 첫 댓글 — 어제 23:55 글 · 오늘 00:05 회차 → Persona 댓글 1건')
+  {
+    await wipe()
+    const a = await persona('P01'); await persona('P02'); await persona('P03')
+    const today = kstDayStart(new Date())
+    const postAt = new Date(today.getTime() - 5 * 60_000)
+    const runAt = new Date(today.getTime() + 5 * 60_000)
+    seq += 1
+    const pid = (await prisma.post.create({
+      data: {
+        boardType: 'FREE', title: TITLE(seq), content: BODY(seq), status: 'PUBLISHED', source: 'SYSTEM',
+        authorId: a.userId, personaId: a.id, publishAt: postAt, createdAt: postAt,
+      },
+      select: { id: true },
+    })).id
+    const f = fakeGenerate()
+    const r = await runCommentLoop({
+      prisma, now: runAt, env: process.env, live: true, source: source(), canon: canonRead,
+      makeGenerate: () => f.gen, generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+    })
+    await auditReplies()
+    const cs = await personaComments(pid)
+    check('🔴 🔴 **어제 23:55 글이 오늘 00:05 회차의 첫 댓글 예산에 든다 — 댓글 정확히 1건 · 글쓴이 아님 · provider 1**',
+      cs.length === 1 && cs[0]!.personaId !== a.id && f.calls() === 1,
+      `${cs.length} · ${JSON.stringify(r.lines.filter((l) => l.startsWith('예산')))} · ${JSON.stringify(r.outcomes.map((o) => o.step + ':' + o.reason))}`)
+  }
+
   console.log('\n② 60분 넘은 글 → 댓글 0 · provider 0 · 남은 후보는 닫는다')
   {
     await wipe()
