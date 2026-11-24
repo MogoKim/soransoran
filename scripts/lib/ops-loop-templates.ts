@@ -1,7 +1,7 @@
 /**
  * 🔴 **무인 운영 루프 launchd 템플릿 셋 — 문자열만 만든다. 등록 0 · 파일 write 0** (2026-09-28)
  *
- *   ① `com.soransoran.stage-controller` 하루 단계 결정(07:00 · 07:20 · 07:40 · 07:55 · 07:58 — 발행 창 08:00 전)
+ *   ① `com.soransoran.stage-controller` 하루 단계 결정(01:50 · 02:10 · 02:30 · 02:45 · 02:48 — 전날 마지막 바퀴가 닫힌 뒤)
  *   ② `com.soransoran.runner-recover`   실패·누락 회차 복구(30분마다 · 기본 dry-run 아님 → `--apply` 로 등록)
  *   ③ `com.soransoran.keep-awake`       `caffeinate -i -s` 로 **유휴·AC 전원 잠자기**를 막는다
  *   ④ `com.soransoran.ops-shadow-observer` 자연 공급 회차가 끝나면 shadow 계획을 한 번 관측해 감사 장부에 적는다
@@ -17,7 +17,7 @@
  */
 import { AUDIT_RUNNER_LABEL } from './auto-ready-audit-template'
 import { PUBLISH_RUNNER_LABEL, runnerPathValue, type RunnerPlistInput } from './original-post-runner-template'
-import { PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
+import { STAGE_DECISION_BASE_MINUTE, cycleLabel } from '../../src/lib/cycle-schedule'
 import { COMMENT_RUNNER_LABEL } from './persona-comment-runner-template'
 import type { RecoveryPolicy } from '../../src/lib/runner-recovery'
 import { OBSERVER_INTERVAL_SEC } from '../../src/lib/ops-shadow-observer'
@@ -26,8 +26,14 @@ export const STAGE_CONTROLLER_LABEL = 'com.soransoran.stage-controller'
 export const STAGE_CONTROLLER_SCRIPT = 'scripts/stage-controller.mts'
 /** 🔴 예약 실행은 `--apply` — 그래도 `STAGE_CONTROLLER_ENABLED=on` 이 아니면 쓰지 않는다 */
 export const STAGE_CONTROLLER_ARGS: readonly string[] = ['--apply']
-/** 07:55가 운영상 최종 판정 시각이고 07:58은 같은 결정을 다시 저장하는 fallback이다. */
-export const STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST = PUBLISH_WINDOW_START_MINUTE - 5
+/** 운영상 최종 판정 — 기준(`STAGE_DECISION_BASE_MINUTE`) + 55분. 그 뒤의 공급 busy 는 미루지 않고 안전 HOLD 다 */
+const FINAL_DECISION_OFFSET_MINUTES = 55
+/**
+ * 🔴 controller 가 깨는 분 — 기준에서 센 오프셋. 앞 셋은 공급 lease 를 기다리는 재시도, 넷째가 최종 판정,
+ *    다섯째는 같은 결정을 다시 저장하는 fallback 이다(같은 날 결정은 하나 · 있으면 읽기만).
+ */
+const STAGE_CONTROLLER_OFFSETS: readonly number[] = [0, 20, 40, FINAL_DECISION_OFFSET_MINUTES, FINAL_DECISION_OFFSET_MINUTES + 3]
+export const STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST = STAGE_DECISION_BASE_MINUTE + FINAL_DECISION_OFFSET_MINUTES
 
 export const RUNNER_RECOVER_LABEL = 'com.soransoran.runner-recover'
 export const RUNNER_RECOVER_SCRIPT = 'scripts/runner-recover.mts'
@@ -50,13 +56,13 @@ export const CAFFEINATE_PATH = '/usr/bin/caffeinate'
 export const CAFFEINATE_ARGS: readonly string[] = ['-i', '-s']
 
 /**
- * 🔴 **controller 는 발행 창보다 먼저 돈다** — 첫 발행 전에 그날 결정이 있어야 consumer 가
- *    safest 로 떨어지지 않는다. 다섯 번 깨우는 것은 **재시도**다(같은 날 결정은 하나 · 이미 있으면 읽기만).
- *    07:58은 07:55의 일시 저장 장애만 받는 최종 fallback이다.
+ * 🔴 **controller 는 전날이 닫힌 뒤 돈다** (2026-11-23 · 옛 07:00 은 발행 창 08:00 앞이었다).
+ *    공개는 자정에도 이어진다 — 그날 결정 전 회차(공급 · 댓글 · 발행)는 전날 결정이 지킨 단계로 잇는다(`headStartFor`).
+ *    다섯 번 깨우는 것은 **재시도**다(같은 날 결정은 하나 · 이미 있으면 읽기만). 마지막은 최종 판정의 일시 저장 장애만 받는 fallback 이다.
  */
 export function stageControllerSlots(): { hour: number; minute: number }[] {
-  return [60, 40, 20, 5, 2].map((before) => {
-    const m = PUBLISH_WINDOW_START_MINUTE - before
+  return STAGE_CONTROLLER_OFFSETS.map((after) => {
+    const m = STAGE_DECISION_BASE_MINUTE + after
     return { hour: Math.floor(m / 60), minute: m % 60 }
   })
 }
@@ -210,7 +216,7 @@ export const RECOVERY_POLICY_OF: Readonly<Record<string, RecoveryPolicy>> = {
 /** 설치 절차 — 공식 설치기 한 명령으로 적용하고 같은 설치기로 되돌린다. */
 export const OPS_LOOP_INSTALL_STEPS: readonly string[] = [
   '① runtime 을 이 PR 이 들어간 main SHA 로 배포한다 (npm run runtime:deploy — controller plist 는 아직 갱신되지 않는다)',
-  '② 필수 계획: npm run ops:loop-install (stage-controller 07:00·07:20·07:40·07:55·07:58 다섯 슬롯 대조)',
+  `② 필수 계획: npm run ops:loop-install (stage-controller ${stageControllerSlots().map((s) => cycleLabel(s.hour * 60 + s.minute)).join('·')} 다섯 슬롯 대조)`,
   '③ 필수 적용: npm run ops:loop-install -- --apply (runtime deploy 만 하고 끝내지 않는다)',
   '④ 단계 ON: npm run stage:switch -- --on --apply 뒤 npm run stage:controller -- --apply',
   '⑤ 되돌리기: npm run stage:switch -- --off --apply 뒤 npm run ops:loop-install -- --rollback=<백업 경로>',

@@ -33,6 +33,7 @@ import {
   judgeRunnerSecrets, type RunnerPlistInput,
 } from './lib/original-post-runner-template'
 import { judgeRepoAuthority } from './lib/stage-authority-repo'
+import { slotLabel } from '../src/lib/scale-profile'
 
 /**
  * 🔴 **시험용 입력** — 실행 반례를 실제 이 프로세스로 돌리기 위한 것이다.
@@ -106,7 +107,9 @@ if (process.argv.includes('--check-runtime')) {
 const fixed = renderRunnerPlistFor('fixed', input)
 const heartbeat = renderRunnerPlistFor('heartbeat', input)
 const grid = verifyHeartbeatGrid(heartbeatWakeTimes())
-console.log(`\n② 렌더  정시판 ${(fixed.match(/<key>Hour<\/key>/g) ?? []).length}회 · heartbeat ${heartbeatWakeTimes().length}회(08:00~22:00 · 10분)`)
+const wakes = heartbeatWakeTimes()
+console.log(`\n② 렌더  정시판 ${(fixed.match(/<key>Hour<\/key>/g) ?? []).length}회 · heartbeat ${wakes.length}회`
+  + `(${slotLabel(wakes[0]!)}~${slotLabel(wakes.at(-1)!)} · 10분)`)
 for (const g of grid) { console.log(`   🔴 ${g}`); blockers.push(g) }
 for (const [name, xml] of [['정시판', fixed], ['heartbeat', heartbeat]] as const) {
   const sec = judgeRunnerSecrets(xml)

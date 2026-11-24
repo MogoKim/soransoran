@@ -152,34 +152,21 @@
 - 이 수리의 첫 재배포는 옛 runtime 배포기로는 수리가 실행되지 않으므로 **staging 트리(수리 포함 target)의 배포기**로 시작한다.
 - 수동 manifest 수정은 하지 않는다. 재배포 뒤 manifest 식별자 = 실제 식별자를 확인해야 닫힌다.
 
-### 3.1 배포 순서와 안전창
+### 3.1 배포 창과 순서 (2026-11-23 · 24시간 공개)
 
-1. 전체 회귀검사와 독립 교차검수를 끝낸다.
-2. exact-head CI가 모두 green인 한 PR만 main에 병합한다.
-3. ✅ 보조 Mac에 말투 보충 묶음 v2 기록 · digest `be47bb88…` · 기존 40명 배정 diff 0 (2026-11-14 22:37 · 11-15 00:00 재검증).
-   현재 runtime은 v2를 읽지 않으므로 이 준비만으로 운영은 바뀌지 않는다.
-4. runtime은 23:40 감사 종료 뒤 00:30 수집 전인 **11-15 00:00~00:25**를 1순위로 삼는다.
-   직전 `runner-recover`·observer·다른 job이 실제 idle인지 확인하고 한 번만 배포한다. 예비창은 01:00~01:25이며
-   05:25를 넘기지 않는다. 단순히 22:15~05:30 전체를 idle로 가정하지 않는다.
-5. 배포 직후 HEAD=pin=manifest, 말투 자산 식별자, launchd, rollback, profile, `ops:loop-install --apply`를 확인한다.
-6. 11-14 07:00 controller 결정은 현재 runtime으로 확인만 한다. 05:30 안전창이 이미 닫혔으므로
-   새 runtime은 위의 11-15 00:00~00:25 또는 01:00~01:25에 실제 idle을 확인한 뒤에만 배포한다.
-7. 11-15 07:00 controller가 `PREPARE`를 확정하고 그날이 증명일이 아닐 때만 새 Persona 20명을
-   create→seed→check→activate 한다. 수동 stage·READY·장부 보정은 하지 않는다.
-   실행 수단은 무인 1회 job `com.soransoran.persona-d30-oneshot`(07:05 · 고정 날짜)였다(11-17 투입을 끝낸 뒤 코드와 job 을 지웠다) — 그 도구가
-   그날 controller 행 `PREPARE · d20 · d30`·비증명일·origin/main=HEAD=pin=manifest·배포 잠금/실행 중 job 0·승인 digest `be47bb88…`와
-   runtime 자산 식별자(따로)·기존 40 말투/상태·P44~P63 전원 미존재·관리자 1명을 모두 확인한 뒤에만 정본 `persona-cohort-run`을 부른다.
-   하나라도 어긋나면 write 0. 켠 뒤에는 정본 `readPersonaCapacity` 한 번의 판독이 contract-valid 60·stage-active 60이고, active 행 60·새 cohort active 20·
-   기존 40 행 지문 불변·정본 cohort check 0일 때만 PASS다. 판독 실패(null)·59·61을 포함해 그 밖이면 새 cohort만 pause한다. 설치·실행 결과는 관측 뒤에만 적는다.
-8. 자연 운영으로 비용·댓글·Persona cadence를 관측하고 rolling 72h 비용이 실제 green인 첫 07:00 controller가 D30을 열게 한다.
-
-~~11-14 07:00 이전에 Persona를 투입해 억지로 D30을 여는 것은 증명 전날 밤 cohort 변경이므로 하지 않는다.~~
-🔴 **2026-11-16 창업자 결정으로 위 문장을 대체한다.** 정본(goal canon §6)이 고정하는 cohort는 TRIAL·REPROVE 기록 **이후**뿐이다.
-1회 투입기는 그날 controller 결정 **전** 창(03:45~06:05 · 권위 = 전날 controller `PREPARE · d20 · d30` · 그날 행 없음)에서도
-투입한다. 07:00 controller가 60/60을 보고 시험을 열 수 있게 하기 위해서다. 결정 뒤 창(07:05~07:19)은 두 번째 기회로 남는다.
-공급 하루 승인 천장은 11-17부터 `$1.80`(날짜별 비용 계약)이다. 11-17 07:00 이 첫 현실 후보다 — 관측 전에는 PASS가 아니다.
-현재 기준선과 새 코드 모델을 섞은 보수 추정상 11-16은 약 $0.045, 11-17은 약 $0.0415다. 창 전체가 새 코드인
-**11-18 07:00**이 첫 현실 후보이며, 실제 rolling 72h 비용이 아직 red면 green이 되는 첫 07:00으로 자동 이월한다.
+- 🔴 **배포 창은 그날 마지막 공급 회차(22:20 바퀴 · 22:35 시작)가 끝난 뒤 ~ 23:50 이다.** 다음 수집은 01:00 · 그날 결정은
+  01:50(최종 02:45)이라 실패해도 결정 전에 되돌릴 시간이 남는다. 바퀴·결정 시각의 정본은 `src/lib/cycle-schedule.ts` 다.
+- 🔴 **01:00 뒤에는 배포·설치를 하지 않는다.** 결정 직전에 job 이 내려가면 결정이 공급 회차를 기다리다 밀리고, 발행 러너가
+  30분 넘게 내려갔다 올라오면 그날 오류 신호가 모름이 된다(`PUBLISH_RUN_MAX_AGE_MS`).
+- 창 안에도 쉬는 순간은 없다 — 발행 틱 10분마다 · 댓글 :07 · :27 · :47 · 감사 :10 · :40. 배포기는 도는 job 이 있으면
+  거절하므로 래퍼가 idle 순간을 기다려 다시 시도하고, 배포 직전 10분 안에 나간 글의 첫 댓글이 달렸는지 본다.
+- 순서: exact-head CI 가 green 인 PR 하나만 merge → `runtime:deploy`(예약표는 옛 설치본 그대로 되올린다) → HEAD=pin=manifest 확인 →
+  그 밤에 투입이 있으면 Persona 투입 → `ops:loop-install --apply`(새 예약표: 발행 144 · controller 01:50 · 감사 48 · 댓글 72) →
+  strict 격리 → 독립 확인(감사 러너 loaded · 예약 48회 · runtime 경로). 설치기는 설치돼 있지 않은 감사·댓글 러너를
+  "미설치"로 적기만 하고 깔지 않는다.
+- 24시간 공개를 되돌릴 때: ① 새 runtime 에서 `npm run ops:loop-install -- --rollback=<그 밤 설치 snapshot>`(옛 예약표 복원 —
+  밤 틱 0 · 결정 07:00 인 안전한 퇴보 상태) ② 그 합침을 되돌린 커밋을 main 에 합치고 그 SHA 로 `runtime:deploy`
+  ③ 옛 설치기로 `ops:loop-install --apply`. 배포기는 origin/main 끝만 받는다 — 옛 SHA 를 그대로 배포하지 않는다.
 
 ## 4. PASS/FAIL/UNKNOWN과 rollback
 
@@ -219,7 +206,7 @@ code·deployed·operating 증거를 서로 대신 쓰지 않는다.
 | 7 | D50 | D30 operating PASS 뒤 Persona 100·비용·host 준비 | controller 자연 개방 |
 | 8 | D100 | D50 operating PASS 뒤 180/300+·100편 부하·host 전환 | 제품·운영 전체 증거 |
 
-30대 여성 Persona는 이번 +20이나 D50 하한에 섞지 않는다. 비율·브랜드 범위를 창업자가 정한 뒤 별도 canary로 관측한다.
+30대 여성 Persona 10명은 D50 +40 cohort 에 들어가고 D50 하한 100명에 센다(11-18 · 11-19 창업자 결정).
 
 ## 6. 완료 보고 계약
 
@@ -233,6 +220,5 @@ code·deployed·operating 증거를 서로 대신 쓰지 않는다.
 ## 7. 창업자 결정이 필요한 것
 
 - 새 비용 상한, credential, DB migration, 법률·브랜드 정책, host 최종 cutover.
-- 30대 Persona canary의 비율·브랜드 범위.
 
 현재 승인된 가역 범위 안의 PR·merge·runtime 배포 순서는 Codex가 판정하고 Claude Code가 실행한다.
