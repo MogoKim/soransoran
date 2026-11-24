@@ -10,7 +10,7 @@
  *      글 자격       `cardToPersona` → `hardFilter` — 배정 판정(`judgeAutoAssignment`)의 정적 축
  *      댓글 자격     `judgePlannerPersona`      — 댓글 분산 planner 의 Persona 쪽 판정
  *      말투 근거     `planBundles` · `referenceSeedShareCount` — 고정 배정과 같은 규칙
- *      다른 사람인가 `judgeDistinctness`(성격·관점·noGo·생활사) · `judgeVoiceSeparation`(문체 거리)
+ *      다른 사람인가 `judgeDistinctness`(성격·관점·noGo·생활사) · `voiceTooClose`(문체 거리 — `judgeVoiceSeparation`)
  *
  * 🔴 DB · 네트워크 · LLM 없음. 정본 말투 자산(로컬 파일)만 읽는다 — `voicePoolFor`.
  */
@@ -27,7 +27,7 @@ import { hardFilter, readLengthBand, readPostRequirements } from '../../src/lib/
 import { judgePlannerPersona, type PlannerPersona, type PlannerPost } from '../../src/lib/persona-comment-planner'
 import { COMMENT_REACTION_ROLES } from '../../src/lib/persona-reaction-roles'
 import {
-  judgeVoiceEvidence, judgeVoiceSeparation, type VoiceReferenceBundle,
+  judgeVoiceEvidence, voiceSeparationBaseline, voiceTooClose, type VoiceReferenceBundle,
 } from '../../src/lib/persona-voice-reference'
 import { PRODUCTION_PERSONA_CODES } from '../../src/lib/persona-cohort'
 import { isPoolCode } from '../../src/lib/persona-card-verify'
@@ -39,7 +39,7 @@ import {
 import { candidateOf } from './d100-persona-tiers.mjs'
 import {
   loadCanonAsset, planAppendOnlyBundles, planBundles, referenceSeedShareCount, stableAssignment,
-  type LocalComment,
+  type LocalComment, type VoiceBandCap,
 } from './persona-reference-store.mjs'
 import { selectFrozenSupplementBundle } from './persona-reference-supplement-store.mjs'
 
@@ -309,6 +309,8 @@ export type VoicePool = {
   supplementalSpeakers: number
   supplementalEligible: number
   supplementalExcluded: number
+  /** 🔴 새 묶음 voiceBand 상한 — 배정이 판정과 같은 식으로 바꾼 자리 · 건너뛴 여분 · 남은 넘침(`planAppendOnlyBundles`) */
+  voiceBandCap: VoiceBandCap
 }
 
 /**
@@ -330,6 +332,7 @@ export function voicePoolFor(input: {
     ok: false, code: canon.code, eligibleSpeakers: 0, assignedSpeakers: 0,
     productionWithoutVoice: [], byCode: new Map(), drift: [], productionBundles: [],
     supplementalSpeakers: 0, supplementalEligible: 0, supplementalExcluded: 0,
+    voiceBandCap: { replaced: [], skipped: { tooClose: 0, seedShared: 0 }, baseline: null, problems: [] },
   }
   if (!canon.ok || canon.rows.length === 0) return empty
   const base = stableAssignment({ repoRoot: input.repoRoot })
@@ -383,6 +386,7 @@ export function voicePoolFor(input: {
     supplementalSpeakers: appended.extraSpeakers,
     supplementalEligible: appended.extraEligibleSpeakers,
     supplementalExcluded: appended.excludedExtraSpeakers,
+    voiceBandCap: appended.voiceBandCap,
   }
 }
 
@@ -395,7 +399,7 @@ export function voicePoolFor(input: {
  *
  *    ① 한 명씩 `judgeAutogenCandidate` (운영 검증기 · 4상태 계약 축)
  *    ② 성격·관점·noGo·생활사 겹침 — `judgeDistinctness` (정본 카드 + **앞선 코드의** 후보)
- *    ③ 문체 거리 — `judgeVoiceSeparation`. 기준은 **운영 고정 배정 묶음끼리의 최소 거리**다:
+ *    ③ 문체 거리 — `voiceTooClose`(`judgeVoiceSeparation`). 기준은 **운영 고정 배정 묶음끼리의 최소 거리**다(`voiceSeparationBaseline`):
  *       운영 Persona 들이 서로 떨어진 것보다 더 가까우면 "이미 있는 누구와 같은 말투" 다.
  *       새 임계값을 지어내지 않는다 — 운영에서 실제로 쓰는 분리도를 넘지 못하면 막는다.
  *       기준을 못 재면(운영 묶음 2개 미만) 모른다 → 격리.
@@ -428,9 +432,8 @@ export function judgeAutogenBatch(
     peers.push(me)
   })
 
-  // ── ③ 문체 거리 ──
-  const base = judgeVoiceSeparation(ctx.productionBundles)
-  const voiceBaseline = ctx.productionBundles.length >= 2 ? base.minDistance : null
+  // ── ③ 문체 거리 — 🔴 식은 `voiceSeparationBaseline` · `voiceTooClose` 하나다(말투 배정의 voiceBand 교체도 같은 식을 쓴다) ──
+  const voiceBaseline = voiceSeparationBaseline(ctx.productionBundles)
   const withVoice = sorted
     .map((c, i) => ({ c, v: verdicts[i]! }))
     .filter((x) => x.v.status !== 'rejected' && x.c.voice !== null)
@@ -442,9 +445,8 @@ export function judgeAutogenBatch(
     // 🔴 정본 운영 묶음 + 앞선 후보만 상대로 본다(뒤 코드가 격리된다)
     const mine = { ...x.c.voice!.bundle, personaCode: x.c.code }
     const others = [...ctx.productionBundles, ...withVoice.slice(0, i).map((y) => ({ ...y.c.voice!.bundle, personaCode: y.c.code }))]
-    const sep = judgeVoiceSeparation([mine, ...others])
-    const near = sep.perBundle.find((p) => p.personaCode === x.c.code)
-    if (near !== undefined && near.distance < voiceBaseline) {
+    const near = voiceTooClose(mine, others, voiceBaseline)
+    if (near !== null) {
       demote(x.v, 'VOICE_TOO_CLOSE',
         `${near.nearest} 와 문체 거리 ${near.distance.toFixed(3)} < 운영 최소 분리 ${voiceBaseline.toFixed(3)}`)
     }

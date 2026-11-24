@@ -92,6 +92,7 @@
     "persona:reference-supplement-build": "tsx scripts/persona-reference-supplement-build.mts",
     "persona:reference-supplement-check": "tsx scripts/persona-reference-supplement-check.mts",
     "persona:voice-consumer-check": "tsx scripts/persona-voice-consumer-check.mts",
+    "persona:voice-band-cap-check": "tsx scripts/persona-voice-band-cap-check.mts && tsx scripts/persona-voice-band-cap-mutation.mts",
     "d20:readiness": "tsx scripts/d20-readiness.mts",
     "d20:readiness:next-day": "tsx scripts/d20-readiness.mts --next-day",
     "d20:readiness-check": "tsx scripts/d20-readiness-check.mts",

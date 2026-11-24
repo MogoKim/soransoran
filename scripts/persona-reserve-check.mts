@@ -319,7 +319,11 @@ export async function runPersonaReserveChecks(check: Check): Promise<void> {
       !/status: 'active', identity: idn/.test(lib) && !/daysSinceActive: 0/.test(lib))
     check('계기판 readPersonaReserve 는 judgePersonaReserve 를 부른다', /judgePersonaReserve\(/.test(tiers))
     check('CLI 는 judgeAutogenBatch(겹침·문체 거리)로 판정한다', /judgeAutogenBatch\(candsWith\(cr\),/.test(cli) && /const batch = judgeAll\(creative\)/.test(cli))
-    check('autogen 은 judgeVoiceSeparation 을 실제로 부른다', /judgeVoiceSeparation\(/.test(lib))
+    // 🔴 문체 거리 식은 판정과 말투 배정이 같이 쓰는 한 곳(`persona-voice-reference`)으로 옮겼다(2026-11-23) — autogen 은 그 식을 부른다
+    const voiceRef = strip(readFileSync('src/lib/persona-voice-reference.ts', 'utf-8'))
+    check('autogen 은 문체 거리 판정(voiceSeparationBaseline · voiceTooClose → judgeVoiceSeparation)을 실제로 부른다',
+      /voiceSeparationBaseline\(ctx\.productionBundles\)/.test(lib) && /voiceTooClose\(mine, others, voiceBaseline\)/.test(lib)
+      && /export function voiceTooClose\([\s\S]*?judgeVoiceSeparation\(\[mine, \.\.\.others\]\)/.test(voiceRef))
   }
 }
 

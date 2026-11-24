@@ -45,7 +45,12 @@ const two = Array.from({ length: 99 }, (_, i) => personaCodeOf(i + 1))
 let pairDiff = 0
 for (const a of two) for (const b of two) if (Math.sign(comparePersonaCodes(a, b)) !== Math.sign(a.localeCompare(b))) pairDiff += 1
 check(`🔴 P01~P99 모든 쌍(${99 * 99})에서 숫자순 = 옛 사전순 — 지금 운영 순서는 바뀔 수 없다`, pairDiff === 0, `${pairDiff}쌍 다름`)
-check('🔴 운영 universe 순서 = 옛 사전순 그대로', PRODUCTION_PERSONA_CODES.join(',') === [...PRODUCTION_PERSONA_CODES].sort().join(','))
+// 🔴 세 자리 코드(P100~)가 운영 universe 에 들어온 뒤(wave8) — 전체는 숫자순이고, 두 자리 코드끼리는 옛 사전순과 한 쌍도 다르지 않다
+const prodTwo = PRODUCTION_PERSONA_CODES.filter((c) => c.length === 3)
+check('🔴 운영 universe 순서 = 숫자순 · 두 자리 코드끼리는 옛 사전순 그대로 · 세 자리는 맨 뒤',
+  PRODUCTION_PERSONA_CODES.join(',') === sortPersonaCodes(PRODUCTION_PERSONA_CODES).join(',')
+  && prodTwo.join(',') === [...prodTwo].sort().join(',')
+  && PRODUCTION_PERSONA_CODES.slice(0, prodTwo.length).join(',') === prodTwo.join(','))
 check('반례 — 옛 사전순은 P100 을 P10 과 P11 사이에 둔다(고친 결함)', [...two, 'P100'].sort().indexOf('P100') === 10 && sortPersonaCodes([...two, 'P100']).at(-1) === 'P100')
 check('정본 표기 — P01 · P99 · P100 · P999 는 코드', ['P01', 'P99', 'P100', 'P999'].every(isPersonaCode))
 check('반례 — P1 · P001 · P00 · p01 은 코드가 아니다 (표기)', !['P1', 'P001', 'P00', 'p01', 'P01a'].some(isPersonaCode))

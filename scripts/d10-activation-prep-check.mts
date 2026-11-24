@@ -134,16 +134,16 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 2~10자
   check('🔴 문체 세 밴드가 모두 2명 이상', voice.every((c) => c.holders.length >= THIN_THRESHOLD))
   check('🔴 측정 당시 문체 합이 24명 (P09 제외)', voice.reduce((n, c) => n + c.holders.length, 0) === 24)
 
-  // 🔴 cohort — 현재 정본: 일곱 회차 60명 (wave7-d30 준비 · 2026-11-14)
+  // 🔴 cohort — 현재 정본: 여덟 회차 103명 (wave8-d50 준비 · 2026-11-23)
   check('🔴 manifest 전체가 성립한다', verifyAllCohorts().length === 0)
   check('🔴 wave4-depth 가 P21~P25 다', COHORTS['wave4-depth'].codes.join() === NEW.join())
   check('🔴 wave4 는 wave3 를 선행으로 요구한다', COHORTS['wave4-depth'].requires.includes('wave3-scale'))
   const total = Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0)
-  check('🔴 일곱 회차 합이 60명 = 목표 인원', total === 60 && TARGET_PERSONA_COUNT === 60)
-  check('🔴 그 수가 현재 Pool 유효 카드 수(61 − P09)와 같다', total === full.cards.length - Object.keys(EXCLUDED_CODES).length && full.cards.length === 61)
-  check('🔴 열린 회차는 wave7-d30 하나뿐이다', RUNNABLE_COHORTS.join() === 'wave7-d30')
-  check('🔴 wave1~wave6 는 끝난 회차다',
-    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary'].every((c) => CLOSED_COHORTS.includes(c as CohortId)))
+  check('🔴 여덟 회차 합이 103명 = 목표 인원', total === 103 && TARGET_PERSONA_COUNT === 103)
+  check('🔴 그 수가 현재 Pool 유효 카드 수(104 − P09)와 같다', total === full.cards.length - Object.keys(EXCLUDED_CODES).length && full.cards.length === 104)
+  check('🔴 열린 회차는 wave8-d50 하나뿐이다', RUNNABLE_COHORTS.join() === 'wave8-d50')
+  check('🔴 wave1~wave7 은 끝난 회차다',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary', 'wave7-d30'].every((c) => CLOSED_COHORTS.includes(c as CohortId)))
   const codes = new Set(full.cards.map((c) => c.code))
   check('🔴 manifest 코드가 전부 Pool 카드에 있다',
     Object.values(COHORTS).every((m) => m.codes.every((c) => codes.has(c))))
@@ -1128,12 +1128,12 @@ console.log('\n⑰ 문서 정합 — 낡은 숫자·낡은 절차를 남기지 �
 }
 
 // ── ⑧ wave5-d10 — Persona 30 준비 (2026-10-08) ──
-console.log('\n⑧ wave5-d10 보존 — 카드 61 · production 60 · 역사적 cohort 7')
+console.log('\n⑧ wave5-d10 보존 — 카드 104 · production 103 · 역사적 cohort 8')
 {
   const { cards, problems } = parsePoolDoc(read(POOL_DOC))
   const WAVE5 = ['P26', 'P27', 'P28', 'P29', 'P30', 'P32']
-  check('🔴 카드 61장 · 파싱 문제 0', cards.length === 61 && problems.length === 0)
-  check('🔴 production universe 60명 = 카드 61 − P09', PRODUCTION_PERSONA_CODES.length === 60
+  check('🔴 카드 104장 · 파싱 문제 0', cards.length === 104 && problems.length === 0)
+  check('🔴 production universe 103명 = 카드 104 − P09', PRODUCTION_PERSONA_CODES.length === 103
     && PRODUCTION_PERSONA_CODES.length === cards.length - Object.keys(EXCLUDED_CODES).length)
   check('🔴 P09 는 카드에 있지만 어느 cohort 에도 없다', cards.some((c) => c.code === 'P09')
     && Object.values(COHORTS).every((m) => !m.codes.includes('P09')) && !PRODUCTION_PERSONA_CODES.includes('P09'))
@@ -1143,9 +1143,9 @@ console.log('\n⑧ wave5-d10 보존 — 카드 61 · production 60 · 역사적 
   check('🔴 wave5 의 선행은 앞 네 회차 전부다',
     ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth'].every((r) => COHORTS['wave5-d10'].requires.includes(r as CohortId))
     && COHORTS['wave5-d10'].requires.length === 4)
-  check('🔴 끝난 옛 회차는 CLI 가 다시 열지 못하고 wave7만 열린다',
-    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary'].every((c) => !judgeCohortArg(c).ok)
-    && judgeCohortArg('wave7-d30').ok)
+  check('🔴 끝난 옛 회차는 CLI 가 다시 열지 못하고 wave8만 열린다',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary', 'wave7-d30'].every((c) => !judgeCohortArg(c).ok)
+    && judgeCohortArg('wave8-d50').ok)
   const args = (limit: number | null) => judgeArgs({ apply: true, limit, actorUserId: 'u', reason: 'r', cohortSize: COHORTS['wave5-d10'].codes.length, requireActor: false })
   check('🔴 --limit=6 이 아니면 적용 거부', args(6).ok && !args(5).ok && !args(7).ok && !args(null).ok)
   check('🔴 manifest 전체가 성립한다(중복 코드 · 선행 누락 0)', verifyAllCohorts().length === 0)

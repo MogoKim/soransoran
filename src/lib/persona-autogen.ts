@@ -18,7 +18,7 @@
  *    여기 있는 것은 골격 생성 · 말투 관찰값 · 카드 렌더러 · seed 조립뿐이다.
  */
 import { PERSONA_CODE_MAX, personaCodeNumber as personaCodeNumberOf, personaCodeOf } from './persona-code'
-import { CHILD_AGE_BANDS, type ChildAgeBand } from './original-post-persona-match'
+import { CHILD_AGE_BANDS, readLengthBand, type ChildAgeBand, type LengthBand } from './original-post-persona-match'
 import { ANCHOR_BASE_DATE, checkLifeConsistency, exactAgeOn, bandOfAge } from './persona-birth-anchor'
 import { coverageOf, gainOf, THIN_THRESHOLD, type AxisSubject } from './persona-axis-coverage'
 import { MARITAL_VALUES } from './persona-card-verify'
@@ -198,6 +198,15 @@ const MENOPAUSE_BY_AGE: Readonly<Record<string, string>> = {
   '40대 중반': '전', '40대 후반': '전', '50대 초반': '진행중', '50대 후반': '후', '60대 초반': '후',
 }
 export const AUTOGEN_AGE_BANDS = Object.keys(MENOPAUSE_BY_AGE)
+
+/**
+ * 🔴 **확장 관문이 받는 나이대** — 사람이 설계한 확장 fixture 의 대상 연령 (2026-11-23).
+ *    창업자 결정(2026-11-18 · 11-19 · 11-22): 30대 여성 Persona 를 전체의 10% 로 넣고 단계 하한 수에 센다.
+ *    그래서 관문은 30대 초반·중반·후반을 받는다. 그 밖의 나이 규칙은 그대로다 — 20대 · 60대 중반 이상은 여전히
+ *    `AGE_OUT_OF_AUDIENCE` 이고, 생일 ↔ 나이대 · 갱년기 · 자녀 터울 · 은퇴는 `lifeProblems` 가 같은 기준으로 본다.
+ *    🔴 자동 골격(`AUTOGEN_AGE_BANDS` · `birthDateFor`)은 30대를 만들지 않는다 — 30대 카드는 사람이 설계한 fixture 로만 온다.
+ */
+export const EXPANSION_AGE_BANDS: readonly string[] = ['30대 초반', '30대 중반', '30대 후반', ...AUTOGEN_AGE_BANDS]
 
 /** 🔴 자녀 구성 후보 — 매칭이 아는 밴드(`CHILD_AGE_BANDS`)만 쓴다 */
 const KID_PROFILES: ReadonlyArray<{ count: number; bands: ChildAgeBand[] }> = [
@@ -466,6 +475,14 @@ export function voiceCoreFromBundle(b: VoiceReferenceBundle): SeedVoiceCore {
     register: polite ? '존댓말' : '구어체',
     emoji: c.jamo + c.deco > 0.3 ? '가끔' : '없음',
   }
+}
+
+/**
+ * 🔴 **새 후보의 문체 밴드 — 배정된 묶음에서 잰다** (2026-11-23). 집단 다양성 판정(`persona-expansion-gate`)과
+ *    말투 배정의 voiceBand 상한(`planAppendOnlyBundles`)이 이 함수 하나를 쓴다. 카드에 적힌 글자가 아니라 묶음이 정한다.
+ */
+export function voiceBandOfBundle(b: VoiceReferenceBundle): LengthBand | null {
+  return readLengthBand(voiceCoreFromBundle(b).length)
 }
 
 /**
