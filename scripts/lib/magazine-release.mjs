@@ -43,6 +43,7 @@ export const bundleFilePath = (graphVersion) => planInputRel(graphVersion)
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const SLUG_LEN = { min: 3, max: 80 }
 const PUBLISH_AT_RE = /^\d{4}-\d{2}-\d{2}T10:30:00\+09:00$/
+const HEX64_RE = /^[0-9a-f]{64}$/
 /** 빈 날을 찾는 상한 — 1년 넘게 찬 달력은 정상 상태가 아니다(멈춘다) */
 const SLOT_HORIZON_DAYS = 400
 
@@ -253,8 +254,10 @@ const canonicalSlugsOf = (bundleMappings, intentId) => bundleMappings.filter((m)
  * release 조립 — 순수. 같은 입력 = 같은 release(바이트 · releaseId).
  * @param {{
  *   bundle: string, controlText: string, articlesText: string, legacyQueue: { active: boolean, text: string|null }, nowMs: number,
- *   candidates: { planId: string, planHash: string, providerPlanHash: string|null, slugProposal: string|null,
+ *   candidates: { planId: string, planHash: string, providerPlanHash: string|null, slugProposal: string|null, manuscriptSha256: string,
  *                 article: object, hero: { sha256: string, width: number, height: number } }[],
+ *                 providerPlanHash — Job 이 원고를 만들 때 묶은 값. 지금 main 에서 다시 만든 값과 다르면 그 후보는 보류(PROVIDER_PLAN_DRIFT)
+ *                 manuscriptSha256 — 검증된 원고 파일의 해시(재개 결속)
  *   slugRecords: Record<string, { intentId: string, slug: string }>,  intentId → 이미 묶인 slug
  *   occupied: { dates: string[], slugs: string[] },                     열린 매거진 PR 이 쓰는 날짜 · slug
  *   existingHeroSlugs: string[],                                        main 에 hero 폴더가 이미 있는 slug
@@ -302,6 +305,12 @@ export function assembleRelease(input) {
     //   admission 에서 빠지는 후보(NOT_ADMITTED)는 아래 고정점이 admission 의 실제 사유로 뺀다 — 여기서 흐린 사유로 덮지 않는다
     const ppCodes = [...new Set(pp.problems.map((p) => p.code))].sort(byCodeUnit)
     if (!pp.ok && ppCodes.join() !== 'NOT_ADMITTED') { addReason(c.planId, 'PROVIDER_PLAN_HOLD', ppCodes.join('+')); continue }
+    // 🔴 원고가 쓰인 입력 = 지금 release 하려는 입력 — Job 이 기록한 ProviderPlan 해시가 지금 main 에서 다시 만든 값과 같아야 한다.
+    //    다르면(관련 글 · 제목이 그 사이 바뀜) 그 원고가 어떤 입력으로 쓰였는지 설명할 수 없다 — 그 후보만 보류한다(재생성이 아니라 재검토 대상).
+    //    기록이 없으면 대조할 수 없다 — 다시 만든 값으로 대신 채우지 않는다.
+    if (pp.ok && c.providerPlanHash !== pp.providerPlanHash) { addReason(c.planId, HEX64_RE.test(String(c.providerPlanHash)) ? 'PROVIDER_PLAN_DRIFT' : 'PROVIDER_PLAN_UNBOUND'); continue }
+    // 검증된 원고의 해시 — journal 의 재개 결속이 쓴다. 없으면 이어받을 때 대조할 수 없다
+    if (!HEX64_RE.test(String(c.manuscriptSha256))) { addReason(c.planId, 'MANUSCRIPT_UNBOUND'); continue }
     const ap = articleProblems(c.article, plan)
     if (ap.length) { addReason(c.planId, 'ARTICLE_INVALID', ap.join('+')); continue }
     if (!isPlain(c.hero) || !/^[0-9a-f]{64}$/.test(String(c.hero.sha256)) || c.hero.width !== HERO_WIDTH || c.hero.height !== HERO_HEIGHT) { addReason(c.planId, 'HERO_INVALID'); continue }
@@ -348,7 +357,8 @@ export function assembleRelease(input) {
     // 🔴 admission 을 통과한 후보는 ProviderPlan 도 열려 있어야 한다(NOT_ADMITTED 를 미룬 후보가 여기 올 수 없다) — 아니면 멈춘다
     if (!m.providerPlanHash) fail('PROVIDER_PLAN_UNRESOLVED', `${id} 의 ProviderPlan 을 확인하지 못했다`)
     return { planId: id, planHash: m.plan.planHash, intentId: m.plan.intentId, cluster: m.plan.cluster, slug: m.slug, slugSource: m.slugSource,
-      publishAt: publishAtOf(dayOf.get(id)), layer: a.layer, groundedBy: a.groundedBy, providerPlanHash: m.providerPlanHash, heroSha256: m.c.hero.sha256 }
+      publishAt: publishAtOf(dayOf.get(id)), layer: a.layer, groundedBy: a.groundedBy, providerPlanHash: m.providerPlanHash, heroSha256: m.c.hero.sha256,
+      manuscriptSha256: m.c.manuscriptSha256 }
   })
   const withdrawn = [...reasons.entries()].map(([planId, rs]) => ({ planId, reasons: [...new Set(rs)].sort(byCodeUnit) })).sort((a, b) => byCodeUnit(a.planId, b.planId))
   if (!members.length) return { ...base, ok: false, code: 'NO_RELEASABLE_CANDIDATE', why: '출판 최소 · 결속 · slug 를 통과한 후보가 없다', members, withdrawn }

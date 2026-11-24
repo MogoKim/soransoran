@@ -9,6 +9,8 @@
  *   RJ  journal + CAS (실제 파일 시스템) — 중간 사망 재실행 · CAS 경쟁 · 충돌 · hero 해시 · slug 기록 · writer 잠금
  *   RE  끝에서 끝 — 임시 bare origin + 실제 git(fetch · show · worktree · commit · push · merge) + 가짜 GitHub(PR · CI · merge 만)
  *       dry-run 쓰기 0 · Draft PR 1 · auto merge · 단계별 사망 재실행 · freeze · CI 실패 · 날짜 놓침 · 변조 PR · 낡은 base
+ *   RS  재개 결속(순수) — 원본 commit · 바이트 · 검증된 원고 · hero · ProviderPlan 반례 하나씩
+ *   RR  01:00 release ↔ 02:00 복구 — 같은 journal · 같은 PR · 새 PR 0 · 날짜 변경 · CI 지연 · freeze · 닫기 실패 · 중복 · 서빙 분리
  *   RB2 vNext 진입점의 legacy 모듈 도달 0 · legacy 상수와 같은 값
  *
  * 🔴 운영 runtime · 운영 장부 · 실제 GitHub · 네트워크 · Slack 0. HOME 은 시작하자마자 임시 폴더다. 외부 효과(GitHub)만 대역이다.
@@ -38,8 +40,15 @@ const FZ = await import('./lib/magazine-merge-freeze.mjs')
 const CAND = await import('./lib/magazine-release-candidates.mjs')
 const { provenanceOverlay } = await import('../src/lib/magazine-provenance-rule.mjs')
 
+// 변이는 전체 무변이 검사를 먼저 통과한 뒤, 각 결함을 검출해야 하는 사례를 실행한다.
+const args = process.argv.slice(2)
+if (args.length && (args.length !== 2 || args[0] !== '--case')) throw new Error('사용법: [--case ID]')
+const selectedCase = args[1]
+let selectedCount = 0
 let pass = 0, fail = 0
 const check = async (id, name, fn) => {
+  if (selectedCase && id !== selectedCase && !(selectedCase === 'RE11' && id === 'RE3')) return
+  if (id === selectedCase) selectedCount++
   try { await fn(); pass++; console.log(`PASS ${id} ${name}`) } catch (e) { fail++; console.log(`FAIL ${id} ${name} — ${String(e?.message ?? e).split('\n')[0].slice(0, 400)}`) }
 }
 const assert = (ok, why) => { if (!ok) throw new Error(why) }
@@ -85,7 +94,7 @@ const providerHash = (F, plan, main = mainOf(F), nowMs = NOW) => CP.projectProvi
 const candidateOf = (F, intentId, over = {}) => {
   const plan = F.plan(intentId)
   return { planId: plan.planId, planHash: plan.planHash, providerPlanHash: providerHash(F, plan), slugProposal: `fx-rel-${intentId.toLowerCase()}`,
-    article: articleFor(plan), hero: { sha256: sha256(webp(1200, 675, intentId)), width: 1200, height: 675 }, ...over }
+    manuscriptSha256: sha256(Buffer.from(JSON.stringify(over.article ?? articleFor(plan)))), article: articleFor(plan), hero: { sha256: sha256(webp(1200, 675, intentId)), width: 1200, height: 675 }, ...over }
 }
 const assemble = (F, cands, over = {}) => R.assembleRelease({
   ...mainOf(F, over), nowMs: over.nowMs ?? NOW, candidates: cands, slugRecords: over.slugRecords ?? {}, occupied: over.occupied ?? { dates: [], slugs: [] },
@@ -109,16 +118,21 @@ try {
   const ALL = ['I-F1-01', 'I-F2-01', 'I-F2-02']
 
   // ════ FZ — merge freeze ════════════════════════════════════
-  await check('FZ1', 'freeze 창 경계 — [22:00, 02:30) KST 두 밤만 막고 그 밖은 연다 · 시각 불명 · 표 손상은 막는다', () => {
+  await check('FZ1', 'freeze 창 경계 — [20:00, 02:30) KST 두 밤만 막고 그 밖은 연다 · 시각 불명 · 표 손상은 막는다', () => {
     const at = (s) => FZ.judgeMergeFreeze(KST(s))
-    const open = ['2026-11-24T21:59:59.999', '2026-11-25T02:30:00', '2026-11-25T12:00:00', '2026-11-25T21:59:59', '2026-11-26T02:30:00', '2026-11-27T01:00:00', '2026-11-23T23:00:00']
-    const shut = ['2026-11-24T22:00:00', '2026-11-25T01:00:00', '2026-11-25T02:00:00', '2026-11-25T02:29:59.999', '2026-11-25T22:00:00', '2026-11-26T01:00:00', '2026-11-26T02:29:59']
+    // 두 창 각각의 네 경계 — 19:59:59 열림 · 20:00:00 막힘 · 다음 날 02:29:59 막힘 · 02:30:00 열림
+    const open = ['2026-11-24T19:59:59', '2026-11-24T19:59:59.999', '2026-11-25T02:30:00', '2026-11-25T12:00:00', '2026-11-25T19:59:59', '2026-11-25T19:59:59.999', '2026-11-26T02:30:00',
+      '2026-11-27T01:00:00', '2026-11-26T20:00:00', '2026-11-23T23:00:00']
+    const shut = ['2026-11-24T20:00:00', '2026-11-24T21:00:00', '2026-11-24T22:00:00', '2026-11-25T01:00:00', '2026-11-25T02:00:00', '2026-11-25T02:29:59', '2026-11-25T02:29:59.999',
+      '2026-11-25T20:00:00', '2026-11-25T21:59:59', '2026-11-26T01:00:00', '2026-11-26T02:29:59', '2026-11-26T02:29:59.999']
     for (const s of open) assert(!at(s).frozen, `${s} 를 막았다`)
     for (const s of shut) assert(at(s).frozen && at(s).code === 'MERGE_FREEZE_WINDOW', `${s} 를 열었다`)
+    assert(at('2026-11-24T20:00:00').window.id === 'freeze-2026-11-24-night' && at('2026-11-25T20:00:00').window.id === 'freeze-2026-11-25-night', '창 id')
     assert(FZ.judgeMergeFreeze(NaN).code === 'MERGE_FREEZE_CLOCK_INVALID' && FZ.judgeMergeFreeze(undefined).frozen, '시각 불명을 열었다')
     assert(FZ.judgeMergeFreeze(KST('2026-12-01T01:00:00'), [{ id: 'x', startAt: '2026-02-30T22:00:00+09:00', endAt: '2026-03-01T02:30:00+09:00' }]).code === 'MERGE_FREEZE_TABLE_INVALID', '깨진 창 표를 열었다')
     assert(FZ.judgeMergeFreeze(KST('2026-12-01T01:00:00'), [{ id: 'x', startAt: '2026-12-02T02:30:00+09:00', endAt: '2026-12-02T02:30:00+09:00' }]).code === 'MERGE_FREEZE_TABLE_INVALID', '끝 ≤ 시작 창을 받았다')
-    assert(FZ.MAGAZINE_MERGE_FREEZE_WINDOWS.map((w) => `${w.startAt}~${w.endAt}`).join() === '2026-11-24T22:00:00+09:00~2026-11-25T02:30:00+09:00,2026-11-25T22:00:00+09:00~2026-11-26T02:30:00+09:00', '창 표가 창업자 승인 값과 다르다')
+    // 한시 제약 — 창은 두 밤뿐이다(영구 야간 제한이 아니다)
+    assert(FZ.MAGAZINE_MERGE_FREEZE_WINDOWS.map((w) => `${w.startAt}~${w.endAt}`).join() === '2026-11-24T20:00:00+09:00~2026-11-25T02:30:00+09:00,2026-11-25T20:00:00+09:00~2026-11-26T02:30:00+09:00', '창 표가 창업자 승인 값과 다르다')
   })
 
   // legacy 01:00 · 02:00 — 실제 runAutoMerge · runRecovery (가짜 git · gh · 배포만)
@@ -146,11 +160,11 @@ try {
     }
     const merges = (d) => d.calls.filter((c) => c.startsWith('merge:')).length
     await check('FZ2', 'legacy 01:00 --apply(runAutoMerge) — 창 안이면 모든 관문을 통과해도 merge 0 · MERGE_FREEZE_WINDOW · 창 밖은 그대로 merge', async () => {
-      for (const s of ['2026-11-25T01:00:00', '2026-11-26T01:00:00']) {
+      for (const s of ['2026-11-24T20:00:00', '2026-11-24T21:00:00', '2026-11-25T01:00:00', '2026-11-25T02:29:59', '2026-11-25T20:00:00', '2026-11-26T01:00:00', '2026-11-26T02:29:59']) {
         const d = deps(KST(s)); const r = await AM.runAutoMerge({ apply: true, deps: d })
         assert(merges(d) === 0 && codes(r).join() === 'MERGE_FREEZE_WINDOW' && r.merged !== true, `${s}: merge ${merges(d)} · ${codes(r)}`)
       }
-      for (const s of ['2026-11-24T21:00:00', '2026-11-27T01:00:00']) {
+      for (const s of ['2026-11-24T19:59:59', '2026-11-25T02:30:00', '2026-11-25T19:59:59', '2026-11-26T02:30:00', '2026-11-27T01:00:00']) {
         const d = deps(KST(s)); const r = await AM.runAutoMerge({ apply: true, deps: d })
         assert(merges(d) === 1 && r.merged === true && codes(r).length === 0, `${s}: 창 밖인데 막았다 ${codes(r)}`)
       }
@@ -169,6 +183,23 @@ try {
       const rr = readFileSync(join(ROOT, 'scripts/lib/magazine-release-run.mjs'), 'utf8')
       const a = rr.indexOf('const freeze = judgeMergeFreeze(deps.now())'), b = rr.indexOf('const merged = deps.mergePr(pr0.number, pr0.headRefOid)')
       assert(a > 0 && b > a && rr.slice(a, b).split('\n').length <= 3 && rr.split('deps.mergePr(').length - 1 === 1, 'vNext: freeze 가 merge 바로 앞이 아니다')
+    })
+    await check('FZ5', '🔴 main 을 바꾸는 매거진 경로 전수 — `gh pr merge` 를 조립하는 파일마다 merge 호출이 정확히 한 곳이고 그 바로 앞이 freeze 판정이다(새 경로가 freeze 없이 생기지 않는다)', () => {
+      const files = [...readdirSync(join(ROOT, 'scripts')).filter((f) => /^magazine-.*\.(mjs|mts)$/.test(f)).map((f) => `scripts/${f}`),
+        ...readdirSync(join(ROOT, 'scripts/lib')).filter((f) => /^(magazine|mgraph)-.*\.mjs$/.test(f)).map((f) => `scripts/lib/${f}`)]
+      const isCheck = (f) => /-(check|mutation|rehearsal)[.-]|rehearsal/.test(f)
+      // 실제 병합 명령을 조립하는 운영 파일 — 검사 · 변이 · 리허설 하네스는 뺀다
+      const merging = files.filter((f) => !isCheck(f) && /\['pr', 'merge'/.test(readFileSync(join(ROOT, f), 'utf8')))
+      assert(JSON.stringify(merging.sort()) === JSON.stringify(['scripts/lib/magazine-release-run.mjs', 'scripts/magazine-auto-merge.mjs', 'scripts/magazine-graph-merge.mts']),
+        `병합 명령을 조립하는 파일이 바뀌었다 — freeze 를 붙였는지 확인하고 이 목록에 더한다: ${merging}`)
+      for (const f of merging) {
+        const src = readFileSync(join(ROOT, f), 'utf8')
+        const calls = [...src.matchAll(/^.*\bdeps\.mergePr\(.*$/gm)]
+        assert(calls.length === 1 && src.split("['pr', 'merge'").length - 1 === 1, `${f}: merge 호출 · 명령 조립이 한 곳이 아니다(${calls.length})`)
+        const before = src.slice(0, calls[0].index).trimEnd().split('\n').slice(-2).join('\n')
+        assert(/const freeze = judgeMergeFreeze\(/.test(before) && /if \(freeze\.frozen\)/.test(before), `${f}: merge 호출 바로 앞 두 줄이 freeze 판정이 아니다 — ${before}`)
+        assert(/from '\.\/(lib\/)?magazine-merge-freeze\.mjs'/.test(src), `${f}: freeze 판정을 한 곳(magazine-merge-freeze)에서 가져오지 않는다`)
+      }
     })
   }
 
@@ -290,8 +321,8 @@ try {
     const real = {
       bundle: readFileSync(join(ROOT, 'src/content/magazine/plan-input/g-20261102-427d4d.json'), 'utf8'),
       controlText: controlText('g-20261102-427d4d', { ...F.w.seed.control, enabledClusters: ['sleep', 'family', 'money-work'] }),
-      articlesText: readFileSync(join(ROOT, 'src/content/magazine/articles.ts'), 'utf8'),
-      legacyQueue: { active: true, text: readFileSync(join(ROOT, 'drafts/magazine/topic-queue.ts'), 'utf8') },
+      articlesText: articlesText([{ slug: 'certificate-in-50s', title: '자격증 시험을 준비할 때', cluster: 'money-work', publishAt: '2026-10-01T10:30:00+09:00' }]),
+      legacyQueue: { active: true, text: queueText([]) },
     }
     const rc = CP.compileContentPlans({ bundle: real.bundle })
     const t603 = rc.plans.find((x) => x.intentId === 'I-T6-03')
@@ -435,7 +466,8 @@ try {
 
   /** 가짜 GitHub — PR · CI · merge 만 대역이다. 브랜치 · commit · merge 결과는 실제 bare origin 에 있다 */
   class FakeGitHub {
-    constructor(origin, helper) { this.origin = origin; this.helper = helper; this.prs = []; this.n = 100; this.merges = 0; this.created = 0; this.ci = () => 'success'; this.fault = {} }
+    constructor(origin, helper) { this.origin = origin; this.helper = helper; this.prs = []; this.n = 100; this.merges = 0; this.mergeCalls = 0; this.created = 0; this.ci = () => 'success'; this.fault = {}
+      this.serving = () => true; this.servingCalls = []; this.afterCreate = null }
     headOf(branch) { const r = spawnSync('git', ['ls-remote', this.origin, `refs/heads/${branch}`], { encoding: 'utf8' }); return r.stdout.split(/\s/)[0] || null }
     refresh() { for (const p of this.prs) if (p.state === 'OPEN') { const h = this.headOf(p.headRefName); if (h) p.headRefOid = h } }
     view(p) { return p ? { ...p } : null }
@@ -457,13 +489,20 @@ try {
           const h = this.headOf(branch); if (!h) return { reason: '원격 브랜치 없음' }
           const p = { number: ++this.n, url: `https://example.invalid/pull/${this.n}`, headRefName: branch, headRefOid: h, baseRefName: 'main', state: 'OPEN', mergeable: 'MERGEABLE', isDraft: draft }
           this.prs.push(p); this.created++
+          this.afterCreate?.(p)
           return { number: p.number, url: p.url }
         },
-        closePr: (n) => { const p = this.prs.find((x) => x.number === n); if (p) p.state = 'CLOSED'; return { ok: Boolean(p) } },
+        closePr: (n) => { if (take('closePr')) return { ok: false }; const p = this.prs.find((x) => x.number === n); if (p) p.state = 'CLOSED'; return { ok: Boolean(p) } },
+        // 서빙 관측 대역 — 실제 Vercel 호출 0. 부른 SHA 를 센다(같은 SHA 재관측 0 을 본다)
+        observeServing: (sha) => { this.servingCalls.push(sha); return this.serving(sha) ? { served: true, code: null, deploymentId: 'dpl_RELEASECHECK0000000000' } : { served: false, code: 'VERCEL_SHA_MISMATCH', deploymentId: null } },
+        getMergeCommit: (n) => this.prs.find((x) => x.number === n)?.mergeCommit ?? null,
         mergePr: (n, sha) => {
           this.refresh()
+          this.mergeCalls++
           const p = this.prs.find((x) => x.number === n)
           if (take('mergePr')) return { ok: false, reason: '주입 merge 실패' }
+          // 응답만 성공인 가짜 merge — main 은 그대로다(MERGED 확인이 잡아야 한다)
+          if (take('mergeHollow')) { p.state = 'MERGED'; p.mergeCommit = 'd'.repeat(40); return { ok: true, mergeCommit: p.mergeCommit } }
           if (!p || p.state !== 'OPEN' || p.headRefOid !== sha || p.isDraft) return { ok: false, reason: 'head 불일치 · 닫힘 · Draft' }
           git(this.helper, 'fetch', '-q', 'origin', '+refs/heads/*:refs/remotes/origin/*')
           git(this.helper, 'checkout', '-q', '-B', 'main', 'origin/main')
@@ -471,7 +510,10 @@ try {
           git(this.helper, ...GIT_ENV, 'commit', '-q', '-m', `squash #${n}`)
           git(this.helper, 'push', '-q', 'origin', 'main')
           p.state = 'MERGED'; this.merges++
-          return { ok: true, mergeCommit: git(this.helper, 'rev-parse', 'HEAD') }
+          p.mergeCommit = git(this.helper, 'rev-parse', 'HEAD')
+          // merge 는 됐는데 응답을 잃었다 — 다음 회차가 다시 merge 하면 안 된다
+          if (take('mergeLost')) return { ok: false, reason: '주입 — merge 응답 유실' }
+          return { ok: true, mergeCommit: p.mergeCommit }
         },
       }
     }
@@ -498,22 +540,29 @@ try {
     const clock = { t: start }
     const rollout = { code: 'VALID', effective: { path: 'vnext', release, targetCandidates: target } }
     const fault = {}
-    const real = RUN.makeReleaseDeps({ root: RT, stateRoot, jobsRoot, readRollout: () => rollout, readCandidates: () => CAND.readReleaseCandidates({ jobsRoot }), now: () => clock.t, sleep: async (ms) => { clock.t += ms } })
+    const real = RUN.makeReleaseDeps({ root: RT, stateRoot, jobsRoot, readRollout: () => rollout, readCandidates: () => CAND.readReleaseCandidates({ jobsRoot }), now: () => clock.t, sleep: async (ms) => { clock.t += ms },
+      vercelContext: () => ({ ok: false, why: '검사 — 실제 Vercel 호출 0' }) })
     const deps = { ...real, ...gh.deps(),
+      commit: (a) => { if (fault.commit > 0) { fault.commit--; throw Object.assign(new Error('주입 사망 — commit 직전'), { code: 'KILLED' }) } return real.commit(a) },
       push: (a) => { if (fault.push > 0) { fault.push--; throw Object.assign(new Error('주입 사망 — push 직전'), { code: 'KILLED' }) } return real.push(a) } }
     const putJob = (intentId, over = {}) => {
       const plan = G.plan(intentId)
-      const art = Buffer.from(JSON.stringify(over.article ?? articleFor(plan))), hero = webp(1200, 675, intentId)
+      const art = Buffer.from(JSON.stringify(over.article ?? articleFor(plan))), hero = webp(1200, 675, over.heroSalt ?? intentId)
       const dir = join(jobsRoot, plan.planHash); mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, 'article.json'), art); writeFileSync(join(dir, 'hero.webp'), hero)
-      writeFileSync(join(dir, 'job.json'), JSON.stringify({ schemaVersion: CAND.JOB_SCHEMA, planId: plan.planId, planHash: plan.planHash, providerPlanHash: providerHash(G, plan),
+      writeFileSync(join(dir, 'job.json'), JSON.stringify({ schemaVersion: CAND.JOB_SCHEMA, planId: plan.planId, planHash: plan.planHash,
+        providerPlanHash: 'providerPlanHash' in over ? over.providerPlanHash : providerHash(G, plan),
         slugProposal: over.slugProposal ?? `fx-rel-${intentId.toLowerCase()}`, manuscript: { file: 'article.json', sha256: sha256(art) }, validation: { verdict: 'VALID' },
-        hero: { file: 'hero.webp', sha256: sha256(hero) }, hold: null }))
+        hero: { file: 'hero.webp', sha256: sha256(hero) }, hold: over.hold ?? null }))
+      return dir
     }
     const run = (apply = true) => RUN.runRelease({ deps, apply })
+    /** 02:00 복구 회차 — 같은 deps · 같은 상태 루트 */
+    const recover = () => RUN.runRelease({ deps, apply: true, recover: true })
+    const journals = () => J.listReleaseJournals(stateRoot).map((x) => x.journal)
     const mainArticles = () => { git(HELP, 'fetch', '-q', 'origin'); return git(HELP, 'show', 'origin/main:src/content/magazine/articles.ts') }
     const remoteBranches = () => spawnSync('git', ['ls-remote', '--heads', ORIGIN], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l.includes(R.RELEASE_BRANCH_PREFIX))
-    return { T, ORIGIN, RT, HELP, stateRoot, jobsRoot, gh, clock, rollout, fault, deps, putJob, run, mainArticles, remoteBranches }
+    return { T, ORIGIN, RT, HELP, stateRoot, jobsRoot, gh, clock, rollout, fault, deps, putJob, run, recover, journals, mainArticles, remoteBranches }
   }
   const releasedRows = (text) => CP.parseArticleIdentityText(text).rows.filter((r) => r.release)
 
@@ -537,7 +586,7 @@ try {
   await check('RE3', 'auto release — PR · CI · 내용/PR 관문 · freeze 밖 → squash merge · main 에 출처 행 3 · plan · hero · journal MERGED · 잔존물 0 · 재실행은 중복 0', async () => {
     const s = autoSandbox = sandbox(F); for (const i of ALL) s.putJob(i)
     const r = await s.run(true)
-    assert(r.outcome === 'MERGED' && r.merge.verified && s.gh.merges === 1 && s.gh.created === 1, `${r.outcome} ${JSON.stringify(r.blockedBy)}`)
+    assert(r.outcome === 'MERGED_SERVED' && r.merge.verified && r.serving?.state === 'SERVED' && s.gh.merges === 1 && s.gh.created === 1, `${r.outcome} ${JSON.stringify(r.blockedBy)}`)
     const rows = releasedRows(s.mainArticles())
     assert(rows.map((x) => `${x.release.intentId}@${x.publishAt.slice(0, 10)}`).join() === 'I-F2-02@2026-11-22,I-F1-01@2026-11-21,I-F2-01@2026-11-23',
       `main 행 ${rows.map((x) => `${x.release.intentId}@${x.publishAt}`)}`)
@@ -563,10 +612,10 @@ try {
     const r3 = await s.run(true)
     assert(r3.outcome === 'MERGE_BLOCKED' && codes(r3).join() === 'MERGE_FAILED' && s.gh.created === 1, `${r3.outcome} ${codes(r3)}`)
     const r4 = await s.run(true)
-    assert(r4.outcome === 'MERGED' && s.gh.created === 1 && s.gh.merges === 1 && readdirSync(join(s.stateRoot, 'releases')).join() === id, `${r4.outcome} ${codes(r4)} · PR ${s.gh.created} · merge ${s.gh.merges}`)
+    assert(r4.outcome === 'MERGED_SERVED' && s.gh.created === 1 && s.gh.merges === 1 && readdirSync(join(s.stateRoot, 'releases')).join() === id, `${r4.outcome} ${codes(r4)} · PR ${s.gh.created} · merge ${s.gh.merges}`)
   })
-  await check('RE5', 'freeze — 11/24 23:00 KST 의 auto release 는 PR 까지 · merge 0 · MERGE_FROZEN · 11/25 02:30 재실행이 같은 PR 을 merge', async () => {
-    const s = sandbox(F, { target: 1, start: KST('2026-11-24T23:00:00') }); s.putJob('I-F1-01')
+  await check('RE5', 'freeze — 11/24 20:00 KST 의 auto release 는 PR 까지 · merge 0 · MERGE_FROZEN · 11/25 02:30 재실행이 같은 PR 을 merge', async () => {
+    const s = sandbox(F, { target: 1, start: KST('2026-11-24T20:00:00') }); s.putJob('I-F1-01')
     const r1 = await s.run(true)
     assert(r1.outcome === 'MERGE_FROZEN' && codes(r1).join() === 'MERGE_FREEZE_WINDOW' && s.gh.merges === 0 && s.gh.created === 1, `${r1.outcome} ${codes(r1)}`)
     s.clock.t = KST('2026-11-25T02:00:00')
@@ -574,7 +623,7 @@ try {
     assert(r2.outcome === 'MERGE_FROZEN' && s.gh.merges === 0, `02:00 ${r2.outcome}`)
     s.clock.t = KST('2026-11-25T02:30:00')
     const r3 = await s.run(true)
-    assert(r3.outcome === 'MERGED' && s.gh.merges === 1 && s.gh.created === 1, `${r3.outcome} ${codes(r3)}`)
+    assert(r3.outcome === 'MERGED_SERVED' && s.gh.merges === 1 && s.gh.created === 1, `${r3.outcome} ${codes(r3)}`)
   })
   await check('RE6', 'release CI 실패 — 그 PR 만 닫고(브랜치 · worktree 정리) journal CLOSED · 같은 main 재실행은 같은 release 를 다시 만들지 않는다(WAITING_MAIN_CHANGE)', async () => {
     const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
@@ -633,7 +682,7 @@ try {
     s.rollout.effective.release = 'auto'
     const r = await s.run(true)
     const rows = releasedRows(s.mainArticles())
-    assert(r.outcome === 'MERGED' && s.gh.created === 2 && s.gh.merges === 1 && rows.length === 1 && rows[0].publishAt === '2026-11-22T10:30:00+09:00', `${r.outcome} ${codes(r)} · ${r.notes} · ${rows.map((x) => x.publishAt)}`)
+    assert(r.outcome === 'MERGED_SERVED' && s.gh.created === 2 && s.gh.merges === 1 && rows.length === 1 && rows[0].publishAt === '2026-11-22T10:30:00+09:00', `${r.outcome} ${codes(r)} · ${r.notes} · ${rows.map((x) => x.publishAt)}`)
   })
   await check('RE10', 'rollout 이 legacy · 없음이면 NOT_VNEXT — 상태 루트 · git · PR 0', async () => {
     const s = sandbox(F); s.putJob('I-F1-01')
@@ -660,16 +709,305 @@ try {
     s.gh.prs[0].state = 'CLOSED' // 사람이 닫았다(브랜치는 남아 있다)
     const r2 = await s.run(true)
     const id = r1.release.releaseId
-    assert(r2.outcome === 'WAITING_MAIN_CHANGE' && codes(r2).join() === 'RELEASE_PR_CLOSED_EXTERNALLY' && s.gh.created === 1, `${r2.outcome} ${codes(r2)}`)
+    // 진행 중 journal 정리가 PR 의 CLOSED 를 사실로 적고, 같은 main 의 같은 release 는 다시 만들지 않는다
+    assert(r2.outcome === 'WAITING_MAIN_CHANGE' && codes(r2).join() === 'JOURNAL_TERMINAL' && r2.notes.some((n) => n.includes('밖에서 닫혔다')) && s.gh.created === 1, `${r2.outcome} ${codes(r2)} ${r2.notes}`)
     assert(J.readJournal(J.journalPathOf(s.stateRoot, id)).state === 'CLOSED' && s.remoteBranches().length === 0 && !existsSync(J.worktreePathOf(s.stateRoot, id)), '정리')
     const r3 = await s.run(true)
     assert(r3.outcome === 'WAITING_MAIN_CHANGE' && s.gh.created === 1, `${r3.outcome}`)
+  })
+  await check('RE13b', 'PR 을 연 직후(같은 회차) 밖에서 닫히면 — merge 단계로 가지 않는다 · journal CLOSED · RELEASE_PR_CLOSED_EXTERNALLY', async () => {
+    const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
+    s.gh.afterCreate = (p) => { p.state = 'CLOSED' }
+    const r = await s.run(true)
+    assert(r.outcome === 'WAITING_MAIN_CHANGE' && codes(r).join() === 'RELEASE_PR_CLOSED_EXTERNALLY' && s.gh.mergeCalls === 0 && s.journals()[0].state === 'CLOSED', `${r.outcome} ${codes(r)} · merge ${s.gh.mergeCalls}`)
   })
   await check('RE12','legacy queue 신원 adapter 는 실행기에서도 켜져 있다 — queue 에 같은 intent 가 있으면 release 0(DUPLICATE_QUEUE_INTENT)', async () => {
     const G = await fresh((s) => { s.queue.push({ slug: 'fx-legacy-same', title: '합성 legacy 같은 주제 다른 제목', cluster: 'money-work', intentId: 'I-F1-01' }) })
     const s = sandbox(G, { target: 1 }); s.putJob('I-F1-01')
     const r = await s.run(false)
     assert(r.outcome === 'NO_RELEASABLE_CANDIDATE' && r.release.withdrawn[0]?.reasons.join().includes('DUPLICATE_QUEUE_INTENT'), `${r.outcome} ${JSON.stringify(r.release?.withdrawn)}`)
+  })
+
+  // ════ RS — 재개 결속 (순수) ══════════════════════════════════
+  await check('RS1', '재개 결속 — journal 의 원본 commit · 바이트 · 검증된 원고 · hero · ProviderPlan 이 전부 같을 때만 통과 · 반례 하나씩 · 통과 0', () => {
+    const H = (c) => c.repeat(64)
+    const slug = 'fx-rs', branch = `${R.RELEASE_BRANCH_PREFIX}20261120-aaaaaaaaaa`
+    const journal = { state: 'PR_OPEN', branch, prNumber: 7, commitSha: 'c'.repeat(40),
+      entries: [{ path: R.planFilePath(slug), afterSha256: H('1') }, { path: R.heroFilePath(slug), afterSha256: H('2') }, { path: R.ARTICLES_PATH, afterSha256: H('3') }],
+      members: [{ planId: 'g:I', planHash: H('4'), slug, providerPlanHash: H('5'), heroSha256: H('2'), manuscriptSha256: H('6') }] }
+    const head = { [R.planFilePath(slug)]: H('1'), [R.heroFilePath(slug)]: H('2'), [R.ARTICLES_PATH]: H('3') }
+    const job = { manuscriptSha256: H('6'), heroSha256: H('2'), providerPlanHash: H('5') }
+    const j = (over = {}) => RUN.judgeResumeBinding({ journal: 'journal' in over ? over.journal : { ...journal, ...(over.j ?? {}) }, pr: { number: 7, headRefName: branch, headRefOid: 'c'.repeat(40), ...(over.pr ?? {}) },
+      headSha256Of: (p) => ({ ...head, ...(over.head ?? {}) })[p] ?? null, jobOf: () => ('job' in over ? over.job : job), providerPlanHashOf: () => ('pp' in over ? over.pp : H('5')) })
+    assert(j().ok && j().checked.length === 1, JSON.stringify(j().blockedBy))
+    const cases = [
+      ['RESUME_JOURNAL_MISSING', { journal: null }], ['RESUME_JOURNAL_BROKEN', { journal: { broken: true, why: 'JSON' } }],
+      // 🔴 이미 MERGED · CLOSED 인 release 의 PR 은 다시 merge 하지 않는다(중복 merge 0) · PR 전 단계도 아니다
+      ['RESUME_JOURNAL_STATE', { j: { state: 'MERGED' } }], ['RESUME_JOURNAL_STATE', { j: { state: 'CLOSED' } }], ['RESUME_JOURNAL_STATE', { j: { state: 'PUSHED' } }],
+      ['RESUME_PR_MISMATCH', { pr: { number: 8 } }], ['RESUME_PR_MISMATCH', { pr: { headRefName: `${R.RELEASE_BRANCH_PREFIX}20261120-bbbbbbbbbb` } }],
+      ['RESUME_COMMIT_MISMATCH', { pr: { headRefOid: 'd'.repeat(40) } }], ['RESUME_COMMIT_MISMATCH', { j: { commitSha: undefined } }],
+      ['RESUME_BYTES_MISMATCH', { head: { [R.heroFilePath(slug)]: H('9') } }], ['RESUME_BYTES_MISMATCH', { head: { [R.ARTICLES_PATH]: H('9') } }],
+      ['RESUME_BYTES_MISMATCH', { head: { [R.planFilePath(slug)]: null } }], ['RESUME_BYTES_MISMATCH', { j: { entries: [] } }],
+      ['RESUME_BYTES_MISMATCH', { j: { members: [{ ...journal.members[0], heroSha256: H('8') }] }, job: { ...job, heroSha256: H('8') } }],
+      ['RESUME_BINDING_ABSENT', { j: { members: [{ ...journal.members[0], manuscriptSha256: null }] } }], ['RESUME_BINDING_ABSENT', { j: { members: [{ ...journal.members[0], providerPlanHash: null }] } }],
+      ['RESUME_BINDING_ABSENT', { j: { members: [] } }],
+      ['RESUME_JOB_MISSING', { job: null }],
+      ['RESUME_JOB_MISMATCH', { job: { ...job, manuscriptSha256: H('7') } }], ['RESUME_JOB_MISMATCH', { job: { ...job, heroSha256: H('7') } }], ['RESUME_JOB_MISMATCH', { job: { ...job, providerPlanHash: H('7') } }],
+      ['RESUME_PROVIDER_PLAN_DRIFT', { pp: H('7') }], ['RESUME_PROVIDER_PLAN_DRIFT', { pp: null }],
+    ]
+    for (const [want, over] of cases) { const r = j(over); assert(!r.ok && codes(r).includes(want), `${want}: ${codes(r).join(',') || '통과'}`) }
+  })
+  await check('RA8', '조립 — Job 이 묶은 ProviderPlan 이 지금 main 에서 다시 만든 값과 다르면 그 후보만 보류(DRIFT) · 기록 없음(UNBOUND) · 원고 해시 없음 · 다른 후보는 그대로', () => {
+    const drift = assemble(F, [candidateOf(F, 'I-F1-01', { providerPlanHash: 'e'.repeat(64) }), candidateOf(F, 'I-F2-02')])
+    assert(drift.ok && drift.members.map((m) => m.intentId).join() === 'I-F2-02' && drift.withdrawn.find((w) => w.planId.endsWith('I-F1-01'))?.reasons.join() === 'PROVIDER_PLAN_DRIFT', JSON.stringify(drift.withdrawn))
+    const unbound = assemble(F, [candidateOf(F, 'I-F1-01', { providerPlanHash: null })])
+    assert(!unbound.ok && unbound.withdrawn[0].reasons.join() === 'PROVIDER_PLAN_UNBOUND', JSON.stringify(unbound.withdrawn))
+    const noMs = assemble(F, [candidateOf(F, 'I-F1-01', { manuscriptSha256: undefined })])
+    assert(!noMs.ok && noMs.withdrawn[0].reasons.join() === 'MANUSCRIPT_UNBOUND', JSON.stringify(noMs.withdrawn))
+    // 조립 결과는 Job 이 묶은 값을 그대로 싣는다(다시 만든 값으로 바꿔 치지 않는다) — journal 이 이것을 재개 결속으로 남긴다
+    const ok = assemble(F, [candidateOf(F, 'I-F1-01')])
+    const c = candidateOf(F, 'I-F1-01')
+    assert(ok.members[0].providerPlanHash === c.providerPlanHash && ok.members[0].manuscriptSha256 === c.manuscriptSha256 && ok.members[0].heroSha256 === c.hero.sha256, '조립이 결속 해시를 싣지 않는다')
+  })
+
+  // ════ RR — 01:00 release ↔ 02:00 복구 ═══════════════════════
+  const oneJournal = (s) => { const js = s.journals(); assert(js.length === 1, `journal ${js.length}개`); return js[0] }
+  const prStates = (s) => s.gh.prs.map((p) => p.state).join()
+  /** 01:00 회차가 PR 을 열고 CI 를 기다리다 넘긴 상태 */
+  const pendingAt0100 = async (opts = {}) => {
+    const s = sandbox(F, { target: 1, ...opts }); s.putJob('I-F1-01')
+    s.gh.ci = () => 'pending'
+    const r = await s.run(true)
+    assert(r.outcome === 'CI_PENDING' && codes(r).join() === 'CI_OBSERVE_TIMEOUT' && s.gh.created === 1 && oneJournal(s).state === 'PR_OPEN', `전제 ${r.outcome} ${codes(r)}`)
+    return { s, r }
+  }
+  await check('RR1', 'CI 지연 — 01:00 이 CI 를 기다리다 넘긴 release PR 을 02:00 복구가 같은 journal · 같은 PR 로 이어 merge 한다 · 새 PR 0 · 조립 0', async () => {
+    const { s, r } = await pendingAt0100()
+    const id = r.release.releaseId, head = s.gh.prs[0].headRefOid
+    s.gh.ci = () => 'success'
+    const r2 = await s.recover()
+    assert(r2.mode === 'recover' && r2.outcome === 'MERGED_SERVED' && r2.release === null && s.gh.created === 1 && s.gh.merges === 1 && r2.merge.number === s.gh.prs[0].number, `${r2.outcome} ${codes(r2)} · PR ${s.gh.created}`)
+    const j = oneJournal(s)
+    assert(j.releaseId === id && j.state === 'MERGED' && j.commitSha === head && j.mainVerified === true && j.serving.state === 'SERVED', `journal ${j.releaseId} ${j.state}`)
+    assert(releasedRows(s.mainArticles()).length === 1 && s.remoteBranches().length === 0, 'main 행 · 잔존물')
+    // 복구가 계속 CI 를 못 보면 같은 PR 이 그대로 남는다(닫지 않는다)
+    const again = await pendingAt0100()
+    const r3 = await again.s.recover()
+    assert(r3.outcome === 'CI_PENDING' && prStates(again.s) === 'OPEN' && again.s.gh.created === 1 && r3.closed.length === 0, `${r3.outcome} ${prStates(again.s)}`)
+  })
+  await check('RR2', '🔴 복구는 새 PR · 재조립 0 — 열린 release PR 이 없으면 후보가 있어도 아무것도 만들지 않는다 · PR 전에 멈춘 release 도 복구가 열지 않는다(01:00 이 같은 journal 로 잇는다)', async () => {
+    const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
+    const r = await s.recover()
+    assert(r.outcome === 'RECOVER_NOTHING_OPEN' && r.release === null && s.gh.created === 0 && s.remoteBranches().length === 0 && s.journals().length === 0
+      && git(s.RT, 'worktree', 'list').split('\n').length === 1, `${r.outcome} · PR ${s.gh.created} · journal ${s.journals().length}`)
+    s.gh.fault.createPr = 1
+    await assertRejects(() => s.run(true), 'KILLED')
+    const id = oneJournal(s).releaseId
+    assert(oneJournal(s).state === 'PUSHED' && s.gh.created === 0, '전제 — PUSHED')
+    const r2 = await s.recover()
+    assert(r2.outcome === 'RECOVER_NOTHING_OPEN' && s.gh.created === 0 && oneJournal(s).state === 'PUSHED' && r2.notes.some((n) => n.includes('복구 회차는 PR 을 만들지 않는다')), `${r2.outcome} ${r2.notes}`)
+    const r3 = await s.run(true)
+    assert(r3.outcome === 'MERGED_SERVED' && s.gh.created === 1 && s.gh.merges === 1 && oneJournal(s).releaseId === id, `${r3.outcome} ${codes(r3)} · PR ${s.gh.created}`)
+  })
+  await check('RR3', '복구 보류 — 날짜를 놓친 PR · 낡은 base 의 PR 을 복구는 닫지 않는다(RECOVER_DEFERRED · 새 PR 0) · 다음 01:00 이 닫고 다시 조립한다', async () => {
+    const a = await pendingAt0100()
+    a.s.clock.t = KST('2026-11-21T11:00:00')
+    const ra = await a.s.recover()
+    assert(ra.outcome === 'RECOVER_DEFERRED' && codes(ra).join() === 'RELEASE_DATE_MISSED' && prStates(a.s) === 'OPEN' && ra.closed.length === 0 && a.s.gh.created === 1, `${ra.outcome} ${codes(ra)} ${prStates(a.s)}`)
+    const b = await pendingAt0100()
+    git(b.s.HELP, 'fetch', '-q', 'origin'); git(b.s.HELP, 'checkout', '-q', '-B', 'main', 'origin/main')
+    const p = join(b.s.HELP, R.ARTICLES_PATH)
+    writeFileSync(p, R.insertArticleRows(readFileSync(p, 'utf8'), [{ slug: 'fx-human', body: { title: '합성 사람 글', description: '합성', cluster: 'family', publishedAt: '2026-11-25', status: 'SCHEDULED', publishAt: '2026-11-25T10:30:00+09:00', body: [] } }]))
+    git(b.s.HELP, ...GIT_ENV, 'commit', '-q', '-am', 'human'); git(b.s.HELP, 'push', '-q', 'origin', 'main')
+    b.s.gh.ci = () => 'success'
+    const rb = await b.s.recover()
+    assert(rb.outcome === 'RECOVER_DEFERRED' && codes(rb).includes('PR_BASE_STALE') && prStates(b.s) === 'OPEN' && rb.closed.length === 0 && b.s.gh.created === 1 && b.s.gh.mergeCalls === 0, `${rb.outcome} ${codes(rb)} ${prStates(b.s)}`)
+    const rb2 = await b.s.run(true)
+    assert(rb2.outcome === 'MERGED_SERVED' && b.s.gh.created === 2 && b.s.gh.merges === 1 && prStates(b.s) === 'CLOSED,MERGED', `${rb2.outcome} ${codes(rb2)} ${prStates(b.s)}`)
+  })
+  await check('RR4', '날짜 변경 — 어제 PR 전에 멈춘 release 를 오늘 01:00 이 **같은 journal · 같은 브랜치 · 같은 commit** 으로 잇는다(새 releaseId 0 · 고아 브랜치 0)', async () => {
+    for (const [stage, arm] of [['PUSHED', (s) => { s.gh.fault.createPr = 1 }], ['COMMITTED', (s) => { s.fault.push = 1 }]]) {
+      const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
+      arm(s)
+      await assertRejects(() => s.run(true), 'KILLED')
+      const j0 = oneJournal(s)
+      assert(j0.state === stage && j0.releaseId.startsWith('20261120-') && j0.members[0].publishAt === '2026-11-21T10:30:00+09:00', `전제 ${stage}: ${j0.state} ${j0.releaseId}`)
+      s.clock.t = KST('2026-11-21T01:00:00') // 날짜가 바뀌었다 — 공개 시각(10:30)은 아직 남았다
+      const r = await s.run(true)
+      const j = oneJournal(s)
+      assert(r.outcome === 'MERGED_SERVED' && s.gh.created === 1 && s.gh.merges === 1 && j.releaseId === j0.releaseId && j.commitSha === j0.commitSha && s.gh.prs[0].headRefName === j0.branch,
+        `${stage}: ${r.outcome} ${codes(r)} · journal ${s.journals().map((x) => `${x.releaseId}:${x.state}`)} · PR ${s.gh.created}`)
+      assert(releasedRows(s.mainArticles())[0].publishAt === '2026-11-21T10:30:00+09:00' && s.remoteBranches().length === 0 && r.release === null, `${stage}: 날짜 · 잔존물 · 재조립`)
+    }
+  })
+  await check('RR5', '날짜 변경 — 공개 시각까지 놓친 release 는 ABANDONED 로 정리하고 같은 plan · 같은 원고로 다시 조립한다(Job 바이트 불변 · 재생성 0 · 열린 PR 1)', async () => {
+    const s = sandbox(F, { target: 1 }); const dir = s.putJob('I-F1-01')
+    const jobBytes = () => ['job.json', 'article.json', 'hero.webp'].map((f) => sha256(readFileSync(join(dir, f)))).join()
+    const before = jobBytes()
+    s.gh.fault.createPr = 1
+    await assertRejects(() => s.run(true), 'KILLED')
+    const j0 = oneJournal(s)
+    s.clock.t = KST('2026-11-21T11:00:00')
+    const r = await s.run(true)
+    const [a, b] = s.journals()
+    assert(r.outcome === 'MERGED_SERVED' && s.journals().length === 2 && a.releaseId === j0.releaseId && a.state === 'ABANDONED' && a.abandonedBy === 'PUBLISH_AT_PAST' && b.state === 'MERGED', `${r.outcome} ${codes(r)} · ${s.journals().map((x) => `${x.releaseId}:${x.state}`)}`)
+    assert(b.members[0].planHash === j0.members[0].planHash && b.members[0].manuscriptSha256 === j0.members[0].manuscriptSha256 && b.members[0].slug === j0.members[0].slug
+      && b.members[0].publishAt === '2026-11-22T10:30:00+09:00' && jobBytes() === before, '다시 조립한 release 의 plan · 원고 · slug · Job 바이트')
+    assert(s.gh.created === 1 && s.gh.merges === 1 && s.remoteBranches().length === 0, `PR ${s.gh.created} · 잔존 ${s.remoteBranches()}`)
+    // commit 전에 멈춘 release — 다음 날 조립이 다른 id 면 ABANDONED(SUPERSEDED)로 적고 새 release 로 간다
+    const t = sandbox(F, { target: 1 }); t.putJob('I-F1-01')
+    t.fault.commit = 1
+    await assertRejects(() => t.run(true), 'KILLED')
+    assert(oneJournal(t).state === 'APPLIED', '전제 — APPLIED')
+    t.clock.t = KST('2026-11-21T01:00:00')
+    const rt = await t.run(true)
+    const [ta, tb] = t.journals()
+    assert(rt.outcome === 'MERGED_SERVED' && ta.state === 'ABANDONED' && ta.abandonedBy === 'SUPERSEDED' && ta.supersededBy === tb.releaseId && tb.state === 'MERGED' && t.gh.created === 1, `${rt.outcome} ${codes(rt)} · ${t.journals().map((x) => `${x.releaseId}:${x.state}`)}`)
+  })
+  await check('RR6', '닫기 실패 — CI 실패 · 날짜 놓침 · 낡은 base 에서 PR 을 닫지 못하면 RELEASE_CLOSE_FAILED · 닫았다고 적지 않는다 · 다시 조립하지 않는다 · 다음 회차가 같은 PR 을 닫는다', async () => {
+    const a = sandbox(F, { target: 1 }); a.putJob('I-F1-01')
+    a.gh.ci = () => 'failure'; a.gh.fault.closePr = 1
+    const r1 = await a.run(true)
+    assert(r1.outcome === 'RELEASE_CLOSE_FAILED' && codes(r1).join() === 'RELEASE_CI_FAILED,RELEASE_CLOSE_FAILED' && prStates(a) === 'OPEN' && oneJournal(a).state === 'PR_OPEN'
+      && a.remoteBranches().length === 1 && r1.closed[0].ok === false, `${r1.outcome} ${codes(r1)} ${prStates(a)} ${oneJournal(a).state}`)
+    const r2 = await a.run(true)
+    assert(r2.outcome === 'RELEASE_CI_FAILED_CLOSED' && prStates(a) === 'CLOSED' && oneJournal(a).state === 'CLOSED' && a.gh.created === 1 && a.remoteBranches().length === 0, `${r2.outcome} ${prStates(a)}`)
+    const b = sandbox(F, { release: 'draft', target: 1 }); b.putJob('I-F1-01')
+    await b.run(true)
+    b.clock.t = KST('2026-11-21T11:00:00'); b.gh.fault.closePr = 1
+    const rb = await b.run(true)
+    assert(rb.outcome === 'RELEASE_CLOSE_FAILED' && codes(rb).join() === 'RELEASE_CLOSE_FAILED' && prStates(b) === 'OPEN' && b.gh.created === 1 && oneJournal(b).state === 'PR_OPEN', `${rb.outcome} ${codes(rb)} · PR ${b.gh.created}`)
+    const c = await pendingAt0100()
+    git(c.s.HELP, 'fetch', '-q', 'origin'); git(c.s.HELP, 'checkout', '-q', '-B', 'main', 'origin/main')
+    const p = join(c.s.HELP, R.ARTICLES_PATH)
+    writeFileSync(p, R.insertArticleRows(readFileSync(p, 'utf8'), [{ slug: 'fx-human', body: { title: '합성 사람 글', description: '합성', cluster: 'family', publishedAt: '2026-11-25', status: 'SCHEDULED', publishAt: '2026-11-25T10:30:00+09:00', body: [] } }]))
+    git(c.s.HELP, ...GIT_ENV, 'commit', '-q', '-am', 'human'); git(c.s.HELP, 'push', '-q', 'origin', 'main')
+    c.s.gh.ci = () => 'success'; c.s.gh.fault.closePr = 1
+    const rc = await c.s.run(true)
+    assert(rc.outcome === 'RELEASE_CLOSE_FAILED' && codes(rc).includes('RELEASE_CLOSE_FAILED') && prStates(c.s) === 'OPEN' && c.s.gh.created === 1 && c.s.gh.mergeCalls === 0, `${rc.outcome} ${codes(rc)} · PR ${c.s.gh.created}`)
+  })
+  await check('RR7', 'freeze 와 복구 — 창 안의 01:00 · 02:00 복구는 같은 PR 을 두고 merge 0(MERGE_FROZEN) · 02:30 복구가 그 PR 을 merge · 20:00 경계', async () => {
+    const s = sandbox(F, { target: 1, start: KST('2026-11-25T01:00:00') }); s.putJob('I-F1-01')
+    const r1 = await s.run(true)
+    assert(r1.outcome === 'MERGE_FROZEN' && s.gh.mergeCalls === 0 && s.gh.created === 1, `01:00 ${r1.outcome} ${codes(r1)}`)
+    s.clock.t = KST('2026-11-25T02:00:00')
+    const r2 = await s.recover()
+    assert(r2.outcome === 'MERGE_FROZEN' && codes(r2).join() === 'MERGE_FREEZE_WINDOW' && s.gh.mergeCalls === 0 && prStates(s) === 'OPEN' && oneJournal(s).state === 'PR_OPEN', `02:00 ${r2.outcome} ${codes(r2)}`)
+    s.clock.t = KST('2026-11-25T02:30:00')
+    const r3 = await s.recover()
+    assert(r3.outcome === 'MERGED_SERVED' && s.gh.merges === 1 && s.gh.created === 1, `02:30 ${r3.outcome} ${codes(r3)}`)
+    for (const [at, frozen] of [['2026-11-25T19:59:59', false], ['2026-11-25T20:00:00', true]]) {
+      const t = sandbox(F, { target: 1, start: KST(at) }); t.putJob('I-F1-01')
+      const r = await t.run(true)
+      assert(frozen ? r.outcome === 'MERGE_FROZEN' && t.gh.mergeCalls === 0 : r.outcome === 'MERGED_SERVED' && t.gh.merges === 1, `${at}: ${r.outcome} ${codes(r)}`)
+    }
+  })
+  await check('RR8', '🔴 중복 merge 0 — merge 응답을 잃어도 다음 회차는 다시 merge 하지 않고 사실(MERGED)만 적는다 · MERGED 뒤 복구 · 재실행은 merge 호출 0', async () => {
+    const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
+    s.gh.fault.mergeLost = 1
+    const r1 = await s.run(true)
+    assert(r1.outcome === 'MERGE_BLOCKED' && codes(r1).join() === 'MERGE_FAILED' && s.gh.merges === 1 && s.gh.mergeCalls === 1 && oneJournal(s).state === 'PR_OPEN', `전제 ${r1.outcome} ${codes(r1)}`)
+    const r2 = await s.recover()
+    const j = oneJournal(s)
+    assert(r2.outcome === 'RECOVER_NOTHING_OPEN' && s.gh.mergeCalls === 1 && j.state === 'MERGED' && j.mainVerified === true && j.mergeCommit === s.gh.prs[0].mergeCommit && j.serving.state === 'SERVED'
+      && r2.settled[0]?.state === 'SERVED' && s.remoteBranches().length === 0, `${r2.outcome} ${codes(r2)} · merge 호출 ${s.gh.mergeCalls} · ${j.state}`)
+    const r3 = await s.recover(), r4 = await s.run(true)
+    assert(s.gh.mergeCalls === 1 && s.gh.created === 1 && r3.outcome === 'RECOVER_NOTHING_OPEN' && r4.outcome === 'NO_RELEASABLE_CANDIDATE' && releasedRows(s.mainArticles()).length === 1, `${r3.outcome} ${r4.outcome} · merge 호출 ${s.gh.mergeCalls}`)
+  })
+  await check('RR9', '재개 결속(끝에서 끝) — 01:00 이 PR 을 연 뒤 Job 의 hero · HOLD · PR head commit · journal 이 바뀌면 복구는 merge 0 · RESUME_HOLD · PR 을 닫지 않는다 · 무변경은 merge', async () => {
+    const hold = async (label, mutate, want) => {
+      const { s } = await pendingAt0100()
+      await mutate(s)
+      s.gh.ci = () => 'success'
+      const r = await s.recover()
+      assert(r.outcome === 'RESUME_HOLD' && codes(r).includes(want) && s.gh.mergeCalls === 0 && prStates(s) === 'OPEN' && r.closed.length === 0 && s.gh.created === 1, `${label}: ${r.outcome} ${codes(r)} · merge ${s.gh.mergeCalls} · ${prStates(s)}`)
+      return { s, r }
+    }
+    await hold('검증 뒤 hero 가 바뀐 Job', (s) => { s.putJob('I-F1-01', { heroSalt: 'other-hero' }) }, 'RESUME_JOB_MISMATCH')
+    await hold('검증 뒤 원고가 바뀐 Job', (s) => { s.putJob('I-F1-01', { article: articleFor(F.plan('I-F1-01'), { title: '합성 바뀐 제목 I-F1-01' }) }) }, 'RESUME_JOB_MISMATCH')
+    await hold('ProviderPlan 기록이 바뀐 Job', (s) => { s.putJob('I-F1-01', { providerPlanHash: 'e'.repeat(64) }) }, 'RESUME_JOB_MISMATCH')
+    await hold('HOLD 가 된 Job', (s) => { s.putJob('I-F1-01', { hold: { reason: '합성 HOLD' } }) }, 'RESUME_JOB_MISSING')
+    await hold('journal 이 없는 release PR', (s) => { rmSync(J.journalPathOf(s.stateRoot, s.journals()[0].releaseId)) }, 'RESUME_JOURNAL_MISSING')
+    // PR 브랜치의 commit 이 바뀌었다 — 트리가 같아도(메시지만 다른 commit) 원본 commit 이 아니면 보류다
+    const amend = (edit) => (s) => {
+      const branch = s.gh.prs[0].headRefName
+      git(s.HELP, 'fetch', '-q', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`); git(s.HELP, 'checkout', '-q', '-B', 'rewrite', `origin/${branch}`)
+      edit(s)
+      git(s.HELP, ...GIT_ENV, 'commit', '-q', '--amend', '--allow-empty', '-a', '-m', 'rewritten'); git(s.HELP, 'push', '-q', '-f', 'origin', `rewrite:refs/heads/${branch}`)
+    }
+    const same = await hold('같은 트리 · 다른 commit', amend(() => {}), 'RESUME_COMMIT_MISMATCH')
+    assert(!codes(same.r).includes('RESUME_BYTES_MISMATCH'), `트리가 같은데 바이트 불일치: ${codes(same.r)}`)
+    const swapped = await hold('hero 바이트만 바꾼 commit', amend((s) => { writeFileSync(join(s.HELP, R.heroFilePath(s.journals()[0].members[0].slug)), webp(1200, 675, 'swapped-hero')) }), 'RESUME_BYTES_MISMATCH')
+    assert(codes(swapped.r).includes('RESUME_COMMIT_MISMATCH'), `${codes(swapped.r)}`)
+    const ok = await pendingAt0100()
+    ok.s.gh.ci = () => 'success'
+    const r = await ok.s.recover()
+    assert(r.outcome === 'MERGED_SERVED' && r.merge.checked.some((c) => c.startsWith('재개 결속')), `대조군 ${r.outcome} ${codes(r)}`)
+  })
+  await check('RR10', 'merge ≠ 서빙 — merge 뒤 그 SHA 가 아직 서빙되지 않으면 MERGED_SERVING_PENDING(journal MERGED · serving PENDING) · 다음 회차가 한 번 다시 관측 · SERVED 뒤 같은 SHA 재관측 0 · 재 merge 0', async () => {
+    const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
+    s.gh.serving = () => false
+    const r1 = await s.run(true)
+    const j1 = oneJournal(s), sha = s.gh.prs[0].mergeCommit
+    assert(r1.outcome === 'MERGED_SERVING_PENDING' && r1.merge.merged && r1.merge.verified && r1.serving.state === 'PENDING' && r1.serving.code === 'VERCEL_SHA_MISMATCH' && codes(r1).length === 0, `${r1.outcome} ${codes(r1)}`)
+    assert(j1.state === 'MERGED' && j1.mainVerified === true && j1.serving.state === 'PENDING' && j1.serving.sha === sha && s.gh.servingCalls.every((x) => x === sha) && s.gh.servingCalls.length === j1.serving.attempts, `journal ${JSON.stringify(j1.serving)}`)
+    const n1 = s.gh.servingCalls.length
+    const r2 = await s.recover() // 아직 서빙 전 — 한 번만 다시 본다(기다리지 않는다)
+    assert(r2.outcome === 'RECOVER_NOTHING_OPEN' && s.gh.servingCalls.length === n1 + 1 && r2.settled[0].state === 'PENDING' && oneJournal(s).serving.attempts === n1 + 1, `${r2.outcome} 관측 ${s.gh.servingCalls.length - n1}`)
+    s.gh.serving = () => true
+    const r3 = await s.recover()
+    assert(s.gh.servingCalls.length === n1 + 2 && r3.settled[0].state === 'SERVED' && oneJournal(s).serving.state === 'SERVED' && oneJournal(s).serving.deploymentId, `${JSON.stringify(r3.settled)}`)
+    const r4 = await s.recover(), r5 = await s.run(true)
+    assert(s.gh.servingCalls.length === n1 + 2 && r4.settled.length === 0 && r5.settled.length === 0 && s.gh.mergeCalls === 1 && s.gh.merges === 1, `SERVED 뒤 재관측 ${s.gh.servingCalls.length - n1 - 2} · merge 호출 ${s.gh.mergeCalls}`)
+    // 관측 상한 — 끝없이 다시 보지 않는다. 넘으면 UNRESOLVED 로 한 번 막고(사람이 본다) 그 뒤로는 관측 0
+    const t = sandbox(F, { target: 1 }); t.putJob('I-F1-01')
+    t.gh.serving = () => false
+    await t.run(true)
+    const jp = J.journalPathOf(t.stateRoot, oneJournal(t).releaseId)
+    J.noteJournal(jp, J.readJournal(jp), { serving: { ...J.readJournal(jp).serving, attempts: RUN.RELEASE_SERVING_MAX_ATTEMPTS - 1 } })
+    const m0 = t.gh.servingCalls.length
+    const u1 = await t.recover(), u2 = await t.recover()
+    assert(u1.outcome === 'MERGED_SERVING_UNRESOLVED' && codes(u1).join() === 'SERVING_UNRESOLVED' && oneJournal(t).serving.state === 'UNRESOLVED' && t.gh.servingCalls.length === m0 + 1
+      && u2.outcome === 'RECOVER_NOTHING_OPEN' && u2.settled.length === 0, `${u1.outcome} ${codes(u1)} / ${u2.outcome} · 관측 ${t.gh.servingCalls.length - m0}`)
+  })
+  await check('RR11', 'merge 응답만 성공이고 main 에 행이 없으면 MERGED_UNVERIFIED — 서빙을 관측하지 않는다(확인 못 한 merge 를 서빙됐다고 적지 않는다) · 다음 회차도 새 release 0', async () => {
+    const s = sandbox(F, { target: 1 }); s.putJob('I-F1-01')
+    s.gh.fault.mergeHollow = 1
+    const r1 = await s.run(true)
+    assert(r1.outcome === 'MERGED_UNVERIFIED' && codes(r1).join() === 'MERGE_UNVERIFIED' && r1.merge.verified === false && s.gh.servingCalls.length === 0 && oneJournal(s).mainVerified === false, `${r1.outcome} ${codes(r1)} · 관측 ${s.gh.servingCalls.length}`)
+    const r2 = await s.run(true)
+    assert(r2.outcome === 'MERGED_UNVERIFIED' && s.gh.created === 1 && s.gh.servingCalls.length === 0 && s.journals().length === 1, `${r2.outcome} · PR ${s.gh.created}`)
+  })
+  await check('RR12', 'CLI · 02:00 배선 — `magazine-release --recover` 는 legacy rollout 에서 NOT_VNEXT · --apply 와 함께는 사용법 오류 · 실제 `magazine-auto-merge --recover` 가 vnext 에서 release 복구만 부른다(legacy 복구 0)', () => {
+    const home = mkdtempSync(join(TMP, 'cli-rec-'))
+    const cli = (args) => spawnSync(process.execPath, [join(ROOT, 'scripts/magazine-release.mjs'), ...args], { encoding: 'utf8', env: { HOME: home, PATH: process.env.PATH }, timeout: 60000 })
+    const a = cli(['--recover']), b = cli(['--recover', '--apply'])
+    assert(a.status === 0 && JSON.parse(a.stdout.trim().split('\n').pop()).outcome === 'NOT_VNEXT' && JSON.parse(a.stdout.trim().split('\n').pop()).mode === 'recover' && !existsSync(join(home, 'Library')) && b.status === 2, `${a.status} ${a.stdout.slice(-160)} · ${b.status}`)
+    // 실제 진입점 파일을 임시 트리에 복사하고 release CLI 만 대역으로 바꾼다 — git · gh 는 PATH 에 없다(외부 호출 0)
+    const tree = mkdtempSync(join(TMP, 'recover-wire-'))
+    mkdirSync(join(tree, 'scripts/lib'), { recursive: true })
+    for (const f of readdirSync(join(ROOT, 'scripts/lib')).filter((x) => x.endsWith('.mjs'))) writeFileSync(join(tree, 'scripts/lib', f), readFileSync(join(ROOT, 'scripts/lib', f)))
+    writeFileSync(join(tree, 'scripts/magazine-auto-merge.mjs'), readFileSync(join(ROOT, 'scripts/magazine-auto-merge.mjs')))
+    writeFileSync(join(tree, 'scripts/magazine-release.mjs'), "import { appendFileSync } from 'node:fs'\nappendFileSync(process.env.STUB_LOG, JSON.stringify(process.argv.slice(2)) + '\\n')\nprocess.exit(Number(process.env.STUB_EXIT ?? 0))\n")
+    const emptyBin = mkdtempSync(join(TMP, 'empty-bin-'))
+    const wire = (rollout, exit) => {
+      const h = mkdtempSync(join(TMP, 'wire-home-')), log = join(h, 'stub.log')
+      if (rollout) {
+        const rp = join(h, 'Library', 'Application Support', 'soransoran'); mkdirSync(rp, { recursive: true })
+        writeFileSync(join(rp, 'magazine-rollout.json'), JSON.stringify({ schemaVersion: 'magazine-rollout/1', path: rollout, release: 'auto', targetCandidates: 1, changedBy: 'release-check',
+          changedAt: '2026-11-24T00:00:00.000Z', previous: { path: 'legacy', release: 'draft', targetCandidates: 1 } }))
+      }
+      const r = spawnSync(process.execPath, [join(tree, 'scripts/magazine-auto-merge.mjs'), '--recover'], { encoding: 'utf8', cwd: tree, timeout: 120000,
+        env: { HOME: h, PATH: emptyBin, STUB_LOG: log, STUB_EXIT: String(exit) } })
+      return { status: r.status, out: `${r.stdout}${r.stderr}`, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [] }
+    }
+    const v0 = wire('vnext', 0), v1 = wire('vnext', 1)
+    assert(v0.status === 0 && v1.status === 1 && JSON.stringify(v0.calls) === JSON.stringify(['["--recover"]']) && JSON.stringify(v1.calls) === JSON.stringify(['["--recover"]'])
+      && !v0.out.includes('자동 병합 복구 (') && !v1.out.includes('자동 병합 복구 ('), `vnext: ${v0.status}/${v1.status} ${v0.calls} ${v0.out.slice(-200)}`)
+    for (const mode of ['legacy', null]) {
+      const l = wire(mode, 0)
+      assert(l.calls.length === 0 && l.out.includes('자동 병합 복구 ('), `${mode ?? '없음'}: release 복구를 불렀다 ${l.calls} ${l.out.slice(-200)}`)
+    }
   })
 
   // ════ RB2 — 경계 ═══════════════════════════════════════════
@@ -708,7 +1046,7 @@ try {
         }
       }
     }
-    assert(seen.has('scripts/lib/magazine-release-run.mjs') && seen.has('scripts/lib/magazine-content-plan.mjs'), `폐포 추적이 비었다 ${[...seen]}`)
+    assert(seen.has('scripts/lib/magazine-release-run.mjs') && seen.has('scripts/lib/magazine-content-plan.mjs') && seen.has('scripts/lib/magazine-deploy-evidence.mjs'), `폐포 추적이 비었다 ${[...seen]}`)
     const hit = [...seen].filter((f) => LEGACY.includes(f))
     assert(hit.length === 0, `legacy 도달: ${hit.join(', ')}`)
     const MG = await import('./lib/magazine-merge-gate.mjs')
@@ -734,4 +1072,4 @@ async function assertRejects(fn, code) {
 }
 
 console.log(`\nrelease 검사: ${pass} pass, ${fail} fail`)
-process.exit(fail ? 1 : 0)
+process.exit(selectedCase && selectedCount === 0 ? 2 : fail ? 1 : 0)

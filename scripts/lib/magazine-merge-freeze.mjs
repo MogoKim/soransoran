@@ -2,9 +2,12 @@
  * 매거진 merge freeze — **모든 매거진 자동 merge 직전에 같은 판정 하나**를 돈다 (2026-11-24 창업자 승인).
  *
  * 왜 있나
- *   창업자가 정한 두 밤(11/24 22:00 ~ 11/25 02:30 KST · 11/25 22:00 ~ 11/26 02:30 KST)에는 매거진 PR 이 main 에 들어가지 않아야 한다.
- *   그 시간대에 도는 자동 merge 는 legacy 01:00 `--apply` · 02:00 `--recover`(둘 다 `runAutoMerge`)와 vNext release merge 다.
- *   한 경로만 막으면 다른 경로가 같은 밤에 main 을 바꾼다 — 그래서 판정은 여기 한 곳이고, 두 경로가 merge 호출 **바로 앞**에서 부른다.
+ *   창업자가 정한 두 밤(11/24 20:00 ~ 11/25 02:30 KST · 11/25 20:00 ~ 11/26 02:30 KST)에는 매거진 PR 이 main 에 들어가지 않아야 한다.
+ *   시작이 20:00 인 이유 — D50 밤 배포 묶음이 20시대에 확정되고, 그 뒤 main 이 움직이면 CI 로 검사한 트리와 달라진다(11-24 지시서 §2.1).
+ *   🔴 두 밤만 막는 한시 제약이다 — 영구 야간 제한이 아니다. 지난 창은 판정에 영향이 없다.
+ *   이 시간대에 main 을 바꿀 수 있는 매거진 경로는 legacy 01:00 `--apply` · 02:00 `--recover`(둘 다 `runAutoMerge`) · vNext release merge ·
+ *   graph 승격 merge(`runGraphMerge` · 시각 무관 수동 실행)다. 한 경로만 막으면 다른 경로가 같은 밤에 main 을 바꾼다 —
+ *   그래서 판정은 여기 한 곳이고, 모든 경로가 merge 호출 **바로 앞**에서 부른다(release 검사 FZ4 · FZ5 가 호출 자리를 센다).
  *
  * 규칙
  *   창은 [startAt, endAt) — 시작 시각은 막고 끝 시각부터 연다. 시각은 오프셋이 붙은 엄격 시각(public-rule)으로만 읽는다.
@@ -18,8 +21,8 @@ import { strictOffsetTimeMs } from './magazine-public-rule.mjs'
 
 /** 창업자가 정한 freeze 창 — 지난 창은 판정에 영향이 없다(창 밖). 새 창은 행을 더한다 */
 export const MAGAZINE_MERGE_FREEZE_WINDOWS = Object.freeze([
-  Object.freeze({ id: 'freeze-2026-11-24-night', startAt: '2026-11-24T22:00:00+09:00', endAt: '2026-11-25T02:30:00+09:00' }),
-  Object.freeze({ id: 'freeze-2026-11-25-night', startAt: '2026-11-25T22:00:00+09:00', endAt: '2026-11-26T02:30:00+09:00' }),
+  Object.freeze({ id: 'freeze-2026-11-24-night', startAt: '2026-11-24T20:00:00+09:00', endAt: '2026-11-25T02:30:00+09:00' }),
+  Object.freeze({ id: 'freeze-2026-11-25-night', startAt: '2026-11-25T20:00:00+09:00', endAt: '2026-11-26T02:30:00+09:00' }),
 ])
 
 /**

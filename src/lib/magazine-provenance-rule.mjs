@@ -29,7 +29,9 @@ export const NO_RELEASE_BINDING = null
 /**
  * @typedef {{ intentId: string, graphVersion: string, bundleHash: string, planHash: string, policyBoard: { id: string, hash: string } }} ReleaseProvenance
  * @typedef {{ slug: string, release: ReleaseProvenance }} ProvenanceRow
- * @typedef {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string }, planHashOf: Readonly<Record<string, string>> }} ReleaseBinding
+ * @typedef {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string }, planHashOf: Readonly<Record<string, string>>,
+ *             relationsOf?: Readonly<Record<string, readonly string[]>> }} ReleaseBinding
+ *   relationsOf — 그 intent 의 컴파일 plan 이 승인받은 관계 edge id(S3-P2). overlay 규칙은 읽지 않는다 — resolver 가 출처 글의 나가는 관계에만 쓴다
  * @typedef {{ intent: string, slug: string }} CanonicalIdentity
  */
 

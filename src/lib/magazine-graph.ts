@@ -269,12 +269,15 @@ function ownSlugs<A extends GraphArticleRef>(picks: EdgePick<A>[]): EdgePick<A>[
  *
  *    한 edge 가 여러 카드 자리를 차지하지 않는다. 입력(edge · mapping) 순서와 무관하게 같은 답이다.
  * 🔴 특정 intent · edge · slug · cluster 예외를 두지 않는다.
+ * @param approved 출처가 승인한 관계(edge id → 그 관계가 나가는 intent). 비활성 edge 는 여기 있고 `from` 이 같을 때만 쓴다.
+ *                 기본값은 없음 — 활성 edge 만 본다(출처 없는 글 · 결속 없는 호출의 결과는 한 글자도 달라지지 않는다)
  */
 export function selectGraphPicks<A extends GraphArticleRef>(
   graph: Pick<MagazineGraph, 'edges' | 'mappings'>,
   fromIntents: ReadonlySet<string>,
   published: ReadonlyMap<string, A>,
   selfSlug: string,
+  approved: ReadonlyMap<string, string> = NO_APPROVED_EDGES,
 ): { direct: EdgePick<A>[]; discovery: EdgePick<A>[] } {
   /**
    * 🔴 **직접 연관과 발견을 처음부터 나눠 모은다.**
@@ -285,7 +288,8 @@ export function selectGraphPicks<A extends GraphArticleRef>(
   const discovery: EdgePick<A>[] = []
 
   for (const edge of graph.edges) {
-    if (!edge.active) continue
+    // 🔴 비활성 edge 는 그 글의 출처 plan 이 승인한 **나가는** 관계일 때만 쓴다. 들어오는 관계 · 다른 intent 의 관계는 켜지 않는다
+    if (!edge.active && approved.get(edge.id) !== edge.from) continue
     if (!FOOTER.has(edge.placement)) continue
     if (!RELATION_TYPES.has(edge.type)) continue
     if (!fromIntents.has(edge.from)) continue
@@ -368,6 +372,7 @@ type GraphMapping = MagazineGraph['mappings'][number]
  * 🔴 무엇을 더할지는 `magazine-provenance-rule.mjs` 의 `provenanceOverlay` 하나가 정한다 — admission 도 같은 함수를 쓴다.
  *    canonical 우선(같은 slug · 같은 intent) · 출처 intent 중복 · rollback · 정확한 컴파일 plan 결속이 전부 거기 있다.
  * 🔴 출처는 신원만 준다. edge · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위 · 3+1 은 전부 graph.edges 가 정한다.
+ *    (그 글의 plan 이 승인한 나가는 관계를 켜는 일은 `approvedOutgoingEdges` 가 따로 한다 — 여기는 mapping 만 만든다)
  * 🔴 graph 가 intent 목록을 주지 않으면 출처를 하나도 쓰지 않는다(모르면 더하지 않는다).
  * 🔴 운영 경로는 `runtimeReleaseBinding(GRAPH.graphVersion)` 을 넘긴다(S3-P2) — 정확한 컴파일 plan 과 같은 출처만 켜진다.
  *    버린 출처는 그 글이 폴백 규칙대로 그려질 뿐이다(비차단) — rollback 이 공개 서비스를 막지 않는다.
@@ -388,6 +393,38 @@ export function effectiveGraphMappings(
   })
   if (overlay.length === 0) return graph.mappings
   return [...graph.mappings, ...overlay.map((o) => ({ intent: o.intent, slug: o.slug, cluster: null }))]
+}
+
+const NO_APPROVED_EDGES: ReadonlyMap<string, string> = new Map()
+const ownKey = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+
+/**
+ * 출처 plan 이 승인한 나가는 관계 — edge id → 그 관계가 나가는 intent (S3-P2).
+ * 어느 글의 하단에 쓰이는지는 `selectGraphPicks` 가 정한다 — edge.from 이 그 글의 intent 이고, 승인 목록이 그 edge 를 같은 intent 의 것으로 적었을 때만이다.
+ *
+ * 왜 있나
+ *   graph 판은 mapping 없는 intent 의 edge 를 비활성(`active: false`)으로 빌드한다. vNext 글은 canonical mapping 없이 출처(overlay)로
+ *   신원을 얻으므로, 신원만 더하면 그 글의 나가는 관계가 전부 비활성이라 하단이 폴백으로 떨어진다(실측 2026-11-24 — 계획 후보 3편 모두 NO_RESULT).
+ *   admission 은 같은 plan 의 관계로 출판 최소를 승인했다 — 승인한 관계를 화면이 그리지 않으면 두 층의 성공 기준이 갈린다.
+ * 🔴 켜는 것은 **유효 mapping 이 출처로 더한 intent** 에서 나가는, 결속(`relationsOf`)이 그 intent 의 것으로 적은 edge 뿐이다.
+ *    결속은 호출자가 지금 graph 판일 때만 넘기고(runtimeReleaseBinding), overlay 는 정확한 컴파일 plan 과 같은 출처만 더한다 —
+ *    판 불일치 · 위조 planHash · canonical 충돌 · 출처 중복 · rollback 은 overlay 가 0 이라 여기도 0 이다.
+ * 🔴 대상 · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위는 여전히 graph edge 가 정한다. 대상 글의 공개 관문도 그대로다.
+ */
+export function approvedOutgoingEdges(
+  canonical: readonly GraphMapping[],
+  effective: readonly GraphMapping[],
+  binding: ReleaseBinding | null,
+): ReadonlyMap<string, string> {
+  const relationsOf = binding?.relationsOf
+  if (!relationsOf || effective === canonical) return NO_APPROVED_EDGES
+  const approved = new Map<string, string>()
+  // 🔴 출처가 더한 mapping(canonical 뒤쪽)의 intent 만 본다 — canonical mapping 으로 신원을 가진 글의 비활성 edge 는 승인 목록에 있어도 켜지 않는다
+  for (const m of effective.slice(canonical.length)) {
+    if (!ownKey(relationsOf, m.intent)) continue
+    for (const edgeId of relationsOf[m.intent]) approved.set(edgeId, m.intent)
+  }
+  return approved
 }
 
 /**
@@ -421,6 +458,7 @@ export function resolveFromGraph(
     fromIntents,
     new Map(published.map((a) => [a.slug, a])),
     article.slug,
+    approvedOutgoingEdges(graph.mappings, mappings, binding),
   )
   if (direct.length === 0 && discovery.length === 0) return { reason: 'NO_RESULT' }
 

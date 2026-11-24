@@ -18,5 +18,21 @@ export const RELEASE_BINDING: ReleaseBinding | null = {
     "I-T6-03": "45456475fb5c16b5705755888561a56525f2d32c763153c3f799ca697cd5e1ed",
     "I-T6-05": "d5685904daebffc325a9d4712e0c31cecb7c88022c768b2b5784438effa723fa",
     "I-T6-11": "5832c99dfa5aa1172e36fbd88be5a2fea0540432d9a24e3bd1403a8765c7adc4"
+  },
+  "relationsOf": {
+    "I-T3-47": [
+      "E-0326"
+    ],
+    "I-T6-03": [
+      "E-0338",
+      "E-0339",
+      "E-0340"
+    ],
+    "I-T6-05": [
+      "E-0329"
+    ],
+    "I-T6-11": [
+      "E-0092"
+    ]
   }
 }

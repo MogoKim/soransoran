@@ -13,6 +13,9 @@
  *
  * 🔴 운영 경로는 `releaseStateRoot()` 하나 — HOME 아래 Application Support. 검사는 반드시 stateRoot 를 주입한다.
  * 🔴 hero 바이트는 Job 이 기록한 해시와 같아야 쓴다(HERO_BYTES_MISMATCH).
+ * 🔴 journal 은 **재개 결속의 정본**이다 — 글마다 검증된 원고 해시 · hero 해시 · ProviderPlan 해시, 경로마다 쓴 바이트의 해시, 원본 commit 을 남긴다.
+ *    다음 회차(01:00 · 02:00 복구)는 열린 PR 의 head 를 이 기록과 대조한 뒤에만 merge 한다(`judgeResumeBinding`). 날짜가 바뀌어도 같은 journal 을 이어 간다.
+ * 🔴 MERGED 는 "main 에 들어갔다" 까지다. 그 SHA 가 운영 도메인에서 서빙되는지는 `serving` 사실로 따로 적는다(`noteJournal`) — 상태 전이가 아니다.
  */
 import * as nodeFs from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -72,6 +75,26 @@ export function readJournal(path, { fs = nodeFs } = {}) {
   } catch { return { broken: true, why: 'JSON' } }
 }
 
+/** 상태 루트의 journal 전부 — releaseId 순. 깨진 것은 `{ broken: true }` 로 그대로 돌려준다(지우지 않는다) */
+export function listReleaseJournals(stateRoot, { fs = nodeFs } = {}) {
+  let ids = []
+  try { ids = fs.readdirSync(join(stateRoot, 'releases')) } catch (e) { if (e?.code === 'ENOENT') return []; throw e }
+  const out = []
+  for (const id of ids.filter((x) => RELEASE_ID_RE.test(x)).sort()) {
+    const path = journalPathOf(stateRoot, id)
+    const journal = readJournal(path, { fs })
+    if (journal) out.push({ releaseId: id, path, journal })
+  }
+  return out
+}
+
+/** 상태를 바꾸지 않고 사실만 덧붙인다(서빙 관측 · main 확인) — history 에 줄을 더하지 않는다 */
+export function noteJournal(path, journal, facts, { fs = nodeFs } = {}) {
+  const next = { ...journal, ...facts }
+  writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`, { fs, tag: journal.releaseId, mode: 0o600 })
+  return next
+}
+
 /** journal 상태 전이 — 사실 기록을 덧붙인다(앞 기록을 지우지 않는다) */
 export function advanceJournal(path, journal, state, facts = {}, { fs = nodeFs, nowIso } = {}) {
   if (!JOURNAL_STATES.includes(state)) fail('JOURNAL_STATE_INVALID', state)
@@ -123,7 +146,10 @@ export function applyReleaseFiles({ worktree, journalPath, release, heroBytesOf,
   }
   if (!journal) {
     journal = { schemaVersion: JOURNAL_SCHEMA, releaseId: release.releaseId, branch: release.branch, baseSha: release.baseSha ?? null,
-      members: release.members.map((m) => ({ planId: m.planId, planHash: m.planHash, intentId: m.intentId, slug: m.slug, publishAt: m.publishAt })),
+      graphVersion: release.graphVersion ?? null,
+      // 🔴 재개 결속 — 그 글의 검증된 원고 · hero · ProviderPlan 해시. 다음 회차가 Job 저장소 · PR head 와 대조한다
+      members: release.members.map((m) => ({ planId: m.planId, planHash: m.planHash, intentId: m.intentId, slug: m.slug, publishAt: m.publishAt, layer: m.layer ?? null,
+        providerPlanHash: m.providerPlanHash ?? null, heroSha256: m.heroSha256 ?? null, manuscriptSha256: m.manuscriptSha256 ?? null })),
       entries, state: 'PREPARED', history: [{ state: 'PREPARED', at: nowIso }] }
     writeFileAtomic(journalPath, `${JSON.stringify(journal, null, 2)}\n`, { fs, tag: release.releaseId, mode: 0o600 })
   }

@@ -291,12 +291,19 @@ export function compileContentPlans(input) {
  * 출처 결속 — **정확한 컴파일 결과** 하나에서만 만든다 (S3-P2). admission 은 이 값을 그대로 쓰고, runtime 은 같은 값을 생성 파일
  * (`src/content/magazine/release-binding.ts`)로 받는다 — 두 층이 같은 결속인지는 검사가 이 함수로 다시 만들어 바이트 대조한다.
  * 🔴 planHashOf 는 컴파일된 plan 만 싣는다. plan 이 없는 intent · 다른 판 · 다른 정책 판의 출처는 provenanceOverlay 가 버린다.
- * @param {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string }, plans: { intentId: string, planHash: string }[] }} compiled
+ * 🔴 relationsOf 는 그 plan 이 근거와 함께 승인받은 관계(direct · discovery)의 edge id 다 — admission 이 출판 최소를 세는 바로 그 관계다.
+ *    graph 판은 mapping 없는 intent 의 edge 를 비활성으로 빌드하므로, runtime resolver 는 출처 글에 한해 이 목록의 edge 만 켠다
+ *    (`src/lib/magazine-graph.ts`). 관계 유형 · 이유 · 표면 · 슬롯 · 대상은 여전히 graph 가 정한다 — 여기는 id 뿐이다.
+ * @param {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string },
+ *           plans: { intentId: string, planHash: string, relations?: { direct: { edgeId: string }[], discovery: { edgeId: string }[] } }[] }} compiled
  */
 export function releaseBindingOf(compiled) {
-  const planHashOf = {}
-  for (const p of [...compiled.plans].sort((a, b) => byCodeUnit(a.intentId, b.intentId))) planHashOf[p.intentId] = p.planHash
-  return { graphVersion: compiled.graphVersion, bundleHash: compiled.bundleHash, policyBoard: { id: compiled.policyBoard.id, hash: compiled.policyBoard.hash }, planHashOf }
+  const planHashOf = {}, relationsOf = {}
+  for (const p of [...compiled.plans].sort((a, b) => byCodeUnit(a.intentId, b.intentId))) {
+    planHashOf[p.intentId] = p.planHash
+    relationsOf[p.intentId] = [...new Set([...(p.relations?.direct ?? []), ...(p.relations?.discovery ?? [])].map((r) => r.edgeId))].sort(byCodeUnit)
+  }
+  return { graphVersion: compiled.graphVersion, bundleHash: compiled.bundleHash, policyBoard: { id: compiled.policyBoard.id, hash: compiled.policyBoard.hash }, planHashOf, relationsOf }
 }
 
 // ── 동적 입력 판독 (텍스트 → 신원 투영) ─────────────────────

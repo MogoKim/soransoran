@@ -59,11 +59,39 @@ const MUTATIONS = [
   ['RM26', '실행기가 legacy queue 신원 adapter 를 끈다', 'RE12', [{ file: RUN, from: '    legacyQueue: { active: true, text: queueText },', to: '    legacyQueue: { active: false, text: null },' }]],
   ['RM27', 'merge 를 검증한 head 에 묶지 않는다', 'RB5', [{ file: RUN, from: "gh(['pr', 'merge', String(n), '--squash', '--match-head-commit', sha])", to: "gh(['pr', 'merge', String(n), '--squash'])" }]],
   ['RM28', 'release 접두가 아닌 브랜치도 지운다', 'RB5', [{ file: RUN, from: '      if (!branch.startsWith(RELEASE_BRANCH_PREFIX)) return false\n      const remote', to: '      const remote' }]],
-  ['RM29', 'CI 실패 PR 을 닫지 않는다', 'RE6', [{ file: RUN, from: "    closeRelease({ deps, pr: pr0, reason: 'release CI 실패", to: "    void ({ deps, pr: pr0, reason: 'release CI 실패" }]],
+  ['RM29', 'CI 실패 PR 을 닫지 않는다', 'RE6', [{ file: RUN, from: "    const closed = closeRelease({ deps, pr: pr0, reason: 'release CI 실패", to: "    const closed = false && closeRelease({ deps, pr: pr0, reason: 'release CI 실패" }]],
   ['RM30', '종료된 release 를 같은 main 에서 다시 만든다', 'RE6', [{ file: RUN, from: '    if (prior && isTerminalJournal(prior)) return block(', to: '    if (false) return block(' }]],
-  ['RM32', '사람이 닫은 release PR 을 계속 merge 하려 든다', 'RE13', [{ file: RUN, from: "    if (pr.state !== 'OPEN') {", to: '    if (false) {' }]],
+  ['RM32', 'PR 을 연 직후 밖에서 닫힌 release 를 계속 merge 하려 든다', 'RE13b', [{ file: RUN, from: "    if (pr.state !== 'OPEN') {", to: '    if (false) {' }]],
+  ['RM32b', '다음 회차가 밖에서 닫힌 release PR 을 사실(CLOSED)로 적지 않는다', 'RE13', [{ file: RUN, from: "      if (pr.state === 'CLOSED') {", to: '      if (false) {' }]],
   // 결속
-  ['RM31', 'runtime 결속 파일이 컴파일 결과와 어긋난다', 'RB1', [{ file: 'src/content/magazine/release-binding.ts', from: '"I-T6-03": "d', to: '"I-T6-03": "e' }]],
+  ['RM31', 'runtime 결속 파일이 컴파일 결과와 어긋난다', 'RB1', [{ file: 'src/content/magazine/release-binding.ts', from: '"bundleHash": "', to: '"bundleHash": "0' }]],
+  // freeze 20:00 · 전수
+  ['RM33', 'freeze 시작을 22:00 으로 되돌린다(첫 밤)', 'FZ1', [{ file: FRZ, from: "startAt: '2026-11-24T20:00:00+09:00'", to: "startAt: '2026-11-24T22:00:00+09:00'" }]],
+  ['RM34', 'freeze 시작을 22:00 으로 되돌린다(둘째 밤)', 'FZ1', [{ file: FRZ, from: "startAt: '2026-11-25T20:00:00+09:00'", to: "startAt: '2026-11-25T22:00:00+09:00'" }]],
+  // 01:00 ↔ 02:00 복구
+  ['RM35', '복구가 열린 PR 이 없을 때 조립으로 넘어간다(새 PR)', 'RR2', [{ file: RUN, from: "    if (recover) { report.outcome = 'RECOVER_NOTHING_OPEN'; return report }\n", to: '' }]],
+  ['RM36', '복구가 PR 전에 멈춘 release 의 PR 을 만든다', 'RR2', [{ file: RUN, from: '    if (recover) { report.notes.push(`release ${releaseId} 는 ${j.state} 에서 멈췄다', to: '    if (false) { report.notes.push(`release ${releaseId} 는 ${j.state} 에서 멈췄다' }]],
+  ['RM37', '복구가 날짜를 놓친 PR 을 닫고 다시 조립한다', 'RR3', [{ file: RUN, from: "        if (recover) return block('RELEASE_DATE_MISSED',", to: "        if (false) return block('RELEASE_DATE_MISSED'," }]],
+  ['RM38', '복구가 낡은 base 의 PR 을 닫고 다시 조립한다', 'RR3', [{ file: RUN, from: '      if (recover) { report.notes.push(`#${pr0.number} ${stale.code} — 복구 회차는 닫지 않는다', to: '      if (false) { report.notes.push(`#${pr0.number} ${stale.code} — 복구 회차는 닫지 않는다' }]],
+  ['RM39', '진행 중 journal 을 보지 않는다(날짜가 바뀌면 새 releaseId · 고아 브랜치)', 'RR4', [{ file: RUN, from: '    if (apply && attempt === 1) {', to: '    if (false) {' }]],
+  ['RM40', '공개 시각을 놓친 PR 전 release 를 그대로 이어 PR 을 연다', 'RR5', [{ file: RUN, from: '    if (!(minPublishMsOf(j.members) > deps.now())) {', to: '    if (false) {' }]],
+  ['RM41', '닫지 못한 PR 을 닫았다고 적는다', 'RR6', [{ file: RUN, from: '  if (!r.ok) return false\n', to: '' }]],
+  ['RM42', 'merge 응답을 잃은 release 를 사실(MERGED)로 적지 않는다', 'RR8', [{ file: RUN, from: "      if (pr.state === 'MERGED') {\n        // 밖에서 merge", to: "      if (false) {\n        // 밖에서 merge" }]],
+  ['RM43', '02:00 진입점이 vnext 에서도 legacy 복구를 돈다', 'RR12', [{ file: AM, from: "    if (lane.lane === 'release') {", to: '    if (false) {' }]],
+  // 재개 결속
+  ['RM44', '실행기가 재개 결속을 merge 판정에 넣지 않는다', 'RR9', [{ file: RUN, from: '  report.blockedBy.push(...resume.blockedBy, ...content.blockedBy, ...prv.blockedBy)', to: '  report.blockedBy.push(...content.blockedBy, ...prv.blockedBy)' }]],
+  ['RM45', '재개 결속이 원본 commit 을 보지 않는다', 'RS1', [{ file: RUN, from: '  if (!HEX40.test(String(journal.commitSha)) || journal.commitSha !== pr.headRefOid) {', to: '  if (false) {' }]],
+  ['RM46', '재개 결속이 PR head 바이트를 보지 않는다', 'RS1', [{ file: RUN, from: "  if (!entries.length || drift.length) block('RESUME_BYTES_MISMATCH',", to: "  if (false) block('RESUME_BYTES_MISMATCH'," }]],
+  ['RM47', '재개 결속이 Job 의 검증된 원고 · hero · ProviderPlan 기록을 보지 않는다', 'RS1', [{ file: RUN, from: '    else if (job.manuscriptSha256 !== m.manuscriptSha256 || job.heroSha256 !== m.heroSha256 || job.providerPlanHash !== m.providerPlanHash) {', to: '    else if (false) {' }]],
+  ['RM48', '재개 결속이 지금 ProviderPlan 을 다시 만들어 대조하지 않는다', 'RS1', [{ file: RUN, from: "    if (providerPlanHashOf(m) !== m.providerPlanHash) block('RESUME_PROVIDER_PLAN_DRIFT',", to: "    if (false) block('RESUME_PROVIDER_PLAN_DRIFT'," }]],
+  ['RM49', '이미 MERGED · CLOSED 인 journal 의 PR 을 merge 하게 둔다(중복 merge)', 'RS1', [{ file: RUN, from: "  if (journal.state !== 'PR_OPEN') block('RESUME_JOURNAL_STATE',", to: "  if (false) block('RESUME_JOURNAL_STATE'," }]],
+  ['RM50', '조립이 Job 의 ProviderPlan 기록을 지금 값과 대조하지 않는다', 'RA8', [{ file: REL, from: '    if (pp.ok && c.providerPlanHash !== pp.providerPlanHash) {', to: '    if (false) {' }]],
+  ['RM51', '조립이 검증된 원고 해시 없이 release 를 만든다', 'RA8', [{ file: REL, from: "    if (!HEX64_RE.test(String(c.manuscriptSha256))) { addReason(c.planId, 'MANUSCRIPT_UNBOUND'); continue }\n", to: '' }]],
+  // merge ≠ 서빙
+  ['RM52', 'SERVED 로 적은 release 를 회차마다 다시 관측한다', 'RR10', [{ file: RUN, from: "      if (j.mainVerified === true && ['SERVED', 'UNRESOLVED'].includes(j.serving?.state)) continue\n", to: '' }]],
+  ['RM53', '서빙 관측 상한이 없다(끝없는 재관측)', 'RR10', [{ file: RUN, from: "  if (s.state !== 'SERVED' && s.attempts >= RELEASE_SERVING_MAX_ATTEMPTS) s.state = 'UNRESOLVED'\n", to: '' }]],
+  ['RM54', 'main 에서 확인하지 못한 merge 도 서빙을 관측해 MERGED_* 로 적는다', 'RR11', [{ file: RUN, from: "    if (!ok) { block('MERGE_UNVERIFIED',", to: "    if (false) { block('MERGE_UNVERIFIED'," }]],
+  ['RM55', '서빙을 못 봐도 SERVED 로 적는다(merge = 서빙)', 'RR10', [{ file: RUN, from: "      if (o?.served === true) { s.state = 'SERVED';", to: "      if (true) { s.state = 'SERVED';" }]],
 ]
 
 const lines = []
@@ -72,10 +100,10 @@ let base = null
 try {
   const visible = (d, re) => (existsSync(join(ROOT, d)) ? readdirSync(join(ROOT, d)).filter((f) => !f.startsWith('.') && re.test(f)).map((f) => `${d}/${f}`) : [])
   const snapshot = new Map()
-  for (const f of [...visible('scripts/lib', /\.mjs$/), ...visible('scripts/__fixtures__/magazine/content-plan', /./), CHECK, AM,
+  for (const f of [...visible('scripts/lib', /\.mjs$/), ...visible('scripts/__fixtures__/magazine/content-plan', /./), CHECK, AM, 'scripts/magazine-graph-merge.mts',
     'scripts/magazine-release.mjs', 'scripts/magazine-release-binding.mjs', 'scripts/magazine-plan-input-bootstrap.mjs', 'scripts/magazine-rollout.mjs',
     'src/lib/magazine-provenance-rule.mjs', 'src/content/magazine/articles.ts', 'src/content/magazine/release-binding.ts', 'src/content/magazine/graph/control.ts',
-    'src/content/magazine/plan-input/g-20261102-427d4d.json', 'drafts/magazine/topic-queue.ts']) {
+    ...visible('src/content/magazine/plan-input', /^g-.*\.json$/), 'drafts/magazine/topic-queue.ts']) {
     if (existsSync(join(ROOT, f))) snapshot.set(f, readFileSync(join(ROOT, f), 'utf8'))
   }
   base = mkdtempSync(join(tmpdir(), 'release-mutation-'))
@@ -92,8 +120,8 @@ try {
     for (const [f, t] of files) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), t) }
     return { dir }
   }
-  const run = (dir) => {
-    const r = spawnSync(process.execPath, [join(dir, CHECK)], { encoding: 'utf8', cwd: dir, timeout: 300_000 })
+  const run = (dir, selectedCase) => {
+    const r = spawnSync(process.execPath, [join(dir, CHECK), ...(selectedCase ? ['--case', selectedCase] : [])], { encoding: 'utf8', cwd: dir, timeout: 300_000 })
     const m = /release 검사: (\d+) pass, (\d+) fail/.exec(r.stdout ?? '')
     return { status: r.status, out: r.stdout ?? '', err: r.stderr ?? '', fail: m ? +m[2] : null, pass: m ? +m[1] : null }
   }
@@ -105,7 +133,7 @@ try {
     try {
       const w = world(id, edits)
       if (w.error) { harnessFail++; lines.push(`FAIL ${id} ${label} — ${w.error} (하네스 결함)`); continue }
-      const r = run(w.dir)
+      const r = run(w.dir, expect)
       if (r.fail === null) { harnessFail++; lines.push(`FAIL ${id} ${label} — 요약 줄 없음(검출 아님): ${(r.out + r.err).slice(-200)}`); continue }
       const hit = r.out.split('\n').some((l) => l.startsWith(`FAIL ${expect} `))
       if (r.status === 1 && hit) { detected++; lines.push(`PASS ${id} ${label} → ${expect} 실패로 검출`) }

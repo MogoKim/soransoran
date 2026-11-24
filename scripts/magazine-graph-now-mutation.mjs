@@ -76,6 +76,15 @@ const MUTATIONS = [
     find: '  const mappings = effectiveGraphMappings(graph, published, binding)\n', replace: '  const mappings = graph.mappings\n' }] },
   { name: 'resolver 가 공유 규칙 대신 자기 사본(canonical 우선 없음)을 쓴다', edits: [{ file: F.graph,
     find: '  const overlay = provenanceOverlay({\n', replace: '  const overlay = rows.map((r) => ({ intent: r.release.intentId, slug: r.slug })) || provenanceOverlay({\n' }] },
+  // 🔴 2026-11-24 — 출처 plan 이 승인한 나가는 관계(결속 relationsOf)만 비활성 edge 를 켠다
+  { name: 'resolver 가 승인 관계를 켜지 않는다(비활성 edge 는 전부 버린다 — 새 글 하단이 폴백)', edits: [{ file: F.graph,
+    find: '    if (!edge.active && approved.get(edge.id) !== edge.from) continue\n', replace: '    if (!edge.active) continue\n' }] },
+  { name: 'resolver 가 승인 목록의 edge 를 from 대조 없이 켠다(다른 글의 들어오는 관계가 켜진다)', edits: [{ file: F.graph,
+    find: '    if (!edge.active && approved.get(edge.id) !== edge.from) continue\n', replace: '    if (!edge.active && !approved.has(edge.id)) continue\n' }] },
+  { name: 'resolver 가 canonical mapping 글에도 승인 목록을 적용한다(출처 아닌 글의 비활성 edge 가 켜진다)', edits: [{ file: F.graph,
+    find: '  for (const m of effective.slice(canonical.length)) {\n', replace: '  for (const m of effective) {\n' }] },
+  { name: 'resolver 가 결속에 없는 비활성 edge 까지 전부 켠다(승인 밖 관계)', edits: [{ file: F.graph,
+    find: '    if (!edge.active && approved.get(edge.id) !== edge.from) continue\n', replace: '' }] },
   { name: '운영이 읽지 않는 출처 진단(dropped)을 되살린다', edits: [{ file: F.rule,
     find: '  return overlay\n}', replace: '  return overlay\n}\nexport const dropped = []' }] },
 ]

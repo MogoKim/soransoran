@@ -53,6 +53,8 @@ export function readReleaseCandidates({ jobsRoot, fs = nodeFs }) {
     candidates.push({
       planId: job.planId, planHash: job.planHash, providerPlanHash: typeof job.providerPlanHash === 'string' ? job.providerPlanHash : null,
       slugProposal: typeof job.slugProposal === 'string' ? job.slugProposal : null, article,
+      // 검증된 원고 파일의 해시(위에서 바이트와 대조했다) — release journal 이 재개 결속으로 남긴다
+      manuscriptSha256: job.manuscript.sha256,
       hero: { sha256: job.hero.sha256, width: size?.width ?? null, height: size?.height ?? null }, heroPath: join(base, job.hero.file),
     })
   }
