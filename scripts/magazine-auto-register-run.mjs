@@ -58,9 +58,14 @@ const write = passthrough.includes('--write')
 /**
  * 🔴 **rollout 판정** (①A · runbook §0.0B.5) — 회차 시작 때 한 번 읽는다. producer 인계 대기 · 등록 · 병합보다 앞이다.
  *    없음 · 손상 · `legacy` 는 아래 legacy 회차를 그대로 돈다(손상만 경고 1줄).
- *    `vnext` 는 이 코드 판에 세로 경로가 없으므로 아무것도 시작하지 않고 non-zero 로 끝난다 — legacy 로 대신 돌리지 않는다.
+ *    `vnext` 는 legacy 단계(인계 대기 · ready · merge)를 하나도 시작하지 않는다 — 이 자리의 vNext 단계인 release writer
+ *    (`magazine-release.mjs` · S3-P2)만 돌고, 그 종료 코드로 아래 guard 줄에서 끝난다. `--write` 회차만 `--apply` 다.
  */
-const ROLLOUT = rolloutGate(readRollout())
+const ROLLOUT = rolloutGate(readRollout(), { vnextLane: 'release' })
+if (ROLLOUT.lane === 'release') {
+  const rel = spawnSync(NODE, [join(ROOT, 'scripts/magazine-release.mjs'), ...(write ? ['--apply'] : [])], { cwd: ROOT, stdio: 'inherit' })
+  ROLLOUT.exitCode = rel.error ? 1 : (rel.status ?? 1)
+}
 if (!ROLLOUT.proceed) { console.error(ROLLOUT.line); process.exit(ROLLOUT.exitCode) }
 if (ROLLOUT.warning) console.error(ROLLOUT.warning)
 

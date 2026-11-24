@@ -34,6 +34,7 @@ import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazin
 import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, PR_FIELDS_ARG, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock } from './lib/magazine-auto-lock.mjs'
+import { judgeMergeFreeze } from './lib/magazine-merge-freeze.mjs'
 import { collectProductionDeployment, resolveVercelContext, verifyVercelDirect } from './lib/magazine-deploy-evidence.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -304,6 +305,9 @@ export async function runAutoMerge({ apply = false, deps }) {
   if (!apply) { log('검증 통과 — 실제 merge 는 --apply'); return report }
 
   // ── ⑧ merge ─────────────────────────────────────────────
+  // 🔴 merge freeze (2026-11-24 창업자 승인) — 01:00 --apply · 02:00 --recover 모두 이 줄을 지난다. merge 호출 바로 앞에서 시각을 다시 읽는다
+  const freeze = judgeMergeFreeze(now())
+  if (freeze.frozen) return fail(freeze.code, freeze.message)
   const merged = deps.mergePr(pr0.number, sha)
   if (!merged.ok) return fail('MERGE_FAILED', merged.reason)
   report.merged = true

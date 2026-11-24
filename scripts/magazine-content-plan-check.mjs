@@ -768,16 +768,19 @@ try {
     assert(!admittedOf(base4, F.pid('I-F4-02')), '전제 — I-F4-02 는 공개 대상이 없어 기본 admission 에서 빠진다')
     const noMapRow = (r) => (r.release === undefined ? (({ release, ...x }) => x)(r) : r)
     const heldTarget = (a) => heldOf(a, F.pid('I-F4-02'))?.join() === 'RELATION_TARGET_UNAVAILABLE'
-    // ⑦-0 🔴 S3 P1 은 결속이 없다(NO_RELEASE_BINDING) — 형식이 완벽한 공개 출처도 대상이 아니다(runtime 운영 경로도 overlay 0)
-    assert(NO_RELEASE_BINDING === null, 'P1 결속은 없음(null)이다')
-    assert(heldTarget(admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] })), '결속 없는 출처를 공개 대상으로 셌다')
-    //   정확한 컴파일 plan 과 다섯 필드가 모두 같은 출처도 P1 에서는 대상이 아니다 — admission 이 결속을 넘기면(활성화) 여기서 잡힌다
+    // ⑦-0 🔴 S3-P2 — admission 결속 = 이 컴파일 결과(releaseBindingOf). 형식만 맞는(결속과 다른) 출처는 대상이 아니다
+    assert(NO_RELEASE_BINDING === null, '결속 없음은 null 이다')
+    assert(heldTarget(admit(F, { articles: [...F.w.seed.articles, row('fx-v43', rel('I-F4-03'))] })), '결속과 다른 출처를 공개 대상으로 셌다')
+    //   정확한 컴파일 plan 과 다섯 필드가 모두 같은 공개 출처는 대상이다 — runtime 도 같은 결속(생성 파일)으로 같은 신원을 쓴다
     {
       const plan42 = base.plans.find((p) => p.intentId === 'I-F4-02')
       assert(plan42 && !parsePI(F.text).mappings.some((m) => m.intentId === 'I-F4-02'), '전제 — I-F4-02 는 컴파일 plan 이 있고 mapping 이 없다')
       const exact = rel('I-F4-02', { graphVersion: base.graphVersion, bundleHash: base.bundleHash, planHash: plan42.planHash, policyBoard: base.policyBoard })
       const a = admit(F, { articles: [...F.w.seed.articles, row('fx-v42', exact)] })
-      assert(!admittedOf(a, F.pid('I-F4-01')), `정확히 결속된 출처(fx-v42)를 P1 에서 대상으로 셌다 ${JSON.stringify(admittedOf(a, F.pid('I-F4-01')))}`)
+      assert(canonicalJson(admittedOf(a, F.pid('I-F4-01'))?.groundedBy) === canonicalJson([{ edgeId: 'E-0040', toIntentId: 'I-F4-02', target: 'PUBLIC', slug: 'fx-v42' }]),
+        `정확히 결속된 공개 출처(fx-v42)를 대상으로 세지 않았다 ${JSON.stringify(admittedOf(a, F.pid('I-F4-01')))}`)
+      // 같은 행이 예약(미공개)이면 대상이 아니다 — 공개 관문은 같은 시각 하나
+      assert(!admittedOf(admit(F, { articles: [...F.w.seed.articles, row('fx-v42', exact, { status: 'SCHEDULED', publishAt: FUTURE })] }), F.pid('I-F4-01')), '예약 출처를 대상으로 셌다')
     }
     // ⑦-1 반례 ① canonical 같은 intent 가 **미공개**인데 출처 글은 공개 — runtime 은 canonical 이 이겨 링크 0 · admission 도 대상 0
     const sortMaps = (b) => b.mappings.sort((x, y) => (`${x.intentId}\u0000${x.slug}` < `${y.intentId}\u0000${y.slug}` ? -1 : 1))

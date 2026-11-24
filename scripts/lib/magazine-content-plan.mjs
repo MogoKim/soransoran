@@ -31,7 +31,7 @@ import { isHeldStatus, isPublicAt, strictPublishAtMs } from './magazine-public-r
 import { ControlLocateError, locateConstLiteral, parseDataLiteral, parseGraphControl } from './magazine-graph-control.mjs'
 import { BANNED_WORDS } from './magazine-qa-constants.mjs'
 import { RELATION_DISPLAY_TARGET, VNEXT_PUBLICATION_RELATION_MINIMUM } from './magazine-relation-policy.mjs'
-import { NO_RELEASE_BINDING, provenanceOverlay } from '../../src/lib/magazine-provenance-rule.mjs'
+import { provenanceOverlay } from '../../src/lib/magazine-provenance-rule.mjs'
 
 export const CONTENT_PLAN_SCHEMA = 'magazine-content-plan/1'
 export const COMPILE_SCHEMA = 'magazine-content-plan-compile/1'
@@ -287,6 +287,18 @@ export function compileContentPlans(input) {
   return { schemaVersion: COMPILE_SCHEMA, graphVersion: bundle.graphVersion, bundleHash: bundle.bundleHash, policyBoard: { id: P.id, hash: POLICY_BOARD_HASH }, plans, held }
 }
 
+/**
+ * 출처 결속 — **정확한 컴파일 결과** 하나에서만 만든다 (S3-P2). admission 은 이 값을 그대로 쓰고, runtime 은 같은 값을 생성 파일
+ * (`src/content/magazine/release-binding.ts`)로 받는다 — 두 층이 같은 결속인지는 검사가 이 함수로 다시 만들어 바이트 대조한다.
+ * 🔴 planHashOf 는 컴파일된 plan 만 싣는다. plan 이 없는 intent · 다른 판 · 다른 정책 판의 출처는 provenanceOverlay 가 버린다.
+ * @param {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string }, plans: { intentId: string, planHash: string }[] }} compiled
+ */
+export function releaseBindingOf(compiled) {
+  const planHashOf = {}
+  for (const p of [...compiled.plans].sort((a, b) => byCodeUnit(a.intentId, b.intentId))) planHashOf[p.intentId] = p.planHash
+  return { graphVersion: compiled.graphVersion, bundleHash: compiled.bundleHash, policyBoard: { id: compiled.policyBoard.id, hash: compiled.policyBoard.hash }, planHashOf }
+}
+
 // ── 동적 입력 판독 (텍스트 → 신원 투영) ─────────────────────
 
 /** 현재 control.ts 의 판 — 엄격 판독(parseGraphControl)이 실패하면 null. bootstrap 신원 대조가 같은 판독을 쓰게 한다 */
@@ -453,7 +465,7 @@ function admitWithPlans(input) {
    * 출처가 **대상**이 되는 신원 — runtime resolver 와 같은 규칙 `provenanceOverlay` 하나로 정한다(S3 P1 수리).
    * 🔴 runtime 이 버릴 대상을 승인하지 않는다 — canonical 같은 intent(미공개여도) · 같은 slug 충돌 · 출처 intent 중복 · 판에 없는 intent ·
    *    결속 없음은 runtime 과 똑같이 overlay 0 이다. 같은 공개 관문(이 시각에 공개인 행)만 넘긴다 — runtime 의 공개 목록과 같은 모집단.
-   * 🔴 S3 P1 은 결속이 없다(NO_RELEASE_BINDING) — 출처는 대상이 되지 않는다. S3-P2 가 두 층에 같은 결속을 준다.
+   * 🔴 S3-P2 — 결속은 이 컴파일 결과 그대로다(releaseBindingOf). runtime 은 같은 값을 생성 파일로 받는다(release-binding.ts).
    */
   const overlaySlugsOf = new Map()
   if (articles.ok) {
@@ -461,7 +473,7 @@ function admitWithPlans(input) {
       canonical: bundle.mappings.map((m) => ({ intent: m.intentId, slug: m.slug })),
       graphIntentIds: bundle.intents.map((x) => x.intentId),
       rows: articles.rows.filter((a) => a.release && isPublicAt(a, nowMs)).map((a) => ({ slug: a.slug, release: a.release })),
-      binding: NO_RELEASE_BINDING,
+      binding: releaseBindingOf(compiled),
     })
     for (const o of overlay) overlaySlugsOf.set(o.intent, [...(overlaySlugsOf.get(o.intent) ?? []), o.slug])
   }

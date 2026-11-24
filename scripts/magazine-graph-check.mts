@@ -51,7 +51,9 @@ import {
   resolveFromGraph,
   resolveRelatedMagazine,
   graphRuntimeConfig,
+  runtimeReleaseBinding,
 } from '../src/lib/magazine-graph'
+import { RELEASE_BINDING } from '../src/content/magazine/release-binding'
 import { NO_RELEASE_BINDING, type ReleaseBinding } from '../src/lib/magazine-provenance-rule.mjs'
 import {
   MAX_KEYS,
@@ -952,23 +954,51 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
       `${JSON.stringify(outF)} / ${JSON.stringify(addedOf(full, [F1, OLD, OTH], forgedBind))}`)
   }
   check('  대조군 — 다섯 필드가 결속과 같으면 출처가 대상이 된다', JSON.stringify(items(OTH, full, [NEW, OLD, OTH])) === JSON.stringify(inbound))
-  // ④ 🔴 S3 P1 운영 경로 — 결속이 없다(NO_RELEASE_BINDING). 형식이 완벽한 출처도 켜지지 않는다
-  check('반례 ④ 결속 없음(운영 기본값) — 형식이 맞는 출처도 대상 0 · overlay 0',
+  // ④ 결속 없음(기본값 · 판이 다른 결속) — 형식이 완벽한 출처도 켜지지 않는다
+  check('반례 ④ 결속 없음(기본값) — 형식이 맞는 출처도 대상 0 · overlay 0',
     NO_RELEASE_BINDING === null && items(OTH, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_RESULT'
       && items(NEW, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_MAPPING'
       && (() => { const r = resolveFromGraph(OTH, full, [NEW, OLD, OTH], () => []); return 'reason' in r && r.reason === 'NO_RESULT' })()
       && effectiveGraphMappings(full, [NEW, OLD, OTH]) === full.mappings && addedOf(full, [NEW, OLD, OTH], NO_RELEASE_BINDING).length === 0)
   {
     const gsrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
-    const prodCall = 'const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>\n      getRelatedMagazineArticles(article, MAX_DIRECT, now),\n    )\n'
-    check('  운영 resolver 호출은 결속을 넘기지 않는다 (인자 4개 · 기본값 NO_RELEASE_BINDING)',
+    // 🔴 S3-P2 — 운영 resolver 는 생성 결속(지금 판일 때만)을 넘기고, admission 은 같은 컴파일 결과의 결속을 쓴다
+    const prodCall = '    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>\n      getRelatedMagazineArticles(article, MAX_DIRECT, now),\n      runtimeReleaseBinding(GRAPH.graphVersion),\n    )\n'
+    check('  운영 resolver 호출은 runtimeReleaseBinding(GRAPH.graphVersion) 을 넘긴다 · resolveFromGraph 기본값은 결속 없음',
       gsrc.split(prodCall).length - 1 === 1 && /binding: ReleaseBinding \| null = NO_RELEASE_BINDING,\n\): \{ resolved/.test(gsrc))
     const cpsrc = readFileSync(join(ROOT, 'scripts/lib/magazine-content-plan.mjs'), 'utf8')
-    check('  admission · runtime 이 같은 규칙 하나를 쓴다 — 둘 다 provenanceOverlay 를 공유 모듈에서 부르고 자기 사본이 없다',
-      /import \{ NO_RELEASE_BINDING, provenanceOverlay \} from '\.\.\/\.\.\/src\/lib\/magazine-provenance-rule\.mjs'/.test(cpsrc)
+    check('  admission · runtime 이 같은 규칙 하나를 쓴다 — 둘 다 provenanceOverlay 를 공유 모듈에서 부르고 자기 사본이 없다 · admission 결속 = 컴파일 결과',
+      /import \{ provenanceOverlay \} from '\.\.\/\.\.\/src\/lib\/magazine-provenance-rule\.mjs'/.test(cpsrc)
         && /from '@\/lib\/magazine-provenance-rule\.mjs'/.test(gsrc)
         && cpsrc.split('provenanceOverlay(').length - 1 === 1 && gsrc.split('provenanceOverlay(').length - 1 === 1
-        && cpsrc.includes('binding: NO_RELEASE_BINDING,') && !/canonicalIntents|canonicalSlugs/.test(gsrc + cpsrc))
+        && cpsrc.includes('binding: releaseBindingOf(compiled),') && !/canonicalIntents|canonicalSlugs/.test(gsrc + cpsrc))
+    // 🔴 runtime 결속 생성 파일 = 지금 graph 판 Bundle 의 정적 컴파일 결과(바이트) — 낡으면 빌드 전에 막는다
+    const { expectedBindingText } = await import('./magazine-release-binding.mjs')
+    const eb = expectedBindingText(ROOT)
+    check('runtime 결속 파일(release-binding.ts)이 지금 graph 판 Bundle 재컴파일 결과와 바이트로 같다', eb.ok && eb.current === eb.expected,
+      eb.ok ? 'node scripts/magazine-release-binding.mjs --write 로 다시 만든다' : `${eb.code} ${eb.why}`)
+    check('  runtimeReleaseBinding — 지금 판의 결속만 쓴다 · 다른 판 · null 이면 결속 없음',
+      runtimeReleaseBinding(GRAPH.graphVersion) === (RELEASE_BINDING?.graphVersion === GRAPH.graphVersion ? RELEASE_BINDING : null)
+        && runtimeReleaseBinding('g-20990101-abcdef') === null && runtimeReleaseBinding(GRAPH.graphVersion, null) === null)
+    // 실제 결속으로 — 결속된 vNext 출처 글이 graph 신원(overlay)을 얻는다 · 위조 planHash 는 얻지 못한다
+    const bound = RELEASE_BINDING && RELEASE_BINDING.graphVersion === GRAPH.graphVersion
+      ? Object.entries(RELEASE_BINDING.planHashOf).find(([intent]) => !GRAPH.mappings.some((m) => m.intent === intent))
+      : undefined
+    if (bound) {
+      const [intent, planHash] = bound
+      const relOf = (ph: string) => ({ schemaVersion: 'magazine-article-release/1' as const, intentId: intent, graphVersion: RELEASE_BINDING!.graphVersion,
+        bundleHash: RELEASE_BINDING!.bundleHash, planHash: ph, policyBoard: { ...RELEASE_BINDING!.policyBoard } })
+      const synth = { ...published[0], slug: 'vnext-bound-synthetic', release: relOf(planHash) } as MagazineArticle
+      const forged = { ...synth, release: relOf('f'.repeat(64)) } as MagazineArticle
+      const add = (a: MagazineArticle) => effectiveGraphMappings(GRAPH, [...published, a], runtimeReleaseBinding(GRAPH.graphVersion)).slice(GRAPH.mappings.length).map((m) => `${m.intent}>${m.slug}`)
+      check(`실제 결속 — 결속된 출처 글(${intent})이 운영 결속으로 graph 신원을 얻는다 · 위조 planHash 는 0`,
+        JSON.stringify(add(synth)) === JSON.stringify([`${intent}>vnext-bound-synthetic`]) && add(forged).length === 0, `${add(synth)} / ${add(forged)}`)
+      // 🔴 연결된 것과 그려지는 것은 다르다 — 지금 graph 판은 mapping 없는 intent 의 edge 를 비활성으로 빌드한다.
+      //    그래서 결속된 출처 글의 하단 링크는 그 slug 를 mapping 하는 다음 graph 승격 전에는 그려지지 않는다(폴백). 판정이 아니라 사실 기록이다
+      const activeOf = GRAPH.edges.filter((e) => (e.from === intent || e.to === intent) && e.active).length
+      const r1 = resolveFromGraph(synth, GRAPH, [...published, synth], () => [], runtimeReleaseBinding(GRAPH.graphVersion))
+      console.log(`  info 결속 출처 intent ${intent} 의 활성 edge ${activeOf}/${GRAPH.edges.filter((e) => e.from === intent || e.to === intent).length} — resolver ${'reason' in r1 ? r1.reason : 'GRAPH'} (graph 승격이 slug 를 mapping 해야 링크가 그려진다)`)
+    } else check('실제 결속 — mapping 없는 결속 plan 이 있다(표본)', false, JSON.stringify(RELEASE_BINDING?.planHashOf ?? null))
     const rsrc = readFileSync(join(ROOT, 'src/lib/magazine-provenance-rule.mjs'), 'utf8')
     const ruleMod = await import('../src/lib/magazine-provenance-rule.mjs')
     check('  운영이 읽지 않는 출처 진단 계약이 없다 — 규칙은 overlay 배열만 · 진단 API · dropped 0',
@@ -2338,6 +2368,11 @@ const GRAPH_FILES = [
     (ar.branch ?? '').startsWith(GRAPH_BRANCH_PREFIX), ar.branch ?? '')
 
   /** 🔴 미해결 1건 계약 — 이미 떠 있으면 새로 만들지 않는다 */
+  const frozen = fakeMergeDeps({ now: () => new Date('2026-11-24T22:00:00+09:00') })
+  const held = await runGraphMerge({ apply: true, deps: frozen })
+  check('D50 보호 시간에는 그래프 PR도 병합을 보류한다',
+    !held.merged && held.blockedBy.some((b) => b.code === 'MERGE_FREEZE_WINDOW') && !frozen.calls.includes('mergePr'))
+
   const busy = fakeMergeDeps({ listGraphPrs: () => ({ ok: true, prs: [okPr] }) })
   const br = await runGraphMerge({ apply: true, deps: busy })
   check('그래프 PR 이 이미 있으면 새로 만들지 않는다',
