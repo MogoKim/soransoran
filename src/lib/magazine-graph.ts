@@ -41,7 +41,7 @@ import type {
   MagazineRecommendationSlot as GraphSlot,
 } from '@/content/magazine/graph/types'
 import type { MagazineArticle } from '@/content/magazine/types'
-import { getAllMagazineArticles, getRelatedMagazineArticles } from '@/lib/magazine'
+import { getAllMagazineArticles, getRelatedMagazineArticles, magazineNow } from '@/lib/magazine'
 import { NO_RELEASE_BINDING, provenanceOverlay, type ReleaseBinding } from '@/lib/magazine-provenance-rule.mjs'
 
 /**
@@ -487,7 +487,7 @@ export function resolveFromGraph(
 export function resolveRelatedMagazine(
   article: MagazineArticle,
   env: NodeJS.ProcessEnv = process.env,
-  now: number = Date.now(),
+  now: number = magazineNow(),
 ): ResolvedRelatedMagazine {
   try {
     const runtime = graphRuntimeConfig(env)
