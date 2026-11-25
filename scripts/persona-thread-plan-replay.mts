@@ -69,6 +69,8 @@ function run(o: { passRate: number; dailyCount: number; runMax: number; perPerso
       const v = judgeFollowupPost({
         postId: p.id, publishedAtMs: p.publishedAtMs, postStatus: 'PUBLISHED', authorPersonaId: p.author, autoManagedPost: true,
         comments: rows.get(p.id)!.filter((c) => c.createdAt.getTime() <= now), hasOpenQueue: false,
+        // 재생 목록에는 원천 증거가 없다 — 뜨거운 글도 보통 글 계획으로 재생한다
+        hot: false,
       }, now)
       if (v.verdict === 'GO') ready.push({ postId: p.id, publishedAtMs: p.publishedAtMs, go: v })
     }
@@ -117,7 +119,7 @@ function run(o: { passRate: number; dailyCount: number; runMax: number; perPerso
   return { calls, sameDay: stat(endOfDay), full: stat(null) }
 }
 
-const plans = posts.map((p) => threadPlanOf(p.id))
+const plans = posts.map((p) => threadPlanOf(p.id, p.publishedAtMs, false))
 const dist = (xs: number[]): string => [...new Set(xs)].sort((a, b) => a - b).map((n) => `${n}개 ${xs.filter((x) => x === n).length}편`).join(' · ')
 const sum = (xs: number[]): number => xs.reduce((a, b) => a + b, 0)
 const slots = plans.flatMap((p) => p.slots)
