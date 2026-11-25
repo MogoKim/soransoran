@@ -457,6 +457,15 @@ try {
     const c = J.acquireReleaseLock({ stateRoot: ls, nowIso: 'T', pid: 4243, pidAlive: () => false })
     assert(c.ok, '죽은 잠금 회수'); c.release()
     assert(!existsSync(join(ls, 'release.lock')), '잠금 잔여')
+    // 두 회차가 같은 죽은 소유자를 보더라도 늦게 도착한 회차는 새 소유자의 잠금을 지울 수 없다.
+    writeFileSync(join(ls, 'release.lock'), JSON.stringify({ pid: 4244, token: 'previous-run' }))
+    let first
+    const delayed = J.acquireReleaseLock({ stateRoot: ls, nowIso: 'T', pid: 4246, pidAlive: (pid) => {
+      if (!first) first = J.acquireReleaseLock({ stateRoot: ls, nowIso: 'T', pid: 4245, pidAlive: (holder) => holder !== 4244 })
+      return pid !== 4244
+    } })
+    assert(first.ok && !delayed.ok && JSON.parse(readFileSync(join(ls, 'release.lock'), 'utf8')).pid === 4245, '복구 경쟁에서 두 writer 진입')
+    first.release()
   })
 
   // ════ RE — 끝에서 끝 (실제 git · 가짜 GitHub) ═════════════════

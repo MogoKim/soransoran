@@ -17,6 +17,7 @@
  *    다음 회차(01:00 · 02:00 복구)는 열린 PR 의 head 를 이 기록과 대조한 뒤에만 merge 한다(`judgeResumeBinding`). 날짜가 바뀌어도 같은 journal 을 이어 간다.
  * 🔴 MERGED 는 "main 에 들어갔다" 까지다. 그 SHA 가 운영 도메인에서 서빙되는지는 `serving` 사실로 따로 적는다(`noteJournal`) — 상태 전이가 아니다.
  */
+import { recoverMagazineLock } from './magazine-lock-recovery.mjs'
 import * as nodeFs from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -198,7 +199,12 @@ export function acquireReleaseLock({ stateRoot, fs = nodeFs, pid = process.pid, 
       try { holder = JSON.parse(fs.readFileSync(path, 'utf8')) } catch { holder = null }
       if (!holder || !Number.isSafeInteger(holder.pid)) return { ok: false, code: 'RELEASE_LOCK_CORRUPT', why: `${path} 를 읽지 못했다 — 자동으로 지우지 않는다` }
       if (pidAlive(holder.pid)) return { ok: false, code: 'RELEASE_LOCK_HELD', why: `release writer(pid ${holder.pid})가 이미 돈다` }
-      try { fs.renameSync(path, `${path}.stale-${token}`); fs.rmSync(`${path}.stale-${token}`, { force: true }) } catch { return { ok: false, code: 'RELEASE_LOCK_HELD', why: '죽은 잠금 회수 경쟁 — 다음 회차' } }
+      try {
+        if (recoverMagazineLock({ fs, path, observed: holder, pidAlive })) continue
+      } catch (e) {
+        if (e.code !== 'ENOENT') return { ok: false, code: 'RELEASE_LOCK_FAILED', why: e.code ?? 'RECOVERY_FAILED' }
+      }
+      return { ok: false, code: 'RELEASE_LOCK_HELD', why: '다른 회차가 잠금을 회수 중이다' }
     }
   }
   return { ok: false, code: 'RELEASE_LOCK_HELD', why: '잠금을 얻지 못했다' }
