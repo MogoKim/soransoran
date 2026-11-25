@@ -23,7 +23,7 @@ import {
   type SlotOpportunity,
 } from '../src/lib/source-slot-release'
 import {
-  pendingFateOf, cohortFatesOf, terminalYieldOf, paidSourcesFor, costAttributionOf, TIME_INVARIANT_LOSS_REASONS, pipelineRunOfLedger,
+  pendingFateOf, cohortFatesOf, terminalYieldOf, paidSourcesFor, costAttributionOf, TIME_INVARIANT_LOSS_REASONS, AGE_LIMIT_LOSS_REASONS, pipelineRunOfLedger,
   type CostFate,
 } from '../src/lib/ready-fate'
 import { judgeJitDemand, fillUpToOf, ledgerRunIdOf, runFileName } from '../src/lib/supply-process'
@@ -61,8 +61,12 @@ const strip = (p: string): string => readFileSync(p, 'utf-8').replace(/\/\*[\s\S
 const H = 3_600_000
 const NOW = new Date('2026-10-04T07:00:00+09:00')
 const QUALITY = currentQualityContract()
-/** 다가오는 슬롯 5개 — 09:00 · 11:00 · 13:00 · 15:00 · 17:00 KST */
-const SLOTS = [9, 11, 13, 15, 17].map((h) => new Date(`2026-10-04T${String(h).padStart(2, '0')}:00:00+09:00`))
+/**
+ * 다가오는 슬롯 5개 — 08:00 · 09:00 · 10:00 · 11:00 · 12:00 KST.
+ * 🔴 (2026-11-25 밤 4) 지평은 지금 창 끝 + 다음 창 첫 자리이고 원천은 수집 뒤 6시간 안의 자리에만 걸린다 —
+ *    옛 09:00~17:00 다섯 자리(10시간 폭)는 한 회차의 READY 가 덮을 수 없는 모양이다. 수집(06:30) 6시간 안 다섯 자리로 잰다.
+ */
+const SLOTS = [8, 9, 10, 11, 12].map((h) => new Date(`2026-10-04T${String(h).padStart(2, '0')}:00:00+09:00`))
 const iso = (ms: number): string => new Date(ms).toISOString()
 /** 🔴 정본 판정이 읽는 증거 — 게시 시각만 바꾼다(반응 · 원천 상대 표본 · 참여 동력 있음) */
 const gate = (postedMs: number, o: { capturedMs?: number; driver?: string } = {}): unknown => {
@@ -83,7 +87,8 @@ const readyOpp = (key: string, g: unknown): SlotOpportunity => ({
     gateResults: g, slotAt, now: NOW, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: key,
   }).verdict === 'eligible',
 })
-const fresh = NOW.getTime() - 2 * H
+/** 게시 07:00 − 1h = 06:00 · 수집 06:30 — 12:00 자리까지 수집 뒤 5.5h */
+const fresh = NOW.getTime() - 1 * H
 
 console.log('\n① 반례 — 슬롯 5 · slot-valid READY 5 → 수요 0 · 유료 0')
 {
@@ -98,13 +103,14 @@ console.log('\n① 반례 — 슬롯 5 · slot-valid READY 5 → 수요 0 · 유
 
 console.log('\n①-b 🔴 사람 승인 READY 는 자동 공급을 닫지 않는다 (JIT 커버리지 = 자동 READY 만)')
 {
-  // 🔴 23:55 KST — 운영 창 마지막 틱(23:50) 뒤라 오늘 회수 기회는 없다. 가까운 지평은 다음 첫 기회 1칸이다
-  //    (2026-10-11 Batch A2 · 옛: 내일 capacity 5칸). 창이 하루 전체라 23:00 에는 아직 회수 기회가 남는다
-  const late = new Date('2026-10-04T23:55:00+09:00')
+  // 🔴 (2026-11-25 밤 4) 08:15 KST — 06:30 바퀴(창 끝 08:50)이고 08:10 자리는 이미 나갔다. 지금 창에 남은 몫 0 ·
+  //    가까운 지평은 다음 창 첫 자리(10:50) 1칸이다. 옛 판은 23:55 · 내일 08:10 이었다 — 수집 뒤 6시간 밖이라
+  //    어떤 READY 도 그 칸을 덮지 못한다(지평 · 만료가 같이 바뀌었다)
+  const late = new Date('2026-10-04T08:15:00+09:00')
   const g = gate(late.getTime() - 2 * H)
   const row = (id: string, decidedBy: string): Record<string, unknown> => ({ id, decidedBy, gateResults: g, matchedPersonaId: null })
   const view = (rows: Record<string, unknown>[]): { loaded: LoadedStock; resolved: ResolvedScale } => ({
-    loaded: { targets: rows, history: [], publishedToday: 0, codeOfPersonaId: new Map() } as unknown as LoadedStock,
+    loaded: { targets: rows, history: [], publishedToday: 1, codeOfPersonaId: new Map() } as unknown as LoadedStock,
     resolved: { scale: { releaseProfile: profileOf('d5'), capacityProfile: profileOf('d5') } } as unknown as ResolvedScale,
   })
   const human = jitCoverageOf(view(Array.from({ length: 5 }, (_, i) => row(`h${i}`, 'founder'))), late)
@@ -137,14 +143,34 @@ console.log('\n② 반례 — 슬롯 5 · 유효 READY 3 → 부족 2 만')
 
 console.log('\n③ 반례 — 지금은 유효하지만 예정 슬롯 전에 만료')
 {
-  const g = gate(SLOTS[0]!.getTime() - 72 * H - 60_000)
+  // 🔴 오래된 원문을 방금(06:30) 수집했다 — 수집 뒤 6시간이 아니라 원문 72시간이 먼저 닫는다
+  const g = gate(SLOTS[0]!.getTime() - 72 * H - 60_000, { capturedMs: NOW.getTime() - 30 * 60_000 })
   const nowV = judgeSlotRelease({ gateResults: g, slotAt: NOW, now: NOW, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'x' })
   const filled = matchOpportunitiesToSlots(SLOTS, [readyOpp('soon', g)]).filled
-  check('🔴 지금(07:00)은 eligible · 첫 슬롯(09:00)에서는 72h 초과 → 커버리지 0 · 수요 5',
+  check('🔴 지금(07:00)은 eligible · 첫 슬롯(08:00)에서는 72h 초과 → 커버리지 0 · 수요 5',
     nowV.verdict === 'eligible' && filled === 0 && judgeJitDemand({ slots: 5, readyFilled: filled, writable: 5 }).upTo === 5)
   const f = pendingFateOf({ gateResults: g, matched: false, horizon: SLOTS, now: NOW, tieBreak: 'soon' })
   check('🔴 그 대기 READY 는 손실 확정(SOURCE_TOO_OLD_AT_SLOT) — 구제하지 않는다',
     f.fate === 'lost' && f.reason === 'SOURCE_TOO_OLD_AT_SLOT', JSON.stringify(f))
+}
+
+console.log('\n③-b 🔴 🔴 반례 — 지금은 유효하지만 예정 슬롯 전에 수집 뒤 6시간 (2026-11-25 밤 4 · 판정서 R12)')
+{
+  // 게시 02:00 · 수집 02:30(지금 07:00 기준 4.5h 전) — 08:00 자리에서 수집 뒤 5.5h, 09:00 자리부터 6.5h 이상
+  const g = gate(NOW.getTime() - 5 * H, { capturedMs: NOW.getTime() - 4.5 * H })
+  const nowV = judgeSlotRelease({ gateResults: g, slotAt: NOW, now: NOW, hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: 'x' })
+  const lateSlots = SLOTS.slice(1)
+  const filled = matchOpportunitiesToSlots(lateSlots, [readyOpp('cap', g)]).filled
+  check('🔴 지금(07:00)은 eligible · 09:00 부터는 수집 뒤 6시간 초과 → 그 자리들의 커버리지 0',
+    nowV.verdict === 'eligible' && filled === 0, JSON.stringify({ v: nowV.verdict, filled }))
+  const f = pendingFateOf({ gateResults: g, matched: false, horizon: lateSlots, now: NOW, tieBreak: 'cap' })
+  check('🔴 🔴 **그 대기 READY 는 손실 확정(CAPTURED_TOO_OLD_AT_SLOT) — unknown 으로 남겨 수율을 부풀리지 않는다**',
+    f.fate === 'lost' && f.reason === 'CAPTURED_TOO_OLD_AT_SLOT', JSON.stringify(f))
+  check('🔴 나이 한도 손실 사유는 원문 72h · 수집 6h 두 개다',
+    AGE_LIMIT_LOSS_REASONS.length === 2 && AGE_LIMIT_LOSS_REASONS.includes('SOURCE_TOO_OLD_AT_SLOT') && AGE_LIMIT_LOSS_REASONS.includes('CAPTURED_TOO_OLD_AT_SLOT'))
+  const c = cohortFatesOf([{ status: 'APPROVED', fate: f.fate }])
+  check('🔴 cohort 에서도 손실로 센다 → 결말 수율 상한에 들어가지 않는다',
+    c.lost === 1 && c.unknown === 0 && terminalYieldOf(c, 1)?.high === 0, JSON.stringify(c))
 }
 
 console.log('\n④ 대기 READY 3분류 — 예정 · 손실 확정 · 모름')

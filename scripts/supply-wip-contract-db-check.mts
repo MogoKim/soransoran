@@ -231,7 +231,8 @@ async function main(): Promise<void> {
   /** ④ 사람이 검토한 옛 계약 기계 행 — `founder` */
   const humanOldId = await machineRow({ voice: 'P18', mark: 'otherDigest', decidedBy: MACHINE_REVIEWED_BY })
   /** ③ 지금 발행 가능 — 사람이 고른 새 글(쉰 P19 가 받을 수 있다) */
-  const freshId = await humanRow(new Date(NOW.getTime() - 1 * DAY), '가을 이불 꺼낸 날', '가을 이불을 꺼내 햇볕에 말렸어요. 다들 이불 바꾸셨어요?')
+  // 🔴 (2026-11-25 밤 4) 새 글 = 게시 3시간 전 · 수집 1.9시간 전 — 옛 값(게시 하루 전)은 수집 뒤 6시간이 지나 만료다
+  const freshId = await humanRow(new Date(NOW.getTime() - 3 * 3_600_000), '가을 이불 꺼낸 날', '가을 이불을 꺼내 햇볕에 말렸어요. 다들 이불 바꾸셨어요?')
   /** ⑨ 회귀 — 원천 72h 초과 · profile 불일치 · gate 탈락 */
   const ttlId = await humanRow(new Date(NOW.getTime() - 40 * DAY), '베란다 화분 이야기', '베란다에 화분을 들였더니 아침이 달라졌어요. 다들 키우는 식물 있으세요?')
   const legacyRaw = await raw('legacy:site', new Date(NOW.getTime() - 3 * DAY))

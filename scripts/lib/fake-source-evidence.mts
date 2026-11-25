@@ -18,7 +18,10 @@ const H = 3_600_000
 
 /**
  * 🔴 기준 시각 `at` 에서 **ageH 시간 전** 게시된 원문 · 반응 관측 · 원천 상대 표본 · 참여 동력이 있는 기록.
- *    기본 ageH=6 — 하루 안 여러 슬롯에서 eligible 로 남는다(72h 전까지).
+ *    기본 ageH=6 — 수집 = 게시 + 1.1h = 기준 − 4.9h.
+ *    🔴 (2026-11-25 밤 4) 수집 뒤 6시간 만료 — 기본 기록은 **기준 시각 뒤 1.1시간까지만** eligible 이다(그 뒤 자리는
+ *       `CAPTURED_TOO_OLD_AT_SLOT`). 하루 여러 자리를 한 기록이 덮는 모양은 이제 실제에 없다 — fixture 도 만들지 않는다.
+ *       오래된 원문을 최근에 수집한 모양은 `capturedAt` 으로 준다(원문 나이 · 수집 나이를 따로 시험할 때).
  */
 export function fakeSourceEvidence(at: Date, opts: {
   ageH?: number; site?: string; id?: string
@@ -26,12 +29,17 @@ export function fakeSourceEvidence(at: Date, opts: {
   commentsPct?: number
   /** 🔴 게시 시각을 직접 준다(주면 `ageH` 를 무시한다) · `null` 이면 게시 시각 모름 */
   postedAt?: Date | null
+  /**
+   * 🔴 수집 시각을 직접 준다 — 주면 목록 = 수집 − 0.1h · 초안 = 수집 + 0.9h(기본 기록과 같은 간격)다.
+   *    게시 시각은 목록보다 앞이어야 한다(부르는 쪽이 지킨다 — 어기면 판정이 POSTED_AFTER_CAPTURE 로 막는다).
+   */
+  capturedAt?: Date
 } = {}): SourceEvidenceRecord {
   const ageH = opts.ageH ?? 6
   const posted = opts.postedAt instanceof Date ? opts.postedAt : new Date(at.getTime() - ageH * H)
-  const listed = new Date(posted.getTime() + 1 * H)
-  const captured = new Date(posted.getTime() + 1.1 * H)
-  const drafted = new Date(posted.getTime() + 2 * H)
+  const captured = opts.capturedAt ?? new Date(posted.getTime() + 1.1 * H)
+  const listed = new Date(captured.getTime() - 0.1 * H)
+  const drafted = new Date(captured.getTime() + 0.9 * H)
   const site = opts.site ?? 'navercafe:fixture'
   return buildSourceEvidence({
     postedAt: opts.postedAt === null ? null : posted.toISOString(), listedAt: listed.toISOString(), capturedAt: captured.toISOString(),

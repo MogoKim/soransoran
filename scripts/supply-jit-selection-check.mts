@@ -46,6 +46,11 @@ const ROW = (o: {
   id: string; site?: string; posted?: Date | null; ageH?: number; cp: number; vp?: number; axis?: 'seed' | 'raw'; title?: string
   /** 판정 기준 시각 — 운영 모양 재생은 회차 시각보다 늦춘다(증거 시각 검사만 통과시키려고 · 나이는 슬롯 기준이라 변하지 않는다) */
   evidenceAt?: Date
+  /**
+   * 🔴 (2026-11-25 밤 4) 수집 시각을 직접 준다 — 오래된 원문을 최근에 수집한 모양(원문 72h · 수집 6h 를 따로 짠다).
+   *    주지 않으면 수집 = 게시 + 1.1h 다(`fakeSourceEvidence` 기본).
+   */
+  capturedAt?: Date
 }): WorksetRow => {
   const site = o.site ?? RT
   const [input] = mergeJudgeRows([{
@@ -60,6 +65,7 @@ const ROW = (o: {
   let ev = fakeSourceEvidence(o.evidenceAt ?? NOW, {
     site, id: o.id, commentsPct: o.cp,
     ...(o.posted === null ? { postedAt: null } : o.posted !== undefined ? { postedAt: o.posted } : { ageH: o.ageH ?? 6 }),
+    ...(o.capturedAt === undefined ? {} : { capturedAt: o.capturedAt }),
   })
   if (o.vp !== undefined) ev = { ...ev, sourceStats: { ...ev.sourceStats!, viewsPct: o.vp } }
   return { sourceArticleId: o.id, sourceSite: site, commentCount: 10, sourcePostedAt: '', sourceListedAt: '', input: input!, evidence: ev }
@@ -109,9 +115,11 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
 // ── ① B형 반례 · 순위 탐욕이 슬롯을 잃는 모양 ──
 {
   // 슬롯 s1·s2 · A(1위) 두 슬롯 다 유효 · B(2위) s1 만 유효
-  const s1 = at(1), s2 = at(30)
-  const A = ROW({ id: 'gA', ageH: 5, cp: 0.9 })
-  const B = ROW({ id: 'gB', ageH: 60, cp: 0.5 })
+  // 🔴 (2026-11-25 밤 4) 두 자리 모두 수집 6시간 안(+1h · +4h) — B 는 원문 70h 라 +4h 자리에서 72h 를 넘긴다.
+  //    A 가 더 늦게 수집됐다(1위). 옛 모양(+30h 자리)은 수집 뒤 6시간 밖이라 아무도 덮지 못한다
+  const s1 = at(1), s2 = at(4)
+  const A = ROW({ id: 'gA', ageH: 5, cp: 0.9, capturedAt: at(-0.8) })
+  const B = ROW({ id: 'gB', ageH: 70, cp: 0.5, capturedAt: at(-1) })
   // 🔴 순위 탐욕 + 가장 이른 빈 슬롯 배정(금지된 구현) — A 가 s1 을 먹고 B 는 갈 곳이 없다
   const naive = (() => { const used = new Set<number>(); let n = 0
     for (const r of [A, B]) { const v = validOf(r, [s1, s2]); const j = v.findIndex((x, k) => x && !used.has(k)); if (j >= 0) { used.add(j); n += 1 } }
@@ -123,7 +131,8 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
   // B형(축을 배정 뒤에 두면 선택이 준다) — raw 가 순위 상위를 차지해도 자동 seed 슬롯 수는 줄지 않는다
   const raws = [0.99, 0.98, 0.97, 0.96].map((cp, i) => ROW({ id: `bR${i}`, ageH: 4, cp, axis: 'raw' }))
   const seeds = [0.6, 0.5, 0.4].map((cp, i) => ROW({ id: `bS${i}`, ageH: 4, cp }))
-  const pb = run({ rows: [...raws, ...seeds], slots: [at(1), at(5), at(9)], cap: 3 })
+  // 🔴 (2026-11-25 밤 4) 세 자리는 수집(−2.9h) 6시간 안이다 — 옛 +5h · +9h 자리는 만료다
+  const pb = run({ rows: [...raws, ...seeds], slots: [at(1), at(2), at(3)], cap: 3 })
   check('① B형 — 순위 상위 raw 4건이 있어도 seed 3건이 3슬롯을 다 덮는다(축 처리로 슬롯이 줄지 않는다)',
     pb.picked.length === 3 && pb.picked.every((r) => r.input.axis === SEED_AXIS) && pb.jit?.coveredSlots === 3, JSON.stringify(pb.jit))
 }
@@ -196,9 +205,12 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
 
 // ── ③ 같은 신선도에서는 반응 순위가 결정한다 ──
 {
-  const slots = Array.from({ length: 12 }, (_, i) => at(1 + i))
+  // 🔴 (2026-11-25 밤 4) 열두 자리는 수집(−2.9h) 6시간 안(+0.25h ~ +3h)이다. 재시도 3건도 덮을 수 있게(연결 가능) 수집은 −3h 대다 —
+  //    만료돼서 빠지는 것이 아니라 상한 때문에 빠지는 것을 잰다
+  const slots = Array.from({ length: 12 }, (_, i) => at(0.25 * (i + 1)))
   const fresh = Array.from({ length: 12 }, (_, i) => ROW({ id: `f${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
-  const old = [ROW({ id: 'rt0', ageH: 20, cp: 0.1 }), ROW({ id: 'rt1', ageH: 21, cp: 0.11 }), ROW({ id: 'rt2', ageH: 22, cp: 0.12 })]
+  const old = [ROW({ id: 'rt0', ageH: 20, cp: 0.1, capturedAt: at(-3) }), ROW({ id: 'rt1', ageH: 21, cp: 0.11, capturedAt: at(-3.05) }),
+    ROW({ id: 'rt2', ageH: 22, cp: 0.12, capturedAt: at(-3.1) })]
   const attempted = new Map([...retryOf([old[0]!], 9), ...retryOf([old[1]!], 7), ...retryOf([old[2]!], 3)])
   const p = run({ rows: [...fresh, ...old], slots, cap: 10, attempted })
   check('③ 더 신선한 원문 12건 ≥ 상한 10 · 오래된 재시도 3건은 선택되지 않는다 · retryReserved 0',
@@ -213,9 +225,11 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
 // ── 🔴 신규 먼저 · 재선정 몫(신규가 남긴 자리) 반례 · 변이 탐지 ──
 {
   // cap10 · 신규 8건 · 재선정 3건 → 몫 K = 10 − 8 = 2 → 신규 8 + 신선한 순 재선정 2(rv0 · rv1) = 10 · rv2 는 상한 밖
-  const slots10 = Array.from({ length: 10 }, (_, i) => at(1 + i))
+  // 🔴 (2026-11-25 밤 4) 자리 · 재선정 수집을 6시간 안으로 옮겼다(뜻은 그대로 — 재선정 셋 다 연결 가능 · 수집이 이른 순 rv0 > rv1 > rv2)
+  const slots10 = Array.from({ length: 10 }, (_, i) => at(0.25 * (i + 1)))
   const fresh8 = Array.from({ length: 8 }, (_, i) => ROW({ id: `n${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
-  const ret3 = [ROW({ id: 'rv0', ageH: 20, cp: 0.1 }), ROW({ id: 'rv1', ageH: 21, cp: 0.11 }), ROW({ id: 'rv2', ageH: 22, cp: 0.12 })]
+  const ret3 = [ROW({ id: 'rv0', ageH: 20, cp: 0.1, capturedAt: at(-3) }), ROW({ id: 'rv1', ageH: 21, cp: 0.11, capturedAt: at(-3.05) }),
+    ROW({ id: 'rv2', ageH: 22, cp: 0.12, capturedAt: at(-3.1) })]
   const att3 = new Map([...retryOf([ret3[0]!], 9), ...retryOf([ret3[1]!], 7), ...retryOf([ret3[2]!], 3)])
   const p8 = run({ rows: [...fresh8, ...ret3], slots: slots10, cap: 10, attempted: att3 })
   check('🔴 상한 10 — 신규 8건 전부 + 재선정은 신규가 남긴 2자리(rv0 · rv1)만 · 상한을 넘지 않는다',
@@ -228,14 +242,16 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
   const ps = run({ rows: [sfresh, sretry], slots: [at(1)], cap: 1, attempted: retryOf([sretry], 9) })
   check('🔴 동일 신선도 · 신규(cp 0.4) vs 재선정(cp 0.99) · 상한 1 — 신규가 들어온다(몫 0)', ids(ps).join() === 'sf1', `selected: ${ids(ps).join()}`)
   // 🔴 반례: 더 신선한 재선정 vs 더 늙은 신규 — 신규 먼저(앞판은 재선정이 이겼다)
-  const freshOld = ROW({ id: 'fo1', ageH: 40, cp: 0.9 })
+  // 🔴 (2026-11-25 밤 4) 40h 원문을 −2h 에 수집 · 재선정은 −1.9h 수집 — 둘 다 그 자리에 유효하고 재선정이 더 최신이다
+  const freshOld = ROW({ id: 'fo1', ageH: 40, cp: 0.9, capturedAt: at(-2) })
   const retryNew = ROW({ id: 'rn1', ageH: 3, cp: 0.1 })
   const pn = run({ rows: [freshOld, retryNew], slots: [at(1)], cap: 1, attempted: retryOf([retryNew], 9) })
   check('🔴 반례 — 더 신선한 재선정(3h)보다 더 늙은 신규(40h)가 먼저다 (신규 굶김 0)', ids(pn).join() === 'fo1', `selected: ${ids(pn).join()}`)
   // 🔴 신규가 모자란 회차 — 상한 20 · 신규 7 · 재선정 13 → 신규 7 이 먼저 서고 남은 13자리를 재선정이 쓴다(자리를 비우지 않는다)
-  const slots20 = Array.from({ length: 20 }, (_, i) => at(1 + i))
-  const fresh7 = Array.from({ length: 7 }, (_, i) => ROW({ id: `g${i}`, ageH: 30 + i, cp: 0.5 }))
-  const ret13 = Array.from({ length: 13 }, (_, i) => ROW({ id: `q${i}`, ageH: 6 + i, cp: 0.5 }))
+  // 🔴 (2026-11-25 밤 4) 스무 자리는 +0.1h ~ +2h · 신규는 −2.5h 대 · 재선정은 −1h 대 수집(재선정이 더 최신 — "더 신선해도 뒤")
+  const slots20 = Array.from({ length: 20 }, (_, i) => at(0.1 * (i + 1)))
+  const fresh7 = Array.from({ length: 7 }, (_, i) => ROW({ id: `g${i}`, ageH: 30 + i, cp: 0.5, capturedAt: at(-2.5 - i * 0.01) }))
+  const ret13 = Array.from({ length: 13 }, (_, i) => ROW({ id: `q${i}`, ageH: 6 + i, cp: 0.5, capturedAt: at(-1 - i * 0.01) }))
   const p21 = run({ rows: [...fresh7, ...ret13], slots: slots20, cap: 20, attempted: retryOf(ret13, 4) })
   check('🔴 신규 부족 회차 — 상한 20 · 신규 7 · 재선정 13 → 신규 7 이 앞자리 + 재선정 13(더 신선해도 뒤)',
     ids(p21).slice(0, 7).every((id) => id.startsWith('g')) && p21.jit?.retryReserved === 13 && p21.picked.length === 20, ids(p21).join(','))
@@ -247,7 +263,7 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
   const pf = runWith({ rows: [...fresh7, ...ret13], slots: slots20, cap: 20, attempted: retryOf(ret13, 4) }, 'freshOnly')
   check('🔴 축소 운영(freshOnly) — 재선정 0 · 신규만', pf.jit?.retryReserved === 0 && pf.picked.length === 7, ids(pf).join(','))
   // 변이 탐지 — 신규 = cap 일 때 재선정이 밀고 들어오면 실패한다
-  const slotsMut = Array.from({ length: 10 }, (_, i) => at(1 + i))
+  const slotsMut = Array.from({ length: 10 }, (_, i) => at(0.25 * (i + 1)))
   const freshMut = Array.from({ length: 10 }, (_, i) => ROW({ id: `mf${i}`, ageH: 4, cp: 0.9 - i * 0.01 }))
   const retMut = [ROW({ id: 'mr0', ageH: 2, cp: 0.99 }), ROW({ id: 'mr1', ageH: 2, cp: 0.98 })]
   const pMut = run({ rows: [...freshMut, ...retMut], slots: slotsMut, cap: 10, attempted: new Map([...retryOf([retMut[0]!], 9), ...retryOf([retMut[1]!], 7)]) })
@@ -275,15 +291,18 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
   check('⑤ 신선도가 같으면 반응 높은 글(0.9)이 낮은 글(0.5)을 이긴다',
     ids(run({ rows: [M, G], slots: s, cap: 1 })).join() === 'qG')
   // ⑥ 반응이 같으면 더 신선한 글이 가른다
+  // 🔴 (2026-11-25 밤 4) 30h 원문을 −2.5h 에 수집 — 그 자리에 유효하다(만료로 지는 것이 아니라 순위로 진다)
   const Gn = ROW({ id: 'fG', ageH: 3, cp: 0.8 })
-  const Mo = ROW({ id: 'fM', ageH: 30, cp: 0.8, title: '갱년기 열감', site: WG })
+  const Mo = ROW({ id: 'fM', ageH: 30, cp: 0.8, title: '갱년기 열감', site: WG, capturedAt: at(-2.5) })
   check('⑥ 반응이 같으면 최신(3h)이 오래된(30h)을 이긴다 — 신선도 1순위',
     ids(run({ rows: [Mo, Gn], slots: s, cap: 1 })).join() === 'fG')
   // ⑥-b 반응이 더 높아도 오래됐으면 뒤 — 신선도가 반응을 이긴다 (옛 정책 반례)
-  const OldHi = ROW({ id: 'oH', ageH: 40, cp: 0.95 })
+  const OldHi = ROW({ id: 'oH', ageH: 40, cp: 0.95, capturedAt: at(-2.5) })
   const FreshLo = ROW({ id: 'fL', ageH: 2, cp: 0.5 })
   check('⑥-b 신선도가 반응을 이긴다 — 더 늙은 고반응 글(40h · cp 0.95)은 신선 저반응 글(2h · cp 0.5)에 진다',
     ids(run({ rows: [OldHi, FreshLo], slots: s, cap: 1 })).join() === 'fL')
+  check('⑥ 🔴 진 쪽도 그 자리에 유효하다 — 만료가 아니라 순위로 진다(혼자면 그 글이 나간다)',
+    ids(run({ rows: [Mo], slots: s, cap: 1 })).join() === 'fM' && ids(run({ rows: [OldHi], slots: s, cap: 1 })).join() === 'oH')
   // ⑦ 신선도·반응 모두 같으면 **결정적 열쇠**로 간다 — 주제·출처 보너스 없음
   const t0 = new Date(NOW.getTime() - 5 * H)
   const plain = ROW({ id: 'tP', posted: t0, cp: 0.7 })
@@ -334,10 +353,15 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
     slotAgesH: (number | null)[]; menopauseCore: boolean; wgangSource: boolean; actualSelected: boolean }[] }
   const shapes = (JSON.parse(readFileSync('scripts/fixtures/supply-jit-shapes-20261010.json', 'utf-8')) as { runs: Shape[] }).runs
   for (const sh of shapes) {
-    const taken = new Date(sh.takenAt)
-    // 🔴 증거 시각 검사만 통과시키려고 판정 기준 시각을 늦춘다 — 나이 · 유효성은 슬롯 기준이라 그대로다
-    const judgeNow = new Date(taken.getTime() + 2.5 * H)
     const slots = sh.slots.map((x) => new Date(x))
+    /**
+     * 🔴 (2026-11-25 밤 4) 10-10 회차는 21~36시간 뒤 자리(다음 날)를 샀다 — 지금은 지평이 지금 창 끝까지이고 수집 뒤 6시간이면
+     *    만료라 그 모양 그대로는 아무것도 못 산다(그것이 바뀐 정책이다). 선택기 회귀를 계속 재려고 **원문 나이 모양(자리별 나이)은
+     *    그대로 두고** 회차를 첫 자리 30분 전으로 옮긴다 — 수집은 그 1시간 전이다. 덮을 수 있는 자리는 수집 6시간 안의 것뿐이다.
+     */
+    const taken = new Date(slots[0]!.getTime() - 0.5 * H)
+    const judgeNow = taken
+    const capturedAt = new Date(taken.getTime() - 1 * H)
     const rows: WorksetRow[] = []
     const attempted = new Map<string, PriorOutcome>()
     sh.candidates.forEach((c, i) => {
@@ -347,6 +371,7 @@ console.log('\n══ JIT 공급 선택 (P0-B1) — 실제 원문 신선도 단�
       const r = ROW({
         id: `shape-${sh.runId}-${i}`, site: c.wgangSource ? WG : RT, posted, cp: c.commentsPct, axis: c.axis,
         ...(c.viewsPct === null ? {} : { vp: c.viewsPct }), title: c.menopauseCore ? '갱년기 이야기' : '우리 집 이야기', evidenceAt: judgeNow,
+        capturedAt,
       })
       rows.push(r)
       if (c.retryTier !== null) {

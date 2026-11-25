@@ -23,6 +23,8 @@
  *       상한 밖 → `SOURCE_TOO_OLD_AT_SLOT` · 그 사이 → `POSTED_WITHIN_DAY_AT_SLOT`(unknown). 기록하는 나이는 늙은 끝이다.
  *       🔴 (Lane B) 기록은 **모든 중첩 칸**을 먼저 확인한다(`parseEvidence`) — 손상은 예외가 아니라
  *       `EVIDENCE_INVALID` + 손상 위치(`issue`)다. 게시 · 수집 코드 다음에 중첩 시각의 순서 · 미래를 본다.
+ *       🔴 (2026-11-25 밤 4) 원문 나이 다음에 **수집 뒤 시간**(`slotAt − capturedAt`)을 본다 — 6시간 이상이면
+ *       `CAPTURED_TOO_OLD_AT_SLOT`(ineligible · 만료 사유). 날짜 구간의 unknown(`POSTED_WITHIN_DAY_AT_SLOT`)보다 먼저다.
  *    ④ 반응 증거 — 수집 때 관측이 없으면 unknown. 있으면 **같은 원천 · 같은 관측 나이 구간** 안 백분위로만 비교한다
  *       (원천 규모가 raw 수를 부풀리지 못하게). velocity 는 실제 반복 관측 2개 이상일 때만.
  *       🔴 (Lane B) 백분위는 **후보 자신을 뺀** 표본에 서로 다른 값이 둘 이상일 때만 선다(`relativePosition`) —
@@ -55,6 +57,16 @@ export const RELEASE_CONTRACT = 'source-slot-v1'
  *    🔴 현재성/상시 분기(7일 · 28일)는 지웠다 — 이벤트 · 키워드로 나이를 늘리지 않는다.
  */
 export const SOURCE_AGE_LIMIT_HOURS = 72
+
+/**
+ * 🔴 **수집 뒤 6시간 만료** (2026-11-19 창업자 확정 · 2026-11-25 밤 4) — 예정 슬롯에서 **수집 시각**으로부터
+ *    6시간 이상 지났으면 그 원천은 나가지 않는다. 글은 수집된 시간대 안에 나간다(새벽 글은 새벽에).
+ *    · 72시간(원문이 올라온 시각에서 잰다)과 다른 축이다 — 6시간은 우리가 그 글을 본 시각에서 잰다.
+ *    · 사람 승인 행에도 똑같이 걸린다(창업자 결정 11-24 ②) — 발행 트랜잭션이 만나면 EXPIRED 로 옮긴다.
+ *    🔴 값은 여기 하나다 — 큐 읽기 범위(`loadPublishableStock`) · 회차 사이 이월 기한(`CARRY_OVER_LOOKBACK_MS`)이 이 값을 쓴다.
+ *       이월 기한은 회차 id 시각으로 잰다(수집 시각보다 늦다) — 같은 6시간이지만 시계가 다르다(판정은 이 축이 한다).
+ */
+export const CAPTURE_AGE_LIMIT_HOURS = 6
 
 /**
  * 🔴 **허용 시계 오차 10분** — 게시 라벨은 분 단위(`15:32` · `방금 전`)이고 수집기 · DB · 러너 시계가 다르다.
@@ -612,7 +624,7 @@ export const RELEASE_REASONS = [
   'EVIDENCE_MISSING', 'EVIDENCE_INVALID',
   'POSTED_MISSING', 'POSTED_CORRUPT', 'CAPTURED_MISSING', 'CAPTURED_CORRUPT',
   'CAPTURED_IN_FUTURE', 'POSTED_AFTER_CAPTURE', 'POSTED_IN_FUTURE',
-  'SOURCE_TOO_OLD_AT_SLOT', 'POSTED_WITHIN_DAY_AT_SLOT',
+  'SOURCE_TOO_OLD_AT_SLOT', 'CAPTURED_TOO_OLD_AT_SLOT', 'POSTED_WITHIN_DAY_AT_SLOT',
   'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED',
   'DRIVER_UNKNOWN',
   'NO_PERSONA_AT_SLOT',
@@ -631,6 +643,7 @@ export const RELEASE_REASON_LABEL: Readonly<Record<ReleaseReason, string>> = {
   POSTED_AFTER_CAPTURE: '게시 시각이 수집 시각보다 늦다 — 올라오기 전에 볼 수 없다',
   POSTED_IN_FUTURE: '게시 시각이 판정 시각보다 미래다',
   SOURCE_TOO_OLD_AT_SLOT: `예정 슬롯에서 원문 나이가 ${SOURCE_AGE_LIMIT_HOURS}시간 이상이다`,
+  CAPTURED_TOO_OLD_AT_SLOT: `예정 슬롯에서 수집 뒤 ${CAPTURE_AGE_LIMIT_HOURS}시간 이상 지났다 — 수집된 시간대를 넘긴 글은 내지 않는다`,
   POSTED_WITHIN_DAY_AT_SLOT: `게시 날짜만 안다 — 예정 슬롯에서 그날 안의 어느 시각이냐에 따라 ${SOURCE_AGE_LIMIT_HOURS}시간 안팎이 갈린다(fail-closed)`,
   RESPONSE_UNOBSERVED: '수집 때 관측한 반응이 없다',
   RESPONSE_UNNORMALIZED: '같은 원천 · 같은 관측 나이의 비교 표본이 없거나 한 점이다(자기 제외 서로 다른 값 2개 미만 · 옛 정규화 판) — raw 수로 비교하지 않는다',
@@ -643,7 +656,7 @@ export const EXPIRING_REASONS: readonly ReleaseReason[] = [
   'EVIDENCE_MISSING', 'EVIDENCE_INVALID',
   'POSTED_MISSING', 'POSTED_CORRUPT', 'CAPTURED_MISSING', 'CAPTURED_CORRUPT',
   'CAPTURED_IN_FUTURE', 'POSTED_AFTER_CAPTURE', 'POSTED_IN_FUTURE',
-  'SOURCE_TOO_OLD_AT_SLOT', 'POSTED_WITHIN_DAY_AT_SLOT', 'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED', 'DRIVER_UNKNOWN',
+  'SOURCE_TOO_OLD_AT_SLOT', 'CAPTURED_TOO_OLD_AT_SLOT', 'POSTED_WITHIN_DAY_AT_SLOT', 'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED', 'DRIVER_UNKNOWN',
 ]
 
 export type ReleaseVerdictKind = 'eligible' | 'ineligible' | 'unknown'
@@ -760,6 +773,8 @@ export function judgeSlotRelease(i: SlotReleaseInput): SlotReleaseVerdict {
   const youngestAgeH = Math.max(0, i.slotAt.getTime() - youngest.getTime()) / HOUR_MS
   rank.ageAtSlotH = sourceAgeHoursAt(oldest.getTime(), i.slotAt.getTime())
   if (!(youngestAgeH < SOURCE_AGE_LIMIT_HOURS)) return out('ineligible', 'SOURCE_TOO_OLD_AT_SLOT')
+  // 🔴 수집 뒤 6시간 — 수집 시각은 한 점이다. 슬롯이 늦을수록 커지므로 시간이 풀지 않는다(구간의 unknown 보다 먼저 본다)
+  if (!(i.slotAt.getTime() - captured.getTime() < CAPTURE_AGE_LIMIT_HOURS * HOUR_MS)) return out('ineligible', 'CAPTURED_TOO_OLD_AT_SLOT')
   if (!(ageAtSlotH < SOURCE_AGE_LIMIT_HOURS)) return out('unknown', 'POSTED_WITHIN_DAY_AT_SLOT')
 
   // ④ 반응 증거 — 관측이 없으면 모른다 · 원천 상대로만 비교한다
