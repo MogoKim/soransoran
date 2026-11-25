@@ -161,6 +161,28 @@ export function articleProblems(article, plan) {
   return [...new Set(bad)].sort(byCodeUnit)
 }
 
+export function releaseProvenanceOf(plan) {
+  return {
+    schemaVersion: ARTICLE_RELEASE_SCHEMA,
+    intentId: plan.intentId,
+    graphVersion: plan.graphVersion,
+    bundleHash: plan.bundleHash,
+    planHash: plan.planHash,
+    policyBoard: { id: plan.policyBoard.id, hash: plan.policyBoard.hash },
+  }
+}
+
+export function articleFromRow(row) {
+  return {
+    schemaVersion: RELEASE_ARTICLE_SCHEMA,
+    title: row.title,
+    description: row.description,
+    heroAlt: row.heroImage?.alt,
+    medical: row.medical === true,
+    body: row.body,
+  }
+}
+
 /** articles.ts 에 들어갈 행 — 키 순서 고정(같은 입력 = 같은 바이트) */
 function rowBodyOf({ article, plan, slug, day }) {
   return {
@@ -173,8 +195,7 @@ function rowBodyOf({ article, plan, slug, day }) {
     ...(article.medical ? { medical: true } : {}),
     heroImage: { src: heroSrcOf(slug), alt: article.heroAlt, width: HERO_WIDTH, height: HERO_HEIGHT },
     body: article.body,
-    release: { schemaVersion: ARTICLE_RELEASE_SCHEMA, intentId: plan.intentId, graphVersion: plan.graphVersion, bundleHash: plan.bundleHash,
-      planHash: plan.planHash, policyBoard: { id: plan.policyBoard.id, hash: plan.policyBoard.hash } },
+    release: releaseProvenanceOf(plan),
   }
 }
 const ROW_KEYS = ['body', 'cluster', 'description', 'heroImage', 'publishAt', 'publishedAt', 'release', 'status', 'title']
@@ -470,7 +491,7 @@ export function judgeReleaseContent(input) {
     if (Object.prototype.hasOwnProperty.call(row, 'medical') && row.medical !== true) block('ROW_SHAPE', `${slug} medical 은 true 일 때만 싣는다`)
     if (row.status !== 'SCHEDULED') block('STATUS_UNEXPECTED', `${slug} 의 status 가 ${row.status} 다`)
     if (row.cluster !== plan.cluster) block('CLUSTER_MISMATCH', `${slug} 의 cluster ${row.cluster} ≠ plan ${plan.cluster}`)
-    const art = { schemaVersion: RELEASE_ARTICLE_SCHEMA, title: row.title, description: row.description, heroAlt: row.heroImage?.alt, medical: row.medical === true, body: row.body }
+    const art = articleFromRow(row)
     const ap = articleProblems(art, plan)
     if (ap.length) block('ARTICLE_INVALID', `${slug}: ${ap.join(', ')}`)
     // 날짜 — 10:30 KST · publishedAt 일치 · 미래 · PR 안 · main · 다른 열린 PR 과 중복 0

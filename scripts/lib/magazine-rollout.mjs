@@ -84,9 +84,10 @@ export function readRollout({ path = rolloutPath(), fs = nodeFs } = {}) {
  * 진입점 판정.
  *   legacy · MISSING · INVALID → 기존 legacy 그대로 (INVALID 만 경고 1줄)
  *   VALID vnext               → legacy 단계를 하나도 시작하지 않는다. vnextLane 을 준 진입점만 그 vNext 단계를 돈다:
- *                               'release'(auto-register 자리 — S3-P2 release writer) · 없음(producer — 생성은 S4 전이라 VNEXT_NOT_IMPLEMENTED)
+ *                               'release'(auto-register 자리 — S3-P2 release writer) · 'produce'(producer 00:10 자리 — S4 생산기) ·
+ *                               없음(그 자리에 vNext 단계가 없다 — 예: sync 뒤 재실행 자식. 한 회차에 두 경로를 섞지 않는다 → VNEXT_NOT_IMPLEMENTED)
  * @param {{code:string, effective:{path:string}, why:string|null, path:string}} read
- * @param {{warn?:boolean, vnextLane?:'release'|null}} [opts] warn=false 면 INVALID 경고를 내지 않는다 (같은 회차의 재실행 자식)
+ * @param {{warn?:boolean, vnextLane?:'release'|'produce'|null}} [opts] warn=false 면 INVALID 경고를 내지 않는다 (같은 회차의 재실행 자식)
  */
 export function rolloutGate(read, { warn = true, vnextLane = null } = {}) {
   if (read.code === 'VALID' && read.effective.path === 'vnext') {
@@ -95,10 +96,15 @@ export function rolloutGate(read, { warn = true, vnextLane = null } = {}) {
       return { proceed: false, lane: 'release', exitCode: 1,
         line: JSON.stringify({ code: 'VNEXT_RELEASE_LANE', rollout: read.effective, message: 'rollout 이 vnext 다 — legacy 등록 · 병합 대신 vNext release writer 만 돈다' }) }
     }
+    if (vnextLane === 'produce') {
+      // 🔴 같은 모양 — 진입점은 S4 생산기(magazine-vnext-produce.mjs --launcher)만 돌고 그 종료 코드로 끝난다. live 설정이 꺼져 있으면 생산기는 계획만 낸다(쓰기 · 호출 0)
+      return { proceed: false, lane: 'produce', exitCode: 1,
+        line: JSON.stringify({ code: 'VNEXT_PRODUCE_LANE', rollout: read.effective, message: 'rollout 이 vnext 다 — legacy 선정 · brief · 회수 대신 vNext 생산기만 돈다' }) }
+    }
     return {
       proceed: false,
       exitCode: 1,
-      line: JSON.stringify({ code: 'VNEXT_NOT_IMPLEMENTED', rollout: read.effective, message: 'rollout 이 vnext 인데 이 코드 판에는 vNext 세로 경로가 없다 — 아무것도 시작하지 않는다 (legacy 로 대신 실행하지 않는다)' }),
+      line: JSON.stringify({ code: 'VNEXT_NOT_IMPLEMENTED', rollout: read.effective, message: 'rollout 이 vnext 인데 이 자리에는 vNext 단계가 없다 — 아무것도 시작하지 않는다 (legacy 로 대신 실행하지 않는다)' }),
     }
   }
   const warning = read.code === 'INVALID' && warn

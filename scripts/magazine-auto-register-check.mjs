@@ -23,6 +23,9 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
+import { canonicalJson } from './lib/magazine-content-plan-input.mjs'
+import { assertContentPlan } from './lib/magazine-content-plan.mjs'
+import { articleFromRow, articleProblems, planFilePath, releaseProvenanceOf } from './lib/magazine-release.mjs'
 import { gate, heroPlan } from './lib/magazine-auto-lane.mjs'
 import { validateManuscript, MIN_BODY_LENGTH } from './lib/magazine-manuscript-guard.mjs'
 import {
@@ -843,7 +846,7 @@ expect('① legacy 회차가 시작된 뒤의 최종 종료는 process.exit(resu
   [(producerBody.match(/process\.exit\(/g) ?? []).length, (producerBody.match(/process\.exit\(result\.code\)/g) ?? []).length], [1, 1])
 expect('② rollout VNEXT_NOT_IMPLEMENTED 진입 거부는 정확히 한 곳이다',
   [producerSrc.split(ROLLOUT_GUARD).length - 1, (producerSrc.match(/process\.exit\(/g) ?? []).length], [1, 2])
-expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT = rolloutGate\(readRollout\(\), \{ warn: !POST_SYNC \}\)\n/.test(producerPreGuard), true)
+expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT = rolloutGate\(readRollout\(\), \{ warn: !POST_SYNC, vnextLane: POST_SYNC \? null : 'produce' \}\)\n/.test(producerPreGuard), true)
 {
   // ③ 거부 줄이 아래 모든 것보다 앞이다 — 각 표식의 **첫** 등장 위치로 본다(정의·호출 모두)
   const after = {
@@ -851,11 +854,15 @@ expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT
     '시작 로그': 'line(`매거진 producer 시작',
     'producer lock': 'acquireLock({',
     'sync(preflight · 재실행)': 'preflight({ exec })',
-    '자식 stage': 'spawnSync(',
+    'legacy 자식 stage': 'spawnSync(NODE,',
     notify: 'notifyOnce(',
     handoff: 'writeHandoff({',
     'finalizer 흐름': 'runProducerFlow({',
   }
+  const dispatch = producerPreGuard.match(/if \(ROLLOUT\.lane === 'produce'\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+  expect('진입 판정 전에는 vnext 생산기 한 개만 위임한다',
+    [(producerPreGuard.match(/spawnSync\(/g) ?? []).length,
+      dispatch.includes("spawnSync(process.execPath, [join(ROOT, 'scripts/magazine-vnext-produce.mjs'), '--launcher'")], [1, true])
   const late = Object.entries(after).filter(([, m]) => { const i = producerSrc.indexOf(m); return rolloutGuardAt === -1 || i === -1 || i < rolloutGuardAt }).map(([k]) => k)
   expect('③ rollout 진입 거부가 BOOT_HEAD · 시작 로그 · lock · sync · 자식 stage · notify · handoff · finalizer 보다 앞이다', late, [])
 }
@@ -2747,7 +2754,8 @@ expect(
  *    있으면 실패한다. 실제 `articles.ts` 를 본다 — fixture 가 아니다.
  */
 const { loadArticles: loadArticlesLive } = await import('./lib/magazine-load.mjs')
-const liveArticles = loadArticlesLive()
+// 리터럴 로더의 격리 VM 에서 넘어온 데이터를 현재 실행 문맥의 JSON 객체로 비교한다.
+const liveArticles = structuredClone(loadArticlesLive())
 const autoEra = liveArticles.filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
 const noHero = autoEra.filter((a) => !a.heroImage?.src)
 expect(`🔴 9/19 이후 등록 글 ${autoEra.length}건에 대표 이미지가 전부 있다`, noHero.map((a) => a.slug), [])
@@ -2792,10 +2800,13 @@ console.log('\n══════ alt — 실제 그림과 맞는가')
  *    **모양과 금지 표현**뿐이다. 그림과의 일치는 사람이 본다 —
  *    그래서 `--write` 에 `--slug` 를 요구한다(위 검사).
  */
-const altRows = loadArticlesLive().filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
+const altRows = liveArticles.filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
+// release 필드가 있는 행은 저장된 ContentPlan 으로 검사한다. 깨진 출처도 이 경로에서 실패해야 한다.
+const legacyAltRows = altRows.filter((a) => !Object.hasOwn(a, 'release'))
+const releaseAltRows = altRows.filter((a) => Object.hasOwn(a, 'release'))
 expect('9/19 이후 글이 전부 alt 를 갖는다', altRows.filter((a) => !a.heroImage?.alt).map((a) => a.slug), [])
-expect('🔴 전부 "여성" 으로 끝난다 (등록 관례)', altRows.filter((a) => !a.heroImage.alt.endsWith('여성')).map((a) => a.slug), [])
-expect('길이가 10~120자다', altRows.filter((a) => a.heroImage.alt.length < 10 || a.heroImage.alt.length > 120).map((a) => a.slug), [])
+expect('🔴 기존 등록 원고의 alt 가 "여성" 으로 끝난다', legacyAltRows.filter((a) => !a.heroImage.alt.endsWith('여성')).map((a) => a.slug), [])
+expect('기존 등록 원고의 alt 길이가 10~120자다', legacyAltRows.filter((a) => a.heroImage.alt.length < 10 || a.heroImage.alt.length > 120).map((a) => a.slug), [])
 // 🔴 브랜드 금지어가 alt 에 들어가지 않는다
 expect(
   '🔴 "시니어·어르신·노인·실버" 가 없다',
@@ -2888,7 +2899,13 @@ function draftHeroAlt(slug) {
   }
 }
 
-for (const a of altRows) {
+for (const a of releaseAltRows) {
+  const plan = assertContentPlan(JSON.parse(readFileSync(planFilePath(a.slug), 'utf8')))
+  expect(`${a.slug}: 등록 출처와 보존된 ContentPlan 이 일치한다`, canonicalJson(a.release), canonicalJson(releaseProvenanceOf(plan)))
+  expect(`${a.slug}: 실제 원고와 이미지 설명이 release 계약을 충족한다`, articleProblems(articleFromRow(a), plan), [])
+}
+
+for (const a of legacyAltRows) {
   const d = draftHeroAlt(a.slug)
   expect(`${a.slug}: 초안 DRAFT 를 파싱했다`, d.ok, true, d.why)
   expect(`${a.slug}: 초안 alt 가 발행본과 같다`, d.alt, a.heroImage.alt)
@@ -3073,7 +3090,7 @@ const relationPolicyMutation = spawnSync(process.execPath, [join('scripts', 'mag
 expect('관계 수량 정책 변이가 전부 검출된다', relationPolicyMutation.status, 0)
 expect('관계 수량 정책 변이 10개를 실제 실행했다', /관계 수량 정책 변이: 10 pass, 0 fail \(변이 10\)/.test(relationPolicyMutation.stdout), true)
 
-for (const suite of ['magazine-release-check.mjs', 'magazine-release-mutation.mjs']) {
+for (const suite of ['magazine-release-check.mjs', 'magazine-release-mutation.mjs', 'magazine-vnext-produce-check.mjs', 'magazine-vnext-produce-mutation.mjs']) {
   const run = spawnSync(process.execPath, [join('scripts', suite)], { stdio: 'inherit' })
   expect(suite, run.status, 0)
 }

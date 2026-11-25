@@ -64,7 +64,7 @@ export const MUTATIONS = {
   // legacy 동일성 대조의 검출력 — legacy 자식 인자를 바꾸면 기준판 대조가 잡아야 한다
   'producer-legacy-drift': [PRODUCER_REL, "spawnStage([INPUT_REPAIR, '--run', kstDate(), '--write', '--result-json', rj])", "spawnStage([INPUT_REPAIR, '--run', kstDate(), '--write', '--result-json', rj, '--drift'])"],
   'register-legacy-drift': [REGISTER_REL, "[MERGE, '--apply', '--notify-send', '--run-id', RUN_ID]", "[MERGE, '--apply', '--notify-send', '--run-id', RUN_ID, '--drift']"],
-  'post-sync-bypass': [PRODUCER_REL, 'const ROLLOUT = rolloutGate(readRollout(), { warn: !POST_SYNC })', 'const ROLLOUT = POST_SYNC ? { proceed: true, warning: null } : rolloutGate(readRollout(), { warn: true })'],
+  'post-sync-bypass': [PRODUCER_REL, "const ROLLOUT = rolloutGate(readRollout(), { warn: !POST_SYNC, vnextLane: POST_SYNC ? null : 'produce' })", "const ROLLOUT = POST_SYNC ? { proceed: true, warning: null } : rolloutGate(readRollout(), { warn: true, vnextLane: 'produce' })"],
 }
 
 /** 후보 파일 내용 — 변이가 있으면 정확히 1곳에 적용한다(0곳·여러 곳이면 하네스 결함으로 멈춘다) */
@@ -379,6 +379,7 @@ function scenario({ entry, entryText, rollout = null, args = [], ff = false, hoo
     lockLeft: existsSync(join(W, 'drafts/magazine/_runs/.producer.lock')),
     rolloutSame: rolloutBefore === null ? !existsSync(RF) : existsSync(RF) && Buffer.compare(rolloutBefore, readFileSync(RF)) === 0,
     homeFiles: listAll(HOME).filter((p) => !p.startsWith('Library')),
+    vnextJobs: existsSync(join(HOME, 'Library', 'Application Support', 'soransoran', 'magazine-jobs')),
   }
 }
 const VALID_LEGACY = JSON.stringify(doc())
@@ -412,13 +413,15 @@ for (const [id, label, rollout, invalid] of [['P1', '파일 없음', null, false
     return { ok: r.ok && ['plan', 'repair', 'fetch', 'notify'].every((k) => cand.stages.includes(k)), detail: `${r.detail} · stages ${cand.stages.join(',')}` }
   })
 }
-await test('P4', 'producer vnext(draft) → VNEXT_NOT_IMPLEMENTED · non-zero · 자식·잠금·handoff·_runs·sync·Slack·rollout 변경 0', () => {
+// S4 — vnext 의 producer 자리는 vNext 생산기(--launcher)만 돈다. live 설정이 없으면 계획만(PLAN_ONLY · 쓰기 0 · 호출 0 · 종료 0)
+await test('P4', 'producer vnext(draft) → vNext 생산기 계획만 · legacy 자식·잠금·handoff·_runs·sync·Slack·rollout·Job 저장소 변경 0', () => {
   const s = scenario({ entry: PRODUCER_REL, entryText: candidate(PRODUCER_REL), rollout: VALID_VNEXT, ff: true })
-  return { ok: s.status !== 0 && /VNEXT_NOT_IMPLEMENTED/.test(s.out) && noWork(s) && s.head === s.START, detail: `status ${s.status} · calls ${s.stages.join(',')} · head ${s.head === s.START ? 'START' : 'MOVED'} · ${s.out.slice(-300)}` }
+  return { ok: s.status === 0 && /VNEXT_PRODUCE_LANE/.test(s.out) && /"outcome":"PLAN_ONLY"/.test(s.out) && /"entry":"launcher"/.test(s.out) && noWork(s) && s.head === s.START && !s.vnextJobs,
+    detail: `status ${s.status} · calls ${s.stages.join(',')} · head ${s.head === s.START ? 'START' : 'MOVED'} · jobs ${s.vnextJobs} · ${s.out.slice(-300)}` }
 })
-await test('P5', 'producer vnext(auto) --dry-run → 같은 fail-closed', () => {
+await test('P5', 'producer vnext(auto) --dry-run → 같은 계획만(쓰기 0)', () => {
   const s = scenario({ entry: PRODUCER_REL, entryText: candidate(PRODUCER_REL), rollout: VALID_VNEXT_AUTO, args: ['--dry-run'] })
-  return { ok: s.status !== 0 && /VNEXT_NOT_IMPLEMENTED/.test(s.out) && noWork(s), detail: `status ${s.status} · ${s.out.slice(-200)}` }
+  return { ok: s.status === 0 && /VNEXT_PRODUCE_LANE/.test(s.out) && /"outcome":"PLAN_ONLY"/.test(s.out) && noWork(s) && !s.vnextJobs, detail: `status ${s.status} · ${s.out.slice(-200)}` }
 })
 await test('P6', 'producer --post-sync 직접 실행 + vnext → 잠금 확인 전에 fail-closed (우회 0)', () => {
   const s = scenario({ entry: PRODUCER_REL, entryText: candidate(PRODUCER_REL), rollout: VALID_VNEXT, args: ['--post-sync', '--expect-head', 'x'] })

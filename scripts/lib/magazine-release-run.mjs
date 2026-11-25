@@ -89,8 +89,8 @@ export function judgeReleasePr({ pr, expectedSha, ciState, checks, rollout }) {
   return { ok: blockedBy.length === 0, blockedBy, checked }
 }
 
-/** main 사실 — 이 시점의 origin/main 바이트 */
-function readMainFacts(deps, baseSha) {
+/** main 사실 — 이 시점의 origin/main 바이트. S4 생산기도 같은 함수로 읽는다(ProviderPlan 입력을 release 와 같게) */
+export function readMainFacts(deps, baseSha) {
   const show = (p) => deps.showFile(baseSha, p)
   const controlText = show(CONTROL_PATH)
   const graphVersion = controlText ? strictControlGraphVersion(controlText) : null
