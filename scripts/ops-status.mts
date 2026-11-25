@@ -29,6 +29,8 @@ import {
   type LaneStatus, type OpsLane, type CostVerdict,
 } from '../src/lib/ops-status'
 import { kstDateString } from '../src/lib/release-canary'
+import { commentDailyCapOf } from '../src/lib/persona-comment-auto-lane'
+import type { RuntimeStage } from '../src/lib/scale-profile'
 import { CONTROLLER_ENV } from '../src/lib/stage-decision-store'
 import { readStageDecision } from '../src/lib/stage-decision-repo'
 import { KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
@@ -106,8 +108,9 @@ async function main(): Promise<void> {
     'SORAN_AUDIT_LLM_DAILY_BUDGET_USD', 'SORAN_AUDIT_LLM_RUN_REQUEST_CAP', 'SORAN_AUDIT_LLM_RESERVE_HEADROOM',
     CONTROLLER_ENV, ...COMMENT_LEDGER_ENV_KEYS,
   ])
-  const cost = readCostSignals(NOW, env.values)
   const { runs } = readProcessRuns()
+  /** 🔴 댓글 천장을 잴 오늘 단계 — 이 화면이 읽은 오늘 결정의 공개 단계. 못 읽음 · 없음 · 깨짐이면 null(→ base 칸 · 화면에 "단계 미확인") */
+  let todayRelease: RuntimeStage | null = null
 
   // 🔴 DB 는 읽기만 — 최근 실제 발행·댓글 · 감사 판정 · 오늘 단계 결정
   const db: {
@@ -128,6 +131,7 @@ async function main(): Promise<void> {
       db.lastPostAt = post?.publishedAt?.toISOString() ?? null
       db.lastCommentAt = cmt?.publishedAt?.toISOString() ?? null
       db.lastAuditJudgedAt = aud?.judgedAt?.toISOString() ?? null
+      todayRelease = sd.found && sd.result.ok ? sd.result.decision.release : null
       db.stage = !sd.found ? `${today} 결정 없음`
         : sd.result.ok ? `${today} ${sd.result.decision.state} · 공개 ${sd.result.decision.release} · 천장 ${sd.result.decision.capacity}`
           : `🔴 ${today} 결정이 깨졌다 — ${sd.result.reason}`
@@ -139,6 +143,7 @@ async function main(): Promise<void> {
   } else {
     db.reason = 'DATABASE_URL 이 없다 — 정본 env 를 찾지 못했다'
   }
+  const cost = readCostSignals(NOW, todayRelease, env.values)
 
   const lanes: LaneStatus[] = OPS_LANES.map((lane) => {
     const label = LANE_LABEL[lane]
@@ -179,6 +184,11 @@ async function main(): Promise<void> {
       : lane === 'audit' ? cost.auditLedger
         : lane === 'comment' ? cost.commentLedger : cost.supplyLedger
     if (lane === 'comment') notes.push('🔴 무인 댓글 루프 전용 장부 — 공급 장부와 상한을 나누지 않는다')
+    if (lane === 'comment') {
+      notes.push(todayRelease === null
+        ? `🟡 단계 미확인 — 오늘 결정을 읽지 못했다 · 댓글 천장은 base $${commentDailyCapOf(null).toFixed(2)} 로 본다`
+        : `댓글 천장 — 오늘 결정 공개 ${todayRelease} · $${commentDailyCapOf(todayRelease).toFixed(2)}`)
+    }
     if ((lane === 'supply' || lane === 'comment') && (cost.commentSpentUsd ?? 0) > 0) {
       notes.push(`🔴 공급 장부에도 옛 댓글 경로 지출이 있다 — $${cost.commentSpentUsd!.toFixed(4)}`)
     }

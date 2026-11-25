@@ -121,9 +121,17 @@ console.log('\n② 판정은 하루 구간 전체로 — fail-closed')
     String(early.rank.ageAtSlotH))
 
   // 늙은 끝 72h = 10-14 15:00Z · 어린 끝 72h = 10-15 15:00Z(구간 끝 10-12T15:00Z 기준)
-  const mid = judge(ev, new Date('2026-10-15T00:00:00.000Z'), captured)
+  // 🔴 (2026-11-25 밤 4) 구간 판정만 보려면 수집이 그 자리의 6시간 안이어야 한다 — 같은 날짜 라벨을 그 자리 1시간 전 회차에서 다시 봤다
+  const midSlot = new Date('2026-10-15T00:00:00.000Z')
+  const midCaptured = new Date(midSlot.getTime() - 59 * 60_000)
+  const midEv = dayEvidence('2026-10-12', new Date(midSlot.getTime() - H), midCaptured)
+  const mid = judge(midEv, midSlot, midCaptured)
   check('🔴 구간이 상한을 걸치면 unknown · POSTED_WITHIN_DAY_AT_SLOT', mid.verdict === 'unknown' && mid.reasons[0] === 'POSTED_WITHIN_DAY_AT_SLOT',
     `${mid.verdict} ${mid.reasons.join()}`)
+  // 🔴 같은 구간이라도 수집 뒤 6시간이 지났으면 판정이 확정된다 — 날짜 구간의 unknown 보다 먼저다(손실 확정 · 수율을 부풀리지 않는다)
+  const midStale = judge(ev, midSlot, captured)
+  check('🔴 🔴 **수집 뒤 6시간이 지난 구간 걸침 → CAPTURED_TOO_OLD_AT_SLOT(ineligible) — unknown 으로 남기지 않는다**',
+    midStale.verdict === 'ineligible' && midStale.reasons[0] === 'CAPTURED_TOO_OLD_AT_SLOT', `${midStale.verdict} ${midStale.reasons.join()}`)
   check('🔴 그 사유는 만료 사유다(시간이 지나도 known 이 되지 않는다)', mid.expires && EXPIRING_REASONS.includes('POSTED_WITHIN_DAY_AT_SLOT'))
   const late = judge(ev, new Date('2026-10-15T15:00:00.000Z'), captured)
   check('어린 끝도 72h 이상 → ineligible SOURCE_TOO_OLD_AT_SLOT', late.verdict === 'ineligible' && late.reasons[0] === 'SOURCE_TOO_OLD_AT_SLOT',
@@ -297,13 +305,15 @@ console.log('\n④ 정확한 게시 시각의 판정은 앞판과 같다')
   const r = rng(7)
   let ok = 0
   const N = 500
+  const seen = { eligible: 0, SOURCE_TOO_OLD_AT_SLOT: 0, CAPTURED_TOO_OLD_AT_SLOT: 0 }
   for (let k = 0; k < N; k += 1) {
     const now = new Date(Date.UTC(2026, 9, 12, Math.floor(r() * 24)))
     // 🔴 목록 · 수집은 판정 시각보다 앞이다(fixture 가 실제보다 강하지 않게 — 미래 관측은 따로 막힌다)
     const posted = new Date(now.getTime() - (2 + r() * 88) * H)
     const listed = new Date(posted.getTime() + r() * 2 * H)
+    const captured = new Date(listed.getTime() + 60_000)
     const ev = buildSourceEvidence({
-      postedAt: posted.toISOString(), listedAt: listed.toISOString(), capturedAt: new Date(listed.getTime() + 60_000).toISOString(),
+      postedAt: posted.toISOString(), listedAt: listed.toISOString(), capturedAt: captured.toISOString(),
       sourceSite: 's', sourceArticleId: String(k), response: { views: 3, comments: 1, observedAt: listed.toISOString() },
       sourceStats: {
         basis: 'list-artifacts', method: SOURCE_STATS_METHOD, sourceKey: 's', bucket: '<3h', n: 4, commentsPct: 0.5, viewsPct: 0.5,
@@ -314,12 +324,17 @@ console.log('\n④ 정확한 게시 시각의 판정은 앞판과 같다')
     const slot = new Date(now.getTime() + r() * 40 * H)
     const v = judge(ev, slot, now)
     // 앞판 식: age = max(0, slot − posted) · `age < 72` 면 다음 단계, 아니면 SOURCE_TOO_OLD_AT_SLOT
+    // 🔴 (2026-11-25 밤 4) 그 다음 단계에 수집 뒤 6시간이 붙었다: slot − captured ≥ 6h 면 CAPTURED_TOO_OLD_AT_SLOT
     const age = Math.max(0, slot.getTime() - posted.getTime()) / H
-    const expect = age < 72 ? 'eligible' : 'ineligible'
-    if (v.verdict === expect && v.rank.ageAtSlotH === Math.round(age * 1000) / 1000
-      && (expect === 'eligible' || v.reasons[0] === 'SOURCE_TOO_OLD_AT_SLOT')) ok += 1
+    const captureAge = (slot.getTime() - captured.getTime()) / H
+    const expect = age >= 72 ? 'SOURCE_TOO_OLD_AT_SLOT' : captureAge >= 6 ? 'CAPTURED_TOO_OLD_AT_SLOT' : 'eligible'
+    seen[expect] += 1
+    if (v.rank.ageAtSlotH === Math.round(age * 1000) / 1000
+      && (expect === 'eligible' ? v.verdict === 'eligible' : v.verdict === 'ineligible' && v.reasons[0] === expect)) ok += 1
   }
-  check(`🔴 정확한 시각 — 판정 · 나이 · 사유가 앞판 식과 같다 (무작위 ${N}벌)`, ok === N, `${ok}/${N}`)
+  check(`🔴 정확한 시각 — 판정 · 나이 · 사유가 앞판 식(72h) + 수집 뒤 6h 식과 같다 (무작위 ${N}벌)`, ok === N, `${ok}/${N}`)
+  check('🔴 무작위 표본이 세 갈래(eligible · 72h · 6h)를 모두 지난다 — 한 갈래도 빈 검사가 아니다',
+    seen.eligible > 0 && seen.SOURCE_TOO_OLD_AT_SLOT > 0 && seen.CAPTURED_TOO_OLD_AT_SLOT > 0, JSON.stringify(seen))
 }
 
 // ─────────────────────────────────────────────────────────

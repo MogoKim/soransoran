@@ -10,7 +10,7 @@
  *    ① 회차 안 재시도 — **연결 계열 오류일 때만**, 몇 번만, 짧게 기다렸다가 같은 입력으로 다시 부른다.
  *       논리·검증·게이트 실패는 재시도하지 않는다(다시 돌려도 같은 답이 나오고, 가리는 것만 된다).
  *    ② 회차 사이 이월 — 앞 회차 중 **적재를 끝내지 못한** 후보 파일을 다음 회차 적재 입력에 얹는다.
- *       기한(24h)과 개수 상한이 있고, 품질 계약이 다른 파일은 **얹지 않는다**.
+ *       기한(수집 뒤 6시간과 같은 값)과 개수 상한이 있고, 품질 계약이 다른 파일은 **얹지 않는다**.
  *
  * 🔴 **중복 적재를 여기서 막지 않는다 — 적재기가 막는다.** 적재기(`micro-seed-supply-autofill`)는
  *    시도마다 큐를 **새로 읽고**, 이미 올라간 후보를 `provenanceKeyOf` 로 `ALREADY` 처리하며,
@@ -23,6 +23,7 @@
  */
 
 import { qualityContractMismatch, type Envelope, type SkipCode } from './micro-seed-supply-autofill'
+import { CAPTURE_AGE_LIMIT_HOURS } from './source-slot-release'
 
 // ─────────────────────────────────────────────────────────
 // ① 회차 안 재시도
@@ -215,8 +216,13 @@ export function parseFillReport(out: string): FillReport | null {
 // ② 회차 사이 이월
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 이월 기한 — 하루. 그보다 오래된 후보는 시의성이 떨어진다 */
-export const CARRY_OVER_LOOKBACK_MS = 24 * 3_600_000
+/**
+ * 🔴 **이월 기한 = 수집 뒤 6시간**(`CAPTURE_AGE_LIMIT_HOURS` · 2026-11-25 밤 4) — 값 둘(옛 24시간 · 만료 6시간)을 하나로 했다.
+ *    그보다 오래된 회차 파일의 원천은 슬롯 판정이 이미 만료로 본다(`CAPTURED_TOO_OLD_AT_SLOT`) — 얹어도 나가지 않는다.
+ *    🔴 시계가 다르다: 이 기한은 **회차 id 시각**(공급 회차 시작)으로 재고, 만료는 **수집 시각**으로 잰다.
+ *       수집이 회차보다 먼저라 5.9시간 된 회차 파일의 원천은 이미 만료일 수 있다 — 적재해도 판정이 막는다(이월이 살리지 않는다).
+ */
+export const CARRY_OVER_LOOKBACK_MS = CAPTURE_AGE_LIMIT_HOURS * 3_600_000
 /** 🔴 한 회차가 이월로 얹는 파일 수 상한 */
 export const CARRY_OVER_MAX_FILES = 3
 
@@ -271,7 +277,7 @@ export const CARRY_REJECT_LABEL: Record<CarryRejectCode, string> = {
   NO_RUN: '만든 회차 기록이 없다 — 끝냈는지 알 수 없어 얹지 않는다',
   DRAFT_NOT_OK: '만든 회차의 초안 단계가 성공하지 않았다',
   COMPLETED: '적재를 이미 끝냈다',
-  STALE: '이월 기한(24h)을 넘겼다',
+  STALE: `이월 기한(${CAPTURE_AGE_LIMIT_HOURS}h)을 넘겼다`,
   FUTURE: '회차 시각이 지금보다 뒤다',
   UNREADABLE: '파일을 읽지 못했다',
   EMPTY: '후보가 0건이다',
@@ -311,7 +317,7 @@ export type CarryPick = { name: string; runId: string; candidateCount: number; s
  *      · 이름이 `auto-draft-<runId>.candidates.json` 이고 이번 회차 파일이 아니다
  *      · 그 회차 기록이 있고 **초안 단계가 ok** 였다(초안이 실패한 회차의 파일은 믿지 않는다)
  *      · 어느 회차 기록도 그 파일을 **끝냈다고** 하지 않는다(`completedCandidateFiles`)
- *      · 기한 안이다(지금 − 24h ≤ 회차 시각 ≤ 지금)
+ *      · 기한 안이다(지금 − 6h ≤ 회차 시각 ≤ 지금 · `CARRY_OVER_LOOKBACK_MS`)
  *      · 파일을 읽었고 후보가 1건 이상이다
  *      · 🔴 **품질 계약이 지금 코드와 같다** — 적재기와 **같은 함수**(`qualityContractMismatch`)로 본다.
  *        적재기의 `CONTRACT` 관문도 그대로 남는다(두 겹이다. 여기서 빼도 적재기가 막는다).

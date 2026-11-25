@@ -20,6 +20,7 @@
 
 import type { BudgetLimits } from './llm-ledger'
 import type { CommentStage } from './persona-comment-stage'
+import type { RuntimeStage } from './scale-profile'
 import { MEMBER_COMMENT_LIMIT_ON_PUBLISH } from './persona-comment-queue'
 import type { SupportedThinkingLevel } from './provider-thinking-contract'
 
@@ -218,14 +219,27 @@ export const COMMENT_LOOP_BUDGET_ENV = {
 } as const
 
 /**
- * 🔴 **하루 절대 상한(USD) — 코드 천장.** env 가 이보다 크면 이 값으로 내린다 — env 로는 낮추기만 한다.
+ * 🔴 **하루 절대 상한(USD) — 코드 천장 · 그날 단계별.** env 가 이보다 크면 이 값으로 내린다 — env 로는 낮추기만 한다.
  *    운영 하루 상한은 env(`SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`)가 정한다. 이 값은 소비 목표가 아니다.
- *    $0.90 의 근거(2026-11-23 · D50 준비 · 댓글 장부 실측): 유료 호출 1회 정산 $0.00176 · 적재율 0.93(11-22 호출 182 → 댓글 170) —
- *    D30(11-22) 장부 하루 $0.32. D50(글 50편)은 `deriveCommentScale` 장부 기대값이 평균 6 에서 $0.57~0.61 ·
- *    평균 7 에서 $0.66~0.72 다. 상한 근처에서는 진행 중 호출의 예약금이 먼저 잡혀 그만큼 일찍 막힌다.
- *    창업자 11-19 승인 하루 총비용(D30 $3.00 · D50 $5.00) 안이다 — 공급 승인 천장 $1.80 + 댓글 $0.90 + 감사 $0.30 = $3.00.
+ *    🔴 단계별로 값이 다른 비용 칸은 **댓글 하나뿐**이다 — 공급은 날짜표(`supply-cost-envelope`)가 유일한 정본이고
+ *       감사는 env 하나다. 세 레인을 한 표로 묶지 않는다(밤 4 판정 2026-11-24 · 이중 정본을 다시 만들지 않는다).
+ *    · `base` $0.90 — D50 이 아닌 날과 단계를 모르는 날. 근거(2026-11-23 · D50 준비 · 댓글 장부 실측): 유료 호출 1회 정산 $0.00176 ·
+ *      적재율 0.93(11-22 호출 182 → 댓글 170) — D30(11-22) 장부 하루 $0.32. D50(글 50편)은 `deriveCommentScale` 장부 기대값이
+ *      평균 6 에서 $0.57~0.61 · 평균 7 에서 $0.66~0.72 다. 상한 근처에서는 진행 중 호출의 예약금이 먼저 잡혀 그만큼 일찍 막힌다.
+ *      창업자 11-19 승인 D30 총비용 $3.00 안 — 공급 승인 천장 $1.80 + 댓글 $0.90 + 감사 $0.30 = $3.00.
+ *    · `d50` $1.50 — 그날 결정이 D50 인 날만(창업자 11-24 승인 · 평균 7 + 뜨거운 글의 장부 기대 $0.66~0.96 위에 예약금 여유).
+ *      D50 총비용 $5.00 안 — $1.80 + $1.50 + $0.30 = $3.60.
  */
-export const COMMENT_LOOP_DAILY_USD_MAX = 0.9
+export const COMMENT_DAILY_USD_CAP = { base: 0.9, d50: 1.5 } as const
+
+/**
+ * 🔴 **그날 단계의 댓글 천장.** `d50` 이면 d50 칸, 그 밖(d1~d30 · 모름 = null)은 base — 🔴 null 을 내지 않는다.
+ *    모름을 null 로 닫으면 오늘 그대로 도는 첫 댓글까지 멈추고(`missingBudgetEnvNames`), 비용 신호는 `NO_BUDGET` →
+ *    `COST_UNKNOWN` 이라 하루 증거가 PASS 가 되지 못한다. 단계는 부르는 쪽이 넘긴다 — 러너는 그날 결정 판독(`followupStageOf`),
+ *    컨트롤러는 **판정하는 그날**의 결정 단계다(지난 날을 오늘 단계로 다시 재지 않는다).
+ */
+export const commentDailyCapOf = (stage: RuntimeStage | null): number =>
+  stage === 'd50' ? COMMENT_DAILY_USD_CAP.d50 : COMMENT_DAILY_USD_CAP.base
 /** env 가 없을 때의 기본값 — 🔴 D10까지 쓰던 $0.20을 유지한다. D20은 실측 뒤 env를 명시해야 한다 */
 export const COMMENT_LOOP_DAILY_USD_DEFAULT = 0.2
 /** **첫 댓글** 한 회차 유료 요청 상한 기본값. 추가 댓글은 자기 장부 회차와 자기 상한(profile)을 쓴다(`followupRunRequestCap`) */
@@ -240,12 +254,15 @@ export type CommentLoopLimits = {
 }
 
 /**
- * 🔴 **env 가 없으면 기본값, 있는데 못 읽으면 null(보류), 상한을 넘으면 상한으로 내린다.**
+ * 🔴 **env 가 없으면 기본값, 있는데 못 읽으면 null(보류), 그날 단계의 상한을 넘으면 상한으로 내린다** — 하루 = min(env, `commentDailyCapOf(stage)`).
  *
  *    "없음" 과 "잘못 씀" 을 같이 기본값으로 읽지 않는다 — `0.2O` 같은 오타가 조용히
  *    기본값이 되면, 사람이 낮춰 두었다고 믿는 값이 실제로는 적용되지 않는다.
+ *    🔴 `stage` 는 기본값 없는 필수 인자다 — 부르는 곳마다 "그날 단계"를 스스로 정해 넘긴다(한 곳만 고친 상태가 컴파일되지 않게).
  */
-export function commentLoopLimitsFromEnv(env: Readonly<Record<string, string | undefined>>): CommentLoopLimits {
+export function commentLoopLimitsFromEnv(
+  env: Readonly<Record<string, string | undefined>>, stage: RuntimeStage | null,
+): CommentLoopLimits {
   const notes: string[] = []
   const read = (name: string, dflt: number, opts: { integer?: boolean; min?: number } = {}): number | null => {
     const raw = (env[name] ?? '').trim()
@@ -258,10 +275,11 @@ export function commentLoopLimitsFromEnv(env: Readonly<Record<string, string | u
     }
     return n
   }
+  const cap = commentDailyCapOf(stage)
   let daily = read(COMMENT_LOOP_BUDGET_ENV.dailyUsd, COMMENT_LOOP_DAILY_USD_DEFAULT)
-  if (daily !== null && daily > COMMENT_LOOP_DAILY_USD_MAX) {
-    notes.push(`🔴 ${COMMENT_LOOP_BUDGET_ENV.dailyUsd}=${daily} 는 상한 $${COMMENT_LOOP_DAILY_USD_MAX} 를 넘는다 — 상한으로 내린다`)
-    daily = COMMENT_LOOP_DAILY_USD_MAX
+  if (daily !== null && daily > cap) {
+    notes.push(`🔴 ${COMMENT_LOOP_BUDGET_ENV.dailyUsd}=${daily} 는 그날 단계(${stage ?? '모름'}) 상한 $${cap} 를 넘는다 — 상한으로 내린다`)
+    daily = cap
   }
   const runCap = read(COMMENT_LOOP_BUDGET_ENV.runRequestCap, COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, { integer: true })
   // 🔴 여유 배수는 1 이상이어야 예약이 추정 오차를 덮는다(`reserveOf` 계약)

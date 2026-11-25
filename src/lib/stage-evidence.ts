@@ -28,7 +28,7 @@ import {
 import {
   otherPersonaTurnsExceed, PERSONA_AUTHOR_FOLLOWUPS_PER_POST_MAX, PERSONA_COMMENTS_PER_POST_MAX, PERSONA_REPLY_CHAIN_MAX,
 } from './persona-target-rules'
-import { THREAD_DEADLINE_MS, threadMeanSizeAt } from './persona-thread-target'
+import { THREAD_DEADLINE_MS, threadHotAt, threadMeanSizeAt } from './persona-thread-target'
 import { auditTarget } from './auto-ready-v2'
 import type { Health } from './ops-status'
 import { judgeSupplyCostEnvelope, usesSupplyCostEnvelope, type SupplyCostEvidence } from './supply-cost-envelope'
@@ -360,6 +360,11 @@ export type EvidencePost = {
   conversationComments?: readonly EvidenceConversationComment[]
   /** 발행 트랜잭션이 남긴 release 도장 상태(`releaseStampStatusOf`). Queue 가 없으면 `MISSING` */
   release: 'STAMPED_ELIGIBLE' | 'MISSING' | 'STALE'
+  /**
+   * 뜨거운 글인가(`isHotThread` — 그 글의 PUBLISHED 큐 행 원천 증거). 🔴 재기만 한다(counts) — 판정 · 계획에 쓰지 않는다.
+   *    없으면 뜨겁지 않은 것으로 센다(근거 없는 승격 0)
+   */
+  hot?: boolean
 }
 
 /** 단계 칸만 일반화한 사실 묶음 — 결정 칸은 `release` 를 문자열로 받는다 */
@@ -500,6 +505,13 @@ export function judgeEvidenceForTarget<S extends string>(
     // ② 글당 댓글 · ③ 타인 3명 — 대화 마감이 지난 글
     const talkClosed = autoTargets.filter((p) => p.publishedAtMs + THREAD_DEADLINE_MS <= facts.readAtMs)
     counts.conversationClosed = talkClosed.length
+    // 🔴 뜨거운 글 — 재기만 한다(판정 코드 0 · 통과선 없음). 뜨거운 글 수(그날 자동 target) · 대화가 닫힌 뜨거운 글 중
+    //    그 줄의 뜨거운 크기 하한(`hot.sizeMin`)에 닿은 글 수. 글당 평균(②)은 이 글들을 포함한 그대로다
+    counts.hotPosts = autoTargets.filter((p) => p.hot === true).length
+    counts.hotReachedSizeMin = talkClosed.filter((p) => {
+      const line = p.hot === true ? threadHotAt(p.publishedAtMs) : null
+      return line !== null && counted(p).length >= line.sizeMin
+    }).length
     if (n > 0 && !enough(talkClosed.length)) codes.add('TEXTURE_UNKNOWN')
     else if (n > 0) {
       const total = talkClosed.reduce((sum, p) => sum + counted(p).length, 0)

@@ -5,7 +5,7 @@
  *   여기서는 대기 행 하나하나를 **정본 `judgeSlotRelease` 하나로** 세 갈래로 나눈다 — 새 신선도 · 화제성 점수 없음.
  *     · `scheduled` 다가오는 예정 슬롯에 정본 짝짓기(`matchOpportunitiesToSlots`)로 이미 걸렸다
  *     · `lost`      시간이 지나도 바뀌지 않는 이유로 정본 판정이 그 행을 다시는 eligible 로 내지 않는다
- *                   (예정 슬롯 시점 원문 나이 한도 초과 — 나이는 줄지 않는다 · 저장된 증거 자체의 부재 · 손상)
+ *                   (예정 슬롯 시점 원문 나이 72h · 수집 뒤 6h 초과 — 나이는 줄지 않는다 · 저장된 증거 자체의 부재 · 손상)
  *     · `unknown`   그 밖 전부 — 짝이 없지만 아직 eligible · Persona · 시계 관련 · 판정 불가. 🔴 PASS 도 FAIL 도 아니다
  *
  *   🔴 발행 시점 재검사는 그대로다 — `scheduled` 는 공개가 아니다. 발행 트랜잭션이 그 시각에 다시 판정한다.
@@ -29,12 +29,19 @@ export type PendingFate = 'scheduled' | 'lost' | 'unknown'
  * 🔴 **시간이 지나도 풀리지 않는 정본 실패 사유** — 행에 저장된 증거 기록은 READY 이후 바뀌지 않는다.
  *    이 사유로 판정이 막힌 행은 발행 트랜잭션이 만나는 즉시 `EXPIRED` 로 옮긴다(구제 없음).
  *    🔴 시계에 기대는 사유(`*_IN_FUTURE` · 중첩 시각 순서 `EVIDENCE_INVALID`)는 넣지 않는다 — 시간이 풀 수 있다.
- *    🔴 나이 한도(`SOURCE_TOO_OLD_AT_SLOT`)는 따로 본다 — 가장 이른 예정 슬롯에서 넘었으면 이후 슬롯에서도 넘는다.
+ *    🔴 나이 한도는 따로 본다(`AGE_LIMIT_LOSS_REASONS`) — 가장 이른 예정 슬롯에서 넘었으면 이후 슬롯에서도 넘는다.
  */
 export const TIME_INVARIANT_LOSS_REASONS: readonly ReleaseReason[] = [
   'EVIDENCE_MISSING', 'POSTED_MISSING', 'POSTED_CORRUPT', 'CAPTURED_MISSING', 'CAPTURED_CORRUPT',
   'POSTED_AFTER_CAPTURE', 'RESPONSE_UNOBSERVED', 'RESPONSE_UNNORMALIZED', 'DRIVER_UNKNOWN',
 ]
+
+/**
+ * 🔴 **나이 한도 둘 — 원문 72시간(`SOURCE_TOO_OLD_AT_SLOT`) · 수집 뒤 6시간(`CAPTURED_TOO_OLD_AT_SLOT`)** (2026-11-25 밤 4).
+ *    둘 다 슬롯이 늦을수록 커지므로 손실 확정이다. 🔴 6시간을 여기서 빼면 그 행이 `unknown` 으로 남아
+ *    수율 상한(`terminalYieldOf` → `paidSourcesFor`)을 부풀리고 공급이 덜 산다.
+ */
+export const AGE_LIMIT_LOSS_REASONS: readonly ReleaseReason[] = ['SOURCE_TOO_OLD_AT_SLOT', 'CAPTURED_TOO_OLD_AT_SLOT']
 
 /**
  * 🔴 **대기 행 하나의 결말.** `matched` 는 호출부가 정본 짝짓기(커버리지와 **같은** 호출)에서 얻은 값이다.
@@ -54,7 +61,7 @@ export function pendingFateOf(i: {
     hardGates: { ok: true, codes: [] }, assignment: { ok: true }, tieBreak: i.tieBreak,
   })
   const reason = v.reasons[0] ?? null
-  if (v.verdict === 'ineligible' && reason === 'SOURCE_TOO_OLD_AT_SLOT') return { fate: 'lost', reason }
+  if (v.verdict === 'ineligible' && reason !== null && AGE_LIMIT_LOSS_REASONS.includes(reason)) return { fate: 'lost', reason }
   if (v.verdict === 'unknown' && reason !== null && TIME_INVARIANT_LOSS_REASONS.includes(reason)) return { fate: 'lost', reason }
   return { fate: 'unknown', reason }
 }
