@@ -28,8 +28,8 @@ const CHECKS = [['graph 검사', path.join(ROOT, 'node_modules', '.bin', 'tsx'),
 
 const MUTATIONS = [
   { name: 'resolver 가 받은 now 를 버리고 진입 때 Date.now 를 다시 읽는다', edits: [{ file: F.graph,
-    find: '  now: number = Date.now(),\n): ResolvedRelatedMagazine {\n  try {',
-    replace: '  _now: number = Date.now(),\n): ResolvedRelatedMagazine {\n  const now = Date.now()\n  try {' }] },
+    find: '  now: number = magazineNow(),\n): ResolvedRelatedMagazine {\n  try {',
+    replace: '  _now: number = magazineNow(),\n): ResolvedRelatedMagazine {\n  const now = Date.now()\n  try {' }] },
   // 🔴 2026-10-18 — edge 단위 선택(#758)이 공개 후보 · 보충을 resolveFromGraph 인자로 옮겼다. 지점도 그 호출로 옮긴다
   { name: 'graph 공개 후보에 now 전달 제거', edits: [{ file: F.graph,
     find: 'resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>', replace: 'resolveFromGraph(article, GRAPH, getAllMagazineArticles(), () =>' }] },
@@ -96,6 +96,18 @@ const runAll = () => CHECKS.map(([label, cmd, args]) => {
 })
 
 let bad = 0
+// 예약 시각을 설정해 빌드해도 운영 공개 시계는 바뀌지 않아야 한다.
+const previewAt = '2099-01-01T00:00:00Z'
+for (const mode of ['development', 'production', 'test']) {
+  const probe = `const { magazineNow } = require('./src/lib/magazine.ts')
+    const now = magazineNow()
+    const expected = process.env.NODE_ENV === 'development' ? Date.parse(process.env.SORAN_MAGAZINE_PREVIEW_AT) : Date.now()
+    process.exit(Math.abs(now - expected) < 500 ? 0 : 1)`
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', probe], {
+    cwd: ROOT, env: { ...process.env, NODE_ENV: mode, SORAN_MAGAZINE_PREVIEW_AT: previewAt },
+  })
+  if (result.status !== 0) { bad++; console.error(`공개 시계 검사 실패 (${mode})`) }
+}
 let caught = 0
 console.log('\nM-GRAPH 공개 판정 시각 변이 시험\n')
 const base = runAll()

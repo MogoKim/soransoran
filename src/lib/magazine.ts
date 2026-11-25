@@ -14,6 +14,18 @@ import { MAGAZINE_ALL_CLUSTER, MAGAZINE_PAGE_SIZE, isPageOutOfRange } from '@/li
  *    검색엔진이 미완성 글을 색인한다. 그래서 아래 함수들도 전부 관문을 경유한다.
  */
 
+/** 로컬 개발 서버에서 예약 글을 검수할 때만 공개 시각을 바꾼다. 운영·테스트는 실제 시계를 쓴다. */
+export function magazineNow(): number {
+  if (process.env.NODE_ENV === 'development') {
+    const value = process.env.SORAN_MAGAZINE_PREVIEW_AT
+    if (value && /(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+      const at = Date.parse(value)
+      if (Number.isFinite(at)) return at
+    }
+  }
+  return Date.now()
+}
+
 /** KST 기본 공개 시각. 운영 전략서 §4 */
 const KST_PUBLISH_TIME = 'T10:30:00+09:00'
 
@@ -33,7 +45,7 @@ export function resolvePublishAt(article: MagazineArticle): number {
  * QA 는 발행 전 절차(magazine-qa.mjs)가 판정하고, HIGH 차단은 검수 단계가 한다.
  * 런타임에서 막아야 할 것은 status: 'BLOCKED' 로 표현한다.
  */
-export function isPublicMagazineArticle(article: MagazineArticle, now = Date.now()): boolean {
+export function isPublicMagazineArticle(article: MagazineArticle, now = magazineNow()): boolean {
   if (article.status === 'DRAFT' || article.status === 'BLOCKED') return false
   return resolvePublishAt(article) <= now
 }
@@ -45,7 +57,7 @@ export function isPublicMagazineArticle(article: MagazineArticle, now = Date.now
  *    호출마다 시각을 다시 읽으면 예약 공개 시각(10:30:00)을 사이에 두고 두 답이 갈린다.
  *    부르는 쪽이 한 번 정한 시각을 넘긴다. 기본값은 지금 — 화면 동작은 그대로다.
  */
-export function getAllMagazineArticles(now: number = Date.now()): MagazineArticle[] {
+export function getAllMagazineArticles(now: number = magazineNow()): MagazineArticle[] {
   return MAGAZINE_ARTICLES.filter((a) => isPublicMagazineArticle(a, now)).sort((a, b) =>
     b.publishedAt.localeCompare(a.publishedAt),
   )
@@ -161,7 +173,7 @@ export function getMagazineArticleBySlug(slug: string): MagazineArticle | undefi
 export function getRelatedMagazineArticles(
   article: MagazineArticle,
   limit = 3,
-  now: number = Date.now(),
+  now: number = magazineNow(),
 ): MagazineArticle[] {
   return getAllMagazineArticles(now)
     .filter((a) => a.slug !== article.slug && a.cluster === article.cluster)
