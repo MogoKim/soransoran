@@ -1038,12 +1038,13 @@ try {
     d.createPr({ branch: `${R.RELEASE_BRANCH_PREFIX}x`, title: 't', body: 'b', draft: true }); d.createPr({ branch: `${R.RELEASE_BRANCH_PREFIX}y`, title: 't', body: 'b', draft: false })
     d.commit({ dir: TMP, paths: [R.ARTICLES_PATH], message: 'm' })
     const before = calls.length
-    const del = d.deleteBranch('main')
+    const protectedBranches = ['main', 'feat/magazine-release-writer-1124']
+    const refused = protectedBranches.every(branch => d.deleteBranch(branch) === false)
     const all = calls.join('\n')
     assert(all.includes(`gh pr merge 7 --squash --match-head-commit ${'h'.repeat(40)}`) && !/--admin|--force|-f\b/.test(all), all)
     assert(calls.filter((c) => c.startsWith('gh pr create')).map((c) => c.includes('--draft')).join() === 'true,false', 'Draft 인자')
     assert(calls.some((c) => c === `git add -- ${R.ARTICLES_PATH}`) && !calls.some((c) => /git add (\.|-A)/.test(c)), 'add')
-    assert(del === false && calls.length === before, 'release 접두가 아닌 브랜치를 지우려 했다')
+    assert(refused && calls.length === before, '발행 브랜치 이외의 브랜치를 지우려 했다')
   })
   await check('RB3', 'vNext release 진입점의 import 폐포에 legacy 모듈 0 · legacy 상수와 같은 값(필수 검사 · 결론 · 자동 브랜치 접두)', async () => {
     const LEGACY = ['scripts/magazine-auto-merge.mjs', 'scripts/lib/magazine-merge-gate.mjs', 'scripts/magazine-register.mjs', 'scripts/lib/magazine-load.mjs',
