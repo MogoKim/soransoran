@@ -1,4 +1,5 @@
 import Image from 'next/image'
+import { Fragment } from 'react'
 import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import type { MagazineArticle, MagazineBlock } from '@/content/magazine/types'
@@ -79,11 +80,49 @@ function Block({ block, articleSlug }: { block: MagazineBlock; articleSlug: stri
   }
 }
 
+function MagazineBrandBanner({ src }: { src: string }) {
+  return (
+    <aside aria-label="소란소란 소개" className="my-7 overflow-hidden rounded-xl border border-subtle bg-surface-soft sm:flex">
+      <div className="relative aspect-[3/1] sm:aspect-auto sm:w-1/3">
+        <Image src={src} alt="" fill sizes="(min-width: 640px) 220px, 100vw" className="object-cover" />
+      </div>
+      <div className="min-w-0 flex-1 p-4 sm:p-5">
+        <p className="break-keep text-lg font-bold leading-snug text-content-primary">자매처럼 편하게, 속마음까지 소란소란.</p>
+        <p className="mt-2 break-keep text-content-primary">고민과 일상을 눈치 보지 않고 나눠요.</p>
+        <Link href="/" className={`mt-3 inline-flex ${TOUCH_MIN} items-center justify-center rounded-lg bg-cta px-5 py-2 text-center text-lg font-bold text-cta-content`}>
+          소란소란 둘러보기
+        </Link>
+      </div>
+    </aside>
+  )
+}
+
+/** 첫 CTA 앞에서 중간에 가장 가까운 절을 고른다. 짧은 글이나 이미지가 없는 글에는 넣지 않는다. */
+function bannerIndex(body: MagazineBlock[]) {
+  const firstCta = body.findIndex(block => block.type === 'cta')
+  const length = firstCta < 0 ? body.length : firstCta
+  if (length < 2) return -1
+  const mid = length / 2
+  let best = -1
+  for (let i = 1; i < length; i++) {
+    if (body[i].type === 'h2' && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i
+  }
+  if (best >= 0) return best
+  for (let i = Math.ceil(mid); i < length; i++) {
+    if (body[i - 1].type !== 'h2' && body[i - 1].type !== 'h3') return i
+  }
+  return -1
+}
+
 export default function MagazineBody({ article }: { article: MagazineArticle }) {
+  const bannerAt = article.heroImage ? bannerIndex(article.body) : -1
   return (
     <div>
       {article.body.map((block, index) => (
-        <Block key={`${block.type}-${index}`} block={block} articleSlug={article.slug} />
+        <Fragment key={`${block.type}-${index}`}>
+          {index === bannerAt && article.heroImage ? <MagazineBrandBanner src={article.heroImage.src} /> : null}
+          <Block block={block} articleSlug={article.slug} />
+        </Fragment>
       ))}
 
       {article.medical ? (
