@@ -289,7 +289,7 @@ function budgetJobs(ctx, root) {
 }
 
 function budgetBlock(ctx, job, estimateUsd) {
-  const roots = ctx.deps.budgetRoots ?? [ctx.deps.jobsRoot]
+  const roots = ctx.deps.readBudgetRoots?.() ?? ctx.deps.budgetRoots ?? [ctx.deps.jobsRoot]
   const all = roots.flatMap(root => budgetJobs(ctx, root))
   if (!Number.isFinite(estimateUsd) || estimateUsd < 0 || all.some(({ job: entry }) => entry.broken ||
     entry.requests.some(r => !Number.isFinite(r.costUsd) || r.costUsd < 0 || !Number.isFinite(Date.parse(r.createdAt)) ||

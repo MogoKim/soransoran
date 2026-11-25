@@ -101,9 +101,9 @@ const T0 = Date.parse('2026-11-25T01:00:00.000Z')
 const rolloutOf = (target, path = 'vnext') => ({ code: 'VALID', effective: { path, release: 'draft', targetCandidates: target } })
 
 function env({ target = 1, faults = {}, stage = 'REHEARSAL', prices = RH.FAKE_PRICES, limits = {}, hooks = null, mutateProviderPlan = null, rollout = null, main = MAIN, remote = F.makeRemote(),
-  jobsRoot = join(tmp('vp-jobs-'), 'jobs'), clock = { t: T0 } } = {}) {
+  readBudgetRoots, jobsRoot = join(tmp('vp-jobs-'), 'jobs'), clock = { t: T0 } } = {}) {
   const provider = { ...F.makeFakeProviders({ remote, faults }), models: { manuscript: 'fake-manuscript/1', image: 'fake-image/1' }, maxOutputTokens: 6000, repairMaxOutputTokens: 800, imageSize: '1536x1024', prices }
-  const deps = (runId) => ({ jobsRoot, now: () => clock.t, sleep: async (ms) => { clock.t += ms }, runId, readRollout: () => rollout ?? rolloutOf(target), readMain: () => main,
+  const deps = (runId) => ({ jobsRoot, readBudgetRoots, now: () => clock.t, sleep: async (ms) => { clock.t += ms }, runId, readRollout: () => rollout ?? rolloutOf(target), readMain: () => main,
     provider, stage, publishedHeroes: () => HEROES, hooks, limits, mutateProviderPlan })
   let seq = 0
   return { jobsRoot, remote, clock, run: (mode = 'run', runId = `r${++seq}`) => P.runProduce({ deps: deps(runId), mode }), advance: (min) => { clock.t += min * 60_000 } }
@@ -329,8 +329,10 @@ await test('E19', '비용 상한 — 편당 초과 예상 → 전송 0 HOLD · �
   const before = submits(b)
   const r = await env({ target: 4, stage: 'PILOT', jobsRoot: b.jobsRoot, remote: b.remote, clock: b.clock }).run()
   const cand = RC.readReleaseCandidates({ jobsRoot: b.jobsRoot })
-  const c = env({ stage: 'S5_CANARY' })
-  seed(c.jobsRoot, 'canary-seed', { stage: 'S5_CANARY', createdAt: '2026-10-01T00:00:00.000Z', costUsd: 4.999 })
+  const trialDir = tmp('vp-trials-'), production = join(tmp(), 'jobs')
+  const { trialBudgetRoots } = await imp('scripts/magazine-vnext-produce.mjs')
+  const c = env({ stage: 'S5_CANARY', jobsRoot: join(trialDir, 'new-contract'), readBudgetRoots: () => trialBudgetRoots(production, trialDir) })
+  seed(join(trialDir, 'original-model'), 'canary-seed', { stage: 'S5_CANARY', createdAt: '2026-10-01T00:00:00.000Z', costUsd: 4.999 })
   const rc = await c.run()
   return { ok: ja.hold?.reason === 'COST_CAP_ARTICLE' && submits(a) === 0 && r.outcome === 'MONTH_CAP_REACHED' && submits(b) === before && cand.candidates.length === 2 && rc.outcome === 'CANARY_CAP_REACHED' && submits(c) === 0,
     detail: JSON.stringify({ a: ja.hold, month: r.outcome, s: [before, submits(b)], cand: cand.candidates.length, canary: rc.outcome }) }
@@ -456,7 +458,7 @@ await test('E31', '실제 캐시 쓰기·읽기 단가와 불완전한 영수증
 })
 await test('E32', 'dry-run과 유료 실행을 혼합하면 설정·키 조회 전에 사용법 오류로 끝난다', () => {
   const file = join(LIBROOT, 'scripts/magazine-vnext-produce.mjs')
-  return [['--live', '--dry-run'], ['--live', '--plan'], ['--rerun', 'bad', '--live']].every(args =>
+  return [['--live', '--compare-revision'], ['--live', '--dry-run'], ['--live', '--plan'], ['--rerun', 'bad', '--live']].every(args =>
     spawnSync(process.execPath, [file, ...args], { encoding: 'utf8' }).status === 2)
 })
 await test('E33', '이미지 원본을 보관한 직후 중단해도 추가 유료 생성 없이 대표 이미지를 완성한다', async () => {

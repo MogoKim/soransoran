@@ -46,6 +46,8 @@ export const MANUSCRIPT_INSTRUCTIONS = [
   '지킬 것:',
   '- 한국어 습니다체. 편집팀 시점으로 쓴다. 저는·제가 같은 1인칭 화자와 개인 경험담을 쓰지 않는다. 지난 일을 회상하는 문장보다 지금 할 수 있는 것을 쓴다.',
   '- exclusions 의 주제는 다루지 않는다. forbiddenClaims 에 해당하는 주장을 하지 않는다. inclusions 가 있으면 다룬다.',
+  '- 독자가 양식을 작성하려고 온 경우, 가장 막히는 칸을 골라 가상의 상황과 그 칸에 그대로 들어갈 완성 예시를 함께 보여 준다. 필수 표시가 있는 칸, 선택 칸, 자유 양식은 구분한다.',
+  '- 오래된 경력을 직무에 맞게 쓰는 글이라면 공고의 담당 업무 하나와 과거에 실제 했다고 가정한 일 하나를 먼저 밝힌다. 같은 사례에서 지원자가 경력란에 옮겨 적을 한 줄을 callout에 쓴다. 그 줄에 기간·역할과 구체적으로 무엇을 어떻게 처리했는지가 드러나게 한다. 공백 사유나 교육 이력은 경력 예시와 따로 쓴다. 가상 예시임을 본문에서 밝히고 확인할 수 없는 성과를 붙이지 않는다.',
   '- 통계 · 퍼센트 · 순위 · 조사 결과 · 기관 발표를 지어내지 않는다. 숫자가 꼭 필요하면 사람마다 다르다고 밝힌다. 본문에 URL 을 쓰지 않는다.',
   '- 의료 · 법률 · 세금 · 금융을 단정하지 않는다. 반드시 · 완치 · 보장 같은 말을 쓰지 않는다. 특정 상품 · 업체를 추천하지 않는다.',
    `- 독자를 나이로 묶는 다음 표현은 피한다: ${BANNED_WORDS.join(', ')}.`,
@@ -79,11 +81,15 @@ export const contractHashOf = ({ id, instructions, schema, model, maxOutputToken
 
 const jsonFormat = (name, schema) => ({ format: { type: 'json_schema', name, schema, strict: true } })
 
+export function manuscriptContractHash({ model, maxOutputTokens }) {
+  return contractHashOf({ id: MANUSCRIPT_CONTRACT_ID, instructions: MANUSCRIPT_INSTRUCTIONS, schema: MANUSCRIPT_SCHEMA, model, maxOutputTokens })
+}
+
 /** 원고 요청 바디 — background · store:true. 입력은 ProviderPlan JSON 하나 */
 export function buildManuscriptBody({ providerPlan, model, maxOutputTokens }) {
   const body = { model, instructions: MANUSCRIPT_INSTRUCTIONS, input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify(providerPlan) }] }],
     text: jsonFormat('magazine_manuscript', MANUSCRIPT_SCHEMA), background: true, store: true, max_output_tokens: maxOutputTokens }
-  return { body, bodyText: JSON.stringify(body), contractHash: contractHashOf({ id: MANUSCRIPT_CONTRACT_ID, instructions: MANUSCRIPT_INSTRUCTIONS, schema: MANUSCRIPT_SCHEMA, model, maxOutputTokens }) }
+  return { body, bodyText: JSON.stringify(body), contractHash: manuscriptContractHash({ model, maxOutputTokens }) }
 }
 
 /**

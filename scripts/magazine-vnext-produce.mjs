@@ -8,6 +8,8 @@
  *   node scripts/magazine-vnext-produce.mjs --live          사람이 부르는 실제 생성 — rollout vnext · live 설정 ON · 키체인 키가 모두 있어야 한다
  *   node scripts/magazine-vnext-produce.mjs --plan [--preview-target <n>]
  *        계획만 — 무엇을 만들지 · ProviderPlan 판정 · 기존 Job 상태. --preview-target 은 rollout 대신 vnext/draft/<n> 으로 가정한다(쓰기 0)
+ *   node scripts/magazine-vnext-produce.mjs --canary <설정 파일> [--compare-revision]
+ *        비교 시험은 원고 계약별 저장소에서 이어 간다. 이전 시험도 같은 비용 상한에 합산한다.
  *   node scripts/magazine-vnext-produce.mjs --rerun <planHash> --scope hero|all --by <이름>
  *        HOLD(또는 창업자 '아니오') 뒤 명시적 재호출 표시 — provider 호출 0. 다음 생산 회차가 이어 간다
  *
@@ -25,7 +27,7 @@ import { randomUUID } from 'node:crypto'
 import { readRollout } from './lib/magazine-rollout.mjs'
 import { jobsRootPath } from './lib/magazine-release-candidates.mjs'
 import { makeReleaseDeps, readMainFacts } from './lib/magazine-release-run.mjs'
-import { LIVE_TEXT_RATES, makeOpenAiProviders, readApiKeyFromKeychain } from './lib/magazine-provider.mjs'
+import { LIVE_TEXT_RATES, manuscriptContractHash, makeOpenAiProviders, readApiKeyFromKeychain } from './lib/magazine-provider.mjs'
 import { OK_OUTCOMES, liveConfigPath, readLiveConfig, rerunJob, runProduce } from './lib/magazine-vnext-produce.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -50,15 +52,30 @@ export function publishedHeroesOf(root) {
   return slugs.filter((s) => existsSync(join(dir, s, 'hero.webp'))).map((s) => ({ name: s, bytes: readFileSync(join(dir, s, 'hero.webp')) }))
 }
 
+// 공용 잠금을 잡은 뒤 호출한다. 수정 전 모델 폴더와 계약별 재시험 폴더를 모두 읽는다.
+export function trialBudgetRoots(productionJobs, canaryDir) {
+  let entries
+  try { entries = readdirSync(canaryDir, { withFileTypes: true }) } catch (error) {
+    if (error.code === 'ENOENT') return [productionJobs]
+    throw error
+  }
+  const roots = [productionJobs]
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) throw Error('CANARY_ROOT_INVALID')
+    if (entry.isDirectory()) roots.push(join(canaryDir, entry.name))
+  }
+  return roots
+}
+
 function readOptions(argv) {
   const options = {}
-  for (const key of ['launcher', 'dry-run', 'live', 'plan']) options[key] = { type: 'boolean' }
+  for (const key of ['launcher', 'dry-run', 'live', 'plan', 'compare-revision']) options[key] = { type: 'boolean' }
   for (const key of ['canary', 'preview-target', 'rerun', 'scope', 'by']) options[key] = { type: 'string' }
   const { values, tokens } = parseArgs({ args: argv, options, tokens: true })
   const keys = tokens.map(token => token.name)
   const modes = ['launcher', 'live', 'plan', 'canary', 'rerun'].filter(k => k in values)
   if (new Set(keys).size !== keys.length || modes.length !== 1) throw Error('실행 모드를 하나만 지정하세요.')
-  const allowed = { launcher: ['dry-run'], live: [], plan: ['preview-target'], canary: [], rerun: ['scope', 'by'] }
+  const allowed = { launcher: ['dry-run'], live: [], plan: ['preview-target'], canary: ['compare-revision'], rerun: ['scope', 'by'] }
   if (keys.some(k => k !== modes[0] && !allowed[modes[0]].includes(k))) throw Error('이 실행 모드에서 사용할 수 없는 옵션입니다.')
   if (modes[0] === 'rerun' && (!/^[0-9a-f]{64}$/.test(values.rerun) || !values.by?.trim() || !['hero', 'all'].includes(values.scope))) throw Error('--rerun <planHash> --scope hero|all --by <이름>')
   if ('preview-target' in values && !/^[1-9]$/.test(values['preview-target'])) throw Error('--preview-target <1~9>')
@@ -74,7 +91,7 @@ async function main() {
   const canaryConfig = args.canary
   const canaryModels = Object.keys(LIVE_TEXT_RATES)
   const state = dirname(productionJobs)
-  const canaryRoots = canaryModels.map(model => join(state, 'magazine-canary-jobs', model))
+  const canaryDir = join(state, 'magazine-canary-jobs')
   let jobsRoot = productionJobs
   const nowIso = new Date().toISOString()
 
@@ -93,7 +110,10 @@ async function main() {
       c.image.model !== 'gpt-image-2.5-flare' || c.image.size !== '1536x864' || c.image.perImage < 0.14) {
       console.error('CANARY_CONFIG_INVALID'); process.exit(2)
     }
-    jobsRoot = canaryRoots[canaryModels.indexOf(c.manuscript.model)]
+    const trial = args['compare-revision']
+      ? c.manuscript.model + '-' + manuscriptContractHash(c.manuscript)
+      : c.manuscript.model
+    jobsRoot = join(canaryDir, trial)
   } else if (liveCfg.on && liveCfg.config.stage === 'S5_CANARY') {
     console.error('S5는 명시적인 --canary 설정으로만 호출한다'); process.exit(2)
   }
@@ -116,7 +136,7 @@ async function main() {
       prices: { manuscript: rates, image: { perImage: c.image.perImage } } }
   }
   const deps = {
-    jobsRoot, lockRoot: productionJobs, budgetRoots: [productionJobs, ...canaryRoots],
+    jobsRoot, lockRoot: productionJobs, readBudgetRoots: () => trialBudgetRoots(productionJobs, canaryDir),
     manuscriptOnly: Boolean(canaryConfig) && liveCfg.config.manuscript.model === 'gpt-6.1-terra',
     now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)), runId: `${nowIso.replace(/[:.]/g, '-')}-${process.pid}-${randomUUID().slice(0, 8)}`,
     readRollout: () => rollout, readMain: () => readMainFromOrigin(ROOT), provider, stage: liveCfg.config?.stage ?? null, publishedHeroes: () => publishedHeroesOf(ROOT),
