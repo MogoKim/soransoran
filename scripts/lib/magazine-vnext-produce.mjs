@@ -404,6 +404,10 @@ function interpretSubmit(ctx, job, n, httpStatus, bodyText) {
 async function settleRequest(ctx, job, r) {
   const { deps, L } = ctx
   const pending = (j) => ({ job: j, pending: true })
+  if (r.kind === 'image' && ['SUBMITTING', 'UNKNOWN'].includes(r.status)) {
+    const next = setRequest(job, r.n, { status: 'UNRECOVERABLE', consumed: true, orphanPossible: true })
+    return { job: hold(ctx, next, 'IMAGE_SUBMISSION_UNKNOWN'), pending: true }
+  }
   if (r.status === 'SUBMITTING') {
     // 앞 실행이 기록 뒤에 죽었다 — 저장된 제출 응답이 있으면 그 바이트로 해석한다(다시 보내지 않는다)
     const file = `raw-${r.n}-submit.json`
@@ -537,7 +541,8 @@ async function sweepDeletes(ctx, job) {
 // ── terminal 소비 ────────────────────────────────────────────
 
 async function consume(ctx, job, r) {
-  const done = (j, patch = {}) => save(ctx, setRequest(j, r.n, { consumed: true, ...patch }))
+  const consumed = j => setRequest(j, r.n, { consumed: true })
+  const done = j => save(ctx, consumed(j))
   const text = r.raw?.final ? readArtifact(ctx.deps.jobsRoot, job.planHash, r.raw.final.file, { fs: ctx.fs }).toString('utf8') : null
   const t = text ? readTerminal(parseWire(text)) : null
   if (r.status === 'REJECTED' || r.status === 'NOT_SENT') return done(job)
@@ -554,7 +559,7 @@ async function consume(ctx, job, r) {
     }
     const plan = ctx.compiled.plans.find((p) => p.planId === job.planId)
     const article = articleFromManuscript(parsed.value, plan)
-    job = done({ ...job, slugProposal: parsed.value.slugProposal.trim(), heroScene: parsed.value.heroScene.trim() })
+    job = consumed({ ...job, slugProposal: parsed.value.slugProposal.trim(), heroScene: parsed.value.heroScene.trim() })
     return writeDraft(ctx, event(ctx, job, 'DRAFT', { n: r.n }), article, 'm')
   }
   if (r.kind === 'repair') {
@@ -563,10 +568,15 @@ async function consume(ctx, job, r) {
     if (!parsed.ok) { ctx.stop = { scope: 'ALL', code: 'DESIGN_CONTRACT_CONFLICT', outcome: 'DESIGN_CONTRACT_CONFLICT' }; return hold(ctx, done(job), 'DESIGN_CONTRACT_CONFLICT', parsed.code) }
     const article = JSON.parse(readArtifact(ctx.deps.jobsRoot, job.planHash, job.draft.file, { fs: ctx.fs }).toString('utf8'))
     const applied = applyReplacement(article, r.target, parsed.replacement)
-    job = done(event(ctx, job, applied.ok ? 'REPAIRED' : 'REPAIR_NOT_APPLIED', { n: r.n, target: r.target.kind === 'field' ? r.target.field : r.target.path.join('.') }))
-    return applied.ok ? writeDraft(ctx, job, applied.article, 'r') : job
+    job = consumed(event(ctx, job, applied.ok ? 'REPAIRED' : 'REPAIR_NOT_APPLIED', { n: r.n, target: r.target.kind === 'field' ? r.target.field : r.target.path.join('.') }))
+    return applied.ok ? writeDraft(ctx, job, applied.article, 'r') : save(ctx, job)
   }
-  return done(job) // image — imageCall 이 그 자리에서 끝낸다
+  if (r.kind === 'image' && r.status === 'COMPLETED' && r.raw?.source) {
+    const bytes = readArtifact(ctx.deps.jobsRoot, job.planHash, r.raw.source.file, { fs: ctx.fs })
+    if (sha256(bytes) !== r.raw.source.sha256) return hold(ctx, job, 'HERO_SOURCE_MISMATCH')
+    return (await finishHero(ctx, job, r.n, bytes)).job
+  }
+  return done(job)
 }
 
 // ── hero ─────────────────────────────────────────────────────
@@ -579,42 +589,52 @@ async function heroStep(ctx, job, pp) {
 }
 
 /** 이미지 — 동기 호출. 원본을 먼저 저장하고 16:9 · 크기 · 중복을 본다. 실패는 이미지만 다시(원고 재생성 0) */
+function rejectHero(ctx, job, n, code, patch = {}) {
+  const next = { ...setRequest(job, n, { consumed: true, ...patch }), lastHeroFailure: code }
+  return { job: save(ctx, event(ctx, next, 'HERO_REJECTED', { n, reason: code })), stopJob: false }
+}
+
 async function imageCall(ctx, job, n, bodyText) {
   const { deps } = ctx
-  const fail = (j, code, patch = {}) => ({ job: save(ctx, event(ctx, { ...setRequest(j, n, { consumed: true, ...patch }), lastHeroFailure: code }, 'HERO_REJECTED', { n, reason: code })), stopJob: false })
   let wire
   try { wire = await deps.provider.image.generate(bodyText) } catch (e) {
     ctx.report.calls.image++
     if (e?.code !== 'TRANSPORT') throw e
-    return fail(job, 'IMAGE_TRANSPORT', { status: 'UNRECOVERABLE', error: 'TRANSPORT', orphanPossible: true })
+    job = setRequest(job, n, { status: 'UNRECOVERABLE', error: 'TRANSPORT', orphanPossible: true, consumed: true })
+    return { job: hold(ctx, job, 'IMAGE_SUBMISSION_UNKNOWN'), stopJob: true }
   }
   ctx.report.calls.image++
   if (wire.httpStatus === 401 || wire.httpStatus === 403) { ctx.stop = { scope: 'ALL', code: 'AUTH', outcome: 'AUTH' }; return { job: save(ctx, setRequest(job, n, { status: 'FAILED', error: `HTTP_${wire.httpStatus}`, costUsd: 0, costBasis: 'NOT_CREATED', consumed: true })), stopJob: true } }
-  if (wire.httpStatus < 200 || wire.httpStatus >= 300) return fail(job, 'IMAGE_PROVIDER_FAILED', { status: 'FAILED', error: `HTTP_${wire.httpStatus}`, ...(wire.httpStatus < 500 ? { costUsd: 0, costBasis: 'NOT_CREATED' } : {}) })
+  if (wire.httpStatus < 200 || wire.httpStatus >= 300) return rejectHero(ctx, job, n, 'IMAGE_PROVIDER_FAILED', { status: 'FAILED', error: `HTTP_${wire.httpStatus}`, ...(wire.httpStatus < 500 ? { costUsd: 0, costBasis: 'NOT_CREATED' } : {}) })
   const response = parseWire(wire.bodyText)
   const img = readImage(response)
-  if (!img.ok) return fail(job, img.code, { status: 'FAILED', error: img.code })
+  if (!img.ok) return rejectHero(ctx, job, n, img.code, { status: 'FAILED', error: img.code })
   const src = writeArtifact(deps.jobsRoot, job.planHash, `hero-source-${n}.bin`, img.bytes, { fs: ctx.fs })
   const metered = deps.provider.kind === 'openai'
   const usage = response.usage ?? null
   const actual = metered ? imageUsageCost(deps.provider.models.image, usage) : null
   const costUsd = actual ?? reqOf(job, n).costUsd
   job = save(ctx, setRequest(job, n, { status: 'COMPLETED', raw: { source: src }, usage, costUsd,
-    costBasis: actual !== null ? 'USAGE' : metered ? 'RESERVED_NO_USAGE' : 'REHEARSAL', consumed: true }))
+    costBasis: actual !== null ? 'USAGE' : metered ? 'RESERVED_NO_USAGE' : 'REHEARSAL', consumed: false }))
   if (metered && actual === null) {
     ctx.stop = { scope: 'ALL', code: 'IMAGE_USAGE_UNKNOWN', outcome: 'IMAGE_USAGE_UNKNOWN' }
     return { job: hold(ctx, job, 'IMAGE_USAGE_UNKNOWN'), stopJob: true }
   }
   await hook(ctx, 'after-hero-source', { planHash: job.planHash, n })
-  const h = await heroFromSource(img.bytes)
-  if (!h.ok) return fail(job, h.code)
+  return finishHero(ctx, job, n, img.bytes)
+}
+
+async function finishHero(ctx, job, n, bytes) {
+  const { deps } = ctx
+  const h = await heroFromSource(bytes)
+  if (!h.ok) return rejectHero(ctx, job, n, h.code)
   const hash = await dHash(h.webp)
   const others = [...(deps.publishedHeroes?.() ?? []), ...listJobs(deps.jobsRoot, { fs: ctx.fs }).filter((x) => x.planHash !== job.planHash && x.job.hero)
     .map((x) => ({ name: `job:${x.planHash.slice(0, 12)}`, hash: x.job.hero.dhash ?? null, bytes: readArtifact(deps.jobsRoot, x.planHash, x.job.hero.file, { fs: ctx.fs }) }))]
   const near = await nearestHero(hash, others)
-  if (near && near.distance <= HERO_DUP_DISTANCE) return fail(job, 'HERO_DUPLICATE', { duplicateOf: near.name, distance: near.distance })
+  if (near && near.distance <= HERO_DUP_DISTANCE) return rejectHero(ctx, job, n, 'HERO_DUPLICATE', { duplicateOf: near.name, distance: near.distance })
   const hero = writeArtifact(deps.jobsRoot, job.planHash, 'hero.webp', h.webp, { fs: ctx.fs })
-  job = save(ctx, event(ctx, { ...job, hero: { ...hero, width: HERO_WIDTH, height: HERO_HEIGHT, dhash: hash, fromRequest: n, crop: h.crop, source: h.source, nearest: near } }, 'HERO_READY', { n }))
+  job = save(ctx, event(ctx, { ...setRequest(job, n, { consumed: true }), hero: { ...hero, width: HERO_WIDTH, height: HERO_HEIGHT, dhash: hash, fromRequest: n, crop: h.crop, source: h.source, nearest: near } }, 'HERO_READY', { n }))
   return { job, stopJob: true }
 }
 

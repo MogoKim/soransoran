@@ -158,6 +158,7 @@ export function makeFakeProviders({ remote, faults = {} }) {
         const b = JSON.parse(bodyText)
         remote.calls.image.push({ prompt: b.prompt })
         const fault = (faults.__image ?? []).shift() ?? null
+        if (fault === 'TRANSPORT') throw new ProviderTransportError('image', { name: 'AbortError' })
         if (fault?.startsWith('HTTP_')) return err(Number(fault.slice(5)), fault)
         const [w, h] = fault === 'SQUARE' ? [1024, 1024] : fault === 'SMALL' ? [960, 640] : [1536, 1024]
         let png

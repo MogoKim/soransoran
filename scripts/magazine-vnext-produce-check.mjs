@@ -44,8 +44,8 @@ export const MUTATIONS = {
   'regen-cap-raised': ['scripts/lib/magazine-vnext-qa.mjs', 'Object.freeze({ places: 2, regenerations: 1 })', 'Object.freeze({ places: 2, regenerations: 3 })'],
   'produce-lane-removed': ['scripts/magazine-producer-run.mjs', "vnextLane: POST_SYNC ? null : 'produce'", 'vnextLane: null'],
   'live-default-on': [PRODUCE, "  return { code: 'VALID', on: c.enabled === true, config: c, why: null }", "  return { code: 'VALID', on: true, config: c, why: null }"],
-  'image-failure-regenerates': [PRODUCE, "  const fail = (j, code, patch = {}) => ({ job: save(ctx, event(ctx, { ...setRequest(j, n, { consumed: true, ...patch }), lastHeroFailure: code }",
-    "  const fail = (j, code, patch = {}) => ({ job: save(ctx, event(ctx, { ...setRequest(j, n, { consumed: true, ...patch }), lastHeroFailure: code, draft: null, manuscript: null, validation: null }"],
+  'image-failure-regenerates': [PRODUCE, 'const next = { ...setRequest(job, n, { consumed: true, ...patch }), lastHeroFailure: code }',
+    'const next = { ...setRequest(job, n, { consumed: true, ...patch }), lastHeroFailure: code, draft: null, manuscript: null, validation: null }'],
   'local-final-ignored': [PRODUCE, '      const local = localFinal(ctx, job, r)\n', '      const local = null\n'],
 }
 
@@ -458,6 +458,23 @@ await test('E32', 'dry-run과 유료 실행을 혼합하면 설정·키 조회 �
   const file = join(LIBROOT, 'scripts/magazine-vnext-produce.mjs')
   return [['--live', '--dry-run'], ['--live', '--plan'], ['--rerun', 'bad', '--live']].every(args =>
     spawnSync(process.execPath, [file, ...args], { encoding: 'utf8' }).status === 2)
+})
+await test('E33', '이미지 원본을 보관한 직후 중단해도 추가 유료 생성 없이 대표 이미지를 완성한다', async () => {
+  let crash = true
+  const e = env({ hooks: { at(point) {
+    if (crash && point === 'after-hero-source') { crash = false; throw Error('SIMULATED_CRASH') }
+  } } })
+  await e.run().catch(() => null)
+  await e.run()
+  return submits(e) === 1 && e.remote.calls.image.length === 1 && state(jobOf(e, 'I-T6-03')) === 'HERO_READY'
+})
+await test('E34', '이미지 전송 결과가 불명인 회차는 같은 원고·이미지 비용을 자동 재집행하지 않는다', async () => {
+  const e = env({ faults: { __image: ['TRANSPORT'] } })
+  await e.run()
+  await e.run()
+  const job = jobOf(e, 'I-T6-03')
+  return job.hold?.reason === 'IMAGE_SUBMISSION_UNKNOWN' && job.validation?.verdict === 'VALID' &&
+    job.requests.filter(r => r.kind === 'image').length === 1 && submits(e, Q_RESUME) === 1 && job.requests.at(-1).costUsd > 0
 })
 await test('E30', 'vNext 생산 진입점의 legacy 모듈 도달 0 (정적 import 폐포)', async () => {
   const LEGACY = /magazine-(load|hero|hero-webp|hero-runner|quarantine|webui-runner|register|queue-lock|direct-spec[\w-]*|brief[\w-]*|producer-(plan|flow|exit|notify)|regen|handoff|fetch-result|delivery-gate|merge-gate|auto-[\w-]+|input-repair|outstanding|manuscript-guard|rehearsal-[\w-]+)\.mjs$/
