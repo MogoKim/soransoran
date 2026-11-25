@@ -384,13 +384,13 @@ try {
     assert(!g.ok && codes(g).join() === 'PROVIDER_PLAN_HOLD' && g.blockedBy[0].message.includes('INTERNAL_MARKER'), codes(g).join())
   })
   await check('RG4', 'PR 관문 — Draft 모드 · Draft PR · SHA 이동 · CI pending · 필수 검사 skipped · 사람 브랜치는 막고 정상만 통과', () => {
-    const pr = { number: 1, headRefName: `${R.RELEASE_BRANCH_PREFIX}x`, headRefOid: 'h'.repeat(40), baseRefName: 'main', state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
+    const pr = { number: 1, headRefName: `${R.RELEASE_BRANCH_PREFIX}20261120-aaaaaaaaaa`, headRefOid: 'h'.repeat(40), baseRefName: 'main', state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
     const ok = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
     const j = (over = {}) => RUN.judgeReleasePr({ pr: { ...pr, ...(over.pr ?? {}) }, expectedSha: over.sha ?? pr.headRefOid, ciState: over.ci ?? 'success', checks: over.checks ?? ok, rollout: { release: over.release ?? 'auto' } })
     assert(j().ok, JSON.stringify(j().blockedBy))
     const want = [['RELEASE_DRAFT_MODE', { release: 'draft' }], ['IS_DRAFT', { pr: { isDraft: true } }], ['SHA_DRIFTED', { sha: 'z'.repeat(40) }], ['CI_NOT_GREEN', { ci: 'pending' }],
       ['REQUIRED_CHECK_MISSING', { checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'skipped' }] }], ['CHECKS_EMPTY', { checks: [] }],
-      ['NOT_RELEASE_BRANCH', { pr: { headRefName: 'feat/someone' } }], ['NOT_MERGEABLE', { pr: { mergeable: 'CONFLICTING' } }]]
+      ['NOT_RELEASE_BRANCH', { pr: { headRefName: 'feat/someone' } }], ['NOT_RELEASE_BRANCH', { pr: { headRefName: 'feat/magazine-release-writer-1124' } }], ['NOT_MERGEABLE', { pr: { mergeable: 'CONFLICTING' } }]]
     for (const [code, over] of want) assert(codes(j(over)).includes(code), `${code}: ${codes(j(over))}`)
   })
 
@@ -580,6 +580,15 @@ try {
     const r = await s.run(false)
     assert(r.outcome === 'DRY_RUN_ASSEMBLED' && r.release.members.length === 3, `${r.outcome} ${JSON.stringify(r.blockedBy)}`)
     assert(!existsSync(s.stateRoot) && s.remoteBranches().length === 0 && s.gh.prs.length === 0 && git(s.RT, 'worktree', 'list').split('\n').length === 1, '쓰기가 있었다')
+  })
+  await check('RE1b', '같은 접두의 개발 PR에는 열린 콘텐츠가 없으면 등록을 계속한다', async () => {
+    const s = sandbox(F, { release: 'draft', target: 1 })
+    s.putJob(ALL[0])
+    const branch = 'feat/magazine-release-writer-1124'
+    git(s.HELP, 'push', 'origin', `HEAD:refs/heads/${branch}`)
+    s.deps.listOpenMagazinePrs = () => ({ ok: true, prs: [{ number: 894, headRefName: branch, headRefOid: git(s.HELP, 'rev-parse', 'HEAD') }] })
+    const r = await s.run(false)
+    assert(r.outcome === 'DRY_RUN_ASSEMBLED' && r.occupied.openRelease === null && r.release.members.length === 1, r.outcome)
   })
   await check('RE2', 'Draft release(vnext/draft/1) — Draft PR 1 · merge 0 · 재실행은 대기(두 번째 PR 0) · 실제 원격 브랜치에 release commit', async () => {
     const s = sandbox(F, { release: 'draft', target: 1 }); for (const i of ALL) s.putJob(i)

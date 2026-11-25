@@ -31,7 +31,7 @@ export const isTerminalJournal = (j) => TERMINAL.has(j?.state)
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 const INTENT_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/
-const RELEASE_ID_RE = /^[0-9]{8}-[0-9a-f]{10}$/
+export const RELEASE_ID_RE = /^[0-9]{8}-[0-9a-f]{10}$/
 
 export class ReleaseWriteError extends Error {
   constructor(code, why) { super(`${code}: ${why}`); this.code = code; this.why = why }
