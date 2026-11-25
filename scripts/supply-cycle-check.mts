@@ -5,7 +5,8 @@
  * 재는 것 (정책 하나에 절 하나):
  *   ① 공급 회차는 바퀴마다 한 번, 그 바퀴의 수집 뒤 · 다음 바퀴의 수집 전에 뜬다 — 시각은 바퀴 표에서 계산된다
  *   ② 그 시각에 뜬 회차를 러너가 정기 회차로 판정한다 · 회차 창은 겹치지 않고 자정을 넘지 않는다
- *   ③ 아침 결정(controller)이 직전 공급 회차를 기다렸다가 판정할 예약을 갖고 있다
+ *   ③ 그날 결정(controller · 01:50)이 직전 공급 회차를 기다렸다가 판정할 예약을 갖고 있다 ·
+ *      결정 전 새벽 자리의 감사가 한 번 다시 돈 뒤에 결정한다
  *   ④ 예산은 남은 예산 ÷ 남은 회차다 — 회차 수가 바뀌어도 식이 그대로다
  *   ⑤ 새 시각표로 하루를 정상 운영한 장부는 비용 증거가 모름(COST_UNKNOWN)이 아니다 ·
  *      시각표를 바꾸기 전날의 장부도 그대로 읽힌다 · 손 실행 · 다른 회차 표식은 여전히 모름으로 닫힌다
@@ -17,7 +18,10 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { CYCLES, CYCLE_MINUTES, SUPPLY_AFTER_COLLECT_MINUTES, SUPPLY_CYCLE_MINUTES, cycleLabel } from '../src/lib/cycle-schedule'
+import {
+  CYCLES, CYCLE_MINUTES, HEARTBEAT_INTERVAL_MINUTES, STAGE_DECISION_BASE_MINUTE, SUPPLY_AFTER_COLLECT_MINUTES, SUPPLY_CYCLE_MINUTES, cycleLabel,
+} from '../src/lib/cycle-schedule'
+import { profileOf } from '../src/lib/scale-profile'
 import type { LedgerEntry } from '../src/lib/llm-ledger'
 import { judgeStageEvidence, type EvidenceSideSignals } from '../src/lib/stage-evidence'
 import { supplyCostContractOf } from '../src/lib/supply-cost-envelope'
@@ -30,6 +34,7 @@ import {
 import { partialPathOf, writeJsonlAtomic } from './lib/atomic-jsonl.mjs'
 import { ledgerPathOf } from './lib/llm-ledger-store.mjs'
 import { STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST, stageControllerLeaseDisposition, stageControllerSlots } from './lib/ops-loop-templates'
+import { auditRunnerSlots } from './lib/auto-ready-audit-template'
 import { readCostSignals } from './lib/ops-signals.mjs'
 
 let pass = 0
@@ -82,13 +87,13 @@ console.log('\n② 그 시각에 뜬 회차가 정기 회차다 · 창은 겹치
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 아침 결정은 직전 공급 회차를 기다렸다가 판정할 예약이 있다')
+console.log('\n③ 그날 결정은 직전 공급 회차를 기다렸다가 판정할 예약이 있다')
 // ─────────────────────────────────────────────────────────
 {
   const controller = stageControllerSlots().map((s) => s.hour * 60 + s.minute)
   const before = SLOT_MIN.filter((m) => m < STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST)
   const lastEnd = Math.max(...before) + WINDOW_MIN
-  check('결정 전 공급 회차가 있다(자정~아침 바퀴)', before.length > 0, before.map(cycleLabel).join(' '))
+  check('결정 전 공급 회차가 있다(자정 뒤 첫 바퀴)', before.length > 0, before.map(cycleLabel).join(' '))
   check('결정 전 마지막 공급 회차의 유료 창이 최종 결정 시각 전에 끝난다',
     lastEnd <= STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST, `${cycleLabel(lastEnd)} ≤ ${cycleLabel(STAGE_CONTROLLER_FINAL_DECISION_MINUTE_KST)}`)
   const retry = controller.filter((m) => m >= lastEnd && stageControllerLeaseDisposition('busy', at(DAY, m)) === 'defer')
@@ -96,6 +101,29 @@ console.log('\n③ 아침 결정은 직전 공급 회차를 기다렸다가 판�
     retry.length > 0, `창 끝 ${cycleLabel(lastEnd)} · 예약 ${controller.map(cycleLabel).join(' ')}`)
   check('공급이 도는 동안의 결정 예약은 미룬다(HOLD 아님)',
     controller.filter((m) => m < lastEnd).every((m) => stageControllerLeaseDisposition('busy', at(DAY, m)) === 'defer'))
+  /**
+   * 🔴 결정 기준(01:50)은 결정 전에 나간 새벽 자리의 감사가 **한 번 다시 돈 뒤**다 — 재시도 회차 + 한 틱 ≤ 기준.
+   *    재시도 가능 감사 실패 한 건은 그날 품질 신호를 나쁨으로 만든다(`qualitySignalOf`). 첫 감사가 제공사 일시 오류로
+   *    한 번 실패해도 재시도가 결정 전에 끝나야 그 한 번이 그날 단계를 굳히지 않는다. 자리는 정본(profileOf) · 감사는 정본 예약표.
+   */
+  {
+    const audits = auditRunnerSlots().map((s) => s.hour * 60 + s.minute)
+    const seen: string[] = []
+    const late: string[] = []
+    for (const st of ['d20', 'd30', 'd50'] as const) {
+      for (const m of profileOf(st).slots.map((s) => s.hour * 60 + s.minute).filter((x) => x < STAGE_DECISION_BASE_MINUTE)) {
+        const retry = audits.filter((a) => a > m)[1]
+        seen.push(`${st} ${cycleLabel(m)}`)
+        if (retry === undefined || retry + HEARTBEAT_INTERVAL_MINUTES > STAGE_DECISION_BASE_MINUTE) {
+          late.push(`${st} ${cycleLabel(m)} → 재시도 ${retry === undefined ? '없음' : cycleLabel(retry)}`)
+        }
+      }
+    }
+    check('결정 첫 예약 = 결정 기준(STAGE_DECISION_BASE_MINUTE) · 결정 전에 나가는 새벽 자리가 실제로 있다(관계가 헛돌지 않는다)',
+      controller[0] === STAGE_DECISION_BASE_MINUTE && seen.length > 0, seen.join(' · '))
+    check('🔴 결정 기준은 결정 전 새벽 자리(d20·d30·d50)의 감사 재시도 + 한 틱 뒤다 — 감사 한 번의 일시 실패가 그날 단계를 굳히지 않는다',
+      late.length === 0, late.join(' · '))
+  }
 }
 
 // ─────────────────────────────────────────────────────────

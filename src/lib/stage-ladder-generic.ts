@@ -2,7 +2,8 @@
  * 🔴 **D1 → D100 단계 부품 — 운영 사다리가 부른다** (2026-09-29 · 2026-09-30 source-slot-v1)
  *
  * 🔴 **무엇을 하나.** 운영 사다리(`stage-ladder.planStageDecision`)에 들어가는 계산만 준다. 상태 기계는 하나다.
- *      · 슬롯 파생(`deriveSlots`) — 운영 창 안 · heartbeat 격자 위 · 60분 안 댓글 회차 3번 이상
+ *      · 슬롯 계약(`verifyGenericProfile`) — 운영 창 안 · heartbeat 격자 위 · 60분 안 댓글 회차 3번 이상
+ *        (D20 이상 · d100 의 자리는 바퀴 비중 `cycleSlotsOf` 가 만든다)
  *      · 올라갈 칸의 관문(`judgeNextPreflight`) — **D3 부터 D100 까지 같은 한 함수**. 막는 것은 발행 구조와 Persona 하한뿐이다
  *      · 올림 관문(`preflightBlocks`) — 그 관문이 PASS 인가
  *
@@ -20,9 +21,9 @@
  * 🔴 순수 함수다 — DB · 파일 · env · 시각 조회 0. 러너 격자 · 댓글 예약표 · 비용 · 기회 사실은 호출부가 주입한다.
  */
 import {
-  RUNTIME_STAGES, MAX_DAILY_TARGET, HIGHEST_RUNTIME_STAGE,
-  minuteOfDay, slotLabel, kstMidnight, verifyProfile, isRuntimeStage, profileOf,
-  type RuntimeStage, type ScaleProfile, type Slot,
+  RUNTIME_STAGES, HIGHEST_RUNTIME_STAGE,
+  minuteOfDay, slotLabel, kstMidnight, verifyProfile, isRuntimeStage, profileOf, cycleSlotsOf,
+  type RuntimeStage, type ScaleProfile,
 } from './scale-profile'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_FIRST_COMMENT_WINDOW_MINUTES } from './persona-comment-auto-lane'
@@ -67,7 +68,7 @@ export function genericDailyTarget(s: GenericStage): number {
 }
 
 // ─────────────────────────────────────────────────────────
-// 🔴 슬롯 — 운영 창 안 · 러너 격자 위 · 댓글 예약표가 덮는 자리에서만 파생한다
+// 🔴 슬롯 — 운영 창 안 · 러너 격자 위 · 댓글 예약표가 덮는 자리만 유효하다
 // ─────────────────────────────────────────────────────────
 
 /**
@@ -84,14 +85,21 @@ export type RunnerGrid = {
   attempts: number
 }
 
-/** 🔴 발행 분 `m` 뒤 60분 안(초과 없음)에 도는 댓글 회차 수와 첫 대기 */
+const DAY_MINUTES = 24 * 60
+
+/**
+ * 🔴 발행 분 `m` 뒤 60분 안(초과 없음)에 도는 댓글 회차 수와 첫 대기.
+ *    댓글 예약표는 하루 반복이다 — 자정을 넘는 회차(다음 날 `c + 1440`)도 센다. 23:30 글의 00:07 · 00:27 회차가 그 글의 시도다.
+ */
 export function commentCoverageOf(m: number, grid: RunnerGrid): { runs: number; firstWait: number | null } {
-  const after = grid.commentSlots.map(minuteOfDay).filter((c) => c > m && c - m <= AUTO_FIRST_COMMENT_WINDOW_MINUTES)
+  const after = grid.commentSlots.map(minuteOfDay)
+    .flatMap((c) => [c, c + DAY_MINUTES])
+    .filter((c) => c > m && c - m <= AUTO_FIRST_COMMENT_WINDOW_MINUTES)
   return { runs: after.length, firstWait: after.length === 0 ? null : Math.min(...after) - m }
 }
 
 /**
- * 🔴 **발행해도 되는 분** — 운영 창(08:00~22:00) 안 · 격자 위 · 60분 안 댓글 시도가 `attempts` 번 이상.
+ * 🔴 **발행해도 되는 분** — 운영 창(`PUBLISH_WINDOW_*` · 하루 전체) 안 · 격자 위 · 60분 안 댓글 시도가 `attempts` 번 이상.
  *    이 목록의 길이 × 회차당 건수가 하루 발행 용량이다.
  */
 export function validPublishMinutes(grid: RunnerGrid): number[] {
@@ -108,44 +116,13 @@ export function publishCapacityOf(grid: RunnerGrid): number {
   return validPublishMinutes(grid).length * Math.max(0, grid.perRunMax)
 }
 
-export type SlotDerivation =
-  | { ok: true; slots: Slot[] }
-  | { ok: false; problems: string[] }
-
-/**
- * 🔴 **n 건을 유효 분 위에 고르게 편다** — 한 분에 한 건(count 1).
- *    `PER_RUN_MAX=1` 이라 한 슬롯이 두 건을 맡으면 그 둘째 건은 다음 틱으로 밀린다 — 그래서 겹치지 않는다.
- *    유효 분이 모자라면 **만들지 않는다**(부족을 늦은 슬롯·창 밖 슬롯으로 메우지 않는다).
- *    🔴 러너 프로필(`RUNTIME_PROFILES`)의 D20·D30·D50 슬롯은 이 함수의 결과를 그대로 적은 것이다 —
- *       검사가 둘을 대조한다.
- */
-export function deriveSlots(n: number, grid: RunnerGrid): SlotDerivation {
-  if (!Number.isInteger(n) || n < 1 || n > MAX_DAILY_TARGET) return { ok: false, problems: [`목표 ${n} — 1~${MAX_DAILY_TARGET} 정수`] }
-  const valid = validPublishMinutes(grid)
-  const cap = valid.length * Math.max(0, grid.perRunMax)
-  if (n > valid.length || n > cap) {
-    return {
-      ok: false,
-      problems: [`하루 ${n}건인데 유효 발행 분 ${valid.length}개 × 회차당 ${grid.perRunMax}건 = ${cap}건 — `
-        + `격자 ${grid.gridMinutes}분 · 첫 댓글 ${grid.attempts}회 시도 계약으로는 담을 수 없다`],
-    }
-  }
-  const idx = Array.from({ length: n }, (_, i) =>
-    n === 1 ? 0 : Math.round((i * (valid.length - 1)) / (n - 1)))
-  const slots = idx.map((k) => {
-    const m = valid[k]!
-    return { hour: Math.floor(m / 60), minute: m % 60, count: 1 }
-  })
-  return { ok: true, slots }
-}
-
 export type GenericProfile =
   | { ok: true; stage: GenericStage; profile: ScaleProfile; source: 'runtime' | 'derived' }
-  | { ok: false; stage: GenericStage; problems: string[] }
+  | { ok: false; stage: GenericStage; problems: readonly string[] }
 
 /**
  * 🔴 **단계 프로필.** d1~d50 은 러너 프로필(`profileOf`)을 **그대로** 돌려주되, 러너 격자 계약으로 다시 본다.
- *    d100 은 목표·슬롯을 파생한다 — 슬롯이 담기지 않으면 프로필이 없다.
+ *    d100 은 목표만 있다 — 자리는 D20 이상과 같은 바퀴 비중 슬롯(`cycleSlotsOf`)이고, 담기지 않으면 프로필이 없다.
  */
 export function genericProfileOf(stage: GenericStage, grid: RunnerGrid): GenericProfile {
   if (isRuntimeStage(stage)) {
@@ -154,7 +131,7 @@ export function genericProfileOf(stage: GenericStage, grid: RunnerGrid): Generic
     return problems.length > 0 ? { ok: false, stage, problems } : { ok: true, stage, profile, source: 'runtime' }
   }
   const n = genericDailyTarget(stage)
-  const d = deriveSlots(n, grid)
+  const d = cycleSlotsOf(n)
   if (!d.ok) return { ok: false, stage, problems: d.problems }
   const top = profileOf(HIGHEST_RUNTIME_STAGE)
   const profile: ScaleProfile = { dailyTarget: n, postsPerWeek: top.postsPerWeek, minDaysBetween: top.minDaysBetween, slots: d.slots }

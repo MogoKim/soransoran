@@ -155,8 +155,13 @@ export default async function PostDetailPage({
               <span className="font-bold text-brand-strong">{displayName(post.author)}</span>
               <span aria-hidden>·</span>
               <span>{formatRelativeTime(post.createdAt)}</span>
-              <span aria-hidden>·</span>
-              <span>조회 {post.viewCount}</span>
+              {/* 🔴 조회 0 은 감춘다(창업자 11-24) — 숫자를 만들지 않는다. 구분점도 같이 빠진다 */}
+              {post.viewCount > 0 ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span>조회 {post.viewCount}</span>
+                </>
+              ) : null}
             </p>
             {/* 🔴 sanitize 는 PostBody 안에서 한다 — 이 화면이 잊을 수 있는 일이 아니게. */}
             <PostBody content={post.content} className="mt-5" />

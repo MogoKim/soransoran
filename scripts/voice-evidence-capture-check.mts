@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  captureVoiceEvidence, evidenceRowProblems, memberKeyOf, readEvidenceSalt, rowsFromVoiceEvidence,
+  captureVoiceEvidence, evidenceRowProblems, memberKeyOf, parseEvidenceUntil, readEvidenceSalt, rowsFromVoiceEvidence,
   speakerHashOf, voiceEvidenceDataDir, type VoiceEvidenceRow,
 } from './lib/voice-evidence-capture.mjs'
 import { purgeVoiceEvidence } from './lib/voice-evidence-retention.mjs'
@@ -94,6 +94,28 @@ check('salt rotation blocks old evidence', readRotated.rows.length === 0 && read
 const oldRow: VoiceEvidenceRow = { ...row, capturedAt: '2026-07-01T00:00:00.000Z' }
 const readExpired = rowsFromVoiceEvidence([oldRow], { salt, members: { memberNames: [] }, now })
 check('90 day retention blocks expired evidence', readExpired.rows.length === 0 && readExpired.dropped.EXPIRED === 1)
+
+// ── 증거 시각 상한 — 계획 도구(persona:expansion)와 기록 도구(persona:reference-supplement-build)가 같은 판독기를 쓴다 ──
+const untilZ = parseEvidenceUntil('2026-10-14T12:00:00Z', now)
+check('evidence-until accepts a zoned ISO instant and normalizes it', untilZ.ok && untilZ.iso === '2026-10-14T12:00:00.000Z')
+const untilKst = parseEvidenceUntil('2026-10-14T21:00:00+09:00', now)
+check('evidence-until offset form normalizes to the same instant', untilKst.ok && untilKst.iso === '2026-10-14T12:00:00.000Z')
+check('evidence-until without a zone is refused', !parseEvidenceUntil('2026-10-14T12:00:00', now).ok)
+check('evidence-until date-only is refused', !parseEvidenceUntil('2026-10-14', now).ok)
+check('evidence-until in the future is refused', !parseEvidenceUntil('2026-10-15T00:00:00.001Z', now).ok)
+const noUntil = parseEvidenceUntil(null, now)
+check('no evidence-until means no bound', noUntil.ok && noUntil.until === null && noUntil.iso === null)
+const beforeBound: VoiceEvidenceRow = { ...row, articleId: '120', capturedAt: '2026-10-14T00:00:00.000Z' }
+const atBound: VoiceEvidenceRow = { ...row, articleId: '121', capturedAt: '2026-10-14T12:00:00.000Z' }
+const afterBound: VoiceEvidenceRow = { ...row, articleId: '122', capturedAt: '2026-10-14T12:00:00.001Z' }
+const bounded = rowsFromVoiceEvidence([beforeBound, atBound, afterBound], {
+  salt, members: { memberNames: [] }, now, until: untilZ.ok ? untilZ.until : null,
+})
+check('evidence-until keeps rows captured at or before the bound and drops later rows',
+  bounded.rows.length === 2 && bounded.dropped.AFTER_EVIDENCE_UNTIL === 1
+  && bounded.rows.every((value) => value.articleId !== '122'))
+const unbounded = rowsFromVoiceEvidence([beforeBound, atBound, afterBound], { salt, members: { memberNames: [] }, now })
+check('without evidence-until every unexpired row stays', unbounded.rows.length === 3 && unbounded.dropped.AFTER_EVIDENCE_UNTIL === 0)
 const readMalformed = rowsFromVoiceEvidence([{ ...row, rawAuthor: author }], {
   salt, members: { memberNames: [] }, now,
 })
@@ -129,6 +151,9 @@ const usable = readUsableVoiceEvidence({ dataDir: temp, salt, members: { memberN
 check('consumer gets only the same usable anonymous rows counted by status',
   usable.rows.length === usable.status.usableRows
   && usable.rows.every((value) => /^vs1:[0-9a-f]{64}$/.test(value.speakerId)))
+const usableBefore = readUsableVoiceEvidence({ dataDir: temp, salt, members: { memberNames: [] }, now, until: new Date('2026-10-01T00:00:00.000Z') })
+check('file reader passes the evidence upper bound through — later rows are not usable',
+  usableBefore.rows.length === 0 && usableBefore.status.usableRows === 0 && usableBefore.status.dropped.AFTER_EVIDENCE_UNTIL > 0)
 const dry = purgeVoiceEvidence({ dataDir: temp, now, execute: false })
 check('purge defaults to a write-free plan', !dry.executed && dry.totals.expired === 2 && dry.totals.malformed === 1
   && readFileSync(mixedPath, 'utf8').split('\n').filter(Boolean).length === 3)

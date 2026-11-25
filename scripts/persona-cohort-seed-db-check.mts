@@ -12,12 +12,12 @@
  *    "운영 active cadence 없음" 반례는 다른 검사의 cadence 있는 active 행이 0 일 때만 성립한다 —
  *    있으면 건너뛰지 않고 FAIL 한다(그 수를 함께 적는다).
  *
- *   ① dry-run → 현재 runnable D30 cohort 전원 seed · lifeStage · 파일 0
+ *   ① dry-run → 현재 runnable D50 cohort 전원 seed · lifeStage · 파일 0
  *   ② --write → 원자적 파일 · 권한 600 · cohort 전원 key · privacy · 같은 내용 재실행 no-op · 다른 내용 기존 파일 → 거부
  *   ②-b 🔴 기존 파일 권한 경계 — 같은 내용 0600 no-op · 같은 내용 0644 dry-run 거부 · --write 는 권한만 고침 ·
  *       다른 내용 0644 → 내용 · 권한 모두 그대로
- *   ③ 승인 D30 fixture SHA·카드·creative는 실제 CLI가 재검증하고,
- *      말투 세대(v1 → v2) 누락 · cadence 없음 → 파일 0
+ *   ③ 승인 D50 fixture SHA·카드·creative는 실제 CLI가 재검증하고,
+ *      말투 세대(v1 → v2 → v3) 의 기준선 누락 · target 누락 · cadence 없음 → 파일 0
  *   🔴 모든 회차 DB write 0 · provider 요청 0
  */
 import { spawnSync } from 'node:child_process'
@@ -72,15 +72,15 @@ async function cleanup(): Promise<void> {
   await prisma.user.deleteMany({ where: { name: { startsWith: NAME_PREFIX }, accounts: { none: {} } } })
 }
 
-const COHORT = 'wave7-d30'
+const COHORT = 'wave8-d50'
 const CODES = COHORTS[COHORT].codes
 const pool = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
 const card = (c: string) => pool.cards.find((x) => x.code === c)!
 const expansionRef = COHORT_EXPANSION_FIXTURES[COHORT]!
 const expansionRaw = readFileSync(join(REPO, expansionRef.path), 'utf-8')
-if (sha256Hex(expansionRaw) !== expansionRef.sha256) throw new Error('D30 승인 fixture SHA가 manifest와 다르다')
+if (sha256Hex(expansionRaw) !== expansionRef.sha256) throw new Error('D50 승인 fixture SHA가 manifest와 다르다')
 const expansionParsed = parseExpansionFixture(expansionRaw)
-if (!('fixture' in expansionParsed)) throw new Error(`D30 승인 fixture 판독 실패: ${expansionParsed.problems.join(' / ')}`)
+if (!('fixture' in expansionParsed)) throw new Error(`D50 승인 fixture 판독 실패: ${expansionParsed.problems.join(' / ')}`)
 const GOOD: Record<string, PersonaCreative> = Object.fromEntries(
   expansionParsed.fixture.candidates.map((candidate) => [candidate.code, candidate.creative]),
 )
@@ -88,28 +88,39 @@ const GOOD: Record<string, PersonaCreative> = Object.fromEntries(
 const T = mkdtempSync(join(tmpdir(), 'soran-cohort-seed-'))
 const HOME_OK = join(T, 'home-ok')
 const HOME_THIN = join(T, 'home-thin')
-const HOME_NO_V1 = join(T, 'home-no-v1')
-const HOME_NO_V2 = join(T, 'home-no-v2')
-mkdirSync(HOME_OK); mkdirSync(HOME_THIN); mkdirSync(HOME_NO_V1); mkdirSync(HOME_NO_V2)
+const HOME_NO_BASELINE = join(T, 'home-no-v2')
+const HOME_NO_TARGET = join(T, 'home-no-v3')
+mkdirSync(HOME_OK); mkdirSync(HOME_THIN); mkdirSync(HOME_NO_BASELINE); mkdirSync(HOME_NO_TARGET)
 const BASE_CODES = PRODUCTION_PERSONA_CODES.slice(0, 30)
 const V1_CODES = COHORTS['wave6-d20-canary'].codes
+const V2_CODES = COHORTS['wave7-d30'].codes
 const asset = writeFakePersonaAsset({ home: HOME_OK, speakers: BASE_CODES.length })
-// 🔴 보충 세대가 둘 다 없으면 canonical fallback은 base30뿐이라
+// 🔴 보충 세대가 하나도 없으면 canonical fallback은 base30뿐이라
 // 기존 wave6 기준선부터 닫힌다. 화자 수를 늘려도 세대 snapshot을 대신할 수 없다.
 writeFakePersonaAsset({ home: HOME_THIN, speakers: BASE_CODES.length })
-const assetNoV1 = writeFakePersonaAsset({ home: HOME_NO_V1, speakers: BASE_CODES.length })
-const assetNoV2 = writeFakePersonaAsset({ home: HOME_NO_V2, speakers: BASE_CODES.length })
+const assetNoBaseline = writeFakePersonaAsset({ home: HOME_NO_BASELINE, speakers: BASE_CODES.length })
+const assetNoTarget = writeFakePersonaAsset({ home: HOME_NO_TARGET, speakers: BASE_CODES.length })
 const assetRows = (JSON.parse(readFileSync(asset.corpus, 'utf-8')) as { comments: { speakerId: string; content: string }[] }).comments
 const assetManifest = JSON.parse(readFileSync(asset.manifest, 'utf-8')) as { sourceDigest: string }
-// 현재 운영과 같은 세대 계약: canonical base30 → 동결 v1(+10) → active v2(+20).
+// 현재 운영과 같은 세대 계약: canonical base30 → 동결 v1(+10) → 동결 v2(+20) → active v3(+43).
 // 임시 HOME의 합성 행만 쓰고 운영 자산은 읽지 않는다.
 const { planSupplementSnapshot } = await import('./lib/persona-reference-supplement-plan.mjs')
 const canonRows = assetRows.map((row) => ({ speakerId: row.speakerId, text: row.content }))
-const extraRows = (prefix: string, codes: readonly string[]) => codes.flatMap((_, speakerIndex) => [
-  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 차분히 읽어 보니 마음이 놓이네요 (${prefix})` },
-  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 무리하지 말고 천천히 쉬어 가세요 (${prefix})` },
-  { speakerId: `${prefix}-extra-${speakerIndex}`, text: `${speakerIndex + 1}번째 말벗처럼 서두르지 않아도 괜찮으니 편하게 나눠요 (${prefix})` },
-])
+// 🔴 보충 화자는 길이 밴드를 섞는다(보통 · 짧게 · 길게 차례) — 한 밴드가 묶음의 70% 를 넘는 합성 cohort 는
+//    기록이 판정과 같은 코드(BATCH_MONOCULTURE)로 막는다(2026-11-23 · voiceBand 상한). 실제 wave6 · wave7 도 섞여 있었다.
+const SAYINGS = [
+  ['차분히 읽어 보니 마음이 놓이네요', '마음이 놓이네요'],
+  ['무리하지 말고 천천히 쉬어 가세요', '천천히 쉬어 가세요'],
+  ['서두르지 않아도 괜찮으니 편하게 나눠요', '편하게 나눠요'],
+] as const
+const extraRows = (prefix: string, codes: readonly string[]) => codes.flatMap((_, speakerIndex) => SAYINGS.map(([body, short]) => ({
+  speakerId: `${prefix}-extra-${speakerIndex}`,
+  text: [
+    `${speakerIndex + 1}번째 말벗처럼 ${body} (${prefix})`,
+    `${speakerIndex + 1}번째 ${short} (${prefix})`,
+    `${speakerIndex + 1}번째 말벗처럼 ${body} ${'정말 그렇네요 '.repeat(5).trim()} (${prefix})`,
+  ][speakerIndex % 3]!,
+})))
 const supplementV1 = planSupplementSnapshot({
   canonRows,
   extraRows: extraRows('v1', V1_CODES),
@@ -123,9 +134,9 @@ const supplementV1 = planSupplementSnapshot({
 if (!supplementV1.ok) throw new Error(`합성 v1 snapshot 계획 실패: ${supplementV1.problems.join(' / ')}`)
 const supplementV2 = planSupplementSnapshot({
   canonRows,
-  extraRows: extraRows('v2', CODES),
+  extraRows: extraRows('v2', V2_CODES),
   baseCodes: BASE_CODES,
-  newCodes: CODES,
+  newCodes: V2_CODES,
   frozenBundles: supplementV1.asset.bundles,
   baseSourceDigest: assetManifest.sourceDigest,
   saltId: 'd'.repeat(12),
@@ -133,16 +144,31 @@ const supplementV2 = planSupplementSnapshot({
   reason: 'fixture generation two',
 })
 if (!supplementV2.ok) throw new Error(`합성 v2 snapshot 계획 실패: ${supplementV2.problems.join(' / ')}`)
-writeFileSync(join(asset.dir, 'supplement-v1.json'), supplementV1.assetText, { mode: 0o600 })
-writeFileSync(join(asset.dir, 'supplement-v1-manifest.json'), supplementV1.manifestText, { mode: 0o600 })
-writeFileSync(join(asset.dir, 'supplement-v2.json'), supplementV2.assetText, { mode: 0o600 })
-writeFileSync(join(asset.dir, 'supplement-v2-manifest.json'), supplementV2.manifestText, { mode: 0o600 })
-// 🔴 세대별 누락을 각각 재현한다. 둘 다 없는 HOME_THIN 하나로는
-// v1 baseline 누락과 v2 target 누락을 구분해 검증할 수 없다.
-writeFileSync(join(assetNoV1.dir, 'supplement-v2.json'), supplementV2.assetText, { mode: 0o600 })
-writeFileSync(join(assetNoV1.dir, 'supplement-v2-manifest.json'), supplementV2.manifestText, { mode: 0o600 })
-writeFileSync(join(assetNoV2.dir, 'supplement-v1.json'), supplementV1.assetText, { mode: 0o600 })
-writeFileSync(join(assetNoV2.dir, 'supplement-v1-manifest.json'), supplementV1.manifestText, { mode: 0o600 })
+const supplementV3 = planSupplementSnapshot({
+  canonRows,
+  extraRows: extraRows('v3', CODES),
+  baseCodes: BASE_CODES,
+  newCodes: CODES,
+  frozenBundles: supplementV2.asset.bundles,
+  baseSourceDigest: assetManifest.sourceDigest,
+  saltId: 'e'.repeat(12),
+  generatedAt: '2026-11-23T00:00:00.000Z',
+  reason: 'fixture generation three',
+})
+if (!supplementV3.ok) throw new Error(`합성 v3 snapshot 계획 실패: ${supplementV3.problems.join(' / ')}`)
+const writeGeneration = (dir: string, generation: number, plan: { assetText: string; manifestText: string }): void => {
+  writeFileSync(join(dir, `supplement-v${generation}.json`), plan.assetText, { mode: 0o600 })
+  writeFileSync(join(dir, `supplement-v${generation}-manifest.json`), plan.manifestText, { mode: 0o600 })
+}
+writeGeneration(asset.dir, 1, supplementV1)
+writeGeneration(asset.dir, 2, supplementV2)
+writeGeneration(asset.dir, 3, supplementV3)
+// 🔴 세대별 누락을 각각 재현한다. 하나도 없는 HOME_THIN 하나로는
+// v2 baseline 누락(v1 · v3 만 있음)과 v3 target 누락(v1 · v2 만 있음)을 구분해 검증할 수 없다.
+writeGeneration(assetNoBaseline.dir, 1, supplementV1)
+writeGeneration(assetNoBaseline.dir, 3, supplementV3)
+writeGeneration(assetNoTarget.dir, 1, supplementV1)
+writeGeneration(assetNoTarget.dir, 2, supplementV2)
 // 🔴 임시 cwd — 출력 `tmp/` 가 저장소에 생기지 않는다. 정본 Pool 문서만 그대로 연결한다
 const CWD = join(T, 'cwd')
 mkdirSync(join(CWD, 'docs'), { recursive: true })
@@ -240,9 +266,9 @@ try {
   bad('반례 6a — 승인 fixture SHA 불일치', cli(['--write']), 'CREATIVE_SHA_MISMATCH')
   rmSync(CWD_EXPANSION_FIXTURE)
   symlinkSync(join(REPO, expansionRef.path), CWD_EXPANSION_FIXTURE)
-  bad('반례 6b — 말투 v1 baseline 누락(v2만 있음)', cli(['--write'], HOME_NO_V1), 'VOICE_BASELINE_MISSING')
-  bad('반례 6c — 말투 v2 target 누락(v1만 있음)', cli(['--write'], HOME_NO_V2), 'VOICE_BUNDLE_MISSING')
-  bad('반례 6d — 말투 v1·v2 모두 누락(합성 자산만 있음)', cli(['--write'], HOME_THIN), 'VOICE_BASELINE_MISSING')
+  bad('반례 6b — 말투 v2 baseline 누락(v1 · v3 만 있음)', cli(['--write'], HOME_NO_BASELINE), 'VOICE_BASELINE_MISSING')
+  bad('반례 6c — 말투 v3 target 누락(v1 · v2 만 있음)', cli(['--write'], HOME_NO_TARGET), 'VOICE_BUNDLE_MISSING')
+  bad('반례 6d — 말투 세대 모두 누락(합성 자산만 있음)', cli(['--write'], HOME_THIN), 'VOICE_BASELINE_MISSING')
   const mineOnly = { user: { name: { startsWith: NAME_PREFIX } } }
   await prisma.persona.updateMany({ where: mineOnly, data: { status: 'paused' } })
   const foreign = await prisma.persona.count({ where: { status: 'active', dailyCap: { not: null }, weeklyCap: { not: null }, silenceRate: { not: null } } })

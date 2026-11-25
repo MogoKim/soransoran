@@ -75,15 +75,17 @@ const hb = renderPublishHeartbeatPlist(INPUT)
 const wakes = heartbeatWakeTimes()
 {
   check('🔴 간격은 10분이다', HEARTBEAT_INTERVAL_MINUTES === 10)
-  check('🔴 깨우는 시각 85개 — 08:00 부터 22:00 까지', wakes.length === 85
+  // 🔴 (2026-11-23) 하루 전체 — 00:00 부터 마지막 틱 23:50 까지 144개(옛 08:00~22:00 85개)
+  check('🔴 깨우는 시각 144개 — 00:00 부터 23:50 까지(하루 전체 창)', wakes.length === 144
+    && minuteOfDay(wakes[0]!) === 0 && minuteOfDay(wakes.at(-1)!) === 23 * 60 + 50
     && minuteOfDay(wakes[0]!) === PUBLISH_WINDOW_START_MINUTE && minuteOfDay(wakes.at(-1)!) === PUBLISH_WINDOW_END_MINUTE)
   check('🔴 격자 판정 문제 0 — 10분 간격 · 슬롯 전부 격자 위 · 창 안', verifyHeartbeatGrid(wakes).length === 0, verifyHeartbeatGrid(wakes).join(' / '))
   check('🔴 정시 슬롯 10개가 전부 heartbeat 시각이다(지연 0)',
     publishRunnerSlots().every((s) => wakes.some((w) => minuteOfDay(w) === minuteOfDay(s))))
   check('🔴 [반례] 슬롯 하나가 격자에서 빠지면 잡는다',
     verifyHeartbeatGrid(wakes.filter((w) => minuteOfDay(w) !== 9 * 60 + 30)).some((p) => p.includes('09:30')))
-  check('🔴 [반례] 창 밖 시각을 넣으면 잡는다',
-    verifyHeartbeatGrid([...wakes, { hour: 22, minute: 10, count: 0 }]).length > 0)
+  check('🔴 [반례] 창 밖 시각(마지막 틱 23:50 뒤)을 넣으면 창 판정이 잡는다',
+    verifyHeartbeatGrid([...wakes, { hour: 23, minute: 55, count: 0 }]).some((p) => p.includes('운영 창 밖')))
   check('🔴 heartbeat 인자 = 정시판 인자 + --heartbeat 하나',
     PUBLISH_HEARTBEAT_ARGS.join(' ') === `${PUBLISH_RUNNER_ARGS.join(' ')} ${HEARTBEAT_FLAG}`)
   check('🔴 시험용 틱 디렉터리 인자는 운영 인자에 없다', !PUBLISH_HEARTBEAT_ARGS.some((a) => a.startsWith('--heartbeat-tick-dir')))
@@ -152,16 +154,22 @@ console.log('\n④ 절전 뒤 catch-up — 같은 KST 날짜 · 운영 창 안�
   check('🔴 d10 — 15:07 wake 부터 한 틱에 1건씩 메운다(한 번에 쏟지 않는다)',
     sim.perTrigger.every((t) => t.allowed <= 1) && pubs.slice(0, 6).join(',') === '08:10,15:07,15:10,15:20,15:30,15:40', pubs.join(','))
   check('🔴 d10 — 창이 끝나기 전에 하루 10건을 다 채운다', sim.published === 10, String(sim.published))
-  // 18:00 부터 절전(17:30 까지 8건) · 23:40 wake → 창 밖이라 0 · 다음 날 07:55 wake 도 0 · 08:10 에 그날 몫 1건만
-  const d1 = simulateDay({ stage: 'd10', trigger: 'local', arrivals: [...wakes.map((w) => minuteOfDay(w)).filter((m) => m < 18 * 60).map((m) => at(DAY, m)), at(DAY, 23 * 60 + 40)] })
+  // 18:00 부터 절전(17:30 까지 8건) · 23:55 wake → 마지막 틱(23:50) 뒤라 0 · 23:40 wake 는 창 안이라 밀린 것 1건
+  const before = wakes.map((w) => minuteOfDay(w)).filter((m) => m < 18 * 60).map((m) => at(DAY, m))
+  const d1 = simulateDay({ stage: 'd10', trigger: 'local', arrivals: [...before, at(DAY, 23 * 60 + 55)] })
   const late = d1.perTrigger.at(-1)!
-  check('🔴 22:00 넘어 깬 wake 는 밀린 것을 메우지 않는다', late.atKst === '23:40' && late.allowed === 0 && d1.published === 8, `${late.atKst}/${late.allowed}/${d1.published}`)
-  const next = simulateDay({ stage: 'd10', trigger: 'local', arrivals: [K('2026-10-02T07:55:00'), K('2026-10-02T08:10:00'), K('2026-10-02T08:20:00')] })
-  check('🔴 다음 날 — 전날 backlog 를 가져오지 않는다(07:55 0 · 08:10 1 · 08:20 0)',
-    next.perTrigger.map((t) => t.allowed).join(',') === '0,1,0', next.perTrigger.map((t) => `${t.atKst}:${t.allowed}`).join(','))
-  check('🔴 창 밖 판정 — 07:59 · 22:01 은 밖 · 08:00 · 22:00 은 안',
-    !heartbeatInWindow(K('2026-10-01T07:59:00')) && !heartbeatInWindow(K('2026-10-01T22:01:00'))
-    && heartbeatInWindow(K('2026-10-01T08:00:00')) && heartbeatInWindow(K('2026-10-01T22:00:00')))
+  const inLate = simulateDay({ stage: 'd10', trigger: 'local', arrivals: [...before, at(DAY, 23 * 60 + 40)] }).perTrigger.at(-1)!
+  check('🔴 마지막 틱(23:50) 넘어 깬 wake 는 밀린 것을 메우지 않는다 · 23:40 wake 는 창 안이라 1건 메운다',
+    late.atKst === '23:55' && late.allowed === 0 && d1.published === 8 && inLate.atKst === '23:40' && inLate.allowed === 1,
+    `${late.atKst}/${late.allowed}/${d1.published} · ${inLate.atKst}/${inLate.allowed}`)
+  // 🔴 하루 경계는 자정 — 다음 날 00:00 틱이 전날 backlog 를 가져오지 않는다
+  const next = simulateDay({ stage: 'd10', trigger: 'local', arrivals: [K('2026-10-02T00:00:00'), K('2026-10-02T07:55:00'), K('2026-10-02T08:10:00'), K('2026-10-02T08:20:00')] })
+  check('🔴 다음 날 — 전날 backlog 를 가져오지 않는다(00:00 0 · 07:55 0 · 08:10 1 · 08:20 0)',
+    next.perTrigger.map((t) => t.allowed).join(',') === '0,0,1,0', next.perTrigger.map((t) => `${t.atKst}:${t.allowed}`).join(','))
+  check('🔴 창 밖 판정 — 23:51 · 23:59 은 밖 · 00:00 · 07:59 · 22:01 · 23:50 은 안',
+    !heartbeatInWindow(K('2026-10-01T23:51:00')) && !heartbeatInWindow(K('2026-10-01T23:59:00'))
+    && heartbeatInWindow(K('2026-10-01T00:00:00')) && heartbeatInWindow(K('2026-10-01T07:59:00'))
+    && heartbeatInWindow(K('2026-10-01T22:01:00')) && heartbeatInWindow(K('2026-10-01T23:50:00')))
 }
 
 // ─────────────────────────────────────────────────────────

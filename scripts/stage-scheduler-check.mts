@@ -6,7 +6,7 @@
  *
  *   ① 단계 목록 · 목표 — 러너 단계 d1~d50 · d100 은 표현만 · 목표는 창업자 계획(`d100Plan`)과 같다
  *   ② (2026-09-30) 승인 천장 env 는 없다 — 러너 단계 해석만 남는다(d100 은 러너 밖)
- *   ③ 슬롯 · 러너 — 08:00~22:00 · heartbeat 격자 · 60분 안 댓글 3회(43회 · 간격 ≤20분) · 하루 시뮬레이션
+ *   ③ 슬롯 · 러너 — 하루 전체 창 · heartbeat 격자 · 60분 안 댓글 3회(72회 · 자정 포함 간격 ≤20분) · 바퀴 비중 자리 · 하루 시뮬레이션
  *   ④ preflight(D3~D100 한 함수) — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona canary 하한 · 비용 상한 · 러너
  *   ⑤ 상태 기계 — **운영 `decideStage` 를 여러 날 돌린다**(저장 계약 · 증거 판정 · consumer 까지 한 줄로)
  *   ⑥ 러너 연결 — consumer env(결정 그대로 · canary 없음) → `resolveScale` · catch-up · 증명일 · 발행 천장
@@ -24,15 +24,16 @@ import { join } from 'node:path'
 
 import {
   GENERIC_STAGES, genericNextStage, genericDailyTarget, HIGHEST_RUNTIME_STAGE,
-  validPublishMinutes, publishCapacityOf, deriveSlots, genericProfileOf, verifyGenericProfile, commentCoverageOf,
+  validPublishMinutes, publishCapacityOf, genericProfileOf, verifyGenericProfile, commentCoverageOf,
   judgeNextPreflight, readyCapacityOf, preflightBlocks,
   type PreflightFacts, type ReadyCohortFact, type GenericStage, type PreflightVerdict,
 } from '../src/lib/stage-ladder-generic'
 import {
   PROFILES, RELEASE_STAGES, RUNTIME_STAGES, RUNTIME_PROFILES, resolveRuntimeStage, minuteOfDay, profileOf,
-  stageRank, isRuntimeStage, CAPACITY_ENV, RELEASE_ENV,
+  stageRank, isRuntimeStage, CAPACITY_ENV, RELEASE_ENV, cycleSlotsOf,
   type RuntimeStage,
 } from '../src/lib/scale-profile'
+import { CYCLES, cycleLabel, cyclePublishWindow, cycleQuotas } from '../src/lib/cycle-schedule'
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, simulateDay } from '../src/lib/publish-slot-catchup'
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import {
@@ -135,7 +136,7 @@ check('🔴 🔴 **천장 해석(resolveCeiling) · D20 전용 관문(needsExten
 check('capacity 칸 = 다음 증명 단계 — d10 → d20 · d50 → d50(맨 위)', preparedStageOf('d10') === 'd20' && preparedStageOf('d50') === 'd50')
 
 // ─────────────────────────────────────────────────────────
-section('③ 슬롯 · 러너 — 08:00~22:00 · 격자 · 첫 댓글')
+section('③ 슬롯 · 러너 — 하루 전체 창 · 격자 · 첫 댓글 · 바퀴 비중 자리')
 const valid = validPublishMinutes(GRID)
 const cap = publishCapacityOf(GRID)
 console.log(`   유효 발행 분 ${valid.length}개 (격자 ${GRID.gridMinutes}분 · 회차당 ${GRID.perRunMax}건 · 댓글 회차 ${GRID.commentSlots.length}개 · 시도 ${GRID.attempts}회) → 하루 용량 ${cap}건`)
@@ -151,9 +152,20 @@ console.log(`   유효 발행 분 ${valid.length}개 (격자 ${GRID.gridMinutes}
     COMMENT_RUNNER_SLOTS.every((x) => x.minute % 20 === 7) && perHour.every((n) => n === 3)
     && mins.includes(8 * 60 + 7), perHour.join(','))
 }
-check('유효 발행 분은 전부 창(08:00~22:00) 안 · 격자 위 · 60분 안 댓글 3회',
+// 🔴 (2026-11-23) 발행 창은 하루 전체 — 00:00 부터 마지막 10분 틱(23:50)까지. 자정을 넘는 댓글 회차까지 세면 모든 틱이 유효하다
+check(`🔴 운영 창 = 하루 전체(${cycleLabel(PUBLISH_WINDOW_START_MINUTE)}~${cycleLabel(PUBLISH_WINDOW_END_MINUTE)}) · 유효 발행 분 = 그 창의 10분 틱 전부 ${valid.length}개`,
+  PUBLISH_WINDOW_START_MINUTE === 0 && PUBLISH_WINDOW_END_MINUTE === 24 * 60 - GRID.gridMinutes
+  && valid.length === 24 * 60 / GRID.gridMinutes && valid[0] === 0 && valid.at(-1) === PUBLISH_WINDOW_END_MINUTE
+  && cap === valid.length * GRID.perRunMax)
+check('유효 발행 분은 전부 창 안 · 격자 위 · 60분 안 댓글 3회',
   valid.every((m) => m >= PUBLISH_WINDOW_START_MINUTE && m <= PUBLISH_WINDOW_END_MINUTE && m % GRID.gridMinutes === 0
     && commentCoverageOf(m, GRID).runs >= GRID.attempts))
+// 🔴 R1 — 댓글 덮개는 자정을 넘는 회차(다음 날 :07 · :27)도 센다. 23:30 · 23:50 자리가 시도 3회를 채운다
+for (const m of [23 * 60 + 30, 23 * 60 + 50]) {
+  const c = commentCoverageOf(m, GRID)
+  check(`🔴 ${cycleLabel(m)} 자리 — 60분 안 댓글 시도 ${c.runs}회 = ${GRID.attempts}회 (자정 넘는 회차 포함 · 첫 대기 ${c.firstWait}분)`,
+    c.runs === GRID.attempts && c.firstWait !== null && c.firstWait <= COMMENT_RUNNER_MAX_GAP_MINUTES)
+}
 for (const s of RUNTIME_STAGES) {
   const p = profileOf(s)
   const probs = verifyGenericProfile(p, GRID)
@@ -161,7 +173,7 @@ for (const s of RUNTIME_STAGES) {
   const waits = mins.map((m) => commentCoverageOf(m, GRID).firstWait ?? 999)
   check(`${s} (${p.dailyTarget}/day) — 창 · 격자 · 시도 3회 · 한 분 한 건 · 첫 댓글 대기 최대 ${Math.max(...waits)}분 ≤ 20`,
     probs.length === 0 && Math.max(...waits) <= 20 && p.slots.every((x) => x.count === 1), probs.join(' / '))
-  // 🔴 하루 시뮬레이션 — 10분 heartbeat 가 08:00~22:00 에 오면 목표를 정확히 채우고 넘지 않는다
+  // 🔴 하루 시뮬레이션 — 10분 heartbeat 가 운영 창 내내 오면 목표를 정확히 채우고 넘지 않는다
   const arrivals: Date[] = []
   for (let m = PUBLISH_WINDOW_START_MINUTE; m <= PUBLISH_WINDOW_END_MINUTE; m += GRID.gridMinutes) {
     arrivals.push(new Date(Date.parse(`${D0}T00:00:00+09:00`) + m * 60_000))
@@ -170,23 +182,36 @@ for (const s of RUNTIME_STAGES) {
   check(`${s} — heartbeat 하루 시뮬레이션 ${sim.published}/${sim.target}건 (넘지 않는다)`, sim.published === sim.target && sim.meetsTarget)
 }
 for (const s of ['d20', 'd30', 'd50'] as const) {
-  const d = deriveSlots(genericDailyTarget(s), GRID)
-  check(`🔴 ${s} 러너 프로필 슬롯 = deriveSlots 결과 그대로(손으로 고치지 않았다)`,
+  const d = cycleSlotsOf(genericDailyTarget(s))
+  check(`🔴 ${s} 러너 프로필 슬롯 = 바퀴 비중 자리(cycleSlotsOf) 그대로 — 숫자는 바퀴 표 한 곳`,
     d.ok && JSON.stringify(d.slots) === JSON.stringify(profileOf(s).slots))
+  // 🔴 바퀴마다 몫(cycleQuotas)만큼 · 그 바퀴의 공개 창 안 — 22:20 바퀴의 자정 넘는 자리는 다음 날 앞자리로 감긴다
+  const mins = profileOf(s).slots.map(minuteOfDay)
+  const quotas = cycleQuotas(genericDailyTarget(s))
+  const perCycle = CYCLES.map((_, i) => {
+    const w = cyclePublishWindow(i)!
+    return mins.filter((m) => (m >= w.start && m < w.end) || (m + 24 * 60 >= w.start && m + 24 * 60 < w.end)).length
+  })
+  check(`🔴 ${s} 바퀴별 자리 = 바퀴 몫 [${perCycle.join(',')}] · 각 자리가 그 바퀴 공개 창 안`,
+    JSON.stringify(perCycle) === JSON.stringify(quotas) && perCycle.reduce((a, b) => a + b, 0) === mins.length)
   check(`${s} Persona 간격은 d10 운영값 그대로`, profileOf(s).postsPerWeek === PROFILES.d10.postsPerWeek
     && profileOf(s).minDaysBetween === PROFILES.d10.minDaysBetween)
 }
 check('🔴 GitHub 예약 합집합은 d1~d10 그대로 10회 — D20 이상은 로컬 heartbeat 격자로 돈다(yml 불변)', allStageCronLines().length === 10)
 const g100 = genericProfileOf('d100', GRID)
-check(`🔴 [blocker 실측] d100 은 지금 러너로 담을 수 없다 — 용량 ${cap} < 100`, !g100.ok && cap < 100)
-// 🔴 댓글 회차가 끊긴 격자(옛 08:07~22:00 창)에서는 22시에 가까운 슬롯이 시도 3회가 안 된다 — 시도 계약은 그대로 막는다
+// 🔴 d100 을 막는 것은 용량(144 ≥ 100)이 아니라 바퀴 몫 — 짧은 바퀴의 공개 창 틱 수보다 몫이 크다(D100 일)
+check(`🔴 [blocker 실측] d100 은 지금 러너로 담을 수 없다 — 바퀴 몫 > 그 바퀴 틱 (용량 ${cap} ≥ 100 이라 용량 부족은 아니다)`,
+  !g100.ok && g100.problems.some((p) => p.includes('바퀴 몫')) && cap >= 100,
+  g100.ok ? '' : g100.problems.join(' / '))
+// 🔴 댓글 회차가 끊긴 격자(옛 08:07~22:00 창)에서는 22시에 가까운 슬롯이 시도 3회가 안 된다 — 자정을 감아 세도 그대로 막는다
 check('반례 — 댓글 회차가 22시에 끝나는 격자에서 21:40 슬롯은 시도 3회가 안 돼 계약 위반', verifyGenericProfile({
   dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 21, minute: 40, count: 1 }],
-}, { ...GRID, commentSlots: GRID.commentSlots.filter((c) => minuteOfDay(c) <= PUBLISH_WINDOW_END_MINUTE) }).some((p) => p.includes('댓글 시도')))
+}, { ...GRID, commentSlots: GRID.commentSlots.filter((c) => minuteOfDay(c) >= 8 * 60 && minuteOfDay(c) <= 22 * 60) })
+  .some((p) => p.includes('댓글 시도')))
 check('반례 — 격자 밖 분(09:35)은 계약 위반', verifyGenericProfile({
   dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 9, minute: 35, count: 1 }],
 }, GRID).some((p) => p.includes('격자')))
-check('반례 — 목표 0 · 101 · 소수는 만들지 않는다', !deriveSlots(0, GRID).ok && !deriveSlots(101, GRID).ok && !deriveSlots(2.5, GRID).ok)
+check('반례 — 목표 0 · 101 · 소수는 만들지 않는다', !cycleSlotsOf(0).ok && !cycleSlotsOf(101).ok && !cycleSlotsOf(2.5).ok)
 
 // ─────────────────────────────────────────────────────────
 section('④ preflight — slot-valid 기회 · 처리량 · 지연 · 계약 유효 Persona · 비용 상한 · 러너')
@@ -573,9 +598,9 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
   check('🔴 11-17 경계 — $0.060 × 30 = $1.80 PASS · $0.060001 FAIL',
     !edgePass.warnings.includes('SUPPLY_COST_SHORT') && edgeFail.warnings.includes('SUPPLY_COST_SHORT'))
 }
-check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 승인 천장 $0.50',
+check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 코드 천장 $0.90',
   supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
-  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.5)
+  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.9)
 check('🔴 저예산 천장은 날짜 계약의 분수 칸(5/7)만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
   supplyCostProofBudgetUsd('2026-11-05', 1.19) === 1.19 * 5 / 7
   && judgeNextPreflight('d20', factsFor('d20', {
@@ -637,8 +662,9 @@ for (const s of ['d3', 'd5', 'd10', 'd20', 'd30', 'd50'] as const) {
 }
 const pf100 = judgeNextPreflight('d100', factsFor('d100'), GRID)
 console.log(`   d100: ${pf100.verdict} [${pf100.codes.join(',')}] · 댓글 감당 ${pf100.counts.commentAffordable}건/day`)
-check('🔴 [blocker 실측] d100 — 상한을 D20까지만 열어도 발행 용량·슬롯이 부족해 자동 통과하지 않는다',
-  pf100.verdict === 'FAIL' && pf100.codes.includes('PUBLISH_CAPACITY_SHORT') && pf100.codes.includes('SLOTS_INFEASIBLE'))
+check('🔴 [blocker 실측] d100 — 바퀴 몫이 짧은 바퀴의 틱에 담기지 않아(SLOTS_INFEASIBLE) 자동 통과하지 않는다 · 하루 용량(144)은 모자라지 않다',
+  pf100.verdict === 'FAIL' && pf100.codes.includes('SLOTS_INFEASIBLE') && !pf100.codes.includes('PUBLISH_CAPACITY_SHORT'),
+  `[${pf100.codes.join(',')}] 용량 ${String(pf100.counts.publishCapacity)}`)
 /**
  * 🔴 **세 갈래** (PR1b · 2026-11-06 · canon §3.1·§3.2·§9):
  *    · `block`    — hard gate. 막는 `codes` 에 있고 판정을 FAIL/UNKNOWN 으로 만든다
@@ -1096,13 +1122,16 @@ section('⑥ 러너 연결 — consumer env → 러너 설정 · catch-up · 발
   check('🔴 consumer — 올린 날(TRIAL d20) → 공개 d20 그대로(canary 없음) · capacity d30 · 단계 칸 둘과 표식뿐',
     tr(t) === 'TRIAL:d20' && env.SORAN_RELEASE_STAGE === 'd20' && env.SORAN_CAPACITY_STAGE === 'd30' && Object.keys(env).length === 3
     && !Object.keys(env).some((k) => /CANARY|WINDOW|PROOF/.test(k)), JSON.stringify(env))
-  const now = new Date(`${t.decision.kstDate}T08:00:00+09:00`)
   const sc = resolveScale(env)
   check('🟢 러너 — 결정 env 그대로 → 공개 d20 · 하루 20건', sc.releaseStage === 'd20' && sc.releaseProfile.dailyTarget === 20, JSON.stringify(sc.notes))
+  const first = profileOf(sc.releaseStage).slots[0]!
+  const now = new Date(`${t.decision.kstDate}T${String(first.hour).padStart(2, '0')}:${String(first.minute).padStart(2, '0')}:00+09:00`)
   const cu = judgeCatchUp({ stage: sc.releaseStage, now, trigger: 'local', cron: null, publishedToday: 0 })
-  check('러너 — 08:00 heartbeat 가 d20 첫 슬롯을 낸다(1건)', cu.run && cu.allowed === 1)
-  const late = judgeCatchUp({ stage: 'd20', now: new Date(`${t.decision.kstDate}T22:10:00+09:00`), trigger: 'local', cron: null, publishedToday: 19 })
-  check('🔴 러너 — 22:00 넘은 backlog 는 버린다', !late.run)
+  check(`러너 — ${cycleLabel(minuteOfDay(first))} heartbeat 가 d20 첫 슬롯을 낸다(1건 · 새벽 자리)`, cu.run && cu.allowed === 1 && minuteOfDay(first) < 8 * 60)
+  // 🔴 창은 하루 전체 — 22:10 의 밀린 몫은 메우고, 마지막 틱(23:50) 뒤의 backlog 는 버린다(다음 날로 끌고 가지 않는다)
+  const lateIn = judgeCatchUp({ stage: 'd20', now: new Date(`${t.decision.kstDate}T22:10:00+09:00`), trigger: 'local', cron: null, publishedToday: 19 })
+  const late = judgeCatchUp({ stage: 'd20', now: new Date(`${t.decision.kstDate}T23:51:00+09:00`), trigger: 'local', cron: null, publishedToday: 19 })
+  check('🔴 러너 — 22:10 밀린 몫은 창 안이라 낸다 · 마지막 틱(23:50) 넘은 backlog 는 버린다', lateIn.run && lateIn.allowed === 1 && !late.run, late.reason)
   check('🔴 발행 트랜잭션 천장 — 같은 env 로 d20 · d10 env 면 d20 요청도 d10 으로 누른다(옛 canary 키는 무시)',
     boundedReleaseStage('d20', env, now) === 'd20'
     && boundedReleaseStage('d20', markedStageEnv({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10', SORAN_RELEASE_CANARY_STAGE: 'd20', SORAN_RELEASE_CANARY_DATE: t.decision.kstDate }), now) === 'd10')

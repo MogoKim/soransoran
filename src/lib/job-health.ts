@@ -134,8 +134,8 @@ export function collectCapabilityFailing(
  * 🔴 **발행 러너의 마지막 실제 회차 기록** (2026-09-29) — 공급 `ProcessRun` 과 **다른** 근거다.
  *
  *    배포는 job 을 다시 load 한다. 그 뒤 launchd 는 `runs = 0 · (never exited)` 라 마지막 종료 값을
- *    잊는다. 발행 heartbeat 은 22:00 이 마지막이고 판정은 07:00 에 돈다 — 그 사이에 배포하면
- *    판정이 "러너 모름(RUNNER_UNKNOWN)" 을 받는다. 통과해야 할 날도 UNKNOWN 이 되어 같은 단계를 다시 시험한다.
+ *    잊는다. 재등록 뒤 첫 heartbeat 틱 전에 판정(controller)이 돌면 판정이 "러너 모름(RUNNER_UNKNOWN)" 을 받는다
+ *    (발행 창이 08~22시이던 때는 밤 배포가 늘 그랬다). 통과해야 할 날도 UNKNOWN 이 되어 같은 단계를 다시 시험한다.
  *
  *    그래서 발행 wrapper(`stage-consume-exec --by=publish`)가 **launchd 가 띄운 회차만** 종료 값을 남긴다.
  *    이 기록은 **재등록 직후 한 번도 안 돈 경우에만** launchd 대신 읽는다 — launchd 가 종료 값을
@@ -145,7 +145,7 @@ export function collectCapabilityFailing(
  *       · 파일이 있고 JSON 이 깨지지 않았다 · v1 형식이다
  *       · 그 job 의 label 로 launchd 가 띄운 회차다(수동 실행 기록이 아니다)
  *       · 끝난 시각이 시작보다 늦고, 지금보다 미래가 아니다
- *       · 끝난 지 `maxAgeMs` 이내다 — 밤 공백(22:00→08:00) + 여유보다 오래됐으면 모른다
+ *       · 끝난 지 `maxAgeMs` 이내다 — 발행 창 밖 공백 + heartbeat 두 칸(`PUBLISH_RUN_MAX_AGE_MS`)보다 오래됐으면 모른다
  *    마지막 회차가 0 이 아니면 **실패(true)** 다.
  */
 export type PublishRunRecord = {

@@ -61,7 +61,9 @@ export default function CommentSection({
   return (
     <section className="mt-8">
       <h2 className="m-0 border-b-2 border-subtle pb-3 text-lg font-bold text-content-primary">
-        댓글 <span className="text-brand-ink">{totalCount}</span>
+        {/* 🔴 0 은 감춘다(창업자 11-24 · 숫자를 만들지 않는다). "많이 공감한 댓글" 의 공감 수는
+              공감 POPULAR_COMMENT_MIN_LIKES(3) 이상만 들어와 0 이 나올 수 없다 — 그 줄은 고치지 않았다 */}
+        댓글{totalCount > 0 ? <> <span className="text-brand-ink">{totalCount}</span></> : null}
       </h2>
 
       {/* 🔴 여기에는 공감 버튼을 두지 않는다. 같은 댓글의 버튼이 위아래로 둘이면

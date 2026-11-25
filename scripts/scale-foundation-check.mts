@@ -39,6 +39,7 @@ import { AUTHORITY_RENDER_INPUT } from './lib/stage-authority-repo'
 // 🔴 댓글 슬롯의 정본 — 여기서 시각을 다시 적지 않는다
 import { planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
+import { cycleLabel } from '../src/lib/cycle-schedule'
 import { BOOTSTRAP_DAILY_MAX } from '../src/lib/persona-comment-bootstrap-budget'
 import {
   COHORTS, EXCLUDED_CODES, cohortOf, verifyManifest, verifyAllCohorts, stageOf,
@@ -560,9 +561,10 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
   // ─────────────────────────────────────────────────────────
   // 🔴 **모든 공개 슬롯이 발행 창 안에 있고, 첫 댓글이 60분 안에 붙는가**
   //
-  //    §9.5-g 확정 계약: 발행 창 08:00~22:00 · 첫 댓글 60분 이내. 창 밖 발행은 계약 위반이다.
-  //    (2026-11-22) 댓글 runner 는 24시간 돈다 — 창은 발행 쪽 정본(`PUBLISH_WINDOW_*`)에서 읽는다.
-  //    옛 판은 네 단계 전부 00:05 를 포함해 첫 댓글까지 8시간 넘게 걸렸다.
+  //    §9.5-g 확정 계약: 발행 창 안 · 첫 댓글 60분 이내. 창 밖 발행은 계약 위반이다.
+  //    (2026-11-22) 댓글 runner 는 24시간 돈다 · (2026-11-23) 발행 창도 하루 전체(`PUBLISH_WINDOW_*` 00:00~23:50).
+  //    첫 댓글 회차는 자정을 넘어도 된다 — 23:50 글의 다음 회차는 다음 날 00:07 이고 60분 계약 안이다.
+  //    옛 판은 네 단계 전부 00:05 를 포함해 첫 댓글까지 8시간 넘게 걸렸다(그때 댓글 runner 는 낮에만 돌았다).
   //
   //    🔴 **시각을 여기 복제하지 않는다.** PROFILES 와 planRunnerSchedule 이 각각 정본이고
   //       이 블록은 둘을 대조만 한다.
@@ -572,21 +574,24 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
     const commentMins = runner.slots.map(minuteOfDay).sort((a, b) => a - b)
     const WIN_START = PUBLISH_WINDOW_START_MINUTE
     const WIN_END = PUBLISH_WINDOW_END_MINUTE
+    /** 발행 분 뒤 첫 댓글 회차까지 — 예약표는 하루 반복이라 자정을 넘으면 다음 날 첫 회차다 */
+    const firstWaitOf = (m: number): number | null => {
+      const next = commentMins.find((c) => c >= m) ?? (commentMins[0] === undefined ? undefined : commentMins[0] + 24 * 60)
+      return next === undefined ? null : next - m
+    }
 
     check('🔴 댓글 runner 슬롯이 실제로 있다 (대조 대상이 비면 시험이 성립하지 않는다)',
       commentMins.length > 0)
 
     for (const stage of RELEASE_STAGES) {
       const slots = PROFILES[stage].slots.map(minuteOfDay)
-      check(`🔴 ${stage} 슬롯이 전부 발행 창 ${WIN_START / 60}:00~${WIN_END / 60}:00 안이다`,
+      check(`🔴 ${stage} 슬롯이 전부 발행 창 ${cycleLabel(WIN_START)}~${cycleLabel(WIN_END)} 안이다`,
         slots.every((m) => m >= WIN_START && m <= WIN_END))
-      check(`🔴 ${stage} 모든 글의 첫 댓글이 ${FIRST_COMMENT_MAX_MINUTES}분 안에 붙는다`,
+      check(`🔴 ${stage} 모든 글의 첫 댓글이 ${FIRST_COMMENT_MAX_MINUTES}분 안에 붙는다(자정 넘는 회차 포함)`,
         slots.every((m) => {
-          const next = commentMins.find((c) => c >= m)
-          return next !== undefined && next - m <= FIRST_COMMENT_MAX_MINUTES
+          const wait = firstWaitOf(m)
+          return wait !== null && wait <= FIRST_COMMENT_MAX_MINUTES
         }))
-      check(`🔴 ${stage} 에 다음 날로 넘어가는 글이 0건이다`,
-        slots.every((m) => commentMins.some((c) => c >= m)))
     }
 
     /**
@@ -597,7 +602,7 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
      *    제품 계약이 아니다. 그대로 두면 앞으로 유효한 시간 조정 — 창 안이고 댓글 간격을
      *    지키고 슬롯 수가 맞는 변경 — 이 포함 관계 때문에 막힌다.
      *
-     *    🔴 지켜야 할 것은 아래 넷이다: 슬롯 수 = dailyTarget · 창 08~22 ·
+     *    🔴 지켜야 할 것은 아래 넷이다: 슬롯 수 = dailyTarget · 발행 창 안 ·
      *       다음 댓글 회차까지 60분 · yml 이 `allStageCronLines()` 를 빠짐없이 담는다.
      *       유효한 슬롯 변경은 yml 을 함께 갱신하면 통과해야 한다.
      */
@@ -609,7 +614,7 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
     /**
      * 🔴 **유효한 슬롯 변경은 통과해야 한다.**
      *
-     *    계약(슬롯 수 = dailyTarget · 창 08~22 · 다음 댓글 회차 60분)만 만족하면
+     *    계약(슬롯 수 = dailyTarget · 발행 창 안 · 다음 댓글 회차 60분)만 만족하면
      *    포함 관계가 깨져도 막지 않는다. 앞선 판은 "d5 에 09:30 을 넣는 것" 자체를
      *    결함으로 봤는데, 그것은 창 안이고 댓글 간격도 지키는 **유효한 배치**다.
      */
@@ -618,8 +623,8 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
       const mins = slots.map(minuteOfDay)
       if (!mins.every((m) => m >= WIN_START && m <= WIN_END)) return false
       return mins.every((m) => {
-        const next = commentMins.find((c) => c >= m)
-        return next !== undefined && next - m <= FIRST_COMMENT_MAX_MINUTES
+        const wait = firstWaitOf(m)
+        return wait !== null && wait <= FIRST_COMMENT_MAX_MINUTES
       })
     }
     check('🟢 지금 승인된 슬롯은 계약을 만족한다',
@@ -629,8 +634,12 @@ console.log('\n④ 슬롯 → 발행 예약(launchd 러너)')
         { hour: 8, minute: 10 }, { hour: 9, minute: 30 }, { hour: 12, minute: 10 },
         { hour: 16, minute: 10 }, { hour: 19, minute: 0 },
       ], 5))
-    check('🔴 창 밖 배치는 여전히 막는다',
-      !satisfiesContract([{ hour: 23, minute: 0 }], 1))
+    // 🔴 창은 하루 전체 — 밤 배치(02:10 · 23:30)는 유효하고, 마지막 틱(23:50) 뒤만 창 밖이다.
+    //    23:55 는 첫 댓글(다음 날 00:07 · 12분)은 지키므로 창 판정 하나로만 막힌다
+    check('🟢 밤 배치(02:10 · 23:30)도 계약을 만족한다 — 첫 댓글은 자정 넘는 회차까지 센다',
+      satisfiesContract([{ hour: 2, minute: 10 }, { hour: 23, minute: 30 }], 2))
+    check('🔴 창 밖 배치(23:55 — 마지막 틱 뒤)는 여전히 막는다',
+      !satisfiesContract([{ hour: 23, minute: 55 }], 1) && (firstWaitOf(23 * 60 + 55) ?? 999) <= FIRST_COMMENT_MAX_MINUTES)
     check('🔴 슬롯 수가 dailyTarget 과 다르면 막는다',
       !satisfiesContract([{ hour: 9, minute: 30 }], 3))
   }
@@ -780,8 +789,8 @@ console.log('\n⑦ cohort manifest')
   check('wave3 는 11명이다', COHORTS['wave3-scale'].codes.length === 11)
   check('🔴 P09 가 어느 cohort 에도 없다', Object.values(COHORTS).every((m) => !m.codes.includes('P09')))
   check('🔴 P09 제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '').includes('readLengthBand'))
-  check('🔴 일곱 cohort 합이 D30 정본 universe 60명이다',
-    TARGET_PERSONA_COUNT === 60
+  check('🔴 여덟 cohort 합이 D50 정본 universe 103명이다',
+    TARGET_PERSONA_COUNT === 103
     && Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === TARGET_PERSONA_COUNT
     && PRODUCTION_PERSONA_CODES.length === TARGET_PERSONA_COUNT)
   check('wave3 는 선행 두 개를 요구한다', COHORTS['wave3-scale'].requires.length === 2)
@@ -873,11 +882,11 @@ console.log('\n⑨ 실행 게이트 (--cohort · --step · --apply · --limit)')
   check('생성·seed 는 actor 를 요구하지 않는다', judgeArgs({ ...base, actorUserId: null, reason: null, requireActor: false }).ok)
 
   // 🔴 --cohort allowlist
-  check('🟢 wave7-d30 만 열려 있다',
-    RUNNABLE_COHORTS.length === 1 && RUNNABLE_COHORTS[0] === 'wave7-d30'
-    && judgeCohortArg('wave7-d30').ok)
-  check('🔴 끝난 회차는 거부(wave1~wave6)',
-    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary']
+  check('🟢 wave8-d50 만 열려 있다',
+    RUNNABLE_COHORTS.length === 1 && RUNNABLE_COHORTS[0] === 'wave8-d50'
+    && judgeCohortArg('wave8-d50').ok)
+  check('🔴 끝난 회차는 거부(wave1~wave7)',
+    ['wave1-mvp', 'wave2', 'wave3-scale', 'wave4-depth', 'wave5-d10', 'wave6-d20-canary', 'wave7-d30']
       .every((c) => !judgeCohortArg(c).ok && /이미 끝난 회차/.test(judgeCohortArg(c).reason)))
   check('🔴 없는 id 는 거부', !judgeCohortArg('wave9').ok)
   check('🔴 비면 거부 (fail-closed)', !judgeCohortArg(null).ok && !judgeCohortArg('  ').ok)
@@ -914,7 +923,11 @@ console.log('\n⑩ 소스 계약')
   for (const k of ['PrismaClient', 'prisma.', 'fetch(', 'node:fs', 'process.env', 'Math.random', 'Date.now']) {
     check(`🔴 scale-profile 에 ${k} 가 없다`, !sp.includes(k))
   }
-  check('🔴 scale-profile 이 import 하지 않는다', !/^import /m.test(sp))
+  // 🔴 import 는 하루 시간표(`cycle-schedule`) 하나뿐이고, 그 파일은 import 0 이다 — D20 이상 슬롯을 모듈이 읽히는 순간
+  //    계산하므로 무엇이든 더 import 하면 순환(TDZ)이 된다
+  check('🔴 scale-profile 의 import 는 import 0 인 cycle-schedule 하나뿐이다',
+    (sp.match(/^import .*$/gm) ?? []).join('\n') === "import { cycleSlots } from './cycle-schedule'"
+    && !/^import /m.test(code('src/lib/cycle-schedule.ts')))
   check('🔴 env 는 **인자로만** 들어온다 — lib 은 아무도 직접 읽지 않는다', (() => {
     const rt = code('src/lib/scale-runtime.ts')
     return !rt.includes('process.env') && /env: Readonly<Record<string, string \| undefined>>/.test(rt)

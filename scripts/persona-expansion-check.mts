@@ -11,7 +11,9 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 import { PERSONA_CANARY_FLOOR, PERSONA_SUSTAINED_TARGET } from '../src/lib/d100-capacity'
-import { autogenCodeOf, RETIRED_AUTOGEN_CODES, type Cadence } from '../src/lib/persona-autogen'
+import {
+  AUTOGEN_AGE_BANDS, autogenCodeOf, birthDateFor, EXPANSION_AGE_BANDS, RETIRED_AUTOGEN_CODES, type Cadence,
+} from '../src/lib/persona-autogen'
 import { PERSONA_CODE_MAX } from '../src/lib/persona-code'
 import {
   COHORT_EXPANSION_FIXTURES, COHORTS, PRODUCTION_PERSONA_CODES, RUNNABLE_COHORTS, TARGET_PERSONA_COUNT,
@@ -41,11 +43,11 @@ const src = (p: string): string => readFileSync(p, 'utf-8')
 console.log('\n══ Persona 확장 계약 fixture ══\n')
 
 const pool = parsePoolDoc(src(PERSONA_POOL_DOC))
-const FIXTURE = 'scripts/__fixtures__/persona-expansion-d30.json'
+const FIXTURE = 'scripts/__fixtures__/persona-expansion-d50.json'
 const fixtureBytes = readFileSync(FIXTURE)
-const fixtureContract = COHORT_EXPANSION_FIXTURES['wave7-d30']
+const fixtureContract = COHORT_EXPANSION_FIXTURES['wave8-d50']
 const fixtureDigest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
-const promoted = COHORTS['wave7-d30'].codes
+const promoted = COHORTS['wave8-d50'].codes
 const priorProductionCodes = PRODUCTION_PERSONA_CODES.filter((code) => !promoted.includes(code))
 const priorCards = pool.cards.filter((c) => priorProductionCodes.includes(c.code))
 const fxRead = loadExpansionFixture(repoRoot, FIXTURE)
@@ -67,17 +69,18 @@ check('단계 목표는 정본 표에서 온다 — d20 canary · d20 지속 · 
   && expansionStepOf('d100-sustained')?.target === PERSONA_SUSTAINED_TARGET.d100)
 check('정본 값 그대로 40 · 60 · 300', EXPANSION_STEPS.map((s) => s.target).join(',') === '40,60,300')
 check('단계는 앞 단계를 선행으로 둔다', EXPANSION_STEPS.every((s, i) => s.requires === (i === 0 ? null : EXPANSION_STEPS[i - 1]!.id)))
-check('🔴 코드상 universe 는 60명이고 wave7-d30만 열린 회차다',
-  PRODUCTION_PERSONA_CODES.length === 60 && TARGET_PERSONA_COUNT === 60
-  && RUNNABLE_COHORTS.join() === 'wave7-d30')
+check('🔴 코드상 universe 는 103명이고 wave8-d50만 열린 회차다',
+  PRODUCTION_PERSONA_CODES.length === 103 && TARGET_PERSONA_COUNT === 103
+  && RUNNABLE_COHORTS.join() === 'wave8-d50')
 check('🔴 승격이 끝난 제안 cohort 목록은 비었다', PROPOSED_COHORTS.length === 0)
-check('wave7 선행은 기존 여섯 cohort 전부다',
-  COHORTS['wave7-d30'].requires.slice().sort().join(',')
-  === Object.keys(COHORTS).filter((id) => id !== 'wave7-d30').sort().join(','))
-check('D30 회차는 정확히 20명 = 60 − 40', promoted.length === PERSONA_CANARY_FLOOR.d30 - priorProductionCodes.length)
-check('승격 코드는 P44~P63 append-only · 폐기 코드 재사용 0',
+check('wave8 선행은 기존 일곱 cohort 전부다',
+  COHORTS['wave8-d50'].requires.slice().sort().join(',')
+  === Object.keys(COHORTS).filter((id) => id !== 'wave8-d50').sort().join(','))
+check('D50 회차는 정확히 43명 = 하한 100 − 기존 60 + 예비 3',
+  priorProductionCodes.length === 60 && promoted.length === PERSONA_CANARY_FLOOR.d50 - priorProductionCodes.length + 3)
+check('승격 코드는 P64~P106 append-only · 폐기 코드 재사용 0',
   promoted.every((c) => RETIRED_AUTOGEN_CODES[c] === undefined)
-  && promoted.join(',') === Array.from({ length: 20 }, (_, i) => autogenCodeOf(44 + i)).join(','))
+  && promoted.join(',') === Array.from({ length: 43 }, (_, i) => autogenCodeOf(64 + i)).join(','))
 check('fixture 코드 = 승격 cohort 코드', fixture.candidates.map((c) => c.code).join(',') === promoted.join(','))
 const scope = (cohort: string, codes: readonly string[]) => judgeExpansionFixtureScope({
   fixtureCohort: cohort,
@@ -86,17 +89,17 @@ const scope = (cohort: string, codes: readonly string[]) => judgeExpansionFixtur
   runnableCohorts: RUNNABLE_COHORTS.map((id) => COHORTS[id]),
 })
 const promotedScope = scope(fixture.cohort, fixture.candidates.map((candidate) => candidate.code))
-check('🔴 승격된 runnable fixture는 자기 cohort를 뺀 기존 40명과 판정한다',
+check('🔴 승격된 runnable fixture는 자기 cohort를 뺀 기존 60명과 판정한다',
   promotedScope.ok && promotedScope.mode === 'runnable'
   && promotedScope.baselineCodes.join(',') === priorProductionCodes.join(','))
-const proposedScope = scope('wave8-proposal', ['P64', 'P65'])
+const proposedScope = scope('wave9-proposal', ['P107', 'P108'])
 check('승격 전 fixture는 운영 universe 전체를 기준으로 판정한다',
   proposedScope.ok && proposedScope.mode === 'proposed'
   && proposedScope.baselineCodes.join(',') === PRODUCTION_PERSONA_CODES.join(','))
-check('🔴 운영 코드 일부만 섞은 fixture는 막는다', !scope('wave7-d30', ['P44', 'P64']).ok)
-check('🔴 runnable cohort에서 코드가 빠지면 막는다', !scope('wave7-d30', promoted.slice(0, -1)).ok)
-check('🔴 runnable cohort에 코드가 더해지면 막는다', !scope('wave7-d30', [...promoted, 'P64']).ok)
-check('🔴 runnable cohort id에 전혀 다른 제안 코드를 넣어도 막는다', !scope('wave7-d30', ['P64']).ok)
+check('🔴 운영 코드 일부만 섞은 fixture는 막는다', !scope('wave8-d50', ['P64', 'P107']).ok)
+check('🔴 runnable cohort에서 코드가 빠지면 막는다', !scope('wave8-d50', promoted.slice(0, -1)).ok)
+check('🔴 runnable cohort에 코드가 더해지면 막는다', !scope('wave8-d50', [...promoted, 'P107']).ok)
+check('🔴 runnable cohort id에 전혀 다른 제안 코드를 넣어도 막는다', !scope('wave8-d50', ['P107']).ok)
 check('🔴 같은 운영 코드라도 cohort id가 다르면 막는다', !scope('wrong-cohort', promoted).ok)
 check('🔴 닫힌 운영 cohort fixture는 막는다', !scope('wave5-d10', COHORTS['wave5-d10'].codes).ok)
 const proposedComparison = expansionFixtureComparisonInputs({
@@ -125,7 +128,7 @@ check('🔴 승격 runnable 정본 카드가 중복돼도 판정을 시작하지
     mode: 'runnable', fixtureCodes: ['P44'], poolCodes: ['P01', 'P44', 'P44'], dbCodes: [],
   }).ok)
 const promotedCards = new Map(pool.cards.filter((card) => promoted.includes(card.code)).map((card) => [card.code, card]))
-check('🔴 wave7 카드 20장이 모두 정본 Pool에 있고 파싱 문제 0', promotedCards.size === 20 && pool.problems.length === 0)
+check('🔴 wave8 카드 43장이 모두 정본 Pool에 있고 파싱 문제 0', promotedCards.size === 43 && pool.problems.length === 0)
 for (const candidate of fixture.candidates) {
   const card = promotedCards.get(candidate.code)
   const life = candidate.life
@@ -169,6 +172,10 @@ check('🔴 CLI 는 --apply · --execute 를 거부한다', /a === '--apply' \|\
 check('CLI 는 LLM·provider 를 부르지 않는다', !/anthropic|openai|gemini|fetch\(|generateCreative/i.test(cli))
 check('🔴 보충 말투 근거는 --db 없이는 회원 대조 전에 거부한다',
   cli.includes("if (USE_VOICE_EVIDENCE && !USE_DB) fail('--voice-evidence"))
+check('🔴 증거 시각 상한은 기록 도구와 같은 판독기로 읽고 같은 뜻으로 넘긴다',
+  cli.includes("parseEvidenceUntil(arg('evidence-until'), NOW)")
+  && cli.includes('until: EVIDENCE_UNTIL.until')
+  && cli.includes("if (EVIDENCE_UNTIL.iso !== null && !USE_VOICE_EVIDENCE) fail("))
 check('보충 말투 근거는 익명 행만 append-only 말투 풀에 넘긴다',
   cli.includes('readUsableVoiceEvidence({')
   && cli.includes('voicePoolFor({ repoRoot, newCodes: batchCodes, supplementalRows })'))
@@ -221,19 +228,22 @@ console.log('⑤ 집단 다양성 — 모두 다른데도 한쪽으로 쏠리는
 const existing = priorCards.map(diversitySubjectOfCard)
 const batchOf = (f: ExpansionFixture): DiversitySubject[] => f.candidates.map((c) => diversitySubjectOf(c.code, c.life, c.creative, null))
 const real = judgePopulationDiversity({ existing, batch: batchOf(fixture) })
-check('D30 fixture 는 기존 40명 집단을 기울이지 않는다', real.ok, real.problems.map((p) => `${p.rule}: ${p.detail}`).join(' / '))
+check('D50 fixture 는 기존 60명 집단을 기울이지 않는다', real.ok, real.problems.map((p) => `${p.rule}: ${p.detail}`).join(' / '))
 const rules = (batch: DiversitySubject[], ex: DiversitySubject[] = existing): DiversityRule[] =>
   [...new Set(judgePopulationDiversity({ existing: ex, batch }).problems.map((p) => p.rule))]
 const base = batchOf(fixture)
 const mut = (f: (s: DiversitySubject, i: number) => Partial<DiversitySubject>): DiversitySubject[] => base.map((s, i) => ({ ...s, ...f(s, i) }))
 
-check('반례 — 20명 전원 같은 자녀 구성 → BATCH_MONOCULTURE',
+check('반례 — 43명 전원 같은 자녀 구성 → BATCH_MONOCULTURE',
   rules(mut(() => ({ childrenCount: 2, childrenAgeBands: ['중고등', '초등'] }))).includes('BATCH_MONOCULTURE'))
-check('반례 — 20명 전원 40대 → CORE_DECADE_NOT_PLURALITY',
+check('반례 — 43명 전원 40대 → CORE_DECADE_NOT_PLURALITY',
   rules(mut((s, i) => ({ ageBand: i % 2 === 0 ? '40대 중반' : '40대 후반', code: s.code }))).includes('CORE_DECADE_NOT_PLURALITY'))
-check('반례 — 20명 전원 같은 성격어 → PERSONALITY_TERM_OVERUSED',
+// 🔴 30대도 십년대로 센다(2026-11-23) — 30대가 50대보다 많아지는 묶음을 잡는다(옛 `[4-6]0대` 는 30대를 세지 않고 지나갔다)
+check('🔴 반례 — 30대가 50대보다 많아지면 → CORE_DECADE_NOT_PLURALITY (30대도 센다)',
+  rules(mut((s, i) => ({ ageBand: i % 2 === 0 ? '30대 초반' : '30대 후반', code: s.code })), existing.slice(0, 10)).includes('CORE_DECADE_NOT_PLURALITY'))
+check('반례 — 43명 전원 같은 성격어 → PERSONALITY_TERM_OVERUSED',
   rules(mut((s) => ({ personality: [...s.personality.slice(0, 2), '정 많음'] }))).includes('PERSONALITY_TERM_OVERUSED'))
-check('반례 — 돌봄 없음 20명 → POPULATION_AXIS_DOMINANT',
+check('반례 — 돌봄 없음 43명 → POPULATION_AXIS_DOMINANT',
   rules(mut(() => ({ parentCare: '없음' }))).includes('POPULATION_AXIS_DOMINANT'))
 const twin = existing.find((s) => s.code === 'P05')!
 check('반례 — 기존 카드와 생활사 7칸이 같다 → LIFE_KEY_DUPLICATE',
@@ -248,28 +258,42 @@ check('작은 묶음(4명)은 단일 품종 판정을 하지 않는다',
 // ─────────────────────────────────────────────────────────
 console.log('⑥ 충돌 — 닉네임 · 연령 · 관심사 · 게시판 · 금칙')
 // ─────────────────────────────────────────────────────────
-const p44 = fixture.candidates.find((c) => c.code === 'P44')!
+const p64 = fixture.candidates.find((c) => c.code === 'P64')!
 const batchNames = new Map(fixture.candidates.map((c) => [c.code, c.displayName]))
 const EMPTY_SETS = { memberNames: [] as string[], personaNames: [] as string[] }
 const conf = (c: ExpansionCandidateFixture, o: { nameSets?: typeof EMPTY_SETS | null; names?: Map<string, string> } = {}): ConflictCode[] =>
   [...new Set(judgeCandidateConflicts(c, { nameSets: o.nameSets === undefined ? EMPTY_SETS : o.nameSets, batchNames: o.names ?? batchNames }).map((x) => x.code))]
 const edit = (o: Partial<ExpansionCandidateFixture> & { lifePatch?: Partial<ExpansionCandidateFixture['life']>; creativePatch?: Partial<ExpansionCandidateFixture['creative']> }): ExpansionCandidateFixture => ({
-  ...p44, ...o, life: { ...p44.life, ...(o.lifePatch ?? {}) }, creative: { ...p44.creative, ...(o.creativePatch ?? {}) },
+  ...p64, ...o, life: { ...p64.life, ...(o.lifePatch ?? {}) }, creative: { ...p64.creative, ...(o.creativePatch ?? {}) },
 })
 const only = (got: ConflictCode[], want: ConflictCode): boolean => got.length === 1 && got[0] === want
 for (const c of fixture.candidates) check(`fixture ${c.code} 충돌 0 (대조 집합 빈 값)`, conf(c).length === 0, conf(c).join(','))
-check('반례 — 대조 집합이 없으면 NAME_MEMBERS_UNMEASURED 만 (통과 아님)', only(conf(p44, { nameSets: null }), 'NAME_MEMBERS_UNMEASURED'))
+check('반례 — 대조 집합이 없으면 NAME_MEMBERS_UNMEASURED 만 (통과 아님)', only(conf(p64, { nameSets: null }), 'NAME_MEMBERS_UNMEASURED'))
 check('반례 — 표시명에 지역명 → NAME_POLICY 만', only(conf(edit({ displayName: '부산꽃' })), 'NAME_POLICY'))
-check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(conf(p44, { nameSets: { memberNames: [], personaNames: [p44.displayName] } }), 'NAME_COLLISION'))
-check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p44, { nameSets: { memberNames: [p44.displayName], personaNames: [] } }), 'NAME_COLLISION'))
+check('반례 — 기존 Persona 이름과 같다 → NAME_COLLISION 만', only(conf(p64, { nameSets: { memberNames: [], personaNames: [p64.displayName] } }), 'NAME_COLLISION'))
+check('반례 — 회원 이름과 같다 → NAME_COLLISION 만', only(conf(p64, { nameSets: { memberNames: [p64.displayName], personaNames: [] } }), 'NAME_COLLISION'))
 check('반례 — 묶음 안 같은 이름 → NAME_BATCH_CONFUSABLE 만',
-  only(conf(p44, { names: new Map([...batchNames, ['P45', p44.displayName]]) }), 'NAME_BATCH_CONFUSABLE'))
-check('반례 — 대상 밖 연령대 → AGE_OUT_OF_AUDIENCE 포함',
-  conf(edit({ lifePatch: { ageBand: '30대 후반' } })).includes('AGE_OUT_OF_AUDIENCE'))
+  only(conf(p64, { names: new Map([...batchNames, ['P65', p64.displayName]]) }), 'NAME_BATCH_CONFUSABLE'))
+check('반례 — 대상 밖 연령대(20대 후반 · 60대 중반) → AGE_OUT_OF_AUDIENCE 포함',
+  conf(edit({ lifePatch: { ageBand: '20대 후반' } })).includes('AGE_OUT_OF_AUDIENCE')
+  && conf(edit({ lifePatch: { ageBand: '60대 중반' } })).includes('AGE_OUT_OF_AUDIENCE'))
+// 🔴 30대는 확장 관문 대상이다(창업자 2026-11-18 · 11-19 · 11-22) — 그 밖의 나이 규칙은 그대로, 자동 골격은 30대를 만들지 않는다
+check('🔴 확장 관문 나이대 = 30대 초반·중반·후반 + 자동 골격 나이대 · 자동 골격에는 30대가 없다',
+  EXPANSION_AGE_BANDS.join(',') === ['30대 초반', '30대 중반', '30대 후반', ...AUTOGEN_AGE_BANDS].join(',')
+  && AUTOGEN_AGE_BANDS.every((b) => !b.startsWith('30대')) && birthDateFor('30대 후반', 94) === null)
+const d50Read = loadExpansionFixture(repoRoot, 'scripts/__fixtures__/persona-expansion-d50.json')
+const d50 = d50Read.ok ? d50Read.fixture.candidates : []
+const d50Thirties = d50.filter((c) => c.life.ageBand.startsWith('30대'))
+const d50Names = new Map(d50.map((c) => [c.code, c.displayName]))
+check('🔴 d50 fixture 의 30대 10명은 AGE_OUT_OF_AUDIENCE 없이 충돌 0 (대조 집합 빈 값)',
+  d50Thirties.length === 10 && d50Thirties.every((c) => conf(c, { names: d50Names }).length === 0),
+  d50Thirties.filter((c) => conf(c, { names: d50Names }).length > 0).map((c) => `${c.code}:${conf(c, { names: d50Names }).join(',')}`).join(' '))
+check('🔴 30대 카드도 생일 ↔ 나이대 규칙은 그대로다 — 30대 후반 카드에 40대 생일 → AGE_LIFE_CONFLICT',
+  d50Thirties.length > 0 && conf({ ...d50Thirties[0]!, life: { ...d50Thirties[0]!.life, birthDate: '1980-01-01' } }, { names: d50Names }).includes('AGE_LIFE_CONFLICT'))
 check('반례 — 생일이 나이대와 어긋난다 → AGE_LIFE_CONFLICT 만', only(conf(edit({ lifePatch: { birthDate: '1990-01-01' } })), 'AGE_LIFE_CONFLICT'))
 check('반례 — 관심사 1개 → INTEREST_COUNT 만', only(conf(edit({ interests: ['등산'] })), 'INTEREST_COUNT'))
 check('반례 — 관심사가 자기 noGo 를 품는다 → INTEREST_NOGO_CONFLICT 만',
-  only(conf(edit({ interests: ['회사 실명', '생리통'] })), 'INTEREST_NOGO_CONFLICT'))
+  only(conf(edit({ interests: ['남편 회사 이름', '생리통'] })), 'INTEREST_NOGO_CONFLICT'))
 check('반례 — 성인 자녀 없이 손주 → INTEREST_LIFE_CONFLICT 만', only(conf(edit({ interests: ['손주 돌보기', '갱년기 열감'] })), 'INTEREST_LIFE_CONFLICT'))
 check('반례 — 자영업 아닌데 가게 → INTEREST_LIFE_CONFLICT 만', only(conf(edit({ interests: ['가게 운영', '갱년기 열감'] })), 'INTEREST_LIFE_CONFLICT'))
 check('반례 — 게시판 없음 → BOARD_EMPTY 만', only(conf(edit({ boards: [] })), 'BOARD_EMPTY'))
@@ -277,7 +301,7 @@ check('🔴 반례 — 매거진은 게시판이 아니다 → BOARD_NOT_A_BOARD
 check('반례 — 모르는 게시판 → BOARD_UNKNOWN 만', only(conf(edit({ boards: ['QNA'] })), 'BOARD_UNKNOWN'))
 check('🔴 반례 — 관심사에 브랜드 금지어 → BRAND_BANNED_WORD 만', only(conf(edit({ interests: ['실버 요가', '갱년기 열감'] })), 'BRAND_BANNED_WORD'))
 check('반례 — 변주에 공통 금지 문구 → COMMON_NOGO_IN_VARIATION 만',
-  only(conf(edit({ creativePatch: { variations: [...p44.creative.variations.slice(0, 4), '추천드립니다 로 맺기'] } })), 'COMMON_NOGO_IN_VARIATION'))
+  only(conf(edit({ creativePatch: { variations: [...p64.creative.variations.slice(0, 4), '추천드립니다 로 맺기'] } })), 'COMMON_NOGO_IN_VARIATION'))
 
 // ─────────────────────────────────────────────────────────
 console.log('⑦ fixture 파서 — 칸을 기본값으로 메우지 않는다')
@@ -320,11 +344,11 @@ const judge = (o: { voice?: readonly string[]; cadence?: Cadence | null; nameSet
   cadence: o.cadence === undefined ? CADENCE : o.cadence, nameSets: o.nameSets === undefined ? EMPTY_SETS : o.nameSets,
 })
 const full = judge()
-check('말투 · cadence · 대조 집합이 모두 있으면 20/20 ready · 묶음 OK', full.ok && full.candidates.every((c) => c.status === 'ready'),
+check('말투 · cadence · 대조 집합이 모두 있으면 43/43 ready · 묶음 OK', full.ok && full.candidates.every((c) => c.status === 'ready'),
   full.candidates.filter((c) => c.status !== 'ready').map((c) => `${c.code}:${c.reasons.join('+')}`).join(' '))
-const two = judge({ voice: ['P44', 'P45'] })
-check('🔴 말투 2명만 있으면 2 ready · 18 blocked(NO_VOICE_EVIDENCE) · 묶음 서지 않음',
-  !two.ok && two.candidates.filter((c) => c.status === 'ready').map((c) => c.code).join(',') === 'P44,P45'
+const two = judge({ voice: ['P64', 'P65'] })
+check('🔴 말투 2명만 있으면 2 ready · 41 blocked(NO_VOICE_EVIDENCE) · 묶음 서지 않음',
+  !two.ok && two.candidates.filter((c) => c.status === 'ready').map((c) => c.code).join(',') === 'P64,P65'
   && two.candidates.filter((c) => c.status === 'blocked').every((c) => c.reasons.includes('NO_VOICE_EVIDENCE')))
 const noSets = judge({ nameSets: null })
 check('🔴 대조 집합이 없으면 ready 가 아니라 unmeasured (blocked 와 섞지 않는다)',
@@ -338,7 +362,7 @@ const sameVoice = judgeExpansionBatch({
   voiceByCode: new Map(promoted.map((c) => [c, { bundle: bundleOf(c, TEXTS), seedShareCount: 1 }])), productionBundles: prodBundles,
   cadence: CADENCE, nameSets: EMPTY_SETS,
 })
-check('🔴 반례 — 20명 모두 같은 길이 밴드 말투 → 묶음 다양성 BATCH_MONOCULTURE(voiceBand)',
+check('🔴 반례 — 43명 모두 같은 길이 밴드 말투 → 묶음 다양성 BATCH_MONOCULTURE(voiceBand)',
   !sameVoice.ok && sameVoice.diversity.problems.some((p) => p.rule === 'BATCH_MONOCULTURE' && p.detail.includes('voiceBand')))
 const autogenSrc = src('scripts/lib/persona-autogen.mts')
 check('🔴 autogen 계약 사유 줄 형식이 "모름" 분류와 맞는다',

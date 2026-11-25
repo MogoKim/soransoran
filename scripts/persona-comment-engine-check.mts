@@ -43,6 +43,7 @@ import { join } from 'node:path'
 import {
   BOOTSTRAP_DAILY_MAX, BOOTSTRAP_SLOTS_PER_POST, countManagedPosts, judgeBootstrapBudget,
 } from '../src/lib/persona-comment-bootstrap-budget'
+import { countManagedPostsToday, type PostReader } from '../src/lib/persona-comment-bootstrap-source'
 import { AUTO_PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-comment-auto-lane'
 import { THREAD_SIZE_CAP } from '../src/lib/persona-thread-target'
 import {
@@ -1549,8 +1550,8 @@ console.log('⑤-d 🔴 Persona reference 안정 배정 (배치가 바뀌어도 
     : '   🟡 자산 없음(CI) — 계약만 본다')
 
   /** 🔴 정본 universe 는 cohort 에서 파생한다 — 목록을 다시 적지 않는다 */
-  check(`🟢 코드상 준비 universe 가 60명이다 (${PRODUCTION_PERSONA_CODES.length})`,
-    PRODUCTION_PERSONA_CODES.length === 60)
+  check(`🟢 코드상 준비 universe 가 103명이다 (${PRODUCTION_PERSONA_CODES.length})`,
+    PRODUCTION_PERSONA_CODES.length === 103)
   check('🔴 P09 는 정본에 없다', !isProductionPersonaCode('P09'))
   check('  제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '') !== '')
 
@@ -3007,6 +3008,26 @@ console.log('㉙ 실제 배선 — 재검사가 발행 함수에 닿아 있는�
   check('🔴 옛 mode 파서는 더 이상 쓰지 않는다', !txSrc.includes('readRunMode('))
   check('🔴 예산도 트랜잭션 안에서 단계로 다시 센다',
     txSrc.includes('countManagedPostsToday(tx') && txSrc.includes('stage: stage.stage'))
+  /**
+   * 🔴 **자정 근처 첫 댓글 예산** (2026-11-23 · 공개 하루 전체) — 23:55 글의 첫 댓글 회차가 00:01 에 돌아도 그 글이
+   *    예산에 든다. 하한 = min(KST 자정, 지금 − 첫 댓글 시한 60분). 한낮에는 자정 그대로(어제 글을 끌어오지 않는다).
+   *    회차 · 트랜잭션 재검사가 같은 함수라 같은 하한이다. 가짜 DB 로 실제 조회 조건을 잰다(문자열 검사 아님).
+   */
+  {
+    const seen: Date[] = []
+    const fakeDb = {
+      post: {
+        findMany: async (args: { where: { createdAt: { gte: Date } } }): Promise<never[]> => { seen.push(args.where.createdAt.gte); return [] },
+      },
+    } as unknown as PostReader
+    const dayStart = new Date('2026-11-24T00:00:00+09:00')
+    const midnightRun = await countManagedPostsToday(fakeDb, dayStart, new Date('2026-11-24T00:01:00+09:00'))
+    await countManagedPostsToday(fakeDb, dayStart, new Date('2026-11-24T10:00:00+09:00'))
+    const post2355 = Date.parse('2026-11-23T23:55:00+09:00')
+    check('🔴 🔴 **자정 첫 댓글 — 00:01 회차의 예산 하한은 23:01(지금 − 60분)이라 23:55 글이 든다 · 10:00 회차의 하한은 자정 그대로**',
+      midnightRun !== null && seen.length === 2 && seen[0]!.getTime() === Date.parse('2026-11-23T23:01:00+09:00')
+      && seen[0]!.getTime() <= post2355 && seen[1]!.getTime() === dayStart.getTime())
+  }
 
   /** 🔴 server action 과 CLI 가 **같은 함수**를 쓴다 — 우회 경로가 없어야 한다 */
   const actionSrc = readFileSync('src/lib/actions/persona-publish.ts', 'utf-8')

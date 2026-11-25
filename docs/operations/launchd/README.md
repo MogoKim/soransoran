@@ -198,10 +198,10 @@ npx tsx scripts/micro-seed-navercafe-run.mts
 |---|---|---|
 | `navercafe-collect` | 네이버 카페 수집(원천 목록을 차례로) | 바퀴 시각 — `cycle-schedule.ts` 의 `CYCLES` |
 | `supply-process` | 공급 처리(글 만들기) | 바퀴마다 수집 시작 뒤 `SUPPLY_AFTER_COLLECT_MINUTES` 분 — `cycle-schedule.ts` |
-| `stage-controller` | 그날 단계 결정 | 07:00 · 07:20 · 07:40 · 07:55 · 07:58 (5회 — 결정은 하루 한 번만 저장된다) |
-| `original-post-runner` | 글 발행 | 08:00~22:00 10분마다 (85회 · 한 회차 1편) |
-| `persona-comment-runner` | 첫 댓글 · 추가 댓글 | 08:07~22:00 약 20분마다 (43회) |
-| `auto-ready-audit` | 발행 뒤 감사 | 08:10~23:40 30분마다 (32회) |
+| `stage-controller` | 그날 단계 결정 | 01:50 · 02:10 · 02:30 · 02:45 · 02:48 (5회 — 결정은 하루 한 번만 저장된다 · 기준은 `cycle-schedule.ts` 의 `STAGE_DECISION_BASE_MINUTE`) |
+| `original-post-runner` | 글 발행 | 00:00~23:50 10분마다 (144회 · 한 회차 1편 · 자리는 바퀴 비중 `cycleSlots`) |
+| `persona-comment-runner` | 첫 댓글 · 추가 댓글 | 하루 24시간 :07 · :27 · :47 (72회) |
+| `auto-ready-audit` | 발행 뒤 감사 | 00:10~23:40 30분마다 (48회) |
 | `runner-recover` | 놓친 회차 복구 | 30분마다 |
 | `ops-shadow-observer` | 읽기 전용 관측(권위 0) | 60초마다 |
 | `keep-awake` | 잠들지 않게 유지 | 상시 |
@@ -348,7 +348,7 @@ job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.
 
 🔴 **파일 템플릿이 아니다.** plist 는 `scripts/lib/persona-comment-runner-template.ts` 가 코드로 렌더한다
 (Label `com.soransoran.persona-comment-runner` · 실행 `scripts/persona-comment-loop.mts --live` ·
-하루 43회 08:07~22:00 · 회차 간격 최대 20분 — 한 글이 첫 댓글 시한 60분 안에 시도 3번). 공급 job(`RUNTIME_JOBS`)이 아니고,
+하루 72회 24시간 :07 · :27 · :47 · 회차 간격 최대 20분(자정 포함) — 한 글이 첫 댓글 시한 60분 안에 시도 3번). 공급 job(`RUNTIME_JOBS`)이 아니고,
 배포 동안만 잠시 멈추는 job(`DEPLOY_QUIESCE_JOBS`)이다 — 격리 검사가 설치됐으면 원문·인자·SHA 를 대조한다.
 
 ```bash

@@ -30,7 +30,7 @@ import {
 import { STAGE_DECISION_V5 } from '../src/lib/stage-decision-contract'
 import { RUNTIME_PROFILES as PROFILES, RELEASE_ENV, CAPACITY_ENV, type RuntimeStage } from '../src/lib/scale-profile'
 import { consumerEnvOf, supplyHeadStartEnvOf } from '../src/lib/stage-controller'
-import { resolveScale, STAGE_DECISION_MARK_ENV } from '../src/lib/scale-runtime'
+import { boundedReleaseStage, resolveScale, STAGE_DECISION_MARK_ENV } from '../src/lib/scale-runtime'
 import { LADDER_RULE } from '../src/lib/ladder-table'
 import { judgeNextPreflight, readyCapacityOf, forecastSupplyOf, type PreflightFacts, type PreflightVerdict } from '../src/lib/stage-ladder-generic'
 import { RUNNER_GRID, PREFLIGHT_ENV_KEYS } from './lib/stage-preflight-facts.mjs'
@@ -1081,16 +1081,34 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
   check('🔴 전날 공개가 열린 단계보다 낮은 날(브레이크 CERTIFIED d30 · 공개 d20) → braked · 평상일 · 올린 날은 braked 아님',
     headBraked.ok && headBraked.braked && headBraked.stage === 'd20' && headPlain.ok && !headPlain.braked && headTrial.ok && !headTrial.braked,
     JSON.stringify([headBraked, headPlain, headTrial]))
-  check('🔴 🔴 **이어 가기 consumer — 공급은 그대로 · 댓글은 브레이크 날이 아닐 때만 · 발행은 늘 거절**',
+  // 🔴 (2026-11-23) 발행도 같은 경로 — 공개가 하루 전체라 자정~그날 결정(01:50) 사이 새벽 자리를 전날 공개 단계로 낸다
+  check('🔴 🔴 **이어 가기 consumer — 공급 · 발행은 그대로(브레이크 날도) · 댓글은 브레이크 날이 아닐 때만**',
     headStartFor('supply', headBraked).ok && headStartFor('supply', headPlain).ok
     && headStartFor('comment', headPlain).ok && headStartFor('comment', headTrial).ok
     && !headStartFor('comment', headBraked).ok
-    && !headStartFor('publish', headPlain).ok && !headStartFor('publish', headTrial).ok
+    && headStartFor('publish', headPlain).ok && headStartFor('publish', headTrial).ok && headStartFor('publish', headBraked).ok
     && !headStartFor('comment', headNone).ok && !headStartFor('comment', headBroken).ok && !headStartFor('comment', headWrongDay).ok)
-  check('🔴 🔴 **이어 가기는 "그날 결정이 아직 없다" 한 갈래 · 발행 아님 · headStartFor 를 지난다 — 깨진 행 · kill switch 는 그대로 safest**', (() => {
+  check('🔴 🔴 **발행 — 전날이 지킨 공개 단계를 그대로 잇는다(올린 날 d30 · 평상일 d20 · 브레이크 날은 이미 낮춘 d20) · 전날 없음 · 깨짐 · 다른 날짜면 잇지 않는다(→ d1)**', (() => {
+    const p = (h: typeof headPlain) => headStartFor('publish', h)
+    const trial = p(headTrial)
+    const plain = p(headPlain)
+    const braked = p(headBraked)
+    return trial.ok && trial.stage === 'd30' && plain.ok && plain.stage === 'd20' && braked.ok && braked.stage === 'd20'
+      && !p(headNone).ok && !p(headBroken).ok && !p(headWrongDay).ok
+  })())
+  check('🔴 🔴 **발행 이어 가기 env — 러너 · 발행 트랜잭션 천장이 전날 공개 단계를 받는다(표식은 전날 날짜)**', (() => {
+    const h = headStartFor('publish', headBraked)
+    if (!h.ok) return false
+    const env = supplyHeadStartEnvOf(h)
+    const at = new Date(`${DATE}T00:50:00+09:00`)
+    return env[RELEASE_ENV] === 'd20' && env[STAGE_DECISION_MARK_ENV] === PREV_DATE
+      && resolveScale(env).releaseStage === 'd20' && boundedReleaseStage('d30', env, at) === 'd20'
+  })())
+  check('🔴 🔴 **이어 가기는 "그날 결정이 아직 없다" 한 갈래 · 발행 포함 · headStartFor 를 지난다 — 깨진 행 · kill switch 는 그대로 safest**', (() => {
     const exec = readFileSync('scripts/stage-consume-exec.mts', 'utf-8')
     return (exec.match(/supplyHeadStartEnvOf\(/g) ?? []).length === 1
-      && /if \(BY !== 'publish' && !outcome\.ok && outcome\.code === 'NO_DECISION' && prisma !== null\) \{/.test(exec)
+      && /if \(!outcome\.ok && outcome\.code === 'NO_DECISION' && prisma !== null\) \{/.test(exec)
+      && !/BY !== 'publish'/.test(exec)
       && /const yesterday = kstDateString\(new Date\(NOW\.getTime\(\) - 864e5\)\)/.test(exec)
       && /const head = headStartFor\(BY, await readSupplyHeadStart\(/.test(exec)
       && /if \(head\.ok\) \{\s+overrides = supplyHeadStartEnvOf\(head\)/.test(exec)

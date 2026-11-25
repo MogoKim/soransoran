@@ -105,8 +105,10 @@ export default function CommentLikeButton({
         >
           <path d="M12 20s-7.2-4.6-7.2-9.4A4 4 0 0 1 12 7.6a4 4 0 0 1 7.2 3C19.2 15.4 12 20 12 20Z" />
         </svg>
-        {/* 0 도 감추지 않는다 — 자리가 사라졌다 생겼다 하면 줄 폭이 흔들린다 */}
-        <span>공감 {count}</span>
+        {/* 🔴 0 은 감춘다(창업자 11-24 · 숫자를 만들지 않는다). 자리는 남긴다 — 숫자 칸이 사라졌다 생겼다 하면
+              처음 누를 때 줄 폭이 흔들린다. 0 일 때는 보이지 않는 한 칸(invisible · 읽기 도구에도 없음)으로 폭만 잡는다. */}
+        <span>공감</span>
+        <span className={`tabular-nums ${count > 0 ? '' : 'invisible'}`}>{count}</span>
       </button>
 
       {/* 🔴 색은 `PostActionBar` 의 notice 와 맞춘다 — 둘은 같은 자리의 쌍둥이다
