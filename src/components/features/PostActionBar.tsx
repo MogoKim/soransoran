@@ -236,8 +236,8 @@ export default function PostActionBar({
           aria-pressed={liked}
           className={
             liked
-              ? `inline-flex ${TOUCH_MIN} items-center gap-2 rounded-full border border-interactive bg-surface-soft px-4 text-sm font-bold text-brand-strong transition duration-150 active:scale-[0.98]`
-              : `inline-flex ${TOUCH_MIN} items-center gap-2 rounded-full border border-interactive px-4 text-sm font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]`
+              ? `inline-flex ${TOUCH_MIN} min-w-[calc(4.25rem_+_2.6em)] items-center justify-center gap-2 rounded-full border border-interactive bg-surface-soft px-4 text-sm font-bold text-brand-strong transition duration-150 active:scale-[0.98]`
+              : `inline-flex ${TOUCH_MIN} min-w-[calc(4.25rem_+_2.6em)] items-center justify-center gap-2 rounded-full border border-interactive px-4 text-sm font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]`
           }
         >
           <svg
@@ -252,10 +252,14 @@ export default function PostActionBar({
           >
             <path d="M12 20s-7.2-4.6-7.2-9.4A4 4 0 0 1 12 7.6a4 4 0 0 1 7.2 3C19.2 15.4 12 20 12 20Z" />
           </svg>
-          {/* 🔴 0 은 감춘다(창업자 11-24 · 숫자를 만들지 않는다). 자리는 남긴다 — 숫자 칸이 사라졌다 생겼다 하면
-                처음 누를 때 버튼 폭이 흔들린다. 0 일 때는 보이지 않는 한 칸(invisible · 읽기 도구에도 없음)으로 폭만 잡는다. */}
+          {/* 🔴 0 은 감춘다(창업자 11-24 · 숫자를 만들지 않는다).
+                폭은 알약의 최소 폭(가운데 정렬)이 잡는다 — 처음 눌러 "공감 1" 이 돼도 알약이 커지지 않는다.
+                최소 폭 = 고정 부분 4.25rem(좌우 여백 px-4 · 아이콘 h-5 · 간격 gap-2 두 번 — rem 이라 글자 크기를 따라가지 않는다)
+                + 글자 부분 2.6em("공감" + 숫자 한 자리 — 글자 크기 3단계를 따라간다).
+                11-25 운영 화면 실측(767px): 작게 110 · 기본 115 · 크게 125px · 0 → 1 폭 변화 0 · 좌우 여백 같음.
+                보이지 않는 0 칸으로 폭을 잡으면 테두리 안에서 글자가 왼쪽으로 쏠려 보였다(같은 날 #895 → 이 수정). */}
           <span>공감</span>
-          <span className={`tabular-nums ${count > 0 ? '' : 'invisible'}`}>{count}</span>
+          {count > 0 ? <span className="tabular-nums">{count}</span> : null}
         </button>
 
         <div className="flex-1" />
