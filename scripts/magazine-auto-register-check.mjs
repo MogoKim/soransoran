@@ -3073,7 +3073,7 @@ const relationPolicyMutation = spawnSync(process.execPath, [join('scripts', 'mag
 expect('관계 수량 정책 변이가 전부 검출된다', relationPolicyMutation.status, 0)
 expect('관계 수량 정책 변이 10개를 실제 실행했다', /관계 수량 정책 변이: 10 pass, 0 fail \(변이 10\)/.test(relationPolicyMutation.stdout), true)
 
-for (const suite of ['magazine-release-check.mjs', 'magazine-release-mutation.mjs']) {
+for (const suite of ['magazine-release-check.mjs', 'magazine-release-mutation.mjs', 'magazine-vnext-produce-check.mjs', 'magazine-vnext-produce-mutation.mjs']) {
   const run = spawnSync(process.execPath, [join('scripts', suite)], { stdio: 'inherit' })
   expect(suite, run.status, 0)
 }

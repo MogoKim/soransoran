@@ -395,6 +395,19 @@ function checkCollisions(published, drafts, queue, report) {
 }
 
 /**
+ * vNext(S4) 원고 한 편을 **같은 checkArticle** 로 판정한다 — 파일 · cwd 읽기 0(판정 사본 0).
+ * heroImage.src 를 주지 않으면 hero 파일 검사(18)는 건너뛴다(hero 는 원고 검증 뒤에 만든다).
+ * @param {object} article  slug · title · description · cluster · medical · body (+ heroImage.alt)
+ * @param {{ published?: object[] }} [context]  제목 · description 중복 대조 대상(slug 포함)
+ * @returns {{ level: 'FAIL'|'WARN', id: string, msg: string }[]}
+ */
+export function checkArticleRows(article, { published = [] } = {}) {
+  const report = createReport()
+  checkArticle(article, { published }, report)
+  return report.rows
+}
+
+/**
  * 검사를 실행하고 결과 객체를 돌려준다. 출력도 종료도 하지 않는다.
  * 다른 스크립트(패킷 생성기 등)가 import 해서 쓰는 진입점이다.
  *
