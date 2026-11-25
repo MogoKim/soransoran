@@ -78,7 +78,8 @@ async function evidenceFor(prisma: PrismaClient, i: {
   } catch (e) { log(`   ⬚ ${i.kstDate} 사실을 읽지 못했다 — ${(e as Error).name} (모름 = PASS 아님)`) }
   let side: EvidenceSideSignals | null = null
   try {
-    const c = readCostSignals(new Date(`${i.kstDate}T12:00:00+09:00`))
+    // 🔴 댓글 천장은 판정하는 그날의 단계(`i.stage` = 그날 결정의 공개 단계)로 잰다 — 지난 날을 오늘 단계로 다시 재지 않는다
+    const c = readCostSignals(new Date(`${i.kstDate}T12:00:00+09:00`), i.stage)
     side = {
       cost: [
         { lane: 'comment', name: '댓글 장부', health: c.commentLedger.health },
@@ -340,7 +341,8 @@ async function computeToday(prisma: PrismaClient, flagOn: boolean): Promise<Cont
       overdueAudits: await overdueAuditCount(prisma, NOW),
     }))
   } catch (e) { signals.push(qualitySignalOf(null, (e as Error).name)) }
-  const cost = readCostSignals(NOW)
+  // 🔴 오늘 장부는 아직 오늘 결정이 없을 때 쓴 돈이다 — 결정 전 회차의 단계(전날 결정)로 잰다 · 전날 행이 없으면 null(→ base)
+  const cost = readCostSignals(NOW, previous?.release ?? null)
   signals.push(costSignalOf([
     { name: '공급 장부', health: cost.supplyLedger.health, reasons: cost.supplyLedger.reasons },
     { name: '댓글 장부', health: cost.commentLedger.health, reasons: cost.commentLedger.reasons },

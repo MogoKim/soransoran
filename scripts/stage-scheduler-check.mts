@@ -37,7 +37,7 @@ import { CYCLES, cycleLabel, cyclePublishWindow, cycleQuotas } from '../src/lib/
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, simulateDay } from '../src/lib/publish-slot-catchup'
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import {
-  COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX,
+  COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_DAILY_USD_CAP,
   firstCommentDelayMs,
 } from '../src/lib/persona-comment-auto-lane'
 import {
@@ -598,9 +598,10 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
   check('🔴 11-17 경계 — $0.060 × 30 = $1.80 PASS · $0.060001 FAIL',
     !edgePass.warnings.includes('SUPPLY_COST_SHORT') && edgeFail.warnings.includes('SUPPLY_COST_SHORT'))
 }
-check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 코드 천장 $0.90',
+// 🔴 댓글 천장 값을 숫자로 고정하는 곳은 이 한 줄뿐이다 — 다른 검사는 `COMMENT_DAILY_USD_CAP` · `commentDailyCapOf` 를 읽는다
+check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 코드 천장 base $0.90 · D50 날 $1.50',
   supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
-  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.9)
+  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_DAILY_USD_CAP.base === 0.9 && COMMENT_DAILY_USD_CAP.d50 === 1.5)
 check('🔴 저예산 천장은 날짜 계약의 분수 칸(5/7)만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
   supplyCostProofBudgetUsd('2026-11-05', 1.19) === 1.19 * 5 / 7
   && judgeNextPreflight('d20', factsFor('d20', {
