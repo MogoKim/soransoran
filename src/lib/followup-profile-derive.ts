@@ -145,11 +145,17 @@ export function deriveFollowupProfile(i: {
   contractValidPersonas: number | null
   /** 댓글 장부 하루 상한(USD) — 모르면 null */
   commentDailyUsdCap: number | null
+  /**
+   * 글당 목표 평균 — 기본은 지금 효력이 있는 줄(`deriveCommentScale` 기본값). 지난 단계의 산출을 다시 잴 때는 그때의 줄을 넘긴다
+   * (2026-11-25 밤 4: 평균 7 줄을 덧붙이자 D20 역사 fixture 가 새 평균으로 다시 재져 깨졌다 — `d20-readiness-check`)
+   */
+  meanSize?: number
 }): FollowupDerive {
   const codes = new Set<FollowupDeriveCode>()
   const counts: Record<string, number> = {}
   const scale = i.contractValidPersonas === null || !(i.contractValidPersonas > 0) ? null : deriveCommentScale({
     dailyPosts: i.targetDailyPosts, personas: { normal: i.contractValidPersonas, quiet: 0 }, runsPerDay: i.commentRunsPerDay,
+    ...(i.meanSize === undefined ? {} : { meanSize: i.meanSize }),
   })
   const dailyCount = scale?.followup.dailyCount ?? 0
   counts.dailyCount = dailyCount

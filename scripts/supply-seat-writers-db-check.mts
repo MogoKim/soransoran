@@ -58,18 +58,24 @@ const DAY = 24 * HOUR
 const kst = (day: string, hm: string): Date => new Date(`${day}T${hm}:00+09:00`)
 const TODAY = '2026-11-18'
 const TOMORROW = '2026-11-19'
-/** 낮 회차 17:15 · 운영 창이 끝난 뒤 23:55(마지막 틱 23:50 뒤 — 창은 하루 전체 · 2026-11-23) */
-const NOON = kst(TODAY, '17:15')
+/**
+ * 저녁 회차 20:35(20:20 바퀴 · 창 끝 22:50) · 운영 창이 끝난 뒤 23:55(마지막 틱 23:50 뒤 — 창은 하루 전체 · 2026-11-23)
+ * 🔴 (2026-11-25 밤 4) 지평이 "지금 창 끝 + 다음 창 첫 자리 1칸"이 되었다 — 옛 낮 회차(17:15)의 지평은 17:20 · 18:20 두 칸이라
+ *    쓸 사람(2명)이 모자라는 모양이 생기지 않는다. 같은 숫자(오늘 빈 자리 4 · 내일 1)를 내는 20:35 회차로 옮겼다:
+ *    17:20 · 18:20 · 19:50 을 놓쳐 밀린 몫 3(20:40 · 20:50 · 21:00 틱) + 21:50 + 다음 창 첫 자리(내일 00:10).
+ */
+const NOON = kst(TODAY, '20:35')
 const EVENING = kst(TODAY, '23:55')
-/** 🔴 하루 20편 단계 — 오늘 16편이 나갔다. 17:15 에 남은 공개 기회는 4개(d20 슬롯 17~20번째) + 내일 첫 자리 */
+/** 🔴 하루 20편 단계 — 오늘 16편이 나갔다. 20:35 에 남은 공개 기회는 4개(d20 슬롯 17~20번째 · 셋은 밀렸다) + 내일 첫 자리 */
 const E = markedStageEnv({ [RELEASE_ENV]: 'd20', [CAPACITY_ENV]: 'd20' }, TODAY)
 /**
  * 🔴 **17번째 d20 슬롯 — 16편이 나간 뒤 처음 도래하는 자리.** 시각은 정본(`profileOf('d20').slots`)에서 읽는다 —
  *    슬롯 표가 다시 계산돼도(2026-11-22 댓글 24시간 격자) 이 검사가 옛 시각에 묶이지 않는다.
+ *    🔴 (2026-11-25 밤 4) 저녁 회차(20:35)에는 이미 밀린 자리다 — 발행 러너 반례(③)는 그 자리 시각에 돈다.
  */
 const NEXT_SLOT = profileOf('d20').slots[16]!
 const NEXT_SLOT_AT = kst(TODAY, `${String(NEXT_SLOT.hour).padStart(2, '0')}:${String(NEXT_SLOT.minute).padStart(2, '0')}`)
-if (NEXT_SLOT_AT.getTime() <= NOON.getTime()) throw new Error(`fixture — 17번째 d20 슬롯 ${NEXT_SLOT_AT.toISOString()} 이 낮 회차(17:15) 뒤가 아니다`)
+if (NEXT_SLOT_AT.getTime() >= NOON.getTime()) throw new Error(`fixture — 17번째 d20 슬롯 ${NEXT_SLOT_AT.toISOString()} 이 저녁 회차(20:35) 전이 아니다(밀린 자리여야 한다)`)
 const scale = resolveScale(E)
 
 const machineGate = (voiceCode: string, at: Date, id: string) => ({
@@ -169,7 +175,7 @@ async function main(): Promise<void> {
     Object.entries(load.byCode).filter(([, r]) => (r.attemptCapacity ?? 0) > 0).map(([c]) => c).sort()
 
   // ─────────────────────────────────────────────────────────
-  console.log('① 낮 회차(17:15) — 오늘 빈 자리 4개 + 내일 첫 자리 1개')
+  console.log('① 저녁 회차(20:35) — 오늘 빈 자리 4개(밀린 셋 + 21:50) + 다음 창 첫 자리(내일 00:10) 1개')
   // ─────────────────────────────────────────────────────────
   {
     const snap = await snapshot(prisma, { env: E, now: NOON })
@@ -200,15 +206,21 @@ async function main(): Promise<void> {
   }
 
   // ─────────────────────────────────────────────────────────
-  console.log('\n② 운영 창이 끝난 뒤(23:55) — 오늘 회수 기회 0 · 지평은 내일 첫 자리 하나')
+  console.log('\n② 운영 창이 끝난 뒤(23:55) — 오늘 회수 기회 0 · 지평은 22:20 바퀴의 내일 몫(00:10) + 다음 창 첫 자리(02:10)')
   // ─────────────────────────────────────────────────────────
   {
+    /**
+     * 🔴 (2026-11-25 밤 4) 낮에 만든 초안(P04 · P05)은 수집 뒤 6시간이 지나 내일 자리를 쓰지 못한다(칸 해제) —
+     *    "내일 자리로 쓰는 중인 사람" 은 그 자리에 나갈 수 있는 초안을 든 사람이다. 23:55 회차 직전에 만든 초안을 쥐여 준다.
+     */
+    await draft('P04', 'machine:auto-draft-v5', EVENING)
+    await draft('P05', 'machine:auto-draft-v5', EVENING)
     const snap = await snapshot(prisma, { env: E, now: EVENING })
     const jit = snap.jit
-    check('fixture — 지평 1자리(내일 첫 자리) · 빈 자리 1', jit !== null && jit.slots === 1 && jit.unfilled.length === 1
-      && kstDateString(jit.horizon[0]!) === TOMORROW, JSON.stringify(jit?.horizon.map((d) => d.toISOString())))
-    check('수요 1 — 내일 자리 하나만 산다', jit !== null && jit.fillable.length === 1
-      && judgeJitDemand({ slots: jit.slots, readyFilled: jit.readyFilled, writable: jit.fillable.length }).upTo === 1)
+    check('fixture — 지평 2자리(내일 00:10 · 02:10) · 빈 자리 2', jit !== null && jit.slots === 2 && jit.unfilled.length === 2
+      && jit.horizon.every((d) => kstDateString(d) === TOMORROW), JSON.stringify(jit?.horizon.map((d) => d.toISOString())))
+    check('수요 2 — 내일 자리 둘만 산다', jit !== null && jit.fillable.length === 2
+      && judgeJitDemand({ slots: jit.slots, readyFilled: jit.readyFilled, writable: jit.fillable.length }).upTo === 2)
     const load = await buildSpeakerLoad(prisma, 'sw-evening', { env: E, now: EVENING, scale })
     const pool = poolOf(load)
     check('🔴 🔴 **내일 자리는 내일 쓸 수 있는 사람에게** — 오늘 쓴 사람(P03 · F01~F14)도 내일은 쓸 수 있다',

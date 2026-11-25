@@ -26,8 +26,10 @@ import { authoritativeGate } from '../../src/lib/auto-ready-repo'
 import { prepareCandidates } from '../../src/lib/supply-candidates'
 import { judgeVoiceMatch, voiceOfGateResults } from '../../src/lib/original-post-voice-match'
 import {
-  judgeSlotRelease, matchOpportunitiesToSlots, type ReleaseReason, type SlotOpportunity,
+  judgeSlotRelease, matchOpportunitiesToSlots, CAPTURE_AGE_LIMIT_HOURS, SOURCE_CLOCK_SKEW_MS,
+  type ReleaseReason, type SlotOpportunity,
 } from '../../src/lib/source-slot-release'
+import { CYCLES, cycleIndexAt, cyclePublishWindow } from '../../src/lib/cycle-schedule'
 import { slotTimesOn } from '../../src/lib/stage-ladder-generic'
 import { kstDateString } from '../../src/lib/release-canary'
 import { availablePersonasAt } from '../../src/lib/supply-capacity-forecast'
@@ -54,7 +56,7 @@ export const laneOf = (decidedBy: string | null): PublishLane =>
   (decidedBy ?? '').trim() === AUTO_DECIDER ? 'auto' : 'human'
 
 export type LoadedStock = {
-  /** 대기열 전체 (APPROVED·EDITED · 미발행) */
+  /** 대기열 (APPROVED·EDITED · 미발행 · 🔴 읽기 범위 `queueReadFromOf` 안 — 그 밖은 어느 슬롯에서도 만료다) */
   queueTotal: number
   /**
    * 🔴 (2026-09-29) 오늘(KST) 자동 target 발행 수 — 자동 READY(`AUTO_DECIDER`) 행이 **무인 표식**으로 나간 것만.
@@ -133,6 +135,28 @@ const kstDayStart = (now: Date): Date => {
   return new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate()) - 9 * 3600_000)
 }
 
+const HOUR_MS = 3_600_000
+const DAY_MS = 86_400_000
+
+/**
+ * 🔴 **큐 읽기 범위 — 수집 뒤 6시간 + 시계 오차** (2026-11-25 밤 4 · 11-19 승인 "큐 읽기 범위").
+ *    큐 행은 원천을 수집한 뒤에 생긴다(`createdAt` ≥ 수집 시각 − 시계 오차). 그래서 이보다 먼저 생긴 행은
+ *    어느 슬롯(지금 이후)에서도 수집 뒤 6시간을 넘겼다(`CAPTURED_TOO_OLD_AT_SLOT`) — 읽지 않는다.
+ *    판정을 새로 하지 않는다: 읽힌 행은 전부 그대로 정본 `judgeSlotRelease` 를 지난다(6시간 안에 생겼어도 수집이
+ *    더 이르면 만료다). 상태를 고치지 않는다(DB write 0) — 만료 판정을 받지 못한 채 APPROVED 로 남은 죽은 행이
+ *    매 틱 다시 읽히던 것만 멈춘다.
+ *    🔴 되돌릴 때(이 범위를 지울 때) 6~72시간 된 APPROVED 행이 다시 읽힌다 — 되돌리기 전에 그 수를 센다.
+ */
+export const queueReadFromOf = (now: Date): Date =>
+  new Date(now.getTime() - CAPTURE_AGE_LIMIT_HOURS * HOUR_MS - SOURCE_CLOCK_SKEW_MS)
+
+/**
+ * 🔴 **발행 이력 읽기 범위 — 8일** (2026-11-25 밤 4). 소비자는 `availablePersonasAt`(주간 상한 7일 · 최소 간격) 하나다.
+ *    지평이 닿는 가장 먼 자리는 다음 날이다(다음 창 첫 자리) — 그 자리에서 7일을 거슬러도 8일 안이다.
+ *    최소 간격은 7일보다 짧다(가장 긴 d1 이 5일) — 8일보다 오래된 발행은 어느 판정도 바꾸지 않는다.
+ */
+export const HISTORY_LOOKBACK_DAYS = 8
+
 /**
  * 🔴 **발행 러너와 똑같이 읽고 똑같이 조립한다.**
  *    바꾸려면 이 한 곳을 바꾼다 — 그러면 러너와 probe 가 함께 바뀐다.
@@ -143,7 +167,7 @@ export async function loadPublishableStock(
   opts: { autoReadyOpen?: boolean } = {},
 ): Promise<LoadedStock> {
   const raw = await prisma.originalPostApprovalQueue.findMany({
-    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null, createdAt: { gte: queueReadFromOf(now) } },
     select: {
       id: true, status: true, createdPostId: true, gateVerdict: true,
       promptVersion: true, model: true, matchedPersonaId: true,
@@ -203,7 +227,8 @@ export async function loadPublishableStock(
   const queueCandidates: QueueCandidate[] = targets.map((t, i) => queueCandidateOf(t, i, codeOfPersonaId))
 
   const historyRows = await prisma.personaActivityLog.findMany({
-    where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
+    where: { kind: 'post', createdAt: { gte: new Date(now.getTime() - HISTORY_LOOKBACK_DAYS * DAY_MS) } },
+    select: { createdAt: true, persona: { select: { code: true } } },
   })
   const history = personas.map((p) => ({
     code: String(p.code),
@@ -389,25 +414,45 @@ export function readyOpportunitiesOf(loaded: LoadedStock, opts: {
   return out
 }
 
+const DAY_MINUTES = 24 * 60
+
 /**
- * 🔴 **가까운 수요 지평** (2026-10-11 Batch A2 · 2026-10-21 catch-up 정렬) —
- *    발행 heartbeat 가 오늘 운영 창 안에서 실제로 낼 수 있는 가장 이른 기회 +
- *    **다음 실제 발행 기회 하나**(다음 운영일 release 첫 슬롯).
- *    · 정규 슬롯을 놓쳤어도 발행기의 `도래 슬롯 − 오늘 발행 수` backlog 가 남아 있으면 다음 heartbeat 를 센다.
- *    · 앞으로 도래할 정규 슬롯도 같은 시뮬레이션에 자연스럽게 포함한다.
- *    · 운영 창 마지막 틱(23:50) 뒤에는 오늘 부족분을 되살리지 않고 다음 첫 기회 하나만 남긴다.
- *      창이 하루 전체라 그날 마지막 공급 회차(22:20 바퀴)는 오늘 남은 자리 + 다음 날 첫 자리(00:xx)를 산다.
- * 🔴 **지운 길** — "오늘 남은 release 슬롯 + 내일 capacity(다음에 증명할 단계) 전체 슬롯".
- *    d5 를 내며 d10 을 준비하는 날, 오늘 d5 슬롯이 내일 d10 10칸을 끌어와 수요를 15 로 부풀렸다.
+ * 🔴 **지금 공개 창의 끝** — 오늘 KST 자정에서 센 분 · 열린 끝(`[start, end)`). 지금 진행 중인 바퀴(`cycleIndexAt`)의
+ *    공개 창(`cyclePublishWindow`) 끝이다. 00:00~00:59 는 전날 22:20 바퀴라 그 창 끝(전날 자정 기준 1530)을
+ *    오늘 자정 기준(90)으로 옮긴다 — 옮기지 않으면 지평이 다시 하루 끝까지 열린다(검토 R1).
+ *    바퀴를 모르면 null — 추정하지 않는다. 🔴 바퀴 표는 고치지 않는다(`cycle-schedule` 은 읽기만 한다).
+ */
+function currentWindowEndMinute(nowMinute: number): number | null {
+  const idx = cycleIndexAt(nowMinute)
+  const w = idx === null ? null : cyclePublishWindow(idx)
+  if (w === null) return null
+  return nowMinute < CYCLES[0]!.minute ? w.end - DAY_MINUTES : w.end
+}
+
+/**
+ * 🔴 **가까운 수요 지평 — 지금 창 끝까지 + 다음 창 첫 자리 1칸** (2026-11-25 밤 4 · 판정서 §2.1)
+ *    · 지금 창 끝 전 — 발행 heartbeat 가 실제로 낼 수 있는 기회(정규 자리 + 놓친 자리 catch-up). 시뮬레이션은 발행기와 같다:
+ *      같은 heartbeat 격자 · 운영 창(23:50 틱까지) · 회차 상한 · `도래 슬롯 − 오늘 발행 수` backlog. 밀린 몫은 지금 창의
+ *      빈 틱이 받고, 창 끝 틱부터는 다음 창 몫이다.
+ *    · 자정을 넘는 창(22:20 바퀴 · 끝 01:30) — 내일 자리 중 창 끝 전 것(00:10 · 01:00)도 지금 창 몫이다.
+ *    · 다음 창 첫 자리 1칸 — 창 끝 이후 가장 이른 정규 자리(오늘에 없으면 내일). 창 첫 자리가 공급 회차 15분 뒤인
+ *      바퀴가 있어(10:30 · 11:50 · 12:50) 앞 회차가 그 한 칸을 사 둔다 — 밀림이 다음 창으로 번지지 않는다.
+ *      그 글의 대기는 가장 긴 경우(01:00 수집 → 05:00 자리)에도 수집 뒤 6시간 안이다.
+ *    · 바퀴를 모르면 빈 지평 — 추정하지 않는다.
+ * 🔴 **지운 길 (2026-11-25 밤 4)** — "오늘 운영 창 끝(23:50)까지 전부 + 내일 첫 자리 1칸". 아침 회차가 하루치를 미리 사고,
+ *    그 옛 재고가 수요 계산에서 오후 자리를 덮어 오후 회차가 새 글을 덜 샀다(수집→공개 중앙값 3.32h). 수집 뒤 6시간
+ *    만료와 같이 넣었다 — 지평만 길면 먼 자리용 글을 사서 버린다.
+ * 🔴 **지운 길 (2026-10-11)** — "오늘 남은 release 슬롯 + 내일 capacity(다음에 증명할 단계) 전체 슬롯".
  *    다음 단계 증명일 전체를 감당하는가는 controller preflight(`judgeNextPreflight` · 증명일 전체 슬롯)가 따로 본다 —
  *    증명 준비도와 오늘 생산량을 섞지 않는다.
  */
 export function upcomingSlots(input: {
   now: Date; publishedToday: number; release: ScaleProfile
 }): Date[] {
-  const tomorrow = kstDateString(new Date(kstMidnight(input.now).getTime() + 86_400_000))
   const dayStart = kstMidnight(input.now)
   const nowMinute = Math.floor((input.now.getTime() - dayStart.getTime()) / 60_000)
+  const end = currentWindowEndMinute(nowMinute)
+  if (end === null) return []
   const firstHeartbeat = Math.max(
     PUBLISH_WINDOW_START_MINUTE,
     Math.ceil(nowMinute / HEARTBEAT_INTERVAL_MINUTES) * HEARTBEAT_INTERVAL_MINUTES,
@@ -416,7 +461,7 @@ export function upcomingSlots(input: {
   const todayOpportunities: Date[] = []
 
   for (let minute = firstHeartbeat;
-    minute <= PUBLISH_WINDOW_END_MINUTE && simulatedPublished < input.release.dailyTarget;
+    minute <= PUBLISH_WINDOW_END_MINUTE && minute < end && simulatedPublished < input.release.dailyTarget;
     minute += HEARTBEAT_INTERVAL_MINUTES) {
     const due = input.release.slots
       .filter((slot) => slot.hour * 60 + slot.minute <= minute)
@@ -428,8 +473,13 @@ export function upcomingSlots(input: {
     simulatedPublished += allowed
   }
 
-  const next = slotTimesOn(tomorrow, input.release).slice(0, 1)
-  return [...todayOpportunities, ...next]
+  /** 🔴 오늘 자정에서 센 분 — 내일 자리는 1440 이상이다 */
+  const minuteOf = (d: Date): number => Math.round((d.getTime() - dayStart.getTime()) / 60_000)
+  const today = slotTimesOn(kstDateString(dayStart), input.release)
+  const tomorrow = slotTimesOn(kstDateString(new Date(dayStart.getTime() + DAY_MS)), input.release)
+  const crossing = tomorrow.filter((d) => minuteOf(d) < end)
+  const nextWindowFirst = [...today, ...tomorrow].find((d) => minuteOf(d) >= end)
+  return [...todayOpportunities, ...crossing, ...(nextWindowFirst === undefined ? [] : [nextWindowFirst])]
 }
 
 /**
@@ -644,7 +694,7 @@ export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: Recov
    *    살릴지") · `freshnessHeld`("사람 검수로") 는 sunk-cost 구제 레인이었다. 이제 발행 트랜잭션이 만난 즉시 EXPIRED 로
    *    옮기고 다음 후보로 교체한다. 레거시 행 일괄 만료는 **계획만** 있다(운영 write 승인 필요).
    */
-  releaseIneligible: { wip: false, owner: 'none', label: '원천 가치 없음 — 예정 슬롯에서 원문 나이 ≥ 72h (만료 예정 · 사람이 살리지 않는다)' },
+  releaseIneligible: { wip: false, owner: 'none', label: '원천 가치 없음 — 예정 슬롯에서 원문 나이 ≥ 72h 또는 수집 뒤 ≥ 6h (만료 예정 · 사람이 살리지 않는다)' },
   releaseUnknown: { wip: false, owner: 'none', label: '원천 증거 모름 — 게시 시각 · 반응 · 동력 없음 (만료 예정 · backfill 없음)' },
   recoveryBroken: { wip: false, owner: 'human', label: '깨진 복구 — 기존 배정이 쓸 수 없는 Persona' },
   assignmentException: { wip: false, owner: 'human', label: '배정 예외 — 말투 · 생활사 · 비활성 (시간이 풀지 않는다)' },
@@ -694,11 +744,11 @@ function bucketOfReject(code: RejectCode, row: AutoRow | undefined): StockBucket
 }
 
 /**
- * 🔴 정본 슬롯 판정 제외 → 칸. 나이 초과만 ineligible · 나머지(증거 · 시각 · 반응 · 동력 모름)는 unknown.
+ * 🔴 정본 슬롯 판정 제외 → 칸. 나이 초과(원문 72h · 수집 뒤 6h)만 ineligible · 나머지(증거 · 시각 · 반응 · 동력 모름)는 unknown.
  *    계획의 첫 판정은 hard gate 를 이미 지난 행 · 배정 전(pending)이라 HARD_GATE · NO_PERSONA_AT_SLOT 은 여기 오지 않는다.
  */
 function bucketOfHold(hold: ReleaseReason): StockBucket {
-  return hold === 'SOURCE_TOO_OLD_AT_SLOT' ? 'releaseIneligible' : 'releaseUnknown'
+  return hold === 'SOURCE_TOO_OLD_AT_SLOT' || hold === 'CAPTURED_TOO_OLD_AT_SLOT' ? 'releaseIneligible' : 'releaseUnknown'
 }
 
 /**

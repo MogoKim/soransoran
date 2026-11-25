@@ -66,7 +66,12 @@ const MUTATIONS: Mutation[] = [
   { name: '대화 감사 없음을 PASS 로', from: "if (raw === null || raw === undefined || typeof raw !== 'object') {", to: "if (raw === null || raw === undefined) return { ok: true }\n  if (typeof raw !== 'object') {" },
   { name: '도장 열쇠 대조 제거', from: 'if (followupKeyOf(expect.postId, s.ordinal) !== expect.dedupKey)', to: 'if (false)' },
   { name: '사건 순번을 live 구조 상한으로 오인', from: 'if (!isCount(s.ordinal) || s.ordinal < 2)', to: 'if (!isCount(s.ordinal) || s.ordinal < 2 || s.ordinal > FOLLOWUP_TOTAL_PER_POST_MAX)' },
-  { name: '적은 글 먼저 제거', from: 'a.go.extrasSoFar - b.go.extrasSoFar\n    ||', to: '0 ||' },
+  // ── 회차 순서 — 진척률(추가 ÷ (계획 크기 − 1)) 낮은 글부터 (2026-11-25 밤 4) ──
+  { name: '🔴 진척률 정렬 제거', from: 'a.go.extrasSoFar * (b.go.planSize - 1) - b.go.extrasSoFar * (a.go.planSize - 1)\n    ||', to: '0 ||' },
+  { name: '🔴 진척률 → 옛 추가 수 정렬(뜨거운 글이 뒤로 밀린다)', from: 'a.go.extrasSoFar * (b.go.planSize - 1) - b.go.extrasSoFar * (a.go.planSize - 1)\n    ||', to: 'a.go.extrasSoFar - b.go.extrasSoFar\n    ||' },
+  // ── 뜨거운 글 — 판정이 hot 을 계획에 넘긴다 ──
+  { name: '🔴 뜨거운 글 무시(계획 크기를 보통 글로)', from: 'const planSize = threadPlanOf(f.postId, f.publishedAtMs, f.hot).size', to: 'const planSize = threadPlanOf(f.postId, f.publishedAtMs, false).size' },
+  { name: '🔴 뜨거운 글 무시(자리를 보통 글 계획으로)', from: 'planSlotAt(threadPlanOf(f.postId, f.publishedAtMs, f.hot), ordinal)', to: 'planSlotAt(threadPlanOf(f.postId, f.publishedAtMs, false), ordinal)' },
   { name: '🔴 출처 문맥 null 글 격리 제거', from: 'if (f.operational === null) blocked.push', to: 'if (false) blocked.push' },
   { name: '🔴 최신 글 우선 제거(hash-only 정렬 복원)',
     from: "(b.publishedAtMs ?? 0) - (a.publishedAtMs ?? 0)\n    || (a.postId < b.postId ? -1 : a.postId > b.postId ? 1 : 0)",

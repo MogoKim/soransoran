@@ -58,6 +58,7 @@ import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { judgeGateReport } from '../../src/lib/persona-comment-gate-report'
 import { judgeStaticVoiceCapability } from '../../src/lib/persona-voice-repeat'
 import { capBlocksForOneMore } from '../../src/lib/persona-cap-usage'
+import { HOT_QUEUE_SELECT, hotQueueWhereOf, hotSourceByPost, isHotThread } from '../../src/lib/persona-thread-hot'
 import { createPendingCandidateLocked } from '../../src/lib/persona-candidate-write'
 
 /**
@@ -393,7 +394,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
     },
   })
   const personaCommentIds = comments.filter((c) => c.commentOrigin === 'PERSONA').map((c) => c.id)
-  const [qs, ls, reports, openRows, fuRows] = await Promise.all([
+  const [qs, ls, reports, openRows, fuRows, hotRows] = await Promise.all([
     prisma.personaApprovalQueue.findMany({
       where: { publishedCommentId: { in: personaCommentIds } },
       select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
@@ -410,7 +411,10 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
       where: { decidedBy: FOLLOWUP_LANE_DECIDED_BY, status: 'PUBLISHED', decidedAt: { gte: dayStart } },
       select: { personaId: true },
     }),
+    // 🔴 뜨거운 글 판독 재료 — 발행 트랜잭션과 같은 조회 모양(`persona-thread-hot`)
+    prisma.originalPostApprovalQueue.findMany({ where: hotQueueWhereOf(postIds), select: HOT_QUEUE_SELECT }),
   ])
+  const hotSourceOf = hotSourceByPost(hotRows)
   const reported = new Set(reports.map((r) => r.commentId))
   const openPosts = new Set(openRows.map((r) => r.targetPostId))
   const contentOf = new Map(comments.map((c) => [c.id, c.content]))
@@ -435,13 +439,16 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
         })),
       }),
     }))
+    const publishedAtMs = (p.publishAt ?? p.createdAt).getTime()
     return {
-      postId: p.id, publishedAtMs: (p.publishAt ?? p.createdAt).getTime(), postStatus: p.status,
+      postId: p.id, publishedAtMs, postStatus: p.status,
       authorPersonaId: p.personaId,
       // 🔴 외부로 보낼 수 있는 Persona 글만 — 실회원 · 외부 원문 · 운영자 · 불명은 잇지 않는다
       autoManagedPost: author === null ? null : author.externalSendAllowed,
       comments: rows,
       hasOpenQueue: openPosts.has(p.id),
+      // 🔴 큐 행이 없는 글(사람이 직접 쓴 Persona 글)은 뜨겁지 않다 — 트랜잭션도 같은 판독이다
+      hot: isHotThread(hotSourceOf.get(p.id) ?? null, publishedAtMs),
     }
   }
 
@@ -507,7 +514,7 @@ export async function runFollowupPhase(deps: FollowupPhaseDeps): Promise<Followu
   const prof = validateFollowupProfile(deps.profile, deps.runtimeStage)
   const perPersonaMax = prof.ok ? prof.profile.perPersonaDailyMax : 0
 
-  // ── 대상 — 추가가 적은 글부터 · 한 글 한 건 ──
+  // ── 대상 — 진척률(추가 ÷ (계획 크기 − 1))이 낮은 글부터 · 한 글 한 건 ──
   const ready: { postId: string; publishedAtMs: number; go: Extract<FollowupPostVerdict, { verdict: 'GO' }>; facts: FollowupPostFacts }[] = []
   for (const p of posts) {
     const f = factsOf(p)

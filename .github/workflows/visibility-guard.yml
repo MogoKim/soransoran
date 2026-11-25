@@ -302,6 +302,11 @@ jobs:
           #    그리고 막는 줄 하나를 지우면 반드시 FAIL 하는지(변이 · 임시 디렉터리만). 새 step 이 아니다(무조건 step 상한 불변)
           npm run check:persona-followup
           npm run check:persona-followup-mutation
+          # 🔴 밤 4(2026-11-25) — 뜨거운 글 판독 · 계획 크기 12~20 · 옛 줄 소급 0 과 그 변이 · 댓글 하루 천장(그날 단계 · D50 $1.50 · 그 밖 $0.90)
+          #    변이. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run check:persona-thread-hot
+          npm run check:persona-thread-hot-mutation
+          npm run check:comment-daily-cap-mutation
           # 🔴 H1(2026-11-14) — 실패 분류 · 최소 범위 격리 · 같은 회차 재선정 루프(실제 run 함수 · mkdtemp 기억 파일)와 그 변이
           npm run check:persona-followup-reselect
           npm run check:persona-followup-reselect-mutation

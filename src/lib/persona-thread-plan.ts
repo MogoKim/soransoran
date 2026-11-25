@@ -5,6 +5,7 @@
  * 어떤 모양으로 언제쯤 말할지가 정해진다. 길이는 계획이 정하지 않는다 — 자리마다 뽑는 실제 댓글 하나의 꼴 값이 정한다(`persona-comment-form`). 저장하지 않는다 — 같은 글은 언제 다시 세워도 같은 계획이다.
  *
  * 🔴 숫자는 `persona-thread-target` 의 둘(글당 목표 평균 · 대화 마감)뿐이다. 크기 분포 · 자리 종류 수 · 간격이 거기서 나온다.
+ *    뜨거운 글은 그 줄의 `hot` 칸이 크기 범위만 바꾼다 — 자리 종류 · 모양 · 간격은 같은 식이다.
  *
  * · 1번 자리는 첫 댓글 레인(`persona-comment-auto-lane`)의 것이다. 이 파일은 2번 자리부터 정한다.
  * · 자리 종류는 셋뿐이다 — 글에 답(새 사람) · 글쓴이가 앞 댓글에 답 · 다른 사람이 앞 댓글에 답.
@@ -14,7 +15,8 @@ import { createHash } from 'node:crypto'
 
 import { REAL_REACTION_SHARE, type ReactionType } from './persona-reaction-roles'
 import {
-  PLAN_AUTHOR_SEATS_MAX, PLAN_MIN_GAP_MS, PLAN_RUNNER_TICK_MS, THREAD_DEADLINE_MS, THREAD_SIZE_MIN, threadMeanSizeAt, threadSizeMaxOf,
+  PLAN_AUTHOR_SEATS_MAX, PLAN_MIN_GAP_MS, PLAN_RUNNER_TICK_MS, THREAD_DEADLINE_MS, THREAD_SIZE_MIN, threadHotAt, threadMeanSizeAt, threadSizeMaxOf,
+  type ThreadHot,
 } from './persona-thread-target'
 
 export { PLAN_MIN_GAP_MS, THREAD_DEADLINE_MS } from './persona-thread-target'
@@ -46,13 +48,22 @@ export type ThreadPlan = { size: number; slots: readonly PlanSlot[] }
  */
 export function threadSizeCdfOf(meanSize: number): readonly (readonly [size: number, upTo: number])[] {
   const n = threadSizeMaxOf(meanSize) - THREAD_SIZE_MIN
-  const p = (meanSize - THREAD_SIZE_MIN) / n
+  return binomialSizeCdf(THREAD_SIZE_MIN, n, (meanSize - THREAD_SIZE_MIN) / n)
+}
+/**
+ * 🔴 **뜨거운 글 크기 분포(누적)** — 크기 = `sizeMin` + 이항(`sizeMax − sizeMin`, ½). 12~20 이면 평균 16 · 18 이상은 37/256(약 14%).
+ *    보통 글과 같은 식(이항)이고 확률만 ½ 로 고정이다 — 새 숫자는 줄의 `hot` 칸뿐이다.
+ */
+export function hotSizeCdfOf(hot: ThreadHot): readonly (readonly [size: number, upTo: number])[] {
+  return binomialSizeCdf(hot.sizeMin, hot.sizeMax - hot.sizeMin, 0.5)
+}
+function binomialSizeCdf(min: number, n: number, p: number): readonly (readonly [size: number, upTo: number])[] {
   let c = 1
   let acc = 0
   return Array.from({ length: n + 1 }, (_, k) => {
     if (k > 0) c = (c * (n - k + 1)) / k
     acc += c * p ** k * (1 - p) ** (n - k)
-    return [THREAD_SIZE_MIN + k, k === n ? 1 : acc] as const
+    return [min + k, k === n ? 1 : acc] as const
   })
 }
 /** 자리 종류가 허용하는 모양 — 그 안에서 실제 몫(`REAL_REACTION_SHARE`)으로 뽑는다 */
@@ -101,9 +112,16 @@ function gapsOf(postId: string, size: number): number[] {
   return w.map((x) => Math.max(PLAN_MIN_GAP_MS, Math.floor((base * n * x) / sum)))
 }
 
-/** @param publishedAtMs 공개 시각 — 그때 효력이 있던 목표 평균을 쓴다. 모르면 마지막 줄 */
-export function threadPlanOf(postId: string, publishedAtMs: number | null = null): ThreadPlan {
-  const size = pick(threadSizeCdfOf(threadMeanSizeAt(publishedAtMs)), unitOf('plan-size', postId))
+/**
+ * @param publishedAtMs 공개 시각 — 그때 효력이 있던 줄(목표 평균 · 뜨거운 글 칸)을 쓴다. 모르면 마지막 줄
+ * @param hot 이 글이 뜨거운가(`isHotThread`) — 🔴 기본값이 없다. 부르는 곳(생성 판정 · 발행 트랜잭션)이 같은 판독을 넘겨야
+ *            한 곳만 고친 상태가 컴파일되지 않는다. 뜨거워도 그 줄에 `hot` 칸이 없으면 보통 글 계획이다(옛 글 소급 0).
+ */
+export function threadPlanOf(postId: string, publishedAtMs: number | null, hot: boolean): ThreadPlan {
+  const hotLine = hot ? threadHotAt(publishedAtMs) : null
+  // 🔴 같은 씨앗 — 보통 글이든 뜨거운 글이든 크기는 `plan-size` 한 번의 추첨이다
+  const cdf = hotLine === null ? threadSizeCdfOf(threadMeanSizeAt(publishedAtMs)) : hotSizeCdfOf(hotLine)
+  const size = pick(cdf, unitOf('plan-size', postId))
   const counts = kindCounts(size)
   const kinds = (Object.keys(counts) as PlanSeatKind[])
     .flatMap((k) => Array.from({ length: counts[k] }, (_, n) => ({ k, u: unitOf('plan-order', postId, k, String(n)) })))

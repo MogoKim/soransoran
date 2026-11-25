@@ -68,10 +68,14 @@ const GITHUB_ENV = markedStageEnv({
   SORAN_RELEASE_WINDOW_STAGE: 'd10', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29',
 })
 /**
- * 🔴 원문 증거 기준 시각 — 시나리오 날의 KST 자정. 게시는 그보다 6시간 앞(전날 18시)이라 그날 · 다음 날 아침까지
- *    72h 안이다. 증거 없는 옛 fixture 는 트랜잭션이 EXPIRED 로 옮긴다(source-slot-v1).
+ * 🔴 원문 증거 기준 시각 — 그 후보가 **나갈 자리 시각**. 수집은 1시간 앞 · 게시는 6시간 앞이라 기준 −1h ~ +5h 의 발행에서
+ *    eligible 이다. 증거 없는 옛 fixture 는 트랜잭션이 EXPIRED 로 옮긴다(source-slot-v1).
+ *    🔴 (2026-11-25 밤 4) 옛 기준(시나리오 날 KST 자정 하나 · 수집 = 게시 + 1.1h)은 수집 뒤 6시간 만료로 하루 내내 쓸 수 없다 —
+ *       실제 공급도 그 자리 가까이에서 수집한 글을 만든다. 그래서 후보마다 **나갈 자리**를 기준으로 만든다
+ *       (`wake` 는 dedupKey 순으로 고르므로 만든 순서 = 나가는 순서다 · dedupKey 는 자릿수를 맞춘다).
+ *       자리가 아직 아닌 틱은 트랜잭션의 슬롯 관문(SLOT_CLOSED · SLOT_CONSUMED)이 원천 판정보다 먼저 막는다.
  */
-let evidenceAt = K('2026-09-26T00:00:00')
+let evidenceAt = K('2026-09-26T09:30:00')
 
 let seq = 0
 async function wipe(): Promise<void> {
@@ -89,8 +93,10 @@ async function cand(): Promise<string> {
   const q = await prisma.originalPostApprovalQueue.create({
     data: {
       sourceRawContentId: raw.id, status: 'APPROVED', draftTitle: `평범한 하루 ${seq}`, draftBody: `아침에 산책을 다녀왔어요 ${seq}. 다들 어떻게 지내세요?`,
-      gateVerdict: 'PASS', gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(evidenceAt, { id: `hb-${seq}` }) } as never, promptVersion: 'p', model: 'm', decidedBy: 'founder',
-      dedupKey: `hb-${seq}`, matchedPersonaId: p.id, matchedAt: new Date(),
+      gateVerdict: 'PASS',
+      gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(evidenceAt, { id: `hb-${seq}`, capturedAt: new Date(evidenceAt.getTime() - 3600e3) }) } as never,
+      promptVersion: 'p', model: 'm', decidedBy: 'founder',
+      dedupKey: `hb-${String(seq).padStart(5, '0')}`, matchedPersonaId: p.id, matchedAt: new Date(),
     },
     select: { id: true },
   })
@@ -142,8 +148,12 @@ async function main(): Promise<void> {
     await wipe()
     day += 1
     const date = `2026-10-${String(day).padStart(2, '0')}`
-    evidenceAt = K(`${date}T00:00:00`)
-    for (let i = 0; i < PROFILES[stage].dailyTarget + 2; i += 1) await cand()
+    // 🔴 후보 k 는 k 번째 자리에 나간다 — 그 자리를 기준으로 만든다. 남는 둘은 마지막 자리 기준(나가지 않는다)
+    const slotMinutes = [...PROFILES[stage].slots].map(minuteOfDay).sort((a, b) => a - b)
+    for (let i = 0; i < PROFILES[stage].dailyTarget + 2; i += 1) {
+      evidenceAt = at(date, slotMinutes[Math.min(i, slotMinutes.length - 1)]!)
+      await cand()
+    }
     const first = Math.min(...PROFILES[stage].slots.map(minuteOfDay))
     let early = 0
     let overDue = 0
@@ -167,8 +177,13 @@ async function main(): Promise<void> {
   console.log('\n② 🔴 절전 뒤 wake — 같은 날짜 · 운영 창 안에서만 · 한 틱 1건')
   {
     await wipe()
-    evidenceAt = K('2026-10-10T00:00:00')
-    for (let i = 0; i < 14; i += 1) await cand()
+    // 🔴 나갈 자리 기준 — 1번 08:10 · 2~8번 15:07 절전 뒤 회수(15:07~17:30) · 9~14번 다음 날 08:10
+    evidenceAt = K('2026-10-10T08:10:00')
+    await cand()
+    evidenceAt = K('2026-10-10T15:07:00')
+    for (let i = 0; i < 7; i += 1) await cand()
+    evidenceAt = K('2026-10-11T08:10:00')
+    for (let i = 0; i < 6; i += 1) await cand()
     const date = '2026-10-10'
     const awake = heartbeatWakeTimes().map(minuteOfDay).filter((m) => m < 9 * 60 || (m >= 15 * 60 + 10 && m < 18 * 60))
     const arrivals = [...awake, 15 * 60 + 7].sort((a, b) => a - b)
@@ -199,7 +214,8 @@ async function main(): Promise<void> {
   console.log('\n③ 🔴 🔴 로컬 env(d5/d1) — 러너가 d3·d10 을 넘겨도 로컬 천장 d1 (하루 1)')
   for (const asked of ['d3', 'd10'] as const) {
     await wipe()
-    evidenceAt = K('2026-09-26T00:00:00')
+    // 🔴 천장 d1 = 09:30 한 건 — 그 자리 기준
+    evidenceAt = K('2026-09-26T09:30:00')
     for (let i = 0; i < 12; i += 1) await cand()
     const date = '2026-09-26'
     const pub: string[] = []
@@ -214,8 +230,13 @@ async function main(): Promise<void> {
   console.log('\n④ 🔴 🔴 로컬 heartbeat(d1 천장) + GitHub 예약(결정 d3 · 옛 기간 키 d10 은 무시 · 실측 지연 110~408분) — 중복 0')
   {
     await wipe()
-    evidenceAt = K('2026-09-26T00:00:00')
-    for (let i = 0; i < 16; i += 1) await cand()
+    // 🔴 이 날 실제로 나가는 세 자리 기준 — 로컬 09:30 · GitHub 14:10(10:50 + 200분 도착 · d3 도래 2) · 19:30(17:30 + 120분 · 도래 3).
+    //    나머지 13건은 나가지 않는다(슬롯 관문이 먼저 막는다)
+    for (const [i, hm] of ['09:30', '14:10', '19:30'].entries()) {
+      evidenceAt = K(`2026-09-26T${hm}:00`)
+      await cand()
+      if (i === 2) for (let k = 0; k < 13; k += 1) await cand()
+    }
     const date = '2026-09-26'
     const cronSlots = [490, 570, 650, 730, 810, 890, 970, 1050, 1140, 1230] // 08:10 … 20:30 (KST 분)
     const delays = [110, 150, 200, 260, 300, 350, 408, 120, 180, 240]
@@ -265,8 +286,11 @@ async function main(): Promise<void> {
   console.log('\n④-b 🔴 🔴 같은 틱 잠금이 **없다고** 쳐도 — 같은 순간 로컬 wake 2 + GitHub 1 이 같은 후보를 노린다')
   {
     await wipe()
-    evidenceAt = K('2026-09-26T00:00:00')
-    for (let i = 0; i < 6; i += 1) await cand()
+    // 🔴 09:30 에 1번 · 13:30 에 2번이 나간다 — 그 자리 기준
+    evidenceAt = K('2026-09-26T09:30:00')
+    await cand()
+    evidenceAt = K('2026-09-26T13:30:00')
+    for (let i = 0; i < 5; i += 1) await cand()
     const t = K('2026-09-26T09:30:00')
     const rs = await Promise.all([wake(t, 'd1', LOCAL_ENV), wake(t, 'd1', LOCAL_ENV), wake(t, 'd3', GITHUB_ENV)])
     const kinds = rs.map((w) => (w === null ? 'none' : w.r.kind === 'published' ? 'published' : w.r.kind === 'blocked' ? w.r.code : 'error'))

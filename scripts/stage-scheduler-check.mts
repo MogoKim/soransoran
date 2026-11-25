@@ -37,7 +37,7 @@ import { CYCLES, cycleLabel, cyclePublishWindow, cycleQuotas } from '../src/lib/
 import { PUBLISH_WINDOW_START_MINUTE, PUBLISH_WINDOW_END_MINUTE, judgeCatchUp, simulateDay } from '../src/lib/publish-slot-catchup'
 import { allStageCronLines } from '../src/lib/scale-workflow-render'
 import {
-  COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX,
+  COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_DAILY_USD_CAP,
   firstCommentDelayMs,
 } from '../src/lib/persona-comment-auto-lane'
 import {
@@ -77,6 +77,7 @@ import { OPPORTUNITY_INVENTORY_AXIS, OPPORTUNITY_INVENTORY_BASIS, OPPORTUNITY_KI
 import { COMMENT_RUNNER_SLOTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 import { readEnvKeys } from './lib/ops-signals.mjs'
 import { markedStageEnv } from './lib/stage-decision-fixture'
+import { threadMeanSizeAt } from '../src/lib/persona-thread-target'
 
 let pass = 0
 let fail = 0
@@ -598,9 +599,10 @@ check('🔴 공급 비용·처리량 경계는 같은 목표 20을 센다 — $0
   check('🔴 11-17 경계 — $0.060 × 30 = $1.80 PASS · $0.060001 FAIL',
     !edgePass.warnings.includes('SUPPLY_COST_SHORT') && edgeFail.warnings.includes('SUPPLY_COST_SHORT'))
 }
-check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 코드 천장 $0.90',
+// 🔴 댓글 천장 값을 숫자로 고정하는 곳은 이 한 줄뿐이다 — 다른 검사는 `COMMENT_DAILY_USD_CAP` · `commentDailyCapOf` 를 읽는다
+check('비용 상한 정본 — 공급 승인 천장 11-16 까지 $1.20 · 11-17 부터 $1.80 · 댓글 기본 $0.20 / 코드 천장 base $0.90 · D50 날 $1.50',
   supplyApprovedDailyUsdOf('2026-11-16') === 1.2 && supplyApprovedDailyUsdOf('2026-11-17') === 1.8
-  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.9)
+  && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_DAILY_USD_CAP.base === 0.9 && COMMENT_DAILY_USD_CAP.d50 === 1.5)
 check('🔴 저예산 천장은 날짜 계약의 분수 칸(5/7)만 비용 용량으로 센다 — 실측 D20은 막고 저비용 D10은 연다',
   supplyCostProofBudgetUsd('2026-11-05', 1.19) === 1.19 * 5 / 7
   && judgeNextPreflight('d20', factsFor('d20', {
@@ -719,7 +721,7 @@ const BAD_COST: HealthSignal[] = [OK_SIGNALS[0]!, { axis: 'cost', health: 'bad',
 
 /**
  * 그날 실제로 일어난 일 — 결정의 공개 단계 슬롯에 글이 나가고, 첫 댓글은 댓글 러너의 실제 대기(글 id 로 정해지는 3~9분)
- * 뒤 30초에 붙고, 추가 댓글 5건이 서로 다른 화자로 이어진다.
+ * 뒤 30초에 붙고, 추가 댓글(목표 평균 올림 − 1 건 · 평균 6 이면 5 · 7 이면 6)이 서로 다른 화자로 이어진다.
  */
 function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null {
   if (mode === 'unread') return null
@@ -733,7 +735,10 @@ function factsOfDay(d: StageDecision, mode: DayMode): StageEvidenceFacts | null 
       personaId: `c-${i}-0`, createdAtMs: t + firstCommentDelayMs(postId) + 30_000, topLevel: true,
       provenance: mode === 'brokenProv' && i === 0 ? 'broken' as const : 'auto' as const,
     }]
-    const followups = (mode === 'thin' ? [1] : [1, 2, 3, 4, 5]).map((k) => ({
+    // 🔴 완벽한 날의 추가 댓글 수는 그 글 공개 시각에 효력이 있던 목표 평균에서 나온다(첫 댓글 1 + 추가 = 평균 올림).
+    //    숫자를 박으면 목표 줄을 덧붙인 날(2026-11-26 평균 7)부터 "완벽한 날"이 통과선(6.3) 아래로 떨어진다 — 밤 4 합친 트리 CI 에서 실제로 났다.
+    const perfectFollowups = Math.ceil(threadMeanSizeAt(t)) - 1
+    const followups = (mode === 'thin' ? [1] : Array.from({ length: perfectFollowups }, (_, n) => n + 1)).map((k) => ({
       personaId: `c-${i}-${k}`, createdAtMs: t + (k + 1) * 20 * 60_000, topLevel: true, provenance: 'followup' as const,
     }))
     return {

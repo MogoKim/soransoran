@@ -43,11 +43,14 @@ const RUN = '20261008-000000'
 const RT = 'navercafe:remonterrace'
 const WG = WGANG_SOURCE_SITE
 const S1 = new Date(NOW.getTime() + 1 * H)
-const S2 = new Date(NOW.getTime() + 10 * H)
+// 🔴 (2026-11-25 밤 4) 둘째 자리는 수집(−2.9h) 6시간 안이다 — 옛 +10h 자리는 아무도 덮지 못한다(수집 뒤 6시간)
+const S2 = new Date(NOW.getTime() + 3 * H)
 const S3 = new Date(NOW.getTime() + 30 * H)
 
 const ROW = (o: {
   id: string; site?: string; ageH?: number; posted?: Date | null; cp: number; vp?: number; axis?: 'seed' | 'raw'; title?: string; body?: string
+  /** 🔴 (2026-11-25 밤 4) 수집 시각을 직접 준다 — 오래된 원문을 최근에 수집한 모양 */
+  capturedAt?: Date
 }): WorksetRow => {
   const site = o.site ?? RT
   const [input] = mergeJudgeRows([{
@@ -62,6 +65,7 @@ const ROW = (o: {
   let ev = fakeSourceEvidence(NOW, {
     site, id: o.id, commentsPct: o.cp,
     ...(o.posted === null ? { postedAt: null } : o.posted !== undefined ? { postedAt: o.posted } : { ageH: o.ageH ?? 6 }),
+    ...(o.capturedAt === undefined ? {} : { capturedAt: o.capturedAt }),
   })
   if (o.vp !== undefined) ev = { ...ev, sourceStats: { ...ev.sourceStats!, viewsPct: o.vp } }
   return { sourceArticleId: o.id, sourceSite: site, commentCount: 10, sourcePostedAt: '', sourceListedAt: '', input: input!, evidence: ev }
@@ -110,6 +114,20 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   const rnd = (): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
   const allSlots = [1, 4, 8, 12, 20, 30].map((h) => new Date(NOW.getTime() + h * H))
   let same = 0, consistent = 0, inversions = 0
+  /**
+   * 🔴 **알려진 불일치 한 벌(#21) — v3 판 결정 대기 · BACKLOG 1묶음(관측)** (2026-11-25 밤 4 · 메인 결정 (나))
+   *    원인: 11-10 retry-authority-v7 부터 선택기의 최대 짝(`maxSlotMatchingWithRetryCap`)은 재선정을 몫 K 개까지만 넣는다.
+   *    K 는 `retrySlotsFor({ limit, fresh, mode })` 가 정하는데 trace 에는 mode(normal · freshOnly) 칸이 없어, trace 요약
+   *    (`summarizeTrace`)은 K 를 모른 채 CAP_REACHED 재선정까지 짝에 넣는다. 신규가 모든 자리를 덮던 72시간 시절에는
+   *    드러나지 않았고, 수집 뒤 6시간 만료가 신규의 유효 창을 좁히자 "재선정만 덮는 자리"가 생겨 #21(cap 1)에서 나타났다.
+   *    운영 영향: 그 회차 trace 는 검증(verify)을 못 지나 쓰이지 않는다 — 묶음 · 유료 호출 · 적재 영향 0 ·
+   *    소비처 ops-shadow `freshCapacityFromTrace` 관측 칸이 null 이 된다.
+   *    🔴 표본(씨앗 · 50벌)은 바꾸지 않는다. #21 은 정확히 이 모양이어야 하고(FACTS_MISMATCH 하나 · maxFillableSlots trace 2 ·
+   *       선택기 1 · 나머지 사실 일치), 나머지 49벌은 전부 일치해야 한다. v3 가 이 불일치를 고치면 이 단정이 빨개진다 — 그때 지운다.
+   */
+  const KNOWN_TRACE_MISMATCH = 21
+  let knownOk = false
+  let knownDetail = ''
   const seen = new Set<string>()
   const N = 50
   for (let n = 0; n < N; n += 1) {
@@ -125,14 +143,26 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
     const t = on.trace!
     const back = readSupplySelectionTrace(JSON.parse(serializeSelectionTrace(t)))
     const pickedHashes = on.plan.picked.map((r) => articleIdHashOf(r.sourceSite, r.sourceArticleId))
-    if (back.ok && back.version === 'v2' && t.summary.mismatches === 0 && t.summary.selected === on.plan.picked.length
+    const positionsOk = t.candidates.filter((c) => c.selected).every((c) => pickedHashes[c.position!] === c.sourceHash)
+    if (n === KNOWN_TRACE_MISMATCH) {
+      const f = on.plan.jit!
+      knownDetail = JSON.stringify({ ok: back.ok, problems: back.ok ? null : back.problems, trace: t.summary.maxFillableSlots, selector: f.maxFillableSlots })
+      knownOk = !back.ok && back.problems.join(',') === 'FACTS_MISMATCH'
+        && t.summary.maxFillableSlots === 2 && f.maxFillableSlots === 1
+        && t.summary.coverTarget === f.coverTarget && t.summary.coveredSlots === f.coveredSlots
+        && t.summary.retryReserved === f.retryReserved && t.summary.rawExcluded === f.rawExcluded && t.summary.slots === f.slots
+        && t.summary.mismatches === 0 && t.summary.selected === on.plan.picked.length && positionsOk
+    } else if (back.ok && back.version === 'v2' && t.summary.mismatches === 0 && t.summary.selected === on.plan.picked.length
       && t.summary.maxFillableSlots === on.plan.jit!.maxFillableSlots && t.summary.coveredSlots === on.plan.jit!.coveredSlots
-      && t.candidates.filter((c) => c.selected).every((c) => pickedHashes[c.position!] === c.sourceHash)) consistent += 1
+      && positionsOk) consistent += 1
     inversions += t.summary.rankInversions
     for (const c of t.candidates) seen.add(c.reason)
   }
   check(`① trace on/off — 슬롯 · 묶음 · 순서 · 제외 · JIT 사실 · digest 동일(무작위 ${N}벌)`, same === N, `${same}/${N}`)
-  check(`① 무작위 ${N}벌 trace 가 실제 선택과 어긋나지 않는다(불일치 0 · 선택 위치 · 최대 슬롯 · 덮은 슬롯 일치 · 다시 읽기 v2)`, consistent === N, `${consistent}/${N}`)
+  check(`① 무작위 ${N}벌 중 알려진 #${KNOWN_TRACE_MISMATCH} 밖 ${N - 1}벌 trace 가 실제 선택과 어긋나지 않는다(불일치 0 · 선택 위치 · 최대 슬롯 · 덮은 슬롯 일치 · 다시 읽기 v2)`,
+    consistent === N - 1, `${consistent}/${N - 1}`)
+  check(`① 🔴 알려진 불일치 #${KNOWN_TRACE_MISMATCH} — 정확히 FACTS_MISMATCH · maxFillableSlots 만 trace 2 · 선택기 1 · 나머지 사실 일치 (v3 판 결정 대기)`,
+    knownOk, knownDetail)
   check(`② 무작위 ${N}벌 — 같은 신규/재시도 부류 안 순위 역전 0`, inversions === 0, String(inversions))
   const wanted = ['SELECTED_COVER', 'CAP_REACHED', 'RAW_NOT_AUTO_CONSUMED', 'SLOT_INELIGIBLE']
   check(`① 무작위 ${N}벌이 여러 단계를 실제로 지난다 — ${[...seen].sort().join(' · ')}`, wanted.every((w) => seen.has(w)), wanted.filter((w) => !seen.has(w)).join(','))
@@ -146,7 +176,8 @@ console.log('\n══ 공급 선택 관측 trace v2 — 선택 불변 · 단계 
   const a = ROW({ id: 'st-a', ageH: 4, cp: 0.8, site: WG })
   const b = ROW({ id: 'st-b', ageH: 4, cp: 0.7 })
   const c = ROW({ id: 'st-c', ageH: 4, cp: 0.6 })
-  const r = ROW({ id: 'st-r', ageH: 30, cp: 0.1 })
+  // 🔴 재시도는 30h 원문을 1h 전에 수집했다 — 그 자리에 유효하다(만료가 아니라 상한으로 빠지는 것을 잰다)
+  const r = ROW({ id: 'st-r', ageH: 30, cp: 0.1, capturedAt: new Date(NOW.getTime() - 1 * H) })
   const { off, on } = sameRun({ rows: [done, raw, old, a, b, c, r], slots: [S1, S2], cap: 3, attempted: retryOf([r], 9), concluded: new Set([KEY(done)]) })
   const t = on.trace!
   const rs = (id: string, site = RT): string => byId(t, site, id)!.reason

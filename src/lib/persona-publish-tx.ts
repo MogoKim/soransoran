@@ -29,6 +29,7 @@ import {
 import { decisionStageEnv } from './scale-runtime'
 import { OPEN_STATUSES } from './persona-comment-queue'
 import { BOOTSTRAP_DAILY_MAX } from './persona-comment-bootstrap-budget'
+import { HOT_QUEUE_SELECT, hotQueueWhereOf, hotSourceByPost, isHotThread } from './persona-thread-hot'
 
 /**
  * 후보 발행 트랜잭션 — 🔴 실제 write 가 일어나는 유일한 함수
@@ -398,7 +399,7 @@ export async function publishCandidateTx(
         const ids = rows.map((c) => c.id)
         const personaIds = rows.filter((c) => c.commentOrigin === 'PERSONA').map((c) => c.id)
         const dayStart = kstDayStart(now)
-        const [qs, ls, reports, otherOpen, fuToday, fuPersonaToday] = await Promise.all([
+        const [qs, ls, reports, otherOpen, fuToday, fuPersonaToday, hotRows] = await Promise.all([
           tx.personaApprovalQueue.findMany({
             where: { publishedCommentId: { in: personaIds } },
             select: { publishedCommentId: true, targetPostId: true, personaId: true, status: true, decidedBy: true, decidedAt: true },
@@ -417,8 +418,11 @@ export async function publishCandidateTx(
           tx.personaApprovalQueue.count({
             where: { decidedBy: FOLLOWUP_LANE_DECIDED_BY, status: 'PUBLISHED', decidedAt: { gte: dayStart }, personaId: row.persona.id },
           }),
+          // 🔴 뜨거운 글 판독 재료 — 생성 판정(러너)과 같은 조회 모양. 다르게 읽으면 보통 글 크기에서 STOP 해 이미 만든 댓글이 닫힌다
+          tx.originalPostApprovalQueue.findMany({ where: hotQueueWhereOf([post.id]), select: HOT_QUEUE_SELECT }),
         ])
         const reported = new Set(reports.map((r) => r.commentId))
+        const postPublishedAtMs = (post.publishAt ?? post.createdAt).getTime()
         const comments: FollowupCommentRow[] = rows.map((c) => ({
           ...c,
           reported: reported.has(c.id),
@@ -441,11 +445,12 @@ export async function publishCandidateTx(
           dedupKey: row.dedupKey,
           editDiff: row.editDiff,
           post: {
-            postId: post.id, publishedAtMs: (post.publishAt ?? post.createdAt).getTime(), postStatus: post.status,
+            postId: post.id, publishedAtMs: postPublishedAtMs, postStatus: post.status,
             authorPersonaId: post.personaId,
             // 🔴 Persona 가 쓴 글만 관리형이다 — 실회원·운영자 글에는 잇지 않는다
             autoManagedPost: post.personaId !== null,
             comments, hasOpenQueue: false,
+            hot: isHotThread(hotSourceByPost(hotRows).get(post.id) ?? null, postPublishedAtMs),
           },
           candidatePersonaId: row.persona.id,
           otherOpenQueue: otherOpen > 0,

@@ -82,6 +82,8 @@ const ROW = (o: {
   sourceArticleId: string; sourceSite?: string; commentCount?: number
   sourcePostedAt?: string; sourceListedAt?: string
   access?: string; safetyVerdict?: string; axis?: string; title?: string
+  /** 🔴 (2026-11-25 밤 4) 수집 시각을 직접 준다 — 오래된 원문을 최근에 수집한 모양(원문 72h · 수집 6h 를 따로 짠다) */
+  capturedAt?: Date
 }): WorksetRow => {
   const [input] = mergeJudgeRows([{
     kind: 'detail',
@@ -112,6 +114,7 @@ const ROW = (o: {
       // 🔴 게시 시각이 없고 목록 시각만 있으면 **게시 시각 모름**이다 — 목록 시각으로 대신하지 않는다
       ...(posted !== undefined ? { postedAt: posted } : o.sourceListedAt !== undefined ? { postedAt: null }
         : { ageH: 6 - Math.min(1, (o.commentCount ?? 0) / 100) }),
+      ...(o.capturedAt === undefined ? {} : { capturedAt: o.capturedAt }),
     }),
   }
 }
@@ -241,11 +244,13 @@ console.log('\n③ 🔴 고르기 전에 빼는 것 — AI 호출 전이다')
 console.log('\n④ 🔴 순서 — 지금 있는 신호만 쓴다')
 // ─────────────────────────────────────────────────────────
 {
+  // 🔴 (2026-11-25 밤 4) 어린 셋은 수집(게시 + 1.1h)이 회차(12:00Z) 6시간 안이다 — 옛 게시 시각(00:00Z · 02:00Z · 전날)은
+  //    수집 뒤 6시간이 지나 전부 만료라 순서를 잴 수 없다. 게시 순서(mid-new > low > mid-old)는 그대로다
   const rows = [
-    ROW({ sourceArticleId: 'low', commentCount: 1, sourcePostedAt: '2026-09-20T00:00:00Z' }),
+    ROW({ sourceArticleId: 'low', commentCount: 1, sourcePostedAt: '2026-09-20T08:00:00Z' }),
     ROW({ sourceArticleId: 'high', commentCount: 40, sourcePostedAt: '2026-09-01T00:00:00Z' }),
-    ROW({ sourceArticleId: 'mid-new', commentCount: 10, sourcePostedAt: '2026-09-20T02:00:00Z' }),
-    ROW({ sourceArticleId: 'mid-old', commentCount: 10, sourcePostedAt: '2026-09-19T00:00:00Z' }),
+    ROW({ sourceArticleId: 'mid-new', commentCount: 10, sourcePostedAt: '2026-09-20T09:00:00Z' }),
+    ROW({ sourceArticleId: 'mid-old', commentCount: 10, sourcePostedAt: '2026-09-20T07:00:00Z' }),
   ]
   const p4 = sel({ rows, limit: 4 })
   const ids = p4.workset.sources.map(sid)
@@ -895,18 +900,19 @@ console.log('\n⑧-b 🔴 🔴 신규·재시도 모두 실제 원문 신선도 
   const R = (id: string, postedAt: string): WorksetRow => ROW({ sourceArticleId: id, sourcePostedAt: postedAt })
   check('🔴 더 최신 재시도가 더 오래된 신규보다 먼저다',
     sel({
-      rows: [R('new-stale', '2026-09-19T10:00:00Z'), R('retry-fresh', '2026-09-20T10:00:00Z')],
+      // 🔴 (2026-11-25 밤 4) 둘 다 수집 6시간 안 — 옛 new-stale(전날)은 만료라 순서가 아니라 만료로 졌다
+      rows: [R('new-stale', '2026-09-20T08:00:00Z'), R('retry-fresh', '2026-09-20T10:00:00Z')],
       attempted: { 'retry-fresh': at(1) }, limit: 1,
     }).workset.sources.map(sid).join(',') === 'retry-fresh')
   check('🔴 더 최신 신규가 오래 기다린 재시도보다 먼저다', (() => {
     const p = sel({
-      rows: [R('retry-stale', '2026-09-19T08:00:00Z'), R('new-fresh', '2026-09-20T09:30:00Z')],
+      rows: [R('retry-stale', '2026-09-20T07:00:00Z'), R('new-fresh', '2026-09-20T09:30:00Z')],
       attempted: { 'retry-stale': at(1) }, limit: 1,
     })
     return p.workset.sources.map(sid).join(',') === 'new-fresh'
   })())
   check('🔴 재시도 시각을 바꿔도 원문 순서가 바뀌지 않는다', (() => {
-    const rows = [R('r-new', '2026-09-20T09:00:00Z'), R('r-old', '2026-09-19T09:00:00Z')]
+    const rows = [R('r-new', '2026-09-20T09:00:00Z'), R('r-old', '2026-09-20T07:30:00Z')]
     const a = sel({ rows, attempted: { 'r-new': at(10), 'r-old': at(1) }, limit: 2 }).workset.sources.map(sid).join(',')
     const b = sel({ rows, attempted: { 'r-new': at(1), 'r-old': at(10) }, limit: 2 }).workset.sources.map(sid).join(',')
     return a === 'r-new,r-old' && b === a
@@ -1077,10 +1083,11 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
   {
     const rows = [
       ROW({ sourceArticleId: 'n0', sourcePostedAt: '2026-09-20T09:00:00Z' }),
-      ROW({ sourceArticleId: 'r1', sourcePostedAt: '2026-09-19T10:00:00Z' }),
+      ROW({ sourceArticleId: 'r1', sourcePostedAt: '2026-09-20T07:00:00Z' }),
     ]
+    // 🔴 (2026-11-25 밤 4) 두 실행 시각 모두 두 원천의 수집 6시간 안이다 — 옛 둘째 시각(다음 날 11:00Z)은 둘 다 만료다
     const first = ids(sel({ rows, attempted: { r1: at(1) }, limit: 1, takenAt: NOW }))
-    const second = ids(sel({ rows, attempted: { r1: at(1) }, limit: 1, takenAt: new Date('2026-09-21T11:00:00Z') }))
+    const second = ids(sel({ rows, attempted: { r1: at(1) }, limit: 1, takenAt: new Date('2026-09-20T14:00:00Z') }))
     check('🔴 상한 1 · 실행 시각이 바뀌어도 더 최신 원문이 그 자리를 쓴다',
       first === 'n0' && second === 'n0', `${first} / ${second}`)
   }
@@ -1090,23 +1097,27 @@ console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, �
     let seed = 20260928
     const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
     let same = 0
+    let nonEmpty = 0
     let firstDiff = ''
     const CASES = 300
     for (let k = 0; k < CASES; k += 1) {
       const n = 1 + rnd(12)
+      const takenAt = new Date(`2026-09-2${String(rnd(2))}T0${String(rnd(9))}:00:00.000Z`)
       const rows = Array.from({ length: n }, (_, i) =>
-        // 🔴 (2026-09-30) 게시 시각은 모든 회차 시각에서 72h 안이다 — 여기서는 자리 나눔 규칙만 대조한다
-        ROW({ sourceArticleId: `c${k}-${i}`, commentCount: rnd(6), sourcePostedAt: `2026-09-${String(18 + rnd(2))}T1${String(rnd(9))}:00:00Z` }))
+        // 🔴 (2026-11-25 밤 4) 게시는 그 회차 2~6시간 전 · 수집은 회차 6시간 안이다 — 옛 게시(그 전 이틀)는 수집 뒤 6시간이 지나
+        //    선택이 늘 비었고, 그러면 "같다" 가 아무것도 증명하지 않는다. 여기서는 자리 나눔 규칙만 대조한다
+        ROW({ sourceArticleId: `c${k}-${i}`, commentCount: rnd(6), sourcePostedAt: new Date(takenAt.getTime() - (2 * 60 + rnd(230)) * 60_000).toISOString() }))
       const att: Record<string, string> = {}
       for (const r of rows) if (rnd(3) === 0) att[r.sourceArticleId] = at(1 + rnd(20))
       const limit = 1 + rnd(8)
-      const takenAt = new Date(`2026-09-2${String(rnd(2))}T0${String(rnd(9))}:00:00.000Z`)
       const got = ids(sel({ rows, attempted: att, limit, takenAt }))
+      if (got !== '') nonEmpty += 1
       const withoutAttempt = ids(sel({ rows: [...rows].reverse(), attempted: {}, limit, takenAt }))
       if (got === withoutAttempt) same += 1
       else if (firstDiff === '') firstDiff = `case ${k}: ${got} ≠ ${withoutAttempt}`
     }
     check(`🔴 seed 무작위 ${CASES} 경우 — attempt 상태·입력 순서가 선택을 바꾸지 않는다`, same === CASES, `${same}/${CASES} ${firstDiff}`)
+    check('🔴 무작위 경우가 실제로 고른다 — 빈 선택끼리의 "같다" 로 통과하지 않는다', nonEmpty === CASES, `${nonEmpty}/${CASES}`)
   }
 
   // ── 러너가 이 결과를 쓰는가 — 실행 증명은 `supply:draft-deferral-e2e-db-check` ⑤ 가 한다 ──
@@ -1578,7 +1589,11 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
     && JSON.stringify(plan.dropped) === JSON.stringify(e.dropped))
 
   // 스냅샷(생성 가능 원천의 증거) → preflight 기회 — 같은 변환(`sourceOpportunitiesOf`)
-  const slots = slotTimesOn('2026-09-21', profileOf('d3'))
+  // 🔴 (2026-11-25 밤 4) 지금 원천은 수집 뒤 6시간 안의 자리에만 걸린다 — 다음 날 d3 세 자리(09:30 · 13:30 · 19:00)는 이 원천이
+  //    덮지 못한다(그날 자리는 그날 수집이 채운다 · 남은 날 순유입은 `measuredFutureSourceOpportunities`). 변환 규칙만 재려고
+  //    d3 자리 수(3)만큼의 자리를 수집(−4.5h) 6시간 안(+0.25h · +0.5h · +1h)에 둔다
+  const slots = [0.25, 0.5, 1].map((h) => new Date(NOW.getTime() + h * 3_600_000))
+  check('fixture 전제 — d3 하루 자리 수와 같은 3칸', slots.length === slotTimesOn('2026-09-21', profileOf('d3')).length)
   const facts = (opps: number): PreflightFacts => ({
     proofKstDate: '2026-11-05',
     slotValidOpportunities: opps, readyCohort: {
@@ -1625,7 +1640,8 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
   const transitionSnapshot = buildOpportunitySnapshot({
     runId: RUN, takenAt: NOW, inputRows: transitionRows.length, inventory: transitionInventory,
   })
-  const d20Slots = slotTimesOn('2026-09-21', profileOf('d20'))
+  // 🔴 (2026-11-25 밤 4) D20 하루 자리 수(20)만큼의 자리를 수집(−4.5h) 6시간 안(4분 간격 · +80분까지)에 둔다 — 다음 날 자리는 지금 원천이 덮지 못한다
+  const d20Slots = Array.from({ length: slotTimesOn('2026-09-21', profileOf('d20')).length }, (_, k) => new Date(NOW.getTime() + (k + 1) * 4 * 60_000))
   const d20Opp = slotValidOpportunitiesOf({
     slots: d20Slots, ready: [], readyPerSource: 1,
     sources: sourceOpportunitiesOf(transitionSnapshot.evidence, new Set(), NOW),
@@ -1661,12 +1677,16 @@ console.log('\n⑬ 🔴 🔴 JIT 선택과 다음 단계 stage-neutral 기회를
 console.log('\n⑳ 🔴 🔴 부족 슬롯마다 원천을 따로 짝짓는다 · current-quality workset-v4 의도 필수')
 // ─────────────────────────────────────────────────────────
 {
-  const s1 = new Date(NOW.getTime() + 2 * 3_600_000)
-  const s2 = new Date(NOW.getTime() + 20 * 3_600_000)
-  const A = ROW({ sourceArticleId: 'jitA', commentCount: 30 })
-  const B = ROW({ sourceArticleId: 'jitB', commentCount: 20 })
-  // 🔴 첫 슬롯(+2h)에서는 62h — eligible · 두 번째 슬롯(+20h)에서는 80h — 만료
-  const C = ROW({ sourceArticleId: 'jitC', commentCount: 90, sourcePostedAt: new Date(NOW.getTime() - 60 * 3_600_000).toISOString() })
+  // 🔴 (2026-11-25 밤 4) 두 자리 모두 수집 6시간 안(+1h · +3h)이다. 수집은 A(−1.5h) > B(−2h) > C(−2.5h) 순 —
+  //    C 는 원문이 70h 라 첫 자리(+1h)에서 71h — eligible · 두 번째 자리(+3h)에서 73h — 만료(72h 가 막는다)
+  const s1 = new Date(NOW.getTime() + 1 * 3_600_000)
+  const s2 = new Date(NOW.getTime() + 3 * 3_600_000)
+  const A = ROW({ sourceArticleId: 'jitA', commentCount: 30, capturedAt: new Date(NOW.getTime() - 1.5 * 3_600_000) })
+  const B = ROW({ sourceArticleId: 'jitB', commentCount: 20, capturedAt: new Date(NOW.getTime() - 2 * 3_600_000) })
+  const C = ROW({
+    sourceArticleId: 'jitC', commentCount: 90, sourcePostedAt: new Date(NOW.getTime() - 70 * 3_600_000).toISOString(),
+    capturedAt: new Date(NOW.getTime() - 2.5 * 3_600_000),
+  })
   // 🔴 (2026-10-10 P0-B1) 배정은 JIT 선택 하나(`selectWorkset({ jit })`)가 한다 — 고른 집합에만 EDF 로 슬롯을 준다
   const jsel = (rows: readonly WorksetRow[], slots: readonly Date[], cap: number) => selectWorkset({
     rows, humanDecided: humanDecisionIndexOf([]), queuePending: new Set(), queuedSources: EMPTY_SOURCE_KEYS,

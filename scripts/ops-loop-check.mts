@@ -22,6 +22,7 @@ import { PRICING_VERSION } from '../src/lib/llm-pricing'
 import { SUPPLY_JIT_CONTRACT } from '../src/lib/supply-intent'
 import { readCostSignals } from './lib/ops-signals.mjs'
 import { settleHoldPathOf, writeSettleHold } from './lib/llm-ledger-store.mjs'
+import { COMMENT_DAILY_USD_CAP, COMMENT_LOOP_BUDGET_ENV } from '../src/lib/persona-comment-auto-lane'
 
 import {
   parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing, collectCapabilityFailing,
@@ -173,12 +174,64 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
     })
     writeFileSync(join(dirs.comment, `${ledgerDateOf(now)}.jsonl`), `${line(0.25)}\n`)
     const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.50', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30' }
-    const c = readCostSignals(now, env, dirs)
+    const c = readCostSignals(now, null, env, dirs)
     check('🔴 댓글 장부 초과 지출을 댓글 축이 본다 (공급 장부가 아니라 전용 장부)',
       c.commentLedger.health === 'bad' && c.commentLedger.codes.includes('DAILY_EXHAUSTED') && c.commentLedger.spentUsd === 0.25)
     check('🔴 댓글 상한은 댓글 계약값 $0.20 이다 (env 미설정 → 기본값)', c.commentLedger.capUsd === 0.2)
     check('댓글 지출이 공급 축을 오염시키지 않는다', c.supplyLedger.spentUsd === 0 && c.supplyLedger.health !== 'bad')
     rmSync(root, { recursive: true, force: true })
+  }
+
+  /**
+   * 🔴 (2026-11-25 밤 4) **댓글 천장은 그날 단계로 잰다** — 단계는 부르는 쪽이 넘긴다(env 에서 읽지 않는다).
+   *    반례: D50 날 $1.10 을 쓴 장부를 이튿날(D30) 컨트롤러가 다시 판정해도, 그 날의 단계(d50)로 재면 ok 다.
+   *    같은 장부를 오늘 단계(d30)로 재면 DAILY_EXHAUSTED — 소급 COST_BAD 가 연속 통과를 끊는다(그래서 그렇게 부르지 않는다).
+   *    컨트롤러가 정본 env 에서 읽는 것은 예산 키뿐이다(결정 표식 없음) — 그래도 댓글 칸이 ok 여야 한다.
+   */
+  {
+    const root = mkdtempSync(join(tmpdir(), 'ops-comment-cap-'))
+    const dirs = { supply: join(root, 's'), audit: join(root, 'a'), comment: join(root, 'c') }
+    for (const d of Object.values(dirs)) mkdirSync(d)
+    const d50Day = new Date('2026-11-26T12:00:00+09:00')
+    const spent = 1.1
+    writeFileSync(join(dirs.comment, `${ledgerDateOf(d50Day)}.jsonl`), `${JSON.stringify({
+      runId: 'comment-loop-d50', stage: 'commentGen', attemptId: 'd50-a1', requestNo: 0, provider: 'google',
+      apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash', status: 'settled', blockCode: null,
+      countedInputTokens: 1, maxOutputTokens: 800, reservedUsd: spent, inputTokens: 1, outputTokens: 1,
+      cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [], settledUsd: spent, pricingVersion: 'supply-2026-09-19',
+      startedAt: d50Day.toISOString(), endedAt: d50Day.toISOString(), errorCode: null,
+    })}\n`)
+    // 컨트롤러가 읽는 env 의 모양 — 예산 키만(결정 표식 · 단계 칸 없음). 운영 댓글 env 는 D50 칸 값이다
+    const controllerEnv = {
+      SORAN_LLM_DAILY_BUDGET_USD: '1.80', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30',
+      [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: String(COMMENT_DAILY_USD_CAP.d50),
+    }
+    const thatDay = readCostSignals(d50Day, 'd50', controllerEnv, dirs).commentLedger
+    const asD30 = readCostSignals(d50Day, 'd30', controllerEnv, dirs).commentLedger
+    const unknown = readCostSignals(d50Day, null, controllerEnv, dirs).commentLedger
+    check('🔴 🔴 **D50 날 $1.10 을 쓴 장부 — 이튿날 재판정도 그 날의 단계(d50)로 재면 ok · 천장은 d50 칸**',
+      thatDay.health === 'ok' && thatDay.capUsd === COMMENT_DAILY_USD_CAP.d50 && thatDay.spentUsd === spent, JSON.stringify(thatDay))
+    check('🔴 같은 장부를 D30 단계로 재면 DAILY_EXHAUSTED — 지난 날을 오늘 단계로 재면 소급 FAIL 이 난다',
+      asD30.health === 'bad' && asD30.codes.includes('DAILY_EXHAUSTED') && asD30.capUsd === COMMENT_DAILY_USD_CAP.base, JSON.stringify(asD30))
+    check('🔴 단계 모름(null)은 상한이 비지 않는다 — base 칸 · NO_BUDGET(unknown) 이 아니다',
+      unknown.capUsd === COMMENT_DAILY_USD_CAP.base && !unknown.codes.includes('NO_BUDGET'), JSON.stringify(unknown))
+    const quiet = readCostSignals(d50Day, 'd50', { SORAN_LLM_DAILY_BUDGET_USD: '1.80', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30' }, { ...dirs, comment: join(root, 'empty') })
+    check('🔴 컨트롤러가 표식 없는 env(예산 키만)로 불러도 댓글 비용 칸은 ok — 빈 장부 · env 기본값',
+      quiet.commentLedger.health === 'ok' && quiet.commentLedger.capUsd !== null, JSON.stringify(quiet.commentLedger))
+    check('🔴 댓글 단계는 기본값 없는 필수 인자다(now · 단계 · env — dirs 만 기본값)', readCostSignals.length === 3, String(readCostSignals.length))
+    rmSync(root, { recursive: true, force: true })
+
+    // 🔴 연결 — 부르는 곳마다 넘기는 단계(판정서 §2.2 표). 함수만 맞고 배선이 오늘 단계를 넘기면 위 반례가 운영에서 다시 난다
+    const ctlSrc = readFileSync('scripts/stage-controller.mts', 'utf-8')
+    check('🔴 연결: 컨트롤러 하루 증거는 판정하는 그날 결정의 단계(i.stage) · 브레이크 신호는 결정 전 회차의 단계(전날 결정)로 잰다',
+      /readCostSignals\(new Date\(`\$\{i\.kstDate\}T12:00:00\+09:00`\), i\.stage\)/.test(ctlSrc)
+      && /readCostSignals\(NOW, previous\?\.release \?\? null\)/.test(ctlSrc)
+      && (ctlSrc.match(/readCostSignals\(/g) ?? []).length === 2)
+    const statusSrc = readFileSync('scripts/ops-status.mts', 'utf-8')
+    check('🔴 연결: ops-status 는 읽은 오늘 결정의 단계로 재고 · 못 읽으면 null 과 "단계 미확인"',
+      /todayRelease = sd\.found && sd\.result\.ok \? sd\.result\.decision\.release : null/.test(statusSrc)
+      && /readCostSignals\(NOW, todayRelease, env\.values\)/.test(statusSrc)
+      && /단계 미확인/.test(statusSrc) && (statusSrc.match(/readCostSignals\(/g) ?? []).length === 1)
   }
 
   /**
@@ -233,7 +286,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
     writeFileSync(join(dirs.supply, `${date}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
     // 현재 env를 일부러 당시 장부값과 다르게 둬도 과거 비용 증거의 예산은 장부의 1.20이어야 한다.
     const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.50', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30' }
-    const c = readCostSignals(now, env, dirs)
+    const c = readCostSignals(now, null, env, dirs)
     check('🟢 비용 증거 파일 왕복 — 낮 회차 정산 20건 · 밤 회차 미상 1건도 표본 · 당시 예산 $1.20',
       c.supplyCostEvidence?.envelope.settledRequests === 20
       && c.supplyCostEvidence.envelope.usageUnknownRequests === 1
@@ -249,7 +302,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
     check('🟢 whole-day와 비용 증거의 예산은 현재 env $0.50으로 소급 변경되지 않는다',
       c.supplyLedger.capUsd === 1.2 && c.supplyCostEvidence?.envelope.budgetUsd === 1.2)
     writeFileSync(join(dirs.supply, `${date}.jsonl`), '{깨진 공급 장부\n')
-    const corrupt = readCostSignals(now, env, dirs)
+    const corrupt = readCostSignals(now, null, env, dirs)
     check('🔴 시행일 이후 공급 장부를 못 읽으면 비용 UNKNOWN으로 약화하지 않고 whole-day hard bad를 보존한다',
       corrupt.supplyLedger.health === 'bad'
       && corrupt.supplyLedger.codes.includes('LEDGER_ERROR')
@@ -261,7 +314,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       ? { ...row, budgetDailyUsd: 0.5, budgetCapUsd: 0.5 }
       : row)
     writeFileSync(join(dirs.supply, `${date}.jsonl`), `${mixedCapRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
-    const mixedCap = readCostSignals(now, env, dirs)
+    const mixedCap = readCostSignals(now, null, env, dirs)
     check('🟢 하루 중 승인 cap이 달라도 유효한 기록의 가장 큰 cap $1.20으로 whole-day와 비용 증거를 판정한다',
       mixedCap.supplyLedger.health === 'ok' && mixedCap.supplyLedger.capUsd === 1.2
       && mixedCap.supplyCostEvidence?.envelope.budgetUsd === 1.2
@@ -272,7 +325,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       ? { ...row, supplyContract: undefined }
       : row)
     writeFileSync(join(dirs.supply, `${date}.jsonl`), `${contractlessNightRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
-    const contractlessNight = readCostSignals(now, env, dirs)
+    const contractlessNight = readCostSignals(now, null, env, dirs)
     check('⬚ 밤 회차 행의 계약 표식이 빠지면 하루 예산(기록 상한)은 유효하지만 비용 표본에서는 조용히 빠지지 않고 귀속 불명 1건이다',
       contractlessNight.supplyLedger.health === 'ok' && contractlessNight.supplyLedger.capUsd === 1.2
       && contractlessNight.supplyCostEvidence?.wholeDayCriticalHealth === 'ok'
@@ -284,7 +337,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       ? { ...row, budgetSource: undefined }
       : row)
     writeFileSync(join(dirs.supply, `${date}.jsonl`), `${unbudgetedNightRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
-    const unbudgetedNight = readCostSignals(now, env, dirs)
+    const unbudgetedNight = readCostSignals(now, null, env, dirs)
     check('🔴 밤 회차 행 하나라도 whole-day 예산 provenance가 깨지면 그날 비용 증거를 UNKNOWN으로 닫는다 — 그 행은 표본에서도 귀속 불명',
       unbudgetedNight.supplyLedger.health === 'unknown'
       && unbudgetedNight.supplyLedger.capUsd === null
@@ -297,7 +350,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       ? { ...row, reservedUsd: 1.15 }
       : row)
     writeFileSync(join(dirs.supply, `${date}.jsonl`), `${overBudgetNightRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
-    const overBudgetNight = readCostSignals(now, env, dirs)
+    const overBudgetNight = readCostSignals(now, null, env, dirs)
     const overBudgetEnvelope = overBudgetNight.supplyCostEvidence?.envelope ?? null
     check('🔴 밤 회차 미상으로 총위험($0.08 + $1.15)이 기록 예산 $1.20 을 넘으면 그날 비용 증거를 hard FAIL로 닫는다 — 표본 위험액도 예산을 넘는다',
       overBudgetNight.supplyLedger.health === 'bad'
@@ -318,7 +371,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
     })
     const manualSeen = [daySlot + 5, nightSlot + 5, nightSlot + windowMinutes + 2].map((minute) => {
       writeFileSync(join(dirs.supply, `${date}.jsonl`), `${[...rows, manualRowAt(minute)].map((row) => JSON.stringify(row)).join('\n')}\n`)
-      return readCostSignals(now, env, dirs)
+      return readCostSignals(now, null, env, dirs)
     })
     check('⬚ 손 실행 행은 낮 회차 창 · 밤 회차 창 · 마지막 회차 창 뒤 어디서 보냈든 하루 실지출에 남고 비용 표본은 ineligible로 닫는다',
       manualSeen.every((seen) => seen.supplyLedger.health === 'ok'
@@ -329,7 +382,7 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       manualSeen.map((seen) => `${JSON.stringify(seen.supplyLedger)} ${JSON.stringify(seen.supplyCostEvidence)}`).join(' | '))
     const missingSourceRows = rows.map((row, i) => i === 0 ? { ...row, budgetSource: undefined } : row)
     writeFileSync(join(dirs.supply, `${date}.jsonl`), `${missingSourceRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
-    const missingSource = readCostSignals(now, env, dirs)
+    const missingSource = readCostSignals(now, null, env, dirs)
     check('⬚ current 요청의 기록 예산 출처가 빠지면 현재 env로 대체하지 않고 UNKNOWN',
       missingSource.supplyLedger.health === 'unknown' && missingSource.supplyLedger.capUsd === null
       && missingSource.supplyCostEvidence?.envelope.ineligibleRequests === 1,
@@ -338,15 +391,15 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
     const legacyRows = rowsOn(legacyDate)
     const legacyNow = nowOf(legacyDate)
     writeFileSync(join(dirs.supply, `${legacyDate}.jsonl`), `${legacyRows.map((row) => JSON.stringify(row)).join('\n')}\n`)
-    const legacy = readCostSignals(legacyNow, env, dirs)
+    const legacy = readCostSignals(legacyNow, null, env, dirs)
     check('🟢 시행일 전 whole-day 비용은 옛 env 계약을 유지해 과거 판정을 바꾸지 않는다',
       legacy.supplyLedger.capUsd === 0.5)
     writeSettleHold(dirs.supply, {
       runId: 'future-hold', attemptId: 'future-hold', date,
       reservedUsd: 0.01, at: now.toISOString(), reason: '뒤 날짜 hold',
     })
-    const legacyWithFutureHold = readCostSignals(legacyNow, env, dirs)
-    const currentWithHold = readCostSignals(now, env, dirs)
+    const legacyWithFutureHold = readCostSignals(legacyNow, null, env, dirs)
+    const currentWithHold = readCostSignals(now, null, env, dirs)
     check('🔴 뒤 날짜 settle hold가 과거 비용 증거를 소급 오염시키지 않지만 hold 당일은 hard bad다',
       legacyWithFutureHold.supplyLedger.health !== 'bad'
       && legacyWithFutureHold.supplyCostEvidence?.wholeDayCriticalHealth !== 'bad'
@@ -358,13 +411,13 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
       runId: 'old-hold', attemptId: 'old-hold', date: legacyDate,
       reservedUsd: 0.01, at: kstAt(legacyDate, daySlot).toISOString(), reason: '앞 날짜 hold',
     })
-    const currentWithOldHold = readCostSignals(now, env, dirs)
+    const currentWithOldHold = readCostSignals(now, null, env, dirs)
     check('🔴 대상 날짜 이전부터 풀리지 않은 settle hold는 현재 비용 증거를 hard bad로 닫는다',
       currentWithOldHold.supplyLedger.health === 'bad'
       && currentWithOldHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
       JSON.stringify(currentWithOldHold))
     writeFileSync(settleHoldPathOf(dirs.supply), 'null\n', 'utf-8')
-    const legacyWithBrokenHold = readCostSignals(legacyNow, env, dirs)
+    const legacyWithBrokenHold = readCostSignals(legacyNow, null, env, dirs)
     check('🔴 깨진 settle hold는 날짜를 비교하지 못하므로 과거 비용 증거도 hard bad로 닫는다',
       legacyWithBrokenHold.supplyLedger.health === 'bad'
       && legacyWithBrokenHold.supplyCostEvidence?.wholeDayCriticalHealth === 'bad',
