@@ -45,10 +45,10 @@ import {
   firstCommentWaitMs, firstPerPost, isAutoLaneCandidatePost, type AutoLanePostFacts,
 } from '../../src/lib/persona-comment-auto-lane'
 import {
-  gateInputOf, materializeTargets, type GateContext, type TargetSource,
+  gateInputOf, materializeTargets, type GateContext, type MaterializeResult, type TargetSource,
 } from './persona-comment-targets'
 import {
-  runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineWriter,
+  runEnqueuePipeline, type PipelineGate, type PipelineOutcome, type PipelineResult, type PipelineWriter,
 } from './persona-comment-pipeline'
 import { checkCommentCandidate } from './persona-comment-candidate.mjs'
 import { voiceCauseNote } from '../../src/lib/persona-voice-repeat'
@@ -369,6 +369,149 @@ const emptyReport = (outcome: CommentLoopOutcome, stage: string, reason: string)
   attemptExcluded: 0, attemptWarnings: [],
 })
 
+/** 🔴 후보를 만든 사정 — 차단 사유 · 이미 보낸 조합 · planner skip 원인별(고정 잠금 = 후보 무관 · ⑧ 시도 = 그 글만). 두 라운드가 같은 줄을 찍는다 */
+const materialLines = (material: MaterializeResult): string[] => {
+  const out: string[] = []
+  for (const b of material.providerBlockers) out.push(`유료 호출 차단 사유: ${b}`)
+  const excluded = material.counts.attemptExcluded
+  if (excluded > 0) out.push(`이미 보낸 조합 ${excluded}건 제외 — 같은 글 60분 window 안에서는 다시 보내지 않는다`)
+  if (material.counts.voiceAttemptExcluded > 0) {
+    out.push(`planner skip ⑧ 시도 ${material.counts.voiceAttemptExcluded}건 — 그 글에서 ⑧ 로 막힌 Persona 는 다른 역할로 다시 보내지 않는다`)
+  }
+  if (material.capExcluded.length > 0) {
+    out.push(`planner skip 카드 상한 ${material.capExcluded.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 한 건 더 달면 발행에서 닫힌다(같은 planCap)`)
+  }
+  if (material.voiceStaticLocked.length > 0) {
+    out.push(`planner skip 고정 잠금 ${material.voiceStaticLocked.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
+  }
+  return out
+}
+
+/** 🔴 결과 한 줄 — 두 라운드가 같은 모양으로 찍는다. ⑧ 원인을 가른다(후보 원인 막음 · 기준선 초과 통과) · 축 이름만 */
+const outcomeLine = (o: PipelineOutcome): string => {
+  const cause = voiceCauseNote(o.plan?.gates ?? [])
+  return `   ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}${cause === '' ? '' : ` · ${cause}`}`
+}
+
+/**
+ * 🔴 **라운드 2 대상 글** — 관문 막힘(`ENQUEUE_BLOCKED`)이 1건 이상이고 적재(`ENQUEUED`)가 0 인 글.
+ *    provider 실패 · 시도 기록 막힘만 있었던 글은 아니다(관문이 후보를 거른 글만 다른 Persona 로 다시 고를 이유가 있다).
+ */
+export function retryPostIdsOf(outcomes: readonly PipelineOutcome[]): Set<string> {
+  const blocked = new Set<string>()
+  const enqueuedPosts = new Set<string>()
+  for (const o of outcomes) {
+    if (o.step === 'ENQUEUE_BLOCKED') blocked.add(o.postId)
+    if (o.step === 'ENQUEUED') enqueuedPosts.add(o.postId)
+  }
+  return new Set([...blocked].filter((id) => !enqueuedPosts.has(id)))
+}
+
+/** 🔴 라운드 2 는 그 글들만 다시 고른다 — 다른 글이 planner 자리를 먹지 않게 원천에서 거른다(판정은 그대로) */
+const onlyPosts = (base: TargetSource, postIds: ReadonlySet<string>): TargetSource => ({
+  ...base,
+  posts: async () => (await base.posts()).filter((p) => postIds.has(p.id)),
+})
+
+/**
+ * 🔴 **첫 댓글 한 라운드** — 대상 → 시작 기록 → provider → 관문 → 적재 → 결과 기록. 라운드 1 · 2 가 **이 함수 하나**를 쓴다.
+ *    후보는 넘겨받은 기억(`entries`)으로 만든다 — 라운드 2 는 라운드 1 결과를 적은 뒤 **다시 읽은** 기억을 넘긴다.
+ *    경고는 `warnings` 에 모은다(찍는 것은 부르는 쪽).
+ */
+async function runFirstCommentRound(i: {
+  deps: CommentLoopDeps
+  source: TargetSource
+  nowMs: number
+  windowMs: number
+  limit: number
+  entries: readonly AttemptEntry[]
+  warnings: string[]
+}): Promise<{
+  material: MaterializeResult
+  candidates: MaterializeResult['targets']
+  result: PipelineResult
+  /** 🔴 시작 기록한 조합의 결과를 기억에 적었는가 — false 면 라운드 2 를 하지 않는다 */
+  outcomesRecorded: boolean
+}> {
+  const { deps, nowMs, limit } = i
+  const material = await materializeTargets({
+    source: i.source, limit, nowMs, windowMs: i.windowMs,
+    attemptedCombos: attemptedComboKeys(i.entries, nowMs),
+    voiceFailedPostPersonas: voiceFailedPostPersonaKeys(i.entries, nowMs),
+    recentFailedAttempts: failedAttemptCounts(i.entries, nowMs),
+  })
+  // 🔴 같은 글의 후보를 모두 넘긴다. 첫 후보가 Gate 에서 막히면 다음 Persona 로 넘어가고,
+  //    하나가 적재되면 pipeline 이 그 글의 나머지 후보를 부르지 않는다.
+  const candidates = material.targets
+  const ctxByKey = new Map(candidates.map((t) => [
+    dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole),
+    { gate: t.gate, recentTexts: t.recentTexts },
+  ]))
+  const ctxOf = (input: CommentInput) => ctxByKey.get(dedupKeyOf(input.post.id, input.personaCode, input.reactionRole))
+  const publishedByKey = new Map(candidates.map((t) => [
+    dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole), t.postPublishedAtMs,
+  ]))
+  /** 🔴 이 라운드에 시작 기록을 남긴 조합 — 결과 갱신은 이것만 한다 */
+  const started = new Set<string>()
+  const generate = candidates.length === 0
+    ? null
+    : deps.makeGenerate(candidates.map((t) => t.target.input.personaCode))
+
+  const result = await runEnqueuePipeline({
+    selection: deps.canon.selection,
+    canon: deps.canon.canon,
+    targets: candidates.map((t) => t.target),
+    preflightOk: material.providerAllowed,
+    preflightBlockers: material.providerBlockers,
+    provider: async ({ model, input }) => {
+      const ctx = ctxOf(input)
+      if (ctx === undefined || generate === null) return { ok: false, text: null, errorCode: 'NO_GATE_CONTEXT' }
+      // 🔴 한 건의 예외가 회차를 끝내지 않는다 — 그 대상만 실패다
+      try { return await generate({ model, input, recentTexts: ctx.recentTexts }) } catch {
+        return { ok: false, text: null, errorCode: 'PROVIDER_EXCEPTION' }
+      }
+    },
+    gate: makeCanonGate((input) => ctxOf(input)?.gate),
+    writer: makePendingWriter(deps.prisma),
+    providerCallLimit: limit,
+    limit,
+    oneCreatedPerPost: true,
+    // 🔴 provider 앞에서 시작 기록을 내구적으로 남긴다 — 못 남기면 부르지 않는다
+    beforeProvider: (t) => {
+      const key = dedupKeyOf(t.facts.postId, t.facts.personaCode, t.facts.reactionRole)
+      const publishedAtMs = publishedByKey.get(key)
+      if (publishedAtMs === null || publishedAtMs === undefined) {
+        const reason = '글 공개 시각을 몰라 시도 기록의 만료를 정할 수 없다'
+        i.warnings.push(`🔴 ${reason} — 이 대상은 보내지 않는다`)
+        return { proceed: false, reason, stopRound: false }
+      }
+      const entry: AttemptEntry = {
+        postId: t.facts.postId, personaCode: t.facts.personaCode, reactionRole: t.facts.reactionRole,
+        postPublishedAtMs: publishedAtMs, attemptedAtMs: nowMs, step: 'STARTED', failedGates: [], blockCodes: [],
+      }
+      const w = deps.attemptStore.recordStart(entry, nowMs)
+      if (w.ok) { started.add(key); return { proceed: true } }
+      i.warnings.push(`🔴 시도 기록을 남기지 못했다 [${w.kind}] ${w.reason} — provider 0`)
+      return { proceed: false, reason: `시도 기록 실패 [${w.kind}] ${w.reason}`, stopRound: w.kind === 'IO' }
+    },
+  })
+  // 🔴 결과를 같은 항목에 적는다. 실패해도 시작 기록이 남아 있어 같은 조합의 재시도는 막힌 채다 — 대신 조용히 넘기지 않는다
+  const updates: AttemptOutcomeUpdate[] = []
+  for (const o of result.outcomes) {
+    const key = attemptKeyOf(o)
+    if (!started.has(key)) continue
+    const summary = attemptOutcomeOf({
+      step: o.step, gates: o.plan?.gates ?? [], blockCodes: o.plan?.blocks.map((b) => b.code) ?? [],
+    })
+    if (summary !== null) updates.push({ key, ...summary })
+  }
+  const done = deps.attemptStore.recordOutcomes(updates, nowMs)
+  if (!done.ok) {
+    i.warnings.push(`🔴 시도 결과를 갱신하지 못했다 [${done.kind}] ${done.reason} — 시작 기록은 남아 같은 조합은 다시 보내지 않는다`)
+  }
+  return { material, candidates, result, outcomesRecorded: done.ok }
+}
+
 /**
  * 🔴 **한 회차.** 순서는 이렇다.
  *
@@ -376,6 +519,7 @@ const emptyReport = (outcome: CommentLoopOutcome, stage: string, reason: string)
  *    ② 모델이 확정되지 않았으면 아무것도 하지 않는다
  *    ③ 발행 sweep — 앞 회차가 남긴 PENDING 을 먼저 낸다(창 밖이면 닫는다)
  *    ④ 오늘 예산이 남았으면 60분 창 안의 새 글마다 **한 대상만** 만들고 댓글 관문을 거쳐 PENDING 적재
+ *       — 후보가 모두 관문에 막힌 글은 기억을 다시 읽어 **한 번만** 다시 고른다(라운드 2 · 남은 호출 안)
  *    ⑤ 발행 sweep — 방금 적재한 것을 낸다
  *
  * 🔴 ③ 을 ④ 앞에 두는 이유 — 적재만 되고 발행되지 못한 행이 있으면 그 글에는 **이미 후보가 있다.**
@@ -480,109 +624,72 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
   }
 
   if (generationSkipped === null && memory !== null && memory.ok) {
-    const material = await materializeTargets({
-      source: autoLaneTargetSource(deps.source, nowMs), limit, nowMs, windowMs,
-      attemptedCombos: attemptedComboKeys(memory.entries, nowMs),
-      voiceFailedPostPersonas: voiceFailedPostPersonaKeys(memory.entries, nowMs),
-      recentFailedAttempts: failedAttemptCounts(memory.entries, nowMs),
+    const round1Warnings: string[] = []
+    const r1 = await runFirstCommentRound({
+      deps, source: autoLaneTargetSource(deps.source, nowMs), nowMs, windowMs, limit,
+      entries: memory.entries, warnings: round1Warnings,
     })
+    const material = r1.material
     attemptExcluded = material.counts.attemptExcluded
-    // 🔴 같은 글의 후보를 모두 넘긴다. 첫 후보가 Gate 에서 막히면 다음 Persona 로 넘어가고,
-    //    하나가 적재되면 pipeline 이 그 글의 나머지 후보를 부르지 않는다.
-    const candidates = material.targets
+    const candidates = r1.candidates
     targets = new Set(candidates.map((t) => t.target.facts.postId)).size
     lines.push(`대상 글 ${targets}편 · 후보 ${candidates.length}건 (planner ${material.counts.planned} · 입력 ${material.counts.built})`)
-    for (const b of material.providerBlockers) lines.push(`유료 호출 차단 사유: ${b}`)
-    if (attemptExcluded > 0) lines.push(`이미 보낸 조합 ${attemptExcluded}건 제외 — 같은 글 60분 window 안에서는 다시 보내지 않는다`)
-    // 🔴 planner skip 은 원인별로 따로 찍는다 — 고정 잠금(후보 무관) · ⑧ 시도(그 글만)
-    if (material.counts.voiceAttemptExcluded > 0) {
-      lines.push(`planner skip ⑧ 시도 ${material.counts.voiceAttemptExcluded}건 — 그 글에서 ⑧ 로 막힌 Persona 는 다른 역할로 다시 보내지 않는다`)
-    }
-    if (material.capExcluded.length > 0) {
-      lines.push(`planner skip 카드 상한 ${material.capExcluded.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 한 건 더 달면 발행에서 닫힌다(같은 planCap)`)
-    }
-    if (material.voiceStaticLocked.length > 0) {
-      lines.push(`planner skip 고정 잠금 ${material.voiceStaticLocked.map((x) => `${x.code}[${x.codes.join(',')}]`).join(' · ')} — 후보와 무관하게 ⑧ 이 막아 유료 호출 0`)
-    }
+    lines.push(...materialLines(material))
     if (candidates.length === 0 && attemptExcluded > 0) {
       generationSkipped = `이 60분 window 의 새 조합이 없다 — 이미 보낸 ${attemptExcluded}건 제외 · 유료 호출 0`
     }
-
-    const ctxByKey = new Map(candidates.map((t) => [
-      dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole),
-      { gate: t.gate, recentTexts: t.recentTexts },
-    ]))
-    const ctxOf = (input: CommentInput) => ctxByKey.get(dedupKeyOf(input.post.id, input.personaCode, input.reactionRole))
-    const publishedByKey = new Map(candidates.map((t) => [
-      dedupKeyOf(t.target.facts.postId, t.target.facts.personaCode, t.target.facts.reactionRole), t.postPublishedAtMs,
-    ]))
-    /** 🔴 이 회차에 시작 기록을 남긴 조합 — 결과 갱신은 이것만 한다 */
-    const started = new Set<string>()
-    const generate = candidates.length === 0
-      ? null
-      : deps.makeGenerate(candidates.map((t) => t.target.input.personaCode))
-
-    const result = await runEnqueuePipeline({
-      selection: deps.canon.selection,
-      canon: deps.canon.canon,
-      targets: candidates.map((t) => t.target),
-      preflightOk: material.providerAllowed,
-      preflightBlockers: material.providerBlockers,
-      provider: async ({ model, input }) => {
-        const ctx = ctxOf(input)
-        if (ctx === undefined || generate === null) return { ok: false, text: null, errorCode: 'NO_GATE_CONTEXT' }
-        // 🔴 한 건의 예외가 회차를 끝내지 않는다 — 그 대상만 실패다
-        try { return await generate({ model, input, recentTexts: ctx.recentTexts }) } catch {
-          return { ok: false, text: null, errorCode: 'PROVIDER_EXCEPTION' }
-        }
-      },
-      gate: makeCanonGate((input) => ctxOf(input)?.gate),
-      writer: makePendingWriter(deps.prisma),
-      providerCallLimit: limit,
-      limit,
-      oneCreatedPerPost: true,
-      // 🔴 provider 앞에서 시작 기록을 내구적으로 남긴다 — 못 남기면 부르지 않는다
-      beforeProvider: (t) => {
-        const key = dedupKeyOf(t.facts.postId, t.facts.personaCode, t.facts.reactionRole)
-        const publishedAtMs = publishedByKey.get(key)
-        if (publishedAtMs === null || publishedAtMs === undefined) {
-          const reason = '글 공개 시각을 몰라 시도 기록의 만료를 정할 수 없다'
-          attemptWarnings.push(`🔴 ${reason} — 이 대상은 보내지 않는다`)
-          return { proceed: false, reason, stopRound: false }
-        }
-        const entry: AttemptEntry = {
-          postId: t.facts.postId, personaCode: t.facts.personaCode, reactionRole: t.facts.reactionRole,
-          postPublishedAtMs: publishedAtMs, attemptedAtMs: nowMs, step: 'STARTED', failedGates: [], blockCodes: [],
-        }
-        const w = deps.attemptStore.recordStart(entry, nowMs)
-        if (w.ok) { started.add(key); return { proceed: true } }
-        attemptWarnings.push(`🔴 시도 기록을 남기지 못했다 [${w.kind}] ${w.reason} — provider 0`)
-        return { proceed: false, reason: `시도 기록 실패 [${w.kind}] ${w.reason}`, stopRound: w.kind === 'IO' }
-      },
-    })
-    // 🔴 결과를 같은 항목에 적는다. 실패해도 시작 기록이 남아 있어 같은 조합의 재시도는 막힌 채다 — 대신 조용히 넘기지 않는다
-    const updates: AttemptOutcomeUpdate[] = []
-    for (const o of result.outcomes) {
-      const key = attemptKeyOf(o)
-      if (!started.has(key)) continue
-      const summary = attemptOutcomeOf({
-        step: o.step, gates: o.plan?.gates ?? [], blockCodes: o.plan?.blocks.map((b) => b.code) ?? [],
-      })
-      if (summary !== null) updates.push({ key, ...summary })
-    }
-    const done = deps.attemptStore.recordOutcomes(updates, nowMs)
-    if (!done.ok) {
-      attemptWarnings.push(`🔴 시도 결과를 갱신하지 못했다 [${done.kind}] ${done.reason} — 시작 기록은 남아 같은 조합은 다시 보내지 않는다`)
-    }
+    // 🔴 앞서 모은 기억 경고(memory.warning)와 이 라운드 경고를 한 번씩 찍는다(옛 순서 그대로)
+    attemptWarnings.push(...round1Warnings)
     for (const w of attemptWarnings) lines.push(w)
+    const result = r1.result
     providerCalls = result.providerCalls
     enqueued = result.created
-    outcomes = result.outcomes
+    outcomes = [...result.outcomes]
     if (result.stoppedReason !== null) lines.push(`생성 멈춤: ${result.stoppedReason}`)
-    for (const o of result.outcomes) {
-      // 🔴 ⑧ 원인을 가른다 — 후보 원인(막음) · 기준선 초과(후보 무관 · 통과). 축 이름만
-      const cause = voiceCauseNote(o.plan?.gates ?? [])
-      lines.push(`   ${o.personaCode} → 글 ${o.postId.slice(0, 8)} · ${o.step} — ${o.reason}${cause === '' ? '' : ` · ${cause}`}`)
+    for (const o of result.outcomes) lines.push(outcomeLine(o))
+
+    /**
+     * 🔴 **라운드 2 — 회차 안 재시도 한 번** (2026-11-25 · D50 첫 댓글 10분 창).
+     *    후보가 모두 관문에 막힌 글은 다음 회차(20분 뒤)를 기다리면 10분 창을 넘긴다. 같은 회차 안에서 **한 번만** 다시 고른다.
+     *    · 대상 — 라운드 1 에서 관문 막힘(`ENQUEUE_BLOCKED`)이 1건 이상이고 적재가 0 인 글만(provider 실패만 있었던 글은 아니다)
+     *    · 라운드 1 이 멈췄으면(`stoppedReason`) · 결과를 기억에 적지 못했으면 · 남은 호출이나 오늘 자리가 0 이면 하지 않는다
+     *    · 기억을 **다시 읽어** 같은 함수로 후보를 만든다 — 라운드 1 에서 보낸 조합은 기억이 빼므로 같은 조합을 다시 보내지 않는다
+     *    · 라운드 2 도 막히면 거기서 끝이다(라운드 3 없음 — 다음 회차가 본다)
+     */
+    const retryPostIds = retryPostIdsOf(result.outcomes)
+    const retryCallLimit = Math.max(0, Math.min(limit - result.providerCalls, readiness.allowance.remaining - result.created))
+    if (retryPostIds.size > 0) {
+      const skip = result.stoppedReason !== null ? '라운드 1 이 멈췄다'
+        : !r1.outcomesRecorded ? '라운드 1 결과를 시도 기억에 적지 못했다'
+          : retryCallLimit === 0
+            ? `남은 호출 0 (회차 상한 ${limit} · 사용 ${result.providerCalls} · 오늘 남은 자리 ${readiness.allowance.remaining - result.created})`
+            : null
+      const memory2 = skip === null ? deps.attemptStore.read(nowMs) : null
+      if (skip !== null || memory2 === null) {
+        lines.push(`재시도 없음 — 후보가 모두 관문에 막힌 글 ${retryPostIds.size}편 · ${skip ?? '?'}`)
+      } else if (!memory2.ok) {
+        const warning = attemptReadWarning(memory2)
+        attemptWarnings.push(warning)
+        lines.push(`재시도 없음 — 후보가 모두 관문에 막힌 글 ${retryPostIds.size}편 · 시도 기억을 다시 읽지 못했다`)
+        lines.push(warning)
+      } else {
+        const round2Warnings: string[] = []
+        if (memory2.warning !== undefined && !attemptWarnings.includes(memory2.warning)) round2Warnings.push(memory2.warning)
+        const r2 = await runFirstCommentRound({
+          deps, source: onlyPosts(autoLaneTargetSource(deps.source, nowMs), retryPostIds), nowMs, windowMs,
+          limit: retryCallLimit, entries: memory2.entries, warnings: round2Warnings,
+        })
+        lines.push(`재시도 — 후보가 모두 관문에 막힌 글 ${retryPostIds.size}편 · 후보 ${r2.candidates.length}건`)
+        lines.push(...materialLines(r2.material))
+        attemptWarnings.push(...round2Warnings)
+        for (const w of round2Warnings) lines.push(w)
+        attemptExcluded += r2.material.counts.attemptExcluded
+        providerCalls += r2.result.providerCalls
+        enqueued += r2.result.created
+        outcomes = [...outcomes, ...r2.result.outcomes]
+        if (r2.result.stoppedReason !== null) lines.push(`재시도 생성 멈춤: ${r2.result.stoppedReason}`)
+        for (const o of r2.result.outcomes) lines.push(outcomeLine(o))
+      }
     }
   }
 
