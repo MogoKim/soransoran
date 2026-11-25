@@ -843,7 +843,7 @@ expect('① legacy 회차가 시작된 뒤의 최종 종료는 process.exit(resu
   [(producerBody.match(/process\.exit\(/g) ?? []).length, (producerBody.match(/process\.exit\(result\.code\)/g) ?? []).length], [1, 1])
 expect('② rollout VNEXT_NOT_IMPLEMENTED 진입 거부는 정확히 한 곳이다',
   [producerSrc.split(ROLLOUT_GUARD).length - 1, (producerSrc.match(/process\.exit\(/g) ?? []).length], [1, 2])
-expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT = rolloutGate\(readRollout\(\), \{ warn: !POST_SYNC \}\)\n/.test(producerPreGuard), true)
+expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT = rolloutGate\(readRollout\(\), \{ warn: !POST_SYNC, vnextLane: POST_SYNC \? null : 'produce' \}\)\n/.test(producerPreGuard), true)
 {
   // ③ 거부 줄이 아래 모든 것보다 앞이다 — 각 표식의 **첫** 등장 위치로 본다(정의·호출 모두)
   const after = {
@@ -851,11 +851,15 @@ expect('② 진입 거부는 rollout 판정 결과를 따른다', /const ROLLOUT
     '시작 로그': 'line(`매거진 producer 시작',
     'producer lock': 'acquireLock({',
     'sync(preflight · 재실행)': 'preflight({ exec })',
-    '자식 stage': 'spawnSync(',
+    'legacy 자식 stage': 'spawnSync(NODE,',
     notify: 'notifyOnce(',
     handoff: 'writeHandoff({',
     'finalizer 흐름': 'runProducerFlow({',
   }
+  const dispatch = producerPreGuard.match(/if \(ROLLOUT\.lane === 'produce'\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+  expect('진입 판정 전에는 vnext 생산기 한 개만 위임한다',
+    [(producerPreGuard.match(/spawnSync\(/g) ?? []).length,
+      dispatch.includes("spawnSync(process.execPath, [join(ROOT, 'scripts/magazine-vnext-produce.mjs'), '--launcher'")], [1, true])
   const late = Object.entries(after).filter(([, m]) => { const i = producerSrc.indexOf(m); return rolloutGuardAt === -1 || i === -1 || i < rolloutGuardAt }).map(([k]) => k)
   expect('③ rollout 진입 거부가 BOOT_HEAD · 시작 로그 · lock · sync · 자식 stage · notify · handoff · finalizer 보다 앞이다', late, [])
 }

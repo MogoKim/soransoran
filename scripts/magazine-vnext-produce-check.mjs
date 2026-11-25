@@ -358,15 +358,25 @@ await test('E22', '계약 충돌(strict 출력 아님 · 400) → DESIGN_CONTRAC
   return { ok: ra.outcome === 'DESIGN_CONTRACT_CONFLICT' && jobOf(a, 'I-T6-03').hold?.reason === 'DESIGN_CONTRACT_CONFLICT' && submits(a, Q_FAMILY) === 0 && rb.outcome === 'DESIGN_CONTRACT_CONFLICT' && submits(b) === 1,
     detail: JSON.stringify({ ra: ra.outcome, fam: submits(a, Q_FAMILY), rb: rb.outcome }) }
 })
-await test('E23', 'store:false(ZDR) — 프로세스가 바뀌면 회수 불능 확정 → 재생성 1회 · 삭제 생략 기록', async () => {
+await test('E23', 'store:false(ZDR) — 프로세스가 바뀌면 회수 불능 확정 → 재생성 1회 · 같은 프로세스도 창을 넘기면 확정 · 완료분은 삭제 생략 기록', async () => {
+  // (a) 제출 직후 급사 → 다음 프로세스는 ZDR 요청을 이어 보지 않는다
   let armed = true
-  const e = env({ faults: { [Q_RESUME]: { submit: ['ZDR'] } }, hooks: { at(point) {
-    if (armed && point === 'after-submit-raw') { armed = false; throw Error('SIMULATED_CRASH') }
-  } } })
-  await e.run().catch(() => null)
-  await e.run()
-  const j = jobOf(e, 'I-T6-03')
-  return { ok: j.requests[0].error === 'ZDR_PROCESS_RESTARTED' && submits(e) === 2 && state(j) === 'HERO_READY' && j.requests[1].deletion?.result === 'DELETED', detail: JSON.stringify(j.requests.map((r) => [r.kind, r.status, r.mode, r.error, r.deletion?.result])) }
+  const a = env({ faults: { [Q_RESUME]: { submit: ['ZDR'], poll: ['SLOW:1'] } }, hooks: { at: (p) => { if (armed && p === 'after-submit-raw') { armed = false; throw new Error('SIMULATED_CRASH') } } } })
+  await a.run().catch(() => null)
+  await a.run()
+  const ja = jobOf(a, 'I-T6-03')
+  // (b) 같은 프로세스 — 창(20초) 안에 끝나지 않으면 확정
+  const b = env({ faults: { [Q_RESUME]: { submit: ['ZDR'], poll: ['SLOW:6'] } }, limits: { pollIntervalMs: 15_000, zdrWindowMs: 20_000 } })
+  await b.run()
+  const jb = jobOf(b, 'I-T6-03')
+  // (c) ZDR 로 끝난 원고 — 원격 보존이 없으니 DELETE 를 보내지 않고 모드를 기록한다
+  const c = env({ faults: { [Q_RESUME]: { submit: ['ZDR'] } } })
+  await c.run()
+  const jc = jobOf(c, 'I-T6-03')
+  return { ok: ja.requests[0].error === 'ZDR_PROCESS_RESTARTED' && submits(a) === 2 && state(ja) === 'HERO_READY'
+    && jb.requests[0].error === 'ZDR_WINDOW_PASSED' && submits(b) === 2 && state(jb) === 'HERO_READY'
+    && jc.requests[0].mode === 'ZDR' && jc.requests[0].deletion?.result === 'SKIPPED_ZDR' && c.remote.calls.remove.length === 0 && state(jc) === 'HERO_READY',
+  detail: JSON.stringify({ a: ja.requests.map((r) => [r.status, r.mode, r.error]), b: jb.requests.map((r) => [r.status, r.error]), c: [jc.requests[0].deletion, c.remote.calls.remove.length] }) }
 })
 await test('E24', 'AUTH(401) → 회차 정지 · 다른 Job 호출 0 · 429 → 정해진 시각까지 대기 뒤 새 요청(재생성 예산 소모 0)', async () => {
   const a = env({ target: 2, faults: { [Q_RESUME]: { submit: ['HTTP_401'] } } })
