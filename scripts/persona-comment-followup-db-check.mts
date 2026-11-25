@@ -391,7 +391,7 @@ async function main(): Promise<void> {
     // 🔴 실제 장부 세션 — 추가 댓글 생성이 `commentFollowupGen` 줄로 남는가(가짜 fetch · 네트워크 0)
     const ledgerDir = join(HOME, 'ledger-followup')
     mkdirSync(ledgerDir, { recursive: true })
-    const session = new SupplyLlmSession({ runId: 'fu-db', dir: ledgerDir, limits: commentLoopLimitsFromEnv({}).limits })
+    const session = new SupplyLlmSession({ runId: 'fu-db', dir: ledgerDir, limits: commentLoopLimitsFromEnv({}, null).limits })
     const realFetch = globalThis.fetch
     process.env.GEMINI_API_KEY = 'fixture-fake-key'
     let genFetch = 0

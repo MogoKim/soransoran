@@ -20,7 +20,7 @@ import type { PrismaClient } from '@prisma/client'
 
 import {
   AUTO_COMMENT_THINKING_LEVEL, AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
-  COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
+  COMMENT_DAILY_USD_CAP, commentDailyCapOf, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
   judgeAutoLane, type AutoLaneFacts,
   firstCommentDelayMs, firstCommentWaitMs, FIRST_COMMENT_DELAY_MIN_MS, FIRST_COMMENT_DELAY_MAX_MS, AUTO_FIRST_COMMENT_WINDOW_MS,
 } from '../src/lib/persona-comment-auto-lane'
@@ -60,6 +60,10 @@ import {
 } from './lib/persona-comment-runner-template'
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { auditLedgerDir } from './lib/auto-ready-semantic-provider.mjs'
+import { RUNTIME_STAGES } from '../src/lib/scale-profile'
+import { decisionStageEnv } from '../src/lib/scale-runtime'
+import { followupStageOf } from '../src/lib/persona-comment-followup'
+import { kstDateString } from '../src/lib/release-canary'
 
 let pass = 0
 let fail = 0
@@ -150,27 +154,80 @@ console.log('\n② 생성 전 대상 필터 · 글당 첫 대상만')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 예산 env — 기본값 · 상한 · 잘못 쓴 값')
+console.log('\n③ 예산 env — 기본값 · 그날 단계 천장 · 잘못 쓴 값')
 // ─────────────────────────────────────────────────────────
 {
-  const d = commentLoopLimitsFromEnv({})
+  const daily = (raw: string) => ({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: raw })
+  const d = commentLoopLimitsFromEnv({}, null)
   check('🟢 env 가 없으면 기본값 — 하루 $0.20 · 회차 6 · 여유 1.5',
     d.limits.dailyUsd === 0.2 && d.limits.runRequestCap === 6 && d.limits.headroomMultiplier === 1.5)
-  check('🔴 기본값 $0.20은 그대로이고 코드 천장은 $0.90이다(D50 준비 · 11-19 승인 총비용 안)',
-    COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.9)
-  const atCap = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.9' })
-  check('🟢 env $0.90(천장)까지는 그대로 읽는다', atCap.limits.dailyUsd === 0.9)
-  const prev = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.5' })
-  check('🟢 env $0.50(옛 천장)은 그대로 읽는다 — 천장을 올려도 운영값은 env 를 바꿀 때까지 그대로다', prev.limits.dailyUsd === 0.5)
-  const hi = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '5' })
-  check('🔴 🔴 **env 가 $5 여도 코드 천장 $0.90으로 내린다**', hi.limits.dailyUsd === 0.9)
-  const lo = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.05' })
+  check('🟢 기본값은 그날 단계로 올라가지 않는다 — D50 날도 env 가 없으면 기본값', commentLoopLimitsFromEnv({}, 'd50').limits.dailyUsd === d.limits.dailyUsd)
+  // 🔴 천장 값은 상수에서 읽는다(값 고정은 stage-scheduler-check 의 비용 상한 정본 한 줄) — 여기는 단계 → 칸의 갈림만 본다
+  check('🔴 🔴 **그날 단계 천장 — d50 만 d50 칸 · d1~d30 과 모름(null)은 base 칸 · null 을 내지 않는다**',
+    commentDailyCapOf('d50') === COMMENT_DAILY_USD_CAP.d50
+    && [...RUNTIME_STAGES.filter((s) => s !== 'd50'), null].every((s) => commentDailyCapOf(s) === COMMENT_DAILY_USD_CAP.base)
+    && COMMENT_DAILY_USD_CAP.d50 > COMMENT_DAILY_USD_CAP.base)
+  check('🔴 단계는 기본값 없는 필수 인자다(부르는 곳마다 그날 단계를 넘긴다)', commentLoopLimitsFromEnv.length === 2)
+  for (const s of [...RUNTIME_STAGES, null]) {
+    const v = commentLoopLimitsFromEnv(daily('2.0'), s).limits.dailyUsd
+    check(`🔴 env $2.00 · 단계 ${s ?? '모름'} → ${s === 'd50' ? 'd50' : 'base'} 칸으로 내린다`,
+      v === (s === 'd50' ? COMMENT_DAILY_USD_CAP.d50 : COMMENT_DAILY_USD_CAP.base), String(v))
+  }
+  const atCap = commentLoopLimitsFromEnv(daily(String(COMMENT_DAILY_USD_CAP.base)), 'd30')
+  check('🟢 env = base 천장이면 그대로 읽는다', atCap.limits.dailyUsd === COMMENT_DAILY_USD_CAP.base)
+  for (const s of ['d50', 'd30', null] as const) {
+    const prev = commentLoopLimitsFromEnv(daily('0.5'), s)
+    check(`🟢 env $0.50 · 단계 ${s ?? '모름'} → $0.50 그대로 — 천장을 올려도 운영값은 env 를 바꿀 때까지 그대로다`, prev.limits.dailyUsd === 0.5)
+  }
+  const mid = (COMMENT_DAILY_USD_CAP.base + COMMENT_DAILY_USD_CAP.d50) / 2
+  check('🔴 env 가 두 칸 사이면 — D50 날은 env 그대로(낮추기만) · D30 날은 base 로 내린다 = min(env, 그날 천장)',
+    commentLoopLimitsFromEnv(daily(String(mid)), 'd50').limits.dailyUsd === mid
+    && commentLoopLimitsFromEnv(daily(String(mid)), 'd30').limits.dailyUsd === COMMENT_DAILY_USD_CAP.base)
+  const hi = commentLoopLimitsFromEnv(daily('5'), null)
+  check('🔴 🔴 **env 가 $5 여도 그날 단계 천장(모름 → base)으로 내린다**', hi.limits.dailyUsd === COMMENT_DAILY_USD_CAP.base)
+  const lo = commentLoopLimitsFromEnv(daily('0.05'), 'd50')
   check('🟢 낮추는 것은 된다 — $0.05', lo.limits.dailyUsd === 0.05)
-  const bad = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.2O' })
-  check('🔴 오타는 기본값이 아니라 보류다(null)', bad.limits.dailyUsd === null)
-  check('🔴 회차 상한 2.5 → 보류', commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.runRequestCap]: '2.5' }).limits.runRequestCap === null)
+  for (const s of ['d50', null] as const) {
+    const bad = commentLoopLimitsFromEnv(daily('0.2O'), s)
+    check(`🔴 오타는 기본값이 아니라 보류다(null) — 단계 ${s ?? '모름'}에서도 천장으로 덮지 않는다`, bad.limits.dailyUsd === null)
+  }
+  check('🔴 회차 상한 2.5 → 보류', commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.runRequestCap]: '2.5' }, null).limits.runRequestCap === null)
   check('🔴 여유 배수 0.5 → 보류(1 미만은 예약이 추정 오차를 못 덮는다)',
-    commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.headroomMultiplier]: '0.5' }).limits.headroomMultiplier === null)
+    commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.headroomMultiplier]: '0.5' }, null).limits.headroomMultiplier === null)
+
+  /**
+   * 🔴 **러너의 그날 단계 = 추가 댓글과 같은 판독**(`followupStageOf(decisionStageEnv(env), now)`).
+   *    오늘 표식 · 그날 결정 전의 어제 표식만 단계를 낸다. 표식 없음 · 깨짐 · 이틀 낡음은 모름 → base(유료 생성을 닫지 않는다).
+   */
+  const at = new Date(NOW)
+  const today = kstDateString(at)
+  const yesterday = kstDateString(new Date(NOW - 864e5))
+  const twoDaysAgo = kstDateString(new Date(NOW - 2 * 864e5))
+  const runnerEnv = (mark: string | undefined, release: string) => ({
+    ...daily('2.0'), SORAN_RELEASE_STAGE: release, SORAN_CAPACITY_STAGE: release,
+    ...(mark === undefined ? {} : { SORAN_STAGE_DECISION_DATE: mark }),
+  })
+  const runnerCap = (env: Record<string, string>): number | null =>
+    commentLoopLimitsFromEnv(env, followupStageOf(decisionStageEnv(env), at).stage).limits.dailyUsd
+  const cases: [string, Record<string, string>, number][] = [
+    ['오늘 결정 d50', runnerEnv(today, 'd50'), COMMENT_DAILY_USD_CAP.d50],
+    ['그날 결정 전 · 어제 표식 d50', runnerEnv(yesterday, 'd50'), COMMENT_DAILY_USD_CAP.d50],
+    ['오늘 결정 d30', runnerEnv(today, 'd30'), COMMENT_DAILY_USD_CAP.base],
+    ['표식 없음(consumer 미경유) · 칸은 d50', runnerEnv(undefined, 'd50'), COMMENT_DAILY_USD_CAP.base],
+    ['깨진 표식 · 칸은 d50', runnerEnv('today', 'd50'), COMMENT_DAILY_USD_CAP.base],
+    ['이틀 낡은 표식 d50', runnerEnv(twoDaysAgo, 'd50'), COMMENT_DAILY_USD_CAP.base],
+  ]
+  for (const [name, env, want] of cases) {
+    const got = runnerCap(env)
+    check(`🔴 러너 그날 단계 — ${name} → ${want === COMMENT_DAILY_USD_CAP.d50 ? 'd50' : 'base'} 칸 · null 아님`, got === want, String(got))
+  }
+  const runnerSource = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
+  check('🔴 연결: 러너가 그날 단계를 한 번 읽어 세션 상한과 장부 관문에 같은 값을 넘긴다',
+    /const day = followupStageOf\(decisionStageEnv\(process\.env\), now\)/.test(runnerSource)
+    && /commentLoopLimitsFromEnv\(process\.env, day\.stage\)/.test(runnerSource)
+    && /readCostSignals\(now, day\.stage, process\.env/.test(runnerSource)
+    && (runnerSource.match(/commentLoopLimitsFromEnv\(/g) ?? []).length === 1
+    && (runnerSource.match(/readCostSignals\(/g) ?? []).length === 1)
   check('🔴 env 이름이 공급·감사와 다르다',
     Object.values(COMMENT_LOOP_BUDGET_ENV).every((n) => n.startsWith('SORAN_PERSONA_COMMENT_')))
 }
@@ -213,7 +270,7 @@ const fakeFetch = (inTokens: number, outTokens: number): typeof globalThis.fetch
     countCalls = 0; genCalls = 0
     const dir = mkdtempSync(join(tmpdir(), 'soran-comment-loop-ledger-'))
     if (spent > 0) seedSpent(dir, spent)
-    const session = new SupplyLlmSession({ runId: 'loop-check', dir, limits: commentLoopLimitsFromEnv({}).limits, now: () => day })
+    const session = new SupplyLlmSession({ runId: 'loop-check', dir, limits: commentLoopLimitsFromEnv({}, null).limits, now: () => day })
     process.env.GEMINI_API_KEY = 'test-key-not-real'
     globalThis.fetch = fakeFetch(1805, 231)
     try {
@@ -260,7 +317,7 @@ console.log('\n④-b 🔴 thinkingLevel 계약 — 실제 요청 body · 네트�
   const callWith = async (stage: 'commentGen' | 'commentFollowupGen', level: Parameters<typeof thinkingLevelVerdict>[1]) => {
     bodies.length = 0; sent = 0
     const dir = mkdtempSync(join(tmpdir(), 'soran-comment-thinking-'))
-    const session = new SupplyLlmSession({ runId: 'thinking-check', dir, limits: commentLoopLimitsFromEnv({}).limits, now: () => day })
+    const session = new SupplyLlmSession({ runId: 'thinking-check', dir, limits: commentLoopLimitsFromEnv({}, null).limits, now: () => day })
     process.env.GEMINI_API_KEY = 'test-key-not-real'
     globalThis.fetch = capture
     try {
@@ -715,7 +772,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       o.sent.push({ round: o.round, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
       return { ok: true, text: o.text ?? BODY, errorCode: null }
     },
-    generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+    generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0,
     attemptStore: o.store,
   })
 
@@ -855,7 +912,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
             sent.push({ round: i + 1, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
             return { ok: true, text: gen(input.personaCode), errorCode: null }
           },
-          generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0,
           attemptStore: store,
         })
         reports.push(r)
@@ -880,7 +937,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
         const nowMs = PUB + offsetMin * MIN
         const mat = await materializeTargets({
-          source: autoLaneTargetSource(replaySource(), nowMs), limit: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          source: autoLaneTargetSource(replaySource(), nowMs), limit: commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0,
           nowMs, windowMs: RATIO_WINDOW_DAYS * 86_400_000, attemptedCombos: attempted,
         })
         for (const t of mat.targets) {

@@ -398,7 +398,7 @@ async function main(): Promise<void> {
       reservedUsd: 0.199, inputTokens: 1805, outputTokens: 231, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
       settledUsd: 0.199, pricingVersion: 'x', startedAt: day.toISOString(), endedAt: day.toISOString(), errorCode: null,
     })
-    const session = new SupplyLlmSession({ runId: 'db-cap', dir, limits: commentLoopLimitsFromEnv({}).limits })
+    const session = new SupplyLlmSession({ runId: 'db-cap', dir, limits: commentLoopLimitsFromEnv({}, null).limits })
     let genFetch = 0
     const realFetch = globalThis.fetch
     process.env.GEMINI_API_KEY = 'fixture-fake-key'
@@ -514,7 +514,7 @@ async function main(): Promise<void> {
       reservedUsd: 0.2, inputTokens: 1805, outputTokens: 231, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
       settledUsd: 0.2, pricingVersion: 'x', startedAt: day.toISOString(), endedAt: day.toISOString(), errorCode: null,
     })
-    const ledger = readCostSignals(day, {}, { comment: dir }).commentLedger
+    const ledger = readCostSignals(day, null, {}, { comment: dir }).commentLedger
     const gate = generationGateOf({ missingEnv: [], ledger })
     check('🔴 소진 장부 → 생성 문 닫힘(DAILY_EXHAUSTED)', !gate.ok && ledger.codes.includes('DAILY_EXHAUSTED'), `${gate.reason}`)
     let anyFetch = 0
@@ -527,7 +527,7 @@ async function main(): Promise<void> {
         f.calls() === 0 && r.providerCalls === 0 && anyFetch === 0 && (await personaComments(fresh)).length === 0, `${f.calls()} ${anyFetch}`)
       check('🟢 이미 돈을 쓴 PENDING 은 발행된다(유료 호출 없음)', (await personaComments(left)).length === 1 && r.sweepBefore?.published === 1)
     } finally { globalThis.fetch = realFetch }
-    const okGate = generationGateOf({ missingEnv: [], ledger: readCostSignals(day, {}, { comment: join(HOME, 'ledger-empty') }).commentLedger })
+    const okGate = generationGateOf({ missingEnv: [], ledger: readCostSignals(day, null, {}, { comment: join(HOME, 'ledger-empty') }).commentLedger })
     check('기준선 — 빈 장부(오늘 0원)는 생성 문이 열린다', okGate.ok, okGate.reason)
   }
 

@@ -19,6 +19,7 @@ import {
   supplyCostProofBudgetUsd, usesSupplyCostEnvelope, type SupplyCostEvidence,
 } from '../../src/lib/supply-cost-envelope'
 import { judgeCost, type CostVerdict } from '../../src/lib/ops-status'
+import type { RuntimeStage } from '../../src/lib/scale-profile'
 import { defaultLedgerDir, ledgerPathOf, readLedgerDay, readSettleHoldAsOf } from './llm-ledger-store.mjs'
 import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
 import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
@@ -82,7 +83,7 @@ export type CostSignals = {
   supplyLedger: CostVerdict
   /** 공급 장부 안의 댓글 단계만 쓴 금액(옛 경로) */
   commentSpentUsd: number | null
-  /** 🔴 무인 댓글 루프 전용 장부 — 상한은 `SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`(기본 $0.20 · 코드 천장 `COMMENT_LOOP_DAILY_USD_MAX` · env 는 낮추기만 한다) */
+  /** 🔴 무인 댓글 루프 전용 장부 — 상한은 `SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`(기본 $0.20 · 코드 천장 `commentDailyCapOf(그날 단계)` · env 는 낮추기만 한다) */
   commentLedger: CostVerdict
   /** 감사 전용 장부 — 공급과 섞이지 않는다 */
   auditLedger: CostVerdict
@@ -91,7 +92,15 @@ export type CostSignals = {
 }
 
 export function readCostSignals(
-  now: Date, env?: Record<string, string>,
+  now: Date,
+  /**
+   * 🔴 **댓글 장부를 잴 그날 단계** — 기본값 없는 필수 인자. 댓글 천장(`commentDailyCapOf`)만 이 값으로 갈린다.
+   *    부르는 쪽이 정한다: 러너 = 그날 결정 판독(`followupStageOf`) · 컨트롤러 하루 증거 = 판정하는 그날 결정의 공개 단계 ·
+   *    컨트롤러 브레이크 = 결정 전 회차의 단계(전날 결정) · 화면 = 그 도구가 읽은 오늘 결정. 모르면 null(→ base 칸).
+   *    🔴 env 에서 단계를 읽지 않는다 — 컨트롤러는 결정 표식 없는 env(예산 키만)를 읽는다.
+   */
+  commentStage: RuntimeStage | null,
+  env?: Record<string, string>,
   /** 🔴 시험용 — 운영은 기본 디렉터리만 쓴다 */
   dirs: { supply?: string; audit?: string; comment?: string } = {},
 ): CostSignals {
@@ -138,7 +147,7 @@ export function readCostSignals(
     tally: c.entries === null ? null : tallyOf(c.entries),
     ledgerError: c.error,
     settleHold: readSettleHoldAsOf(commentDir, targetLedgerDate),
-    capUsd: commentLoopLimitsFromEnv(envVals).limits.dailyUsd,
+    capUsd: commentLoopLimitsFromEnv(envVals, commentStage).limits.dailyUsd,
   })
   // §3.4 — 하루 장부의 중대 무결성과 그날 정기 회차 전체의 비용 envelope
   const supplyCostEvidence: SupplyCostEvidence | null = s.entries === null ? {

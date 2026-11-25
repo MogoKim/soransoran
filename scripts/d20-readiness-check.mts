@@ -14,7 +14,7 @@ import {
   FOLLOWUP_PROFILE_VERSION, validateFollowupProfile,
 } from '../src/lib/persona-comment-followup'
 import {
-  COMMENT_LOOP_BUDGET_ENV, COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX, commentLoopLimitsFromEnv,
+  COMMENT_LOOP_BUDGET_ENV, commentDailyCapOf, commentLoopLimitsFromEnv,
 } from '../src/lib/persona-comment-auto-lane'
 import { profileOf } from '../src/lib/scale-profile'
 import { RUNNER_GRID } from './lib/stage-preflight-facts.mjs'
@@ -40,7 +40,7 @@ const measure = (patch: Partial<FollowupMeasure> = {}): FollowupMeasure => ({
 })
 const D20_POSTS = profileOf('d20').dailyTarget
 const RUNS = RUNNER_GRID.commentSlots.length
-/** 🔴 D20 후보 산출 당시(2026-10-16) 댓글 장부 하루 상한 — 역사 값이다. 지금 코드 천장(`COMMENT_LOOP_DAILY_USD_MAX`)이 아니다 */
+/** 🔴 D20 후보 산출 당시(2026-10-16) 댓글 장부 하루 상한 — 역사 값이다. 지금 코드 천장(`commentDailyCapOf`)이 아니다 */
 const D20_FIXTURE_COMMENT_CAP_USD = 0.5
 const derive = (m: FollowupMeasure | null, o: Partial<{ personas: number | null; cap: number | null }> = {}) => deriveFollowupProfile({
   measure: m, targetStage: 'd20', targetDailyPosts: D20_POSTS, commentRunsPerDay: RUNS,
@@ -91,10 +91,15 @@ console.log('\n② 식 — 실측에서만 나온다')
 console.log('\n③ 승인 없이 설치되지 않는다 · 첫 댓글 예산이 먼저다')
 {
   // 🔴 fixture 는 실제보다 강할 수 없다 — 런타임이 천장으로 깎는 상한이면 이 fixture 의 CANDIDATE 는 운영에서 나올 수 없는 결과다
-  check('D20 후보 fixture 상한 $0.50(역사 값)은 지금 런타임이 깎지 않고 그대로 읽는 값이다 — 코드 천장 $0.90 · 기본 $0.20 은 그대로다',
-    commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: String(D20_FIXTURE_COMMENT_CAP_USD) }).limits.dailyUsd
+  check('D20 후보 fixture 상한 $0.50(역사 값)은 지금 런타임이 깎지 않고 그대로 읽는 값이다 — d20-readiness 가 쓰는 단계(미확인 → base 칸) 천장 아래다',
+    commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: String(D20_FIXTURE_COMMENT_CAP_USD) }, null).limits.dailyUsd
       === D20_FIXTURE_COMMENT_CAP_USD
-    && COMMENT_LOOP_DAILY_USD_MAX === 0.9 && COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2)
+    && D20_FIXTURE_COMMENT_CAP_USD < commentDailyCapOf(null))
+  const readinessSource = readFileSync('scripts/d20-readiness.mts', 'utf-8')
+  check('🔴 연결: d20-readiness 는 오늘 결정을 읽지 않는다 — 댓글 천장을 단계 미확인(null → base)으로 재고 화면·JSON 에 적는다',
+    /const commentStage = null\n/.test(readinessSource)
+    && /commentLoopLimitsFromEnv\(pe\.values, commentStage\)/.test(readinessSource)
+    && /commentCapStage: '단계 미확인/.test(readinessSource) && /console\.log\(`   🟡 \$\{fu\.commentCapStage\}`\)/.test(readinessSource))
   const c = derive(measure()).candidate!
   check('🔴 승인칸이 비어 있다', c.approvedBy === null && c.approvedAt === null)
   check('🔴 후보 그대로는 validateFollowupProfile 이 거부한다(설치해도 0건)', !validateFollowupProfile(c, 'd20').ok)

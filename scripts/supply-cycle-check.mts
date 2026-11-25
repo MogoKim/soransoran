@@ -237,7 +237,7 @@ try {
     const empty = join(tmp, `empty-${dirSeq}`)
     for (const d of [dir, empty]) mkdirSync(d, { recursive: true })
     writeFileSync(ledgerPathOf(dir, date), lines.map((l) => `${JSON.stringify(l)}\n`).join(''), 'utf-8')
-    const c = readCostSignals(new Date(`${date}T12:00:00+09:00`), { SORAN_LLM_DAILY_BUDGET_USD: String(BUDGET) }, { supply: dir, audit: empty, comment: empty })
+    const c = readCostSignals(new Date(`${date}T12:00:00+09:00`), 'd30', { SORAN_LLM_DAILY_BUDGET_USD: String(BUDGET) }, { supply: dir, audit: empty, comment: empty })
     const side: EvidenceSideSignals = {
       cost: [{ lane: 'comment', name: '댓글 장부', health: 'ok' }, { lane: 'audit', name: '감사 장부', health: 'ok' }],
       supplyCostEvidence: c.supplyCostEvidence,
