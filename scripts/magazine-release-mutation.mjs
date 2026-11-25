@@ -58,7 +58,7 @@ const MUTATIONS = [
   ['RM25', '열린 release PR 이 있어도 새 release 를 만든다', 'RE2', [{ file: RUN, from: '    if (openRelease) {', to: '    if (false) {' }]],
   ['RM26', '실행기가 legacy queue 신원 adapter 를 끈다', 'RE12', [{ file: RUN, from: '    legacyQueue: { active: true, text: queueText },', to: '    legacyQueue: { active: false, text: null },' }]],
   ['RM27', 'merge 를 검증한 head 에 묶지 않는다', 'RB5', [{ file: RUN, from: "gh(['pr', 'merge', String(n), '--squash', '--match-head-commit', sha])", to: "gh(['pr', 'merge', String(n), '--squash'])" }]],
-  ['RM28', 'release 접두가 아닌 브랜치도 지운다', 'RB5', [{ file: RUN, from: '      if (!branch.startsWith(RELEASE_BRANCH_PREFIX)) return false\n      const remote', to: '      const remote' }]],
+  ['RM28', 'release 접두가 아닌 브랜치도 지운다', 'RB5', [{ file: RUN, from: '      if (!releaseIdOf(branch)) return false\n      const remote', to: '      const remote' }]],
   ['RM29', 'CI 실패 PR 을 닫지 않는다', 'RE6', [{ file: RUN, from: "    const closed = closeRelease({ deps, pr: pr0, reason: 'release CI 실패", to: "    const closed = false && closeRelease({ deps, pr: pr0, reason: 'release CI 실패" }]],
   ['RM30', '종료된 release 를 같은 main 에서 다시 만든다', 'RE6', [{ file: RUN, from: '    if (prior && isTerminalJournal(prior)) return block(', to: '    if (false) return block(' }]],
   ['RM32', 'PR 을 연 직후 밖에서 닫힌 release 를 계속 merge 하려 든다', 'RE13b', [{ file: RUN, from: "    if (pr.state !== 'OPEN') {", to: '    if (false) {' }]],
