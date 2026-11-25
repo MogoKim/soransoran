@@ -28,8 +28,8 @@ const CHECKS = [['graph 검사', path.join(ROOT, 'node_modules', '.bin', 'tsx'),
 
 const MUTATIONS = [
   { name: 'resolver 가 받은 now 를 버리고 진입 때 Date.now 를 다시 읽는다', edits: [{ file: F.graph,
-    find: '  now: number = Date.now(),\n): ResolvedRelatedMagazine {\n  try {',
-    replace: '  _now: number = Date.now(),\n): ResolvedRelatedMagazine {\n  const now = Date.now()\n  try {' }] },
+    find: '  now: number = magazineNow(),\n): ResolvedRelatedMagazine {\n  try {',
+    replace: '  _now: number = magazineNow(),\n): ResolvedRelatedMagazine {\n  const now = Date.now()\n  try {' }] },
   // 🔴 2026-10-18 — edge 단위 선택(#758)이 공개 후보 · 보충을 resolveFromGraph 인자로 옮겼다. 지점도 그 호출로 옮긴다
   { name: 'graph 공개 후보에 now 전달 제거', edits: [{ file: F.graph,
     find: 'resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>', replace: 'resolveFromGraph(article, GRAPH, getAllMagazineArticles(), () =>' }] },
@@ -76,6 +76,15 @@ const MUTATIONS = [
     find: '  const mappings = effectiveGraphMappings(graph, published, binding)\n', replace: '  const mappings = graph.mappings\n' }] },
   { name: 'resolver 가 공유 규칙 대신 자기 사본(canonical 우선 없음)을 쓴다', edits: [{ file: F.graph,
     find: '  const overlay = provenanceOverlay({\n', replace: '  const overlay = rows.map((r) => ({ intent: r.release.intentId, slug: r.slug })) || provenanceOverlay({\n' }] },
+  // 🔴 2026-11-24 — 출처 plan 이 승인한 나가는 관계(결속 relationsOf)만 비활성 edge 를 켠다
+  { name: 'resolver 가 승인 관계를 켜지 않는다(비활성 edge 는 전부 버린다 — 새 글 하단이 폴백)', edits: [{ file: F.graph,
+    find: '    if (!edge.active && approved.get(edge.id) !== edge.from) continue\n', replace: '    if (!edge.active) continue\n' }] },
+  { name: 'resolver 가 승인 목록의 edge 를 from 대조 없이 켠다(다른 글의 들어오는 관계가 켜진다)', edits: [{ file: F.graph,
+    find: '    if (!edge.active && approved.get(edge.id) !== edge.from) continue\n', replace: '    if (!edge.active && !approved.has(edge.id)) continue\n' }] },
+  { name: 'resolver 가 canonical mapping 글에도 승인 목록을 적용한다(출처 아닌 글의 비활성 edge 가 켜진다)', edits: [{ file: F.graph,
+    find: '  for (const m of effective.slice(canonical.length)) {\n', replace: '  for (const m of effective) {\n' }] },
+  { name: 'resolver 가 결속에 없는 비활성 edge 까지 전부 켠다(승인 밖 관계)', edits: [{ file: F.graph,
+    find: '    if (!edge.active && approved.get(edge.id) !== edge.from) continue\n', replace: '' }] },
   { name: '운영이 읽지 않는 출처 진단(dropped)을 되살린다', edits: [{ file: F.rule,
     find: '  return overlay\n}', replace: '  return overlay\n}\nexport const dropped = []' }] },
 ]
@@ -96,6 +105,18 @@ const runAll = () => CHECKS.map(([label, cmd, args]) => {
 })
 
 let bad = 0
+// 예약 시각을 설정해 빌드해도 운영 공개 시계는 바뀌지 않아야 한다.
+const previewAt = '2099-01-01T00:00:00Z'
+for (const mode of ['development', 'production', 'test']) {
+  const probe = `const { magazineNow } = require('./src/lib/magazine.ts')
+    const now = magazineNow()
+    const expected = process.env.NODE_ENV === 'development' ? Date.parse(process.env.SORAN_MAGAZINE_PREVIEW_AT) : Date.now()
+    process.exit(Math.abs(now - expected) < 500 ? 0 : 1)`
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', probe], {
+    cwd: ROOT, env: { ...process.env, NODE_ENV: mode, SORAN_MAGAZINE_PREVIEW_AT: previewAt },
+  })
+  if (result.status !== 0) { bad++; console.error(`공개 시계 검사 실패 (${mode})`) }
+}
 let caught = 0
 console.log('\nM-GRAPH 공개 판정 시각 변이 시험\n')
 const base = runAll()

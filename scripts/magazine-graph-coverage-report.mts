@@ -3,17 +3,13 @@
 import { MAGAZINE_ARTICLES } from '../src/content/magazine/articles'
 import { GRAPH } from '../src/content/magazine/graph/current'
 import { getAllMagazineArticles } from '../src/lib/magazine'
-import { analyzeGraphCoverage } from './lib/magazine-graph-coverage.mjs'
+import { analyzePublicGraphCoverage } from './lib/magazine-public-coverage'
 
 const nowArg = process.argv.find((arg) => arg.startsWith('--now='))?.slice('--now='.length)
 const now = nowArg ? new Date(nowArg).getTime() : Date.now()
 if (!Number.isFinite(now)) throw new TypeError(`--now가 유효한 ISO 시각이 아니다: ${nowArg}`)
 
-const report = analyzeGraphCoverage({
-  publicArticles: getAllMagazineArticles(now),
-  allArticles: MAGAZINE_ARTICLES,
-  graph: GRAPH,
-})
+const report = analyzePublicGraphCoverage(getAllMagazineArticles(now), MAGAZINE_ARTICLES, GRAPH)
 
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify(report, null, 2))

@@ -51,8 +51,13 @@ import {
   resolveFromGraph,
   resolveRelatedMagazine,
   graphRuntimeConfig,
+  runtimeReleaseBinding,
 } from '../src/lib/magazine-graph'
+import { RELEASE_BINDING } from '../src/content/magazine/release-binding'
 import { NO_RELEASE_BINDING, type ReleaseBinding } from '../src/lib/magazine-provenance-rule.mjs'
+import { canonicalJson, planInputRel } from './lib/magazine-content-plan-input.mjs'
+import { analyzePublicGraphCoverage } from './lib/magazine-public-coverage'
+import { admitContentPlans } from './lib/magazine-content-plan.mjs'
 import {
   MAX_KEYS,
   clearImpressions,
@@ -207,7 +212,7 @@ check(
 )
 
 /** 🔴 공개 글의 graph 참여 상태 — 활성 계약은 SEARCH_NODE 와 EDITORIAL_NON_SEARCH 를 다르게 본다 */
-const COVERAGE = analyzeGraphCoverage({ publicArticles: published, allArticles: MAGAZINE_ARTICLES, graph: GRAPH })
+const COVERAGE = analyzePublicGraphCoverage(published, MAGAZINE_ARTICLES, GRAPH)
 const participationOf = (slug: string): string | undefined =>
   COVERAGE.rows.find((row: { slug: string }) => row.slug === slug)?.participation
 const isSearchNode = (a: MagazineArticle) => participationOf(a.slug) === 'SEARCH_NODE'
@@ -876,6 +881,40 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
     JSON.stringify(inbound) === JSON.stringify(['new-v|GRAPH|DIRECT_NEXT|E-O1 정본 이유|NEXT_QUESTION|FOOTER_NEXT']), JSON.stringify(inbound))
   check('  관계 유형 · 이유 · 표면 · 슬롯은 graph edge 값 그대로다 (출처는 edge 를 싣지 않는다)',
     Array.isArray(out) && Array.isArray(inbound) && !Object.keys(rel('x') ?? {}).some((k) => /edge|reason|placement|slot|priority|anchor|publish/i.test(k)))
+  {
+    // 🔴 승인 관계(결속 relationsOf) — 비활성 edge 는 그 글의 출처 plan 이 승인한 나가는 관계일 때만 켠다
+    const off = (e: PEdge): PEdge => ({ ...e, active: false })
+    const NEW2 = art('new-2', '2026-11-21', 'I-NEW2')
+    const withRel = (relationsOf: Record<string, string[]>, planHashOf: Record<string, string> = BIND.planHashOf): ReleaseBinding => ({ ...BIND, planHashOf, relationsOf })
+    const inact = g([off(pe('E-N1', 'I-NEW', 'I-OLD')), off(pe('E-N2', 'I-NEW', 'I-OTH')), off(pe('E-O1', 'I-OTH', 'I-NEW')), off(pe('E-O2', 'I-OTH', 'I-OLD')),
+      off(pe('E-N3', 'I-NEW', 'I-NEW2'))], maps, pi('I-NEW', 'I-NEW2', 'I-OLD', 'I-OTH'))
+    const pubs3 = [NEW, OLD, OTH]
+    const FORGED_NEW = art('new-v', '2026-11-20', 'I-NEW', { planHash: 'f'.repeat(64) })
+    const n1 = ['old|GRAPH|DIRECT_NEXT|E-N1 정본 이유|NEXT_QUESTION|FOOTER_NEXT']
+    check('승인 관계 — 비활성 edge 라도 출처 plan 이 승인한 나가는 관계(E-N1)는 그린다 · 승인하지 않은 E-N2 는 대상이 공개여도 0',
+      JSON.stringify(items(NEW, inact, pubs3, withRel({ 'I-NEW': ['E-N1'] }))) === JSON.stringify(n1), JSON.stringify(items(NEW, inact, pubs3, withRel({ 'I-NEW': ['E-N1'] }))))
+    check('  반례 — 승인 목록 없음(옛 결속 모양) · 빈 목록 · 다른 intent 이름으로 적힌 목록은 비활성 edge 를 켜지 않는다(NO_RESULT)',
+      items(NEW, inact, pubs3, BIND) === 'NO_RESULT' && items(NEW, inact, pubs3, withRel({ 'I-NEW': [] })) === 'NO_RESULT'
+        && items(NEW, inact, pubs3, withRel({ 'I-OTH': ['E-N1'] })) === 'NO_RESULT')
+    check('  반례 — 승인 목록에 남의 edge(from 이 다른 intent)를 적어도 켜지 않는다 · 들어오는 비활성 edge(E-O1)로 기존 글이 새 글을 고르지 않는다',
+      items(NEW, inact, pubs3, withRel({ 'I-NEW': ['E-O1', 'E-O2'] })) === 'NO_RESULT' && items(OTH, inact, pubs3, withRel({ 'I-NEW': ['E-N1', 'E-O1'] })) === 'NO_RESULT')
+    check('  반례 — canonical mapping 으로 신원을 가진 글(출처 아님)은 승인 목록이 있어도 비활성 edge 를 켜지 않는다',
+      items(OTH, inact, pubs3, withRel({ 'I-OTH': ['E-O1', 'E-O2'], 'I-NEW': ['E-N1'] })) === 'NO_RESULT')
+    check('  반례 — 위조 planHash · 판이 다른 결속 · 출처 intent 중복이면 승인 목록이 있어도 0(NO_MAPPING)',
+      items(FORGED_NEW, inact, [FORGED_NEW, OLD, OTH], withRel({ 'I-NEW': ['E-N1'] })) === 'NO_MAPPING'
+        && items(NEW, inact, pubs3, { ...withRel({ 'I-NEW': ['E-N1'] }), graphVersion: 'g-20990101-abcdef' }) === 'NO_MAPPING'
+        && items(NEW, inact, [...pubs3, art('new-dup', '2026-11-22', 'I-NEW')], withRel({ 'I-NEW': ['E-N1'] })) === 'NO_MAPPING',
+      `${items(FORGED_NEW, inact, [FORGED_NEW, OLD, OTH], withRel({ 'I-NEW': ['E-N1'] }))} ${items(NEW, inact, pubs3, { ...withRel({ 'I-NEW': ['E-N1'] }), graphVersion: 'g-20990101-abcdef' })} ${items(NEW, inact, [...pubs3, art('new-dup', '2026-11-22', 'I-NEW')], withRel({ 'I-NEW': ['E-N1'] }))}`)
+    // 같은 묶음의 대상 — 같이 출시된 대상(I-NEW2)이 공개 · 결속이면 그리고, 탈락(미공개 · 결속 없음)하면 그 줄만 없다
+    const both = withRel({ 'I-NEW': ['E-N1', 'E-N3'], 'I-NEW2': [] }, { 'I-NEW': 'b'.repeat(64), 'I-NEW2': 'b'.repeat(64) })
+    check('  같은 묶음의 대상 — 대상도 출처로 공개됐으면 그린다 · 대상이 탈락(미공개 또는 결속에 없음)하면 그 줄만 빠지고 나머지는 그대로',
+      JSON.stringify(items(NEW, inact, [...pubs3, NEW2], both)) === JSON.stringify(['new-2|GRAPH|DIRECT_NEXT|E-N3 정본 이유|NEXT_QUESTION|FOOTER_NEXT', ...n1])
+        && JSON.stringify(items(NEW, inact, pubs3, both)) === JSON.stringify(n1)
+        && JSON.stringify(items(NEW, inact, [...pubs3, NEW2], withRel({ 'I-NEW': ['E-N1', 'E-N3'] }))) === JSON.stringify(n1),
+      JSON.stringify(items(NEW, inact, [...pubs3, NEW2], both)))
+    check('  활성 edge 의 결과는 승인 목록 유무와 무관하게 같다 (기존 출력 불변)',
+      JSON.stringify(items(NEW, full, pubs3, withRel({ 'I-NEW': ['E-N1'] }))) === JSON.stringify(out) && JSON.stringify(items(OTH, full, pubs3, withRel({ 'I-NEW': [] }))) === JSON.stringify(inbound))
+  }
   check('  출처 없는 graph 결과는 overlay 함수를 거쳐도 같은 배열 객체다 (legacy 바이트 · 출력 불변)',
     effectiveGraphMappings(full, [OLD, OTH], BIND) === full.mappings && effectiveGraphMappings(GRAPH, published, BIND) === GRAPH.mappings)
   check('  공개되지 않은 vNext 글은 대상이 아니다 (공개 목록에 없으면 overlay 0)',
@@ -952,23 +991,86 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
       `${JSON.stringify(outF)} / ${JSON.stringify(addedOf(full, [F1, OLD, OTH], forgedBind))}`)
   }
   check('  대조군 — 다섯 필드가 결속과 같으면 출처가 대상이 된다', JSON.stringify(items(OTH, full, [NEW, OLD, OTH])) === JSON.stringify(inbound))
-  // ④ 🔴 S3 P1 운영 경로 — 결속이 없다(NO_RELEASE_BINDING). 형식이 완벽한 출처도 켜지지 않는다
-  check('반례 ④ 결속 없음(운영 기본값) — 형식이 맞는 출처도 대상 0 · overlay 0',
+  // ④ 결속 없음(기본값 · 판이 다른 결속) — 형식이 완벽한 출처도 켜지지 않는다
+  check('반례 ④ 결속 없음(기본값) — 형식이 맞는 출처도 대상 0 · overlay 0',
     NO_RELEASE_BINDING === null && items(OTH, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_RESULT'
       && items(NEW, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_MAPPING'
       && (() => { const r = resolveFromGraph(OTH, full, [NEW, OLD, OTH], () => []); return 'reason' in r && r.reason === 'NO_RESULT' })()
       && effectiveGraphMappings(full, [NEW, OLD, OTH]) === full.mappings && addedOf(full, [NEW, OLD, OTH], NO_RELEASE_BINDING).length === 0)
   {
     const gsrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
-    const prodCall = 'const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>\n      getRelatedMagazineArticles(article, MAX_DIRECT, now),\n    )\n'
-    check('  운영 resolver 호출은 결속을 넘기지 않는다 (인자 4개 · 기본값 NO_RELEASE_BINDING)',
+    // 🔴 S3-P2 — 운영 resolver 는 생성 결속(지금 판일 때만)을 넘기고, admission 은 같은 컴파일 결과의 결속을 쓴다
+    const prodCall = '    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>\n      getRelatedMagazineArticles(article, MAX_DIRECT, now),\n      runtimeReleaseBinding(GRAPH.graphVersion),\n    )\n'
+    check('  운영 resolver 호출은 runtimeReleaseBinding(GRAPH.graphVersion) 을 넘긴다 · resolveFromGraph 기본값은 결속 없음',
       gsrc.split(prodCall).length - 1 === 1 && /binding: ReleaseBinding \| null = NO_RELEASE_BINDING,\n\): \{ resolved/.test(gsrc))
     const cpsrc = readFileSync(join(ROOT, 'scripts/lib/magazine-content-plan.mjs'), 'utf8')
-    check('  admission · runtime 이 같은 규칙 하나를 쓴다 — 둘 다 provenanceOverlay 를 공유 모듈에서 부르고 자기 사본이 없다',
-      /import \{ NO_RELEASE_BINDING, provenanceOverlay \} from '\.\.\/\.\.\/src\/lib\/magazine-provenance-rule\.mjs'/.test(cpsrc)
+    check('  admission · runtime 이 같은 규칙 하나를 쓴다 — 둘 다 provenanceOverlay 를 공유 모듈에서 부르고 자기 사본이 없다 · admission 결속 = 컴파일 결과',
+      /import \{ provenanceOverlay \} from '\.\.\/\.\.\/src\/lib\/magazine-provenance-rule\.mjs'/.test(cpsrc)
         && /from '@\/lib\/magazine-provenance-rule\.mjs'/.test(gsrc)
         && cpsrc.split('provenanceOverlay(').length - 1 === 1 && gsrc.split('provenanceOverlay(').length - 1 === 1
-        && cpsrc.includes('binding: NO_RELEASE_BINDING,') && !/canonicalIntents|canonicalSlugs/.test(gsrc + cpsrc))
+        && cpsrc.includes('binding: releaseBindingOf(compiled),') && !/canonicalIntents|canonicalSlugs/.test(gsrc + cpsrc))
+    // 🔴 runtime 결속 생성 파일 = 지금 graph 판 Bundle 의 정적 컴파일 결과(바이트) — 낡으면 빌드 전에 막는다
+    const { expectedBindingText } = await import('./magazine-release-binding.mjs')
+    const eb = expectedBindingText(ROOT)
+    check('runtime 결속 파일(release-binding.ts)이 지금 graph 판 Bundle 재컴파일 결과와 바이트로 같다', eb.ok && eb.current === eb.expected,
+      eb.ok ? 'node scripts/magazine-release-binding.mjs --write 로 다시 만든다' : `${eb.code} ${eb.why}`)
+    // 🔴 객체 참조(===)로 비교하지 않는다 — tsx 가 같은 생성 파일을 두 모듈 인스턴스로 올리면(원격 Node 20.20.2 실측) 내용이 같아도 참조가 다르다.
+    //    계약은 「지금 판이면 그 결속의 내용 그대로 · 아니면 없음」이다. 내용은 키 정렬 canonical 직렬화로 대조한다.
+    const sameBinding = (a: ReleaseBinding | null, b: ReleaseBinding | null) => (a === null || b === null ? a === b : canonicalJson(a) === canonicalJson(b))
+    const wantBinding = RELEASE_BINDING?.graphVersion === GRAPH.graphVersion ? RELEASE_BINDING : null
+    const copyBinding = RELEASE_BINDING ? (JSON.parse(JSON.stringify(RELEASE_BINDING)) as ReleaseBinding) : null
+    check('  runtimeReleaseBinding — 지금 판이면 결속 내용 그대로(참조가 달라도 같은 내용) · 다른 판 · null 이면 결속 없음',
+      sameBinding(runtimeReleaseBinding(GRAPH.graphVersion), wantBinding)
+        && runtimeReleaseBinding('g-20990101-abcdef') === null && runtimeReleaseBinding(GRAPH.graphVersion, null) === null
+        // 내용이 같은 사본은 받는다(참조 의존 0) · 판 필드만 다른 사본 · 판은 같고 인자 판이 다른 호출은 버린다
+        && (copyBinding === null || (copyBinding !== RELEASE_BINDING && sameBinding(runtimeReleaseBinding(copyBinding.graphVersion, copyBinding), copyBinding)
+          && runtimeReleaseBinding(GRAPH.graphVersion, { ...copyBinding, graphVersion: 'g-20990101-abcdef' }) === null
+          && runtimeReleaseBinding('g-20990101-abcdef', copyBinding) === null))
+        // 내용이 다르면 같다고 하지 않는다(비교 자체의 반례)
+        && (copyBinding === null || !sameBinding({ ...copyBinding, bundleHash: 'e'.repeat(64) }, wantBinding)),
+      `${canonicalJson(runtimeReleaseBinding(GRAPH.graphVersion)).slice(0, 80)} / ${canonicalJson(wantBinding).slice(0, 80)}`)
+    // 운영 입력에 이미 예약된 원고가 있으면 admission은 해당 intent를 보류한다.
+    // 승인된 후보와 그 선행 글을 함께 공개한 상태에서 독자에게 보이는 근거 링크를 검사한다.
+    if (wantBinding) {
+      const bundle = readFileSync(join(ROOT, planInputRel(GRAPH.graphVersion)), 'utf8')
+      const admission = admitContentPlans({
+        bundle,
+        controlText: readFileSync(join(ROOT, 'src/content/magazine/graph/control.ts'), 'utf8'),
+        articlesText: readFileSync(join(ROOT, 'src/content/magazine/articles.ts'), 'utf8'),
+        legacyQueue: { active: true, text: readFileSync(join(ROOT, 'drafts/magazine/topic-queue.ts'), 'utf8') },
+        nowMs: CHECK_NOW,
+      })
+      const registered = (await import('../src/content/magazine/articles')).MAGAZINE_ARTICLES.filter((a) => a.release)
+      const alreadyBound = registered.filter((a) => wantBinding.planHashOf[a.release!.intentId] === a.release!.planHash)
+      for (const row of alreadyBound) {
+        const intent = row.release!.intentId
+        check(`등록한 intent ${intent}의 두 번째 공급을 보류한다`,
+          admission.held.some((item: { intentId: string; reasons: string[] }) =>
+            item.intentId === intent && item.reasons.includes('DUPLICATE_RELEASED_INTENT')))
+      }
+      type Admitted = { planId: string; intentId: string; planHash: string; cluster: MagazineArticle['cluster']; layer: number
+        groundedBy: { edgeId: string; target: string; slug?: string; planId?: string }[] }
+      const accepted: Admitted[] = admission.admitted
+      const projected = new Map<string, MagazineArticle>()
+      for (const a of accepted) {
+        projected.set(a.planId, { ...published[0], slug: `vnext-check-${a.intentId.toLowerCase()}`, cluster: a.cluster,
+          release: { schemaVersion: 'magazine-article-release/1', intentId: a.intentId, planHash: a.planHash,
+            graphVersion: wantBinding.graphVersion, bundleHash: wantBinding.bundleHash, policyBoard: wantBinding.policyBoard } })
+      }
+      for (const a of accepted) {
+        const self = projected.get(a.planId)!
+        const prior = accepted.filter((p) => p.layer < a.layer).map((p) => projected.get(p.planId)!)
+        const r = resolveFromGraph(self, GRAPH, [...published, ...prior, self], () => [], wantBinding)
+        const rendered = 'resolved' in r ? r.resolved.items : []
+        const grounded = a.groundedBy.some((g) => {
+          const slug = g.target === 'PUBLIC' ? g.slug : projected.get(g.planId ?? '')?.slug
+          const edge = GRAPH.edges.find((e) => e.id === g.edgeId)
+          return edge && rendered.some((item) => item.source === 'GRAPH' && item.article.slug === slug
+            && item.slot === edge.slot && item.reason === edge.reason && item.surface === edge.placement)
+        })
+        check(`공급 후보 ${a.intentId}의 하단에 승인된 근거 링크와 독자에게 보여 줄 이유가 있다`, grounded, self.slug)
+      }
+    }
     const rsrc = readFileSync(join(ROOT, 'src/lib/magazine-provenance-rule.mjs'), 'utf8')
     const ruleMod = await import('../src/lib/magazine-provenance-rule.mjs')
     check('  운영이 읽지 않는 출처 진단 계약이 없다 — 규칙은 overlay 배열만 · 진단 API · dropped 0',
@@ -994,11 +1096,11 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
     check('  kill switch 에서는 출처가 있어도 폴백이다', off.source === 'FALLBACK' && off.reason === 'DISABLED', `${off.source} ${off.reason}`)
   } else check('  kill switch 반례 대상 공개 글이 있다', false)
 
-  // 실제 저장소 — legacy 57편은 출처 0 · 진단 0
+  // 기존 원고에는 출처 기반 신원을 추가하지 않는다. 새 원고는 정식 발행 데이터에 함께 존재할 수 있다.
   const { MAGAZINE_ARTICLES } = await import('../src/content/magazine/articles')
-  check('실제 articles.ts — 출처 있는 행 0 · 유효 mapping 은 canonical 그대로 (legacy 바이트 그대로)',
-    MAGAZINE_ARTICLES.every((a) => a.release === undefined) && effectiveGraphMappings(GRAPH, MAGAZINE_ARTICLES) === GRAPH.mappings,
-    `${MAGAZINE_ARTICLES.filter((a) => a.release !== undefined).length}행`)
+  const legacy = MAGAZINE_ARTICLES.filter((a) => a.release === undefined)
+  check('기존 원고의 유효 mapping은 canonical 그대로다',
+    effectiveGraphMappings(GRAPH, legacy, runtimeReleaseBinding(GRAPH.graphVersion)) === GRAPH.mappings)
 
   // 클라이언트 · JSON 경계 — 출처가 화면 밖으로 나갈 길이 없다
   const scan = (dir: string): string[] => readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
@@ -2338,6 +2440,16 @@ const GRAPH_FILES = [
     (ar.branch ?? '').startsWith(GRAPH_BRANCH_PREFIX), ar.branch ?? '')
 
   /** 🔴 미해결 1건 계약 — 이미 떠 있으면 새로 만들지 않는다 */
+  for (const [at, wantMerge] of [['2026-11-24T19:59:59', true], ['2026-11-24T20:00:00', false], ['2026-11-25T02:29:59', false], ['2026-11-25T02:30:00', true],
+    ['2026-11-25T19:59:59', true], ['2026-11-25T20:00:00', false], ['2026-11-26T02:29:59', false], ['2026-11-26T02:30:00', true]] as const) {
+    const fz = fakeMergeDeps({ now: () => new Date(`${at}+09:00`) })
+    const hr = await runGraphMerge({ apply: true, deps: fz })
+    check(`D50 보호 창 경계 ${at} KST — 그래프 PR 병합 ${wantMerge ? '진행' : '보류(MERGE_FREEZE_WINDOW · mergePr 호출 0)'}`,
+      wantMerge ? hr.merged === true && fz.calls.includes('mergePr') && !hr.blockedBy.some((b) => b.code === 'MERGE_FREEZE_WINDOW')
+        : !hr.merged && hr.blockedBy.some((b) => b.code === 'MERGE_FREEZE_WINDOW') && !fz.calls.includes('mergePr'),
+      `${hr.merged} ${hr.blockedBy.map((b) => b.code).join()}`)
+  }
+
   const busy = fakeMergeDeps({ listGraphPrs: () => ({ ok: true, prs: [okPr] }) })
   const br = await runGraphMerge({ apply: true, deps: busy })
   check('그래프 PR 이 이미 있으면 새로 만들지 않는다',

@@ -41,8 +41,21 @@ import type {
   MagazineRecommendationSlot as GraphSlot,
 } from '@/content/magazine/graph/types'
 import type { MagazineArticle } from '@/content/magazine/types'
-import { getAllMagazineArticles, getRelatedMagazineArticles } from '@/lib/magazine'
+import { getAllMagazineArticles, getRelatedMagazineArticles, magazineNow } from '@/lib/magazine'
 import { NO_RELEASE_BINDING, provenanceOverlay, type ReleaseBinding } from '@/lib/magazine-provenance-rule.mjs'
+import { RELEASE_BINDING } from '@/content/magazine/release-binding'
+
+/**
+ * 운영 resolver 가 넘기는 출처 결속 (S3-P2) — 생성 파일의 결속이 **지금 graph 판과 같을 때만** 쓴다.
+ * 🔴 판이 다르거나(승격 직후 · rollback) 생성 파일이 null 이면 결속 없음 — 출처는 켜지지 않고 그 글은 폴백 규칙대로 그려진다.
+ *    결속 내용이 컴파일 결과와 같은지는 빌드 전 검사(check:magazine-graph)가 본다 — 요청마다 다시 계산하지 않는다.
+ */
+export function runtimeReleaseBinding(
+  graphVersion: string,
+  binding: ReleaseBinding | null = RELEASE_BINDING,
+): ReleaseBinding | null {
+  return binding && binding.graphVersion === graphVersion ? binding : NO_RELEASE_BINDING
+}
 
 /**
  * 🔴 제품에 **실제로 붙어 있는** 표면의 정본이다.
@@ -256,12 +269,15 @@ function ownSlugs<A extends GraphArticleRef>(picks: EdgePick<A>[]): EdgePick<A>[
  *
  *    한 edge 가 여러 카드 자리를 차지하지 않는다. 입력(edge · mapping) 순서와 무관하게 같은 답이다.
  * 🔴 특정 intent · edge · slug · cluster 예외를 두지 않는다.
+ * @param approved 출처가 승인한 관계(edge id → 그 관계가 나가는 intent). 비활성 edge 는 여기 있고 `from` 이 같을 때만 쓴다.
+ *                 기본값은 없음 — 활성 edge 만 본다(출처 없는 글 · 결속 없는 호출의 결과는 한 글자도 달라지지 않는다)
  */
 export function selectGraphPicks<A extends GraphArticleRef>(
   graph: Pick<MagazineGraph, 'edges' | 'mappings'>,
   fromIntents: ReadonlySet<string>,
   published: ReadonlyMap<string, A>,
   selfSlug: string,
+  approved: ReadonlyMap<string, string> = NO_APPROVED_EDGES,
 ): { direct: EdgePick<A>[]; discovery: EdgePick<A>[] } {
   /**
    * 🔴 **직접 연관과 발견을 처음부터 나눠 모은다.**
@@ -272,7 +288,8 @@ export function selectGraphPicks<A extends GraphArticleRef>(
   const discovery: EdgePick<A>[] = []
 
   for (const edge of graph.edges) {
-    if (!edge.active) continue
+    // 🔴 비활성 edge 는 그 글의 출처 plan 이 승인한 **나가는** 관계일 때만 쓴다. 들어오는 관계 · 다른 intent 의 관계는 켜지 않는다
+    if (!edge.active && approved.get(edge.id) !== edge.from) continue
     if (!FOOTER.has(edge.placement)) continue
     if (!RELATION_TYPES.has(edge.type)) continue
     if (!fromIntents.has(edge.from)) continue
@@ -355,8 +372,9 @@ type GraphMapping = MagazineGraph['mappings'][number]
  * 🔴 무엇을 더할지는 `magazine-provenance-rule.mjs` 의 `provenanceOverlay` 하나가 정한다 — admission 도 같은 함수를 쓴다.
  *    canonical 우선(같은 slug · 같은 intent) · 출처 intent 중복 · rollback · 정확한 컴파일 plan 결속이 전부 거기 있다.
  * 🔴 출처는 신원만 준다. edge · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위 · 3+1 은 전부 graph.edges 가 정한다.
+ *    (그 글의 plan 이 승인한 나가는 관계를 켜는 일은 `approvedOutgoingEdges` 가 따로 한다 — 여기는 mapping 만 만든다)
  * 🔴 graph 가 intent 목록을 주지 않으면 출처를 하나도 쓰지 않는다(모르면 더하지 않는다).
- * 🔴 S3 P1 운영 경로는 결속이 없다(`NO_RELEASE_BINDING`) — 출처는 켜지지 않고 결과는 canonical mapping 그대로다.
+ * 🔴 운영 경로는 `runtimeReleaseBinding(GRAPH.graphVersion)` 을 넘긴다(S3-P2) — 정확한 컴파일 plan 과 같은 출처만 켜진다.
  *    버린 출처는 그 글이 폴백 규칙대로 그려질 뿐이다(비차단) — rollback 이 공개 서비스를 막지 않는다.
  */
 export function effectiveGraphMappings(
@@ -377,6 +395,38 @@ export function effectiveGraphMappings(
   return [...graph.mappings, ...overlay.map((o) => ({ intent: o.intent, slug: o.slug, cluster: null }))]
 }
 
+const NO_APPROVED_EDGES: ReadonlyMap<string, string> = new Map()
+const ownKey = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+
+/**
+ * 출처 plan 이 승인한 나가는 관계 — edge id → 그 관계가 나가는 intent (S3-P2).
+ * 어느 글의 하단에 쓰이는지는 `selectGraphPicks` 가 정한다 — edge.from 이 그 글의 intent 이고, 승인 목록이 그 edge 를 같은 intent 의 것으로 적었을 때만이다.
+ *
+ * 왜 있나
+ *   graph 판은 mapping 없는 intent 의 edge 를 비활성(`active: false`)으로 빌드한다. vNext 글은 canonical mapping 없이 출처(overlay)로
+ *   신원을 얻으므로, 신원만 더하면 그 글의 나가는 관계가 전부 비활성이라 하단이 폴백으로 떨어진다(실측 2026-11-24 — 계획 후보 3편 모두 NO_RESULT).
+ *   admission 은 같은 plan 의 관계로 출판 최소를 승인했다 — 승인한 관계를 화면이 그리지 않으면 두 층의 성공 기준이 갈린다.
+ * 🔴 켜는 것은 **유효 mapping 이 출처로 더한 intent** 에서 나가는, 결속(`relationsOf`)이 그 intent 의 것으로 적은 edge 뿐이다.
+ *    결속은 호출자가 지금 graph 판일 때만 넘기고(runtimeReleaseBinding), overlay 는 정확한 컴파일 plan 과 같은 출처만 더한다 —
+ *    판 불일치 · 위조 planHash · canonical 충돌 · 출처 중복 · rollback 은 overlay 가 0 이라 여기도 0 이다.
+ * 🔴 대상 · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위는 여전히 graph edge 가 정한다. 대상 글의 공개 관문도 그대로다.
+ */
+export function approvedOutgoingEdges(
+  canonical: readonly GraphMapping[],
+  effective: readonly GraphMapping[],
+  binding: ReleaseBinding | null,
+): ReadonlyMap<string, string> {
+  const relationsOf = binding?.relationsOf
+  if (!relationsOf || effective === canonical) return NO_APPROVED_EDGES
+  const approved = new Map<string, string>()
+  // 🔴 출처가 더한 mapping(canonical 뒤쪽)의 intent 만 본다 — canonical mapping 으로 신원을 가진 글의 비활성 edge 는 승인 목록에 있어도 켜지 않는다
+  for (const m of effective.slice(canonical.length)) {
+    if (!ownKey(relationsOf, m.intent)) continue
+    for (const edgeId of relationsOf[m.intent]) approved.set(edgeId, m.intent)
+  }
+  return approved
+}
+
 /**
  * 그래프 하나로 이 글의 하단 목록을 만든다 — 켜짐 · 버전 · cluster 판정이 끝난 뒤의 몫.
  *
@@ -385,7 +435,7 @@ export function effectiveGraphMappings(
  * 🔴 vNext 출처 overlay(effectiveGraphMappings)는 여기 안에서만 쓴다 — 켜짐 · 버전 · cluster 관문 뒤다.
  * @param published 공개 관문을 거친 글 전부 (같은 now 로 만든 것)
  * @param legacy    예전 방식 연관 글 — 그래프 후보가 있을 때만 부른다
- * @param binding   출처 결속 — 운영 호출은 넘기지 않는다(S3 P1 = NO_RELEASE_BINDING · 출처 비활성). 검사만 합성 결속을 넘긴다
+ * @param binding   출처 결속 — 운영 호출은 runtimeReleaseBinding(지금 판의 생성 결속 · 판이 다르면 없음)을 넘긴다. 기본값은 결속 없음
  */
 export function resolveFromGraph(
   article: MagazineArticle,
@@ -408,6 +458,7 @@ export function resolveFromGraph(
     fromIntents,
     new Map(published.map((a) => [a.slug, a])),
     article.slug,
+    approvedOutgoingEdges(graph.mappings, mappings, binding),
   )
   if (direct.length === 0 && discovery.length === 0) return { reason: 'NO_RESULT' }
 
@@ -487,7 +538,7 @@ export function resolveFromGraph(
 export function resolveRelatedMagazine(
   article: MagazineArticle,
   env: NodeJS.ProcessEnv = process.env,
-  now: number = Date.now(),
+  now: number = magazineNow(),
 ): ResolvedRelatedMagazine {
   try {
     const runtime = graphRuntimeConfig(env)
@@ -506,6 +557,7 @@ export function resolveRelatedMagazine(
     // 🔴 공개 관문을 거친 글만 후보다
     const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>
       getRelatedMagazineArticles(article, MAX_DIRECT, now),
+      runtimeReleaseBinding(GRAPH.graphVersion),
     )
     if ('reason' in result) return fallback(article, result.reason, now)
     return result.resolved

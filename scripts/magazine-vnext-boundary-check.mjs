@@ -361,7 +361,8 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
   const NAMES = ['parseControlText', 'parseGraphControl']
   const OWNERS = {
     parseControlText: ['scripts/lib/magazine-graph-build.mjs', 'scripts/lib/magazine-research-current.mjs', 'scripts/lib/magazine-g8-promoter.mjs'],
-    parseGraphControl: ['scripts/lib/magazine-direct-spec-source.mjs', 'scripts/lib/magazine-content-plan.mjs'],
+    // S3-P2 release 조립 · merge gate — main control 을 같은 엄격 판독으로 읽는다(결속 판 = control 판)
+    parseGraphControl: ['scripts/lib/magazine-direct-spec-source.mjs', 'scripts/lib/magazine-content-plan.mjs', 'scripts/lib/magazine-release.mjs'],
   }
   const COMPAT = { 'scripts/lib/magazine-graph-build.mjs': 'export { parseControlText }', 'scripts/lib/magazine-direct-spec-source.mjs': 'export { parseGraphControl }' }
   const found = new Map()
@@ -459,7 +460,8 @@ ratchet('R13', 'control 판독 정의(parseControlText · parseGraphControl · c
 //    직접 import 만 보면 허용 모듈이 끌고 오는 fs · cwd · Date.now 기본값을 못 본다(앞판: gate 를 허용해 fs · path · cwd 가 폐포에 들어왔다 — P1-C).
 //    공개 판정은 import 0 의 public-rule 이 소유하고, gate 는 그것을 다시 내보낼 뿐이다. 파일 읽기는 bootstrap CLI(경계) 몫이다.
 {
-  const ROOTS = ['scripts/lib/magazine-content-plan-input.mjs', 'scripts/lib/magazine-content-plan.mjs']
+  // S3-P2 — release 조립 · PR 내용 관문(merge gate 재컴파일)과 merge freeze 판정도 같은 순수 폐포다
+  const ROOTS = ['scripts/lib/magazine-content-plan-input.mjs', 'scripts/lib/magazine-content-plan.mjs', 'scripts/lib/magazine-release.mjs', 'scripts/lib/magazine-merge-freeze.mjs']
   const PURE = new Set([...ROOTS, 'scripts/lib/magazine-public-rule.mjs', 'scripts/lib/magazine-graph-control.mjs', 'scripts/lib/magazine-literal.mjs',
     'scripts/lib/magazine-qa-constants.mjs', 'scripts/lib/magazine-relation-policy.mjs',
     // S3 P1 수리 — admission 과 runtime resolver 가 함께 쓰는 출처 overlay 규칙(import 0). 같은 토큰 검사를 받는다
