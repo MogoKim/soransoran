@@ -40,7 +40,8 @@ export default function NextToRead({
       <PostExposureList as="ol" surface="NEXT_TO_READ" className="m-0 mt-2 flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
         {next.map((post, index) => (
           <li key={post.id}>
-            <PostListItem post={post} rank={index + 1} />
+            {/* 🔴 0 은 감춘다(창업자 11-24) — 홈 · /best 와 같은 hideEmptyStats */}
+            <PostListItem post={post} rank={index + 1} hideEmptyStats />
           </li>
         ))}
       </PostExposureList>

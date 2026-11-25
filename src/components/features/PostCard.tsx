@@ -60,12 +60,18 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
           <span aria-hidden>·</span>
           {formatRelativeTime(post.createdAt)}
         </span>
-        <span className="flex items-center gap-1">
-          <StatIcon name="comment" /> {commentCount}
-        </span>
-        <span className="flex items-center gap-1">
-          <StatIcon name="eye" /> {post.viewCount}
-        </span>
+        {/* 🔴 0 은 감춘다(창업자 11-24 · 빈 숫자가 죽은 게시판처럼 읽히지 않게) — 숫자를 만들지 않는다.
+              0 이 아닌 값은 언제나 그대로 나간다. 홈 · /best 의 hideEmptyStats 와 같은 규칙이다. */}
+        {commentCount > 0 ? (
+          <span className="flex items-center gap-1">
+            <StatIcon name="comment" /> {commentCount}
+          </span>
+        ) : null}
+        {post.viewCount > 0 ? (
+          <span className="flex items-center gap-1">
+            <StatIcon name="eye" /> {post.viewCount}
+          </span>
+        ) : null}
       </div>
     </Link>
   )
