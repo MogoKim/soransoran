@@ -1,5 +1,6 @@
 import Image from 'next/image'
 import { Fragment } from 'react'
+import { BRAND_NAME } from '@/lib/brand-name'
 import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import type { MagazineArticle, MagazineBlock } from '@/content/magazine/types'
@@ -82,15 +83,15 @@ function Block({ block, articleSlug }: { block: MagazineBlock; articleSlug: stri
 
 function MagazineBrandBanner({ src }: { src: string }) {
   return (
-    <aside aria-label="소란소란 소개" className="my-7 overflow-hidden rounded-xl border border-subtle bg-surface-soft sm:flex">
+    <aside aria-label={`${BRAND_NAME} 소개`} className="my-7 overflow-hidden rounded-xl border border-subtle bg-surface-soft sm:flex">
       <div className="relative aspect-[3/1] sm:aspect-auto sm:w-1/3">
         <Image src={src} alt="" fill sizes="(min-width: 640px) 220px, 100vw" className="object-cover" />
       </div>
       <div className="min-w-0 flex-1 p-4 sm:p-5">
-        <p className="break-keep text-lg font-bold leading-snug text-content-primary">자매처럼 편하게, 속마음까지 소란소란.</p>
+        <p className="break-keep text-lg font-bold leading-snug text-content-primary">자매처럼 편하게, 속마음까지 {BRAND_NAME}.</p>
         <p className="mt-2 break-keep text-content-primary">고민과 일상을 눈치 보지 않고 나눠요.</p>
         <Link href="/" className={`mt-3 inline-flex ${TOUCH_MIN} items-center justify-center rounded-lg bg-cta px-5 py-2 text-center text-lg font-bold text-cta-content`}>
-          소란소란 둘러보기
+          {BRAND_NAME} 둘러보기
         </Link>
       </div>
     </aside>
