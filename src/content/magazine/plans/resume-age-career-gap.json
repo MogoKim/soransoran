@@ -1,0 +1,121 @@
+{
+  "answerScope": "양식 종류별로 칸에 넣는 기준 — 나이·생년월일, 오래된 경력 추리기, 공백 한 줄, 교육·자격과 경력 구분, 직무에 맞춘 순서",
+  "audienceSituation": "무엇을 적을지는 대강 정했는데, 나이·생년월일 칸과 오래된 경력·공백 기간을 이력서 양식에 실제로 어떻게 넣을지 막힐 때",
+  "bundleHash": "bf5322bdb91b6b28c4884e63f5194cd8c1afe26d0eb42a987b2a70b8f9404277",
+  "cluster": "money-work",
+  "cta": {
+    "communityDestination": "/community/free"
+  },
+  "exclusions": [
+    "첫 취업을 준비하는 사람의 이력서 작성법",
+    "양식 파일 배포",
+    "합격 자소서",
+    "살림 경험을 역량으로 번역하기",
+    "공백을 대하는 마음가짐",
+    "자격증 취득 판단"
+  ],
+  "forbiddenClaims": [
+    "의학·재정 단정",
+    "제품 추천"
+  ],
+  "graphVersion": "g-20261124-e8a6b8",
+  "inclusions": [],
+  "intentId": "I-T6-03",
+  "officialSourceUrls": [],
+  "planHash": "45456475fb5c16b5705755888561a56525f2d32c763153c3f799ca697cd5e1ed",
+  "planId": "g-20261124-e8a6b8:I-T6-03",
+  "policyBoard": {
+    "hash": "c21d58fd6089c49a1bf3475e74fa8cddc774051d37be777707de07670a15250d",
+    "id": "magazine-content-plan-policy/1"
+  },
+  "primaryQuery": "이 나이에 이력서를 어떻게 쓰나요",
+  "quality": {
+    "display": {
+      "direct": [
+        "E-0338",
+        "E-0339"
+      ],
+      "discovery": "E-0340"
+    },
+    "meetsDisplayTarget": false
+  },
+  "relations": {
+    "direct": [
+      {
+        "anchorLabel": "50대에 자격증 따는 게 의미가 있을까",
+        "edgeId": "E-0338",
+        "evidence": {
+          "basisSha256": "d74114523aa171e98ab5a2e2d98eb68a7baa96b4f08f65391f8dd83dad47904c",
+          "objectSha256": "62ddef6b8c0111f43435fdd9e0cabe3fb7177024e3b9f5054bba470b5e36c709",
+          "refs": [
+            {
+              "ref": "evidence/serpapi/2026-11-01T06-59-21-553Z_2a638c90.json",
+              "sha256": "ff001963dbf554b8c2415fcf72c0840c33f85caf5da91b659f04da189f04179d"
+            },
+            {
+              "ref": "evidence/serpapi/2026-11-01T06-59-21-556Z_6102768a.json",
+              "sha256": "ad56554e6614631e13db0c3c448fb8de7ce8bd124981313f190843394bad5edf"
+            },
+            {
+              "ref": "evidence/serpapi/2026-11-01T06-59-21-557Z_b3f87f66.json",
+              "sha256": "ff26288220bdf212b79933617c05b9926b89925e2edf41cddb98f04149b503de"
+            }
+          ]
+        },
+        "placement": "FOOTER_NEXT",
+        "priority": 2,
+        "readerReason": "이력서 자격 칸이 비어 보이면 지금이라도 자격증을 따야 하나 묻게 된다",
+        "relationType": "NEXT_QUESTION",
+        "slot": "DIRECT_NEXT",
+        "toIntentId": "I-T6-04"
+      },
+      {
+        "anchorLabel": "주부로 지내다 다시 일하려고 할 때",
+        "edgeId": "E-0339",
+        "evidence": {
+          "basisSha256": "06ba5e469ab245cfb66c0e5c82652ab1fb6bf012dcf704fc70b9d05d9e8b2290",
+          "objectSha256": "d8d2bd60f8dc332d6e074039fd3b86826be88f624a5a15f890cbd05537d5c214",
+          "refs": [
+            {
+              "ref": "evidence/serpapi/2026-09-21T12-24-50-082Z_a080e3e0.json",
+              "sha256": "2b212e2534e2dc72d2143be4968fe28057af4a06b156fb4f327ad9a774801b80"
+            }
+          ]
+        },
+        "placement": "FOOTER_SIBLING",
+        "priority": 2,
+        "readerReason": "이력서에서 가장 막히는 곳이 오래 비어 있는 경력 칸이라면, 주부로 지내다 다시 일하려는 사람의 이야기가 같은 자리다",
+        "relationType": "SIBLING",
+        "slot": "SAME_EXPERIENCE",
+        "toIntentId": "I-T6-02"
+      }
+    ],
+    "discovery": [
+      {
+        "anchorLabel": "이 나이에 뭘 배우면 좋을까",
+        "edgeId": "E-0340",
+        "evidence": {
+          "basisSha256": "06ba5e469ab245cfb66c0e5c82652ab1fb6bf012dcf704fc70b9d05d9e8b2290",
+          "objectSha256": "f2ce9ee011b47d1128bb945b32b1b33719d4be7ae4dc24d0f78aff476c0a341f",
+          "refs": [
+            {
+              "ref": "evidence/serpapi/2026-09-21T12-24-50-082Z_a080e3e0.json",
+              "sha256": "2b212e2534e2dc72d2143be4968fe28057af4a06b156fb4f327ad9a774801b80"
+            }
+          ]
+        },
+        "placement": "FOOTER_BRIDGE",
+        "priority": 3,
+        "readerReason": "온라인 이력서 작성 자체가 낯설다면, 취업 준비에 필요한 배움을 고르는 기준으로 이어진다",
+        "relationType": "BRIDGE",
+        "slot": "BRIDGE_DISCOVERY",
+        "toIntentId": "I-T6-05"
+      }
+    ]
+  },
+  "schemaVersion": "magazine-content-plan/1",
+  "territoryGrade": "AUTO",
+  "territoryId": "T6",
+  "textProvenance": "CLEAR",
+  "validationProfile": "STANDARD"
+}
