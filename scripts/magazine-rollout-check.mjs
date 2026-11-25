@@ -64,7 +64,7 @@ export const MUTATIONS = {
   // legacy 동일성 대조의 검출력 — legacy 자식 인자를 바꾸면 기준판 대조가 잡아야 한다
   'producer-legacy-drift': [PRODUCER_REL, "spawnStage([INPUT_REPAIR, '--run', kstDate(), '--write', '--result-json', rj])", "spawnStage([INPUT_REPAIR, '--run', kstDate(), '--write', '--result-json', rj, '--drift'])"],
   'register-legacy-drift': [REGISTER_REL, "[MERGE, '--apply', '--notify-send', '--run-id', RUN_ID]", "[MERGE, '--apply', '--notify-send', '--run-id', RUN_ID, '--drift']"],
-  'post-sync-bypass': [PRODUCER_REL, 'const ROLLOUT = rolloutGate(readRollout(), { warn: !POST_SYNC })', 'const ROLLOUT = POST_SYNC ? { proceed: true, warning: null } : rolloutGate(readRollout(), { warn: true })'],
+  'post-sync-bypass': [PRODUCER_REL, "const ROLLOUT = rolloutGate(readRollout(), { warn: !POST_SYNC, vnextLane: POST_SYNC ? null : 'produce' })", "const ROLLOUT = POST_SYNC ? { proceed: true, warning: null } : rolloutGate(readRollout(), { warn: true, vnextLane: 'produce' })"],
 }
 
 /** 후보 파일 내용 — 변이가 있으면 정확히 1곳에 적용한다(0곳·여러 곳이면 하네스 결함으로 멈춘다) */
