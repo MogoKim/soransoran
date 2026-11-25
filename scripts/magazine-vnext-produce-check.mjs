@@ -6,7 +6,7 @@
  *   node scripts/magazine-vnext-produce-check.mjs --only E3,E5    일부(id 접두)
  *   node scripts/magazine-vnext-produce-check.mjs --mutate <id>   변이 사본으로 실행(magazine-vnext-produce-mutation.mjs 가 부른다)
  *
- * 입력은 이 작업 트리의 **실제** main 바이트(control · Bundle · articles · legacy queue · 결속)다 — 후보는 compiler · admission 이 고른다.
+ * 11/24의 보존된 제품 Bundle과 고정된 공개 목록으로 당시의 후보 선택을 재현한다. 실제 CLI 리허설은 현재 작업 트리를 읽는다.
  * 소비 쪽은 release writer 의 실제 함수(readReleaseCandidates · assembleRelease · applyReleaseFiles · judgeReleaseContent)다.
  * 🔴 운영 HOME · 운영 Job 저장소 · rollout · live 설정 · 네트워크 · 키 · git 쓰기 0. 모든 저장소는 OS 임시 폴더다.
  * 마지막 줄: `vNext 생산기 검사: <n> pass, <n> fail`
@@ -89,7 +89,29 @@ async function test(id, name, fn) {
   if (ok) pass++; else fail++
   console.log(`${ok ? 'PASS' : 'FAIL'} ${id} ${name}${!ok && detail ? ` — ${String(detail).slice(0, 500)}` : ''}`)
 }
-const MAIN = RH.readWorktreeMain(ROOT)
+// 첫 콘텐츠가 배포된 뒤에도 같은 실패 조건을 재현한다. 현재 공개 상태를 되돌리거나 Git 이력을 요구하지 않는다.
+const fixture = await imp('scripts/__fixtures__/magazine/content-plan/world.mjs')
+const { planInputRel } = await imp('scripts/lib/magazine-content-plan-input.mjs')
+const fixtureRoot = tmp('vp-before-first-release-')
+const graphVersion = 'g-20261124-e8a6b8'
+const bundlePath = planInputRel(graphVersion)
+const bundle = readFileSync(join(ROOT, bundlePath), 'utf8')
+const relatedSlugs = ['back-to-work-homemaker', 'certificate-in-50s', 'age-learning', 'empty-nest-quiet', 'job-credentials']
+const publicRows = relatedSlugs.map(slug => ({
+  slug, title: slug, cluster: slug === 'empty-nest-quiet' ? 'family' : 'money-work', publishAt: '2026-10-01T10:30:00+09:00',
+}))
+const fixtureFiles = {
+  [bundlePath]: bundle,
+  [RL.BINDING_PATH]: RL.renderBindingFile(CP.releaseBindingOf(CP.compileContentPlans({ bundle }))),
+  [RL.ARTICLES_PATH]: fixture.articlesText(publicRows),
+  'src/content/magazine/graph/control.ts': fixture.controlText(graphVersion, fixture.loadSeed().control),
+  'drafts/magazine/topic-queue.ts': fixture.queueText([]),
+}
+for (const [path, bytes] of Object.entries(fixtureFiles)) {
+  mkdirSync(dirname(join(fixtureRoot, path)), { recursive: true })
+  writeFileSync(join(fixtureRoot, path), bytes)
+}
+const MAIN = RH.readWorktreeMain(fixtureRoot)
 if (!MAIN.ok) { console.log(`HARNESS main 바이트를 읽지 못했다 — ${MAIN.why}`); process.exit(2) }
 const COMPILED = CP.compileContentPlans({ bundle: MAIN.bundle })
 const planOf = (intentId) => COMPILED.plans.find((p) => p.intentId === intentId)
@@ -150,7 +172,7 @@ await test('E3', '정상 2편(다른 cluster) — 원고 요청 planHash 당 1 �
 })
 await test('E3b', '리허설 끝까지 — applyReleaseFiles(CAS · journal) · judgeReleaseContent(merge 직전 관문) 통과 · 미리보기에 fake 표식', async () => {
   const out = join(tmp('vp-rh-'), 'out')
-  const r = await RH.rehearse({ root: ROOT, out, target: 2 })
+  const r = await RH.rehearse({ root: fixtureRoot, out, target: 2 })
   const html = r.preview ? readFileSync(r.preview, 'utf8') : ''
   return { ok: r.ok && r.gate.ok && r.release.members.length === 2 && html.includes('fake provider 리허설 산출') && html.includes('noindex'), detail: JSON.stringify({ code: r.code, gate: r.gate, rel: r.release?.code }) }
 })
