@@ -242,8 +242,12 @@ export const commentDailyCapOf = (stage: RuntimeStage | null): number =>
   stage === 'd50' ? COMMENT_DAILY_USD_CAP.d50 : COMMENT_DAILY_USD_CAP.base
 /** env 가 없을 때의 기본값 — 🔴 D10까지 쓰던 $0.20을 유지한다. D20은 실측 뒤 env를 명시해야 한다 */
 export const COMMENT_LOOP_DAILY_USD_DEFAULT = 0.2
-/** **첫 댓글** 한 회차 유료 요청 상한 기본값. 추가 댓글은 자기 장부 회차와 자기 상한(profile)을 쓴다(`followupRunRequestCap`) */
-export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 6
+/**
+ * **첫 댓글** 한 회차 유료 요청 상한 기본값. 추가 댓글은 자기 장부 회차와 자기 상한(profile)을 쓴다(`followupRunRequestCap`).
+ * 근거(2026-11-25 · D50 첫 댓글 10분): 한 글 후보 한 벌(`BOOTSTRAP_SLOTS_PER_POST` 5) + 같은 회차 재시도 한 벌(5) = 10.
+ * 하루 지출은 이 값이 아니라 하루 상한(`commentDailyCapOf`)이 막는다.
+ */
+export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 10
 /** 예약 여유 배수 기본값 — 공급·감사 운영값과 같다 */
 export const COMMENT_LOOP_HEADROOM_DEFAULT = 1.5
 

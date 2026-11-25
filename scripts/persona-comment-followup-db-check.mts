@@ -42,7 +42,7 @@ const { SANITIZER_VERSION } = await import('../src/lib/persona-eval-invalidation
 const { REFERENCE_MANIFEST_FILE } = await import('../src/lib/persona-reference-asset')
 const { GATE_CODES } = await import('../src/lib/persona-comment-gate-report')
 const { publishCandidateTx } = await import('../src/lib/persona-publish-tx')
-const { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } = await import('../src/lib/persona-comment-auto-lane')
+const { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY, COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT } = await import('../src/lib/persona-comment-auto-lane')
 const F = await import('../src/lib/persona-comment-followup')
 const { threadPlanOf } = await import('../src/lib/persona-thread-plan')
 const {
@@ -360,7 +360,7 @@ async function main(): Promise<void> {
     const r = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
       makeGenerate: () => async () => ({ ok: true, text: '읽으면서 고개가 계속 끄덕여졌어요. 그런 밤은 괜히 마음이 싱숭생숭하죠. 오늘은 푹 주무셨으면 좋겠네요~', errorCode: null }),
-      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+      generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
       followupPhase: () => phase(g.gen),
     })
     const cs = await personaRows(pid)
@@ -374,7 +374,7 @@ async function main(): Promise<void> {
     const r2 = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
       makeGenerate: () => async () => ({ ok: true, text: '어머 그 새벽 얼마나 길게 느껴지셨을까요. 오늘은 꼭 푹 주무셨으면 좋겠어요.', errorCode: null }),
-      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+      generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
       followupPhase: () => phase(g2.gen, { conversationAudit: { verdict: 'FAIL', codes: ['FOLLOWUP_SELF'], counts: {} } }),
     })
     const cs2 = await personaRows(pid2)
