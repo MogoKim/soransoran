@@ -31,7 +31,7 @@ import { parseArticleIdentityText, projectProviderPlan, strictControlGraphVersio
 import { resolveVercelContext, verifyVercelDirect } from './magazine-deploy-evidence.mjs'
 import { strictPublishAtMs } from './magazine-public-rule.mjs'
 import {
-  ReleaseWriteError, advanceJournal, applyReleaseFiles, isTerminalJournal, journalPathOf, listReleaseJournals, noteJournal, readJournal, readSlugRecords, recordSlug,
+  RELEASE_ID_RE, ReleaseWriteError, advanceJournal, applyReleaseFiles, isTerminalJournal, journalPathOf, listReleaseJournals, noteJournal, readJournal, readSlugRecords, recordSlug,
   worktreePathOf,
 } from './magazine-release-journal.mjs'
 
@@ -68,7 +68,7 @@ export function judgeReleasePr({ pr, expectedSha, ciState, checks, rollout }) {
   const block = (code, message) => blockedBy.push({ code, message })
   if (rollout?.release !== 'auto') block('RELEASE_DRAFT_MODE', 'rollout release 가 draft 다 — release PR 을 자동으로 merge 하지 않는다(창업자 병합)')
   if (!pr) { block('NO_PR', 'PR 을 읽지 못했다'); return { ok: false, blockedBy, checked } }
-  if (!String(pr.headRefName ?? '').startsWith(RELEASE_BRANCH_PREFIX)) block('NOT_RELEASE_BRANCH', `${pr.headRefName} 는 vNext release 브랜치가 아니다`)
+  if (!releaseIdOf(pr.headRefName)) block('NOT_RELEASE_BRANCH', `${pr.headRefName} 는 vNext release 브랜치가 아니다`)
   if (pr.state !== 'OPEN') block('NOT_OPEN', `PR 상태 ${pr.state}`)
   if (pr.isDraft) block('IS_DRAFT', 'Draft release PR 이다 — 자동 merge 0')
   if (pr.mergeable !== 'MERGEABLE') block('NOT_MERGEABLE', `mergeable=${pr.mergeable}`)
@@ -196,7 +196,11 @@ export function judgeResumeBinding({ journal, pr, headSha256Of, jobOf, providerP
 function journalOf(deps, releaseId) {
   try { const path = journalPathOf(deps.stateRoot, releaseId); return { path, journal: readJournal(path) } } catch { return { path: null, journal: null } }
 }
-const releaseIdOf = (branch) => String(branch).slice(RELEASE_BRANCH_PREFIX.length)
+function releaseIdOf(branch) {
+  if (typeof branch !== 'string' || !branch.startsWith(RELEASE_BRANCH_PREFIX)) return null
+  const id = branch.slice(RELEASE_BRANCH_PREFIX.length)
+  return RELEASE_ID_RE.test(id) ? id : null
+}
 const minPublishMsOf = (members) => Math.min(...members.map((m) => strictPublishAtMs({ publishAt: m.publishAt, status: 'SCHEDULED' })))
 
 /** release PR 제목 · 본문 — 조립 결과와 journal(이어받기) 어느 쪽에서도 같은 모양 */
@@ -231,7 +235,7 @@ function closeFailed({ report, pr }) {
 
 /** release 잔존물 정리 — 그 release 의 worktree · 원격/로컬 브랜치(접두가 release 인 이름만). 실패는 기록만 한다(판정을 바꾸지 않는다) */
 function cleanupRelease({ deps, releaseId, branch, report }) {
-  if (!branch.startsWith(RELEASE_BRANCH_PREFIX)) return
+  if (!releaseIdOf(branch)) return
   let wt = null
   try { wt = worktreePathOf(deps.stateRoot, releaseId) } catch { wt = null }
   if (wt && existsSync(wt) && !deps.removeWorktree(wt)) report.notes.push(`${wt} worktree 를 지우지 못했다`)
@@ -489,14 +493,14 @@ export async function runRelease({ deps, apply, recover = false }) {
     // ③ 열린 매거진 PR — 점유 · 열린 release PR
     const open = deps.listOpenMagazinePrs()
     if (!open.ok) return block('PR_LOOKUP_FAILED', open.reason)
-    const releasePrs = open.prs.filter((p) => p.headRefName.startsWith(RELEASE_BRANCH_PREFIX))
+    const releasePrs = open.prs.filter((p) => releaseIdOf(p.headRefName))
     if (releasePrs.length > 1) return block('MULTIPLE_RELEASE_PRS', `열린 release PR 이 ${releasePrs.length}건이다 — 고르지 않는다`)
     const occ = { dates: [], slugs: [] }
     let openRelease = null
     for (const p of open.prs) {
       const o = occupiedByPr(deps, p, mainRec)
       if (!o) return block('OPEN_PR_UNREADABLE', `#${p.number} 의 점유(날짜 · slug)를 읽지 못했다 — 모르면 조립하지 않는다`)
-      if (p.headRefName.startsWith(RELEASE_BRANCH_PREFIX)) { openRelease = { pr: p, occ: o }; continue }
+      if (releaseIdOf(p.headRefName)) { openRelease = { pr: p, occ: o }; continue }
       occ.dates.push(...o.dates); occ.slugs.push(...o.slugs)
     }
     report.occupied = { dates: [...occ.dates].sort(), slugs: [...occ.slugs].sort(), openRelease: openRelease ? openRelease.pr.number : null }
@@ -716,7 +720,7 @@ export function makeReleaseDeps({ root, stateRoot, jobsRoot, readRollout, readCa
     mergeBase: (a, b) => { const r = git(['merge-base', a, b]); return r.code === 0 ? r.out.trim() : null },
     /** release 브랜치만 — 원격(있으면) · 로컬(있으면). worktree 를 먼저 지운 뒤 부른다 */
     deleteBranch: (branch) => {
-      if (!branch.startsWith(RELEASE_BRANCH_PREFIX)) return false
+      if (!releaseIdOf(branch)) return false
       const remote = git(['ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`])
       const r1 = remote.code === 0 ? git(['push', 'origin', '--delete', branch]).code === 0 : true
       const local = git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).code === 0
