@@ -46,6 +46,8 @@ const derive = (m: FollowupMeasure | null, o: Partial<{ personas: number | null;
   measure: m, targetStage: 'd20', targetDailyPosts: D20_POSTS, commentRunsPerDay: RUNS,
   contractValidPersonas: o.personas === undefined ? 40 : o.personas,
   commentDailyUsdCap: o.cap === undefined ? D20_FIXTURE_COMMENT_CAP_USD : o.cap,
+  // 🔴 D20 후보 산출(2026-10-16) 당시 효력 줄의 평균 — 지금 줄(평균 7)로 다시 재면 역사 fixture 가 아니다
+  meanSize: THREAD_TARGETS[0]!.meanSize,
 })
 
 console.log('\n① 실측이 없으면 숫자를 만들지 않는다')
@@ -78,7 +80,7 @@ console.log('\n② 식 — 실측에서만 나온다')
   const d = derive(measure())
   check('정상 실측 → CANDIDATE', d.verdict === 'CANDIDATE' && d.candidate !== null, `${d.verdict} ${d.codes.join(',')}`)
   const c = d.candidate!
-  const scale = deriveCommentScale({ dailyPosts: D20_POSTS, personas: { normal: 40, quiet: 0 }, runsPerDay: RUNS })
+  const scale = deriveCommentScale({ dailyPosts: D20_POSTS, personas: { normal: 40, quiet: 0 }, runsPerDay: RUNS, meanSize: THREAD_TARGETS[0]!.meanSize })
   check('🔴 하루 건수 · 회차 · Persona 하루 = 정본 계산식(deriveCommentScale) 그대로', c.dailyCount === scale.followup.dailyCount
     && c.runMax === scale.followup.runMax && c.perPersonaDailyMax === scale.followup.perPersonaDailyMax, JSON.stringify(scale.followup))
   check('🔴 하루 USD = 하루 건수 × (정산 USD / 실제 발행 추가 댓글) — 버린 요청 비용 포함', Math.abs(c.dailyUsd - Math.ceil(c.dailyCount * 0.003 * 10_000) / 10_000) < 1e-12, String(c.dailyUsd))
