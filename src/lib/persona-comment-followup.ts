@@ -210,6 +210,11 @@ export type FollowupPostFacts = {
   comments: readonly FollowupCommentRow[]
   /** 이 글을 대상으로 열려 있는 Queue 가 있는가(어느 레인이든). 모르면 null */
   hasOpenQueue: boolean | null
+  /**
+   * 🔴 뜨거운 글인가(`isHotThread` — 그 글을 낸 원글 큐 행의 원천 증거). 계획 크기가 이것으로 갈린다.
+   *    기본값이 없다 — 생성 판정과 발행 트랜잭션이 같은 조회(`HOT_QUEUE_SELECT`)로 읽어 넘긴다. 큐 행이 없는 글은 false
+   */
+  hot: boolean
 }
 
 /** `hook` 은 계획이 이 자리에 준 모양(반응 역할)이다 */
@@ -233,7 +238,7 @@ export type FollowupPostVerdict =
    * `target` · `speaker` · `roles` 는 계획이 먼저 서 보라고 한 자리(`seats[0]`)다. 🔴 한 자리가 막혀도 글은 멈추지 않는다 —
    * 그 자리에 설 사람이 없으면 부르는 쪽이 `seats` 의 다음 자리로 넘어간다(`pickFollowupSeat`).
    */
-  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; reason: string }
+  | { verdict: 'GO'; ordinal: number; extrasSoFar: number; planSize: number; openHooks: number; key: string; target: FollowupTarget; speaker: FollowupSpeaker; excludePersonaIds: readonly string[]; roles: readonly ReactionType[]; seats: readonly FollowupSeat[]; reason: string }
   | { verdict: 'WAIT'; notBeforeMs: number | null; reason: string }
   | { verdict: 'STOP'; reason: string }
   | { verdict: 'BLOCK'; reason: string }
@@ -247,6 +252,8 @@ type FollowupBase =
       live: readonly FollowupCommentRow[]
       livePersona: readonly FollowupCommentRow[]
       extrasSoFar: number
+      /** 이 글의 대화 계획 크기(첫 댓글 포함) — 회차 순서의 진척률 분모 */
+      planSize: number
       cap: number
       ordinal: number
       lastPersonaMs: number
@@ -295,7 +302,7 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   // ── 계획 크기 · 실회원 상한 ──
   // 🔴 구조 상한(`FOLLOWUP_TOTAL_PER_POST_MAX`)은 계획 크기의 최댓값이라 계획 크기가 먼저 막는다 — 따로 보지 않는다
   const personaCount = livePersona.length
-  const planSize = threadPlanOf(f.postId, f.publishedAtMs).size
+  const planSize = threadPlanOf(f.postId, f.publishedAtMs, f.hot).size
   if (personaCount >= planSize) return stop(`Persona 댓글 ${personaCount}건 — 이 글의 대화 계획 ${planSize}건을 다 채웠다`)
   const extrasSoFar = livePersona.filter((c) => c.provenance === 'followup').length
   // ── 실회원 우선 ──
@@ -321,7 +328,7 @@ function followupBaseOf(f: FollowupPostFacts, nowMs: number): FollowupBase {
   return {
     // 🔴 구조 상한은 live 수로 보되, 멱등 순번은 삭제 이력을 포함해 단조 증가한다.
     // 삭제 뒤 live 수로 순번을 재사용하면 이미 저장된 followup:<post>:N 과 충돌한다.
-    ok: true, live, livePersona, extrasSoFar, cap, ordinal: historicalPersonaCount + 1,
+    ok: true, live, livePersona, extrasSoFar, planSize, cap, ordinal: historicalPersonaCount + 1,
     lastPersonaMs: Math.max(...livePersona.map((c) => c.createdAt.getTime())), onPost, publishedAtMs: f.publishedAtMs,
   }
 }
@@ -347,7 +354,7 @@ export function judgeFollowupPost(f: FollowupPostFacts, nowMs: number): Followup
     return { verdict: 'WAIT', notBeforeMs, reason: `시간차 — ${Math.ceil((notBeforeMs - nowMs) / 60_000)}분 뒤` }
   }
   return {
-    verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, openHooks: here.seats.length,
+    verdict: 'GO', ordinal: b.ordinal, extrasSoFar: b.extrasSoFar, planSize: b.planSize, openHooks: here.seats.length,
     key: followupKeyOf(f.postId, b.ordinal), target: first.target, speaker: first.speaker,
     excludePersonaIds: [...b.onPost].sort(),
     roles: first.roles, seats: here.seats,
@@ -402,7 +409,7 @@ const rolesOf = (shape: ReactionType): ReactionType[] =>
  *    답 대상은 Persona 댓글뿐이고 한 댓글에는 답이 하나만 달린다(`replyTargetOpen`).
  */
 export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats: FollowupSeat[]; gapMs: number } {
-  const slot = planSlotAt(threadPlanOf(f.postId, f.publishedAtMs), ordinal)
+  const slot = planSlotAt(threadPlanOf(f.postId, f.publishedAtMs, f.hot), ordinal)
   if (slot === null) return { seats: [], gapMs: FOLLOWUP_MIN_GAP_MS }
   const author = f.authorPersonaId ?? null
   const consumed = consumedOf(f)
@@ -443,14 +450,17 @@ export function followupSeatsOf(f: FollowupPostFacts, ordinal: number): { seats:
 }
 
 /**
- * 🔴 **한 회차에 자리가 모자라면 추가 댓글이 적은 글부터 잇는다.**
+ * 🔴 **한 회차에 자리가 모자라면 진척률(추가 ÷ (계획 크기 − 1))이 낮은 글부터 잇는다** (2026-11-25 밤 4 · 판정서 §2.3).
  *    읽은 순서대로 자리를 주면 앞 글들이 하루 상한을 다 먹고 나머지는 전부 첫 댓글로 끝난다
- *    (fixture 시뮬레이션 D100 실측: 71/100). 같은 수면 글 id 해시로 섞는다 — 결정적이다.
+ *    (fixture 시뮬레이션 D100 실측: 71/100) — 그래서 덜 채운 글이 먼저다.
+ *    옛 판은 "추가가 적은 글부터"였다. 계획이 12~20 인 뜨거운 글은 추가가 늘수록 맨 뒤로 밀려, 경합 회차에서
+ *    12 에 못 닿았다(모의실험 · 정기 회차만 · runMax 7 · 정오 몰림: 12 도달 52% → 진척률 93%). 경합이 없으면 두 순서는 같다.
+ *    동률은 최신 공개 글 → 글 id(결정적). 교차곱으로 비교한다 — 나눗셈의 부동소수 오차로 동률이 갈리지 않게.
  */
 export function orderFollowupGo<T extends { postId: string; publishedAtMs?: number | null; go: Extract<FollowupPostVerdict, { verdict: 'GO' }> }>(
   items: readonly T[],
 ): T[] {
-  return [...items].sort((a, b) => a.go.extrasSoFar - b.go.extrasSoFar
+  return [...items].sort((a, b) => a.go.extrasSoFar * (b.go.planSize - 1) - b.go.extrasSoFar * (a.go.planSize - 1)
     || (b.publishedAtMs ?? 0) - (a.publishedAtMs ?? 0)
     || (a.postId < b.postId ? -1 : a.postId > b.postId ? 1 : 0))
 }

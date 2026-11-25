@@ -144,7 +144,7 @@ console.log('\n④ 역할 몫 — 대화 계획 10,000편 · planner 순서')
   const ALLOWED: Readonly<Record<string, readonly ReactionType[]>> = {
     post: ['other', 'empathy', 'question', 'experience'], author: ['other', 'experience', 'question'], reply: ['other', 'empathy', 'question'],
   }
-  const slots = Array.from({ length: 10_000 }, (_, i) => threadPlanOf(`share-${i}`)).flatMap((p) => p.slots)
+  const slots = Array.from({ length: 10_000 }, (_, i) => threadPlanOf(`share-${i}`, null, false)).flatMap((p) => p.slots)
   for (const [kind, roles] of Object.entries(ALLOWED)) {
     const xs = slots.filter((s) => s.kind === kind)
     const total = roles.reduce((a, r) => a + (REAL_REACTION_SHARE[r] ?? 0), 0)

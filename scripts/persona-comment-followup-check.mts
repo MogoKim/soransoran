@@ -19,7 +19,7 @@
  * 🔴 변이 시험(`persona-comment-followup-mutation.mts`)이 `FOLLOWUP_MODULE` 로 변이 모듈을 주입한다.
  */
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -96,6 +96,8 @@ const factsOf = (postId: string, s: Pick<FxScenario, 'post' | 'comments'>): Foll
   autoManagedPost: s.post.autoManaged ?? true,
   comments: s.comments.map((c) => rowOf(postId, c)),
   hasOpenQueue: s.post.hasOpenQueue ?? false,
+  // 🔴 시나리오의 공개 시각(T0)은 첫 줄보다 이르다 — 뜨거운 글 칸이 없는 줄이라 hot 은 계획을 바꾸지 않는다
+  hot: false,
 })
 
 // ═════════ ① 스위치 ═════════
@@ -104,9 +106,9 @@ for (const v of ['1', 'true', 'ON', 'On', 'yes', 'enabled', ' on2']) {
   check(`① ${JSON.stringify(v)} → OFF`, M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: v }).enabled === false)
 }
 check('① 정확히 on → ON', M.readFollowupSwitch({ [M.FOLLOWUP_SWITCH_ENV]: 'on' }).enabled === true)
-check('① 구조 상한 = 대화 계획의 가장 큰 크기(목표 평균의 두 배) · 추가 = 그 − 첫 댓글 1',
+check('① 구조 상한 = 대화 계획의 가장 큰 크기(목표 평균의 두 배 · 뜨거운 글 상한 중 큰 쪽) · 추가 = 그 − 첫 댓글 1',
   M.FOLLOWUP_TOTAL_PER_POST_MAX === PERSONA_COMMENTS_PER_POST_MAX && PERSONA_COMMENTS_PER_POST_MAX === THREAD_SIZE_CAP
-  && THREAD_SIZE_CAP === Math.max(...THREAD_TARGETS.map((t) => Math.ceil(t.meanSize * 2)))
+  && THREAD_SIZE_CAP === Math.max(...THREAD_TARGETS.map((t) => Math.max(Math.ceil(t.meanSize * 2), t.hot?.sizeMax ?? 0)))
   && M.FOLLOWUP_EXTRA_PER_POST_MAX === THREAD_SIZE_CAP - 1, `상한 ${THREAD_SIZE_CAP}`)
 check('① 🔴 대화 마감 = 계획 마감 하나(생성 · 발행 · 시도 기억이 같은 값)',
   M.FOLLOWUP_POST_AGE_MAX_MS === THREAD_DEADLINE_MS && M.FOLLOWUP_ATTEMPT_LANE.attemptWindowMs === THREAD_DEADLINE_MS)
@@ -227,7 +229,16 @@ for (const b of fx.profiles.broken) {
 const PERSONAS = Array.from({ length: 30 }, (_, i) => `p${String(i).padStart(2, '0')}`)
 type SimResult = { perPost: Map<string, FollowupModule.FollowupCommentRow[]>; violations: string[]; trace: string }
 
-function simulate(opts: { posts: number; salt: string; members?: (postId: string) => number; profile?: Record<string, unknown>; stage?: string }): SimResult {
+function simulate(opts: {
+  posts: number; salt: string; members?: (postId: string) => number; profile?: Record<string, unknown>; stage?: string
+  /** 공개 시각 — 기본 T0(첫 줄보다 이른 시각 · 첫 줄). 주면 그 시각에 효력이 있던 줄을 쓴다 */
+  at?: number
+  /** 뜨거운 글인가 — 기본 전부 false */
+  hot?: (postId: string) => boolean
+}): SimResult {
+  // 🔴 이 시뮬레이션의 모든 시각은 공개 시각 P0 기준이다 — 계획도 같은 시각 · 같은 hot 으로 센다
+  const P0 = opts.at ?? T0
+  const hotOf = (postId: string): boolean => opts.hot?.(postId) ?? false
   const profile = opts.profile ?? fx.profiles.approved
   const stage = opts.stage ?? 'd10'
   const perPersonaMax = profile.perPersonaDailyMax as number
@@ -244,7 +255,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const members = opts.members?.(postId) ?? 0
     for (let m = 0; m < members; m++) {
       rows.push({
-        id: `${postId}-m${m}`, postId, parentId: null, createdAt: new Date(T0 + (2 + m) * MIN), isDeleted: false,
+        id: `${postId}-m${m}`, postId, parentId: null, createdAt: new Date(P0 + (2 + m) * MIN), isDeleted: false,
         authorId: `u${m}`, commentOrigin: 'MEMBER', personaId: null, operatorWriterId: null,
         reported: false, provenance: null,
       })
@@ -252,7 +263,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     // 첫 댓글 — 자동 레인이 10~50분에 단다
     const first = PERSONAS.find((p) => p !== a && M.unitOf('sim-first', postId, p) < 0.2) ?? PERSONAS.find((p) => p !== a)!
     rows.push({
-      id: `${postId}-c1`, postId, parentId: null, createdAt: new Date(T0 + (10 + Math.floor(M.unitOf('sim-first-at', postId) * 40)) * MIN),
+      id: `${postId}-c1`, postId, parentId: null, createdAt: new Date(P0 + (10 + Math.floor(M.unitOf('sim-first-at', postId) * 40)) * MIN),
       isDeleted: false, authorId: null, commentOrigin: 'PERSONA', personaId: first, operatorWriterId: null,
       reported: false, provenance: 'auto',
     })
@@ -261,7 +272,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   const followupsByPersona = new Map<string, number>()
   let followupsToday = 0
   for (let t = 60; t <= 26 * 60; t += 15) {
-    const nowMs = T0 + t * MIN
+    const nowMs = P0 + t * MIN
     const allowed = M.judgeFollowupTick({
       ...baseTick, profile, runtimeStage: stage, followupsToday, followupUsdToday: followupsToday * 0.001,
       commentLedgerRemainingUsd: 5, firstCommentReserveUsd: 0.02,
@@ -271,8 +282,8 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const ready: { postId: string; go: Extract<FollowupModule.FollowupPostVerdict, { verdict: 'GO' }> }[] = []
     for (const [postId, rows] of perPost) {
       const v = M.judgeFollowupPost({
-        postId, publishedAtMs: T0, postStatus: 'PUBLISHED', authorPersonaId: author.get(postId)!, autoManagedPost: true,
-        comments: rows, hasOpenQueue: false,
+        postId, publishedAtMs: P0, postStatus: 'PUBLISHED', authorPersonaId: author.get(postId)!, autoManagedPost: true,
+        comments: rows, hasOpenQueue: false, hot: hotOf(postId),
       }, nowMs)
       if (v.verdict === 'GO') ready.push({ postId, go: v })
     }
@@ -315,7 +326,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const persona = rows.filter((r) => r.commentOrigin === 'PERSONA').sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const members = rows.filter((r) => r.commentOrigin !== 'PERSONA').length
     if (persona.length > M.FOLLOWUP_TOTAL_PER_POST_MAX) violations.push(`${postId} Persona ${persona.length}건`)
-    if (persona.length > threadPlanOf(postId).size) violations.push(`${postId} 계획 ${threadPlanOf(postId).size}건을 넘겼다`)
+    if (persona.length > threadPlanOf(postId, P0, hotOf(postId)).size) violations.push(`${postId} 계획 ${threadPlanOf(postId, P0, hotOf(postId)).size}건을 넘겼다`)
     // 🔴 글쓴이 아닌 사람은 두 번까지 — 두 번째는 답글이다(새 댓글을 또 달지 않는다)
     for (const who of new Set(persona.filter((r) => r.personaId !== author.get(postId)).map((r) => r.personaId))) {
       const mine = persona.filter((r) => r.personaId === who)
@@ -327,7 +338,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
       || own.some((r) => r.parentId === null || r.provenance !== 'followup')) violations.push(`${postId} 자기 글 댓글`)
     for (let k = 1; k < persona.length; k++) {
       if (persona[k]!.createdAt.getTime() - persona[k - 1]!.createdAt.getTime() < M.FOLLOWUP_MIN_GAP_MS) violations.push(`${postId} 시간차 미달`)
-      if (persona[k]!.createdAt.getTime() - T0 > M.FOLLOWUP_POST_AGE_MAX_MS) violations.push(`${postId} 식은 글에 이음`)
+      if (persona[k]!.createdAt.getTime() - P0 > M.FOLLOWUP_POST_AGE_MAX_MS) violations.push(`${postId} 식은 글에 이음`)
     }
     const extras = persona.length - 1
     if (extras > M.FOLLOWUP_EXTRA_PER_POST_MAX) violations.push(`${postId} 추가 ${extras}건`)
@@ -355,7 +366,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   check('④ D10 모든 글을 같은 수로 맞추지 않는다', new Set(counts).size > 1, counts.join(','))
 
   // 🔴 상한이 묶이지 않으면 글마다 계획을 다 채운다 — 막다른 길이 없다
-  const sizes = [...a.perPost.keys()].map((id) => threadPlanOf(id).size)
+  const sizes = [...a.perPost.keys()].map((id) => threadPlanOf(id, T0, false).size)
   const planned = sizes.reduce((x, n) => x + n - 1, 0)
   const got = counts.reduce((x, n) => x + n - 1, 0)
   check('④ 🔴 D10 — 계획을 넘지 않고, 하루 상한(40)이 닿는 데까지 채운다',
@@ -381,20 +392,28 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   const spread = tc.filter((n) => n >= 2).length
   check('④ 🔴 상한이 묶여도 앞 글이 독차지하지 않는다(추가 받은 글 ≥ 30)', tight.violations.length === 0 && spread >= 30, `${spread}/100`)
 
-  // 🔴 회차 자리 순서 — 추가가 적은 글이 먼저다(해시 순서만으로는 이 계약을 증명할 수 없다)
+  // 🔴 회차 자리 순서 — 진척률(추가 ÷ (계획 크기 − 1))이 낮은 글이 먼저다(해시 순서만으로는 이 계약을 증명할 수 없다)
+  //    추가 수 순서와 갈리게 짠다: c(추가 2 · 계획 3 → 1.0)와 a(추가 3 · 계획 20 → 0.16)는 추가 수로는 c 가 먼저, 진척률로는 a 가 먼저다
   {
-    const g = (postId: string, extras: number) => ({
+    const g = (postId: string, extras: number, planSize: number) => ({
       postId,
-      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1, key: M.followupKeyOf(postId, extras + 2),
+      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, planSize, openHooks: 1, key: M.followupKeyOf(postId, extras + 2),
         target: { kind: 'post' as const, hook: 'question' as const }, speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], reason: '' },
     })
     let allOk = true
+    let detail = ''
     for (let i = 0; i < 50; i++) {
-      const items = [g(`o-${i}-a`, 3), g(`o-${i}-b`, 0), g(`o-${i}-c`, 2), g(`o-${i}-d`, 1), g(`o-${i}-e`, 0)]
-      const order = M.orderFollowupGo(items).map((x) => x.go.extrasSoFar)
-      if (order.join(',') !== '0,0,1,2,3') allOk = false
+      const items = [g(`o-${i}-a`, 3, 20), g(`o-${i}-b`, 0, 5), g(`o-${i}-c`, 2, 3), g(`o-${i}-d`, 1, 12), g(`o-${i}-e`, 0, 12)]
+      const order = M.orderFollowupGo(items).map((x) => x.postId.slice(-1)).join('')
+      if (order !== 'bedac') { allOk = false; detail = order }
     }
-    check('④ 🔴 회차 자리는 추가 댓글이 적은 글부터', allOk)
+    check('④ 🔴 회차 자리는 진척률이 낮은 글부터(추가 수가 아니다) · 진척 0 끼리는 글 id 순', allOk, detail)
+    // 🔴 진척률이 같으면(1/3 = 2/6) 최신 공개 글 먼저 — 비율 동률이 추가 수로 갈리지 않는다
+    const tie = M.orderFollowupGo([
+      { ...g('t-old', 1, 4), publishedAtMs: T0 }, { ...g('t-new', 2, 7), publishedAtMs: T0 + MIN },
+    ]).map((x) => x.postId)
+    // (옛 추가 수 순서라면 추가 1 인 t-old 가 먼저다)
+    check('④ 🔴 진척률 동률(1/3 = 2/6)은 최신 공개 글 먼저', tie.join(',') === 't-new,t-old', tie.join(','))
   }
   // 🔴 같은 extrasSoFar 에서 최신 공개 글이 먼저다(hash 아님 — 오래된 글이 예산을 선점하지 않는다)
   // 방법: hash 순서로 먼저 줄 세운 뒤 publishedAtMs 를 역순으로 붙인다
@@ -402,7 +421,7 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
   {
     const g3 = (postId: string, extras: number, publishedAtMs: number) => ({
       postId, publishedAtMs,
-      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, openHooks: 1,
+      go: { verdict: 'GO' as const, ordinal: extras + 2, extrasSoFar: extras, planSize: 7, openHooks: 1,
         key: M.followupKeyOf(postId, extras + 2), target: { kind: 'post' as const, hook: 'question' as const },
         speaker: { kind: 'other' as const }, excludePersonaIds: [], roles: ['other' as const], seats: [], reason: '' },
     })
@@ -414,13 +433,46 @@ function simulate(opts: { posts: number; salt: string; members?: (postId: string
     const sorted3 = M.orderFollowupGo(items3).map((x) => x.postId)
     // 시각 내림차순(최신 먼저) = byHash 역순(hash 최대가 시각 최대)
     const expectedByTime = [...byHash].reverse()
-    check('④ 🔴 같은 extrasSoFar 에서 최신 공개 글 먼저(hash 아님)',
+    check('④ 🔴 같은 진척률(추가 0)에서 최신 공개 글 먼저(hash 아님)',
       sorted3.join(',') === expectedByTime.join(','),
       `결과: ${sorted3.join(',')} | 기대: ${expectedByTime.join(',')}`)
     // publishedAtMs 없으면 postId 사전순 fallback — 결정적
     const mkNoTime = (id: string) => ({ postId: id, go: g3(id, 0, 0).go })
     const sorted4 = M.orderFollowupGo([mkNoTime('z-0'), mkNoTime('a-0')]).map((x) => x.postId)
     check('④ publishedAtMs 없으면 postId 사전순 fallback(결정적)', sorted4[0] === 'a-0' && sorted4[1] === 'z-0', sorted4.join(','))
+  }
+
+  // 🔴 뜨거운 글(밤 4) — 뜨거운 글 칸이 있는 줄의 시각에 공개된 글. 상한이 남으면 뜨거운 글도 자기 계획(12~20)을 다 채운다.
+  //    판정이 hot 을 계획에 넘기지 않으면(보통 글 크기에서 멈춤) 이 검사가 잡는다
+  {
+    const hotLine = THREAD_TARGETS.filter((t) => t.hot !== undefined).at(-1)
+    check('④ 뜨거운 글 칸이 있는 줄이 있다(지점 0곳 금지)', hotLine !== undefined)
+    if (hotLine !== undefined) {
+      const HOT_AT = Date.parse(hotLine.since) + 3 * 3_600_000
+      const isHot = (id: string): boolean => Number(id.split('-').at(-1)) % 3 === 0
+      const roomyHot = { ...fx.profiles.approvedD100, perPersonaDailyMax: 20 }
+      const hs = simulate({ posts: 12, salt: 'hot', profile: roomyHot, stage: 'd100', at: HOT_AT, hot: isHot })
+      const ids = [...hs.perPost.keys()]
+      const got = ids.map((id) => hs.perPost.get(id)!.filter((r) => r.commentOrigin === 'PERSONA').length)
+      const plan = ids.map((id) => threadPlanOf(id, HOT_AT, isHot(id)).size)
+      check('④ 🔴 뜨거운 글 — 불변식 위반 0 · 모든 글이 자기 계획을 다 채운다 · 뜨거운 글은 하한 이상',
+        hs.violations.length === 0 && got.every((n, i) => n === plan[i]) && ids.every((id, i) => !isHot(id) || got[i]! >= hotLine.hot!.sizeMin),
+        `실제 ${got.join(',')} · 계획 ${plan.join(',')} · ${hs.violations.slice(0, 2).join(' · ')}`)
+      const pubHot = HOT_AT - 3 * 3_600_000
+      const firstAt = (pubHot - T0) / MIN + 10
+      const goHot = M.judgeFollowupPost({ ...factsOf('hot-go-1', { post: {}, comments: [{ id: 'c1', atMin: firstAt, origin: 'PERSONA', persona: 'pB', provenance: 'auto' }] }), publishedAtMs: pubHot, hot: true }, HOT_AT)
+      // 🔴 자리(간격 · 종류)도 같은 계획에서 온다 — 크기만 뜨거운 글이고 자리는 보통 글 계획이면 자리 간격이 어긋난다
+      const gapId = Array.from({ length: 200 }, (_, i) => `hot-gap-${i}`)
+        .find((id) => threadPlanOf(id, pubHot, true).slots[0]!.gapMs !== threadPlanOf(id, pubHot, false).slots[0]!.gapMs)!
+      const seatFacts = (hot: boolean): FollowupModule.FollowupPostFacts => ({ ...factsOf(gapId, { post: {}, comments: [{ id: 'c1', atMin: firstAt, origin: 'PERSONA', persona: 'pB', provenance: 'auto' }] }), publishedAtMs: pubHot, hot })
+      check('④ 🔴 자리 간격도 hot 이 고른 계획에서 온다(생성 · 발행 트랜잭션이 같은 함수)',
+        M.followupSeatsOf(seatFacts(true), 2).gapMs === threadPlanOf(gapId, pubHot, true).slots[0]!.gapMs
+        && M.followupSeatsOf(seatFacts(false), 2).gapMs === threadPlanOf(gapId, pubHot, false).slots[0]!.gapMs,
+        gapId)
+      check('④ 🔴 판정의 계획 크기 = 같은 글 · 같은 시각 · 같은 hot 의 계획(진척률 분모)',
+        goHot.verdict === 'GO' && goHot.planSize === threadPlanOf('hot-go-1', pubHot, true).size && goHot.planSize >= hotLine.hot!.sizeMin,
+        goHot.verdict === 'GO' ? String(goHot.planSize) : `${goHot.verdict} · ${goHot.reason}`)
+    }
   }
 
   const withMembers = simulate({ posts: 30, salt: 'mem', members: (id) => (M.unitOf('m', id) < 0.5 ? 1 : 3) })
@@ -1133,23 +1185,33 @@ const normalizeDiffers = (a: string, b: string): boolean => {
 // ═════════ ⑭ 대화 계획 — 글 id 하나로 크기 · 자리 · 모양 · 간격이 정해진다(길이는 꼴이 정한다) ═════════
 {
   const ids = Array.from({ length: 3000 }, (_, i) => `plan-post-${i}`)
-  const plans = ids.map((id) => threadPlanOf(id))
+  // 🔴 마지막 줄(지금 효력) · 보통 글 — 시각을 모르면 마지막 줄이다(null)
+  const plans = ids.map((id) => threadPlanOf(id, null, false))
   const mean = plans.reduce((s, p) => s + p.size, 0) / plans.length
+  // 양 끝은 얇다(평균 7 이면 13 이상이 약 0.05%) — 끝이 실제로 나오는지는 넓은 표본으로 본다
+  const wide = Array.from({ length: 20_000 }, (_, i) => threadPlanOf(`plan-wide-${i}`, null, false))
   const target = threadMeanSizeAt(null)
   check('⑭ 🔴 크기 — 평균이 목표 평균(`THREAD_TARGETS`)이고, 범위는 하한~평균의 두 배 · 양 끝까지 실제로 나온다',
     plans.every((p) => p.size >= THREAD_SIZE_MIN && p.size <= Math.ceil(target * 2) && p.slots.length === p.size - 1)
-    && Math.abs(mean - target) < 0.1 && plans.some((p) => p.size === THREAD_SIZE_MIN) && plans.some((p) => p.size >= Math.ceil(target * 2) - 1),
+    && Math.abs(mean - target) < 0.1 && wide.some((p) => p.size === THREAD_SIZE_MIN) && wide.some((p) => p.size >= Math.ceil(target * 2) - 1),
     `평균 ${mean.toFixed(2)} · 목표 ${target} · 최대 ${Math.max(...plans.map((p) => p.size))}`)
   check('⑭ 🔴 공개 시각의 줄을 쓴다 — 첫 줄보다 이른 글은 첫 줄 · 모르면 마지막 줄',
     threadMeanSizeAt(0) === THREAD_TARGETS[0]!.meanSize && threadMeanSizeAt(null) === THREAD_TARGETS[THREAD_TARGETS.length - 1]!.meanSize
-    && JSON.stringify(threadPlanOf('plan-post-1', Date.parse(THREAD_TARGETS[0]!.since))) === JSON.stringify(threadPlanOf('plan-post-1', 0)))
+    && JSON.stringify(threadPlanOf('plan-post-1', Date.parse(THREAD_TARGETS[0]!.since), false)) === JSON.stringify(threadPlanOf('plan-post-1', 0, false)))
   check('⑭ 🔴 계획의 틱 여유가 실제 댓글 러너 간격과 같다', PLAN_RUNNER_TICK_MS === COMMENT_RUNNER_MAX_GAP_MINUTES * MIN,
     `${PLAN_RUNNER_TICK_MS / MIN} · ${COMMENT_RUNNER_MAX_GAP_MINUTES}`)
-  // 🔴 가장 나쁜 경우 — 첫 댓글 +9분 · 자리마다 간격 + 다음 틱까지 한 틱을 기다려도 마감 안에 끝난다
-  const worst = (p: ThreadPlan) => 9 * MIN + p.slots.reduce((s, x) => s + x.gapMs + PLAN_RUNNER_TICK_MS, 0)
-  check('⑭ 🔴 간격은 마감에서 역산 — 어느 계획이든 마감 안에 끝난다 · 10분 이상',
-    plans.every((p) => worst(p) <= THREAD_DEADLINE_MS && p.slots.every((x) => x.gapMs >= PLAN_MIN_GAP_MS)),
-    `가장 긴 계획 ${Math.round(Math.max(...plans.map(worst)) / MIN)}분`)
+  // 🔴 가장 나쁜 경우 — 첫 댓글 +9분 · 자리마다 "간격 + 회차 처리"가 지난 뒤의 다음 정기 틱(⌈(간격 + 처리) ÷ 틱⌉ 틱)을 기다려도
+  //    마감 안에 끝난다. 옛 식(자리마다 간격 + 한 틱)은 크기 15 까지만 성립했다 — 크기 20 은 간격이 전부 10분이라 10 + 20 = 30분 × 19.
+  //    처리 시간 1분 = 댓글 장부 11-24~25 회차 104개의 실측 최댓값 0.6분(p50 0.2 · p90 0.3 · runId 시각 → 마지막 endedAt ·
+  //    유료 생성 구간 · 첫 댓글 대기 제외)을 올린 값(2026-11-25 메인 호스트 읽기 전용 측정). 사건 깨움 회차는 넣지 않는다(보수).
+  const PLAN_PROCESS_MS = 1 * MIN
+  const worst = (p: ThreadPlan) => 9 * MIN + p.slots.reduce((s, x) => s + Math.ceil((x.gapMs + PLAN_PROCESS_MS) / PLAN_RUNNER_TICK_MS) * PLAN_RUNNER_TICK_MS, 0)
+  // 모든 줄 × (보통 · 뜨거운) — 뜨거운 글 칸이 없는 줄은 hot 이어도 보통 글 계획이라 같은 값이다
+  const everyLine = THREAD_TARGETS.flatMap((t) => [false, true].map((hot) => ids.slice(0, 1500).map((id) => threadPlanOf(id, Date.parse(t.since), hot)))).flat()
+  check('⑭ 🔴 간격은 마감에서 역산 — 어느 줄 · 어느 계획(뜨거운 글 20 포함)이든 마감 안에 끝난다 · 10분 이상',
+    everyLine.every((p) => worst(p) <= THREAD_DEADLINE_MS && p.slots.every((x) => x.gapMs >= PLAN_MIN_GAP_MS))
+    && everyLine.some((p) => p.size === THREAD_SIZE_CAP),
+    `가장 긴 계획 ${Math.round(Math.max(...everyLine.map(worst)) / MIN)}분 · 최대 크기 ${Math.max(...everyLine.map((p) => p.size))}`)
   const avgGap = (n: number) => {
     const xs = plans.filter((p) => p.size === n).flatMap((p) => p.slots.map((x) => x.gapMs))
     return xs.reduce((a, b) => a + b, 0) / xs.length
@@ -1157,7 +1219,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑭ 🔴 큰 대화일수록 빨리 돈다 — 평균 간격이 크기와 함께 줄어든다',
     avgGap(4) > avgGap(6) && avgGap(6) > avgGap(8) && avgGap(8) > avgGap(10),
     [4, 6, 8, 10].map((n) => `${n}개 ${Math.round(avgGap(n) / MIN)}분`).join(' · '))
-  check('⑭ 결정적 — 같은 글은 언제 세워도 같은 계획', JSON.stringify(threadPlanOf('plan-post-7')) === JSON.stringify(plans[7]))
+  check('⑭ 결정적 — 같은 글은 언제 세워도 같은 계획', JSON.stringify(threadPlanOf('plan-post-7', null, false)) === JSON.stringify(plans[7]))
   const count = (p: ThreadPlan, k: string) => p.slots.filter((x) => x.kind === k).length
   check('⑭ 🔴 4개 이상인 글은 새 사람의 댓글이 2개 이상(글쓴이 아닌 사람 3명 이상) · 글쓴이 답글은 1~3',
     plans.every((p) => (p.size < 4 || count(p, 'post') >= 2) && count(p, 'author') >= 1 && count(p, 'author') <= 3))
@@ -1182,7 +1244,8 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   check('⑭ 모양은 배정 가능한 역할뿐 · 자리 종류는 셋뿐',
     all.every((x) => ['other', 'empathy', 'question', 'experience'].includes(x.shape) && ['post', 'author', 'reply'].includes(x.kind)))
   // 🔴 이미 댓글이 달린 글 — 살아 있는 Persona 댓글을 채운 자리로 세어 남은 자리만 잇는다(배포 전 글에도 같다)
-  const small = ids.find((id) => threadPlanOf(id).size === 2)!
+  // 🔴 시나리오 글은 T0(첫 줄)에 공개됐다 — 계획도 그 시각으로 센다
+  const small = ids.find((id) => threadPlanOf(id, T0, false).size === 2)!
   const old = (n: number): FxComment[] => Array.from({ length: n }, (_, i): FxComment => (i === 0
     ? { id: 'o1', atMin: 10, origin: 'PERSONA', persona: 'pB', provenance: 'auto' }
     : { id: `o${i + 1}`, atMin: 10 + i * 60, parent: 'o1', origin: 'PERSONA', persona: 'pA', provenance: 'followup' }))
@@ -1205,7 +1268,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   const chain = ['pB', 'pC', 'pD', 'pE', 'pF', 'pG'].map((p, i) => P(`c${i + 1}`, 10 + i * 30, p, i === 0 ? undefined : `c${i}`))
   const deep = M.judgeFollowupPost(factsOf('plan-x-14', { post: {}, comments: chain }), T0 + 300 * MIN)
   check('⑭-2 🔴 글쓴이 자리라도 사슬 6단 끝에는 답하지 않는다 → 새 사람의 글에 답',
-    threadPlanOf('plan-x-14').slots[5]?.kind === 'author' && deep.verdict === 'GO' && deep.ordinal === 7 && deep.target.kind === 'post',
+    threadPlanOf('plan-x-14', T0, false).slots[5]?.kind === 'author' && deep.verdict === 'GO' && deep.ordinal === 7 && deep.target.kind === 'post',
     deep.verdict === 'GO' ? `${deep.ordinal} ${deep.target.kind}` : `${deep.verdict} · ${deep.reason}`)
   // 'plan-x-393' — 계획 11건 · 마지막 자리가 글쓴이. 글쓴이가 이미 세 번 답했고 지운 댓글로 순번(12)이 계획을 넘었다
   const author3 = [
@@ -1214,7 +1277,7 @@ const normalizeDiffers = (a: string, b: string): boolean => {
   ]
   const fourth = M.judgeFollowupPost(factsOf('plan-x-393', { post: {}, comments: author3 }), T0 + 300 * MIN)
   check('⑭-2 🔴 순번이 계획을 넘어 마지막(글쓴이) 자리를 다시 써도 네 번째 글쓴이 답글은 없다 → 새 사람',
-    threadPlanOf('plan-x-393').size === 11 && threadPlanOf('plan-x-393').slots[9]?.kind === 'author'
+    threadPlanOf('plan-x-393', T0, false).size === 11 && threadPlanOf('plan-x-393', T0, false).slots[9]?.kind === 'author'
     && fourth.verdict === 'GO' && fourth.ordinal === 12 && fourth.speaker.kind === 'other',
     fourth.verdict === 'GO' ? `${fourth.ordinal} ${fourth.speaker.kind}` : `${fourth.verdict} · ${fourth.reason}`)
 }
@@ -1328,6 +1391,20 @@ const normalizeDiffers = (a: string, b: string): boolean => {
     .gates.find((g) => g.gate === '⑦')?.outcome
   check('⑯ 🔴 관문 ⑦ — 같은 말이 첫 댓글 입력에서는 막히고 자리 입력에서는 통과한다(배선 확인)',
     sevenOf(base) === 'regenerate' && sevenOf(seated) === 'pass', `첫 댓글 ${sevenOf(base)} · 자리 ${sevenOf(seated)}`)
+}
+
+// ═════════ ⑰ 뜨거운 글 판독기는 고객 번들 사슬 밖이다 (밤 4) ═════════
+{
+  // 🔴 `import 'server-only'` 대신 — 러너는 `npx tsx` 로 돌아 그 표식 패키지를 풀지 못한다. 그래서 import 한 곳이 없음을 직접 잰다.
+  //    지점 0곳이면(경로가 바뀌어 읽은 파일 0) 죽은 검사다 — 읽은 파일 수가 0 이 아닌지도 본다
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name)
+    return e.isDirectory() ? walk(p) : /\.(ts|tsx|mts|js|jsx)$/.test(e.name) ? [p] : []
+  })
+  const files = ['../src/app', '../src/components'].flatMap((d) => walk(join(here, d)))
+  const importers = files.filter((f) => /persona-thread-hot/.test(readFileSync(f, 'utf-8')))
+  check('⑰ 🔴 src/app · src/components 의 어떤 파일도 뜨거운 글 판독기(`persona-thread-hot`)를 import 하지 않는다',
+    files.length > 50 && importers.length === 0, `읽은 파일 ${files.length} · import ${importers.map((f) => f.split('/src/')[1]).join(', ') || '0'}`)
 }
 
 for (const l of lines) console.log(l)
