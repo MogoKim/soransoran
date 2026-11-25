@@ -22,6 +22,7 @@
  *   node scripts/magazine-auto-merge.mjs --apply      🔴 실제 merge
  *   node scripts/magazine-auto-merge.mjs --watch      publishAt 이후 공개 확인만
  *   node scripts/magazine-auto-merge.mjs --recover    🔴 02:00 복구 — 01:00 이 못 끝낸 자동 PR 1건을 같은 관문으로 merge
+ *                                                     (rollout 이 vnext 면 `magazine-release.mjs --recover` 만 돈다 — 같은 release PR · 같은 journal)
  *
  * 종료 코드: 성공했거나 할 것이 없으면 0 · 막혔으면 1
  */
@@ -34,6 +35,8 @@ import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazin
 import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, PR_FIELDS_ARG, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 import { acquireLock } from './lib/magazine-auto-lock.mjs'
+import { judgeMergeFreeze } from './lib/magazine-merge-freeze.mjs'
+import { readRollout, rolloutGate } from './lib/magazine-rollout.mjs'
 import { collectProductionDeployment, resolveVercelContext, verifyVercelDirect } from './lib/magazine-deploy-evidence.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -304,6 +307,9 @@ export async function runAutoMerge({ apply = false, deps }) {
   if (!apply) { log('검증 통과 — 실제 merge 는 --apply'); return report }
 
   // ── ⑧ merge ─────────────────────────────────────────────
+  // 🔴 merge freeze (2026-11-24 창업자 승인) — 01:00 --apply · 02:00 --recover 모두 이 줄을 지난다. merge 호출 바로 앞에서 시각을 다시 읽는다
+  const freeze = judgeMergeFreeze(now())
+  if (freeze.frozen) return fail(freeze.code, freeze.message)
   const merged = deps.mergePr(pr0.number, sha)
   if (!merged.ok) return fail('MERGE_FAILED', merged.reason)
   report.merged = true
@@ -784,6 +790,21 @@ async function main() {
    *    01:00 의 `auto-merge.json` 도, 앞선 복구 결과도 덮지 않는다.
    */
   if (argv.includes('--recover')) {
+    /**
+     * 🔴 rollout 이 vnext 면 legacy 복구를 시작하지 않는다 (2026-11-24). 01:00 이 vNext release PR(`feat/magazine-release-*`)을 열고
+     *    CI 를 기다리다 넘기면, 아래 legacy 복구는 legacy 자동 PR 접두(AUTO_BRANCH_PREFIX)만 찾아 그 PR 을 다음 01:00 까지 다시 보지 않았다.
+     *    02:00 의 vNext 단계는 release writer 의 복구 모드 하나다 — 01:00 과 같은 journal · 같은 PR · 같은 merge gate(freeze 포함),
+     *    조립 · 새 PR · PR 닫기 0. 종료 코드는 그 결과 그대로다. 없음 · 손상 · legacy 는 아래 legacy 복구를 그대로 돈다.
+     */
+    const lane = rolloutGate(readRollout(), { vnextLane: 'release' })
+    if (lane.lane === 'release') {
+      line('rollout vnext — legacy 복구 대신 vNext release 복구(같은 journal · 같은 PR · 새 PR 0)')
+      const rel = spawnSync(process.execPath, [join(HERE, 'magazine-release.mjs'), '--recover'], { cwd: ROOT, stdio: 'inherit' })
+      const rc = rel.error ? 1 : (rel.status ?? 1)
+      line(`종료 (코드 ${rc})`)
+      process.exit(rc)
+    }
+    if (lane.warning) console.error(lane.warning)
     line('자동 병합 복구 (🔴 실제 merge · 01:00 과 같은 관문)')
     let initial = null
     try { initial = JSON.parse(readFileSync(join(runDir, 'auto-merge.json'), 'utf8')) } catch { initial = null }

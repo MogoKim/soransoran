@@ -32,6 +32,7 @@
  *
  * 종료 코드: 막힌 것이 있으면 1
  */
+import { judgeMergeFreeze } from './lib/magazine-merge-freeze.mjs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import {
@@ -278,6 +279,8 @@ export async function runGraphMerge({
     return report
   }
 
+  const freeze = judgeMergeFreeze(deps.now().getTime())
+  if (freeze.frozen) return fail(freeze.code ?? 'MERGE_FREEZE_WINDOW', freeze.message)
   const merged = deps.mergePr(created.number, sha)
   if (!merged.ok) return fail('MERGE_FAILED', merged.reason ?? 'merge 하지 못했다')
   report.merged = true

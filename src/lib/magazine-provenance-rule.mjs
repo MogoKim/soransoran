@@ -17,18 +17,21 @@
  *
  * 🔴 출처는 신원(slug → intent)만 준다. edge · 관계 유형 · 이유 · 표면 · 슬롯 · 우선순위 · 3+1 은 전부 graph 가 정한다.
  * 🔴 결속(binding)은 **정확한 컴파일 plan** 이다 — 64-hex 형식이 맞는 것만으로 출처를 믿지 않는다.
- *    S3 P1 에는 결속을 만드는 경로가 없다(저장소 · CI 에 Bundle 이 없고 runtime 은 hash 를 재계산할 수 없다).
- *    그래서 두 층의 운영 호출은 `NO_RELEASE_BINDING` 을 넘기고, 출처는 **켜질 수 없다**. S3-P2 가 같은 결속을 두 층에 함께 준다.
+ *    S3-P2 부터 두 층이 같은 결속을 쓴다 — admission 은 컴파일 결과에서 바로(`releaseBindingOf`), runtime 은 그 값을 그대로 적은
+ *    생성 파일(`src/content/magazine/release-binding.ts`)에서. 그 파일이 컴파일 결과와 바이트로 같은지는 graph 검사 · release 검사가 본다.
+ *    생성 파일의 판이 지금 graph 판과 다르거나 없으면 runtime 은 `NO_RELEASE_BINDING` 을 넘긴다 — 출처는 켜지지 않고 폴백이다.
  * 🔴 순수 — import 0 · fs · env · 벽시계 · 네트워크 0. 입력 순서와 무관하게 같은 답이다.
  */
 
-/** S3 P1 — 결속이 없다. 두 층의 운영 호출이 이 값을 넘긴다 */
+/** 결속 없음 — runtime 이 지금 graph 판의 결속을 갖지 못했을 때 넘기는 값(출처 비활성 · 폴백) */
 export const NO_RELEASE_BINDING = null
 
 /**
  * @typedef {{ intentId: string, graphVersion: string, bundleHash: string, planHash: string, policyBoard: { id: string, hash: string } }} ReleaseProvenance
  * @typedef {{ slug: string, release: ReleaseProvenance }} ProvenanceRow
- * @typedef {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string }, planHashOf: Readonly<Record<string, string>> }} ReleaseBinding
+ * @typedef {{ graphVersion: string, bundleHash: string, policyBoard: { id: string, hash: string }, planHashOf: Readonly<Record<string, string>>,
+ *             relationsOf?: Readonly<Record<string, readonly string[]>> }} ReleaseBinding
+ *   relationsOf — 그 intent 의 컴파일 plan 이 승인받은 관계 edge id(S3-P2). overlay 규칙은 읽지 않는다 — resolver 가 출처 글의 나가는 관계에만 쓴다
  * @typedef {{ intent: string, slug: string }} CanonicalIdentity
  */
 

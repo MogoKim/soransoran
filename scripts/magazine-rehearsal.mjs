@@ -30,12 +30,26 @@ import { buildSandbox, readGuard, stageEnv } from './lib/magazine-rehearsal-sand
 import { pathToFileURL } from 'node:url'
 import net from 'node:net'
 import { KST, SPEED, addDays, collect, curate, curateTargetFirst, leftovers, pickTargets as pickRuntimeTargets, placeHero, runStage, s1CurationOk, s1IsolationOk, templatePair, writeSlugFiles } from './lib/magazine-rehearsal-scenarios.mjs'
+import { MAGAZINE_MERGE_FREEZE_WINDOWS } from './lib/magazine-merge-freeze.mjs'
 import { STALE_RUN_MARKER, directFacts, isolateDirectRunDay, plantStaleDirectRun, prepareDirect } from './lib/magazine-rehearsal-direct.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SOURCE = resolve(HERE, '..')
 export const DEFAULT_RUNTIME = '/Users/yanadoo/Documents/soransoran-magazine-runtime'
 const kstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+/**
+ * 기본 회차 날짜 — 내일부터, 그 날의 자동 레인 시간대(00:00 ~ 04:00 KST · 01:00 등록 · 02:00 복구 · 03:30 재실행)가
+ * 매거진 merge freeze 창과 겹치지 않는 첫 날 (2026-11-24).
+ * 🔴 freeze 는 운영 정책이라 제품 판정에 우회 손잡이를 두지 않는다 — 대신 정상 경로 시나리오가 창 안 날짜를 고르지 않는다.
+ *    창 안에서 merge 가 막히는지는 release 검사(FZ)가 실제 runAutoMerge 로 따로 본다.
+ */
+const defaultRehearsalDate = () => {
+  for (let d = addDays(kstToday(), 1), i = 0; i < 60; d = addDays(d, 1), i++) {
+    const from = Date.parse(`${d}T00:00:00+09:00`), to = Date.parse(`${d}T04:00:00+09:00`)
+    if (!MAGAZINE_MERGE_FREEZE_WINDOWS.some((w) => Date.parse(w.startAt) < to && Date.parse(w.endAt) > from)) return d
+  }
+  throw new Error('freeze 창과 겹치지 않는 rehearsal 날짜를 60일 안에서 찾지 못했다')
+}
 
 // ─────────────────────────────────────────────────────────
 // 운영 불변 증거 — runtime 자료의 해시 (읽기만)
@@ -1405,7 +1419,7 @@ async function main() {
   const unknown = ids.filter((i) => !SCENARIOS[i])
   if (unknown.length) { console.error(`모르는 시나리오: ${unknown.join(',')}`); process.exit(2) }
   const runtime = arg('--runtime') ?? DEFAULT_RUNTIME
-  const date = arg('--date') ?? addDays(kstToday(), 1)
+  const date = arg('--date') ?? defaultRehearsalDate()
   const repeat = argv.includes('--no-repeat') ? false : ids.includes('S1')
   const base = join(tmpdir(), `magazine-rehearsal-${Date.now().toString(36)}`)
   mkdirSync(base, { recursive: true })

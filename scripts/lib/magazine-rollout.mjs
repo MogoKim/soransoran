@@ -81,14 +81,20 @@ export function readRollout({ path = rolloutPath(), fs = nodeFs } = {}) {
 }
 
 /**
- * 진입점 판정 — ①A 판(vNext 세로 경로 없음).
+ * 진입점 판정.
  *   legacy · MISSING · INVALID → 기존 legacy 그대로 (INVALID 만 경고 1줄)
- *   VALID vnext               → VNEXT_NOT_IMPLEMENTED · 아무것도 시작하지 않는다
+ *   VALID vnext               → legacy 단계를 하나도 시작하지 않는다. vnextLane 을 준 진입점만 그 vNext 단계를 돈다:
+ *                               'release'(auto-register 자리 — S3-P2 release writer) · 없음(producer — 생성은 S4 전이라 VNEXT_NOT_IMPLEMENTED)
  * @param {{code:string, effective:{path:string}, why:string|null, path:string}} read
- * @param {{warn?:boolean}} [opts] warn=false 면 INVALID 경고를 내지 않는다 (같은 회차의 재실행 자식)
+ * @param {{warn?:boolean, vnextLane?:'release'|null}} [opts] warn=false 면 INVALID 경고를 내지 않는다 (같은 회차의 재실행 자식)
  */
-export function rolloutGate(read, { warn = true } = {}) {
+export function rolloutGate(read, { warn = true, vnextLane = null } = {}) {
   if (read.code === 'VALID' && read.effective.path === 'vnext') {
+    if (vnextLane === 'release') {
+      // 🔴 proceed 는 false 다 — 진입점은 release 단계를 돈 뒤 같은 guard 줄에서 끝난다(legacy 로 이어 가지 않는다)
+      return { proceed: false, lane: 'release', exitCode: 1,
+        line: JSON.stringify({ code: 'VNEXT_RELEASE_LANE', rollout: read.effective, message: 'rollout 이 vnext 다 — legacy 등록 · 병합 대신 vNext release writer 만 돈다' }) }
+    }
     return {
       proceed: false,
       exitCode: 1,

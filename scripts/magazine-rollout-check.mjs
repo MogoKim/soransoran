@@ -312,6 +312,11 @@ __rec('ready')
 const runId = process.argv[process.argv.indexOf('--run-id') + 1]
 if (process.argv.includes('--write')) { const d = join(process.cwd(), 'drafts/magazine/_runs', kst()); mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'auto-register.json'), JSON.stringify({ runId, done: [], blocked: [], exitCode: 0 })) }
 process.exit(0)`,
+  // vNext release writer 대역 — rollout vnext 의 auto-register 자리(S3-P2). 종료 코드는 HOME/release-exit 로 정한다
+  'scripts/magazine-release.mjs': `${REC}import { existsSync, readFileSync } from 'node:fs'
+__rec('release')
+const f = join(process.env.HOME, 'release-exit')
+process.exit(existsSync(f) ? Number(readFileSync(f, 'utf8')) : 0)`,
   'scripts/magazine-auto-merge.mjs': `${REC}import { mkdirSync, writeFileSync } from 'node:fs'
 __rec('merge')
 const runId = process.argv[process.argv.indexOf('--run-id') + 1]
@@ -449,12 +454,24 @@ for (const [id, label, rollout, args, invalid] of [
     return { ok: r.ok && need.every((k) => cand.stages.includes(k)), detail: `${r.detail} · stages ${cand.stages.join(',')}` }
   })
 }
-for (const [id, args] of [['A4', ['--write', '--pr', '--merge']], ['A5', []]]) {
-  await test(id, `auto-register vnext ${args.join(' ') || 'dry-run'} → VNEXT_NOT_IMPLEMENTED · non-zero · 인계 대기·ready·merge·_runs·Slack·rollout 변경 0`, () => {
+// 🔴 S3-P2 — vnext 의 auto-register 자리는 release writer 하나만 돈다. legacy 단계(인계 대기 · ready · merge) · _runs · Slack 0 ·
+//    `--write` 회차만 `--apply` · 진입점 종료 코드 = release 종료 코드
+const releaseOnly = (s, apply) => {
+  const calls = JSON.parse(s.calls.replace(/<[A-Z]+>/g, '0'))
+  return s.callCount === 1 && s.stages[0] === 'release' && calls[0].argv.includes('--apply') === apply && JSON.stringify(s.runsAfter) === JSON.stringify(s.runsBefore)
+    && !s.lockLeft && s.rolloutSame && !/Slack/.test(s.out) && !/인계/.test(s.out) && !/회차 식별자/.test(s.out) && /VNEXT_RELEASE_LANE/.test(s.out)
+}
+for (const [id, args, apply] of [['A4', ['--write', '--pr', '--merge'], true], ['A5', [], false]]) {
+  await test(id, `auto-register vnext ${args.join(' ') || 'dry-run'} → release 단계만(${apply ? '--apply' : 'dry-run'}) · legacy 인계 대기·ready·merge·_runs·Slack·rollout 변경 0`, () => {
     const s = scenario({ entry: REGISTER_REL, entryText: candidate(REGISTER_REL), rollout: VALID_VNEXT_AUTO, args, before: freshHandoff })
-    return { ok: s.status !== 0 && /VNEXT_NOT_IMPLEMENTED/.test(s.out) && noWork(s) && !/회차 식별자/.test(s.out), detail: `status ${s.status} · calls ${s.stages.join(',')} · ${s.out.slice(-300)}` }
+    return { ok: s.status === 0 && releaseOnly(s, apply), detail: `status ${s.status} · calls ${s.calls.slice(0, 200)} · ${s.out.slice(-300)}` }
   })
 }
+await test('A6', 'auto-register vnext — release 가 막히면(exit 1) 진입점도 non-zero · legacy 로 넘어가지 않는다', () => {
+  const s = scenario({ entry: REGISTER_REL, entryText: candidate(REGISTER_REL), rollout: VALID_VNEXT_AUTO, args: ['--write', '--pr', '--merge'],
+    before: (ctx) => { freshHandoff(ctx); writeFileSync(join(ctx.HOME, 'release-exit'), '1') } })
+  return { ok: s.status === 1 && releaseOnly(s, true), detail: `status ${s.status} · calls ${s.stages.join(',')} · ${s.out.slice(-300)}` }
+})
 
 await test('H0', '기준판 = guard 를 넣기 전 원본 (HEAD 에 guard 가 없을 때만 대조 · 있으면 모양만 확인)', () => {
   const bad = []
