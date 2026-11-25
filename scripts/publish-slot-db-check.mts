@@ -57,15 +57,19 @@ const envOf = (stage: string): Record<string, string> => markedStageEnv({ SORAN_
 
 let seq = 0
 /**
- * 🔴 원문 증거 기준 시각 — 그 절의 KST 자정. 게시는 6시간 앞(전날 18시)이라 그날 · 다음 날 아침까지 72h 안이다.
- *    `evidence: 'old'` 는 기준보다 80시간 앞 게시(슬롯에서 72h 초과) · `'none'` 은 증거 칸 없음.
+ * 🔴 원문 증거 기준 시각 — 그 절의 첫 발행 무렵(보통 그날 08:00). 수집은 1시간 앞 · 게시는 6시간 앞이라
+ *    기준 −1h ~ +5h 의 발행에서 eligible 이다(수집 뒤 6시간).
+ *    🔴 (2026-11-25 밤 4) 옛 기준(그 절의 KST 자정 · 수집 = 게시 + 1.1h)은 수집 뒤 6시간 만료로 아침 발행에서 전부 만료다 —
+ *       발행을 재는 절은 그 발행 시각 가까이에서 수집한 원천을 쓴다. 다음 날 발행하는 후보는 그날 기준으로 따로 만든다.
+ *    `evidence: 'old'` 는 기준보다 80시간 앞 게시(슬롯에서 72h 초과 · 수집은 같은 1시간 앞) ·
+ *    `'captureOld'` 는 게시 8시간 · 수집 7시간 앞(원문은 72h 안 · 수집 뒤 6시간 초과) · `'none'` 은 증거 칸 없음.
  */
-let evidenceAt = K('2026-10-01T00:00:00')
+let evidenceAt = K('2026-10-01T08:00:00')
 async function wipe(): Promise<void> {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "AutoReadyAudit","PersonaActivityLog","OriginalPostApprovalQueue","MicroSeedRawContent","Post","Persona","User" CASCADE')
 }
 /** 발행 가능한 사람 결정 후보 한 건 — Persona 도 각자 */
-async function cand(evidence: 'fresh' | 'old' | 'none' = 'fresh'): Promise<string> {
+async function cand(evidence: 'fresh' | 'old' | 'captureOld' | 'none' = 'fresh'): Promise<string> {
   seq += 1
   const u = await prisma.user.create({ data: { nickname: `슬롯${seq}` }, select: { id: true } })
   const p = await prisma.persona.create({ data: { code: `S${String(seq).padStart(3, '0')}`, userId: u.id, status: 'active' }, select: { id: true } })
@@ -78,7 +82,11 @@ async function cand(evidence: 'fresh' | 'old' | 'none' = 'fresh'): Promise<strin
       sourceRawContentId: raw.id, status: 'APPROVED', draftTitle: `평범한 하루 ${seq}`, draftBody: `아침에 산책을 다녀왔어요 ${seq}. 다들 어떻게 지내세요?`,
       gateVerdict: 'PASS', gateResults: {
         holds: [], blocks: [],
-        ...(evidence === 'none' ? {} : fakeEvidenceGate(evidenceAt, { id: `slot-${seq}`, ...(evidence === 'old' ? { ageH: 80 } : {}) })),
+        ...(evidence === 'none' ? {} : fakeEvidenceGate(evidenceAt, {
+          id: `slot-${seq}`,
+          ...(evidence === 'old' ? { ageH: 80 } : evidence === 'captureOld' ? { ageH: 8 } : {}),
+          capturedAt: new Date(evidenceAt.getTime() - (evidence === 'captureOld' ? 7 : 1) * 3_600_000),
+        })),
       } as never, promptVersion: 'p', model: 'm', decidedBy: 'founder',
       dedupKey: `slot-${seq}`, matchedPersonaId: p.id, matchedAt: new Date(),
     },
@@ -109,7 +117,7 @@ async function main(): Promise<void> {
   console.log('① 🔴 🔴 08:10 d10 · 도래 1 · 두 러너가 밖에서 발행 0 을 봤다 — 순차')
   {
     await wipe()
-    evidenceAt = K('2026-10-01T00:00:00')
+    evidenceAt = K('2026-10-01T08:00:00')
     const [a, b] = [await cand(), await cand()]
     const ra = await scheduled(a, K('2026-10-01T08:10:00'), 'd10', envOf('d10'), 0)
     const rb = await scheduled(b, K('2026-10-01T08:12:00'), 'd10', envOf('d10'), 0)
@@ -125,7 +133,7 @@ async function main(): Promise<void> {
   console.log('\n② 🔴 🔴 같은 입력 동시 실행 → Post 정확히 1 · 패자는 재시도 뒤 정상 무발행')
   {
     await wipe()
-    evidenceAt = K('2026-10-01T00:00:00')
+    evidenceAt = K('2026-10-01T08:00:00')
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-01T08:10:00')
     const [r1, r2] = await Promise.all([scheduled(a, at, 'd10', envOf('d10')), scheduled(b, at, 'd10', envOf('d10'))])
@@ -134,7 +142,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **패자는 충돌 뒤 한 번 재시도 → 슬롯을 다시 세어 SLOT_CONSUMED (오류 아님)**',
       loser.kind === 'blocked' && loser.code === 'SLOT_CONSUMED', JSON.stringify(loser))
     await wipe()
-    evidenceAt = K('2026-10-01T00:00:00')
+    evidenceAt = K('2026-10-01T08:00:00')
     const c = await cand()
     const [s1, s2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10')), scheduled(c, at, 'd10', envOf('d10'))])
     check('🔴 같은 후보 동시 — Post 정확히 1', (await posts()) === 1 && [s1, s2].filter((x) => x.kind === 'published').length === 1, `${s1.kind}/${s2.kind}`)
@@ -148,7 +156,7 @@ async function main(): Promise<void> {
       await wipe()
       day += 1
       const date = `2026-10-${String(day).padStart(2, '0')}`
-      evidenceAt = K(`${date}T00:00:00`)
+      evidenceAt = K(`${date}T08:00:00`)
       const [hh, mm] = first[stage]!.split(':').map(Number) as [number, number]
       const before = `${String(mm === 0 ? hh - 1 : hh).padStart(2, '0')}:${String(mm === 0 ? 59 : mm - 1).padStart(2, '0')}`
       const id = await cand()
@@ -162,7 +170,8 @@ async function main(): Promise<void> {
   console.log('\n④ 🔴 운영 창 끝(23:50) 경계 · 그 뒤 · 자정 뒤 전날 backlog 0 — 창은 하루 전체(2026-11-23)')
   {
     await wipe()
-    evidenceAt = K('2026-10-08T00:00:00')
+    // 🔴 23:50 · 23:51 발행 — 기준 23:00(수집 22:00)
+    evidenceAt = K('2026-10-08T23:00:00')
     const ids = [await cand(), await cand(), await cand()]
     // d10 · 하루 목표 10 · 23:50 에는 도래 10 — 오늘 9건을 이미 냈다고 둔다(ActivityLog 를 그 날짜로)
     const u = await prisma.user.create({ data: { nickname: '기록' }, select: { id: true } })
@@ -176,7 +185,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **23:51 — 운영 창 밖 → SLOT_CLOSED · 쓰기 0**', r2351.kind === 'blocked' && r2351.code === 'SLOT_CLOSED' && (await q(ids[1]!)).status === 'APPROVED', JSON.stringify(r2351))
     // 자정 뒤 — 전날 밀린 슬롯을 메우지 않는다(새 날짜의 첫 슬롯 전)
     await wipe()
-    evidenceAt = K('2026-10-09T00:00:00')
+    evidenceAt = K('2026-10-09T08:00:00')
     const late = await cand()
     const r0054 = await scheduled(late, K('2026-10-09T00:54:00'), 'd10', envOf('d10'), 0)
     check('🔴 🔴 **자정 뒤 00:54 — 전날 backlog 0 · SLOT_CLOSED**', r0054.kind === 'blocked' && r0054.code === 'SLOT_CLOSED', JSON.stringify(r0054))
@@ -187,7 +196,7 @@ async function main(): Promise<void> {
   console.log('\n⑤ 🔴 🔴 호출자가 d10 · 거대 상한을 주장해도 env 천장이 d1 이면 d1')
   {
     await wipe()
-    evidenceAt = K('2026-10-10T00:00:00')
+    evidenceAt = K('2026-10-10T08:00:00')
     const [a, b] = [await cand(), await cand()]
     const env = {} // 천장 d1
     const r0810 = await scheduled(a, K('2026-10-10T08:10:00'), 'd10', env)
@@ -206,7 +215,8 @@ async function main(): Promise<void> {
   console.log('\n⑥ 🔴 manual-live 경로 동작 불변 — 슬롯 게이트 없음 · 주입 상한')
   {
     await wipe()
-    evidenceAt = K('2026-10-11T00:00:00')
+    // 🔴 03:00 발행 — 기준 03:00(수집 02:00)
+    evidenceAt = K('2026-10-11T03:00:00')
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-11T03:00:00') // 🔴 d1 도래 슬롯 0(첫 슬롯 09:30) — 예약이면 막혔을 시각
     const m1 = await publishOriginalPostTx(prisma, { queueId: a, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 1 } }, { now: () => at })
@@ -218,7 +228,7 @@ async function main(): Promise<void> {
   console.log('\n⑧ 🔴 🔴 같은 후보 경합 — 09:30 d10 · 도래 2 · 두 러너가 같은 후보를 골랐다')
   {
     await wipe()
-    evidenceAt = K('2026-10-13T00:00:00')
+    evidenceAt = K('2026-10-13T08:00:00')
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-13T09:30:00')
     // 🔴 두 러너가 같은 순간 같은 후보를 골랐다 — 둘 다 이 행을 미발행으로 본 스냅샷을 들고 있다
@@ -234,7 +244,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **남은 두 번째 슬롯 — 다음 heartbeat 가 다른 후보로 소비**', r3.kind === 'published' && (await posts()) === 2, JSON.stringify(r3))
 
     await wipe()
-    evidenceAt = K('2026-10-13T00:00:00')
+    evidenceAt = K('2026-10-13T08:00:00')
     const c = await cand()
     const [pc1, pc2] = [await planOf(c), await planOf(c)]
     const [c1, c2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10'), 0, pc1), scheduled(c, at, 'd10', envOf('d10'), 0, pc2)])
@@ -245,8 +255,11 @@ async function main(): Promise<void> {
 
     // 🔴 선택기 결함은 여전히 실패다 — 전날 발행된 행을 오늘 골랐다
     await wipe()
-    evidenceAt = K('2026-10-13T00:00:00')
-    const [old, other] = [await cand(), await cand()]
+    evidenceAt = K('2026-10-13T08:00:00')
+    const old = await cand()
+    // 🔴 다음 날 08:10 에 나갈 후보는 그날 기준으로 만든다(수집 뒤 6시간)
+    evidenceAt = K('2026-10-14T08:00:00')
+    const other = await cand()
     const y = await scheduled(old, K('2026-10-13T09:30:00'), 'd10', envOf('d10'), 0) // 전날 발행
     const t1 = await scheduled(other, K('2026-10-14T08:10:00'), 'd10', envOf('d10'), 0) // 오늘 다른 글 1
     const bug = await scheduled(old, K('2026-10-14T09:30:00'), 'd10', envOf('d10'), 0) // 밖 0 · 안 1 · 대상은 어제 발행
@@ -256,7 +269,7 @@ async function main(): Promise<void> {
     check('🔴 계획 뒤 발행 수가 늘지 않았으면 경합이 아니다 → ALREADY_PUBLISHED', bug2.kind === 'blocked' && bug2.code === 'ALREADY_PUBLISHED', JSON.stringify(bug2))
     // 🔴 오늘 발행된 행 — 러너가 밖에서 이미 그 발행을 보고도(밖 1 · 안 1) 그 행을 골랐다 → 선택기 결함
     await wipe()
-    evidenceAt = K('2026-10-15T00:00:00')
+    evidenceAt = K('2026-10-15T08:00:00')
     const td = await cand()
     const t0 = await scheduled(td, K('2026-10-15T08:10:00'), 'd10', envOf('d10'), 0)
     const seen = await scheduled(td, K('2026-10-15T09:30:00'), 'd10', envOf('d10'), 1)
@@ -267,7 +280,7 @@ async function main(): Promise<void> {
   console.log('\n⑨ 🔴 🔴 [마스터 반례] A 는 오늘 이미 발행 · 계획은 A 포함 1 · stale plan 이 A 를 다시 고름 · 계획 뒤 무관한 B 발행')
   {
     await wipe()
-    evidenceAt = K('2026-10-16T00:00:00')
+    evidenceAt = K('2026-10-16T08:00:00')
     const [A, B] = [await cand(), await cand()]
     const pa = await scheduled(A, K('2026-10-16T08:10:00'), 'd10', envOf('d10'), 0) // A 오늘 발행
     const planA = await planOf(A) // 🔴 계획 — A 는 이미 발행된 채로 스냅샷에 들어 있다
@@ -277,7 +290,7 @@ async function main(): Promise<void> {
       pa.kind === 'published' && pb.kind === 'published' && stale.kind === 'blocked' && stale.code === 'ALREADY_PUBLISHED', JSON.stringify(stale))
     // 🔴 스냅샷이 다른 행을 가리키면 경합이 아니다
     await wipe()
-    evidenceAt = K('2026-10-17T00:00:00')
+    evidenceAt = K('2026-10-17T08:00:00')
     const [X, Y] = [await cand(), await cand()]
     const planY = await planOf(Y)
     await scheduled(X, K('2026-10-17T08:10:00'), 'd10', envOf('d10'), 0)
@@ -285,7 +298,7 @@ async function main(): Promise<void> {
     check('🔴 계획 스냅샷의 queueId 가 이 행이 아니면 경합이 아니다 → ALREADY_PUBLISHED', wrong.kind === 'blocked' && wrong.code === 'ALREADY_PUBLISHED', JSON.stringify(wrong))
     // 🔴 스냅샷이 "미발행" 이라 주장하지만 그 시각이 발행 뒤다 — 대상 자신의 전환이 계획 뒤가 아니다
     await wipe()
-    evidenceAt = K('2026-10-18T00:00:00')
+    evidenceAt = K('2026-10-18T08:00:00')
     const [F, G] = [await cand(), await cand()]
     await scheduled(F, K('2026-10-18T08:10:00'), 'd10', envOf('d10'), 0)
     await scheduled(G, K('2026-10-18T09:30:00'), 'd10', envOf('d10'), 1)
@@ -298,7 +311,7 @@ async function main(): Promise<void> {
   console.log('\n⑦ 🔴 정상 발행 — Post · Queue · ActivityLog 원자적 정합')
   {
     await wipe()
-    evidenceAt = K('2026-10-12T00:00:00')
+    evidenceAt = K('2026-10-12T08:00:00')
     const a = await cand()
     const at = K('2026-10-12T08:10:00')
     const r = await scheduled(a, at, 'd10', envOf('d10'))
@@ -313,7 +326,7 @@ async function main(): Promise<void> {
   console.log('\n⑩ 🔴 🔴 트랜잭션 시계 재판정 — 원천 가치가 사라진 행은 EXPIRED · 슬롯은 다음 후보가 채운다 (source-slot-v1)')
   {
     await wipe()
-    evidenceAt = K('2026-10-20T00:00:00')
+    evidenceAt = K('2026-10-20T08:00:00')
     const [old, none, fresh] = [await cand('old'), await cand('none'), await cand('fresh')]
     const at = K('2026-10-20T08:10:00')
     const rOld = await scheduled(old, at, 'd10', envOf('d10'))
@@ -348,9 +361,21 @@ async function main(): Promise<void> {
       again.kind === 'blocked' && after.status === 'EXPIRED' && after.updatedAt.getTime() === before.updatedAt.getTime() && (await posts()) === 1,
       JSON.stringify(again))
 
+    // 🔴 (2026-11-25 밤 4) 수집 뒤 6시간 — 원문은 72h 안이어도 수집 7시간 지난 사람 승인 행은 트랜잭션이 EXPIRED 로 옮긴다
+    //    (창업자 결정 11-24 ② · 이 파일의 후보는 전부 `founder` 결정 행이다)
+    await wipe()
+    evidenceAt = K('2026-10-20T08:00:00')
+    const capOld = await cand('captureOld')
+    const rCap = await scheduled(capOld, K('2026-10-20T08:10:00'), 'd10', envOf('d10'))
+    const qCap = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: capOld }, select: { status: true, createdPostId: true, declineReason: true, decidedBy: true } })
+    check('🔴 🔴 **사람 승인 행 · 게시 8h · 수집 7h 전 → expired(CAPTURED_TOO_OLD_AT_SLOT) · Queue EXPIRED · Post 0**',
+      rCap.kind === 'expired' && rCap.reasons.includes('CAPTURED_TOO_OLD_AT_SLOT') && qCap.status === 'EXPIRED' && qCap.createdPostId === null
+      && qCap.decidedBy === 'founder' && (qCap.declineReason ?? '').startsWith('RELEASE_EXPIRED:CAPTURED_TOO_OLD_AT_SLOT') && (await posts()) === 0,
+      `${JSON.stringify(rCap)} ${qCap.status} ${qCap.declineReason}`)
+
     // 경합 — 같은 만료 대상을 두 러너가 동시에 — 전환은 한 번 · Post 0
     await wipe()
-    evidenceAt = K('2026-10-21T00:00:00')
+    evidenceAt = K('2026-10-21T08:00:00')
     const race = await cand('old')
     const [p1, p2] = [await planOf(race), await planOf(race)]
     const rat = K('2026-10-21T08:10:00')
@@ -362,7 +387,7 @@ async function main(): Promise<void> {
 
     // 🔴 만료가 오늘 발행 수에 들어가지 않는다 — 같은 날 슬롯 계산이 그대로다
     await wipe()
-    evidenceAt = K('2026-10-22T00:00:00')
+    evidenceAt = K('2026-10-22T08:00:00')
     const [o2, f2, f3] = [await cand('old'), await cand('fresh'), await cand('fresh')]
     const e1 = await scheduled(o2, K('2026-10-22T08:10:00'), 'd10', envOf('d10'))
     const e2 = await scheduled(f2, K('2026-10-22T08:10:30'), 'd10', envOf('d10'))
@@ -405,7 +430,7 @@ async function main(): Promise<void> {
       ['도래 2(09:30) → TARGET_RACE_LOST', K('2026-10-23T09:30:00'), 'TARGET_RACE_LOST'],
     ] as const) {
       await wipe()
-      evidenceAt = K('2026-10-23T00:00:00')
+      evidenceAt = K('2026-10-23T08:00:00')
       const a = await cand()
       const [planW, planL] = [await planOf(a), await planOf(a)]
       let winner: PublishResult | null = null
@@ -429,7 +454,7 @@ async function main(): Promise<void> {
 
     // (b) 두 번 연속 충돌 · 아무도 발행하지 않았다 → 소비 증거 없음 → error · write 0
     await wipe()
-    evidenceAt = K('2026-10-23T00:00:00')
+    evidenceAt = K('2026-10-23T08:00:00')
     const b = await cand()
     const rb = await withFault(b, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(b), async (f) => { if (f.point === 'begin') throw p2034() })
     check('🔴 🔴 **[반례] 두 번 연속 충돌 · 끝까지 소비 증거 미출현 → 일정을 다 쓰고 error · Post 0 · ActivityLog 0 · Queue 그대로**',
@@ -439,7 +464,7 @@ async function main(): Promise<void> {
 
     // (c) 도래 2 · 승자는 **다른** 후보를 냈다 — 슬롯도 이 후보도 소비되지 않았다 → error
     await wipe()
-    evidenceAt = K('2026-10-23T00:00:00')
+    evidenceAt = K('2026-10-23T08:00:00')
     const [c1, c2] = [await cand(), await cand()]
     const at2 = K('2026-10-23T09:30:00')
     const rc = await withFault(c1, at2, 'd10', 0, await planOf(c1), async (f) => {
@@ -452,8 +477,11 @@ async function main(): Promise<void> {
 
     // (d) 선택기 결함 — 전날 발행된 행을 오늘 골랐다 + 두 번 연속 충돌 → ALREADY_PUBLISHED 를 정상으로 바꾸지 않는다
     await wipe()
-    evidenceAt = K('2026-10-23T00:00:00')
-    const [old, other] = [await cand(), await cand()]
+    evidenceAt = K('2026-10-23T08:00:00')
+    const old = await cand()
+    // 🔴 다음 날 08:10 에 나갈 후보는 그날 기준으로 만든다(수집 뒤 6시간)
+    evidenceAt = K('2026-10-24T08:00:00')
+    const other = await cand()
     const y = await scheduled(old, K('2026-10-23T09:30:00'), 'd10', envOf('d10'), 0)
     const t1 = await scheduled(other, K('2026-10-24T08:10:00'), 'd10', envOf('d10'), 0)
     const rd = await withFault(old, K('2026-10-24T09:30:00'), 'd10', 0, await planOf(old), async (f) => { if (f.point === 'begin') throw p2034() })
@@ -467,7 +495,7 @@ async function main(): Promise<void> {
       ['도래 2(09:30) → TARGET_RACE_LOST', K('2026-10-23T09:30:00'), 'TARGET_RACE_LOST'],
     ] as const) {
       await wipe()
-      evidenceAt = K('2026-10-23T00:00:00')
+      evidenceAt = K('2026-10-23T08:00:00')
       const g = await cand()
       const [planW, planL] = [await planOf(g), await planOf(g)]
       let winner: PublishResult | null = null
@@ -513,7 +541,7 @@ async function main(): Promise<void> {
 
     // (e) 직렬화가 아닌 DB 오류 — 재시도도 다시 읽기도 없이 error
     await wipe()
-    evidenceAt = K('2026-10-23T00:00:00')
+    evidenceAt = K('2026-10-23T08:00:00')
     const e = await cand()
     const ecalls: string[] = []
     const re = await withFault(e, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(e), async (f) => {
@@ -526,7 +554,7 @@ async function main(): Promise<void> {
     // (f) 부분 write — 세 write 뒤 커밋 전 실패: 충돌 2회든 일반 오류든 Post · Queue · ActivityLog 전부 되돌아간다
     for (const kind of ['P2034', 'other'] as const) {
       await wipe()
-      evidenceAt = K('2026-10-23T00:00:00')
+      evidenceAt = K('2026-10-23T08:00:00')
       const f0 = await cand()
       const rf = await withFault(f0, K('2026-10-23T08:10:00'), 'd10', 0, await planOf(f0), async (f) => {
         if (f.point === 'written') throw kind === 'P2034' ? p2034() : new Error('boom')

@@ -28,7 +28,7 @@ import { resolveScale } from '../src/lib/scale-runtime'
 import { authoritativeGate } from '../src/lib/auto-ready-repo'
 import {
   loadPublishableStock, resolvePublishScale, planPublishBatch, classifyStock, loadStockClassification, upcomingSlots,
-  STOCK_BUCKETS,
+  STOCK_BUCKETS, queueReadFromOf, HISTORY_LOOKBACK_DAYS,
 } from './lib/publishable-stock.mjs'
 import { snapshot, buildSpeakerLoad } from './supply-process.mjs'
 import { planSpeakerAvailability, remainingCapacity } from '../src/lib/content-core/speaker-availability'
@@ -168,12 +168,13 @@ async function main(): Promise<void> {
    * 🔴 사람이 고른 글 — 원문 게시 시각은 `postedAt`(증거 기록). 40일 전 원문은 예정 슬롯에서 72h 를 넘겼다
    *    (2026-09-30 · 옛 TTL 28일 대신 정본 `SOURCE_AGE_LIMIT_HOURS`).
    */
-  const humanRow = async (postedAt: Date, title: string, body: string) => {
+  const humanRow = async (postedAt: Date, title: string, body: string, capturedAt?: Date) => {
     const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, postedAt)
     return (await prisma.originalPostApprovalQueue.create({
       data: {
         sourceRawContentId: r.id, status: 'APPROVED', draftTitle: title, draftBody: body,
-        gateVerdict: 'PASS', gateResults: fakeEvidenceGate(NOW, { postedAt, id: `pp-h-${seq}` }) as never,
+        gateVerdict: 'PASS',
+        gateResults: fakeEvidenceGate(NOW, { postedAt, id: `pp-h-${seq}`, ...(capturedAt === undefined ? {} : { capturedAt }) }) as never,
         promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
         decidedBy: 'founder', dedupKey: `pp-${seq}`,
       },
@@ -288,7 +289,8 @@ async function main(): Promise<void> {
 
   console.log('\n③ 🔴 새 사람 글 — 발행 러너가 d1 로 못 내면 공급도 발행 가능으로 세지 않는다')
   {
-    const freshId = await humanRow(new Date(NOW.getTime() - 1 * DAY), '가을 옷장 정리', '가을 옷을 꺼내다가 작년에 산 니트를 찾았어요. 다들 옷장 정리 하셨어요?')
+    // 🔴 (2026-11-25 밤 4) 새 글 = 게시 3시간 전 · 수집 1.9시간 전 — 옛 값(게시 하루 전)은 수집 뒤 6시간이 지나 만료다
+    const freshId = await humanRow(new Date(NOW.getTime() - 3 * 3_600_000), '가을 옷장 정리', '가을 옷을 꺼내다가 작년에 산 니트를 찾았어요. 다들 옷장 정리 하셨어요?')
     const pub = await publisherView(prisma, envOf('d1', 'd5'))
     const sup = (await snapshot(prisma, { env: envOf('d1', 'd5'), now: NOW })).classification!
     check('🔴 d1(최소 5일) — 이틀 전에 쓴 Persona 뿐이라 배정 유예(시간성) → 러너 0 · 공급 0',
@@ -387,6 +389,55 @@ async function main(): Promise<void> {
     check('🔴 화자 WIP — P01 은 그 글을 든다 · P03 은 예외 글로 점유되지 않는다',
       (load.byCode.P01?.readyCount ?? -1) === load0.P01 + 1 && (load.byCode.P03?.readyCount ?? -1) === load0.P03,
       `P01 ${load.byCode.P01?.readyCount} · P03 ${load.byCode.P03?.readyCount}`)
+  }
+
+  console.log('\n⑥ 🔴 🔴 큐 읽기 범위 · 발행 이력 범위 — 실제 DB 의 where 로 잰다 (2026-11-25 밤 4 · 가짜 prisma 는 where 를 무시한다)')
+  {
+    const H = 3_600_000
+    const from = queueReadFromOf(NOW)
+    check('🔴 큐 읽기 범위 = 지금 − 6h − 시계 오차 10분', NOW.getTime() - from.getTime() === 6 * H + 10 * 60_000,
+      String(NOW.getTime() - from.getTime()))
+    const queued = async (tag: string, createdAt: Date): Promise<string> => {
+      const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, createdAt)
+      return (await prisma.originalPostApprovalQueue.create({
+        data: {
+          sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `범위 ${tag}`, draftBody: `범위 본문 ${tag} ${seq}`,
+          gateVerdict: 'PASS', gateResults: fakeEvidenceGate(NOW, { id: `pp-range-${tag}` }) as never,
+          promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: 'founder', dedupKey: `pp-range-${tag}`,
+          createdAt,
+        },
+        select: { id: true },
+      })).id
+    }
+    const outsideId = await queued('out', new Date(from.getTime() - 60_000))
+    const insideId = await queued('in', new Date(from.getTime() + 60_000))
+    const loaded = await loadPublishableStock(prisma, NOW)
+    const read = new Set(loaded.allRows.map((r) => r.id))
+    check('🔴 🔴 **경계 1분 밖에 생긴 APPROVED 행은 읽지 않는다(죽은 행 재조회 0)**', !read.has(outsideId))
+    check('🔴 🔴 **경계 1분 안에 생긴 행은 읽는다 — 시계 오차만큼 넉넉히 읽는다**', read.has(insideId))
+    check('대기열 수 = 읽은 행 수 — 읽기 범위가 셈에도 같다', loaded.queueTotal === loaded.allRows.length)
+    // 🔴 범위 안에 생겼어도 수집이 6시간을 넘겼으면 만료다 — 사람 승인 행에도 같다(창업자 결정 11-24 ②)
+    const lateHumanId = await humanRow(new Date(NOW.getTime() - 7 * H), '늦게 고른 사람 글', '어제 저녁 이야기를 오늘 골랐어요. 다들 어떠세요?',
+      new Date(NOW.getTime() - 6.5 * H))
+    const pub = await publisherView(prisma, envOf('d1', 'd5'))
+    const held = pub.plan.prepared.held.find((h) => h.queueId === lateHumanId)
+    check('🔴 🔴 **사람 승인 행 · 수집 6.5시간 전 → 읽히지만 held(CAPTURED_TOO_OLD_AT_SLOT) · releaseIneligible · WIP 아님**',
+      held?.hold === 'CAPTURED_TOO_OLD_AT_SLOT' && pub.classification.ids.releaseIneligible.includes(lateHumanId)
+      && !pub.classification.personaWipIds.includes(lateHumanId), JSON.stringify(held))
+    // 발행 이력 — 8일 경계
+    const p05 = personas.find((p) => p.code === 'P05')!
+    const logAt = async (tag: string, createdAt: Date): Promise<void> => {
+      await prisma.personaActivityLog.create({
+        data: { personaId: p05.id, kind: 'post', targetId: `pp-hist-${tag}`, gateStatus: 'PASS', decidedBy: 'operator', createdAt },
+      })
+    }
+    const edge = NOW.getTime() - HISTORY_LOOKBACK_DAYS * DAY
+    await logAt('out', new Date(edge - 60_000))
+    await logAt('in', new Date(edge + 60_000))
+    const hist = (await loadPublishableStock(prisma, NOW)).history.find((h) => h.code === 'P05')?.matchedAts.map((d) => d.getTime()) ?? []
+    check('🔴 발행 이력 범위 = 8일', HISTORY_LOOKBACK_DAYS === 8)
+    check('🔴 🔴 **8일 1분 밖 발행 기록은 읽지 않고 · 1분 안 기록과 이틀 전 기록은 읽는다**',
+      !hist.includes(edge - 60_000) && hist.includes(edge + 60_000) && hist.includes(TWO_DAYS_AGO.getTime()), JSON.stringify(hist))
   }
 
   await prisma.$disconnect()

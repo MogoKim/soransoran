@@ -353,7 +353,8 @@ console.log('\n⑤-b 🔴 (Lane B) 82cook **실제 artifact 형식** replay — 
 
   // 🔴 공급 러너의 묶음 증거 조립(`worksetRows`) → 생성 전 정본 판정
   const at = new Date('2026-09-30T14:00:00.000Z')
-  const slot = new Date('2026-10-01T00:30:00.000Z')
+  // 🔴 (2026-11-25 밤 4) 예정 자리는 수집(L2 22:05 KST) 뒤 6시간 안이다 — 옛 자리(다음 날 09:30)는 수집 뒤 11시간이라 만료다
+  const slot = new Date('2026-09-30T15:00:00.000Z')
   const rows = worksetRows([join(d82, '82cook-adapt-R82.detail.jsonl'), join(d82, '82cook-adapt-R82.raw-detail.jsonl')], readListObservations(d82, at), at)
   const w68 = rows?.find((r) => r.sourceArticleId === '9244768')
   const v68 = w68 === undefined ? null : preGenerationRelease(w68, slot, at)

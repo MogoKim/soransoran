@@ -22,7 +22,7 @@ import {
   buildSourceEvidence, compareReleaseRank, judgeSlotRelease, matchOpportunitiesToSlots, percentileOf,
   observationBucketOf, readSourceEvidence, releaseStampCheck, releaseStampStatusOf, releaseStampOf, publishEventAtOf, sourceStatsSnapshot, velocityOf,
   describeRelease, parseEvidence, relativePosition,
-  EXPIRING_REASONS, RELEASE_CONTRACT, SOURCE_AGE_LIMIT_HOURS, SOURCE_EVIDENCE_KEY, SOURCE_EVIDENCE_VERSION, SOURCE_STATS_METHOD,
+  CAPTURE_AGE_LIMIT_HOURS, EXPIRING_REASONS, RELEASE_CONTRACT, SOURCE_AGE_LIMIT_HOURS, SOURCE_EVIDENCE_KEY, SOURCE_EVIDENCE_VERSION, SOURCE_STATS_METHOD,
   type ListObservation, type SlotOpportunity, type SourceEvidenceRecord,
 } from '../src/lib/source-slot-release'
 import { prepareCandidates, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -190,6 +190,40 @@ console.log('\n⑤ 선택 때 유효했지만 슬롯 전 가치 소멸')
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('\n⑤-b 🔴 수집 뒤 6시간 만료 (2026-11-19 창업자 확정 · 2026-11-25 밤 4)')
+{
+  // 🔴 정책 값 6 을 숫자로 고정한다 — 상수를 바꾸면 이 줄과 아래 경계가 함께 빨개진다
+  check('🔴 정책 값 — 수집 뒤 6시간', CAPTURE_AGE_LIMIT_HOURS === 6, String(CAPTURE_AGE_LIMIT_HOURS))
+  const cap = hoursAgo(0.9)
+  const e = ev({ posted: hoursAgo(2), captured: cap })
+  const at = (h: number): Date => new Date(cap.getTime() + h * H)
+  const edge = judge(e, at(6))
+  check('🔴 🔴 **경계 — 수집 뒤 5.99h 슬롯은 eligible · 정확히 6h 슬롯은 CAPTURED_TOO_OLD_AT_SLOT · ineligible · 만료 사유**',
+    judge(e, at(5.99)).verdict === 'eligible'
+    && edge.verdict === 'ineligible' && edge.reasons[0] === 'CAPTURED_TOO_OLD_AT_SLOT' && edge.expires,
+    `${judge(e, at(5.99)).verdict} · ${edge.verdict} ${edge.reasons.join()}`)
+  check('🔴 6시간 사유는 닫힌 만료 사유 목록에 있다', EXPIRING_REASONS.includes('CAPTURED_TOO_OLD_AT_SLOT'))
+  // 게시는 72시간 안이어도 수집이 늙으면 만료다 — 72시간과 다른 축(게시 8h · 수집 7h 전)
+  const lateCapture = judge(ev({ posted: hoursAgo(8), listed: hoursAgo(7.5), captured: hoursAgo(7), drafted: hoursAgo(6.5) }))
+  check('🔴 🔴 **원문은 72h 안(8h)이어도 수집 뒤 7h 지난 지금 슬롯 → CAPTURED_TOO_OLD_AT_SLOT**',
+    lateCapture.verdict === 'ineligible' && lateCapture.reasons[0] === 'CAPTURED_TOO_OLD_AT_SLOT', JSON.stringify(lateCapture.reasons))
+  // 원문 72시간 · 수집 6시간을 둘 다 넘기면 기존 사유가 먼저다 — 두 축이 서로를 가리지 않는다
+  const both = judge(ev({ posted: hoursAgo(80), listed: hoursAgo(79), captured: hoursAgo(78) }))
+  check('🔴 원문 72h · 수집 6h 를 둘 다 넘기면 원문 나이 사유가 먼저다(기존 사유 그대로)',
+    both.verdict === 'ineligible' && both.reasons[0] === 'SOURCE_TOO_OLD_AT_SLOT')
+  // 🔴 사람 승인 행에도 같은 판정이다(창업자 결정 11-24 ②) — 계획 함수는 lane 을 보지 않는다
+  const human: QueueCandidate = {
+    queueId: 'h6', title: 't', body: 'b', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
+    gateResults: { [SOURCE_EVIDENCE_KEY]: e }, voice: null, profile: 'human',
+  }
+  const h1 = prepareCandidates({ candidates: [human], personas: [], at: at(5) })
+  const h2 = prepareCandidates({ candidates: [human], personas: [], at: at(6.5) })
+  check('🔴 🔴 **사람 승인 후보도 수집 뒤 6시간 슬롯에서 held(CAPTURED_TOO_OLD_AT_SLOT · expires)**',
+    h1.held.length === 0 && h2.held[0]?.hold === 'CAPTURED_TOO_OLD_AT_SLOT' && h2.held[0]?.expires === true,
+    JSON.stringify(h2.held))
+}
+
+// ─────────────────────────────────────────────────────────
 console.log('\n⑥ 이미 비용 쓴 draft vs 더 좋은 현재 후보')
 {
   const drafted = judge(ev({ id: 'd', views: 150, comments: 3, drafted: hoursAgo(20), posted: hoursAgo(40) }))
@@ -222,8 +256,12 @@ console.log('\n⑦ 원문 시각 없음 · 손상 · 미래 · capture 이후')
 // ─────────────────────────────────────────────────────────
 console.log('\n⑧ deferred 가 증명일 안에 안 풀림 · ⑨ Persona voice/cadence 슬롯 부족')
 {
-  const slots = slotTimesOn('2026-10-01', profileOf('d3'))
+  /**
+   * 🔴 (2026-11-25 밤 4) 원천 하나는 수집 뒤 6시간 안의 자리에만 걸린다 — d3 증명일 세 자리(09:30 · 13:30 · 19:00)를
+   *    한 증거로 덮을 수 없다. 이 반례는 배정 유예 · 같은 날 Persona 짝짓기를 재므로 **수집 6시간 안의 세 자리**로 잰다.
+   */
   const e = ev({ posted: hoursAgo(1) })
+  const slots = [0, 2, 4].map((h) => new Date(NOW.getTime() + h * H))
   const readyOpp = (key: string, personaCode: string | null, freeFrom: Date | null): SlotOpportunity => ({
     key, personaCode,
     validAt: (slotAt) => judgeSlotRelease({

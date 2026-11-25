@@ -51,7 +51,12 @@ const H = 3_600_000
 /** 🔴 고정 시각 — 2026-10-01(목) KST. d3 슬롯 09:30 · 13:30 · 19:00 */
 const LIST_NC = K('2026-10-01T07:00:00') // 네이버 카페 목록 회차
 const LIST_82 = K('2026-10-01T07:05:00') // 82cook 목록 회차
-const SUPPLY_AT = K('2026-10-01T08:00:00') // 공급 러너(JIT 생성) 회차
+/**
+ * 공급 러너(JIT 생성) 회차 — 08:20 바퀴의 공급 회차(08:35 · 창 08:50~10:30).
+ * 🔴 (2026-11-25 밤 4) 지평 = 지금 창 끝 + 다음 창 첫 자리 — 이 회차의 d3 지평은 09:30 · 13:30 두 칸(부족 2 · 회복 상한 6)이다.
+ *    옛 08:00 회차는 지평이 09:30 한 칸(부족 1 · 상한 3)이라 수집 최신순 위 셋만 사서 네이버 카페 원천이 묶음에 들지 못했다.
+ */
+const SUPPLY_AT = K('2026-10-01T08:35:00')
 const PUBLISH_AT = K('2026-10-01T09:31:00') // 첫 슬롯(09:30) 발행 러너 회차
 const iso = (d: Date): string => d.toISOString()
 const utcRun = (d: Date): string => iso(d).replace(/[-:]/g, '').slice(0, 15).replace('T', '-')
@@ -339,6 +344,14 @@ async function world(label: string, supplyEnv: Record<string, string> = {}): Pro
   resetWake()
   const sup = runSupply(SUPPLY_AT, supplyEnv)
   dump(`supply-${label.slice(0, 1)}`, sup.out)
+  /**
+   * 🔴 (2026-11-25 밤 4) 지평 = 지금 창 끝 + 다음 창 첫 자리 — 한 회차는 지평 두 칸만큼(적재 상한 2)만 적재하고 나머지 후보는
+   *    상한 컷으로 남긴다. 1분 뒤 같은 바퀴의 다음 회차가 그 파일을 이월로 적재한다(수집 뒤 6시간 · 회차 id 6시간 안) —
+   *    시나리오들이 견줄 후보(3위 이상)가 생긴다. 검사가 읽는 공급 출력은 첫 회차 것이다.
+   */
+  const sup2 = runSupply(new Date(SUPPLY_AT.getTime() + 60_000), supplyEnv)
+  dump(`supply2-${label.slice(0, 1)}`, sup2.out)
+  if (sup2.code !== 0) console.log(`  ❌ 둘째 공급 회차가 실패했다(exit ${sup2.code}) — ${sup2.out.split('\n').slice(-5).join(' | ')}`)
   return { sup }
 }
 
@@ -438,7 +451,9 @@ async function main(): Promise<void> {
     for (let i = 0; i < order.length; i += 1) {
       const row = order[i]!
       const posted = new Date(PUBLISH_AT.getTime() - 72 * H + 20 - i)
-      const after1 = iso(new Date(posted.getTime() + 1))
+      // 🔴 (2026-11-25 밤 4) 오래된 원문을 발행 1시간 전에 수집했다 — 수집 뒤 6시간이 아니라 원문 72h 가 막는 것을 잰다.
+      //    수집 시각도 1ms씩 더 이르게 둬서 수집 최신순(정본 순서)이 그대로다
+      const after1 = iso(new Date(PUBLISH_AT.getTime() - H - i))
       await patchGate(row.id, (g) => {
         const e = g[SOURCE_EVIDENCE_KEY] as Record<string, unknown>
         return { ...g, [SOURCE_EVIDENCE_KEY]: { ...e, postedAt: iso(posted), listedAt: after1, capturedAt: after1,

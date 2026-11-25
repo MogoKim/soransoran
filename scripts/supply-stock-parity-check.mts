@@ -69,7 +69,7 @@ const gateOfMark = (m: ContractMark): Record<string, unknown> => {
 function fixture(o: {
   rejected?: { id: string; code: RejectCode }[]
   targets?: string[]
-  held?: { id: string; hold: 'SOURCE_TOO_OLD_AT_SLOT' | 'POSTED_MISSING' | 'EVIDENCE_MISSING' }[]
+  held?: { id: string; hold: 'SOURCE_TOO_OLD_AT_SLOT' | 'CAPTURED_TOO_OLD_AT_SLOT' | 'POSTED_MISSING' | 'EVIDENCE_MISSING' }[]
   ready?: string[]
   deferred?: string[]
   exceptions?: string[]
@@ -162,6 +162,10 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
     c.counts.qualityQuarantine === 4 && review.slice(4).every((r) => !wip(c, r.id)))
   check('🔴 슬롯에서 원문 72h 초과는 releaseIneligible — 발행 재고가 아니다', same(c.ids.releaseIneligible, ['ttl']) && !c.ids.publishableNow.includes('ttl'))
   check('🔴 🔴 **원천 가치 없는 행은 WIP 를 점유하지 않는다**', !wip(c, 'ttl'))
+  // 🔴 (2026-11-25 밤 4) 수집 뒤 6시간도 원천 가치 없음 칸이다 — "모름" 칸으로 보내면 다음 칸 해제 · 진단이 사유를 잃는다
+  const cap6 = classifyStock(fixture({ targets: ['cap6'], held: [{ id: 'cap6', hold: 'CAPTURED_TOO_OLD_AT_SLOT' }] }))
+  check('🔴 🔴 **수집 뒤 6시간(CAPTURED_TOO_OLD_AT_SLOT) → releaseIneligible · WIP 아님**',
+    same(cap6.ids.releaseIneligible, ['cap6']) && cap6.counts.releaseUnknown === 0 && !wip(cap6, 'cap6'))
   check('legacy → profileMismatch · gate → gateBlocked', same(c.ids.profileMismatch, ['legacy']) && same(c.ids.gateBlocked, ['gate']))
   check('🔴 legacy · gate 탈락은 WIP 가 아니다', !wip(c, 'legacy') && !wip(c, 'gate'))
   const total = STOCK_BUCKETS.reduce((n, b) => n + c.counts[b], 0)
@@ -237,18 +241,20 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
   check('제목 복제는 gateBlocked', same(auto.ids.gateBlocked, ['t']))
 }
 
-console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 실제 catch-up 기회 + 다음 첫 기회')
+console.log('\n② 🔴 가까운 수요 지평 — 지금 창 끝까지의 실제 catch-up 기회 + 다음 창 첫 자리 1칸 (2026-11-25 밤 4)')
 {
   const at = (hm: string): Date => new Date(`2026-10-12T${hm}:00+09:00`)
   const tomorrowFirst = (p: (typeof PROFILES)[keyof typeof PROFILES]): string =>
     new Date(`2026-10-13T${String(p.slots[0]!.hour).padStart(2, '0')}:${String(p.slots[0]!.minute).padStart(2, '0')}:00+09:00`).toISOString()
-  // 반례④ d5 공개 · d10 준비 — 07:00 오늘 d5 5칸 + 다음 첫 기회 1 = 6 (옛: 오늘 5 + 내일 d10 10 = 15)
+  const hms = (xs: readonly Date[]): string => xs.map((d) => new Date(d.getTime() + 9 * 3_600_000).toISOString().slice(5, 16)).join(',')
+  // 반례④ d5 공개 · d10 준비 — 07:00(06:30 바퀴 · 창 끝 08:50) 지금 창의 d5 08:10 + 다음 창 첫 자리 10:50 = 2
+  //   (옛 하루 끝 지평: 오늘 5 + 내일 첫 1 = 6 · 그 전: 오늘 5 + 내일 d10 10 = 15) — 내일 d10 을 끌어오지 않는다
   const morning = upcomingSlots({ now: at('07:00'), publishedToday: 0, release: PROFILES.d5 })
-  check('🔴 🔴 반례④ d5 공개 · d10 준비 07:00 — 지평 6(오늘 d5 5 + 다음 첫 기회 1) · 내일 d10 10칸을 끌어오지 않는다',
-    morning.length === 6 && morning.filter((d) => d.getTime() >= at('23:59').getTime()).length === 1
-    && morning[5]!.toISOString() === tomorrowFirst(PROFILES.d5), `${morning.length}`)
+  check('🔴 🔴 반례④ d5 공개 · d10 준비 07:00 — 지평 2(지금 창 08:10 + 다음 창 첫 자리 10:50) · 내일 칸을 끌어오지 않는다',
+    hms(morning) === hms([at('08:10'), at('10:50')]), hms(morning))
   const afternoon = upcomingSlots({ now: at('14:00'), publishedToday: 3, release: PROFILES.d5 })
-  check('반례④ 14:00 · 3편 낸 뒤 — 지평 3(남은 d5 2 + 다음 첫 기회 1) · 옛 12', afternoon.length === 3, `${afternoon.length}`)
+  check('반례④ 14:00 · 3편 낸 뒤(13:20 바퀴 · 창 끝 15:50) — 지금 창에 남은 자리 0 + 다음 창 첫 자리 16:10 = 1 · 옛 3',
+    hms(afternoon) === hms([at('16:10')]), hms(afternoon))
   // 목표를 다 채웠으면 다음 첫 기회 하나만
   const night = upcomingSlots({ now: at('21:15'), publishedToday: 5, release: PROFILES.d5 })
   check('🔴 🔴 반례⑤ 오늘 d5 슬롯 끝(21:15 · 5편) — 지평 1(다음 첫 기회만) · 옛 10',
@@ -270,10 +276,10 @@ console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 실제 catch-u
   const afterClose = upcomingSlots({ now: at('23:55'), publishedToday: 3, release: PROFILES.d5 })
   check('🔴 운영 창 뒤(23:55) 부족분은 되살리지 않는다 — 다음 첫 기회만',
     afterClose.length === 1 && afterClose[0]!.toISOString() === tomorrowFirst(PROFILES.d5), `${afterClose.length}`)
-  // 반례⑥ 열린 d10 증명일 — 그날 남은 d10 슬롯이 든다
+  // 반례⑥ 열린 d10 증명일 — 지금 창(11:20 바퀴 · 끝 12:50)의 d10 자리 + 다음 창 첫 자리. 내일 d20 을 끌어오지 않는다
   const proof = upcomingSlots({ now: at('12:00'), publishedToday: 3, release: PROFILES.d10 })
-  check('🔴 🔴 반례⑥ 열린 d10 증명일 12:00 · 3편 — 지평 8(남은 d10 7 + 다음 첫 기회 1) · 옛 7 + 내일 d20 20 = 27',
-    proof.length === 8 && proof.slice(0, 7).every((d) => d.getTime() >= at('12:00').getTime() && d.getTime() < at('23:59').getTime()), `${proof.length}`)
+  check('🔴 🔴 반례⑥ 열린 d10 증명일 12:00 · 3편 — 지평 2(지금 창 12:10 + 다음 창 첫 자리 13:30) · 옛 8 · 그 전 27',
+    hms(proof) === hms([at('12:10'), at('13:30')]), hms(proof))
   const lib = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
   const body = lib.slice(lib.indexOf('export function upcomingSlots'), lib.indexOf('export type PublishPlan'))
   check('🔴 공급 수요가 발행기와 같은 heartbeat · 운영 창 · 회차 상한을 쓴다',
@@ -287,8 +293,48 @@ console.log('\n② 🔴 가까운 수요 지평 — 오늘 남은 실제 catch-u
     return s15.capacityStage === 'd5' && s15.releaseStage === 'd1' && sameProfile(s15.releaseProfile, PROFILES.d1)
       && sameProfile(s15.capacityProfile, RUNTIME_PROFILES.d5)
   })())
-  check('모든 release 단계 — 지평 = 오늘 남은 슬롯 + 1 (07:00 · 0편)', RELEASE_STAGES.every((st) =>
-    upcomingSlots({ now: at('07:00'), publishedToday: 0, release: PROFILES[st] }).length === PROFILES[st].dailyTarget + 1))
+  check('모든 release 단계 — 07:00 · 0편 지평 = 지금 창(~08:50) 안 자리 + 다음 창 첫 자리 1 · 마지막 칸은 창 끝 뒤 첫 정규 자리',
+    RELEASE_STAGES.every((st) => {
+      const h = upcomingSlots({ now: at('07:00'), publishedToday: 0, release: PROFILES[st] })
+      const minutes = PROFILES[st].slots.map((s) => s.hour * 60 + s.minute).sort((a, b) => a - b)
+      const inWindow = minutes.filter((m) => m >= 7 * 60 && m < 8 * 60 + 50).length
+      const first = minutes.find((m) => m >= 8 * 60 + 50)!
+      return h.length === inWindow + 1 && h.slice(0, -1).every((d) => d.getTime() < at('08:50').getTime())
+        && hms(h.slice(-1)) === hms([at(`${String(Math.floor(first / 60)).padStart(2, '0')}:${String(first % 60).padStart(2, '0')}`)])
+    }))
+}
+
+console.log('\n②-b 🔴 🔴 판정서 §2.1 반례 표 — D50 자리표 (지금 창 끝 + 다음 창 첫 자리 1칸)')
+{
+  /** 🔴 D50 자리는 바퀴 표가 계산한다(`cycleSlots(50)`) — 손으로 옮기지 않는다. 오늘 = 11-26 · 내일 = 11-27 */
+  const d50 = RUNTIME_PROFILES.d50
+  const at = (day: '26' | '27', hm: string): Date => new Date(`2026-11-${day}T${hm}:00+09:00`)
+  const hms = (xs: readonly Date[]): string => xs.map((d) => new Date(d.getTime() + 9 * 3_600_000).toISOString().slice(5, 16)).join(',')
+  const before = (hm: string): number => d50.slots.filter((s) => s.hour * 60 + s.minute <= Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3))).length
+  const row = (hm: string, expect: Date[], label: string): void => {
+    // 🔴 그 시각까지 도래한 자리를 다 냈다(제때 나간 날) — 밀린 몫 0
+    const h = upcomingSlots({ now: at('26', hm), publishedToday: before(hm), release: d50 })
+    check(label, hms(h) === hms(expect), `${hm} → ${hms(h)}`)
+  }
+  check('D50 자리표 확인 — 50칸 · 첫 자리 00:10 · 22:20 바퀴 몫 23:10 · 00:10 · 01:00', d50.slots.length === 50
+    && ['00:10', '01:00', '23:10'].every((hm) => d50.slots.some((s) => s.hour === Number(hm.slice(0, 2)) && s.minute === Number(hm.slice(3)))))
+  row('00:20', [at('26', '01:00'), at('26', '01:50')],
+    '🔴 🔴 **00:20(바퀴 12 · 끝 01:30) — 오늘 01:00 + 다음 창 첫 자리 01:50 · 하루 끝까지가 아니다(검토 R1)**')
+  row('01:15', [at('26', '01:50'), at('26', '02:30'), at('26', '03:20'), at('26', '04:00'), at('26', '05:00')],
+    '🔴 🔴 **01:15(바퀴 0 · 끝 04:30) — 01:50 · 02:30 · 03:20 · 04:00 + 다음 창 첫 자리 05:00**')
+  row('22:35', [at('26', '23:10'), at('27', '00:10'), at('27', '01:00'), at('27', '01:50')],
+    '🔴 🔴 **22:35(바퀴 12 · 끝 01:30) — 오늘 23:10 · 내일 00:10 · 01:00 + 내일 01:50**')
+  row('23:55', [at('27', '00:10'), at('27', '01:00'), at('27', '01:50')],
+    '🔴 🔴 **23:55(운영 창 뒤) — 내일 00:10 · 01:00 + 내일 01:50**')
+  // 🔴 밀린 몫 — 06:55 · 0편: 07:00~08:40 열한 틱이 밀린 8칸 + 창 안 4칸 중 11칸을 받고, 창 끝 틱(08:50)은 다음 창 몫이다
+  const backlog = upcomingSlots({ now: at('26', '06:55'), publishedToday: 0, release: d50 })
+  const ticks = Array.from({ length: 11 }, (_, k) => new Date(at('26', '07:00').getTime() + k * 10 * 60_000))
+  check('🔴 🔴 **밀린 몫은 지금 창의 빈 틱이 받는다 — 창 끝 틱(08:50)은 열린 끝이라 세지 않는다 · 다음 창 첫 자리 09:00**',
+    hms(backlog) === hms([...ticks, at('26', '09:00')]), hms(backlog))
+  check('🔴 바퀴를 모르는 시각(자정 기준 분이 범위 밖)은 없다 — 하루 모든 10분 시각에서 지평이 비지 않는다(D50)',
+    Array.from({ length: 144 }, (_, k) => k * 10).every((m) => upcomingSlots({
+      now: new Date(at('26', '00:00').getTime() + m * 60_000), publishedToday: before(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`), release: d50,
+    }).length >= 1))
 }
 
 console.log('\n③ Persona 여력 대기 — 초안 실패가 아니다')
