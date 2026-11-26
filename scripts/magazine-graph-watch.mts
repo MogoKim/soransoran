@@ -18,6 +18,17 @@
  *   다른 글의 하단에 링크로 뜨는 것**이다. 목록에도 sitemap 에도 없는 글의
  *   주소가 그렇게 새어 나가면 검색엔진이 미완성 글을 먼저 본다.
  *
+ * ── 🔴 "공개 글" 의 기준은 **지금 서빙 중인 배포의 원문**이다 (2026-11-26 사고) ──
+ *   앞판은 감시가 도는 checkout 의 `articles.ts` 를 기준으로 삼았다. 그 checkout 이 배포보다
+ *   뒤처지자(#900 미반영) 정상 공개된 새 글을 향한 링크 10개를 전부 누출로 읽었다.
+ *   이제 도메인이 가리키는 Production 배포의 commit 을 읽고, **그 commit 의 `articles.ts`**
+ *   (git object · 없으면 gh 로 같은 SHA 읽기 — checkout·내려받기 0)를 데이터로만 판독해
+ *   제품과 같은 `isPublicMagazineArticle` 로 공개 목록을 만든다. 감시 대상도 그 목록 전부다.
+ *   · 기준을 못 세우면(배포 조회 실패 · 원문 없음 · 깨진 행 · 모르는 status · 공개 0편)
+ *     `CHECK_UNREACHABLE` 이다 — 차단도 쓰기도 0.
+ *   · 누출로 보이면 조치 전에 **같은 배포인지 · 그 사이 공개 시각이 지났는지** 다시 읽는다.
+ *     배포가 바뀌었거나 공개 시각이 지났으면 차단하지 않고 non-zero 로 다음 관측에 넘긴다.
+ *
  * ── 🔴 세 층의 차단. 사람 승인 단계가 없다 ──
  *
  *   층 0  요청 단위 폴백      배포도 커밋도 필요 없다. resolver 가 이미 한다 —
@@ -45,9 +56,11 @@
  *
  * 종료 코드: 관측된 문제가 없으면 0 · 있으면 1
  */
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readServingProduction, resolveVercelContext } from './lib/magazine-deploy-evidence.mjs'
+import { ARTICLES_PATH, parseArticleRecordText } from './lib/magazine-release.mjs'
 import {
   checkAuth,
   makeRealDeps,
@@ -59,8 +72,8 @@ import {
   type ProjectLink,
   type VercelDeps,
 } from './lib/mgraph-vercel.mjs'
-import { getAllMagazineArticles } from '../src/lib/magazine'
-import { MAGAZINE_ARTICLES } from '../src/content/magazine/articles'
+import { isPublicMagazineArticle, resolvePublishAt } from '../src/lib/magazine'
+import type { MagazineArticle } from '../src/content/magazine/types'
 
 export const SITE = 'https://soransoran.com'
 const ROOT = join(import.meta.dirname, '..')
@@ -76,9 +89,14 @@ export type StepResult = { ok: boolean; detail: string }
 /** 준비 단계의 결과 — 실패면 이유를 그대로 로그와 Slack 에 싣는다 */
 export type Resolved<T> = { ok: true; value: T } | { ok: false; why: string }
 
+/** 지금 서빙 중인 Production 배포와, 그 commit 의 `articles.ts` 원문 */
+export type DeployedSource = { deploymentId: string; sha: string; articlesText: string }
+
 export type GraphWatchDeps = {
   fetchPage: (url: string) => PageFetch
   now: () => Date
+  /** 🔴 **읽기만 한다.** 실패는 전부 `CHECK_UNREACHABLE` 로 끝난다 — 차단 근거가 되지 않는다 */
+  readDeployed: () => Resolved<DeployedSource>
   /**
    * 층 1 — 환경변수와 재배포. 🔴 **둘 다** 해야 반영된다.
    *
@@ -117,6 +135,44 @@ export type GraphWatchReport = {
   steps: { name: string; ok: boolean; detail: string }[]
   /** 🔴 차단이 필요했는데 끝까지 가지 못했다 — 알림으로 갈음하지 않는다 */
   automationFailed: boolean
+  /** 판정 기준이 된 배포. 기준을 세우지 못했으면 null */
+  catalog: { deploymentId: string; sha: string; registered: number; public: number } | null
+}
+
+const STATUSES: ReadonlySet<unknown> = new Set(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'BLOCKED'])
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/**
+ * 배포된 `articles.ts` 원문 → 그 시각의 공개 slug. 원문을 **실행하지 않는다**(데이터 판독).
+ *
+ * 🔴 공개 판정은 제품의 `isPublicMagazineArticle` 그대로다 — DRAFT·BLOCKED·공개 시각 전은 빠진다.
+ * 🔴 한 행이라도 판정할 수 없으면 전체가 실패다. 읽히는 행만으로 목록을 만들면
+ *    못 읽은 공개 글을 향한 링크가 누출로 둔갑한다.
+ */
+export function deployedCatalog(
+  articlesText: string,
+  nowMs: number,
+): Resolved<{ registered: number; publicSlugs: Set<string> }> {
+  let rec: ReturnType<typeof parseArticleRecordText>
+  // 판독기가 모르는 모양에서 던져도 감시는 "못 봤다" 로 끝낸다
+  try { rec = parseArticleRecordText(articlesText) } catch { return { ok: false, why: '배포된 등록부를 읽지 못했다 (판독 예외)' } }
+  if (!rec.ok) return { ok: false, why: `배포된 등록부를 읽지 못했다 (${rec.code})` }
+  const publicSlugs = new Set<string>()
+  const rows = Object.entries(rec.record as Record<string, unknown>)
+  for (const [slug, raw] of rows) {
+    const row = raw as Partial<MagazineArticle> | null
+    if (
+      row === null || typeof row !== 'object' || Array.isArray(row) || !SLUG.test(slug) ||
+      (row.slug !== undefined && row.slug !== slug) || typeof row.publishedAt !== 'string' ||
+      (row.publishAt !== undefined && typeof row.publishAt !== 'string') ||
+      (row.status !== undefined && !STATUSES.has(row.status))
+    ) return { ok: false, why: `배포된 등록부의 행을 판정할 수 없다 (${slug})` }
+    const article = { ...row, slug } as MagazineArticle
+    if (!Number.isFinite(resolvePublishAt(article))) return { ok: false, why: `배포된 등록부의 공개 시각을 읽지 못했다 (${slug})` }
+    if (isPublicMagazineArticle(article, nowMs)) publicSlugs.add(slug)
+  }
+  if (publicSlugs.size === 0) return { ok: false, why: `배포된 등록부에 공개 글이 0편이다 (등록 ${rows.length}편)` }
+  return { ok: true, value: { registered: rows.length, publicSlugs } }
 }
 
 /**
@@ -135,24 +191,44 @@ export function extractRelatedLinks(html: string): string[] {
   return [...section.matchAll(/href="\/magazine\/([a-z0-9-]+)"/g)].map((m) => m[1])
 }
 
+/** 기준(배포 등록부) 자체를 못 읽었을 때 finding 이 가리키는 자리 — 글 slug 가 아니다 */
+const CATALOG_SLUG = '(배포 등록부)'
+
 export async function runGraphWatch({
   deps,
-  articles = getAllMagazineArticles(),
   site = SITE,
   apply = false,
 }: {
   deps: GraphWatchDeps
-  articles?: { slug: string }[]
   site?: string
   apply?: boolean
 }): Promise<GraphWatchReport> {
-  const publicSlugs = new Set(articles.map((a) => a.slug))
+  /** 🔴 기준이 없으면 화면을 보지도, 차단하지도 않는다 — 못 본 것으로 끝낸다 */
+  const unseen = (why: string): GraphWatchReport => ({
+    ok: false,
+    checked: 0,
+    unreachable: 0,
+    findings: [{ code: 'CHECK_UNREACHABLE', message: `${why} — 못 본 것이지 샌 것이 아니다`, slug: CATALOG_SLUG }],
+    action: 'NONE',
+    steps: [],
+    automationFailed: false,
+    catalog: null,
+  })
+  const src = deps.readDeployed()
+  if (!src.ok) return unseen(src.why)
+  const deployed = src.value
+  // 🔴 공개 판정 시각은 한 번만 정한다 — 글마다 다시 읽으면 10:30 을 사이에 두고 답이 갈린다
+  const cat = deployedCatalog(deployed.articlesText, deps.now().getTime())
+  if (!cat.ok) return unseen(cat.why)
+  const { publicSlugs, registered } = cat.value
+
   const findings: GraphWatchFinding[] = []
   const steps: { name: string; ok: boolean; detail: string }[] = []
   let checked = 0
   let unreachable = 0
 
-  for (const article of articles) {
+  for (const slug of publicSlugs) {
+    const article = { slug }
     const res = deps.fetchPage(`${site}/magazine/${article.slug}`)
     if (!res.ok) {
       unreachable++
@@ -192,11 +268,47 @@ export async function runGraphWatch({
    *    자기 링크·중복은 보기 싫은 것이지 새는 것이 아니다 — 알리고 끝낸다.
    *    연결 실패는 관측이 아니다 — 차단하지 않는다.
    */
+  const hasLeak = () => findings.some((f) => f.code === 'UNPUBLISHED_LEAK')
+  /** 누출 판정을 "못 봤다" 로 물린다 — 차단은 걸지 않되 non-zero 로 다음 관측에 넘긴다 */
+  const defer = (why: string, when: (f: GraphWatchFinding) => boolean = () => true) => {
+    for (const f of findings) {
+      if (f.code === 'UNPUBLISHED_LEAK' && when(f)) Object.assign(f, { code: 'CHECK_UNREACHABLE', message: why })
+    }
+  }
+  const SWITCHED = '관측 중 Production 배포가 바뀌었거나 다시 읽지 못했다 — 차단하지 않는다 · 다음 관측에서 다시 본다'
+
+  /**
+   * 🔴 누출로 보일 때만, 조치 전에 기준을 **다시 읽는다.**
+   *    화면을 읽는 동안 배포가 바뀌면 옛 등록부로 새 화면을 재는 꼴이고,
+   *    그 사이 공개 시각이 지난 글은 이미 정상 공개다. 둘 다 누출이 아니다.
+   */
+  if (hasLeak()) {
+    const again = deps.readDeployed()
+    const live =
+      again.ok && again.value.deploymentId === deployed.deploymentId && again.value.sha === deployed.sha
+        ? deployedCatalog(again.value.articlesText, deps.now().getTime())
+        : null
+    if (!live?.ok) defer(SWITCHED)
+    else {
+      defer(
+        '관측 중 공개 시각이 지나 정상 공개된 글이다 — 차단하지 않는다 · 다음 관측에서 다시 본다',
+        (f) => live.value.publicSlugs.has(f.targetSlug ?? ''),
+      )
+    }
+  }
+
+  /**
+   * 🔴 쓰기 대상(preflight 가 고른 배포)이 관측한 배포와 다르면 **아무것도 쓰지 않는다** —
+   *    env·재배포·control.ts·PR 전부 0. 보지 않은 배포를 끄는 것은 차단이 아니다.
+   */
+  const pre = hasLeak() && apply ? deps.vercel.preflight() : null
+  if (pre?.ok && pre.value.deployment.id !== deployed.deploymentId) defer(SWITCHED)
+
   const leaked = findings.filter((f) => f.code === 'UNPUBLISHED_LEAK')
   const action: 'NONE' | 'TRIP_GLOBAL' = leaked.length > 0 ? 'TRIP_GLOBAL' : 'NONE'
   let automationFailed = false
 
-  if (action === 'TRIP_GLOBAL' && apply) {
+  if (action === 'TRIP_GLOBAL' && pre) {
     const reason = `미공개 누출 ${leaked.length}건 (${leaked[0].slug} → ${leaked[0].targetSlug})`
     const step = (name: string, r: StepResult) => {
       steps.push({ name, ...r })
@@ -211,7 +323,6 @@ export async function runGraphWatch({
      * 🔴 건너뛰고 "알림 발송" 으로 끝내지 않는다. 그러면 차단되지 않은 상태가
      *    초록불로 보고된다.
      */
-    const pre = deps.vercel.preflight()
     if (!pre.ok) {
       step('층1 준비 (로그인·프로젝트·Production 배포)', { ok: false, detail: pre.why })
       step('층1 환경변수 MGRAPH_GRAPH_KILL=1', { ok: false, detail: '🔴 준비가 서지 않아 실행하지 않았다' })
@@ -253,7 +364,15 @@ export async function runGraphWatch({
     action,
     steps,
     automationFailed,
+    catalog: { deploymentId: deployed.deploymentId, sha: deployed.sha, registered, public: publicSlugs.size },
   }
+}
+
+/** 🔴 실행하지 않은 차단을 "차단함" 으로 알리지 않는다 — 읽기 전용 회차는 그렇게 적는다 */
+export function alertTitle(report: Pick<GraphWatchReport, 'action' | 'automationFailed'>, apply: boolean): string {
+  if (report.action !== 'TRIP_GLOBAL') return '매거진 연관 글 감시 — 확인하지 못한 항목이 있다'
+  const did = !apply ? '읽기 전용 — 차단하지 않았다' : report.automationFailed ? '자동 차단 실패' : '자동 차단함'
+  return `🔴 매거진 연관 글 — 미공개 글이 링크에 떴다 (${did})`
 }
 
 /**
@@ -281,13 +400,19 @@ export function writeTrippedControl(
   return { changed: true, path: file }
 }
 
-const exec = (cmd: string, args: string[]): { code: number; out: string; err: string } => {
-  try {
-    return { code: 0, out: execFileSync(cmd, args, { encoding: 'utf8', timeout: 60_000 }), err: '' }
-  } catch (e) {
-    const x = e as { status?: number; stdout?: string; stderr?: string; message?: string }
-    return { code: x.status ?? 1, out: x.stdout ?? '', err: x.stderr ?? x.message ?? '' }
-  }
+/**
+ * 🔴 `spawnSync` 다 — `vercel inspect` 는 성공해도 배포 id 를 **stderr** 로 낸다.
+ *    성공 때 stdout 만 주는 실행기로는 그 id 를 영영 못 읽는다.
+ * 🔴 `maxBuffer` 를 넉넉히 둔다 — `articles.ts` 원문이 기본 상한(1MB)을 넘으면 읽기 실패로 끝난다.
+ */
+const exec = (
+  cmd: string,
+  args: string[],
+  { timeoutMs = 60_000, cwd }: { timeoutMs?: number; cwd?: string } = {},
+): { code: number; out: string; err: string } => {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, ...(cwd ? { cwd } : {}) })
+  if (r.error) return { code: 1, out: r.stdout ?? '', err: r.error.message }
+  return { code: r.status ?? 1, out: r.stdout ?? '', err: r.stderr ?? '' }
 }
 
 /**
@@ -318,6 +443,25 @@ export const realDeps: GraphWatchDeps = {
     return { ok: true, status, body }
   },
   now: () => new Date(),
+  /**
+   * 🔴 **읽기만 한다.** 도메인 배포의 commit → 그 commit 의 등록부 원문.
+   *    git object 가 여기 없으면(뒤처진 checkout) gh 로 **같은 SHA** 를 읽는다 —
+   *    checkout·내려받기·host 변경 0. 실패 사유에 CLI 원문을 싣지 않는다(종료 코드만).
+   */
+  readDeployed: () => {
+    const live = readServingProduction({ exec, context: resolveVercelContext() }) as
+      | { ok: true; deploymentId: string; sha: string }
+      | { ok: false; code: string; why: string }
+    if (!live.ok) return { ok: false, why: `서빙 중인 Production 배포를 확정하지 못했다 (${live.code}: ${live.why})` }
+    const local = exec('git', ['-C', ROOT, 'show', `${live.sha}:${ARTICLES_PATH}`])
+    const raw = local.code === 0
+      ? local
+      : exec('gh', ['api', `repos/{owner}/{repo}/contents/${ARTICLES_PATH}?ref=${live.sha}`, '-H', 'Accept: application/vnd.github.raw'], { cwd: ROOT })
+    if (raw.code !== 0 || raw.out.trim() === '') {
+      return { ok: false, why: `배포 commit ${live.sha.slice(0, 7)} 의 등록부 원문을 읽지 못했다 (git 종료 ${local.code} · 마지막 종료 ${raw.code})` }
+    }
+    return { ok: true, value: { deploymentId: live.deploymentId, sha: live.sha, articlesText: raw.out } }
+  },
   vercel: {
     /**
      * 🔴 **읽기만 한다.** 로그인·프로젝트·Production 배포를 확인할 뿐 아무것도 바꾸지 않는다.
@@ -372,6 +516,11 @@ async function main(): Promise<void> {
   console.log(`\nM-GRAPH 연관 글 감시 ${apply ? '(🔴 차단을 실행한다)' : '(읽기만)'}\n`)
   const report = await runGraphWatch({ deps: realDeps, apply })
 
+  console.log(
+    report.catalog
+      ? `  기준: 배포 ${report.catalog.deploymentId} · commit ${report.catalog.sha.slice(0, 7)} · 등록 ${report.catalog.registered}편 · 공개 ${report.catalog.public}편`
+      : '  🔴 기준(서빙 중인 배포의 등록부)을 세우지 못했다 — 화면을 판정하지 않았다',
+  )
   console.log(`  확인 ${report.checked}편 · 읽지 못함 ${report.unreachable}편 · 관측 ${report.findings.length}건`)
   for (const f of report.findings) {
     console.log(`  ${f.code === 'UNPUBLISHED_LEAK' ? '🔴' : '  '} ${f.code} ${f.slug}${f.targetSlug ? ` → ${f.targetSlug}` : ''} — ${f.message}`)
@@ -397,10 +546,7 @@ async function main(): Promise<void> {
       const r = await send(
         buildMessage({
           severity: report.action === 'TRIP_GLOBAL' ? 'ERROR' : 'WARN',
-          title:
-            report.action === 'TRIP_GLOBAL'
-              ? `🔴 매거진 연관 글 — 미공개 글이 링크에 떴다${report.automationFailed ? ' (자동 차단 실패)' : ' (자동 차단함)'}`
-              : '매거진 연관 글 감시 — 확인하지 못한 항목이 있다',
+          title: alertTitle(report, apply),
           reason: report.findings.map((f) => `${f.code}: ${f.slug}${f.targetSlug ? `→${f.targetSlug}` : ''}`).join(' / '),
           next: `${SITE}/magazine`,
           logPath: null,
@@ -416,8 +562,7 @@ async function main(): Promise<void> {
 
   const code = report.ok && !report.automationFailed ? 0 : 1
   console.log(`\n${code === 0 ? '✅' : '🔴'} 종료 (코드 ${code})`)
-  console.log('🔴 등록된 글 총수를 이 감시의 성과로 읽지 않는다 — 본 것은 링크뿐이다.')
-  console.log(`   (참고: articles.ts 등록 ${MAGAZINE_ARTICLES.length}편 · 지금 공개 ${getAllMagazineArticles().length}편)\n`)
+  console.log('🔴 등록된 글 총수를 이 감시의 성과로 읽지 않는다 — 본 것은 링크뿐이다.\n')
   process.exit(code)
 }
 

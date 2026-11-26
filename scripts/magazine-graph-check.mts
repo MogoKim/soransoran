@@ -73,13 +73,18 @@ import {
   toDepthBucket,
 } from '../src/lib/analytics/magazine-read-depth'
 import {
+  alertTitle,
+  deployedCatalog,
   extractRelatedLinks,
   parseCurlOutput,
   runGraphWatch,
   writeTrippedControl,
+  type DeployedSource,
   type GraphWatchDeps,
+  type Resolved,
   type StepResult,
 } from './magazine-graph-watch.mjs'
+import { readServingProduction, verifyVercelDirect } from './lib/magazine-deploy-evidence.mjs'
 import {
   PRODUCTION_HOST,
   checkAuth,
@@ -1115,7 +1120,8 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
     leaks.length === 0 && props.length > 0 && !/release/.test(props), leaks.join(', '))
   const watchSrc = readFileSync(join(ROOT, 'scripts/magazine-graph-watch.mts'), 'utf8')
   check('graph watch 는 출처를 판정하지 않는다 — rollback 을 막는 hard fail 0',
-    !/release|provenance/i.test(watchSrc))
+    // 등록부 데이터 판독기(parseArticleRecordText)를 들여오는 import 경로 하나만 뺀다 — 그 밖의 언급은 여전히 0 이어야 한다
+    !/release|provenance/i.test(watchSrc.replace("'./lib/magazine-release.mjs'", '')))
 }
 
 // ── ④-G 🔴 graph 참여 — EDITORIAL_NON_SEARCH 는 선언으로만 · 활성 계약은 미분류를 막는다 (2026-10-18) ──
@@ -1691,6 +1697,19 @@ const pageWith = (links: string[]) =>
   links.map((s) => `<li><a href="/magazine/${s}">제목</a></li>`).join('') +
   `</ul></section></main>`
 
+/**
+ * 🔴 가짜가 주입하는 것은 **배포 원문 텍스트**까지다. 그 텍스트를 판독해 공개 목록을 만드는 일
+ *    (데이터 판독 · 제품의 공개 판정)은 운영과 같은 코드가 한다 — 목록을 직접 건네지 않는다.
+ */
+const FAKE_NOW = '2026-09-23T12:00:00+09:00'
+const PUBLIC_ROW = { title: '시험 글', publishedAt: '2026-09-01' }
+const registryText = (rows: Record<string, unknown>) =>
+  `const MAGAZINE_ARTICLE_RECORD = ${JSON.stringify(rows, null, 2)}\n`
+const deployedText = (articlesText: string, deploymentId = 'dpl_test', sha = 'a'.repeat(40)): Resolved<DeployedSource> =>
+  ({ ok: true, value: { deploymentId, sha, articlesText } })
+const deployedRows = (rows: Record<string, unknown>, deploymentId?: string, sha?: string) =>
+  deployedText(registryText(rows), deploymentId, sha)
+
 /** 가짜 화면. `null` 은 연결 실패, 숫자는 그 상태 코드로 돌려준다 */
 const fakeDeps = (
   pages: Record<string, string | null | number>,
@@ -1700,19 +1719,36 @@ const fakeDeps = (
     setEnv?: StepResult
     redeploy?: StepResult
     lane?: StepResult
+    /** 배포된 등록부의 행. 기본은 공개 글 두 편(published[0] · published[1]) */
+    rows?: Record<string, unknown>
+    /** 읽을 때마다 차례로 돌려준다(마지막 값 반복) — 배포 교체·읽기 실패를 만든다 */
+    reads?: Resolved<DeployedSource>[]
+    /** 호출마다 차례로 돌려주는 시각(마지막 값 반복) */
+    nows?: string[]
+    /** preflight 가 고르는 배포 — 기본은 관측한 배포와 같다 */
+    preflightId?: string
   } = {},
-): GraphWatchDeps & { calls: string[] } => {
+): GraphWatchDeps & { calls: string[]; fetched: string[] } => {
   const calls: string[] = []
+  const fetched: string[] = []
+  let readN = 0
+  let nowN = 0
   return {
     calls,
+    fetched,
     fetchPage: (url) => {
       const slug = url.split('/magazine/')[1] ?? ''
+      fetched.push(slug)
       const v = slug in pages ? pages[slug] : ''
       if (v === null) return { ok: false, status: null, why: 'curl 실패' }
       if (typeof v === 'number') return { ok: false, status: v, why: `HTTP ${v}` }
       return { ok: true, status: 200, body: v }
     },
-    now: () => new Date('2026-09-23T12:00:00+09:00'),
+    now: () => new Date(opts.nows ? opts.nows[Math.min(nowN++, opts.nows.length - 1)] : FAKE_NOW),
+    readDeployed: () => {
+      if (opts.reads) return opts.reads[Math.min(readN++, opts.reads.length - 1)]
+      return deployedRows(opts.rows ?? { [published[0].slug]: PUBLIC_ROW, [published[1].slug]: PUBLIC_ROW })
+    },
     vercel: {
       preflight: () => {
         calls.push('preflight')
@@ -1722,7 +1758,7 @@ const fakeDeps = (
           value: {
             who: 'tester',
             project: { dir: '/p', projectId: 'prj_test', orgId: 'team_test', projectName: 'soransoran' },
-            deployment: { id: 'dpl_test', target: 'production', status: 'Ready', url: 'https://x' },
+            deployment: { id: opts.preflightId ?? 'dpl_test', target: 'production', status: 'Ready', url: 'https://x' },
           },
         }
       },
@@ -1766,9 +1802,7 @@ const fakeDeps = (
   )
 
   const clean = await runGraphWatch({
-    deps: fakeDeps({ [a]: pageWith([b]) }),
-    articles: [{ slug: a }, { slug: b }],
-  })
+    deps: fakeDeps({ [a]: pageWith([b]) }),  })
   check('정상 화면이면 조치가 없다', clean.ok && clean.action === 'NONE', `확인 ${clean.checked}편`)
 
   /**
@@ -1784,14 +1818,15 @@ const fakeDeps = (
    *       감시가 고장 났다는 뜻이 아니다. 감시 시험이 그 숫자에 기대면 안 된다.
    *
    *    🔴 **표본이 없다고 건너뛰지 않는다.** 고정 fixture 로 **언제나** 돌린다.
-   *       감시가 보는 "공개 목록" 은 `runGraphWatch({ articles })` 인자다 —
-   *       그 목록에 없는 slug 가 곧 미공개다. 실제 `articles.ts` 는 건드리지 않는다.
+   *       감시가 보는 "공개 목록" 은 `deps.readDeployed()` 가 준 배포 원문에서 나온다 —
+   *       그 원문에 공개 행으로 없는 slug 가 곧 미공개다. 실제 `articles.ts` 는 건드리지 않는다.
    *
    *    🔴 **slug 모양은 실제와 같아야 한다.** 매거진 slug 는 영문 kebab-case 라
    *       (types.ts) 한글 표본은 감시의 정규식에 아예 걸리지 않고, 그러면
    *       "샌 것을 못 잡는" 결함을 "표본이 이상해서" 로 덮게 된다.
    */
   const UNPUBLISHED_FIXTURE = 'mgraph-unpublished-fixture'
+  const leakPages = { [a]: pageWith([UNPUBLISHED_FIXTURE]) }
   check(
     '  fixture 가 kebab-case 다 — 감시 정규식이 잡는 모양',
     /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(UNPUBLISHED_FIXTURE),
@@ -1810,9 +1845,7 @@ const fakeDeps = (
   )
 
   const leak = await runGraphWatch({
-    deps: fakeDeps({ [a]: pageWith([UNPUBLISHED_FIXTURE]) }),
-    articles: [{ slug: a }, { slug: b }],
-  })
+    deps: fakeDeps({ [a]: pageWith([UNPUBLISHED_FIXTURE]) }),  })
   check('미공개 글이 링크에 뜨면 전체 차단을 요구한다', leak.action === 'TRIP_GLOBAL', leak.action)
   check(
     '  그 사유가 UNPUBLISHED_LEAK 다',
@@ -1825,8 +1858,10 @@ const fakeDeps = (
    *    이게 없으면 위 검사는 "무조건 TRIP_GLOBAL 이 나온다" 와 구별되지 않는다.
    */
   const notLeak = await runGraphWatch({
-    deps: fakeDeps({ [a]: pageWith([UNPUBLISHED_FIXTURE]) }),
-    articles: [{ slug: a }, { slug: b }, { slug: UNPUBLISHED_FIXTURE }],
+    deps: fakeDeps(
+      { [a]: pageWith([UNPUBLISHED_FIXTURE]) },
+      { rows: { [a]: PUBLIC_ROW, [b]: PUBLIC_ROW, [UNPUBLISHED_FIXTURE]: PUBLIC_ROW } },
+    ),
   })
   check(
     '🔴 같은 fixture 가 공개 목록에 있으면 누출이 아니다',
@@ -1835,9 +1870,7 @@ const fakeDeps = (
   )
 
   const selfLink = await runGraphWatch({
-    deps: fakeDeps({ [a]: pageWith([a, b, b]) }),
-    articles: [{ slug: a }, { slug: b }],
-  })
+    deps: fakeDeps({ [a]: pageWith([a, b, b]) }),  })
   check('자기 링크·중복은 알리되 전체 차단하지 않는다', selfLink.action === 'NONE' && !selfLink.ok)
   check(
     '  둘 다 관측된다',
@@ -1847,9 +1880,7 @@ const fakeDeps = (
 
   /** 🔴 연결 실패로 그래프를 끄면 그래프는 영원히 못 켠다. 못 본 것과 본 것은 다르다 */
   const down = await runGraphWatch({
-    deps: fakeDeps({ [a]: null, [b]: null }),
-    articles: [{ slug: a }, { slug: b }],
-  })
+    deps: fakeDeps({ [a]: null, [b]: null }),  })
   check('연결 실패로는 차단하지 않는다', down.action === 'NONE', `읽지 못함 ${down.unreachable}편`)
   check('  그래도 조용히 넘어가지 않는다 (ok=false)', down.ok === false)
 
@@ -1862,7 +1893,6 @@ const fakeDeps = (
   for (const code of [404, 500, 503]) {
     const r = await runGraphWatch({
       deps: fakeDeps({ [a]: code, [b]: code }),
-      articles: [{ slug: a }, { slug: b }],
     })
     check(`HTTP ${code} 는 성공이 아니다 — CHECK_UNREACHABLE 로 센다`,
       r.unreachable === 2 && r.checked === 0 && r.action === 'NONE')
@@ -1879,60 +1909,200 @@ const fakeDeps = (
   // ── 🔴 자동 차단 체인 — 사람 승인 없이 네 단계가 실제로 불린다 ──
   {
     // 🔴 자동 차단 체인도 같은 고정 fixture 로 태운다 — 운영 예약 글에 기대지 않는다
-    const leakPages = { [a]: pageWith([UNPUBLISHED_FIXTURE]) }
-    const arts = [{ slug: a }, { slug: b }]
 
     const dryRun = fakeDeps(leakPages)
-    const dry = await runGraphWatch({ deps: dryRun, articles: arts })
+    const dry = await runGraphWatch({ deps: dryRun })
     check('--apply 없이는 아무 단계도 부르지 않는다', dryRun.calls.length === 0 && dry.steps.length === 0)
+    check('  🔴 읽기 전용 회차는 "차단함" 이라고 알리지 않는다',
+      dry.action === 'TRIP_GLOBAL' && !alertTitle(dry, false).includes('차단함') && alertTitle(dry, false).includes('차단하지 않았다'),
+      alertTitle(dry, false))
 
     const full = fakeDeps(leakPages)
-    const applied = await runGraphWatch({ deps: full, articles: arts, apply: true })
+    const applied = await runGraphWatch({ deps: full, apply: true })
     check('--apply 면 네 단계가 순서대로 불린다',
       full.calls.join('→') === 'preflight→setKillEnv→redeploy→writeControl→commitAndMerge',
       full.calls.join(' → '))
     check('  환경변수만 바꾸고 끝내지 않는다 (재배포까지 부른다)', full.calls.includes('redeploy'))
     check('  전부 성공하면 자동화 실패가 아니다', applied.automationFailed === false)
+    check('  실행한 회차만 "자동 차단함" 이라고 알린다', alertTitle(applied, true).includes('자동 차단함'), alertTitle(applied, true))
     check('  사람 승인 단계가 없다', applied.steps.every((s) => !/승인|검수/.test(s.name)))
 
     /** 🔴 credential 이 없으면 **성공으로 속이지 않는다** */
     const noCreds = fakeDeps(leakPages, { vercelCreds: false })
-    const r1 = await runGraphWatch({ deps: noCreds, articles: arts, apply: true })
+    const r1 = await runGraphWatch({ deps: noCreds, apply: true })
     check('Vercel 로그인이 없으면 자동화 실패다', r1.automationFailed === true)
     check('  🔴 준비가 서지 않으면 끄지도 재배포하지도 않는다',
       !noCreds.calls.includes('setKillEnv') && !noCreds.calls.includes('redeploy'))
     check('  그래도 층2 는 계속 간다 (할 수 있는 것은 한다)', noCreds.calls.includes('writeControl'))
 
     const noGh = fakeDeps(leakPages, { laneCreds: false })
-    const r2 = await runGraphWatch({ deps: noGh, articles: arts, apply: true })
+    const r2 = await runGraphWatch({ deps: noGh, apply: true })
     check('gh credential 이 없어도 자동화 실패로 적는다', r2.automationFailed === true)
     check('  영구 반영을 시도하지 않는다', !noGh.calls.includes('commitAndMerge'))
 
     /** 🔴 한 단계가 실패해도 실패로 끝난다 — 알림으로 갈음하지 않는다 */
     const envFail = fakeDeps(leakPages, { setEnv: { ok: false, detail: '설정 거부' } })
-    const r3 = await runGraphWatch({ deps: envFail, articles: arts, apply: true })
+    const r3 = await runGraphWatch({ deps: envFail, apply: true })
     check('env 설정이 실패하면 자동화 실패다', r3.automationFailed === true)
     check('  🔴 값이 안 들어갔으면 재배포하지 않는다 (끄지 않은 채 다시 배포하는 꼴)',
       !envFail.calls.includes('redeploy'))
     check('  층2 는 계속 시도한다', envFail.calls.includes('commitAndMerge'))
 
     const redeployFail = fakeDeps(leakPages, { redeploy: { ok: false, detail: '재배포 거부' } })
-    const r3b = await runGraphWatch({ deps: redeployFail, articles: arts, apply: true })
+    const r3b = await runGraphWatch({ deps: redeployFail, apply: true })
     check('재배포가 실패하면 자동화 실패다 — env 만 성공은 성공이 아니다',
       r3b.automationFailed === true)
     check('  env 는 실제로 불렸다', redeployFail.calls.includes('setKillEnv'))
 
     /** 🔴 누출이 없으면 --apply 여도 아무것도 하지 않는다 */
     const cleanApply = fakeDeps({ [a]: pageWith([b]) })
-    const r4 = await runGraphWatch({ deps: cleanApply, articles: arts, apply: true })
+    const r4 = await runGraphWatch({ deps: cleanApply, apply: true })
     check('누출이 없으면 --apply 여도 차단하지 않는다',
       cleanApply.calls.length === 0 && r4.action === 'NONE' && r4.automationFailed === false)
 
     /** 🔴 연결 실패만으로는 --apply 여도 차단하지 않는다 */
     const downApply = fakeDeps({ [a]: 500, [b]: null })
-    const r5 = await runGraphWatch({ deps: downApply, articles: arts, apply: true })
+    const r5 = await runGraphWatch({ deps: downApply, apply: true })
     check('네트워크 실패만으로는 --apply 여도 차단하지 않는다', downApply.calls.length === 0)
     check('  그래도 non-zero 로 끝날 근거가 남는다 (ok=false)', r5.ok === false)
+  }
+
+  // ── 🔴 기준은 서빙 중인 배포의 원문이다 (2026-11-26 — 뒤처진 checkout 이 정상 공개 글을 누출로 읽었다) ──
+  {
+    const NEW_PUBLIC = 'mgraph-new-public-fixture'
+    const base = { [a]: PUBLIC_ROW, [b]: PUBLIC_ROW }
+    const unseen = (r: Awaited<ReturnType<typeof runGraphWatch>>, d: ReturnType<typeof fakeDeps>) =>
+      r.action === 'NONE' && r.ok === false && d.calls.length === 0 && r.steps.length === 0 && r.automationFailed === false &&
+      r.findings.length > 0 && r.findings.every((f) => f.code === 'CHECK_UNREACHABLE')
+
+    /** 사고 재현 — 이 checkout 의 articles.ts 에 없는 글이 배포에는 공개돼 있다 */
+    const fresh = fakeDeps({ [a]: pageWith([NEW_PUBLIC]) }, { rows: { ...base, [NEW_PUBLIC]: PUBLIC_ROW } })
+    const rFresh = await runGraphWatch({ deps: fresh, apply: true })
+    check('🔴 이 checkout 에 없는 새 공개 글을 향한 링크는 누출이 아니다',
+      !MAGAZINE_ARTICLES.some((x) => x.slug === NEW_PUBLIC) && rFresh.ok && rFresh.action === 'NONE' && fresh.calls.length === 0,
+      `${rFresh.action} · ${rFresh.findings.map((f) => f.code).join(',') || '판정 없음'}`)
+    check('  그 새 글의 화면도 감시한다 (배포의 공개 글 전부)',
+      fresh.fetched.includes(NEW_PUBLIC) && rFresh.checked === 3 && rFresh.catalog?.public === 3, fresh.fetched.join(','))
+
+    /** 배포 원문에 있어도 공개 조건을 못 채운 글은 여전히 누출이다 */
+    for (const [name, held] of [
+      ['DRAFT', { ...PUBLIC_ROW, status: 'DRAFT' }],
+      ['BLOCKED', { ...PUBLIC_ROW, status: 'BLOCKED' }],
+      ['예약(공개 시각 전)', { ...PUBLIC_ROW, status: 'SCHEDULED', publishedAt: '2026-12-01', publishAt: '2026-12-01T10:30:00+09:00' }],
+    ] as const) {
+      const d = fakeDeps(leakPages, { rows: { ...base, [UNPUBLISHED_FIXTURE]: held } })
+      const r = await runGraphWatch({ deps: d, apply: true })
+      check(`🔴 배포 등록부의 ${name} 글이 링크에 뜨면 두 층 차단이 그대로 돈다`,
+        r.action === 'TRIP_GLOBAL' && d.calls.join('→') === 'preflight→setKillEnv→redeploy→writeControl→commitAndMerge',
+        `${r.action} · ${d.calls.join('→')}`)
+      check(`  ${name} 글의 화면은 감시 대상이 아니다`, !d.fetched.includes(UNPUBLISHED_FIXTURE) && r.catalog?.registered === 3)
+    }
+
+    /** 조치 전 재확인 — 그 사이 공개 시각이 지났으면 누출이 아니다 */
+    const soon = { ...PUBLIC_ROW, status: 'SCHEDULED', publishedAt: '2026-09-23', publishAt: '2026-09-23T12:00:30+09:00' }
+    const turned = fakeDeps(leakPages, { rows: { ...base, [UNPUBLISHED_FIXTURE]: soon }, nows: [FAKE_NOW, '2026-09-23T12:01:00+09:00'] })
+    const rTurned = await runGraphWatch({ deps: turned, apply: true })
+    check('🔴 관측 중 공개 시각이 지난 글로는 차단하지 않는다 — 쓰기 0 · non-zero', unseen(rTurned, turned),
+      `${rTurned.action} · ${turned.calls.join('→') || '호출 0'}`)
+    const notYet = fakeDeps(leakPages, { rows: { ...base, [UNPUBLISHED_FIXTURE]: soon }, nows: [FAKE_NOW, '2026-09-23T12:00:10+09:00'] })
+    check('  대조군 — 재확인 때도 공개 전이면 차단한다',
+      (await runGraphWatch({ deps: notYet, apply: true })).action === 'TRIP_GLOBAL' && notYet.calls.includes('redeploy'))
+
+    /** 조치 전 재확인 — 배포가 바뀌었거나 다시 못 읽었으면 차단하지 않는다 */
+    const first = deployedRows(base)
+    for (const [name, second] of [
+      ['다른 배포 id', deployedRows(base, 'dpl_other')],
+      ['다른 commit', deployedRows(base, 'dpl_test', 'b'.repeat(40))],
+      ['재조회 실패', { ok: false, why: 'VERCEL_INSPECT_FAILED' }],
+      ['재조회한 등록부가 깨짐', deployedText('const MAGAZINE_ARTICLE_RECORD = {')],
+    ] as [string, Resolved<DeployedSource>][]) {
+      const d = fakeDeps(leakPages, { reads: [first, second] })
+      const r = await runGraphWatch({ deps: d, apply: true })
+      check(`🔴 재확인 — ${name} 이면 차단하지 않는다 (쓰기 0 · non-zero)`, unseen(r, d), `${r.action} · ${d.calls.join('→') || '호출 0'}`)
+    }
+
+    /** 쓰기 대상이 관측한 배포와 다르면 env·재배포·control·PR 전부 0 */
+    const moved = fakeDeps(leakPages, { preflightId: 'dpl_other' })
+    const rMoved = await runGraphWatch({ deps: moved, apply: true })
+    check('🔴 preflight 가 다른 배포를 고르면 아무것도 쓰지 않는다',
+      moved.calls.join('→') === 'preflight' && rMoved.action === 'NONE' && rMoved.ok === false && rMoved.automationFailed === false,
+      moved.calls.join('→'))
+
+    /** 기준을 못 세우면 화면도 보지 않고 차단도 하지 않는다 */
+    for (const [name, read] of [
+      ['배포 조회 실패', { ok: false, why: 'VERCEL_NOT_READY' }],
+      ['등록부 원문이 비었다', deployedText('')],
+      ['등록부 선언이 없다', deployedText('export const OTHER = {}\n')],
+      ['등록부가 데이터가 아니다', deployedText('const MAGAZINE_ARTICLE_RECORD = { "x-y": makeRow() }\n')],
+      ['같은 slug 가 두 번이다', deployedText('const MAGAZINE_ARTICLE_RECORD = { "x-y": { "publishedAt": "2026-09-01" }, "x-y": { "publishedAt": "2026-09-01" } }\n')],
+      ['레코드의 slug와 본문의 slug가 다르다', deployedRows({ ...base, [UNPUBLISHED_FIXTURE]: { ...PUBLIC_ROW, slug: a } })],
+      ['행이 객체가 아니다', deployedRows({ ...base, [UNPUBLISHED_FIXTURE]: 'x' })],
+      ['모르는 status', deployedRows({ ...base, [UNPUBLISHED_FIXTURE]: { ...PUBLIC_ROW, status: 'ARCHIVED' } })],
+      ['publishedAt 이 없다', deployedRows({ ...base, [UNPUBLISHED_FIXTURE]: { title: '시험 글' } })],
+      ['공개 시각을 읽을 수 없다', deployedRows({ ...base, [UNPUBLISHED_FIXTURE]: { ...PUBLIC_ROW, publishAt: '내일 아침' } })],
+      ['공개 글이 0편이다', deployedRows({ [a]: { ...PUBLIC_ROW, status: 'DRAFT' } })],
+    ] as [string, Resolved<DeployedSource>][]) {
+      const d = fakeDeps(leakPages, { reads: [read] })
+      const r = await runGraphWatch({ deps: d, apply: true })
+      check(`🔴 ${name} → CHECK_UNREACHABLE · 화면 조회 0 · 쓰기 0 · non-zero`,
+        unseen(r, d) && d.fetched.length === 0 && r.catalog === null, r.findings.map((f) => f.message).join(' / '))
+    }
+
+    /** 가짜 원문이 아니라 **이 저장소의 실제 등록부**를 넣어도 제품의 공개 목록과 같다 */
+    const real = deployedCatalog(readFileSync(join(ROOT, 'src/content/magazine/articles.ts'), 'utf8'), CHECK_NOW)
+    check('🔴 실제 articles.ts 원문 판독 = 제품 공개 관문 (같은 시각 · 같은 집합)',
+      real.ok && real.value.registered === MAGAZINE_ARTICLES.length &&
+        real.value.publicSlugs.size === publicSlugs.size && [...publicSlugs].every((s) => real.value.publicSlugs.has(s)),
+      real.ok ? `등록 ${real.value.registered} · 공개 ${real.value.publicSlugs.size}` : real.why)
+
+    const code = readFileSync(join(ROOT, 'scripts/magazine-graph-watch.mts'), 'utf8').replace(/^\s*\*.*$/gm, '')
+    check('🔴 감시가 이 checkout 의 등록부를 기준으로 쓰지 않는다 (import 0 · 관문 직접 호출 0)',
+      !/content\/magazine\/articles'/.test(code) && !/getAllMagazineArticles|MAGAZINE_ARTICLES/.test(code))
+    check('  운영 경로에 공개 목록을 건네는 인자가 없다 (가짜와 운영이 같은 판독을 탄다)',
+      !/articles\??:\s*\{ slug: string \}\[\]/.test(code) && /deps\.readDeployed\(\)/.test(code))
+    check('  원문은 배포 commit 의 git object 에서 읽고, 없으면 gh 로 같은 SHA 를 읽는다',
+      /'show', `\$\{live\.sha\}:\$\{ARTICLES_PATH\}`/.test(code) && /contents\/\$\{ARTICLES_PATH\}\?ref=\$\{live\.sha\}/.test(code) &&
+        !/'(fetch|pull|checkout|switch|reset)'/.test(code))
+  }
+
+  // ── 🔴 도메인 → Production READY 배포 id · 40자 SHA (감시와 병합 증거가 같은 읽기를 쓴다) ──
+  {
+    const SHA40 = 'c'.repeat(40)
+    const CTX = { ok: true, value: { bin: '/bin/vercel', projectDir: '/p' } }
+    const world = (json: unknown) => {
+      const seen: string[] = []
+      const exec = (_bin: string, args: string[]) => {
+        seen.push(args[0])
+        // 🔴 실제 inspect 는 성공해도 사람용 출력을 전부 stderr 로 낸다 — stdout 은 비어 있다
+        if (args[0] === 'inspect') return { code: 0, out: '', err: '  id\tdpl_live1\n  target\tproduction\n' }
+        return { code: 0, out: JSON.stringify(json), err: '' }
+      }
+      return { exec, seen }
+    }
+    const good = { id: 'dpl_live1', target: 'production', readyState: 'READY', gitSource: { sha: SHA40 } }
+    const w = world(good)
+    const served = readServingProduction({ exec: w.exec, context: CTX })
+    check('서빙 중인 배포의 id 와 40자 SHA 를 읽는다 (inspect → api · 읽기 둘)',
+      served.ok === true && served.deploymentId === 'dpl_live1' && served.sha === SHA40 && w.seen.join('→') === 'inspect→api',
+      JSON.stringify(served))
+    for (const [name, json, code] of [
+      ['짧은 SHA', { ...good, gitSource: { sha: SHA40.slice(0, 7) } }, 'VERCEL_NO_FULL_SHA'],
+      ['SHA 없음', { ...good, gitSource: {} }, 'VERCEL_NO_FULL_SHA'],
+      ['preview 배포', { ...good, target: 'preview' }, 'VERCEL_NOT_PRODUCTION'],
+      ['준비 중', { ...good, readyState: 'BUILDING' }, 'VERCEL_NOT_READY'],
+      ['다른 배포의 원문', { ...good, id: 'dpl_other' }, 'VERCEL_ID_MISMATCH'],
+    ] as const) {
+      const r = readServingProduction({ exec: world(json).exec, context: CTX })
+      check(`  ${name} → ${code}`, r.ok === false && r.code === code, JSON.stringify(r))
+    }
+    const noCtx = readServingProduction({ exec: world(good).exec, context: { ok: false, why: '없음' } })
+    check('  실행 맥락이 없으면 VERCEL_UNAVAILABLE', noCtx.ok === false && noCtx.code === 'VERCEL_UNAVAILABLE')
+    const same = verifyVercelDirect({ sha: SHA40, exec: world(good).exec, context: CTX })
+    const other = verifyVercelDirect({ sha: 'd'.repeat(40), exec: world(good).exec, context: CTX })
+    check('  병합 증거 쪽 계약은 그대로다 — 기대 merge SHA 와 같을 때만 통과',
+      same.ok === true && same.deployment.sha === SHA40 && same.deployment.deploymentId === 'dpl_live1' &&
+        other.ok === false && other.code === 'VERCEL_SHA_MISMATCH',
+      `${JSON.stringify(same)} · ${JSON.stringify(other)}`)
   }
 }
 

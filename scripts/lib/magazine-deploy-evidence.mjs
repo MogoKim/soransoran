@@ -145,13 +145,15 @@ export function vercelDeploymentVerdict({ json, liveId, sha }) {
   return null
 }
 
+const no = (code, why) => ({ ok: false, code, why })
+const FULL_SHA = /^[0-9a-f]{40}$/
+
 /**
- * Vercel 직접 확인 — inspect(도메인) → api(그 id). 실패는 전부 `{ ok:false, code, why }`.
- * @param {{ sha:string, exec:Function, context:{ok:boolean, value?:{bin:string, projectDir:string}, why?:string} }} p
+ * 도메인이 **지금 가리키는** 배포의 id 와 원문 — inspect(도메인) → api(그 id). 읽기 둘뿐이고 판정하지 않는다.
+ * `verifyVercelDirect`(기대 SHA 대조)와 `readServingProduction`(SHA 를 모르는 쪽)이 같이 쓴다.
+ * @returns {{ ok:true, liveId:string, json:unknown } | { ok:false, code:string, why:string }}
  */
-export function verifyVercelDirect({ sha, exec, context }) {
-  const no = (code, why) => ({ ok: false, code, why })
-  if (!sha) return no('NO_SHA', 'merge SHA 가 없다')
+function readDomainDeployment({ exec, context }) {
   if (!context?.ok) return no('VERCEL_UNAVAILABLE', context?.why ?? 'Vercel 실행 맥락이 없다')
   const { bin, projectDir } = context.value
   const opts = { timeoutMs: VERCEL_CALL_TIMEOUT_MS }
@@ -168,10 +170,38 @@ export function verifyVercelDirect({ sha, exec, context }) {
   if (api.code !== 0) return no('VERCEL_API_FAILED', `배포 원문 조회 실패 (종료 ${api.code})`)
   let json
   try { json = JSON.parse(api.out) } catch { return no('VERCEL_API_BAD_JSON', '배포 원문을 JSON 으로 읽지 못했다') }
+  return { ok: true, liveId, json }
+}
+
+/**
+ * Vercel 직접 확인 — 도메인 배포가 기대 merge SHA 의 Production READY 인가. 실패는 전부 `{ ok:false, code, why }`.
+ * @param {{ sha:string, exec:Function, context:{ok:boolean, value?:{bin:string, projectDir:string}, why?:string} }} p
+ * @returns {{ ok:true, deployment:{ found:true, state:'success', sha:string, deploymentId:string, evidenceSource:string } } | { ok:false, code:string, why:string }}
+ */
+export function verifyVercelDirect({ sha, exec, context }) {
+  if (!sha) return no('NO_SHA', 'merge SHA 가 없다')
+  const live = readDomainDeployment({ exec, context })
+  if (!live.ok) return live
+  const { liveId, json } = live
 
   const bad = vercelDeploymentVerdict({ json, liveId, sha })
   if (bad) return no(bad.code, bad.why)
   return { ok: true, deployment: { found: true, state: 'success', sha: json.gitSource.sha, deploymentId: liveId, evidenceSource: EVIDENCE_VERCEL } }
+}
+
+/**
+ * 도메인이 지금 서빙하는 Production READY 배포의 id 와 **40자 commit SHA** — 기대 SHA 를 모르는 쪽(연관 글 감시)이 쓴다.
+ * 🔴 SHA 가 40자 전체가 아니면 실패다 — 짧은 SHA 로 다른 commit 의 원문을 읽지 않는다.
+ * @returns {{ ok:true, deploymentId:string, sha:string } | { ok:false, code:string, why:string }}
+ */
+export function readServingProduction({ exec, context }) {
+  const live = readDomainDeployment({ exec, context })
+  if (!live.ok) return live
+  const sha = live.json?.gitSource?.sha
+  if (typeof sha !== 'string' || !FULL_SHA.test(sha)) return no('VERCEL_NO_FULL_SHA', '도메인 배포의 commit SHA(40자)를 읽지 못했다')
+  const bad = vercelDeploymentVerdict({ json: live.json, liveId: live.liveId, sha })
+  if (bad) return no(bad.code, bad.why)
+  return { ok: true, deploymentId: live.liveId, sha }
 }
 
 /**
