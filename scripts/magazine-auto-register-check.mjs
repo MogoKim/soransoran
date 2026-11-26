@@ -1196,25 +1196,79 @@ expect('🔴 소스 코드 변경은 허용하지 않는다', M.isAllowedFile('s
 expect('🔴 워크플로 변경은 허용하지 않는다', M.isAllowedFile('.github/workflows/visibility-guard.yml'), false)
 // 🔴 MERGE_RISK 기대 삭제 (M3-A · SUPERSEDED) — 등급으로 병합을 가르지 않는다
 
-console.log('\n══════ 무인 ⑤ 시각 일치 — 템플릿 · 문서 · 테스트')
-const regTpl = readFileSync(join('docs', 'operations', 'launchd', 'magazine', 'com.soransoran.magazine-auto-register.plist.template'), 'utf8')
-const prodTpl2 = readFileSync(join('docs', 'operations', 'launchd', 'magazine', 'com.soransoran.magazine-producer.plist.template'), 'utf8')
-const hourOf = (x) => (x.match(/<key>Hour<\/key><integer>(\d+)<\/integer>/) ?? [])[1]
-expect('producer 는 00:10 그대로', hourOf(prodTpl2), '0')
-expect('🔴 등록은 01:00 이다', hourOf(regTpl), '1')
-expect('템플릿 설명도 01:00 이다', /01:00 KST/.test(regTpl), true)
-// 🔴 **실행 시각**만 본다. 주석의 변경 이력("02:00 → 01:00")은 남아 있어야 한다 —
-//    무엇이 언제 왜 바뀌었는지가 지워지면 다음 사람이 같은 자리를 다시 판다.
-expect('예약 블록에 옛 시각이 없다', /<key>Hour<\/key><integer>2<\/integer>/.test(regTpl), false)
-expect('변경 이력은 주석에 남아 있다', /02:00 → 01:00/.test(regTpl), true)
-expect('🔴 --merge 가 켜져 있다', /<string>--merge<\/string>/.test(regTpl), true)
-expect('자동 공개가 아님을 명시한다', /merge 해도 공개는 아니다|publishAt.*전까지 안 나간다/.test(regTpl), true)
+console.log('\n══════ 무인 ⑤ 시각 일치 — 템플릿(시·분) · 진입점 · 운영 안내')
+// 같은 시각이 이력이나 다른 job에 등장할 수 있어 실제 예약과 그 job의 운영 안내를 대조한다.
+const MAGAZINE_TPL = (name) => join('docs', 'operations', 'launchd', 'magazine', `com.soransoran.magazine-${name}.plist.template`)
+const plistBodyOf = (text) => text.replace(/<!--[\s\S]*?-->/g, '')
+const scheduleOf = (text) => {
+  const block = (plistBodyOf(text).match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/) ?? [, ''])[1]
+  return [...block.matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(([, dict]) => {
+    const keys = [...dict.matchAll(/<key>([^<]+)<\/key>/g)].map(([, key]) => key).sort()
+    if (keys.join(',') !== 'Hour,Minute') return null
+    const integer = (key) => dict.match(new RegExp(`<key>${key}</key>\\s*<integer>(\\d+)</integer>`))?.[1]
+    const hour = integer('Hour')
+    const minute = integer('Minute')
+    if (hour === undefined || minute === undefined) return null
+    return `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+  })
+}
+const programArgsOf = (text) => [...((plistBodyOf(text).match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/) ?? [, ''])[1])
+  .matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1])
+/** 운영 안내의 예약 줄 — `HH:MM KST  <job>` 로 시작하는 줄만. 본문 속 시각 언급은 대응이 아니다 */
+const guideScheduleOf = (text) => [...text.matchAll(/^(\d\d:\d\d) KST\s+([a-z][a-z0-9-]*)/gm)].map((m) => ({ time: m[1], job: m[2] }))
+
 const runbook = readFileSync(join('docs', 'operations', 'magazine-automation-runbook.md'), 'utf8')
-expect('runbook 도 01:00 이다', /01:00/.test(runbook), true)
-// 🔴 등록 시각이 옛 02:00 으로 남지 않는가 — 2026-10-09 부터 02:00 은 **다른 job**(자동 병합 복구)의 정상 시각이다.
-//    그래서 "02:00 이라는 글자" 가 아니라 "02:00 에 등록한다" 는 줄을 본다.
-expect('runbook 에 등록 02:00 이 남아 있지 않다', /02:00 KST\s+auto-register\b/.test(runbook), false)
-expect('runbook 의 02:00 은 자동 병합 복구 job 이다', /02:00 KST\s+auto-merge-recovery\b/.test(runbook), true)
+const guideSchedule = guideScheduleOf(runbook)
+const LAUNCHD_JOBS = [
+  { name: 'producer', time: '00:10', entry: 'scripts/magazine-producer-run.mjs', flags: [], vnextStep: 'magazine-vnext-produce.mjs' },
+  { name: 'auto-register', time: '01:00', entry: 'scripts/magazine-auto-register-run.mjs', flags: ['--write', '--pr', '--merge'], vnextStep: 'magazine-release.mjs' },
+  { name: 'auto-merge-recovery', time: '02:00', entry: 'scripts/magazine-auto-merge.mjs', flags: ['--recover', '--notify-send'], vnextStep: 'magazine-release.mjs' },
+]
+for (const job of LAUNCHD_JOBS) {
+  const tplText = readFileSync(MAGAZINE_TPL(job.name), 'utf8')
+  const slots = scheduleOf(tplText)
+  const actual = slots[0]
+  expect(`🔴 ${job.name} 예약은 하루 한 번이다`, slots.length, 1)
+  expect(`🔴 ${job.name} 템플릿의 실행 시각(시·분)은 ${job.time} 이다`, actual, job.time)
+  expect(`${job.name} 템플릿 머리말도 실제 실행 시각을 말한다`, tplText.includes(`매일 ${actual} KST`), true)
+  const args = programArgsOf(tplText)
+  expect(`🔴 ${job.name} 은 node 로 진입점을 직접 부른다`, args.slice(0, 2), ['__NODE__', `__REPO__/${job.entry}`])
+  expect(`🔴 ${job.name} 인자는 정확히 이것뿐이다`, args.slice(2), job.flags)
+  expect(`${job.name} 진입점 파일이 저장소에 있다`, existsSync(job.entry), true)
+  // 운영 안내 ↔ 템플릿: 그 job 의 예약 줄이 있고, 전부 템플릿의 실제 시각이다
+  const guided = guideSchedule.filter((g) => g.job === job.name).map((g) => g.time)
+  expect(`🔴 runbook 이 ${job.name} 의 예약 줄을 적는다`, guided.length > 0, true)
+  expect(`🔴 runbook 의 ${job.name} 예약 줄은 전부 템플릿 시각과 같다`, guided.filter((t) => t !== actual), [])
+  expect(`runbook 이 ${job.name} 의 진입점 파일을 적는다`, runbook.includes(job.entry.split('/').pop()), true)
+  // 동작 ↔ 운영 안내: 진입점이 rollout 을 읽어 그 자리의 vNext 단계로 넘기고, 안내도 같은 파일을 말한다
+  const entrySrc = readFileSync(job.entry, 'utf8')
+  expect(`🔴 ${job.name} 진입점이 rollout 을 읽어 vNext 단계(${job.vnextStep})로 넘긴다`,
+    /rolloutGate\(readRollout\(\)/.test(entrySrc) && entrySrc.includes(job.vnextStep), true)
+  expect(`runbook 이 ${job.name} 자리의 vNext 단계를 같은 파일로 안내한다`, runbook.includes(job.vnextStep), true)
+}
+// 한 시각에 두 job 을 적지 않는다 — 01:00 등록과 02:00 복구가 같은 시각으로 적히면 잠금 대기 설명이 성립하지 않는다
+const jobTimes = LAUNCHD_JOBS.map((job) => scheduleOf(readFileSync(MAGAZINE_TPL(job.name), 'utf8'))[0])
+expect('🔴 세 job 의 실행 시각이 서로 다르고 producer → 등록 → 복구 순서다', [...jobTimes].sort(), jobTimes)
+expect('🔴 세 job 의 실행 시각이 겹치지 않는다', new Set(jobTimes).size, LAUNCHD_JOBS.length)
+
+/** 변이 자기 시험 — 판독기가 실제로 가르는가 (죽은 검사 방지). 실제 템플릿 글자를 한 군데만 바꿔 본다 */
+const prodTplText2 = readFileSync(MAGAZINE_TPL('producer'), 'utf8')
+expect('  분만 바꾼 변이를 잡는다 (00:10 → 00:40)',
+  scheduleOf(prodTplText2.replace('<key>Minute</key><integer>10</integer>', '<key>Minute</key><integer>40</integer>'))[0], '00:40')
+expect('  Minute 가 빠진 예약은 시각으로 읽지 않는다',
+  scheduleOf(prodTplText2.replace('<key>Minute</key><integer>10</integer>', ''))[0], null)
+expect('  요일 제한이 있으면 매일 실행하는 예약이 아니다',
+  scheduleOf(prodTplText2.replace('<key>Hour</key>', '<key>Weekday</key><integer>1</integer><key>Hour</key>'))[0], null)
+expect('  주석 속 시각은 실행 시각이 아니다',
+  scheduleOf('<!-- <key>StartCalendarInterval</key><array><dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict></array> -->').length, 0)
+expect('  운영 안내 판독기가 옛 등록 줄을 그 job 의 줄로 읽는다',
+  guideScheduleOf('02:00 KST  auto-register   옛 줄\n본문 속 01:00 KST 언급').map((g) => `${g.time} ${g.job}`), ['02:00 auto-register'])
+
+const regTpl = readFileSync(MAGAZINE_TPL('auto-register'), 'utf8')
+// 🔴 주석의 변경 이력("02:00 → 01:00")은 남아 있어야 한다 —
+//    무엇이 언제 왜 바뀌었는지가 지워지면 다음 사람이 같은 자리를 다시 판다.
+expect('변경 이력은 주석에 남아 있다', /02:00 → 01:00/.test(regTpl), true)
+expect('자동 공개가 아님을 명시한다', /merge 해도 공개는 아니다|publishAt.*전까지 안 나간다/.test(regTpl), true)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ 운영연결 ① 등록 후 삭제된 큐 — 등급은 등록 전 main 에서 본다')

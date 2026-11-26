@@ -1,8 +1,24 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 갱신 2026-11-09 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09) · `com.soransoran.magazine-graph-watch`
+작성 2026-09-15 · 갱신 2026-11-26 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch` · `com.soransoran.magazine-auto-merge-recovery`(2026-10-09) · `com.soransoran.magazine-graph-watch`
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
+무엇을 쓰고 무엇을 고칠지(편집 판단 · 신규 0편이 좋은 날)는 charter §3-C, 지금 관측한 상태는 milestone 이 정본이다.
+
+## 지금 무엇이 도는가 — 먼저 여기를 본다 (2026-11-26)
+
+이 문서에는 두 경로의 절이 함께 있다. **어느 절이 지금 적용되는지는 rollout switch(§0.0B.5)가 정한다.**
+실제 값은 문서가 아니라 그 호스트의 `magazine-rollout.json` · `magazine-provider-live.json` · `launchctl` 로 확인하고, 관측한 값과 시각은 milestone 에 적는다.
+
+| rollout | 00:10 producer 자리 | 01:00 등록 자리 · 02:00 복구 자리 | 적용되는 절 |
+|---|---|---|---|
+| `vnext` | `magazine-vnext-produce.mjs --launcher` — live 설정이 켜져 있을 때만 유료 생성, 꺼져 있으면 **계획만**(쓰기 0 · provider 호출 0 · 종료 0) | `magazine-release.mjs` — release writer(§0.0B.4 · §0.0B.6). 복구는 같은 journal · 같은 release PR | §0.0B · §10 |
+| `legacy` · 파일 없음 · 손상 | 동결된 legacy 생산(§0.0A · §4.5 의 LEGACY 줄) | legacy 등록·자동 병합(§0.0 · §0.1) | §0.0A · §0.0 · §0.1 · §1~§9 |
+
+- 세 launchd job 의 시각과 plist 는 두 경로에서 같다(§4.5). 경로를 가르는 것은 plist 가 아니라 진입점이 회차 시작 때 읽는 rollout 이다.
+- 🔴 **계획만 도는 회차와 유료 공급을 기대한 회차는 둘 다 종료 0 일 수 있다.** 종료 코드만으로 "독자에게 글이 갔는가"를 판단하지 않는다(§5 「vNext 회차의 알림」).
+- 공개의 소유자는 언제나 `articles.ts` 의 `publishAt` 이다. 어느 경로든 병합이 곧 공개가 아니다(§10).
+- 이력 문서와 legacy 로 되돌릴 때의 주의는 §11 이다.
 
 ---
 
@@ -25,13 +41,14 @@
 사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
 **모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
 
-### 0.0A 현행 legacy·DIRECT 실행 설명 (vNext 구현 전까지)
+### 0.0A legacy·DIRECT 실행 설명 — rollout 이 `legacy`(또는 없음·손상)일 때만 적용
 
-정책은 charter §18-B, vNext 실행 계약은 §0.0B 다. 이 절은 **지금 main 코드가 실제로 하는 일**과 운영자가 따라야 할 절차만 적는다.
+정책은 charter §18-B, vNext 실행 계약은 §0.0B 다. 이 절은 **rollout 이 legacy 일 때 main 의 legacy 코드가 하는 일**과 그때 운영자가 따라야 할 절차만 적는다.
+2026-11-09 판의 제목은 "vNext 구현 전까지"였다. 지금은 vNext 코드가 main 에 있으므로 이 절은 **rollout 을 legacy 로 되돌리는 조건부 복구**를 위해 남는다.
 
 - 🔴 **legacy 는 2026-11-09 부터 기능 동결이다**(창업자 결정 · §0.0B.7). 안전 긴급 수정 외에는 기능·정책을 보정하지 않는다.
-  동결은 코드 변경 금지이지 운영 정지가 아니다 — vNext 가 실제 쓰기를 시작할 때 rollout switch 가 legacy writer 를 배타 정지한다.
-- 자연 회차의 운영 경로는 `LEGACY_BRIEF_V1` 이다. `DIRECT_SPEC_V1` 코드 경로도 main 에 있다.
+  동결은 코드 변경 금지이지 삭제가 아니다 — rollout 이 `vnext` 인 동안 rollout switch 가 legacy writer 를 배타 정지한다(§0.0B.5).
+- legacy 자연 회차의 경로는 `LEGACY_BRIEF_V1` 이다. `DIRECT_SPEC_V1` 코드 경로도 main 에 있다(운영 회차 0).
 
 ```text
 LEGACY_BRIEF_V1  frozen legacy queue -> Claude brief -> ChatGPT manuscript -> draft.md -> QA...
@@ -54,10 +71,19 @@ DIRECT_SPEC_V1   GRAPH_READY -> G8 -> ArticlePlan -> ArticleSpec -> manuscript -
   - materialize 가 `QUEUE_WRITE_CONFLICT` 이면 큐에서 해당 slug·intent 행과 source 관문 결과를 확인하기 전에는
     producer 를 실행하지 않는다. `concurrentWrite: true` 성공은 다른 writer 의 변경을 보존한 채 내 행이 그대로라는 뜻이다.
 
-### 0.0B 🔴 Magazine vNext 실행 계약 (2026-11-03 설계 동결 · 2026-11-09 S0 재동결 · 구현 전)
+### 0.0B 🔴 Magazine vNext 실행 계약 (2026-11-03 설계 동결 · 2026-11-09 S0 재동결 · 2026-11-26 구현 상태 표기)
 
 권위 객체·관계·ContentPlan·공급 정책은 charter §18-B, 현재 상태와 단계 순서는 milestone 이 정본이다. 이 절은 **실행**만 정한다.
-🔴 아직 구현 전이다. 아래는 구현이 지켜야 할 계약이며, 지금 운영은 동결된 legacy 경로다(§0.0A).
+
+🔴 **이 절은 계약이고, 구현됐는지는 조항마다 다르다** (2026-11-26). 2026-11-09 판은 이 절 전체를 "구현 전"이라고 적었다. 지금은 다르다.
+
+- **main 에 있는 것** — 세로 경로의 코드: Bundle·compiler·admission(`scripts/lib/magazine-content-plan*.mjs`) · provider·Job·검증·수리
+  (`scripts/magazine-vnext-produce.mjs` · `scripts/lib/magazine-provider.mjs`) · release writer(`scripts/magazine-release.mjs`) ·
+  rollout(`scripts/lib/magazine-rollout.mjs`). 이 경로로 만든 첫 글이 공개됐다(milestone).
+- **아직 없는 것** — vNext 회차의 장애 알림(§0.0B.9 의 「알림」 칸 · §5). 그 밖에 조항별로 아직 없는 동작은 그 자리에 미구현이라고 적는다.
+- **입증되지 않은 것** — 유료 생성의 무인 자연 회차 · 다른 cluster 의 무인 공개 · 장애 알림의 실제 수신.
+- 조항별 구현 여부의 정본은 이 문단이 아니라 코드와 §0.0B.8 의 검사다. 아래 본문의 현재형 문장은 "구현이 지켜야 하는 것"으로 읽는다.
+  바라는 동작을 이미 그런 것처럼 적지 않는다.
 
 #### 0.0B.1 입력 · ProviderPlan · Job
 
@@ -394,6 +420,10 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 | release CI 실패 | 그 release | 후보를 검증됨으로 되돌림 | 1회 |
 | 정상 대기(열린 release PR · 목표 도달) | — | 아무것도 안 함 | 없음 |
 
+🔴 **이 표의 「알림」 칸은 목표 계약이며 2026-11-26 기준 미구현이다.** 기준 코드(main `20a0443b`)의 vNext 회차는 진입점이 legacy 알림 지점보다
+앞에서 끝나고(§0.0B.5 — rollout 을 잠금·sync·자식·알림보다 먼저 읽는다), 생산기와 release writer 의 코드에는 Slack 발송이 없다.
+2026-11-26 00:10 회차의 실패가 그렇게 알림 없이 지나갔다. 「범위」와 「동작」 칸은 계약 그대로다. 현재 동작과 목표는 §5 「vNext 회차의 알림」에 나눠 적는다.
+
 ### 0.0 자동 병합이 확인하는 것
 
 > 이 절과 §0.1 은 **legacy 자동 등록 PR** 의 현행 계약이다(동결). vNext release PR 의 merge gate 는 §0.0B.4 다.
@@ -570,21 +600,37 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 
 ## 4.5 무인 운영 — 하루의 흐름
 
-아래는 **지금 배포된 코드의 하루**다. `LEGACY` 는 운영 중인 경로이고, `DIRECT` 는 main 에 있는 현행 코드 경로다(운영 회차 0).
-vNext(§0.0B)는 구현 전이며, 구현 뒤에는 rollout switch 가 `vnext` 일 때만 producer 입구가
-`ContentPlan → Job → ManuscriptProvider·ImageProvider → 검증·부분 수리` 로, 날짜 배정이 release writer(§0.0B.4)로 바뀐다.
+시각과 진입점은 두 경로에서 같다. rollout 이 `vnext` 인지 `legacy` 인지에 따라 진입점이 **그 자리의 단계**만 바꿔 부른다.
 한 회차에서 두 경로를 섞지 않는다.
 
+| 시각(KST) | launchd job | 진입점과 인자 | rollout `vnext` 일 때 그 자리의 단계 |
+|---|---|---|---|
+| 00:10 | `com.soransoran.magazine-producer` | `scripts/magazine-producer-run.mjs` | `magazine-vnext-produce.mjs --launcher` |
+| 01:00 | `com.soransoran.magazine-auto-register` | `scripts/magazine-auto-register-run.mjs --write --pr --merge` | `magazine-release.mjs` (`--write` 회차만 `--apply`) |
+| 02:00 | `com.soransoran.magazine-auto-merge-recovery` | `scripts/magazine-auto-merge.mjs --recover --notify-send` | `magazine-release.mjs --recover` |
+| 11:00 · 11:05 | `magazine-watch` · `magazine-graph-watch` | 공개 확인 · graph 감시(설치 템플릿은 `--apply --notify-send`. 누출 판정 시 환경변수 변경·재배포와 영구 차단 PR 시도) | 같다 |
+
+시각과 인자의 정본은 `docs/operations/launchd/magazine/*.plist.template` 이다. `npm run magazine:auto-check` 가 세 job 의 시·분과 진입점·인자를
+템플릿에서 읽어 이 절의 예약 줄과 대조한다 — 템플릿만 또는 이 절만 바꾸면 검사가 실패한다.
+
+아래 예약 줄에서 `VNEXT` 는 rollout 이 `vnext` 일 때, `LEGACY` 는 rollout 이 `legacy`(없음·손상 포함)일 때의 단계다.
+`DIRECT` 는 main 에 있는 legacy 쪽 코드 경로다(운영 회차 0).
+
 ```
-00:10 KST  producer        LEGACY: 동결 queue → brief(claude) → 원고 회수 → 관문 → 알림
-                           DIRECT(현행 코드): SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
-                           끝나면 _runs/{date}/producer-handoff.json 을 남긴다
-01:00 KST  auto-register   ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
+00:10 KST  producer        VNEXT: 후보 선택 → live 설정이 켜져 있을 때만 원고·hero 생성 → 검증·부분 수리 (§0.0B.1~§0.0B.3)
+                                  live 설정이 꺼져 있으면 계획만 — 쓰기 0 · provider 호출 0 · 종료 0
+                           LEGACY: 동결 queue → brief(claude) → 원고 회수 → 관문 → 알림
+                           DIRECT: SPEC_READY 선택 → ArticleSpec 검증 → 원고 회수 → 관문 → 알림
+                           LEGACY·DIRECT 는 끝나면 _runs/{date}/producer-handoff.json 을 남긴다
+01:00 KST  auto-register   VNEXT: 검증된 후보를 release PR 하나로 묶는다 · publishAt 은 여기서 배정한다 (§0.0B.4)
+                           LEGACY: 아래 ①~⑥
+                           ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
                            ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register
                            ④ PR 생성 → ⑤ 자동 병합(--merge) → main
                            ⑥ merge SHA 의 Production 배포 확인 → 예약 글이 **아직 안 나왔는지**(404)
                            필수 CI 는 최대 30분 기다린다 · 명시적 실패는 즉시 중단 (병합 잠금 안에서)
-02:00 KST  auto-merge-recovery  01:00 이 CI 시간 초과 등으로 못 끝낸 자동 PR 1건을 **같은 관문**으로
+02:00 KST  auto-merge-recovery  VNEXT: 01:00 이 연 release PR 을 같은 journal 로 이어 본다 · 새 PR 0
+                           LEGACY: 01:00 이 CI 시간 초과 등으로 못 끝낸 자동 PR 1건을 **같은 관문**으로
                            다시 본다(`--recover`) · 0건 no-op · 2건 이상 멈춤
                            01:00 병합이 아직 잠금을 쥐고 있으면 최대 90분 기다린다 → 풀리면 진행 ·
                            끝까지 잠겨 있으면 merge 0 · non-zero · Slack (성공·no-op 로 세지 않는다)
@@ -593,6 +639,8 @@ vNext(§0.0B)는 구현 전이며, 구현 뒤에는 rollout switch 가 `vnext` �
 10:30 KST  (해당일)        publishAt 도달 → 예약 글이 공개된다
 11:00 KST  magazine-watch  본문·대표 이미지·/magazine 목록 노출 확인 → 실패면 Slack
 ```
+
+아래 🔴 항목은 legacy 자동 병합에서 실측으로 얻은 계약이다. vNext merge gate 는 같은 위험을 같은 방식으로 막는다(§0.0B.4).
 
 🔴 **02:00 복구는 새 관문이 아니다** (2026-10-09 #675 — 필수 CI 21분 7초 · 옛 상한 20분에서 시간 초과 ·
    CI 는 61초 뒤 성공했으나 PR 이 OPEN 으로 남았다). `runAutoMerge({ apply: true })` 를 그대로 다시 돈다 —
@@ -659,7 +707,34 @@ vNext(§0.0B)는 구현 전이며, 구현 뒤에는 rollout switch 가 `vnext` �
 
 ## 5. 감시
 
-### producer 종료 코드의 뜻
+> 이 절의 「producer 종료 코드의 뜻」 · 「알림 계약」 · 로그 표는 **legacy 회차**(rollout `legacy`)의 계약이다.
+> legacy 의 write 회차는 성공도 실패도 Slack 을 보낸다. vNext 회차는 바로 아래 「vNext 회차의 알림」을 본다 — 둘을 섞어 읽지 않는다.
+
+### vNext 회차의 알림 — 현재 동작과 목표 (2026-11-26)
+
+**현재 동작** — 기준 코드 main `20a0443b`
+
+| 무엇 | 지금 |
+|---|---|
+| 생산기 종료 코드 | 정상(계획만 · 할 일 없음 · 생성 · 잠금 대기 · 예산 정지) 0 · 막힘 1 · 사용법 2 |
+| 결과 기록 | stdout 의 JSON 한 줄(launchd 로그). 실제 생성 회차는 `~/Library/Application Support/soransoran/magazine-produce/runs/<KST 날짜>/` 에도 남는다 |
+| Slack | 🔴 **없다.** 생산기와 release writer 에 발송 코드가 없고, 진입점은 legacy 알림 지점보다 앞에서 끝난다 |
+
+- 그래서 지금은 계획만 돈 회차(`PLAN_ONLY`)와 유료 공급에 성공한 회차가 둘 다 종료 0 이고, 막힌 회차(종료 1)도 Slack 으로 오지 않는다.
+  2026-11-26 00:10 회차가 `VNEXT_NOT_IMPLEMENTED` 로 끝난 사실은 그날 오전 사람이 로그를 열어서야 알았다.
+- 지금 확인하는 방법은 `launchctl print` 의 last exit status 와 로그의 `outcome` 을 직접 읽는 것뿐이다.
+
+**목표 계약 — 미구현.** 구현되기 전까지는 위 「현재 동작」이 사실이다.
+
+- **정상 회차는 조용하다.** 매일 오는 성공 알림은 아무도 읽지 않는다. 복구가 필요한 장애만 알린다. legacy 의 "성공도 보낸다"를 옮기지 않는다.
+- 회차의 결과를 예약 작업 **바깥**에서 넷으로 가른다 — 기대했던 유료 공급 · 의도한 계획만 · 적격 후보나 시의성이 없어 0편(정상 — charter §3-C) · 실제 실패.
+  시작 전 실패와 예약 회차 미실행까지 포괄한다. 이유: 종료 0 은 독자가 받은 결과를 설명하지 못하고, 생산기가 뜨기 전에 끝난 회차는 생산기가 알릴 수 없다.
+- 같은 증상은 사고 한 건으로 묶어 **장애 1회 · 복구 1회**만 보낸다(§0.0B.9 의 "상태가 바뀔 때 1회"). 기기 단절은 그 기기 밖에서 감시한다.
+- 발송은 기존 발송기(`scripts/lib/slack-notify.mjs`)를 다시 쓴다. 알림은 회차 판정을 바꾸지 않는다.
+  같은 작업을 다시 돌려도 이중 과금과 중복 PR 이 없어야 한다(§0.0B.2 의 `SUBMISSION_UNKNOWN`).
+- 이 알림을 만드는 데 보조 호스트 이전이나 추가 발행 슬롯을 먼저 할 이유는 없다.
+
+### producer 종료 코드의 뜻 (legacy 회차)
 
 🔴 옛 판은 brief·원고 회수 실패를 **삼키고** plan 의 코드만 돌려줬다.
 ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 `exit 0` 이었다.
@@ -675,9 +750,9 @@ ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 `exit 0` 이�
 🔴 Slack 은 판정을 바꾸지 않는다 — 양방향으로. 알림이 실패해도 원래 실패는 실패이고,
 실패 회차에서도 알림은 **반드시 시도한다**.
 
-### 알림 계약 — 종료 경로는 하나다
+### 알림 계약 — 종료 경로는 하나다 (legacy 회차)
 
-🔴 non-dry-run producer 의 **모든** 종료 경로가 단일 finalizer 를 지난다
+🔴 legacy 회차에서 non-dry-run producer 의 **모든** 종료 경로가 단일 finalizer 를 지난다
 (`scripts/lib/magazine-producer-flow.mjs`). 알림은 거기 한 곳에만 있고 **회차당 정확히 한 번** 돈다.
 
 | 중단 사유 | exit | Slack | write·AI |
@@ -708,7 +783,7 @@ ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 `exit 0` 이�
 | producer 로그 | `~/Library/Logs/soransoran/magazine-producer.log` |
 | auto-register 로그 | `~/Library/Logs/soransoran/magazine-auto-register.log` |
 | write 회차 리포트 | `drafts/magazine/_runs/{date}/auto-register.json` (runtime 안) |
-| Slack | write 회차는 **성공도 실패도** 보낸다 (`#소란소란-알림`) |
+| Slack | legacy write 회차는 **성공도 실패도** 보낸다 (`#소란소란-알림`). vNext 회차는 위 「vNext 회차의 알림」 |
 | launchd 종료 코드 | write 회차 실패는 non-zero 로 남는다 |
 
 🔴 로그에 반드시 남는 것: PR URL · 처리 slug · 막힌 단계 이름 · 남은 브랜치.
@@ -813,3 +888,108 @@ npm run magazine:launchd-check    # 설치기 판정 · 템플릿 렌더 (tsx)
   회귀 테스트가 "여전히 막힌다" 를 시험한다. 원본 정리는 별건이다.
 - 자동 레인은 `imageMode` 와 무관하게 hero 를 요구한다(`scripts/magazine-auto-register.mjs:1253` `--require-hero` · `scripts/magazine-batch-qa.mjs:274`). hero 유지는 charter §12.
 - 등록·병합은 위험 등급으로 막지 않는다 — `AUTO_RISK`·`MERGE_RISK` 는 M3-A 에서 제거됐다(`scripts/magazine-register.mjs:49` · `scripts/lib/magazine-merge-gate.mjs:62`). 위험은 검증 강도로 다룬다(charter §3-B).
+
+---
+
+## 10. 공개 엔진과 과거 레코드 호환 (2026-11-26 이관 — 2026-08 성장 운영 전략서 §4 · §6 · §13.2 · 매거진 전략 D7)
+
+어느 생산 경로로 만든 글이든 **공개는 이 절의 판정 하나**가 정한다. 생산·병합과 공개는 분리돼 있다 — 생산 호스트가 꺼져도 예약분은 공개된다.
+옮기지 않은 조항(01:00 브라우저 생산 · 재고 일수와 그에 따른 생산량 · 일일 보고 양식)과 원문 위치는
+[예전 주소의 안내](./2026-08-23-soransoran-magazine-seo-production-strategy.md)에 있다.
+
+### 10.1 런타임 필드는 둘뿐이다
+
+| 필드 | 값 | 없으면 |
+|---|---|---|
+| `status` | `DRAFT` / `SCHEDULED` / `PUBLISHED` / `BLOCKED` | `PUBLISHED` 로 본다 |
+| `publishAt` | 오프셋이 있는 ISO 8601 — `2026-08-25T10:30:00+09:00` | `publishedAt` 을 KST 10:30 으로 해석한다 |
+
+- 🔴 **둘 다 선택 필드다.** 그래서 이 필드가 생기기 전에 공개된 글은 한 글자도 고치지 않고 계속 공개된다.
+  필드를 필수로 바꾸거나 "없으면"의 해석을 바꾸면 이미 색인된 주소가 조용히 숨는다 — 과거 레코드 호환은 이 두 줄이다.
+- QA 결과와 위험 판정은 런타임 필드로 두지 않는다. 런타임에 두면 스크립트가 판정한 결과와 파일에 적힌 값이라는 두 개의 진실이 생긴다.
+  검증에 실패한 글은 애초에 `articles.ts` 에 들어오지 않는 것이 게이트다.
+- 10:30 KST 는 독자가 오전에 휴대폰을 보는 시간대이고 문제가 생기면 그날 안에 대응할 수 있다는 **운영 기본값**이다.
+  발행 시각이 검색 순위를 올린다고 주장하지 않는다.
+
+### 10.2 공개 조건과 숨김 조건
+
+```
+공개   status 가 DRAFT 도 BLOCKED 도 아니고  publishAt <= now   (publishAt 이 없으면 publishedAt 의 KST 10:30)
+숨김   publishAt 이 미래 · status 가 BLOCKED · status 가 DRAFT   — 하나라도 걸리면
+```
+
+### 10.3 적용 위치 — 다섯 곳 전부
+
+```
+/magazine 목록
+/magazine/[slug] 상세      미래 글은 404
+sitemap                     공개 글만
+관련 글 (함께 읽어보세요)   graph resolver 도 공개 글만 후보로 쓴다 (charter §18-B.4)
+시리즈 UI (이전/다음/목차)
+```
+
+- 🔴 **한 곳이라도 빠지면 사고다.** 목록에서 숨겼는데 sitemap 에 남으면 검색엔진이 404 를 크롤하고, 관련 글에 남으면 독자가 404 를 밟는다.
+- 관문은 하나다 — `src/lib/magazine.ts` 의 `getAllMagazineArticles()`. 새 표면을 만들 때 공개 판정을 다시 구현하지 않고 이 관문을 거친다.
+- 🔴 `/magazine` 은 `force-dynamic` 을 명시한다. 인증 구조가 바뀌어 페이지가 정적이 되면 **예약 공개가 아무 에러 없이 멈춘다.**
+
+### 10.4 공개 판정 드리프트 감지
+
+판정 규칙이 두 곳에 산다 — 런타임(`src/lib/magazine.ts`)과 스크립트(`scripts/lib/magazine-gate.mjs`). 스크립트가 TS 를 실행하지 못해서다.
+두 구현이 조용히 갈라지면 QA 가 "공개"라고 본 글이 런타임에서는 숨겨지거나 그 반대가 되고, 아무 에러도 나지 않는다.
+`assertGateInSync()` 가 런타임 파일을 글자로 읽어 대조하고, 어긋나면 QA FAIL 이다. **판정 규칙을 고칠 때는 양쪽을 같이 고친다.**
+
+### 10.5 등록 뒤의 `drafts/` 사본은 정본이 아니다
+
+정본은 `src/content/magazine/articles.ts` 다. 정본을 나중에 고쳐도 draft 사본은 따라가지 않는다. 실제로 갈라진 적이 있다.
+
+```
+health-insurance-after-retire   정본에서 medical 플래그를 뺐다          사본에는 medical: true 가 남았다
+less-sleep-with-age             정본 callout 에 진료 주체를 넣었다      사본에는 옛 문장이 남았다
+```
+
+- 🔴 이미 발행·예약된 slug 의 draft 를 보고 품질을 판정하지 않는다. 두 번 검사하면 정본과 사본 중 어느 쪽이 맞는지 알 수 없게 된다.
+- 사본의 동기화나 삭제는 별도 결정이다 — 지우면 그 사본을 읽는 회귀 검사 대상이 사라진다. legacy 삭제 단계(§0.0B.7)에서 함께 정한다.
+
+### 10.6 목록 주소
+
+charter §11 이 canonical `/magazine?cluster=<cluster>` 목록 도달을 크롤 최소로 두므로, 목록 주소는 공개 호환의 일부다.
+
+| 항목 | 값 |
+|---|---|
+| 한 쪽 | 12건 (`MAGAZINE_PAGE_SIZE`) |
+| 1쪽 · 전체 분류 | `/magazine` — `?page=1` · `?cluster=all` 을 붙이지 않는다 |
+| 분류 · 분류 + 쪽 | `/magazine?cluster=sleep` · `/magazine?cluster=sleep&page=2` |
+| 모르는 분류 · 잘못된 page | 전체 · 1쪽으로 되돌린다 (404 가 아니다) |
+| 범위 초과 page | **404** — 빈 200 은 soft-404 를 만든다 |
+| canonical | 지금 보고 있는 목록(쪽·분류 포함). 2쪽을 1쪽으로 몰지 않는다 |
+
+- 분류 칩은 공개 글이 실제로 있는 분류만 세우고, 보고 있는 쪽이 아니라 공개 글 전체로 계산한다.
+- 공개 글이 0건으로 돌아가면 `/magazine` 에 noindex 를 다시 건다(색인 정책이 정본).
+- 회귀는 `npm run check:pagination` 이 막는다.
+
+원문: [성장 운영 전략서 §6 (L191-L285)](https://github.com/MogoKim/soransoran/blob/20a0443b610aae331857d096db5df3252d5fe24d/docs/operations/2026-08-23-soransoran-magazine-seo-production-strategy.md?plain=1#L191-L285) ·
+[매거진 전략 D7 (L441-L472)](https://github.com/MogoKim/soransoran/blob/20a0443b610aae331857d096db5df3252d5fe24d/docs/operations/2026-08-23-soransoran-magazine-strategy.md?plain=1#L441-L472)
+
+---
+
+## 11. 이력 문서와 조건부 legacy 복구
+
+| 예전 주소 | 지금의 역할 |
+|---|---|
+| [`2026-08-23-soransoran-magazine-strategy.md`](./2026-08-23-soransoran-magazine-strategy.md) · [`2026-08-23-soransoran-magazine-seo-production-strategy.md`](./2026-08-23-soransoran-magazine-seo-production-strategy.md) | 안내만 남았다. 조항별 행선지와 Git 고정 원문 링크 |
+| [`2026-08-25-magazine-continuation-runbook.md`](./2026-08-25-magazine-continuation-runbook.md) | 이력. 세션이 브라우저를 이어받던 절차 — rollout 을 `legacy` 로 되돌리고 그 절차가 실제로 필요할 때만 연다 |
+| [`../decisions/magazine-manuscript-lane.md`](../decisions/magazine-manuscript-lane.md) | 날짜별 결정 기록. 원고 관문의 오탐 방지 근거와 검사 위치 |
+
+**legacy 로 되돌릴 때 지금도 재현되는 것** — continuation 런북에서 실제로 겪은 사례 가운데 legacy 코드가 남아 있는 동안 유효한 셋이다.
+vNext 는 브라우저를 쓰지 않으므로(§0.0B.2) vNext 회차에는 해당하지 않는다.
+
+- **node 경로.** launchd 는 셸 프로필을 읽지 않고, plist 의 node 경로와 PATH 는 설치 시점의 값이다. node 버전을 바꾼 뒤에는 설치기를 다시 돌린다(§4).
+  증상은 조용하다 — job 이 그냥 돌지 않는다.
+- **날짜 선점.** legacy `magazine-producer-plan.mjs --now <날짜>` 를 `--dry-run` 없이 돌리면 그 날짜의 `run.json` 이 남아 실전 회차를 "이미 끝났다"로 막는다.
+  날짜를 옮기는 시험은 `--dry-run` 으로만 한다.
+- **headless 불가.** ChatGPT 웹 UI 는 headless 에서 403 이다. legacy 생산은 GUI 세션이 필요해 맥이 잠들면 실패하고,
+  Playwright 가 전용 프로필을 직접 열면 세션 쿠키가 지워진다.
+
+**삭제 순서.** 옛 생산기 · 큐 · 실험 파일 · 이력 문서는 §0.0B.7 의 네 조건이 모두 채워지기 전에는 지우지 않는다.
+그 뒤 continuation 런북이 활성 트리에서 지울 첫 후보다(옛 실행 경로 퇴역 · 대체 복구 시험 · D100 문서 목록과 외부 인계 링크 정리가 조건).
+결정 기록은 마지막 참조가 없어지면 Git 이력으로만 남길 수 있다. 이 정리의 소유자는 매거진 담당이다.
