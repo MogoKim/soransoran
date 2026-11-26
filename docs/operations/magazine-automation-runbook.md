@@ -24,22 +24,14 @@
 
 ## 0. 경계 — 무엇을 자동으로 하고 무엇을 안 하나
 
-| | 자동 | 사람·CI |
+| 단계 | vNext | legacy 조건부 복구 |
 |---|---|---|
-| graph readiness·ContentPlan | vNext: ✅ compiler 가 ContentPlanInputBundle 에서 결정적으로 컴파일(§0.0B.1) · 공급 loop 는 병렬(charter §18-B.5) | DIRECT 현행 코드: G8 편입 · ArticlePlan prepare/approve/materialize 가 queue 앞에서 완료(§0.0A) |
-| 다음 계획 선택 | ✅ producer — DIRECT 현행: `SPEC_READY` 참조 · vNext: 출판 최소를 충족한 ContentPlan(charter §18-B.2) | 계획 내용을 재해석하지 않음 |
-| 원고 생성 + 관문 | ✅ producer — legacy: ChatGPT 웹 UI · vNext: ManuscriptProvider API(§0.0B.2) | |
-| 변환 · QA · hero · batch-qa | ✅ auto-register | |
-| `articles.ts` 등록 (**PR 브랜치 위에서**) | ✅ auto-register | |
-| **PR 생성** (`[merge 금지]`) | ✅ auto-register | |
-| **PR merge** | ✅ auto-merge (검증 통과 시) | |
-| **production 공개** | 🔴 **절대 안 함** | `publishAt`(10:30 KST) 도달 시 자동 |
+| 주제 선택 | ContentPlan compiler와 현재 admission을 통과한 후보에서 선택(§0.0B.1) | DIRECT의 `SPEC_READY` 참조(§0.0A) |
+| 원고·QA·hero | live 회차에 생산기가 원고를 생성·검증한 뒤 hero를 만든다(§0.0B.2~3) | 브라우저 생성 후 등록기의 변환·QA·hero·batch-qa |
+| 등록·PR·병합 | release writer가 PR 브랜치에 등록한다. rollout의 release 모드와 검사를 따라 Draft 또는 자동 병합을 진행한다(§0.0B.4~6) | auto-register가 PR을 만들고 auto-merge가 검증한다(§0.0~0.1) |
+| 독자에게 공개 | 운영 배포에 등록된 글이 공개 상태·시각 관문을 통과하면 목록·상세·사이트맵에 나온다(§10) | 같은 관문 |
 
-🔴 **2026-09-16 경영 결정 — 목표는 완전 무인 운영이다.** merge 도 자동이 됐다.
-
-🔴 **그러나 자동 "공개" 는 아니다.** merge 해도 글은 `publishAt` 전까지 어디에도 안 나온다.
-사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
-**모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
+완전 무인 운영의 증거는 자연 회차에서 한 글의 등록·PR·병합·운영 배포·실제 공개를 끝까지 연결한 기록이다. 운영 배포 시점과 글의 공개 시각은 각각 확인한다.
 
 ### 0.0A legacy·DIRECT 실행 설명 — rollout 이 `legacy`(또는 없음·손상)일 때만 적용
 
