@@ -1019,30 +1019,65 @@ const FILES = [
 
   /** batch-qa 위험 문장 요구가 프로필 기준 */
   const bq = fs.readFileSync('scripts/magazine-batch-qa.mjs', 'utf8')
-  /** 🔴 정본이 실연 결과를 사실대로 적었는가 */
-  const charter = fs.readFileSync('docs/operations/M-GRAPH-PROJECT-CHARTER.md', 'utf8')
-  check('🔴 정본이 실연 ①(자동 재생성)을 기록한다',
-    /실연 ① 자동 재생성/.test(charter) && /MED_CARE_LINE/.test(charter) && /1회 호출/.test(charter))
-  check('🔴 정본이 실연 ①에서 hero·register 가 stub 이었음을 밝힌다',
-    /hero-runner` 와 `magazine-register` 는 \*\*stub\*\*/.test(charter))
-  /**
-   * 🔴 실연 ②는 **격리 복제본에서 실제로 돌린 것**이다. 정본이 그 수치를 그대로 적어야
-   *    나중에 "말로만 했다" 와 구별된다. 숫자 하나라도 빠지면 FAIL 이다.
-   */
-  check('🔴 정본이 실연 ②(hero 생성 + 실제 등록)를 수치로 기록한다',
-    /실연 ② hero 생성 \+ 실제 등록/.test(charter) &&
-    /1200×675/.test(charter) &&
-    /2026-09-27T10:30:00\+09:00/.test(charter) &&
-    /26 → 25/.test(charter) &&
-    /\*\*DONE\*\*/.test(charter))
-  check('🔴 정본이 텍스트 원고 ChatGPT 호출 0회를 명시한다',
-    /텍스트 원고 ChatGPT 호출 0회/.test(charter))
-  check('🔴 정본이 운영 흔적 0 을 바이트 대조로 적는다',
-    /운영에 남긴 흔적 0/.test(charter) && /바이트 해시로 대조/.test(charter) &&
-    /regen-packets` 없음/.test(charter))
-  check('🔴 정본이 아직 하지 않은 것(push·PR·병합·배포)을 적는다',
-    /push · PR · 병합 · 배포 · 운영 등록은 하지 않았다/.test(charter) &&
-    /Codex 재검토/.test(charter))
+  // 실연의 범위와 stub 사용 여부는 당시 커밋에서 확인한다. 현재 동작은 별도 drive() 회귀로 검증한다.
+  const M3A_HISTORY = {
+    repo: 'https://github.com/MogoKim/soransoran',
+    commit: '20a0443b610aae331857d096db5df3252d5fe24d',
+    path: 'docs/operations/M-GRAPH-PROJECT-CHARTER.md',
+    records: [
+      { id: '상태 강등 · 그때 하지 않은 것', from: 145, to: 161,
+        facts: [/무인 완주는 아직 한 번도 없었다/, /push · PR · 병합 · 배포 · 운영 등록은 하지 않았다/, /Codex 재검토/] },
+      { id: '실연 ③ 무전송 실측', from: 278, to: 291,
+        facts: [/실연 ③ 실제 ChatGPT DOM 무전송 실측/, /send 클릭 \*\*0\*\*/, /증명하지 않는 것/] },
+      { id: '실연 ① 자동 재생성', from: 293, to: 300,
+        facts: [/실연 ① 자동 재생성/, /MED_CARE_LINE/, /1회 호출/, /hero-runner` 와 `magazine-register` 는 \*\*stub\*\*/] },
+      { id: '실연 ② hero 생성 + 실제 등록', from: 302, to: 324,
+        facts: [/실연 ② hero 생성 \+ 실제 등록/, /텍스트 원고 ChatGPT 호출 0회/, /1200×675/, /2026-09-27T10:30:00\+09:00/,
+          /26 → 25/, /\*\*DONE\*\*/, /운영에 남긴 흔적 0/, /바이트 해시로 대조/, /regen-packets` 없음/] },
+    ],
+  }
+  const historyUrl = (r, commit = M3A_HISTORY.commit) =>
+    `${M3A_HISTORY.repo}/blob/${commit}/${M3A_HISTORY.path}?plain=1#L${r.from}-L${r.to}`
+  /** 글자 안에서 그 기록의 고정 링크를 판정한다 — 순수 함수. 아래 자기 시험이 같은 함수를 부른다 */
+  const hasHistoryPointer = (text, record) => text.includes(`](${historyUrl(record)})`)
+  const charter = fs.readFileSync(M3A_HISTORY.path, 'utf8')
+  const historyStart = charter.indexOf('\n### 3-B-1.')
+  const historyEnd = historyStart < 0 ? -1 : charter.indexOf('\n### ', historyStart + 1)
+  const historySection = historyStart < 0 ? '' : charter.slice(historyStart, historyEnd < 0 ? undefined : historyEnd)
+  check('🔴 헌장에 과거 실연 기록의 색인 절(§3-B-1)이 있다', historySection.length > 0)
+  for (const r of M3A_HISTORY.records) {
+    check(`🔴 헌장이 「${r.id}」를 기준 커밋의 정확한 줄(L${r.from}-L${r.to})로 가리킨다`, hasHistoryPointer(historySection, r), historyUrl(r))
+  }
+  /** 브랜치·축약 SHA 로 자기 과거 줄을 가리키면 내일 다른 글자를 가리킨다 */
+  const mutablePointers = [...historySection.matchAll(/\/blob\/([^/\s)]+)\/docs\/operations\/M-GRAPH-PROJECT-CHARTER\.md[^)\s]*#L\d+/g)]
+    .filter((m) => m[1] !== M3A_HISTORY.commit).map((m) => m[1])
+  check('🔴 색인 절의 헌장 줄 링크는 전부 기준 커밋 전체 SHA 다', mutablePointers.length === 0,
+    mutablePointers.slice(0, 3).join(' · ') || M3A_HISTORY.commit.slice(0, 12))
+
+  const record = M3A_HISTORY.records[0]
+  check('  고정 링크의 설명을 바꿀 수 있다', hasHistoryPointer(`[당시 실연](${historyUrl(record)})`, record))
+  for (const invalid of [historyUrl(record, 'main'), historyUrl(record).concat('0'), historyUrl(record).concat('-broken')]) {
+    check(`  잘못된 줄 링크를 거부한다 (${invalid})`, !hasHistoryPointer(`[원문](${invalid})`, record))
+  }
+
+  /** ② 원문 — 기준 커밋 객체가 있을 때만 읽는다. 네트워크는 쓰지 않는다 */
+  const gitRead = (args) => nodeSpawnSync('git', args, { encoding: 'utf8', maxBuffer: 1e8 })
+  const hasHistoryCommit = gitRead(['cat-file', '-e', `${M3A_HISTORY.commit}^{commit}`]).status === 0
+  if (hasHistoryCommit) {
+    const pinned = gitRead(['show', `${M3A_HISTORY.commit}:${M3A_HISTORY.path}`])
+    check('🔴 기준 커밋에서 헌장 원문을 읽는다', pinned.status === 0 && Boolean(pinned.stdout), `exit ${pinned.status}`)
+    const pinnedLines = (pinned.stdout ?? '').split('\n')
+    for (const r of M3A_HISTORY.records) {
+      const body = pinnedLines.slice(r.from - 1, r.to).join('\n')
+      const missing = r.facts.filter((re) => !re.test(body))
+      check(`🔴 고정 원문 「${r.id}」(L${r.from}-L${r.to})가 그 사실을 실제로 적고 있다`, missing.length === 0,
+        missing.map(String).join(' · ') || `${r.facts.length}개 사실`)
+    }
+  } else if ((gitRead(['rev-parse', '--is-shallow-repository']).stdout ?? '').trim() === 'true') {
+    console.log(`  note 기준 커밋 ${M3A_HISTORY.commit.slice(0, 12)} 객체가 이 shallow clone 에 없다 — 원문 대조는 건너뛰고 포인터만 검사했다 (PASS 로 세지 않는다)`)
+  } else {
+    check('🔴 전체 이력 clone 에 기준 커밋이 있다 (고정 원문을 잃지 않았다)', false, M3A_HISTORY.commit)
+  }
 
   check('🔴 batch-qa riskSentences 요구가 프로필 기준이다',
     /needRisk = laneForRisk\.ok && laneForRisk\.profile !== 'STANDARD'/.test(bq))
