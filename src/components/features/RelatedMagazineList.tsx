@@ -12,8 +12,9 @@ import {
  * 🔴 화면은 그래프를 모른다. 무엇을 왜 골랐는지는 resolver 가 정하고,
  *    여기는 받은 순서대로 그린다. 그래야 그래프를 꺼도 이 파일이 그대로 산다.
  *
- * 🔴 **목록 공통 graphVersion 을 받지 않는다.** 한 목록에 지정 관계와 보충이 섞이므로
- *    공통값을 모든 클릭에 붙이면 보충 클릭이 그래프 성과로 잡힌다.
+ * 🔴 **목록 공통 graphVersion 을 받지 않는다.** 클릭 계측은 눌린 줄이 가진 source · graphVersion 을 쓴다.
+ *    한 목록은 전부 지정 관계이거나 전부 폴백이지만(2026-11-27 — 섞어 채우지 않는다),
+ *    그 사실을 화면이 다시 판정하지 않고 resolver 가 준 줄 값을 그대로 싣는다.
  *
  * 🔴 **서버 컴포넌트로 남는다.** 계측은 줄 하나(RelatedMagazineLink)만 클라이언트다.
  *    목록 전체를 내리면 글 데이터가 통째로 브라우저까지 간다.
@@ -48,7 +49,7 @@ export default function RelatedMagazineList({
               relationType={relationType}
               surface={surface}
               slot={slot}
-              /* 🔴 보충에는 슬롯 문구를 주지 않는다 — 슬롯인 척하면 화면이 거짓말을 한다 */
+              /* 🔴 폴백에는 슬롯 문구를 주지 않는다 — 슬롯인 척하면 화면이 거짓말을 한다 */
               slotLabel={slot ? SLOT_LABEL[slot] : null}
               reason={reason}
               source={source}
