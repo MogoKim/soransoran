@@ -47,6 +47,8 @@ export const MUTATIONS = {
   'image-failure-regenerates': [PRODUCE, 'const next = { ...setRequest(job, n, { consumed: true, ...patch }), lastHeroFailure: code }',
     'const next = { ...setRequest(job, n, { consumed: true, ...patch }), lastHeroFailure: code, draft: null, manuscript: null, validation: null }'],
   'local-final-ignored': [PRODUCE, '      const local = localFinal(ctx, job, r)\n', '      const local = null\n'],
+  'native-key-failure-ambiguous': ['scripts/lib/magazine-provider.mjs', "    if (j?.ok === false && j.sent === false && (KEY_NOT_SENT.has(j.code) || j.code === 'BAD_REQUEST')) return localNotSentWire(j.code)\n", ''],
+  'native-sent-failure-not-created': ['scripts/lib/magazine-provider.mjs', 'if (j?.ok === false && j.sent === false && (KEY_NOT_SENT.has(j.code)', 'if (j?.ok === false && (true'],
 }
 
 if (argv.includes('--list')) { console.log(Object.keys(MUTATIONS).join('\n')); process.exit(0) }
@@ -123,8 +125,8 @@ const T0 = Date.parse('2026-11-25T01:00:00.000Z')
 const rolloutOf = (target, path = 'vnext') => ({ code: 'VALID', effective: { path, release: 'draft', targetCandidates: target } })
 
 function env({ target = 1, faults = {}, stage = 'REHEARSAL', prices = RH.FAKE_PRICES, limits = {}, hooks = null, mutateProviderPlan = null, rollout = null, main = MAIN, remote = F.makeRemote(),
-  readBudgetRoots, jobsRoot = join(tmp('vp-jobs-'), 'jobs'), clock = { t: T0 } } = {}) {
-  const provider = { ...F.makeFakeProviders({ remote, faults }), models: { manuscript: 'fake-manuscript/1', image: 'fake-image/1' }, maxOutputTokens: 6000, repairMaxOutputTokens: 800, imageSize: '1536x1024', prices }
+  readBudgetRoots, jobsRoot = join(tmp('vp-jobs-'), 'jobs'), clock = { t: T0 }, wrapProvider = (p) => p } = {}) {
+  const provider = { ...wrapProvider(F.makeFakeProviders({ remote, faults })), models: { manuscript: 'fake-manuscript/1', image: 'fake-image/1' }, maxOutputTokens: 6000, repairMaxOutputTokens: 800, imageSize: '1536x1024', prices }
   const deps = (runId) => ({ jobsRoot, readBudgetRoots, now: () => clock.t, sleep: async (ms) => { clock.t += ms }, runId, readRollout: () => rollout ?? rolloutOf(target), readMain: () => main,
     provider, stage, publishedHeroes: () => HEROES, hooks, limits, mutateProviderPlan })
   let seq = 0
@@ -454,22 +456,60 @@ await test('E28', '격리 — 리허설은 저장소 안 · 운영 상태 폴더
   const b = await RH.rehearse({ root: ROOT, out: join(process.env.HOME, 'Library', 'Application Support', 'soransoran', 'x') })
   return { ok: a.code === 'OUT_NOT_ISOLATED' && b.code === 'OUT_NOT_ISOLATED' && !existsSync(join(ROOT, '.vnext-rehearsal-out')), detail: JSON.stringify([a.code, b.code]) }
 })
-await test('E29', '실제 adapter wire — POST /responses background·store:true · previous_response_id 0 · metadata 0 · 키는 헤더에만 · 끊김은 TRANSPORT', async () => {
+await test('E29', '실제 adapter wire — 네이티브 client 로 op · 본문(또는 id)만 넘긴다 · background·store:true · previous_response_id 0 · metadata 0 · 키를 받는 경로 0 · 끊김은 TRANSPORT', async () => {
+  // 네이티브 client 로 넘기는 한 건 — op 와 본문(또는 id)뿐이다. 키 · 헤더 · URL · host 를 Node 가 정하지 않는다(실제 client 의 전송 모양은 magazine-provider-client-check 가 본다)
   const seen = []
-  const fetchImpl = async (url, init) => { seen.push({ url, init }); return { status: 200, text: async () => JSON.stringify({ id: 'resp_x', status: 'queued', store: true }) } }
-  const key = `sk-test-${'k'.repeat(30)}`
-  const ad = PV.makeOpenAiProviders({ apiKey: key, fetchImpl, baseUrl: 'https://example.invalid/v1' })
+  const run = async (o) => { seen.push(o); return { started: true, status: 0, stdout: JSON.stringify({ v: 1, build: 'PRODUCTION', ok: true, httpStatus: 200, body: JSON.stringify({ id: 'resp_x001', status: 'queued', store: true }) }) } }
+  const verify = () => ({ ok: true, bin: '/nonexistent/client', sha256: 'x' })
+  const ad = PV.makeNativeProviders({ home: '/nonexistent', run, verify })
   const pp = CP.projectProviderPlan({ admission: { bundle: MAIN.bundle, controlText: MAIN.controlText, articlesText: MAIN.articlesText, legacyQueue: MAIN.legacyQueue, nowMs: T0 }, planId: RESUME.planId, planHash: RESUME.planHash })
   const { bodyText } = PV.buildManuscriptBody({ providerPlan: pp.providerPlan, model: 'm', maxOutputTokens: 6000 })
   const w = await ad.manuscript.submit(bodyText)
-  await ad.manuscript.retrieve('resp_x'); await ad.manuscript.remove('resp_x')
-  const body = JSON.parse(seen[0].init.body)
+  await ad.manuscript.retrieve('resp_x001'); await ad.manuscript.remove('resp_x001')
+  const sent = seen.map((s) => JSON.parse(s.input))
+  const body = JSON.parse(sent[0].body)
   let transport = null
-  try { await PV.makeOpenAiProviders({ apiKey: key, fetchImpl: async () => { throw new Error('boom') } }).manuscript.submit('{}') } catch (e) { transport = e.code }
+  try { await PV.makeNativeProviders({ home: '/nonexistent', verify, run: async () => ({ started: true, status: 11, stdout: JSON.stringify({ v: 1, build: 'PRODUCTION', ok: false, sent: true, code: 'TRANSPORT', detail: -1005 }) }) }).manuscript.submit('{}') } catch (e) { transport = e.code }
   const sentPlan = JSON.parse(body.input[0].content[0].text)
-  return { ok: seen[0].url.endsWith('/responses') && seen[0].init.method === 'POST' && body.background === true && body.store === true && !('previous_response_id' in body) && !('metadata' in body)
-    && seen[0].init.headers.Authorization === `Bearer ${key}` && !JSON.stringify(w).includes(key) && !seen[0].init.body.includes(key) && seen[1].init.method === 'GET' && seen[2].init.method === 'DELETE'
-    && transport === 'TRANSPORT' && JSON.stringify(sentPlan) === JSON.stringify(pp.providerPlan) && body.text.format.strict === true, detail: JSON.stringify({ urls: seen.map((s) => `${s.init.method} ${s.url}`), keys: Object.keys(body), transport }) }
+  return { ok: seen.every((s) => s.mode === 'request' && s.bin === '/nonexistent/client' && !('env' in s)) && Object.keys(sent[0]).sort().join() === 'body,op,timeoutMs,v' && sent[0].op === 'submit' && sent[0].body === bodyText
+    && body.background === true && body.store === true && !('previous_response_id' in body) && !('metadata' in body)
+    && Object.keys(sent[1]).sort().join() === 'id,op,timeoutMs,v' && sent[1].op === 'retrieve' && sent[2].op === 'remove' && sent[2].id === 'resp_x001' && PV.readSubmit(PV.parseWire(w.bodyText))?.id === 'resp_x001'
+    && !('makeOpenAiProviders' in PV) && !('readApiKeyFromKeychain' in PV)
+    && transport === 'TRANSPORT' && JSON.stringify(sentPlan) === JSON.stringify(pp.providerPlan) && body.text.format.strict === true, detail: JSON.stringify({ sent: sent.map((s) => Object.keys(s)), keys: Object.keys(body), transport }) }
+})
+// 네이티브 client 가 fake 원격 앞에 선 모양 — keyState 가 'ok' 가 아니면 client 는 전송하지 않고 그 사유를 말한다
+const nativeOver = (base, state) => {
+  const client = async ({ input }) => {
+    const q = JSON.parse(input)
+    const say = (o) => ({ started: true, status: 0, stdout: JSON.stringify({ v: 1, build: 'PRODUCTION', ...o }) })
+    if (state.key !== 'ok') return say({ ok: false, sent: false, code: state.key, detail: -25308 })
+    if (state.net === 'lost') { await base.manuscript.submit(q.body); return say({ ok: false, sent: true, code: 'TRANSPORT', detail: -1005 }) }
+    const wire = q.op === 'submit' ? await base.manuscript.submit(q.body) : q.op === 'retrieve' ? await base.manuscript.retrieve(q.id) : q.op === 'remove' ? await base.manuscript.remove(q.id) : await base.image.generate(q.body)
+    return say({ ok: true, httpStatus: wire.httpStatus, body: wire.bodyText })
+  }
+  return { ...PV.makeNativeProviders({ home: '/nonexistent', run: client, verify: () => ({ ok: true, bin: '/nonexistent/client', sha256: 'x' }) }), kind: 'fake' }
+}
+await test('E35', '키를 못 읽음(창 없이 · 전송 0) → 요청 FAILED · NOT_CREATED · 비용 0 · UNKNOWN 0 · 회차 정지 — 동의 뒤 다음 회차는 대기 없이 정상 완주', async () => {
+  const ks = { key: 'KEY_CONSENT_REQUIRED', net: 'ok' }
+  const e = env({ wrapProvider: (base) => nativeOver(base, ks) })
+  const r1 = await e.run()
+  const j1 = jobOf(e, 'I-T6-03'), q1 = j1.requests[0]
+  const raw1 = JSON.parse(J.readArtifact(e.jobsRoot, j1.planHash, 'raw-1-submit.json').toString('utf8'))
+  const sent1 = submits(e)
+  ks.key = 'ok'
+  await e.run()
+  const j2 = jobOf(e, 'I-T6-03')
+  return { ok: r1.outcome === 'AUTH' && sent1 === 0 && j1.requests.length === 1 && q1.status === 'FAILED' && q1.costBasis === 'NOT_CREATED' && q1.costUsd === 0 && !q1.orphanPossible && J.jobCostUsd(j1) === 0
+    && raw1.error.type === PV.LOCAL_NOT_SENT && raw1.error.code === 'KEY_CONSENT_REQUIRED' && !j1.requests.some((r) => r.status === 'UNKNOWN')
+    && state(j2) === 'HERO_READY' && submits(e) === 1, detail: JSON.stringify({ r1: r1.outcome, sent1, q1, st2: state(j2), s2: submits(e) }) }
+})
+await test('E36', '전송 뒤 끊김(client 가 sent:true) → 전송 여부 불명 그대로 — UNKNOWN · 비용 예약 유지 · 확인 창 전 재전송 0', async () => {
+  const st = { key: 'ok', net: 'lost' }
+  const e = env({ wrapProvider: (base) => nativeOver(base, st) })
+  await e.run()
+  const q = jobOf(e, 'I-T6-03').requests[0]
+  st.net = 'ok'; e.advance(1); await e.run()
+  return { ok: q.status === 'UNKNOWN' && q.orphanPossible === true && q.costBasis === 'RESERVED' && q.costUsd > 0 && q.error === 'TRANSPORT:TRANSPORT:-1005' && submits(e) === 1, detail: JSON.stringify({ q, s: submits(e) }) }
 })
 await test('E31', '실제 캐시 쓰기·읽기 단가와 불완전한 영수증을 구분한다', () => {
   const usage = { inputTokens: 1162, outputTokens: 1822, details: { cached_tokens: 0, cache_write_tokens: 1159,

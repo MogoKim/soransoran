@@ -191,6 +191,8 @@ PLANNED → SUBMITTED(responseId) → GENERATED(로컬 저장·해시 검증) �
 - 이미지 baseline `gpt-image-2.5-flare`(필요 시 `gpt-image-2.5-sunburst` 비교). 모델명·단가는 S5 직전 공식 가격 페이지로 다시 대조한다.
 - **API 키**: S5 직전에만 창업자가 **별도 project · 최소 권한**으로 만든다(Responses 생성·조회·삭제 · 이미지 생성). 키는 저장소·로그·Job 에 쓰지 않는다.
   DELETE 권한과 `store` 실효값은 S5 canary 의 확인 항목이다.
+- 회사 Mac의 실제 공급은 전용 실행 파일이 키체인의 매거진 키로 OpenAI를 호출한다. 설치는 `node scripts/magazine-provider-client.mjs install --approved-by <담당자>`로 수행한다. 설치 결과에 표시된 실행 파일의 `grant`를 호출한 뒤 macOS 창에서 앱과 항목 이름을 확인하고 최초 1회 허용한다. 무인 점검은 새 프로세스의 `node scripts/magazine-provider-client.mjs status`가 `ready: true`인지 본다. 이 점검의 유료 호출은 0회다.
+- 키체인 잠금이나 동의 누락이 있으면 예약 회차는 창을 띄우지 않고 멈춘다. 실행 파일 교체 때는 새 소스와 빌드를 확인하고 `install --reapprove --approved-by <담당자>`로 설치한 뒤 동의와 무인 점검을 반복한다.
 
 **EvidenceProvider (M-GRAPH 공급 loop 의 외부 수집기 — 정책은 charter §18-B.5 · 첫 글 뒤·병렬)**
 
