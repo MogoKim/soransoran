@@ -1,0 +1,71 @@
+{
+  "answerScope": "부모 세대의 생각이 달라지는 중이라는 것",
+  "audienceSituation": "자식이 결혼 생각이 없다고 하거나, 나도 굳이 시키고 싶지 않아졌을 때",
+  "bundleHash": "bf5322bdb91b6b28c4884e63f5194cd8c1afe26d0eb42a987b2a70b8f9404277",
+  "cluster": "family",
+  "cta": {
+    "communityDestination": "/community/free"
+  },
+  "exclusions": [
+    "결혼 권유",
+    "비혼 비난"
+  ],
+  "forbiddenClaims": [
+    "의학·재정 단정",
+    "제품 추천"
+  ],
+  "graphVersion": "g-20261124-e8a6b8",
+  "inclusions": [],
+  "intentId": "I-T3-47",
+  "officialSourceUrls": [],
+  "planHash": "5d529b42d832bbd19b44764c928c916429961ef25f364ca051b95b39376ab504",
+  "planId": "g-20261124-e8a6b8:I-T3-47",
+  "policyBoard": {
+    "hash": "c21d58fd6089c49a1bf3475e74fa8cddc774051d37be777707de07670a15250d",
+    "id": "magazine-content-plan-policy/1"
+  },
+  "primaryQuery": "자녀가 결혼을 안 하겠다고 할 때",
+  "quality": {
+    "display": {
+      "direct": [
+        "E-0326"
+      ],
+      "discovery": null
+    },
+    "meetsDisplayTarget": false
+  },
+  "relations": {
+    "direct": [
+      {
+        "anchorLabel": "자녀가 독립한 뒤 집이 조용할 때",
+        "edgeId": "E-0326",
+        "evidence": {
+          "basisSha256": "43fad15aaead5fada155dc745afc44fcceffc42184c4a35ae5120eb76be27b54",
+          "objectSha256": "c77216c3de144ee74b4ace7f37a3f31969eafaff17e5fb57c4169d053db266e6",
+          "refs": [
+            {
+              "ref": "evidence/serpapi/2026-09-21T06-44-09-306Z_bb8b8000.json",
+              "sha256": "8ca7e6446dba31e58085ce05045e8167fbe614a8910342dda335d4127038839a"
+            },
+            {
+              "ref": "evidence/serpapi/2026-09-21T12-24-03-617Z_f3c4807a.json",
+              "sha256": "619a9b0ca9babd2377bdcbe5d9ecce40d6c954a6afc6a7b2b6e5143d59434c80"
+            }
+          ]
+        },
+        "placement": "FOOTER_NEXT",
+        "priority": 1,
+        "readerReason": "자녀의 결혼 계획을 존중하면서도 독립 후 내 생활이 걱정된다면, 혼자 쓰게 된 시간에 관한 이야기로 이어진다",
+        "relationType": "NEXT_QUESTION",
+        "slot": "DIRECT_NEXT",
+        "toIntentId": "I-T3-05"
+      }
+    ],
+    "discovery": []
+  },
+  "schemaVersion": "magazine-content-plan/1",
+  "territoryGrade": "AUTO",
+  "territoryId": "T3",
+  "textProvenance": "CLEAR",
+  "validationProfile": "STANDARD"
+}
