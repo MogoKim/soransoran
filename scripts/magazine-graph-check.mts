@@ -340,14 +340,23 @@ check(
     editorialResolved.every(({ result }) => result.source === 'FALLBACK' && result.reason === 'EDITORIAL_NON_SEARCH'),
     `${editorialResolved.length}편`,
   )
+  /**
+   * 🔴 2026-11-27 — 앞판은 여기서 「각 canary 에 직접 3칸 + 발견 1칸인 표본」을 요구했다. 그 표본은 예전 방식 글로 채운 칸까지 세어야만 있었다.
+   *    3+1 은 표시 **상한**이자 품질 지표이지 채워야 하는 칸이 아니다(헌장 §18-B.2). 상한이 지켜지는지는 ④-C · ④-F 가 보고,
+   *    여기는 각 canary 에 **근거 있는 직접 연관 줄**이 실제로 나오는지만 본다. 3+1 충족 수는 판정 없이 적는다.
+   */
+  const shapeOf = (cluster: string) => canaryResolved.filter(({ article, result }) => article.cluster === cluster && result.source === 'GRAPH')
+    .map(({ result }) => ({ direct: result.items.filter((i) => i.slot !== DISCOVERY_SLOT).length, discovery: result.items.filter((i) => i.slot === DISCOVERY_SLOT).length }))
   check(
-    '  각 canary에 직접 3칸 + 발견 1칸인 표본이 있다',
-    [...canaryClusters].every((cluster) => canaryResolved
-      .filter(({ article }) => article.cluster === cluster)
-      .some(({ result }) =>
-        result.items.filter((item) => item.slot !== DISCOVERY_SLOT).length === MAX_DIRECT
-        && result.items.filter((item) => item.slot === DISCOVERY_SLOT).length === 1)),
+    '  각 canary에 근거 있는 직접 연관 줄이 나온 표본이 있다',
+    [...canaryClusters].every((cluster) => shapeOf(cluster).some((s) => s.direct >= 1)),
   )
+  for (const cluster of canaryClusters) {
+    const shapes = shapeOf(cluster)
+    const tally = new Map<string, number>()
+    for (const s of shapes) tally.set(`${s.direct}+${s.discovery}`, (tally.get(`${s.direct}+${s.discovery}`) ?? 0) + 1)
+    console.log(`  info ${cluster} 그래프 목록 ${shapes.length}편 — 직접+발견 ${[...tally].sort().map(([k, n]) => `${k}:${n}편`).join(' · ')} (3+1 은 품질 지표 · 게이트 아님)`)
+  }
   if (canaryClusters.has('family')) {
     check(
       '  family 신규·기존 글이 서로 역방향으로 연결된다',
@@ -541,72 +550,85 @@ console.log('\n④-T 공개 경계 — 10:29:59 미공개 · 10:30:00 공개 · 
   check('  now 를 생략한 기본 호출 = 지금 시각을 넘긴 호출 (결과·순서 그대로)', sameDefault)
 }
 
-// ── ④-B 🔴 보충 — 그래프를 켰다고 연관 글이 줄면 안 된다 ──
-console.log('\n④-B 부족분 보충')
+// ── ④-B 🔴 근거 있는 관계만큼 — 그래프가 고른 목록에 예전 방식 글을 섞어 채우지 않는다 (2026-11-27) ──
+//    헌장 §11 「화면은 resolver 가 근거 있는 관계만큼 보여 준다」 · §18-B.2 「근거가 없는 칸은 비운다」.
+//    앞판은 「그래프를 켜도 연관 글이 줄면 안 된다」며 같은 cluster 최신 글로 채웠다 — 그 가정을 이 절이 뒤집는다.
+console.log('\n④-B 근거 있는 관계만큼 (그래프 목록에 임의 보충 0)')
 
 {
-  let shrank = 0
-  let overLegacy = 0
-  let wrongVersion = 0
-  let fillPretendsGraph = 0
-  let filled = 0
-  const detail: string[] = []
-
-  for (const a of published) {
-    const legacy = legacyOf(a)
-    const r = resolveAt(a, ALL_ON)
-    const g = r.items.filter((i) => i.source === 'GRAPH')
-    const f = r.items.filter((i) => i.source === 'FALLBACK_FILL')
-    if (f.length > 0) filled++
-
-    // 🔴 줄어들면 안 된다 — 이 보충의 존재 이유다
-    if (r.items.length < legacy.length) {
-      shrank++
-      detail.push(`${a.slug} ${legacy.length}→${r.items.length}`)
-    }
-    /**
-     * 🔴 억지로 늘리지 않는다 — **직접 연관 자리**의 상한은
-     *    `max(예전 개수, 그래프 직접 연관 수)` 이고 3을 넘지 않는다.
-     *    발견 카드는 그래프만 채우는 별도 자리라 이 계산에 들어가지 않는다.
-     */
-    const directOut = r.items.filter((i) => i.slot !== DISCOVERY_SLOT)
-    const graphDirect = g.filter((i) => i.slot !== DISCOVERY_SLOT)
-    if (directOut.length > Math.min(MAX_DIRECT, Math.max(legacy.length, graphDirect.length))) {
-      overLegacy++
-    }
-    // 🔴 출처와 버전이 어긋나면 계측이 거짓말을 한다
-    for (const i of r.items) {
-      if ((i.source === 'GRAPH') !== (i.graphVersion !== 'none')) wrongVersion++
-    }
-    // 🔴 보충 항목이 그래프 관계인 척하면 안 된다
-    if (f.some((i) => i.graphVersion !== 'none')) fillPretendsGraph++
+  const bindingNow = runtimeReleaseBinding(GRAPH.graphVersion)
+  const mappingsNow = effectiveGraphMappings(GRAPH, published, bindingNow)
+  const footer = new Set<string>(FOOTER_SURFACES)
+  /** 이 줄을 낸 근거 edge — 출발 글의 intent 에서 나가 대상 글의 intent 로 가고, 슬롯 · 이유 · 표면 · 관계 유형이 줄과 같다 */
+  const evidenceOf = (fromSlug: string, i: { article: { slug: string }; slot: string | null; reason: string | null; surface: string; relationType: string }) => {
+    const from = new Set(mappingsNow.filter((m) => m.slug === fromSlug).map((m) => m.intent))
+    const to = new Set(mappingsNow.filter((m) => m.slug === i.article.slug).map((m) => m.intent))
+    return GRAPH.edges.filter((e) => from.has(e.from) && to.has(e.to) && footer.has(e.placement)
+      && e.slot !== null && e.slot === i.slot && e.reason === i.reason && e.placement === i.surface && e.type === i.relationType)
   }
 
-  check(`그래프를 켜도 연관 글이 줄어든 글 0`, shrank === 0, detail.join(' · ') || '없음')
-  check('  예전보다 억지로 늘어난 글 0', overLegacy === 0)
-  check('  출처와 graphVersion 이 어긋난 항목 0', wrongVersion === 0)
-  check("  보충 항목은 전부 graph_version='none'", fillPretendsGraph === 0)
-  check('  실제로 보충이 일어난 글이 있다', filled > 0, `${filled}편`)
+  let mixed = 0
+  let wrongVersion = 0
+  let fallbackDressed = 0
+  let graphLists = 0
+  let graphItems = 0
+  const noEvidence: string[] = []
+  const padded: string[] = []
+  const fewer: string[] = []
 
-  /** 🔴 보충이 자기 자신·중복을 들여보내지 않는가 */
+  for (const env of [DEFAULT, ALL_ON]) {
+    for (const a of published) {
+      const r = resolveAt(a, env)
+      // 🔴 한 목록은 전부 GRAPH 이거나 전부 FALLBACK 이다 — 줄의 출처가 목록 판정과 다르면 섞인 것이다
+      if (r.items.some((i) => i.source !== r.source)) mixed++
+      for (const i of r.items) {
+        // 🔴 출처와 버전이 어긋나면 계측이 거짓말을 한다
+        if ((i.source === 'GRAPH') !== (i.graphVersion === GRAPH.graphVersion) || (i.source !== 'GRAPH' && i.graphVersion !== 'none')) wrongVersion++
+        if (i.source !== 'GRAPH' && (i.slot !== null || i.reason !== null)) fallbackDressed++
+      }
+      if (r.source !== 'GRAPH') continue
+      graphLists++
+      for (const i of r.items) {
+        graphItems++
+        if (evidenceOf(a.slug, i).length === 0) noEvidence.push(`${a.slug}→${i.article.slug}`)
+      }
+      // 🔴 예전 방식 결과와 겹치는 글이 실릴 수는 있다 — 근거 edge 가 있을 때만이다. 근거 없이 겹치면 채운 것이다
+      const legacy = legacyOf(a)
+      if (r.items.length < legacy.length) fewer.push(`${a.slug} ${legacy.length}→${r.items.length}`)
+      const strangers = r.items.filter((i) => legacy.includes(i.article.slug) && evidenceOf(a.slug, i).length === 0)
+      if (strangers.length > 0) padded.push(`${a.slug}: ${strangers.map((i) => i.article.slug).join(',')}`)
+    }
+  }
+
+  check('🔴 그래프가 고른 목록의 줄은 전부 GRAPH 출처다 — 한 목록에 두 출처가 섞인 글 0', mixed === 0)
+  check('🔴 GRAPH 줄은 전부 근거 edge 가 있다 (출발 intent → 대상 intent · 슬롯 · 이유 · 표면 · 관계 유형 일치)',
+    noEvidence.length === 0, `${graphItems}줄${noEvidence.length ? ` · ${noEvidence.slice(0, 5).join(' | ')}` : ''}`)
+  check('🔴 예전 방식(같은 cluster 최신)에만 있는 무관한 글이 그래프 목록에 실린 경우 0', padded.length === 0, padded.slice(0, 5).join(' | ') || '없음')
+  check('  이 절이 실제 그래프 목록과 줄을 봤다 (0이면 검사가 아니다)', graphLists > 0 && graphItems > 0, `${graphLists}목록 · ${graphItems}줄`)
+  check('  출처와 graphVersion 이 어긋난 항목 0', wrongVersion === 0)
+  check('  폴백 줄은 슬롯 · 이유가 없다 (그래프 관계인 척하지 않는다)', fallbackDressed === 0)
+  /**
+   * 🔴 **죽은 검사를 만들지 않는다** — 근거 관계가 예전 개수보다 적은 글이 운영 그래프에 실제로 있어야 한다.
+   *    그런 글이 0 이면 「채우지 않는다」는 주장이 아무것도 시험하지 않는다. 앞판은 이 글들을 예전 방식 글로 채웠다.
+   */
+  check('  근거 관계가 예전 개수보다 적은 글이 실제로 있고, 그 글은 줄어든 채로 나간다 (채우지 않는다)',
+    fewer.length > 0, `${fewer.length}건 · ${fewer.slice(0, 4).join(' · ')}`)
+
+  /** 🔴 자기 자신·중복을 들여보내지 않는가 */
   let selfOrDup = 0
   for (const a of published) {
     const out = resolveAt(a, ALL_ON).items.map((i) => i.article.slug)
     if (out.includes(a.slug) || new Set(out).size !== out.length) selfOrDup++
   }
-  check('  보충 뒤에도 자기 링크·중복 0', selfOrDup === 0)
+  check('  자기 링크·중복 0', selfOrDup === 0)
 
-  /** 🔴 **죽은 보충을 만들지 않는다** — 보충을 끄면 13편이 다시 줄어야 한다 */
-  const wouldShrink = published.filter((a) => {
-    const r = resolveAt(a, ALL_ON)
-    const g = r.items.filter((i) => i.source === 'GRAPH').length
-    return r.source === 'GRAPH' && g < legacyOf(a).length
-  })
-  check(
-    '  보충이 없었다면 줄었을 글이 실제로 있다 (보충이 일하고 있다)',
-    wouldShrink.length > 0,
-    `${wouldShrink.length}편`,
-  )
+  /** 🔴 resolver 조립 함수에 예전 방식 글이 들어올 자리가 없다 — 폴백 줄을 만드는 곳은 fallback() 하나다 */
+  const assembleSrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
+  const assembleBody = assembleSrc.slice(assembleSrc.indexOf('export function resolveFromGraph('), assembleSrc.indexOf('export function resolveRelatedMagazine('))
+  check('🔴 조립 함수(resolveFromGraph)가 예전 방식 글을 받지도 만들지도 않는다 · 폴백 줄 생성은 fallback() 한 곳',
+    assembleBody.length > 0 && !/getRelatedMagazineArticles|asFallbackItem|legacy/.test(assembleBody)
+      && assembleSrc.split('asFallbackItem(').length - 1 === 2 // 정의 1 + fallback() 의 호출 1
+      && assembleSrc.includes("export type RelatedMagazineSource = 'GRAPH' | 'FALLBACK'\n"))
 
   /** 🔴 목록 전체 graphVersion 을 클릭에 쓰지 않는다 — 화면이 항목 값을 쓰는지 본다 */
   const listSrc = readFileSync(join(ROOT, 'src/components/features/RelatedMagazineList.tsx'), 'utf8')
@@ -672,7 +694,9 @@ console.log('\n④-C 추천 4슬롯 (직접 3 + 발견 1)')
     })
   }
 
-  check('정확히 4개가 나오는 글이 있다', total4 > 0, `${total4}편`)
+  // 🔴 2026-11-27 — 「정확히 4개가 나오는 글이 있다」를 뺐다. 그 글은 예전 방식 글로 채운 칸을 세어야만 있었다(운영 그래프 실측 0편).
+  //    4줄(직접 3 + 발견 1)이 실제로 조립되고 상한이 지켜지는지는 ④-F 의 합성 반례가 본다. 여기는 숫자만 적는다
+  console.log(`  info 근거 관계만으로 ${MAX_TOTAL}줄이 찬 글 ${total4}편 (품질 지표 · 게이트 아님)`)
   check('발견 카드가 붙은 글이 있다', withDisc > 0, `${withDisc}편`)
   check('  한 글에 발견 카드는 최대 1개', multiDisc === 0)
   check('  직접 연관은 3개를 넘지 않는다', overDirect === 0)
@@ -680,8 +704,8 @@ console.log('\n④-C 추천 4슬롯 (직접 3 + 발견 1)')
   check('🔴 발견 카드는 GRAPH 출처만 — 최신·인기 글로 채우지 않는다', discNotGraph === 0)
   check('🔴 발견 카드가 직접 연관과 중복되지 않는다', discDuplicate === 0)
   check('  발견 카드는 마지막 자리다', discNotLast === 0)
-  check('🔴 보충 항목은 슬롯이 없다 (슬롯인 척하지 않는다)', fillHasSlot === 0)
-  check('🔴 보충 항목은 추천 이유가 없다', fillHasReason === 0)
+  check('🔴 폴백 항목은 슬롯이 없다 (슬롯인 척하지 않는다)', fillHasSlot === 0)
+  check('🔴 폴백 항목은 추천 이유가 없다', fillHasReason === 0)
   check('🔴 그래프 항목은 전부 검증된 이유 문구를 가진다', graphNoReason === 0)
   check('  position 이 화면 순서와 같다', badPosition === 0)
 
@@ -742,14 +766,14 @@ console.log('\n④-F edge 단위 선택 정책 (실제 조립 함수 resolveFrom
   })
   const fm = (intent: string, slug: string, coverage?: string): FMap =>
     coverage === undefined ? { intent, slug, cluster: 'fam' } : { intent, slug, cluster: 'fam', coverage }
-  const once = (edges: FEdge[], maps: FMap[], arts: MagazineArticle[], legacy: MagazineArticle[]) => {
-    const r = resolveFromGraph(SELF, { graphVersion: 'g-test', edges, mappings: [fm('I-SELF', 'self'), ...maps] }, [SELF, ...arts], () => legacy)
+  const once = (edges: FEdge[], maps: FMap[], arts: MagazineArticle[]) => {
+    const r = resolveFromGraph(SELF, { graphVersion: 'g-test', edges, mappings: [fm('I-SELF', 'self'), ...maps] }, [SELF, ...arts])
     return 'reason' in r ? r.reason : r.resolved.items.map((i) => `${i.article.slug}|${i.source}|${i.slot ?? '-'}|${i.reason ?? '-'}`)
   }
   /** 🔴 edge · mapping · 공개 글 순서를 모두 뒤집어도 같은 답이어야 한다 */
-  const run = (edges: FEdge[], maps: FMap[], arts: MagazineArticle[], legacy: MagazineArticle[] = []) => {
-    const a = once(edges, maps, arts, legacy)
-    const b = once([...edges].reverse(), [...maps].reverse(), [...arts].reverse(), legacy)
+  const run = (edges: FEdge[], maps: FMap[], arts: MagazineArticle[]) => {
+    const a = once(edges, maps, arts)
+    const b = once([...edges].reverse(), [...maps].reverse(), [...arts].reverse())
     return JSON.stringify(a) === JSON.stringify(b) ? a : [`순서 의존 ${JSON.stringify(a)} / ${JSON.stringify(b)}`]
   }
   const graphSlugs = (r: string[] | string) => (Array.isArray(r) ? r.filter((x) => x.split('|')[1] === 'GRAPH').map((x) => x.split('|')[0]) : [r])
@@ -794,6 +818,56 @@ console.log('\n④-F edge 단위 선택 정책 (실제 조립 함수 resolveFrom
 
   r = run([fe('E-1', 'I-A', 1, DISCOVERY_SLOT)], [fm('I-A', 'old', 'ANSWERS'), fm('I-A', 'new', 'ANSWERS_PARTIAL')], [OLD, NEW])
   check('발견 edge 도 같은 규칙 — 대표 1개(오래된 ANSWERS)', same(r, ['old']), JSON.stringify(r))
+
+  /**
+   * 🔴 **근거 있는 관계만큼** (2026-11-27 · 헌장 §11 · §18-B.2) — 조립 결과 **전체**를 글자 그대로 대조한다(GRAPH 줄만 추리지 않는다).
+   *    공개 목록에는 관계가 없는 같은 cluster 글(예전 방식이라면 최신순으로 실렸을 글)을 늘 섞어 둔다 — 그 글은 한 편도 나오면 안 된다.
+   *    실제 사고: 승인된 관계 1개(empty-nest-quiet) 옆에 같은 cluster 최신 글 2편이 보충으로 실렸다.
+   */
+  const exact = (got: string[] | string, want: string[] | string) => JSON.stringify(got) === JSON.stringify(want)
+  const STRAY = [art('stray-newest', '2026-11-26'), art('stray-newer', '2026-11-25'), art('stray-new', '2026-11-24')]
+  r = run([fe('E-1', 'I-A')], [fm('I-A', 'old', 'ANSWERS')], [OLD, ...STRAY])
+  check('🔴 근거 관계가 1개면 정확히 1줄 — 같은 cluster 최신 글 3편이 공개돼 있어도 0편 섞인다',
+    exact(r, ['old|GRAPH|DIRECT_NEXT|E-1 이유']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A'), fe('E-2', 'I-B', 2, 'SAME_EXPERIENCE')], [fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'mid', 'ANSWERS')], [OLD, MID, ...STRAY])
+  check('🔴 근거 관계가 2개면 정확히 2줄 (3번째 자리를 채우지 않는다)',
+    exact(r, ['old|GRAPH|DIRECT_NEXT|E-1 이유', 'mid|GRAPH|SAME_EXPERIENCE|E-2 이유']), JSON.stringify(r))
+  r = run([fe('E-D', 'I-A', 1, DISCOVERY_SLOT)], [fm('I-A', 'old', 'ANSWERS')], [OLD, ...STRAY])
+  check('🔴 발견 관계만 있으면 발견 1줄뿐 — 직접 연관 자리를 예전 방식 글로 채우지 않는다',
+    exact(r, [`old|GRAPH|${DISCOVERY_SLOT}|E-D 이유`]), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A'), fe('E-D', 'I-B', 1, DISCOVERY_SLOT)], [fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'mid', 'ANSWERS')], [OLD, MID, ...STRAY])
+  check('🔴 직접 1 + 발견 1 = 2줄 · 발견이 마지막 · 사이를 채우지 않는다',
+    exact(r, ['old|GRAPH|DIRECT_NEXT|E-1 이유', `mid|GRAPH|${DISCOVERY_SLOT}|E-D 이유`]), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A'), fe('E-D', 'I-B', 1, DISCOVERY_SLOT)], [fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'old', 'ANSWERS')], [OLD, ...STRAY])
+  check('🔴 직접과 발견이 같은 글을 가리키면 직접 1줄만 — 중복도 없고 빈 발견 자리를 다른 글로 채우지도 않는다',
+    exact(r, ['old|GRAPH|DIRECT_NEXT|E-1 이유']), JSON.stringify(r))
+  r = run([fe('E-D1', 'I-A', 1, DISCOVERY_SLOT), fe('E-D2', 'I-B', 2, DISCOVERY_SLOT)], [fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'mid', 'ANSWERS')], [OLD, MID, ...STRAY])
+  check('  발견 edge 가 둘이어도 발견은 1줄 (priority 가 앞선 edge)',
+    exact(r, [`old|GRAPH|${DISCOVERY_SLOT}|E-D1 이유`]), JSON.stringify(r))
+  r = run([fe('E-D1', 'I-A', 1, DISCOVERY_SLOT), fe('E-D2', 'I-B', 2, DISCOVERY_SLOT), fe('E-1', 'I-A')],
+    [fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'mid', 'ANSWERS')], [OLD, MID, ...STRAY])
+  check('  앞선 발견 대표가 직접 연관과 같은 글이면 다음 발견 edge 가 그 자리를 갖는다 (근거 있는 관계로만)',
+    exact(r, ['old|GRAPH|DIRECT_NEXT|E-1 이유', `mid|GRAPH|${DISCOVERY_SLOT}|E-D2 이유`]), JSON.stringify(r))
+  const D4 = ['a', 'b', 'c', 'd'].map((k, i) => art(`${k}-only`, `2026-10-0${i + 1}`))
+  r = run([fe('E-1', 'I-A', 1), fe('E-2', 'I-B', 2), fe('E-3', 'I-C', 3), fe('E-4', 'I-D', 4), fe('E-D', 'I-E', 1, DISCOVERY_SLOT)],
+    [fm('I-A', 'a-only', 'ANSWERS'), fm('I-B', 'b-only', 'ANSWERS'), fm('I-C', 'c-only', 'ANSWERS'), fm('I-D', 'd-only', 'ANSWERS'), fm('I-E', 'old', 'ANSWERS')], [...D4, OLD, ...STRAY])
+  check('  직접 edge 4개 + 발견 1개 → 직접 상한 3(priority 순) + 발견 1 = 4줄 · 상한 유지',
+    exact(r, ['a-only|GRAPH|DIRECT_NEXT|E-1 이유', 'b-only|GRAPH|DIRECT_NEXT|E-2 이유', 'c-only|GRAPH|DIRECT_NEXT|E-3 이유', `old|GRAPH|${DISCOVERY_SLOT}|E-D 이유`]), JSON.stringify(r))
+  r = run([fe('E-1', 'I-A'), fe('E-2', 'I-GONE')], [fm('I-A', 'old', 'ANSWERS'), fm('I-GONE', 'not-public', 'ANSWERS'), fm('I-A', 'self', 'ANSWERS')], [OLD, ...STRAY])
+  check('  미공개 대상 · 자기 자신을 가리키는 관계는 줄을 내지 않고, 그 빈자리도 채우지 않는다',
+    exact(r, ['old|GRAPH|DIRECT_NEXT|E-1 이유']), JSON.stringify(r))
+  r = run([fe('E-1', 'I-GONE')], [fm('I-GONE', 'not-public', 'ANSWERS')], [...STRAY])
+  check('  근거 관계가 0줄이면 조립 함수는 목록을 만들지 않는다(NO_RESULT) — 예전 화면은 호출자의 폴백이 통째로 낸다',
+    exact(r, 'NO_RESULT'), JSON.stringify(r))
+  {
+    const one = resolveFromGraph(SELF, { graphVersion: 'g-test', edges: [fe('E-1', 'I-A'), fe('E-D', 'I-B', 1, DISCOVERY_SLOT)],
+      mappings: [fm('I-SELF', 'self'), fm('I-A', 'old', 'ANSWERS'), fm('I-B', 'mid', 'ANSWERS')] }, [SELF, OLD, MID, ...STRAY])
+    const its = 'resolved' in one ? one.resolved.items : []
+    check('  조립 결과의 줄은 전부 source GRAPH · 그 판 graphVersion · 슬롯과 이유 있음 · position 0부터 연속',
+      its.length === 2 && its.every((i, n) => i.source === 'GRAPH' && i.graphVersion === 'g-test' && i.slot !== null && !!i.reason && i.position === n)
+        && 'resolved' in one && one.resolved.source === 'GRAPH' && one.resolved.reason === null,
+      its.map((i) => `${i.article.slug}:${i.source}:${i.graphVersion}:${i.position}`).join(','))
+  }
 
   /**
    * 🔴 연결 검사 — 운영 resolver 가 실제 GRAPH 에서 edge 단위 계약을 지키는가. 특정 slug 를 적지 않는다.
@@ -867,7 +941,7 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   const pi = (...ids: string[]): PIntent[] => ids.map((id) => ({ id, cluster: 'fam', board: 'free' }))
   const g = (edges: PEdge[], mappings: PMap[], intents?: PIntent[]) => ({ graphVersion: 'g-p', edges, mappings, ...(intents ? { intents } : {}) })
   const items = (self: MagazineArticle, graph: ReturnType<typeof g>, published: MagazineArticle[], binding: ReleaseBinding | null = BIND) => {
-    const r = resolveFromGraph(self, graph, published, () => [], binding)
+    const r = resolveFromGraph(self, graph, published, binding)
     return 'reason' in r ? r.reason : r.resolved.items.map((i) => `${i.article.slug}|${i.source}|${i.slot ?? '-'}|${i.reason ?? '-'}|${i.relationType}|${i.surface}`)
   }
   /** canonical 밖에서 실제로 더해진 출처 신원 — 버린 이유를 따로 돌려받지 않는다(운영이 읽지 않는 진단은 계약이 아니다) */
@@ -1000,12 +1074,12 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
   check('반례 ④ 결속 없음(기본값) — 형식이 맞는 출처도 대상 0 · overlay 0',
     NO_RELEASE_BINDING === null && items(OTH, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_RESULT'
       && items(NEW, full, [NEW, OLD, OTH], NO_RELEASE_BINDING) === 'NO_MAPPING'
-      && (() => { const r = resolveFromGraph(OTH, full, [NEW, OLD, OTH], () => []); return 'reason' in r && r.reason === 'NO_RESULT' })()
+      && (() => { const r = resolveFromGraph(OTH, full, [NEW, OLD, OTH]); return 'reason' in r && r.reason === 'NO_RESULT' })()
       && effectiveGraphMappings(full, [NEW, OLD, OTH]) === full.mappings && addedOf(full, [NEW, OLD, OTH], NO_RELEASE_BINDING).length === 0)
   {
     const gsrc = readFileSync(join(ROOT, 'src/lib/magazine-graph.ts'), 'utf8')
     // 🔴 S3-P2 — 운영 resolver 는 생성 결속(지금 판일 때만)을 넘기고, admission 은 같은 컴파일 결과의 결속을 쓴다
-    const prodCall = '    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>\n      getRelatedMagazineArticles(article, MAX_DIRECT, now),\n      runtimeReleaseBinding(GRAPH.graphVersion),\n    )\n'
+    const prodCall = '    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), runtimeReleaseBinding(GRAPH.graphVersion))\n'
     check('  운영 resolver 호출은 runtimeReleaseBinding(GRAPH.graphVersion) 을 넘긴다 · resolveFromGraph 기본값은 결속 없음',
       gsrc.split(prodCall).length - 1 === 1 && /binding: ReleaseBinding \| null = NO_RELEASE_BINDING,\n\): \{ resolved/.test(gsrc))
     const cpsrc = readFileSync(join(ROOT, 'scripts/lib/magazine-content-plan.mjs'), 'utf8')
@@ -1065,7 +1139,7 @@ console.log('\n④-P vNext Article 출처(release) overlay — 신원만 (실제
       for (const a of accepted) {
         const self = projected.get(a.planId)!
         const prior = accepted.filter((p) => p.layer < a.layer).map((p) => projected.get(p.planId)!)
-        const r = resolveFromGraph(self, GRAPH, [...published, ...prior, self], () => [], wantBinding)
+        const r = resolveFromGraph(self, GRAPH, [...published, ...prior, self], wantBinding)
         const rendered = 'resolved' in r ? r.resolved.items : []
         const grounded = a.groundedBy.some((g) => {
           const slug = g.target === 'PUBLIC' ? g.slug : projected.get(g.planId ?? '')?.slug
@@ -1134,7 +1208,7 @@ console.log('\n④-G graph 참여 (SEARCH_NODE · EDITORIAL_NON_SEARCH · UNRESO
     ({ slug, state: 'EDITORIAL_NON_SEARCH', reasonCode: 'BOUNDED_RESEARCH_EXHAUSTED', evidenceHash: HASH, ...over })
   const self = { slug: 'self', publishedAt: '2026-01-01', cluster: 'fam', title: 'self' } as unknown as MagazineArticle
   const reasonOf = (graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'>) => {
-    const r = resolveFromGraph(self, graph, [self], () => [])
+    const r = resolveFromGraph(self, graph, [self])
     return 'reason' in r ? r.reason : 'RESOLVED'
   }
   const base = { graphVersion: 'g-test', edges: [], mappings: [] }
@@ -1191,13 +1265,13 @@ console.log('\n④-G graph 참여 (SEARCH_NODE · EDITORIAL_NON_SEARCH · UNRESO
   const e335 = edgeById('E-0335'), e336 = edgeById('E-0336')
   const retire = mwRes.get('retirement-others-what-work')
   const shape = retire?.items.map((i) => `${i.article.slug}|${i.source}|${i.slot}|${i.reason ?? ''}`) ?? []
-  check('money-work: retirement-others-what-work = E-0335 GRAPH direct 1 + FALLBACK_FILL 2 + E-0336 GRAPH discovery 1',
+  // 🔴 2026-11-27 — 앞판은 이 사이에 예전 방식 글 2편을 채워 4줄이었다. 근거 관계는 둘뿐이므로 2줄이다
+  check('money-work: retirement-others-what-work = E-0335 GRAPH direct 1 + E-0336 GRAPH discovery 1 · 그 밖의 줄 0',
     !!e335 && e335.from === 'I-T6-12' && e335.to === 'I-T6-01' && e335.placement === 'FOOTER_NEXT'
       && !!e336 && e336.from === 'I-T6-12' && e336.to === 'I-T7-05' && e336.placement === 'FOOTER_BRIDGE'
-      && shape.length === 4
+      && shape.length === 2
       && shape[0] === `rehire-where-to-start|GRAPH|DIRECT_NEXT|${e335.reason}`
-      && retire!.items.slice(1, 3).every((i) => i.source === 'FALLBACK_FILL' && i.slot === null && i.reason === null)
-      && shape[3] === `alone-pastime|GRAPH|${DISCOVERY_SLOT}|${e336.reason}`,
+      && shape[1] === `alone-pastime|GRAPH|${DISCOVERY_SLOT}|${e336.reason}`,
     shape.join(' · '))
   const mwBad: string[] = []
   for (const [slug, r] of mwRes) {
@@ -1415,8 +1489,8 @@ console.log('\n④-E 노출 중복 제거')
     check('  다른 출발 글도 새 노출', shouldSendImpression(id({ fromSlug: 'z' }), st) === true)
     check('  🔴 다른 graphVersion 은 새 노출 (다른 추천이다)',
       shouldSendImpression(id({ graphVersion: 'g-다른버전' }), st) === true)
-    check('  다른 출처(보충)도 새 노출',
-      shouldSendImpression(id({ source: 'FALLBACK_FILL', slot: 'none' }), st) === true)
+    check('  다른 출처(폴백)도 새 노출',
+      shouldSendImpression(id({ source: 'FALLBACK', slot: 'none' }), st) === true)
     check('  다른 슬롯도 새 노출', shouldSendImpression(id({ slot: 'BRIDGE_DISCOVERY' }), st) === true)
   }
 

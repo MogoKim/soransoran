@@ -109,16 +109,18 @@ export type MagazineGraphFallbackReason =
 export const EDITORIAL_REASON_CODES = ['BOUNDED_RESEARCH_EXHAUSTED'] as const
 
 /**
- * 한 줄의 출처. 🔴 **목록 단위가 아니라 항목 단위다.**
+ * 한 줄의 출처.
  *
- *   GRAPH          지정 관계가 고른 글
- *   FALLBACK_FILL  그래프가 자리를 다 못 채워 예전 방식으로 **보충**한 글
- *   FALLBACK       그래프가 아예 답을 못 내 목록 전체가 예전 방식인 글
+ *   GRAPH     근거 있는 지정 관계가 고른 글
+ *   FALLBACK  그래프가 답을 못 내(꺼짐 · 판 불일치 · cluster 밖 · 매핑 없음 · 결과 0 · 예외) 목록 전체가 예전 방식인 글
  *
- * 🔴 보충 항목이 graph relation 인 척하면 안 된다. 그러면 계측에서
- *    "지정 관계가 클릭을 만들었다" 는 숫자가 부풀고, 그 숫자로 그래프를 넓히게 된다.
+ * 🔴 **한 목록에 두 출처가 섞이지 않는다** (2026-11-27 · 헌장 §11 · §18-B.2 「근거가 없는 칸은 비운다」).
+ *    그래프가 한 줄이라도 고르면 그 목록은 근거 있는 관계**만큼만** 보여 준다 — 같은 cluster 최신 글로 빈자리를 채우지 않는다.
+ *    (앞판은 `FALLBACK_FILL` 로 채웠고, 승인된 관계 1개 옆에 주제가 다른 글 2편이 같은 목록에 실렸다)
+ * 🔴 과거 계측 원본에는 `recommendation_source = 'FALLBACK_FILL'` 이 남아 있다. 그 값을 아는 자리는
+ *    계측 타입(`MagazineRelatedParams`) 하나다 — resolver 는 더 이상 그 값을 만들지 않는다.
  */
-export type RelatedMagazineSource = 'GRAPH' | 'FALLBACK_FILL' | 'FALLBACK'
+export type RelatedMagazineSource = 'GRAPH' | 'FALLBACK'
 
 /**
  * 🔴 슬롯 매핑을 **이 파일에 적지 않는다.** 정본은 연구 저장소의
@@ -150,17 +152,17 @@ export type RelatedMagazineItem = {
   relationType: MagazineRelationType
   surface: MagazineRelationSurface
   /**
-   * 🔴 그래프가 고른 줄만 슬롯을 갖는다. 보충은 `null` 이다 —
-   *    보충을 특정 슬롯인 것처럼 표시하면 화면이 거짓말을 한다.
+   * 🔴 그래프가 고른 줄만 슬롯을 갖는다. 폴백은 `null` 이다 —
+   *    폴백을 특정 슬롯인 것처럼 표시하면 화면이 거짓말을 한다.
    */
   slot: GraphSlot | null
-  /** 🔴 검증된 그래프 문구. 런타임에서 만들지 않는다. 보충은 null */
+  /** 🔴 검증된 그래프 문구. 런타임에서 만들지 않는다. 폴백은 null */
   reason: string | null
   /** 화면 순서. 계측의 position 과 같은 값이다 (0부터) */
   position: number
   /** 🔴 이 한 줄이 어디서 왔나 */
   source: RelatedMagazineSource
-  /** 🔴 **항목마다** 다르다. 그래프가 고른 줄만 실제 버전, 나머지는 'none' */
+  /** 그래프가 고른 줄만 실제 버전, 폴백은 'none' */
   graphVersion: string
 }
 
@@ -168,7 +170,7 @@ export type ResolvedRelatedMagazine = {
   items: RelatedMagazineItem[]
   /**
    * 목록 전체의 성격.
-   *   GRAPH  한 줄이라도 지정 관계가 있다 (보충이 섞여 있을 수 있다)
+   *   GRAPH     전부 근거 있는 지정 관계다 (관계 수만큼 — 1줄일 수도 있다)
    *   FALLBACK  전부 예전 방식이다
    * 🔴 계측에는 이 값을 쓰지 않는다 — 클릭은 **눌린 줄의** source·graphVersion 을 쓴다.
    */
@@ -323,11 +325,7 @@ export function selectGraphPicks<A extends GraphArticleRef>(
  * 🔴 `relationType: 'SIBLING'` 은 "같은 분류의 이웃" 이라는 사실 그대로다.
  *    지정 관계가 아니라는 것은 `source` 가 말한다 — 관계 이름으로 속이지 않는다.
  */
-function asFallbackItem(
-  article: MagazineArticle,
-  source: 'FALLBACK' | 'FALLBACK_FILL',
-  position: number,
-): RelatedMagazineItem {
+function asFallbackItem(article: MagazineArticle, position: number): RelatedMagazineItem {
   return {
     article,
     relationType: 'SIBLING',
@@ -336,14 +334,14 @@ function asFallbackItem(
     slot: null,
     reason: null,
     position,
-    source,
+    source: 'FALLBACK',
     // 🔴 그래프가 고르지 않은 줄에 버전을 달면 계측이 그래프 성과를 부풀린다.
     graphVersion: 'none',
   }
 }
 
 /**
- * 그래프가 아예 답을 못 냈다 — **예전 화면 그대로** 돌려준다.
+ * 그래프가 한 줄도 못 골랐다 — **예전 화면 그대로** 돌려준다. 예전 방식 글이 나가는 길은 이 함수 하나다.
  *
  * 🔴 개수는 항상 `MAX_DIRECT`(3)다. 발견 자리는 **그래프만 채울 수 있는 자리**이고,
  *    그래프가 없으면 그 자리도 없다. 예전 규칙이 같은 cluster 최신 3편이었으므로
@@ -355,9 +353,7 @@ function fallback(
   now: number,
 ): ResolvedRelatedMagazine {
   return {
-    items: getRelatedMagazineArticles(article, MAX_DIRECT, now).map((a, i) =>
-      asFallbackItem(a, 'FALLBACK', i),
-    ),
+    items: getRelatedMagazineArticles(article, MAX_DIRECT, now).map((a, i) => asFallbackItem(a, i)),
     source: 'FALLBACK',
     reason,
     graphVersion: 'none',
@@ -430,18 +426,18 @@ export function approvedOutgoingEdges(
 /**
  * 그래프 하나로 이 글의 하단 목록을 만든다 — 켜짐 · 버전 · cluster 판정이 끝난 뒤의 몫.
  *
- * 🔴 그래프 · 공개 글 · 보충 재료를 인자로 받는다. resolver 는 운영 GRAPH 와 공개 목록을 넘기고,
+ * 🔴 그래프 · 공개 글을 인자로 받는다. resolver 는 운영 GRAPH 와 공개 목록을 넘기고,
  *    검사는 같은 함수에 합성 그래프를 넘겨 edge 단위 계약을 **실제 조립 결과로** 본다.
+ * 🔴 **예전 방식 연관 글을 받지 않는다** (2026-11-27). 받을 자리가 없으면 섞일 길도 없다 —
+ *    여기서 나가는 줄은 전부 `selectGraphPicks` 가 edge 에서 고른 줄이다.
  * 🔴 vNext 출처 overlay(effectiveGraphMappings)는 여기 안에서만 쓴다 — 켜짐 · 버전 · cluster 관문 뒤다.
  * @param published 공개 관문을 거친 글 전부 (같은 now 로 만든 것)
- * @param legacy    예전 방식 연관 글 — 그래프 후보가 있을 때만 부른다
  * @param binding   출처 결속 — 운영 호출은 runtimeReleaseBinding(지금 판의 생성 결속 · 판이 다르면 없음)을 넘긴다. 기본값은 결속 없음
  */
 export function resolveFromGraph(
   article: MagazineArticle,
   graph: Pick<MagazineGraph, 'graphVersion' | 'edges' | 'mappings' | 'participation'> & { intents?: MagazineGraph['intents'] },
   published: readonly MagazineArticle[],
-  legacy: () => readonly MagazineArticle[],
   binding: ReleaseBinding | null = NO_RELEASE_BINDING,
 ): { resolved: ResolvedRelatedMagazine } | { reason: 'NO_MAPPING' | 'EDITORIAL_NON_SEARCH' | 'NO_RESULT' } {
   const mappings = effectiveGraphMappings(graph, published, binding)
@@ -474,29 +470,18 @@ export function resolveFromGraph(
   })
 
   /**
-   * 🔴 **모자란 직접 연관만 채운다.** 그래프를 켰다는 이유로 독자가 보는 연관 글이
-   *    줄어들면 안 된다 — 실측(2026-09-23): 채우지 않으면 36편 중 **13편**이 줄었다.
+   * 🔴 **근거 있는 관계만큼만 보여 준다** (2026-11-27 · 헌장 §11 · §18-B.2).
+   *    직접 연관은 edge 가 고른 대표를 상한(3)까지, 발견은 유효한 BRIDGE 가 있을 때 1개 — 그게 전부다.
+   *    관계가 1개면 1줄이다. 같은 cluster 최신 글 · 인기 글로 빈자리를 채우지 않는다.
    *
-   * 🔴 **얼마나 채우나.** `max(예전 개수, 그래프 직접 연관 수)` 까지다 (상한 3).
-   *      · 예전보다 적어지지 않는다 — 그게 보충의 목적이다
-   *      · 예전보다 억지로 많아지지도 않는다
-   *
-   * 🔴 채우는 재료는 **기존 함수의 결과뿐**이다. 세 번째 규칙을 만들지 않는다.
-   * 🔴 **발견 자리는 채우지 않는다.** 유효한 BRIDGE 가 없으면 그냥 비운다 —
-   *    최신 글이나 인기 글을 넣는 순간 "같은 또래가 궁금해한 것" 이 거짓이 된다.
+   *    앞판은 「그래프를 켰다고 연관 글이 줄면 안 된다」(2026-09-23)며 예전 방식 글로 직접 연관 자리를 채웠다.
+   *    그 결과 승인된 관계 1개 옆에 주제가 다른 글 2편이 같은 「함께 읽어보세요」에 실렸다(2026-11-27 실제 렌더).
+   *    줄 수를 지키는 것보다 그 줄이 왜 거기 있는지 말할 수 있는 쪽이 독자에게 맞다
+   *    (헌장 §3-C — 관련 글 클릭을 억지로 늘리지 않는다).
+   * 🔴 그래프가 **한 줄도** 못 고른 글은 여기 오지 않는다 — 위에서 NO_RESULT 로 나가 목록 전체가 예전 방식이다.
    */
-  const fill = legacy()
-  const directTarget = Math.min(MAX_DIRECT, Math.max(fill.length, direct.length))
-
-  const items: RelatedMagazineItem[] = direct.slice(0, directTarget).map(asItem)
+  const items: RelatedMagazineItem[] = direct.slice(0, MAX_DIRECT).map(asItem)
   const chosen = new Set<string>([article.slug, ...items.map((i) => i.article.slug)])
-
-  for (const a of fill) {
-    if (items.length >= directTarget) break
-    if (chosen.has(a.slug)) continue // 자기 자신 · 그래프가 이미 고른 글
-    chosen.add(a.slug)
-    items.push(asFallbackItem(a, 'FALLBACK_FILL', items.length))
-  }
 
   // 🔴 발견 카드는 마지막 한 자리. 직접 연관과 중복될 수 없다.
   for (const p of discovery) {
@@ -521,8 +506,8 @@ export function resolveFromGraph(
  * 🔴 **개수 인자를 받지 않는다.** 개수는 계약이 정하지 호출부가 정하는 값이 아니다.
  *
  * ```
- * 그래프 ON  직접 연관 최대 3 + 발견 최대 1 = 최대 4
- * 그래프 OFF 같은 cluster 최신 최대 3 (예전과 동일)
+ * 그래프가 고름    근거 있는 직접 연관 최대 3 + 발견 최대 1 = 최대 4 (관계 수만큼 — 채우지 않는다)
+ * 그래프가 못 고름  같은 cluster 최신 최대 3 (예전과 동일 — 꺼짐 · 판 불일치 · cluster 밖 · 매핑 없음 · 결과 0 · 예외)
  * ```
  *
  *    앞판은 `limit` 인자를 받아 놓고 **쓰지 않았다.** 호출부와 시험이 3을 넘기면서
@@ -531,7 +516,7 @@ export function resolveFromGraph(
  *
  * @param env 실제 환경변수. 🔴 값을 바꿔도 **재배포해야** 현재 배포에 반영된다.
  *            (Vercel 환경변수는 빌드·런타임에 주입된다. 「즉시」가 아니다)
- * @param now 공개 판정 시각. 🔴 **진입할 때 한 번 정하고** 그래프 후보·보충·폴백 모두 이 값으로 본다
+ * @param now 공개 판정 시각. 🔴 **진입할 때 한 번 정하고** 그래프 후보·폴백 모두 이 값으로 본다
  *            (2026-10-13 — 호출마다 시각을 다시 읽으면 10:30:00 을 사이에 두고 후보 목록과
  *            폴백이 다른 순간을 봐 예약 글이 섞일 수 있다). 기본값은 지금.
  */
@@ -555,10 +540,7 @@ export function resolveRelatedMagazine(
     }
 
     // 🔴 공개 관문을 거친 글만 후보다
-    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), () =>
-      getRelatedMagazineArticles(article, MAX_DIRECT, now),
-      runtimeReleaseBinding(GRAPH.graphVersion),
-    )
+    const result = resolveFromGraph(article, GRAPH, getAllMagazineArticles(now), runtimeReleaseBinding(GRAPH.graphVersion))
     if ('reason' in result) return fallback(article, result.reason, now)
     return result.resolved
   } catch (error) {

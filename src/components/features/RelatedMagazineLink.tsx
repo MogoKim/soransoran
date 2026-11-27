@@ -41,15 +41,15 @@ export type RelatedLinkProps = {
   fromSlug: string
   relationType: MagazineRelationType
   surface: MagazineRelationSurface
-  /** 🔴 그래프가 고른 줄만 슬롯을 갖는다. 보충은 null */
+  /** 🔴 그래프가 고른 줄만 슬롯을 갖는다. 폴백은 null */
   slot: MagazineRecommendationSlot | null
-  /** 슬롯 문구. 보충은 null — 슬롯인 척하지 않는다 */
+  /** 슬롯 문구. 폴백은 null — 슬롯인 척하지 않는다 */
   slotLabel: string | null
-  /** 🔴 검증된 그래프 문구. 런타임에서 만들지 않는다. 보충은 null */
+  /** 🔴 검증된 그래프 문구. 런타임에서 만들지 않는다. 폴백은 null */
   reason: string | null
   source: RelatedMagazineSource
   position: number
-  /** 🔴 **이 줄의** 버전이다. 목록 공통값이 아니다 — 보충은 'none' */
+  /** 🔴 **이 줄의** 버전이다 — 폴백은 'none' */
   graphVersion: string
 }
 
@@ -143,12 +143,12 @@ export default function RelatedMagazineLink({
         >
           {title}
         </span>
-        {/* 🔴 그래프가 고른 줄만 이유를 보여 준다. 보충에는 붙이지 않는다 */}
+        {/* 🔴 그래프가 고른 줄만 이유를 보여 준다. 폴백에는 붙이지 않는다 */}
         {reason ? (
           <span className="line-clamp-2 break-keep text-meta text-content-muted">{reason}</span>
         ) : null}
         <span className="flex flex-wrap items-center gap-x-1.5 text-meta text-content-muted">
-          {/* 🔴 슬롯 문구가 있으면 분류 앞에 둔다. 보충은 예전과 똑같이 분류만 보인다 */}
+          {/* 🔴 슬롯 문구가 있으면 분류 앞에 둔다. 폴백은 예전과 똑같이 분류만 보인다 */}
           {slotLabel ? (
             <>
               <span

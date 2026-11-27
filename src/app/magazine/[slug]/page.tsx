@@ -180,7 +180,7 @@ export default async function MagazineArticlePage({ params }: { params: { slug: 
             {tracking ? <SignupFunnelMarker kind="content-end" /> : null}
           </article>
 
-          {/* 🔴 graphVersion 은 넘기지 않는다 — 항목마다 다르다 (보충은 'none') */}
+          {/* 🔴 graphVersion 은 넘기지 않는다 — 줄마다 자기 값을 싣는다 (폴백은 'none') */}
           <RelatedMagazineList
             items={related.items}
             fromSlug={article.slug}
