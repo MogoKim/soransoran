@@ -597,7 +597,15 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
   })
   lines.push(`예산 ${readiness.detail}`)
 
-  const limit = Math.max(0, Math.min(COMMENT_LOOP_RUN_MAX, deps.runRequestCap, readiness.allowance.remaining))
+  /**
+   * 🔴 **한도는 둘이다** (2026-11-28 밤 5-b). 하나로 묶으면 자정 직후(오늘 남은 자리 5) 라운드 1 이 관문에 막힌 호출 5 로
+   *    한도를 다 써 재시도가 0 이 된다 — 막힌 호출은 자리를 쓰지 않는다.
+   *    · 호출 한도 `callCap` — 돈을 막는다(`COMMENT_LOOP_RUN_MAX` · 장부 회차 상한 `runRequestCap`)
+   *    · 자리 한도 `readiness.allowance.remaining` — 적재 수를 막는다
+   *    라운드 1 한도(`limit`)는 둘 중 작은 것이다(옛 식 그대로). 재시도는 아래 라운드 2 에서 두 한도를 따로 뺀다.
+   */
+  const callCap = Math.max(0, Math.min(COMMENT_LOOP_RUN_MAX, deps.runRequestCap))
+  const limit = Math.max(0, Math.min(callCap, readiness.allowance.remaining))
   let generationSkipped: string | null = null
   let providerCalls = 0
   let enqueued = 0
@@ -653,16 +661,18 @@ export async function runCommentLoop(deps: CommentLoopDeps): Promise<CommentLoop
      *    후보가 모두 관문에 막힌 글은 다음 회차(20분 뒤)를 기다리면 10분 창을 넘긴다. 같은 회차 안에서 **한 번만** 다시 고른다.
      *    · 대상 — 라운드 1 에서 관문 막힘(`ENQUEUE_BLOCKED`)이 1건 이상이고 적재가 0 인 글만(provider 실패만 있었던 글은 아니다)
      *    · 라운드 1 이 멈췄으면(`stoppedReason`) · 결과를 기억에 적지 못했으면 · 남은 호출이나 오늘 자리가 0 이면 하지 않는다
+     *    · 남은 호출 = 호출 한도(`callCap`) − 라운드 1 호출 · 남은 자리 = 오늘 자리 − 라운드 1 적재 — 둘 중 작은 것까지만 부른다
+     *      (라운드 1 한도 `limit` 에서 빼지 않는다 — 그것은 자리에 눌린 값이라 막힌 호출이 재시도 몫까지 먹는다 · 밤 5-b)
      *    · 기억을 **다시 읽어** 같은 함수로 후보를 만든다 — 라운드 1 에서 보낸 조합은 기억이 빼므로 같은 조합을 다시 보내지 않는다
      *    · 라운드 2 도 막히면 거기서 끝이다(라운드 3 없음 — 다음 회차가 본다)
      */
     const retryPostIds = retryPostIdsOf(result.outcomes)
-    const retryCallLimit = Math.max(0, Math.min(limit - result.providerCalls, readiness.allowance.remaining - result.created))
+    const retryCallLimit = Math.max(0, Math.min(callCap - result.providerCalls, readiness.allowance.remaining - result.created))
     if (retryPostIds.size > 0) {
       const skip = result.stoppedReason !== null ? '라운드 1 이 멈췄다'
         : !r1.outcomesRecorded ? '라운드 1 결과를 시도 기억에 적지 못했다'
           : retryCallLimit === 0
-            ? `남은 호출 0 (회차 상한 ${limit} · 사용 ${result.providerCalls} · 오늘 남은 자리 ${readiness.allowance.remaining - result.created})`
+            ? `남은 호출 0 (회차 호출 상한 ${callCap} · 사용 ${result.providerCalls} · 오늘 남은 자리 ${readiness.allowance.remaining - result.created})`
             : null
       const memory2 = skip === null ? deps.attemptStore.read(nowMs) : null
       if (skip !== null || memory2 === null) {

@@ -379,7 +379,9 @@ async function main(): Promise<void> {
     JSON.stringify(fallbackRun.outcomes.map((o) => `${o.personaCode}:${o.step}`)))
 
     // 🔴 반례① DB 판 (2026-11-25) — 라운드 1 후보가 모두 관문에 막혀도 같은 회차 라운드 2 가 다른 조합으로 실제 PENDING 1행을 만든다
-    //    라운드 1 한 벌(5)은 본문 복제 → ① 관문 막힘 · 그 뒤는 깨끗한 문장. 오늘 자리(관리형 글 × 5)도 재시도 상한이다.
+    //    라운드 1 한 벌(5)은 본문 복제 → ① 관문 막힘 · 그 뒤는 깨끗한 문장.
+    //    🔴 (2026-11-28 밤 5-b) 오늘 자리(관리형 글 × 5)는 **적재 수** 상한이고 호출 상한이 아니다 — 막힌 호출은 자리를 쓰지 않는다.
+    //       재시도 호출 = min(회차 호출 상한 − 라운드 1 호출, 오늘 자리 − 라운드 1 적재).
     const retryScenario = async (extraManagedPosts: number) => {
       await wipe()
       const author = await persona('P01')
@@ -403,10 +405,16 @@ async function main(): Promise<void> {
     }
     {
       const only = await retryScenario(0)
-      check('🔴 반례③ DB — 오늘 자리 5(관리형 글 1편)면 라운드 1 이 5 를 다 써 라운드 2 없음 · Queue 0 · 이유 한 줄',
-        only.run.providerCalls === 5 && only.rows.length === 0 && only.run.enqueued === 0
-        && only.run.lines.some((l) => l.startsWith('재시도 없음 — 후보가 모두 관문에 막힌 글 1편 · 남은 호출 0')),
-      `${only.run.providerCalls} · ${only.run.lines.filter((l) => l.startsWith('재시도')).join(' / ')}`)
+      const onlyEnq = only.run.outcomes.find((o) => o.step === 'ENQUEUED')
+      check('🔴 🔴 반례③ DB (밤 5-b) — 오늘 자리 5(관리형 글 1편 · 자정 직후 모양)여도 라운드 1 관문 막힘 5 뒤 재시도가 돈다 · Queue 1행 · 댓글 1',
+        only.run.providerCalls === 6 && only.sent.length === 6 && only.blockedKeys.size === 5
+        && only.rows.length === 1 && !only.blockedKeys.has(only.rows[0]!.dedupKey) && only.run.enqueued === 1
+        && onlyEnq !== undefined && only.rows[0]!.dedupKey === dedupKeyOf(onlyEnq.postId, onlyEnq.personaCode, onlyEnq.reactionRole)
+        && only.run.lines.some((l) => l.startsWith('예산 ') && l.endsWith('→ 남은 5건'))
+        && only.run.lines.some((l) => l.startsWith('재시도 — 후보가 모두 관문에 막힌 글 1편'))
+        && !only.run.lines.some((l) => l.startsWith('재시도 없음'))
+        && (await personaComments(only.target)).length === 1,
+      `${only.run.providerCalls} · ${only.run.lines.filter((l) => l.startsWith('재시도') || l.startsWith('예산')).join(' / ')}`)
       const r = await retryScenario(1)
       const enq = r.run.outcomes.find((o) => o.step === 'ENQUEUED')
       check('🔴 🔴 반례① DB — 라운드 1 관문 막힘 5건 → 같은 회차 라운드 2 가 Queue 1행 · 막힌 조합 행 0 · 댓글 1',
