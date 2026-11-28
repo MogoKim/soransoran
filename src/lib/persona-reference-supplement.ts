@@ -25,14 +25,15 @@ export const SUPPLEMENT_BASE_PERSONA_COUNT = 30
 
 /**
  * 🔴 **이 코드가 아는 보충 세대** — append-only. 새 cohort 의 묶음은 다음 세대 하나로 쓴다
- *    (v1 wave6 · v2 wave7 · v3 wave8). 세대를 늘릴 때 고치는 곳은 이 목록 하나다 —
+ *    (v1 wave6 · v2 wave7 · v3 wave8 · v4 wave9). 세대를 늘릴 때 고치는 곳은 이 목록 하나다 —
  *    기록 도구는 마지막 세대를 쓰고 그 직전 세대를 동결 입력으로 읽는다.
  *
  * 🔴 runtime 은 이 목록 밖 세대 파일을 읽지 않는다. 그래서 순서가 무결성이다:
  *    다음 세대 파일은 그 세대를 **모르는** runtime 이 돌 때 먼저 기록하고(옛 코드는 무시한다),
  *    그 세대를 아는 코드를 배포해야 배포기가 source · target Persona 자산 식별자를 각각 잰다.
+ *    v4 파일이 아직 없으면 runtime 은 지금처럼 v3 를 읽는다(`activeSupplementPaths` — 있는 가장 높은 세대).
  */
-export const SUPPLEMENT_GENERATIONS = [1, 2, 3] as const
+export const SUPPLEMENT_GENERATIONS = [1, 2, 3, 4] as const
 export type SupplementGeneration = (typeof SUPPLEMENT_GENERATIONS)[number]
 export const SUPPLEMENT_LATEST_GENERATION: SupplementGeneration =
   SUPPLEMENT_GENERATIONS[SUPPLEMENT_GENERATIONS.length - 1]!
