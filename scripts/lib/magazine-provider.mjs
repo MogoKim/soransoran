@@ -6,12 +6,15 @@
  *                 graph · queue · publishAt · PR · Git · planHash · 로컬 경로를 싣지 않는다. previous_response_id 를 쓰지 않는다.
  *   응답 판독     readSubmit · readTerminal · parseManuscriptText · parseRepairText · readImage — fake 와 실제가 **같은 판독기**를 지난다.
  *   비용          estimateCostUsd(전송 전 최악 추정 · 상한 판정용) · actualCostUsd(usage 기준). 단가는 설정에서만 받는다(지어내지 않는다).
- *   실제 adapter  makeOpenAiProviders — Responses API(background · store:true) · Images API. 🔴 키는 인자로만 받고 어디에도 쓰지 않는다.
+ *   실제 adapter  makeNativeProviders — Responses API(background · store:true) · Images API. 🔴 키는 Node 에 오지 않는다 —
+ *                 고정 경로의 네이티브 client 가 키체인에서 직접 읽어 api.openai.com 에만 보낸다(`security` CLI · Node https 경로 없음).
  *
  * 🔴 wire 는 { httpStatus, bodyText } 다. 해석은 호출자가 응답 바이트를 먼저 원자 저장한 **뒤에** 한다(급사해도 ID 를 되찾는다).
  */
 import { createHash } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import nodeFs from 'node:fs'
+import { userInfo } from 'node:os'
 import { canonicalJson } from './magazine-content-plan-input.mjs'
 import { BANNED_WORDS } from './magazine-qa-constants.mjs'
 import { CONTENT_PLAN_POLICY_BOARD } from './magazine-content-plan.mjs'
@@ -229,36 +232,120 @@ export class ProviderTransportError extends Error {
 }
 
 /**
- * OpenAI Responses · Images adapter. 🔴 키는 Authorization 헤더 밖 어디에도 두지 않는다(로그 · 오류 · Job 0).
- * @param {{ apiKey: string, fetchImpl?: typeof fetch, baseUrl?: string, timeouts?: { submit?: number, retrieve?: number, remove?: number, image?: number } }} p
+ * 네이티브 client(`scripts/magazine-provider-client/main.swift`) 계약. 🔴 Node 는 키를 읽지도 받지도 않는다 —
+ * 키체인 읽기와 api.openai.com 전송은 고정 경로에 설치한 client 프로세스 안에서만 일어난다.
+ * service · account · host 는 client 에 박힌 상수와 같아야 한다(여기 값은 대조용이지 client 로 넘기는 인자가 아니다).
  */
-export function makeOpenAiProviders({ apiKey, fetchImpl = globalThis.fetch, baseUrl = 'https://api.openai.com/v1', timeouts = {} }) {
-  if (!isStr(apiKey) || apiKey.length < 20) throw new Error('API 키가 없다')
+export const NATIVE_CLIENT = Object.freeze({
+  protocol: 1, clientVersion: '1', build: 'PRODUCTION',
+  service: 'soransoran-magazine-openai', account: 'magazine-pilot', host: 'api.openai.com',
+  dir: 'Library/Application Support/soransoran/magazine-provider-client', bin: 'soransoran-magazine-provider',
+  approval: 'approval.json', approvalSchema: 'magazine-provider-client-approval/1',
+})
+export const nativeClientPaths = ({ home }) => {
+  const dir = `${home}/${NATIVE_CLIENT.dir}`
+  return { dir, bin: `${dir}/${NATIVE_CLIENT.bin}`, approval: `${dir}/${NATIVE_CLIENT.approval}` }
+}
+const APPROVAL_KEYS = ['approvedAt', 'approvedBy', 'clientVersion', 'schemaVersion', 'sha256']
+
+/**
+ * 설치본 대조 — 고정 경로 · 내 소유 · 남이 못 쓰는 권한 · 승인 기록의 SHA-256 과 같은 바이트. 하나라도 어긋나면 실행하지 않는다.
+ * 바이너리를 바꾸면 SHA 가 달라져 여기서 멈춘다(다시 승인해야 한다). 키체인 동의는 macOS 가 서명 해시로 따로 묶는다.
+ */
+export function verifyNativeClient({ home, fs = nodeFs, uid = process.getuid() }) {
+  const p = nativeClientPaths({ home })
+  const bad = (code) => ({ ok: false, code })
+  let d, b, a
+  try { d = fs.lstatSync(p.dir); b = fs.lstatSync(p.bin); a = fs.lstatSync(p.approval) } catch { return bad('CLIENT_NOT_INSTALLED') }
+  if (!d.isDirectory() || !b.isFile() || !a.isFile()) return bad('CLIENT_PATH_KIND')
+  if ([d, b, a].some((s) => s.uid !== uid || (s.mode & 0o022) !== 0) || (b.mode & 0o100) === 0) return bad('CLIENT_PERMISSIONS')
+  let approval, bytes
+  try { approval = parseWire(fs.readFileSync(p.approval, 'utf8')); bytes = fs.readFileSync(p.bin) } catch { return bad('CLIENT_UNREADABLE') }
+  if (!approval || Object.keys(approval).sort().join() !== APPROVAL_KEYS.join() || approval.schemaVersion !== NATIVE_CLIENT.approvalSchema
+    || approval.clientVersion !== NATIVE_CLIENT.clientVersion || !isStr(approval.approvedBy) || !approval.approvedBy.trim() || Number.isNaN(Date.parse(approval.approvedAt))) return bad('CLIENT_APPROVAL_INVALID')
+  const digest = sha256(bytes)
+  if (digest !== approval.sha256) return bad('CLIENT_NOT_APPROVED')
+  return { ok: true, bin: p.bin, sha256: digest }
+}
+
+const CLIENT_STDOUT_MAX = 160 * 1024 * 1024
+
+/**
+ * client 한 번 실행 — stdin 한 건 · stdout 한 건. stderr 는 받지 않는다. 환경은 HOME 하나만 넘긴다(DYLD_* · 검사용 변수 차단).
+ * started:false 는 프로세스가 뜨지 않았다는 뜻이다(전송 0 확정).
+ * @returns {Promise<{ started: boolean, error?: string, status?: number|null, signal?: string|null, timedOut?: boolean, stdout?: string }>}
+ */
+export function runNativeClient({ bin, mode, input = '', timeoutMs, env = { HOME: userInfo().homedir } }) {
+  return new Promise((done) => {
+    let child, started = false, settled = false, timedOut = false, over = false, size = 0, timer = null
+    const chunks = []
+    const finish = (r) => { if (!settled) { settled = true; clearTimeout(timer); done(r) } }
+    try { child = spawn(bin, [mode], { env, stdio: ['pipe', 'pipe', 'ignore'] }) } catch (e) { finish({ started: false, error: e?.code ?? 'SPAWN' }); return }
+    timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, timeoutMs)
+    child.once('spawn', () => { started = true })
+    child.once('error', (e) => { if (!started) finish({ started: false, error: e?.code ?? 'SPAWN' }) })
+    child.stdout.on('data', (c) => { size += c.length; if (size > CLIENT_STDOUT_MAX) { over = true; child.kill('SIGKILL') } else chunks.push(c) })
+    child.stdin.on('error', () => { /* client 가 입력을 다 읽기 전에 끝났다 — 판정은 stdout 으로 한다 */ })
+    child.stdin.end(input)
+    child.once('close', (status, signal) => finish({ started: true, status, signal, timedOut, stdout: over ? '' : Buffer.concat(chunks).toString('utf8') }))
+  })
+}
+
+/** client 가 "전송하지 않았다"고 말할 수 있는 사유 — 이 목록 밖의 실패는 전부 전송 여부 불명으로 본다 */
+const KEY_NOT_SENT = new Set(['KEY_NOT_FOUND', 'KEY_CONSENT_REQUIRED', 'KEY_DENIED', 'KEY_MALFORMED', 'KEY_UI_GUARD_FAILED', 'KEY_ERROR'])
+export const LOCAL_NOT_SENT = 'soransoran_local_not_sent'
+/**
+ * 전송 0 이 확정된 실패를 생산기가 이미 아는 "만들어지지 않음" 경로로 넘긴다 — 401(키 · client 사용 불가 → 회차 정지) · 400(요청이 client 계약 밖).
+ * 🔴 provider 가 준 응답이 아니다. 바이트에 error.type = LOCAL_NOT_SENT 를 박아 구분한다. 이 경로는 요청을 UNKNOWN 으로 남기지 않고 비용을 예약해 두지 않는다.
+ */
+export const localNotSentWire = (code) => ({ httpStatus: code === 'BAD_REQUEST' ? 400 : 401,
+  bodyText: JSON.stringify({ error: { type: LOCAL_NOT_SENT, code, message: '로컬 client 가 전송하지 않았다 — provider 응답이 아니다' } }) })
+
+const readClient = (r, build) => {
+  const j = r.started ? parseWire(String(r.stdout ?? '').trim()) : null
+  return j && j.v === NATIVE_CLIENT.protocol && j.build === build ? j : null
+}
+
+/**
+ * OpenAI Responses · Images adapter — 네이티브 client 경유. wire 는 예전과 같은 { httpStatus, bodyText } 다.
+ *   전송 0 확정(설치본 불일치 · 실행 실패 · 키 실패 · 계약 밖)  → localNotSentWire (요청 FAILED · NOT_CREATED · 비용 0)
+ *   그 밖의 모든 실패(전송 뒤 끊김 · 시간 초과 · 출력 판독 불가)   → ProviderTransportError (전송 여부 불명 그대로)
+ * @param {{ home: string, run?: typeof runNativeClient, verify?: typeof verifyNativeClient, build?: string, timeouts?: { submit?: number, retrieve?: number, remove?: number, image?: number } }} p
+ */
+export function makeNativeProviders({ home, run = runNativeClient, verify = verifyNativeClient, build = NATIVE_CLIENT.build, timeouts = {} }) {
   const t = { submit: 60_000, retrieve: 30_000, remove: 30_000, image: 240_000, ...timeouts }
-  const call = async (op, method, path, bodyText, ms) => {
-    let res
-    try {
-      res = await fetchImpl(`${baseUrl}${path}`, { method, headers: { Authorization: `Bearer ${apiKey}`, ...(bodyText ? { 'Content-Type': 'application/json' } : {}) },
-        ...(bodyText ? { body: bodyText } : {}), signal: AbortSignal.timeout(ms) })
-    } catch (e) { throw new ProviderTransportError(op, e) }
-    let text
-    try { text = await res.text() } catch (e) { throw new ProviderTransportError(op, e) }
-    return { httpStatus: res.status, bodyText: text }
+  const call = async (op, fields) => {
+    const v = verify({ home })
+    if (!v.ok) return localNotSentWire(v.code)
+    const r = await run({ bin: v.bin, mode: 'request', input: JSON.stringify({ v: NATIVE_CLIENT.protocol, op, timeoutMs: t[op], ...fields }), timeoutMs: t[op] + 15_000 })
+    if (!r.started) return localNotSentWire('CLIENT_SPAWN_FAILED')
+    const j = readClient(r, build)
+    if (j?.ok === true && Number.isInteger(j.httpStatus) && j.httpStatus >= 100 && j.httpStatus <= 599 && isStr(j.body)) return { httpStatus: j.httpStatus, bodyText: j.body }
+    if (j?.ok === false && j.sent === false && (KEY_NOT_SENT.has(j.code) || j.code === 'BAD_REQUEST')) return localNotSentWire(j.code)
+    const name = isStr(j?.code) && /^[A-Z_]{3,40}$/.test(j.code) ? `${j.code}${Number.isInteger(j.detail) ? `:${j.detail}` : ''}` : r.timedOut ? 'CLIENT_TIMEOUT' : 'CLIENT_OUTPUT'
+    throw new ProviderTransportError(op, { name })
   }
   return {
     kind: 'openai',
     manuscript: {
-      submit: (bodyText) => call('submit', 'POST', '/responses', bodyText, t.submit),
-      retrieve: (id) => call('retrieve', 'GET', `/responses/${encodeURIComponent(id)}`, null, t.retrieve),
-      remove: (id) => call('remove', 'DELETE', `/responses/${encodeURIComponent(id)}`, null, t.remove),
+      submit: (bodyText) => call('submit', { body: bodyText }),
+      retrieve: (id) => call('retrieve', { id }),
+      remove: (id) => call('remove', { id }),
     },
-    image: { generate: (bodyText) => call('image', 'POST', '/images/generations', bodyText, t.image) },
+    image: { generate: (bodyText) => call('image', { body: bodyText }) },
   }
 }
 
-/** 키 — macOS 로그인 키체인에서 그 자리에서만 읽는다(출력 · 저장 0). 서비스 · 계정 이름은 live 설정이 준다 */
-export function readApiKeyFromKeychain({ service, account, exec = spawnSync }) {
-  const r = exec('security', ['find-generic-password', '-s', service, '-a', account, '-w'], { encoding: 'utf8' })
-  const key = r.status === 0 ? String(r.stdout ?? '').trim() : ''
-  return key.length >= 20 ? key : null
+/**
+ * 비대화형 점검 — 설치본 대조 + client `status`(창 0 · 네트워크 0 · 유료 호출 0 · 비밀 출력 0).
+ * 실제 생성 전에 반드시 부른다 — 키를 못 읽는 상태면 요청을 하나도 기록하지 않고 끝낸다.
+ * @returns {Promise<{ ready: boolean, code: string, item?: string, detail?: number, sha256?: string }>}
+ */
+export async function nativeClientStatus({ home, run = runNativeClient, verify = verifyNativeClient, build = NATIVE_CLIENT.build }) {
+  const v = verify({ home })
+  if (!v.ok) return { ready: false, code: v.code }
+  const j = readClient(await run({ bin: v.bin, mode: 'status', timeoutMs: 20_000 }), build)
+  if (!j || j.mode !== 'status' || j.clientVersion !== NATIVE_CLIENT.clientVersion || !isStr(j.unattended)) return { ready: false, code: 'CLIENT_STATUS_UNREADABLE' }
+  if (j.unattended !== 'READY') return { ready: false, code: KEY_NOT_SENT.has(j.unattended) ? j.unattended : 'KEY_ERROR', item: isStr(j.item) ? j.item : 'UNKNOWN', ...(Number.isInteger(j.detail) ? { detail: j.detail } : {}) }
+  return { ready: true, code: 'READY', item: 'PRESENT', sha256: v.sha256 }
 }

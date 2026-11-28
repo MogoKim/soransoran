@@ -5,7 +5,7 @@
  *   node scripts/magazine-vnext-produce.mjs --launcher [--dry-run]
  *        00:10 producer 자리 — `magazine-producer-run.mjs` 가 rollout vnext 일 때만 부른다.
  *        live 설정(`magazine-provider-live.json`)이 켜져 있을 때만 실제 생성, 아니면 **계획만**(쓰기 0 · 호출 0 · 종료 0).
- *   node scripts/magazine-vnext-produce.mjs --live          사람이 부르는 실제 생성 — rollout vnext · live 설정 ON · 키체인 키가 모두 있어야 한다
+ *   node scripts/magazine-vnext-produce.mjs --live          사람이 부르는 실제 생성 — rollout vnext · live 설정 ON · 승인된 client 와 키체인 동의가 모두 있어야 한다
  *   node scripts/magazine-vnext-produce.mjs --plan [--preview-target <n>]
  *        계획만 — 무엇을 만들지 · ProviderPlan 판정 · 기존 Job 상태. --preview-target 은 rollout 대신 vnext/draft/<n> 으로 가정한다(쓰기 0)
  *   node scripts/magazine-vnext-produce.mjs --canary <설정 파일> [--compare-revision]
@@ -14,7 +14,8 @@
  *        HOLD(또는 창업자 '아니오') 뒤 명시적 재호출 표시 — provider 호출 0. 다음 생산 회차가 이어 간다
  *
  * 🔴 fake provider 는 이 진입점에 없다 — 리허설은 `magazine-vnext-rehearsal.mjs`(격리 저장소)만 쓴다.
- * 🔴 키는 키체인에서 실제 생성 직전에만 읽고 어디에도 쓰지 않는다.
+ * 🔴 이 프로세스는 키를 읽지 않는다. 고정 경로의 네이티브 client 가 키체인에서 직접 읽어 전송한다(설치 · 동의: `magazine-provider-client.mjs`).
+ *    client 가 준비되지 않았으면(미설치 · 미승인 · 동의 없음) 요청을 기록하기 전에 KEY_UNAVAILABLE 로 끝난다(호출 0 · 종료 1).
  * 결과: JSON 한 줄(stdout). 실제 생성 회차는 `~/Library/Application Support/soransoran/magazine-produce/runs/<KST 날짜>/` 에도 남긴다.
  * 종료 코드: 정상(계획 · 할 일 없음 · 생성 · 잠금 대기 · 예산 정지) 0 · 막힘 1 · 사용법 2
  */
@@ -27,7 +28,7 @@ import { randomUUID } from 'node:crypto'
 import { readRollout } from './lib/magazine-rollout.mjs'
 import { jobsRootPath } from './lib/magazine-release-candidates.mjs'
 import { makeReleaseDeps, readMainFacts } from './lib/magazine-release-run.mjs'
-import { LIVE_TEXT_RATES, manuscriptContractHash, makeOpenAiProviders, readApiKeyFromKeychain } from './lib/magazine-provider.mjs'
+import { LIVE_TEXT_RATES, NATIVE_CLIENT, manuscriptContractHash, makeNativeProviders, nativeClientStatus } from './lib/magazine-provider.mjs'
 import { OK_OUTCOMES, liveConfigPath, readLiveConfig, rerunJob, runProduce } from './lib/magazine-vnext-produce.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -128,9 +129,15 @@ async function main() {
         c.image.model !== 'gpt-image-2.5-flare' || c.image.size !== '1536x864' || c.image.perImage < 0.14) {
       console.error('LIVE_PRICE_UNVERIFIED'); process.exit(1)
     }
-    const apiKey = readApiKeyFromKeychain(c.keychain)
-    if (!apiKey) { console.log(JSON.stringify({ outcome: 'KEY_MISSING', why: '키체인에서 키를 읽지 못했다(서비스 · 계정 이름 확인)' })); process.exit(1) }
-    const p = makeOpenAiProviders({ apiKey })
+    if (c.keychain.service !== NATIVE_CLIENT.service || c.keychain.account !== NATIVE_CLIENT.account) {
+      console.log(JSON.stringify({ outcome: 'KEYCHAIN_CONFIG_MISMATCH', why: 'live 설정의 키체인 항목이 client 에 고정된 항목과 다르다' })); process.exit(1)
+    }
+    // 요청을 하나도 기록하기 전에 본다 — 설치본이 승인본과 같은지 · 키가 창 없이 읽히는지(네트워크 0 · 유료 호출 0)
+    const client = await nativeClientStatus({ home })
+    if (!client.ready) {
+      console.log(JSON.stringify({ outcome: 'KEY_UNAVAILABLE', client, why: '네이티브 client 가 준비되지 않았다 — node scripts/magazine-provider-client.mjs status' })); process.exit(1)
+    }
+    const p = makeNativeProviders({ home })
     provider = { ...p, models: { manuscript: c.manuscript.model, image: c.image.model }, maxOutputTokens: c.manuscript.maxOutputTokens,
       repairMaxOutputTokens: c.manuscript.repairMaxOutputTokens, imageSize: c.image.size,
       prices: { manuscript: rates, image: { perImage: c.image.perImage } } }

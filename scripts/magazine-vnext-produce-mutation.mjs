@@ -24,6 +24,7 @@ const expectedCase = {
   'regen-cap-raised': 'E16', 'produce-lane-removed': 'E26',
   'live-default-on': 'E25', 'image-failure-regenerates': 'E12',
   'local-final-ignored': 'E10',
+  'native-key-failure-ambiguous': 'E35', 'native-sent-failure-not-created': 'E36',
 }
 let killed = 0, survived = 0
 for (const id of ids) {
