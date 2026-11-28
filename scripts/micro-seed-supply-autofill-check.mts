@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os'
 import {
   readSupplyIntent, SUPPLY_JIT_CONTRACT, WORKSET_KIND, WORKSET_VERSION, WORKSET_VERSION_JIT, worksetFileName, type SupplyIntent,
 } from '../src/lib/supply-workset'
-import { autoReadyPriority, intentsForFile } from './micro-seed-supply-autofill.mjs'
+import { autoReadyPriority, fillOrderOf, intentsForFile } from './micro-seed-supply-autofill.mjs'
 import { currentQualityContract, qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { RULE_VERSION as CURRENT_AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as CURRENT_AUTO_JUDGE_PROMPT_VERSION } from '../src/lib/micro-seed-auto-judge'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
@@ -806,6 +806,99 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
   check('🔴 자동 READY 정본의 실제 차단 사유를 보존한다',
     !blockedVerdict.priority
     && blockedVerdict.verdict?.reasons.some((r) => r.includes(DRAFT_LIFE_REVIEW_UNREAD)) === true)
+
+  /**
+   * ⑦ 적재 순서 = 원천 순위 정본(2026-11-28 밤 5-a) — 11-27 22:35 반례: 원문 번호순으로 세우면 이월(먼저 수집 ·
+   *    작은 번호) 후보가 앞에 서서 이번 회차 새 후보가 `--up-to` 에 전부 잘렸다.
+   *    🔴 후보 행은 생성 봉투(`candidate-envelope`)가 실제로 적는 칸만 쓴다 — 원문 세 시각은 ISO 문자열 · 모르면 빈 문자열,
+   *       사람 후보(`publish-candidates`)는 세 칸이 아예 없다(`ok()`).
+   */
+  const HUMAN = new WeakSet<object>()
+  const timed = (id: string, capturedAt: string, o: Partial<Candidate> = {}): Candidate => ({
+    ...eC, sourceArticleId: id, title: `이야기 ${id}`, lifeReview: [],
+    sourcePostedAt: capturedAt === '' ? '' : new Date(Date.parse(capturedAt) - 3_600_000).toISOString(),
+    sourceListedAt: capturedAt, sourceCapturedAt: capturedAt, ...o,
+  })
+  const human = (id: string): Candidate => { const c = ok({ sourceArticleId: id, title: `사람 ${id}` }); HUMAN.add(c); return c }
+  const sv = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const idsOf = (xs: readonly Candidate[]): string => xs.map((c) => sv(c.sourceArticleId)).join(',')
+  /** 러너 ③-b · ④ 그대로 — 정본 순서 → 자동 READY 우선 / 후순위 → `--up-to` 컷 */
+  const planFill = (rows: readonly Candidate[], upTo: number): { targets: Candidate[]; take: readonly Candidate[]; cut: Candidate[] } => {
+    const pri: Candidate[] = []
+    const def: Candidate[] = []
+    for (const c of fillOrderOf(rows)) {
+      const payload = buildQueuePayload({
+        envelope: HUMAN.has(c) ? {} : eEnv, candidate: c, autoJudge: HUMAN.has(c) ? {} : eAj, review: cleanRev, now: NOW,
+      })
+      if (autoReadyPriority({ candidate: c, payload }).priority) pri.push(c)
+      else def.push(c)
+    }
+    const targets = [...pri, ...def]
+    const g = judgeApply({ targets, apply: true, limit: null, upTo })
+    const take = g.ok ? g.take : []
+    return { targets, take, cut: targets.filter((c) => !take.includes(c)) }
+  }
+
+  // ① 늦게 수집된 후보가 먼저 — 원문 번호가 커도 작아도
+  const a1 = timed('35000001', '2026-11-27T10:00:00.000Z')
+  const b1 = timed('34000001', '2026-11-27T12:00:00.000Z')
+  const c1 = timed('36000001', '2026-11-27T14:00:00.000Z')
+  check('🔴 ⑦-① 늦게 수집된 후보가 먼저 선다 — 번호가 더 작아도(34…) · 더 커도(36…)',
+    idsOf(fillOrderOf([a1, b1, c1])) === '36000001,34000001,35000001'
+    && idsOf(fillOrderOf([c1, a1, b1])) === '36000001,34000001,35000001')
+
+  // ② --up-to 컷 — 이월(앞 회차 수집 · 작은 번호) 3건 + 이번 회차 새 후보 2건, 자리 2
+  const carry = [timed('35010001', '2026-11-27T09:10:00.000Z'), timed('35010002', '2026-11-27T09:12:00.000Z'),
+    timed('35010003', '2026-11-27T09:15:00.000Z')]
+  const fresh = [timed('35020001', '2026-11-27T13:30:00.000Z'), timed('35020002', '2026-11-27T13:32:00.000Z')]
+  const cutPlan = planFill([...carry, ...fresh], 2)
+  check('🔴 ⑦-② `--up-to=2` 은 새로 수집된 2건을 싣고 먼저 수집된 이월 3건이 잘린다',
+    idsOf(cutPlan.take) === '35020002,35020001' && idsOf(cutPlan.cut) === '35010003,35010002,35010001')
+
+  // ③ 수집 시각을 모르면 언제나 뒤 — 빈 문자열(생성 봉투의 "모른다") · 깨진 값 · 칸 없음(사람 후보)
+  const blank = timed('30000001', '')
+  const broken = timed('30000002', '2026-11-27T23:00:00.000Z', { sourceCapturedAt: '2026-11-27 23:00' })
+  const noKey = human('30000003')
+  const known = timed('39000001', '2026-11-26T01:00:00.000Z')
+  const unk = fillOrderOf([blank, noKey, broken, known])
+  check('🔴 ⑦-③ 수집 시각을 아는 후보(하루 넘게 오래됐어도)가 먼저 · 모르는 셋은 뒤 · 그 셋도 열쇠로 결정적',
+    idsOf(unk) === '39000001,30000001,30000002,30000003'
+    && idsOf(fillOrderOf([broken, known, noKey, blank])) === idsOf(unk))
+
+  // ④ 수집 시각이 같으면(목록 회차 시각을 수집 시각으로 쓰는 원천) 파일 순서와 무관하게 같은 순서
+  const T = '2026-11-27T11:00:00.000Z'
+  const same = [timed('20000009', T), timed('20000001', T), timed('20000005', T, { sourceSite: 'navercafe:wgang' }),
+    timed('20000001', T, { title: '이야기 20000001 둘째' })]
+  const perms = (xs: readonly Candidate[]): Candidate[][] => xs.length <= 1 ? [[...xs]]
+    : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]))
+  const orders = new Set(perms(same).map((p) => fillOrderOf(p).map((c) => `${sv(c.sourceSite)}/${sv(c.sourceArticleId)}/${sv(c.title)}`).join('|')))
+  check('🔴 ⑦-④ 수집 시각이 같으면 24가지 파일 순서가 전부 같은 결과 — 사이트 · 원문 id · 제목 코드 포인트 순',
+    orders.size === 1 && [...orders][0] === [
+      'navercafe:remonterrace/20000001/이야기 20000001', 'navercafe:remonterrace/20000001/이야기 20000001 둘째',
+      'navercafe:remonterrace/20000009/이야기 20000009', 'navercafe:wgang/20000005/이야기 20000005',
+    ].join('|'))
+
+  // ⑤ 「자동 READY 우선」 나눔은 그대로 — 각 묶음 안에서만 수집 시각 최신 먼저
+  const priOld = timed('35030001', '2026-11-27T08:00:00.000Z')
+  const priNew = timed('35030002', '2026-11-27T12:00:00.000Z')
+  const defNew = timed('35030003', '2026-11-27T15:00:00.000Z', { lifeReview: null })
+  const defOld = timed('35030004', '2026-11-27T09:00:00.000Z', { lifeReview: null })
+  const hum = human('35030005')
+  const split = planFill([hum, defOld, priOld, defNew, priNew], 1)
+  check('🔴 ⑦-⑤ 자동 READY 우선 묶음이 앞(더 늦게 수집된 후순위보다도) · 묶음 안은 최신 먼저 · 사람 후보는 맨 뒤 · 컷은 앞에서',
+    idsOf(split.targets) === '35030002,35030001,35030003,35030004,35030005' && idsOf(split.take) === '35030002')
+  const runnerCode = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '')
+  const fillFn = runnerCode.slice(runnerCode.indexOf('export function fillOrderOf('), runnerCode.indexOf('export function autoReadyPriority('))
+  check('🔴 ⑦ 배선 — 러너가 파일을 합친 뒤 `fillOrderOf` 로 세우고 그 순서로 선별한다 · 옛 문자열 정렬이 없다',
+    /const candidates = fillOrderOf\(fileRows\)/.test(runnerCode)
+    && runnerCode.indexOf('const candidates = fillOrderOf(fileRows)') < runnerCode.indexOf('for (const c of candidates) {')
+    && !/candidates\.sort\(/.test(runnerCode)
+    && fillFn.includes('sortBySourceRank(') && fillFn.includes('sourceRankSignalOf(') && !fillFn.includes('localeCompare'))
+  check('🔴 ⑦ 배선 — 「자동 READY 우선」 나눔과 컷은 그 순서를 그대로 쓴다',
+    /for \(const c of targets\) \{\s*const payload = buildQueuePayload\(/.test(runnerCode)
+    && runnerCode.includes('const orderedTargets = [...priorityTargets, ...deferredTargets.map((x) => x.c)]')
+    && runnerCode.includes('judgeApply({ targets: orderedTargets, apply: APPLY, limit: LIMIT, upTo: UP_TO })'))
 }
 
 console.log('\n─────────────────────────────────────────────────────────')
