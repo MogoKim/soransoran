@@ -58,12 +58,13 @@ function Block({ block, articleSlug }: { block: MagazineBlock; articleSlug: stri
           {/* 🔴 이 CTA 는 라벨이 길다. "크게" 에서 한 줄에 안 들어가므로 두 줄을 허용한다 —
                  문구를 줄이지 않고 높이가 자라게 둔다(min-h 52px 는 하한일 뿐이다).
                  items-center 만으로는 두 줄이 왼쪽으로 몰려 보여 가운데 정렬을 함께 건다. */}
-          <Link
+          {/* 이 주소는 GET 요청을 게시판 이동으로 기록하므로 클릭할 때 탐색하는 일반 링크를 쓴다. */}
+          <a
             href={ctaHref(articleSlug, block.href)}
             className={`mt-3 inline-flex ${TOUCH_MIN} items-center justify-center rounded-lg bg-cta px-6 py-2 text-center text-lg font-bold leading-snug text-cta-content no-underline transition duration-150 hover:brightness-95 active:scale-95`}
           >
             {block.label}
-          </Link>
+          </a>
         </div>
       )
     case 'image':
