@@ -7,19 +7,23 @@
 import type { ReleaseBinding } from '@/lib/magazine-provenance-rule.mjs'
 
 export const RELEASE_BINDING: ReleaseBinding | null = {
-  "graphVersion": "g-20261124-e8a6b8",
-  "bundleHash": "bf5322bdb91b6b28c4884e63f5194cd8c1afe26d0eb42a987b2a70b8f9404277",
+  "graphVersion": "g-20261128-3fbfc8",
+  "bundleHash": "8ef851813ea0b1ceb6c6dac4a35efa5fa42e9fe6a25d9ceab10d64c83059c29a",
   "policyBoard": {
     "id": "magazine-content-plan-policy/1",
     "hash": "c21d58fd6089c49a1bf3475e74fa8cddc774051d37be777707de07670a15250d"
   },
   "planHashOf": {
-    "I-T3-47": "5d529b42d832bbd19b44764c928c916429961ef25f364ca051b95b39376ab504",
-    "I-T6-03": "45456475fb5c16b5705755888561a56525f2d32c763153c3f799ca697cd5e1ed",
-    "I-T6-05": "d5685904daebffc325a9d4712e0c31cecb7c88022c768b2b5784438effa723fa",
-    "I-T6-11": "5832c99dfa5aa1172e36fbd88be5a2fea0540432d9a24e3bd1403a8765c7adc4"
+    "I-T3-03": "ef8170dafb07c065d211f93ffa275b86aafc5668ce365fc06340847ac5404640",
+    "I-T3-47": "a28e588090ecac55b81410cdb0849a3d9f2d83135ea5ddb036b9cee79496e204",
+    "I-T6-03": "d35bed36cff1f79f92d837af2cd5207b8e5d099a8eb333b7647d6470fe70c916",
+    "I-T6-05": "cbdd6ba0d69da819403b3290aff1df8af417691cfbc2dad633f840227048ba12",
+    "I-T6-11": "859bf784cf97c4a21635ffaccbd16cdde2490b0cd945e4ab9907fb2955b46582"
   },
   "relationsOf": {
+    "I-T3-03": [
+      "E-0341"
+    ],
     "I-T3-47": [
       "E-0326"
     ],
