@@ -236,10 +236,11 @@ try {
   writeFileSync(SUPPLEMENT_MANIFEST_FILE_V2, v2Manifest, { encoding: 'utf8', mode: 0o600 })
 
   // ── 세대는 목록 하나가 정한다 · 다음 세대는 직전 세대를 동결 입력으로 받는다 ──
-  check('code knows generations 1..3 and the latest is 3',
-    SUPPLEMENT_GENERATIONS.join(',') === '1,2,3' && SUPPLEMENT_LATEST_GENERATION === 3)
+  check('code knows generations 1..4 and the latest is 4',
+    SUPPLEMENT_GENERATIONS.join(',') === '1,2,3,4' && SUPPLEMENT_LATEST_GENERATION === 4)
   check('previous generation is derived, the first has none',
-    previousSupplementGeneration(3) === 2 && previousSupplementGeneration(2) === 1 && previousSupplementGeneration(1) === null)
+    previousSupplementGeneration(4) === 3 && previousSupplementGeneration(3) === 2
+    && previousSupplementGeneration(2) === 1 && previousSupplementGeneration(1) === null)
   check('generation paths follow one naming rule',
     SUPPLEMENT_GENERATIONS.every((g) => supplementPaths(g).corpus.endsWith(`supplement-v${g}.json`)
       && supplementPaths(g).manifest.endsWith(`supplement-v${g}-manifest.json`)))
@@ -272,6 +273,41 @@ try {
   writeFileSync(supplementPaths(3).corpus, v3Corpus, { encoding: 'utf8', mode: 0o600 })
   const explicitV2 = readSupplementSnapshot({ baseSourceDigest: sourceDigest, baseAssignmentDigestFor: () => baseDigest, generation: 2 })
   check('an explicit generation read never falls back to another generation', explicitV2.ok && explicitV2.byCode.size === 4)
+
+  // ── v4 (wave9) — v3 와 같은 계약: 동결 v3 바이트 그대로 + 숫자 코드순으로 뒤에 붙는다 ──
+  //    🔴 기록 전 runtime 은 v3 를 읽는다(파일이 없는 세대는 고르지 않는다) — 순서 무결성(기록 → 배포)의 전제다.
+  check('before v4 is written the runtime still selects complete v3', activeSupplementPaths().generation === 3)
+  const v3Manifest = readFileSync(supplementPaths(3).manifest, 'utf8')
+  const v4 = planSupplementSnapshot({
+    canonRows: canon,
+    extraRows: rows('v4', 2),
+    baseCodes,
+    newCodes: ['P107', 'P153'],
+    baseSourceDigest: sourceDigest,
+    saltId: 'b'.repeat(12),
+    generatedAt: '2026-11-28T00:00:00.000Z',
+    reason: 'append generation four',
+    frozenBundles: v3.asset.bundles,
+  })
+  check('v4 plan keeps every frozen v3 bundle and appends after them in numeric code order',
+    v4.ok && v4.asset.bundles.map((bundle) => bundle.personaCode).join(',') === 'P34,P35,P36,P37,P64,P100,P107,P153')
+  check('v4 plan preserves frozen v3 bundle bytes',
+    JSON.stringify(v4.asset.bundles.slice(0, 6)) === JSON.stringify(v3.asset.bundles))
+  const v4Write = writeSupplementSnapshot({ assetText: v4.assetText, manifestText: v4.manifestText, generation: 4 })
+  check('v4 write succeeds without touching v2 or v3', v4Write.ok && v4Write.action === 'write'
+    && readFileSync(SUPPLEMENT_MANIFEST_FILE_V2, 'utf8') === v2Manifest
+    && readFileSync(supplementPaths(3).manifest, 'utf8') === v3Manifest)
+  check('runtime selects complete v4 over v3', activeSupplementPaths().generation === 4)
+  const v4Loaded = read()
+  check('active v4 snapshot verifies and covers frozen plus appended bundles', v4Loaded.ok && v4Loaded.byCode.size === 8)
+  const v4Corpus = readFileSync(supplementPaths(4).corpus, 'utf8')
+  rmSync(supplementPaths(4).corpus)
+  const partialV4 = read()
+  check('partial v4 fails closed instead of silently falling back to v3',
+    !partialV4.ok && partialV4.code === 'SUPPLEMENT_PARTIAL' && activeSupplementPaths().generation === 4)
+  writeFileSync(supplementPaths(4).corpus, v4Corpus, { encoding: 'utf8', mode: 0o600 })
+  const explicitV3 = readSupplementSnapshot({ baseSourceDigest: sourceDigest, baseAssignmentDigestFor: () => baseDigest, generation: 3 })
+  check('an explicit v3 read stays v3 after v4 exists', explicitV3.ok && explicitV3.byCode.size === 6)
 
   const cli = readFileSync(join(process.cwd(), 'scripts/persona-reference-supplement-build.mts'), 'utf8')
   check('production apply reads canonical DB addresses',
