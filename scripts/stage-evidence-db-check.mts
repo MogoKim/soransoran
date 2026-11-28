@@ -52,7 +52,8 @@ import {
 import { currentQualityContract } from '../src/lib/quality-contract'
 import { observeJob } from './lib/runner-health.mjs'
 import { consecutivePassDays } from '../src/lib/stage-ladder'
-import { LADDER_RULE } from '../src/lib/ladder-table'
+import { LADDER_RULE, commentDepthFloorOf } from '../src/lib/ladder-table'
+import { THREAD_SIZE_CAP, threadMeanSizeAt, threadSizeMaxOf } from '../src/lib/persona-thread-target'
 import { unresolvedDefectCount } from '../src/lib/auto-ready-repo'
 import { judgeSlotRelease, publishEventAtOf, releaseStampOf, releaseStampStatusOf, RELEASE_STAMP_KEY } from '../src/lib/source-slot-release'
 import { fakeEvidenceGate } from './lib/fake-source-evidence.mjs'
@@ -207,10 +208,24 @@ async function rawRow(capturedAt: Date): Promise<string> {
 type Seeded = { posts: string[]; authors: string[]; commenters: string[]; comments: string[]; logs: string[]; queues: string[] }
 
 /**
- * 🔴 하루 — 무인 발행 3건(자동 READY 도장 행) · 글마다 5분 뒤 다른 Persona 첫 댓글 1건 + 서로 다른 화자의 추가 댓글 5건 ·
- *    감사 1건(판정 no) = 정본 표본 ceil(3×0.2)=1. 수와 결의 통과선을 넘는 하루다.
+ * 🔴 **글당 댓글 수(첫 댓글 포함)는 그 글 공개 시각의 정본 통과선에서 낸다** — 숫자를 박지 않는다.
+ *    통과선 = `commentDepthFloorOf(threadMeanSizeAt(공개 시각))`, 그 선에 닿는 가장 작은 정수다(판정의 `below` 와 같은 1e-9).
+ *    앞판은 6(첫 1 + 추가 5)을 박아 두었다 — `THREAD_TARGETS` 에 11-26 줄(평균 7 · 통과선 6.3)이 붙자
+ *    증거 날짜가 그 줄을 넘은 날(11-27)부터 깨끗한 하루가 COMMENT_DEPTH_SHORT 가 됐다(11-28 사슬).
  */
-async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER, day: string = D): Promise<Seeded> {
+const passingDepthAt = (publishedAt: Date): number =>
+  Math.ceil(commentDepthFloorOf(threadMeanSizeAt(publishedAt.getTime())) - 1e-9)
+/** 그날 깨끗한 하루의 글당 댓글 평균 — 판정과 같은 반올림(`round2`) */
+const depthAvgOf = (day: string): number =>
+  Math.round((slotsOf(day).reduce((n, t) => n + passingDepthAt(t), 0) / slotsOf(day).length) * 100) / 100
+
+/**
+ * 🔴 하루 — 무인 발행 3건(자동 READY 도장 행) · 글마다 5분 뒤 다른 Persona 첫 댓글 1건 + 서로 다른 화자의 추가 댓글
+ *    (`depthOf(공개 시각)` − 1건 · 기본은 정본 통과선에 닿는 수) · 감사 1건(판정 no) = 정본 표본 ceil(3×0.2)=1.
+ *    기본값이면 수와 결의 통과선을 넘는 하루다.
+ */
+async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER, day: string = D,
+  depthOf: (publishedAt: Date) => number = passingDepthAt): Promise<Seeded> {
   const DAY_SLOTS = slotsOf(day)
   const s: Seeded = { posts: [], authors: [], commenters: [], comments: [], logs: [], queues: [] }
   for (let i = 0; i < n; i += 1) {
@@ -238,7 +253,7 @@ async function seedDay(n = 3, decidedBy: string | null = AUTO_DECIDER, day: stri
         personaId: commenter, createdAt: new Date(t.getTime() + 5 * MIN) },
       select: { id: true },
     })
-    for (let k = 0; k < 5; k += 1) await followupComment(post.id, null, new Date(t.getTime() + (k + 2) * 15 * MIN))
+    for (let k = 0; k < depthOf(t) - 1; k += 1) await followupComment(post.id, null, new Date(t.getTime() + (k + 2) * 15 * MIN))
     s.posts.push(post.id); s.authors.push(author); s.commenters.push(commenter); s.comments.push(c.id); s.logs.push(log.id); s.queues.push(q.id)
   }
   if (n > 0 && decidedBy === AUTO_DECIDER) {
@@ -282,9 +297,24 @@ try {
   check('편수 3 · 자동 target 3 · 첫 댓글 3 · 감사 기대 ceil(3×20%)=1 · 표본 1', base.counts.published === 3 && base.counts.autoTargets === 3
     && base.counts.firstCommentOk === 3 && base.counts.auditExpected === 1
     && base.counts.auditSampled === 1, JSON.stringify(base.counts))
-  check('🟢 결 — 글당 댓글 6(첫 1 + 추가 5) · 타인 3명 3편 · 수집 시각을 큐 행에서 읽었다',
-    base.counts.commentDepthAvg === 6 && base.counts.threeVoicesPosts === 3 && base.counts.collectKnown === 3, JSON.stringify(base.counts))
+  check(`🟢 결 — 글당 댓글 ${depthAvgOf(D)}(그 글 공개 시각의 통과선 ${base.counts.commentDepthFloor} 에 닿는 수) · 타인 3명 3편 · 수집 시각을 큐 행에서 읽었다`,
+    base.counts.commentDepthAvg === depthAvgOf(D) && base.counts.threeVoicesPosts === 3 && base.counts.collectKnown === 3, JSON.stringify(base.counts))
+  check('fixture 전제 — 글당 댓글 수가 그 줄의 크기 상한 · 글당 구조 상한(`THREAD_SIZE_CAP`) 안이다(실제 러너보다 강하지 않다)',
+    SLOTS.every((t) => passingDepthAt(t) <= threadSizeMaxOf(threadMeanSizeAt(t.getTime())) && passingDepthAt(t) <= THREAD_SIZE_CAP),
+    SLOTS.map((t) => `${passingDepthAt(t)}/${threadSizeMaxOf(threadMeanSizeAt(t.getTime()))}/${THREAD_SIZE_CAP}`).join(' '))
   check('🟢 그 하루는 열린 단계 d3 의 연속 통과 1일이다', consecutivePassDays(TODAY, 'd3', [{ decision: dec, evidence: base }]) === 1)
+  {
+    // 🔴 글당 댓글 미달 — 글마다 정본 통과선에 닿는 수보다 하나 적다. 다른 축은 그대로 통과선 위다
+    await wipe()
+    const dShort = await storeDecision(TRIAL_D3)
+    await seedDay(3, AUTO_DECIDER, D, (t) => passingDepthAt(t) - 1)
+    const v = await verdictOf(dShort)
+    const floorD = Math.round(commentDepthFloorOf(SLOTS.reduce((n, t) => n + threadMeanSizeAt(t.getTime()), 0) / SLOTS.length) * 100) / 100
+    check('🔴 글당 댓글이 공개 시각 통과선 바로 아래 → COMMENT_DEPTH_SHORT 하나만(타인 3명 · 첫 댓글은 그대로 통과) · 통과선은 그 글들의 줄',
+      v.verdict === 'FAIL' && v.codes.length === 1 && has(v, 'COMMENT_DEPTH_SHORT') && v.counts.threeVoicesPosts === 3
+      && v.counts.firstCommentOk === 3 && v.counts.commentDepthFloor === floorD,
+      `${v.verdict} ${v.codes.join(',')} ${JSON.stringify(v.counts)}`)
+  }
 
   console.log('\n② 행 하나씩 비틀면 PASS 가 아니다')
   await counter('🔴 09:30 글 첫 댓글 삭제(행 없음) → FIRST_COMMENT_SHORT', 'FIRST_COMMENT_SHORT', async (s) => {
@@ -359,7 +389,9 @@ try {
     const { d } = await thread(4)
     const v = await verdictOf(d)
     check('🟢 자동 첫 댓글 1 + 추가 답글 4 → PASS', v.verdict === 'PASS', `${v.verdict} ${v.codes.join(',')}`)
-    check('그때 counts — 첫 댓글 3 · 글당 댓글의 분자 22(글 3 × 6 + 답글 4) · 수동 0 · 대화 감사 PASS', v.counts.firstCommentOk === 3 && v.counts.personaComments === 22
+    const numerator = SLOTS.reduce((n, t) => n + passingDepthAt(t), 0) + 4
+    check(`그때 counts — 첫 댓글 3 · 글당 댓글의 분자 ${numerator}(글마다 공개 시각 통과선에 닿는 수 + 답글 4) · 수동 0 · 대화 감사 PASS`,
+      v.counts.firstCommentOk === 3 && v.counts.personaComments === numerator
       && v.counts.manualPersonaOnTargets === 0 && v.conversation?.verdict === 'PASS', `${JSON.stringify(v.counts)} ${JSON.stringify(v.conversation)}`)
   }
   {
@@ -850,8 +882,8 @@ try {
       JSON.stringify(passRun.out?.evidence?.counts))
     check('🟢 🔴 **전날 판정 PASS — launchd 유무와 무관하다(러너 건강은 판정의 입력이 아니다)**',
       passRun.out?.evidence?.verdict === 'PASS', JSON.stringify(passRun.out?.evidence))
-    check('🟢 실제 행에서 결 네 칸이 계산된다 — 첫 댓글 3/3 · 글당 댓글 6 · 타인 3명 3편 · 수집→공개 중앙값',
-      passRun.out?.evidence?.counts.firstCommentOk === 3 && passRun.out.evidence.counts.commentDepthAvg === 6
+    check(`🟢 실제 행에서 결 네 칸이 계산된다 — 첫 댓글 3/3 · 글당 댓글 ${depthAvgOf(D)} · 타인 3명 3편 · 수집→공개 중앙값`,
+      passRun.out?.evidence?.counts.firstCommentOk === 3 && passRun.out.evidence.counts.commentDepthAvg === depthAvgOf(D)
       && passRun.out.evidence.counts.threeVoicesPosts === 3 && passRun.out.evidence.counts.collectToPublishMedianH !== undefined,
       JSON.stringify(passRun.out?.evidence?.counts))
     check('🔴 하루 통과로는 올리지 않는다 — 연속 1 · 공개 d3', passRun.out?.result.passDays === 1 && passRun.out.result.decision.release === 'd3'
