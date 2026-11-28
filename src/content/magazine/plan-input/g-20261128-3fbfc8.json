@@ -1,0 +1,4474 @@
+{
+  "bundleHash": "8ef851813ea0b1ceb6c6dac4a35efa5fa42e9fe6a25d9ceab10d64c83059c29a",
+  "graphVersion": "g-20261128-3fbfc8",
+  "intents": [
+    {
+      "answerScope": "호칭이 문서마다 다르다는 사실과, 제도에서 쓰는 구분이 생활의 구분과 다르다는 점",
+      "audienceSituation": "자기를 뭐라고 불러야 할지 모르겠을 때. 기사나 제도 안내에서 중년·중장년이라는 말을 보고 내가 거기 드는지 확인한다",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "제도별 정확한 연령 기준 나열 — 출처마다 다르고 우리가 정본이 아니다",
+        "노인·시니어 호칭"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T0-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "우리 나이는 몇 살부터 몇 살까지를 말하나",
+      "quarantined": false,
+      "territoryId": "T0",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "몸과 마음에서 나이를 느끼는 순간들, 그것을 어떻게 받아들이는가",
+      "audienceSituation": "거울이나 사진, 몸의 작은 변화에서 문득 나이를 느낀 날. 병이 아니라 감각의 이야기다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "노화 방지·안티에이징",
+        "의학적 노화 기전"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T0-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 드는 게 실감 나는 순간",
+      "quarantined": false,
+      "territoryId": "T0",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "세 질의 모두 paa4 가 붙었다. T0 은 앞서 두 번 갈래 0 이었는데 이번에 처음 갈래가 생겼다",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T0-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남은 시간을 어떻게 쓸까",
+      "quarantined": false,
+      "territoryId": "T0",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 82Cook 「요즘 환갑 초청 어디까지」 · 아하 「요즘 환갑은 어떻게 보내는게 맞을까요??」",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T0-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "환갑을 어디까지 알릴까",
+      "quarantined": false,
+      "territoryId": "T0",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 창업자 판단 대기. 정치적 논란에 우리가 들어갈지는 우리가 정할 일이 아니다",
+      "audienceSituation": "🔴 호칭 자체가 사회 논란이 됐다는 것을 알게 됐을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "정치적 입장 표명",
+        "특정 진영 언어 사용"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T0-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "폐경이라는 말 대신 완경을 쓸지",
+      "quarantined": false,
+      "territoryId": "T0",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "시작 시기에 폭이 있다는 것, 사람마다 다르다는 것, 갱년기와 폐경이 같은 말이 아니라는 것",
+      "audienceSituation": "몸이 예전 같지 않은데 이게 갱년기인지 아닌지 모를 때. 아직 폐경은 아닌 사람이 많다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "진단 기준",
+        "자가진단 체크리스트(I-T1-06)",
+        "호르몬 검사(I-T4-04)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기는 몇 살부터 시작되나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "기간에 폭이 있다는 것, 증상별로 다르게 끝난다는 것",
+      "audienceSituation": "이미 겪는 중인데 끝이 안 보일 때. 언제까지 견뎌야 하는지 알고 싶다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "치료로 기간을 줄이는 방법",
+        "개별 증상 각각의 경과"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기는 얼마나 오래 가나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "평균과 폭, 그리고 평균이 내 시기를 말해 주지 않는다는 것",
+      "audienceSituation": "생리가 불규칙해지기 시작해 내가 어디쯤인지 가늠하려 할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "조기폐경 진단",
+        "폐경을 늦추는 방법(I-T1-13)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "폐경은 보통 몇 살에 하나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "두 낱말이 어떻게 쓰이는지, 사전 등재 상태, 독자가 스스로 고르면 된다는 것",
+      "audienceSituation": "어딘가에서 완경이라는 말을 보고 무엇이 맞는지 궁금해졌을 때. 낱말 하나에 감정이 걸려 있다",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "어느 쪽이 옳다는 판정",
+        "임상 수치와 진단 기준(I-T1-01·I-T1-03)",
+        "어원 사전"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "폐경과 완경, 어느 말을 써야 하나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "증상이 사람마다 다르게 온다는 것, 개별 증상 글로 가는 길",
+      "audienceSituation": "목록을 보고 내 것이 여기 있는지 찾아보는 단계. 아직 어떤 증상을 겪는지 이름 붙이지 못했다",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 30가지 같은 나열 형식 — 1페이지가 이미 그 형식이고 우리 결이 아니다",
+        "치료·영양제"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에는 어떤 증상이 나타나나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 확인할 범위가 좁다. 스스로 판단하기 어렵다는 것과 진료에서 무엇을 이야기하면 되는지까지",
+      "audienceSituation": "병원에 가기 전에 스스로 가늠해 보고 싶을 때",
+      "automationDecision": "REJECT",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 체크리스트·점수표 — 1페이지가 「안면홍조 하루 3회 이상」 식 수치 문항을 쓴다. 같은 형식이면 우리가 진단 도구를 주는 글이 된다",
+        "자가진단 키트·제품"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-06",
+      "policyScope": "BLOCKED",
+      "primaryQuery": "내가 갱년기인지 어떻게 아나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "왜 생기는지, 얼마나 가는지, 그 순간에 할 수 있는 것",
+      "audienceSituation": "사람들 앞에서 갑자기 달아올라 당황했던 날. 남들이 알아챌까 봐 신경 쓰인다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "호르몬 치료(I-T4-05)",
+        "음식·영양제로 낫는다는 주장"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갑자기 얼굴이 달아오를 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "변화의 모양이 일정하지 않다는 것, 어느 시점에 진료를 생각하면 되는지",
+      "audienceSituation": "생리 주기와 양이 들쭉날쭉해져 이게 끝나가는 신호인지 궁금할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 폐경 후 출혈(I-T1-09) — 위험 등급이 다르다",
+        "피임·임신"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "폐경 전후로 생리가 달라질 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 「진료를 받으세요」 한 방향뿐",
+      "audienceSituation": "끝난 줄 알았는데 피가 비쳐 놀란 순간. 검색부터 하게 된다",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "안심시키는 서술",
+        "원인 감별",
+        "치료 방법"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-09",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "폐경이 지났는데 출혈이 있을 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "끝난 뒤에도 남는 변화와 새로 신경 쓸 것",
+      "audienceSituation": "끝나가는 것 같은데 그 다음이 궁금할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "질환 각각의 경과",
+        "폐경 후 출혈(I-T1-09)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-10",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기가 끝나면 몸은 어떻게 되나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "몸에서 무슨 일이 일어나는지를 설명으로만",
+      "audienceSituation": "증상을 검색하다 호르몬이라는 말을 만나 원인을 이해하려 할 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 호르몬 수치를 올리는 방법·음식·영양제",
+        "검사 수치 해석(I-T4-04)",
+        "호르몬 치료(I-T4-05)"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-11",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "여성호르몬이 부족하면 어떻게 되나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "사람마다 힘든 지점이 다르다는 것, 서로의 이야기",
+      "audienceSituation": "증상 하나하나가 아니라 이 시기 전체가 버거울 때. 정보보다 공감이 필요하다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "증상 심각도 순위",
+        "치료"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-12",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 제일 힘든 건 무엇일까",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 좁다. 이 질문에 답을 파는 자리가 1페이지를 차지한다는 사실과, 판단은 진료에서",
+      "audienceSituation": "아직 오지 않았으면 하는 마음으로 검색할 때",
+      "automationDecision": "REJECT",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "약·시술·영양제 소개",
+        "효과 주장"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-13",
+      "policyScope": "BLOCKED",
+      "primaryQuery": "폐경을 늦출 수 있나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기에 잠이 얕아지는 이유와 그 밤을 보내는 법",
+      "audienceSituation": "새벽 세시쯤 깨어 다시 잠들지 못하는 밤이 반복될 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "불면증 진단·기간 기준(I-T2-06)",
+        "수면제"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-14",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "새벽에 자꾸 깨는 이유",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기에 관절이 아플 수 있다는 것과 움직임을 아주 멈추지 않는 선",
+      "audienceSituation": "무릎이나 손목이 아파 움직이기 겁날 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 날씨가 통증의 원인이라는 인과 확정",
+        "관절염 진단",
+        "치료·주사"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-15",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 관절이 아픈데 운동해도 되나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기의 변화로 설명되는 범위",
+      "audienceSituation": "가르마가 넓어 보이거나 빠지는 양이 늘었을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "탈모 치료·제품"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-16",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "머리카락이 빠질 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기에 같이 오는 변화라는 설명",
+      "audienceSituation": "갱년기와 연결 지어 생각하지 못했던 작은 증상들",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "각 증상의 질환 감별"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-17",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "입이 마르고 눈이 뻑뻑하고 소변이 잦아질 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "국립재활원·의학신문·한의원. 🔴 1위가 「의외로 90%는 이것 때문」 식 블로그다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-18",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 어지러울 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 🔴 1페이지 1·2위가 국민건강보험·질병관리청 국가건강정보포털이다 — 1차 출처가 위에 있다. 그 아래는 안과(클리어서울·비앤빛)",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-19",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "노안은 언제부터 오나요",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 의료 판단 영역. MEDICAL·FINANCIAL 프로필로 자동 검증한다. 조사 후보이며 발행 승인이 아니다",
+      "audienceSituation": "몸이 아프거나 예전 같지 않은데 어디 물어볼 데가 없을 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "진단",
+        "치료법 안내",
+        "약·시술 추천"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-20",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "폐경 뒤 관계가 아프거나 반응이 없을 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 의료 판단 영역. PAA 에 「호흡곤란으로 사망할 수 있나요」 가 있다 — 우리가 답할 자리가 아니다",
+      "audienceSituation": "두근거림 말고 다른 몸 증상이 나타나 다른 병인가 겁이 날 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "진단",
+        "응급 판단",
+        "치료 안내"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-21",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 숨이 차거나 손발이 저릴 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "지나간 사람들의 이야기. 극복법 목록이 아니라 시기의 모양",
+      "audienceSituation": "증상 하나하나가 아니라 이 시기 전체를 어떻게 지나가는지 알고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "치료법 나열",
+        "극복 프로그램",
+        "제품"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-24",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기를 어떻게들 넘겼나 궁금할 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 의료. 우리가 진단하지 않는다. 이른 시기에 겪는 사람이 있다는 것과 병원에 갈 신호",
+      "audienceSituation": "아직 이른 나이인데 생리가 달라져 겁이 날 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "조기폐경 진단",
+        "원인 단정",
+        "치료 안내"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-25",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "마흔 중반에 벌써 끝나 가는 것 같을 때",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "—(새 글이 아니라 예약 글 hormone-therapy-who 의 범위 확장)",
+      "audienceSituation": "시작은 했는데 언제까지 먹어야 하는지, 끊으면 어떻게 되는지 아무도 안 알려줄 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "복용 중단 권고",
+        "기간 제시",
+        "효과 주장",
+        "약 추천"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T1-26",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "호르몬 치료를 그만둬도 되는지",
+      "quarantined": false,
+      "territoryId": "T1",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "잠의 모양이 달라지는 것과 줄어드는 것의 차이",
+      "audienceSituation": "예전보다 일찍 깨고 적게 자는데 이게 나이 탓인지 궁금할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "불면증 진단(I-T2-06)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 들면 잠이 줄어드는 게 정상인가요",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "그 밤에 하지 않는 편이 나은 것",
+      "audienceSituation": "누워서 시계를 보며 잠들지 못하는 밤",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "수면제",
+        "불면증 진단·기간"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "잠이 안 올 때 하면 안 되는 것",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "습관으로 안 되는 경우가 있다는 것과 진료실로 넘기는 선",
+      "audienceSituation": "권하는 것을 다 해 봤는데 달라지지 않아 지친 상태",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 몇 주 이상이면 불면증 같은 기간 기준"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "잠자리 습관을 바꿔도 그대로일 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 좁다. 이름을 붙이는 일은 진료실에서 한다는 것",
+      "audienceSituation": "잠 문제를 검색하다 불면증이라는 병명을 만나 내가 거기 해당하는지 불안해진 순간",
+      "automationDecision": "PASS",
+      "cluster": "sleep",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 진단 기준·기간",
+        "치료법",
+        "불면증에 좋은 음식(I-T2-05)"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기 불면증이라는 말을 만났을 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "—",
+      "audienceSituation": "약 말고 할 수 있는 게 없나 찾는 단계",
+      "automationDecision": "REJECT",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "전부"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-05",
+      "policyScope": "BLOCKED",
+      "primaryQuery": "불면증에 좋은 음식",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기에 감정의 폭이 달라질 수 있다는 것, 이상한 일이 아니라는 것",
+      "audienceSituation": "설거지를 하다 갑자기 눈시울이 뜨거워진 날. 스스로도 당황스럽다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 우울증 시사·배제",
+        "🔴 출처 없는 기간 기준"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이유 없이 눈물이 날 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "감정의 폭이 달라지는 시기라는 것, 자책을 덜어 내는 쪽",
+      "audienceSituation": "별것 아닌 일에 화가 나고 그 뒤에 자책이 남을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 감정조절장애 같은 병명",
+        "치료",
+        "🔴 자녀·가족이 대하는 법(EX-01)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "감정 조절이 잘 안 될 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "게으름이 아니라는 것, 작게 시작하는 선",
+      "audienceSituation": "해야 할 일은 아는데 몸이 안 움직이는 아침이 이어질 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 우울증 진단·기간",
+        "약"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "아무것도 하기 싫어질 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기에 흔한 변화라는 것과 언제 진료를 생각하는지",
+      "audienceSituation": "단어가 안 떠오르고 깜빡하는 일이 늘어 덜컥 겁이 날 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 치매 감별·검사"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-09",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "기억력이 떨어진 것 같을 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "계절과 시기가 마음에 미치는 영향, 그 시기를 보내는 법",
+      "audienceSituation": "계절이 바뀌거나 한 해가 끝나갈 때 유독 허전해지는 시기",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "계절성 우울증 진단"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-10",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "가을·연말이 되면 마음이 가라앉을 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "한의원·헬스매체가 1페이지를 나눠 가졌다. 우리 독자의 말은 없다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-11",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 가슴이 두근거릴 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 의료 경계. 우리가 답할 수 있는 것은 감정의 이야기뿐이고 우울증 판단은 아니다",
+      "audienceSituation": "관계를 거절당하는 일이 반복되면서 자기 값이 깎이는 느낌이 들 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "우울증 자가진단",
+        "치료 권유",
+        "약 정보"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-12",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "거절이 쌓여 마음이 내려앉을 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "그 느낌이 이 나이에 흔하다는 것. 해결책이 아니라 같이 앉아 있는 글",
+      "audienceSituation": "남과 비교하다 지금까지가 다 잘못된 것 같아질 때",
+      "automationDecision": "HOLD",
+      "cluster": "emotion",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "자존감 회복 방법론",
+        "성공 서사",
+        "우울증 진단"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T2-13",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "살아온 게 실패처럼 느껴질 때",
+      "quarantined": false,
+      "territoryId": "T2",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "설명이 잘 안 되는 이유와 무엇부터 말해 볼 수 있는지",
+      "audienceSituation": "몸이 힘들다고 말해도 남편이 대수롭지 않게 넘길 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 남편을 바꾸는 방법",
+        "부부 상담 권유"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편이 갱년기를 이해 못 할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "말이 줄어드는 시기가 있다는 것, 서로의 현황을 나누는 자리",
+      "audienceSituation": "하루에 몇 마디 안 하는 날이 이어질 때. 싸운 것도 아닌데 조용하다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "부부관계 횟수·통계(EX-03)",
+        "이혼(EX-04)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편과 대화가 없을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "반복되는 패턴을 보는 법",
+      "audienceSituation": "같은 이유로 반복해서 부딪히고, 끝나고 나면 허탈할 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "자녀에게 부모의 다툼을 중재하는 역할을 맡기는 조언",
+        "법률·이혼 절차"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부싸움이 반복될 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "생활 리듬이 겹치며 생기는 마찰과 각자의 시간",
+      "audienceSituation": "혼자 쓰던 낮 시간이 사라지고 서로 부딪히기 시작할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "은퇴 재무 설계(I-T5-04)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편이 은퇴하고 집에 있을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "허전함을 정상으로 두고 그 시간을 다시 채우는 이야기",
+      "audienceSituation": "아이 방이 비고 저녁 시간이 이상하게 길어진 시기",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "자녀 독립 지원·재정"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자녀가 독립한 뒤 집이 조용할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "묻고 싶은 마음과 참는 마음 사이",
+      "audienceSituation": "물어보기도 안 물어보기도 애매한 시기. 주변 이야기에 마음이 흔들린다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 결혼을 권하거나 말리는 조언",
+        "비혼 담론"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자녀가 결혼 이야기를 안 할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "그 말이 왜 남는지와 흘려보내는 법",
+      "audienceSituation": "명절이 지나고도 친척의 한마디가 마음에 남아 있을 때",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "가족 관계 단절 조언"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "명절에 들은 말이 계속 남을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "말하지 못하는 이유와 어디서 말할 수 있는지",
+      "audienceSituation": "몸이나 돈 이야기를 자식에게 꺼내기 어려운 상태",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "가족 상담"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자식한테는 말 못 하는 이야기",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 🔴 82Cook 1위 「나중에 손주 안봐주시겠다는 분들 계시죠. 이유가 뭔지요?」 — 우리 독자가 이미 그 자리에서 말하고 있다",
+      "automationDecision": "HOLD",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-20",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "손주를 봐 달라고 할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 강하게 적중. 브런치 「다 큰 자식들과의 거리두기」 1위 · 일다 「부모자식 거리두기 연습 필요」 · 82Cook · 오마이뉴스 「딸이 결혼했습니다, 거리 두기 잘 할 수 있을까요?」",
+      "automationDecision": "HOLD",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-21",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "다 큰 자식과 거리를 둔다는 것",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "적중하되 🔴 시점 주의. Reddit r/JUSTNOMIL(며느리 커뮤니티) · 「시어머니가 거리 두는 며느리 특징」 — 검색자는 며느리다. 우리 독자가 며느리인 경우에 맞고, 시어머니가 된 독자에게는 맞지 않는다",
+      "automationDecision": "HOLD",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-22",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "시어머니와 거리를 두고 싶을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 🔴 Reddit r/AskWomenOver40 「형제자매와 연락 끊기 – 슬픔은 어떻게 다뤄야 할까요?」 · r/AskReddit · Daum 「동생과 싸운 후 절연한 지 7년」 · 헤이코리안",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-23",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "형제자매와 멀어졌을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "적중. 조선경제 「각방 쓰기의 심리학」 · 헬스경향 · 동아사이언스 「부부, 사랑·건강 잡으려면 침대 따로」",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-24",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부가 따로 자기로 할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 🔴 82Cook 1위 「주말부부 오래하면 부부간 애정이 많이 식을까요?」",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-25",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "주말부부로 오래 지낼 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 82Cook 「50대 리스, 남편이 미워요.」 · 「50대 이후 남편 필요 없어지나요?」 — 독자가 직접 쓴 말이다",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-26",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편이 미워질 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ Blind 「시부모님이 좋아질수록 친정부모님이 비교돼」 · 82Cook 「시어머니랑 사이 좋으신 분들은 안계신가요?」",
+      "automationDecision": "HOLD",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-27",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "시댁과 친정이 비교될 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "평균이라는 숫자가 왜 위로가 안 되는지, 같은 나이 사람들이 실제로 무슨 말을 하는지",
+      "audienceSituation": "남들은 얼마나 하는지 숫자로 확인하고 싶을 때. 문제를 풀려는 게 아니라 내가 이상한지 재 보는 것이다",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "성기능 진단·치료",
+        "횟수 권장치 제시",
+        "의학 통계를 우리 수치로 단정"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-28",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부관계 횟수가 남들과 얼마나 다른지 궁금할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "몸과 마음이 달라지는 것이 흔한 일이라는 것, 거절이 관계의 끝이 아니라는 것",
+      "audienceSituation": "마음이 식었는데 말은 못 하고, 거절할 때마다 미안한 마음이 남을 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "성치료 권유",
+        "부부관계 기술",
+        "이혼 상담"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-29",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부관계가 부담스럽거나 하기 싫어졌을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "한쪽만 원하는 상태가 흔하다는 것, 그 침묵을 어떻게 읽을지",
+      "audienceSituation": "🔴 우리가 가정한 방향의 반대. 거절하는 쪽이 아니라 기다리다 지친 쪽이다",
+      "automationDecision": "HOLD",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "남성 성기능 치료",
+        "바람 의심 조장"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-30",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편이 먼저 다가오지 않을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "몸의 변화와 마음의 변화가 겹친다는 것, 그것을 남편에게 어떻게 말할지",
+      "audienceSituation": "몸이 달라진 뒤로 관계도 달라졌는데, 그게 갱년기 때문인지 마음 때문인지 모를 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "호르몬 치료 권유",
+        "성기능 개선 제품"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-32",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 들어서며 부부관계가 달라질 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "🔴 창업자 판단 대기. 우리가 다룰지 아직 정해지지 않았다",
+      "audienceSituation": "오래 같이 살면서 상대가 나를 여자로 보지 않는다고 느낄 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "연애 기술",
+        "외모 관리 상품"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-34",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편에게 여자로 보이지 않는 것 같을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "🔴 1페이지가 법률사무소로 점령돼 있다. 우리 자리가 있는지 아직 모른다",
+      "audienceSituation": "헤어지지는 않되 따로 살고 싶다는 생각이 들 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "법률 자문",
+        "이혼 절차 안내",
+        "재산 분할 계산"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-35",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "졸혼이라는 선택을 알아볼 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "되돌리는 방법이 아니라, 되돌리려 해 본 사람들의 이야기",
+      "audienceSituation": "대화도 스킨십도 없어진 뒤에 뭐라도 해 보려는 마음이 들 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "부부 상담 프로그램 추천",
+        "관계 개선 기술"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-36",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부 사이를 다시 돌려 보려 할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "커뮤니티가 왜 필요한지 — 이것은 주제라기보다 소란소란의 존재 이유다",
+      "audienceSituation": "🔴 검색어 뒤에 커뮤니티 이름을 직접 붙이는 행동. 광고와 병원 결과를 피하려는 것이다",
+      "automationDecision": "REJECT",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "특정 커뮤니티 홍보",
+        "타 사이트 콘텐츠 전재"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-37",
+      "policyScope": "BLOCKED",
+      "primaryQuery": "병원 말고 같은 처지 사람들의 말을 듣고 싶을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 미정. 독자 시점이 확인되기 전에는 다루지 않는다",
+      "audienceSituation": "🔴 검색자가 당사자인지 의심하는 배우자인지 화면으로 알 수 없다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "불륜 조장",
+        "배우자 감시 조언"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-38",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기 무렵 마음이 밖으로 향한다는 이야기",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "순서와 관례가 아니라, 그 자리에서 부모가 느끼는 것",
+      "audienceSituation": "상견례 날짜가 잡히고 나서 뭘 해야 하는지 아무도 알려주지 않을 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "예단·예물 금액 기준",
+        "결혼식 절차 안내"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-39",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자녀 결혼이 시작됐을 때 부모의 자리",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "호칭의 실제 쓰임과, 거리를 어떻게 두는지",
+      "audienceSituation": "새로 생긴 관계인데 호칭부터 막힐 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "예법 정본 주장",
+        "전통 규범 강요"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-40",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "사돈을 어떻게 부르고 어떻게 지내나",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "알려진 것과 알려지지 않은 것, 그 걱정 자체가 흔하다는 것",
+      "audienceSituation": "안 한 지 오래됐는데 몸이나 관계에 무슨 일이 생기는 건 아닌지 걱정될 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "건강 효과 단정",
+        "의학적 권고"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-41",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부관계를 안 하면 어떻게 되는지 궁금할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "두려움의 이름을 붙이는 것. 예측이 아니라 같은 걱정을 한 사람들의 이야기",
+      "audienceSituation": "거절이 쌓이면 상대가 떠나거나 바람을 피울까 봐 겁이 날 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "외도 징후 목록",
+        "배우자 감시",
+        "이혼 절차"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-42",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부관계 거절이 헤어짐으로 갈까 두려울 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "나이 상단의 이야기. 끝이 있는지 없는지",
+      "audienceSituation": "오십대를 지나고 나면 그 다음은 어떤 모습인지 궁금할 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "성기능 치료",
+        "정력 제품"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-43",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "예순이 넘어서도 부부로 산다는 것",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "남성 갱년기가 있다는 사실과, 두 사람이 동시에 겪을 때의 생활",
+      "audienceSituation": "내 갱년기를 찾다가 남편도 그렇다는 걸 알게 됐을 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "남성호르몬 치료 권유",
+        "진단",
+        "제품 추천"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-44",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남편도 갱년기라는 걸 알게 됐을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "스킨십이 없어지는 과정과, 다시 만드는 게 가능한지",
+      "audienceSituation": "성이 아니라 스킨십 자체가 사라졌다는 걸 어느 날 깨달을 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "부부 성치료",
+        "스킨십 기술"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-45",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "손도 안 잡게 됐을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "중요도 자체를 묻는 질문. 답을 정해 주지 않고 각자의 자리",
+      "audienceSituation": "남들은 중요하다는데 나는 없어도 괜찮은 것 같을 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "성생활 권장",
+        "부부관계 필요성 주장"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-46",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "잠자리가 그렇게 중요한 건지 모르겠을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "부모 세대의 생각이 달라지는 중이라는 것",
+      "audienceSituation": "자식이 결혼 생각이 없다고 하거나, 나도 굳이 시키고 싶지 않아졌을 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "결혼 권유",
+        "비혼 비난"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-47",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자녀가 결혼을 안 하겠다고 할 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "거리를 두는 것이 불효가 아니라는 것, 실제로 해 본 방법들",
+      "audienceSituation": "내 부모인데도 만나고 나면 지칠 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "효 강요",
+        "부모 비난"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-48",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "친정 부모와 거리를 두고 싶을 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "집집마다 다르다는 것과, 내보낸 집·데리고 있는 집의 이야기",
+      "audienceSituation": "품에서 언제 내보내야 하는지 정답이 없을 때",
+      "automationDecision": "HOLD",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "독립 시기 권장",
+        "자녀 교육법"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T3-49",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자녀를 언제 독립시킬지 고민될 때",
+      "quarantined": false,
+      "territoryId": "T3",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "과 선택까지",
+      "audienceSituation": "가야 할 것 같은데 어느 과인지 몰라 미루고 있을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 병원 이름·비용 — 1페이지가 개별 의원 페이지다",
+        "검사 항목 상세(I-T4-02)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기 증상은 무슨 과에 가야 하나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "검사가 있다는 것과 병원마다 다르다는 것",
+      "audienceSituation": "검사를 받아 볼까 하는데 비용과 절차가 궁금할 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 구체적 비용 금액",
+        "🔴 수치 해석"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기 검사는 어떻게 하고 얼마나 드나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "확인하는 경로",
+      "audienceSituation": "안내문을 받았거나 못 받아 내가 대상인지 확인하려 할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "항목 추천(I-T4-04)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "올해 국가건강검진 대상인지 어떻게 아나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이름이 무엇을 가리키는지와 내 안내문을 확인하는 법",
+      "audienceSituation": "안내문을 펼쳐 놓고 이름만 들여다보게 될 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 「이 검사를 받으세요」 형태 — 1페이지가 병원 선택검사 마케팅이다",
+        "종합검진 상품"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "검진 안내문의 항목이 무슨 뜻인지 모를 때",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "결정이 진료에서 이뤄진다는 것과 진료 전에 정리할 것",
+      "audienceSituation": "주변에서 좋았다는 말과 걱정된다는 말을 다 들어 혼란스러울 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 부작용 발생률 수치",
+        "🔴 「대부분 자연 호전」 같은 경과 판단",
+        "누가 받고 누가 안 받는지의 구분"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기 호르몬 치료는 누가 받나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "검사 이야기를 꺼내는 계기와 국가검진 대상 확인 경로",
+      "audienceSituation": "폐경 뒤 뼈 이야기를 듣고 검사를 떠올렸을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 시작 나이·검사 주기 수치 — 1페이지의 수치가 서로 다르다(학회 54·60·66세 / 의원 65세 / 블로그 2~3년)",
+        "골다공증 약·주사"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "골다공증 검사는 언제부터 받나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "—(아직 정할 수 없다)",
+      "audienceSituation": "지난번 검진이 언제였는지 가물가물할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "주기 수치"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "유방 검진은 몇 년마다 받나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "검사가 무엇인지와 병원·보험에 따라 다르다는 것",
+      "audienceSituation": "산부인과에서 권유받았거나 검진 항목에서 보고 알아볼 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 구체적 금액",
+        "백신 접종 권고",
+        "결과 해석"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "HPV 검사는 얼마고 어떻게 받나요",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "미루게 되는 이유와 가 볼 만한 기준을 스스로 정하는 법",
+      "audienceSituation": "이 정도로 병원에 가도 되나 싶어 미루는 상태",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 증상별 응급도 판정"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-09",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "병원에 가야 할지 참아야 할지 고민될 때",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 우리가 체크리스트를 주면 안 되는 자리일 수 있다. MEDICAL·FINANCIAL 프로필로 자동 검증한다",
+      "audienceSituation": "증상이 갱년기인지 아닌지 스스로 확인해 보고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "자가진단표 제공",
+        "점수 기준 제시",
+        "진단"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-11",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "병원에 가기 전에 스스로 재 보려 할 때",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 의료. 수치를 해석해 주지 않는다. 결과를 기다리는 시간과 의사에게 뭘 물을지",
+      "audienceSituation": "검사는 받았는데 숫자가 무슨 뜻인지 모르겠고 언제 나오는지도 모를 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "수치 해석",
+        "정상 범위 제시",
+        "진단"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-12",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "검사 결과지를 받아 들었을 때",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 의료. I-T4-08(비용·방법) 의 다음 단계",
+      "audienceSituation": "검사를 받았거나 받으려는데 실비·결과·백신까지 줄줄이 궁금해질 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "결과 해석",
+        "접종 권유",
+        "병원 추천"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-13",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "HPV 검사를 받고 나서",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "결과가 오는 과정과 어디서 확인하는지. 수치 해석은 하지 않는다",
+      "audienceSituation": "검진은 받았는데 결과가 안 오거나 어디서 보는지 모를 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "수치 해석",
+        "이상 소견 판단",
+        "병원 추천"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-14",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "건강검진 결과를 기다릴 때",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "🔴 디지털 생활 영역이다. 특정 앱을 권하지 않고, 어려웠던 사람들의 이야기와 대안",
+      "audienceSituation": "전화로 하던 예약이 어플로 바뀌어 병원 문턱이 더 높아졌을 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "특정 앱 추천",
+        "병원 추천",
+        "설치법 안내"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-15",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "병원 예약을 어플로 해야 할 때",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 의료·비용. 항목을 권하지 않는다. 국가검진과 무엇이 다른지와, 결정해 본 사람들",
+      "audienceSituation": "국가검진만으로 부족한 것 같은데 몇십만 원을 쓸지 망설일 때",
+      "automationDecision": "PASS",
+      "cluster": "clinic",
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "검진 센터 추천",
+        "항목 권고",
+        "비용 단정"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T4-16",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "돈을 내고 종합검진을 받을지",
+      "quarantined": false,
+      "territoryId": "T4",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": "판단에 무엇을 같이 봐야 하는지. 금액은 공단에서 본인 기준으로",
+      "audienceSituation": "퇴직으로 소득이 끊겼는데 연금은 아직인 구간. 주변에서 손해라는 말을 듣는다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 감액률·지급개시연령 수치 — 출생연도마다 다르다",
+        "신청 서류·절차"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "국민연금을 언제부터 받는 게 나을까요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "제도가 있다는 것과 조건이 갈린다는 것까지",
+      "audienceSituation": "소득이 없어 가입 대상이 아닌 줄 알았다가 임의가입을 알게 됐을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 금액·수령액 계산",
+        "가입 권유"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "전업주부도 국민연금을 넣을 수 있나요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "왜 달라지는지와 확인해 볼 두 가지 경로(임의계속·피부양자)",
+      "audienceSituation": "퇴직 두어 달 뒤 고지서를 받고 금액에 놀란 순간",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 금액 계산",
+        "🔴 부과요소 나열 — 자동차는 2024-02 부터 빠졌는데 공단 정적 안내에 아직 남아 있다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "퇴직하면 건강보험료가 얼마나 나오나요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "평균이 내 생활을 말해 주지 않는다는 것과 내 기준을 세우는 순서",
+      "audienceSituation": "막연한 불안에 숫자를 찾아보지만 어떤 숫자도 내 것 같지 않을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 목표 금액 제시",
+        "투자·상품"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "노후에 한 달에 얼마나 필요할까요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "챙기는 순서와 국세청에서 확인하는 경로",
+      "audienceSituation": "한 해 병원비가 꽤 나갔는데 어떻게 챙기는지 모를 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 공제율·한도 숫자 — 귀속연도마다 바뀐다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "연말정산에서 의료비는 어떻게 챙기나요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "서두르지 않아도 된다는 것과 확인할 순서",
+      "audienceSituation": "목돈이 한 번에 들어왔는데 어디에 둘지 몰라 통장에 그대로 있는 상태",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 상품 추천·수익률",
+        "IRP 세액공제 금액"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "퇴직금을 어떻게 두어야 하나요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "🔴 토스뱅크·신한투자증권·미래에셋 — 금융사가 1페이지를 장악했다. 판매 유인이 직접 붙는다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "퇴직금을 IRP에 넣어야 하나요",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 세금. MEDICAL·FINANCIAL 프로필로 자동 검증한다. 제도가 바뀌므로 금액·기한을 우리가 단정하지 않는다",
+      "audienceSituation": "자식 결혼에 돈을 보태려는데 증여세 이야기가 나올 때",
+      "automationDecision": "PASS",
+      "cluster": "family",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "세액 계산",
+        "신고 대행 안내",
+        "절세 전략"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "자녀 결혼 자금을 대 줄 때 세금이 걸릴 때",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "돈 계산이 아니라 시간과 자리의 이야기",
+      "audienceSituation": "일이 끝난 뒤의 하루가 어떤 모습인지 상상이 안 될 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "재테크 상품",
+        "투자 권유",
+        "연금 수령액 계산"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-09",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "은퇴하고 난 뒤의 하루",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "금액마다 전제가 다르다는 것과, 내 기준을 세우는 순서",
+      "audienceSituation": "숫자가 여기저기 다르게 나와서 뭘 기준 삼아야 할지 모를 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "금액 단정",
+        "금융 상품",
+        "투자 권유"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-10",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "노후 생활비가 얼마면 되는지 궁금할 때",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "🔴 제도. 금액을 단정하지 않는다. 선택지가 있다는 것과 기한이 있다는 것",
+      "audienceSituation": "직장이 끝나고 보험료 고지서가 오기 전에 방법을 찾을 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "보험료 계산",
+        "신청 대행",
+        "금액 단정"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-11",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "퇴사하고 건강보험을 어떻게 할지",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "실제로 그렇게 사는 사람들의 살림. 절약법 목록이 아니라 생활",
+      "audienceSituation": "기준을 찾는 게 아니라 이미 그 돈으로 살고 있을 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "재테크",
+        "절약 챌린지",
+        "금액 단정"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-12",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "적은 돈으로 한 달을 살아 볼 때",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "집집마다 다른 방식과, 바꿔 본 사람들의 이야기",
+      "audienceSituation": "수입이 줄거나 한쪽이 그만두면서 돈 관리 방식을 다시 정해야 할 때",
+      "automationDecision": "HOLD",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "가계부 앱 추천",
+        "재테크",
+        "부부 갈등 상담"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-13",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부부가 돈을 따로 쓸지 같이 쓸지",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "🔴 제도. 금액·자격을 단정하지 않는다. 분할연금이라는 제도가 있다는 것과 기한이 있다는 것",
+      "audienceSituation": "따로 살 생각을 하다 보면 결국 돈과 연금에서 막힐 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "수령액 계산",
+        "청구 대행",
+        "자격 판정"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T5-14",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "헤어지면 연금은 어떻게 되나",
+      "quarantined": false,
+      "territoryId": "T5",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "찾아보는 경로와 처음 막히는 지점",
+      "audienceSituation": "다시 일해야겠다고 마음먹었는데 어디를 봐야 할지 모를 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 「유망 직종」 나열",
+        "🔴 은퇴 후 직업 담론 — 남성 중심 표현군과 섞인다",
+        "급여·채용 공고"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "재취업을 어디부터 알아봐야 하나요",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "공백을 어떻게 보느냐와 첫 걸음",
+      "audienceSituation": "경력이 끊긴 기간이 길어 어디서부터 설명해야 할지 막막할 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 자격증 취득 권유(I-T6-04)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "주부로 지내다 다시 일하려고 할 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "양식 종류별로 칸에 넣는 기준 — 나이·생년월일, 오래된 경력 추리기, 공백 한 줄, 교육·자격과 경력 구분, 직무에 맞춘 순서",
+      "audienceSituation": "무엇을 적을지는 대강 정했는데, 나이·생년월일 칸과 오래된 경력·공백 기간을 이력서 양식에 실제로 어떻게 넣을지 막힐 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "첫 취업을 준비하는 사람의 이력서 작성법",
+        "양식 파일 배포",
+        "합격 자소서",
+        "살림 경험을 역량으로 번역하기",
+        "공백을 대하는 마음가짐",
+        "자격증 취득 판단"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이 나이에 이력서를 어떻게 쓰나요",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "자격증이 답이 되는 경우와 아닌 경우를 가르는 질문",
+      "audienceSituation": "자격증부터 따야 한다는 말을 여기저기서 듣고 정말 그런지 알고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 자격증 목록·순위 — 1페이지가 이미 나열형 블로그다",
+        "취업률·보장"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "50대에 자격증을 따는 게 의미가 있을까요",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "배움의 여러 모양과 고르는 기준",
+      "audienceSituation": "자격증까지는 아니고 뭐라도 배워 보고 싶은 단계",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 자격증 판단(I-T6-04) 으로 넘긴다",
+        "학원·강의 추천"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이 나이에 뭘 배우면 좋을까요",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 아하·잡코리아·브런치 「면접에서 자꾸 떨어져요. 나이때문일까요?」 · Reddit r/AskAcademia",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "면접에서 나이 이야기가 나올 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 이번 회차 최고 수확(rel8+paa4). 🔴 리멤버 커뮤니티 1위 「나이 50에 이직을 하며 느낀 점」 · Blind · Reddit r/ExperiencedDevs",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "50대에 이직을 준비할 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "적중. 아하·잡코리아. 🔴 Blind 「나이 많은 신입.... 하 왜 피하는지 이해가 될것같아」 — 받는 쪽의 시선이 그대로 보인다",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 많은 신입으로 들어간다는 것",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "직종의 실제 모습과, 나이가 걸리는 지점",
+      "audienceSituation": "재취업을 하겠다고 마음은 먹었는데 무슨 일이 가능한지부터 모를 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "구인 사이트 추천",
+        "자격증 학원 안내",
+        "소득 보장 주장"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-09",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "50대 여자가 할 수 있는 일에 뭐가 있나",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "🔴 1페이지가 고용노동부·고용24·중장년내일센터로 제도 창구가 점령했다. 우리 자리가 있는지 모른다",
+      "audienceSituation": "실업급여나 지원금이 나에게 해당되는지 알아보려 할 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "수급액 계산",
+        "신청 대행",
+        "자격 판정"
+      ],
+      "forbiddenClaims": [
+        "수령액·세액 단정",
+        "상품 추천",
+        "수익률 제시",
+        "자격 판정",
+        "신청 대행 안내"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-10",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "제도가 도와주는지 알아볼 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "FINANCIAL"
+    },
+    {
+      "answerScope": "기술 없이 다시 시작한 사람들이 무엇부터 했는지 — 직종 목록이 아니라 그 시기의 이야기",
+      "audienceSituation": "오래 다닌 회사에서 나오게 됐는데 자격증도 기술도 없다는 것을 알게 될 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "자격증 학원 추천",
+        "구인 플랫폼 안내",
+        "소득 보장 주장",
+        "권고사직 법률 자문"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-11",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "내세울 기술 없이 밀려났을 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "실제로 하고 있는 일들의 모양. 추천 목록이 아니라 사례",
+      "audienceSituation": "재취업을 하겠다기보다, 남들은 뭘 하고 사는지부터 보고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "직업 추천",
+        "학원·자격증 안내",
+        "소득 보장"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-12",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "은퇴하고 다들 무슨 일을 하나 궁금할 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "스펙 없이 시작한 사람들이 무엇부터 했는지",
+      "audienceSituation": "이력서에 쓸 게 없다고 느껴 시작조차 막막할 때",
+      "automationDecision": "PASS",
+      "cluster": "money-work",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "고소득 직업 주장",
+        "자격증 영업"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T6-13",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "내세울 스펙이 없다고 느낄 때",
+      "quarantined": false,
+      "territoryId": "T6",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "갑자기가 아니라 서서히 줄어든다는 것과 그것이 실패가 아니라는 것",
+      "audienceSituation": "연락처는 많은데 편히 부를 사람이 없다고 느낄 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 손절·인간관계 처세 — 관측된 갈래의 다수가 그 결이다",
+        "친구 만드는 기술"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 들수록 친구가 줄어드는 이유",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "나가기 싫은 마음을 탓하지 않는 것과 갈 자리·안 갈 자리를 나누는 법",
+      "audienceSituation": "약속을 잡아 놓고 당일에 나가기 싫어지는 자신이 이상하게 느껴질 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "사회성 훈련"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "모임에 나가기 싫어질 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "UNVERIFIED",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "—(새 글이 아니라 기존 글 보강 — avoiding-gatherings 에 「혼자가 편한 사람」 이라는 낱말과 그 장면을 더한다)",
+      "audienceSituation": "혼자가 편한데 그래도 되나 싶어 확인받고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "전부 — 기존 글이 이미 답한다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "혼자가 편한 게 문제일까요",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "그 상태를 말할 자리",
+      "audienceSituation": "친구가 줄어든 상태를 지나 지금 당장 부를 사람이 없는 상태",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 친구 사귀는 법 — 관측된 organic 은 10~20대 상담 톤이었다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-04",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 드니까 만날 사람이 없을 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "혼자 보내는 시간의 여러 모양",
+      "audienceSituation": "시간은 생겼는데 뭘 해야 할지 모를 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 취미 순위 나열",
+        "🔴 동호회·만남 알선 — 관측 갈래에 만남 앱이 섞인다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "혼자서 뭘 하며 지내나요",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "제도·기관 중심이다. 서울시50플러스·1365·이모작뉴스. 🔴 개인 경험 글이 얇다",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-20",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "50대에 봉사활동을 시작하려면",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "적중하되 🔴 관련검색이 전부 「손절 디시」 계열이다(오래된 친구 손절·친구 손절 기준·30대 친구 손절 디시). 처세 담론과 바로 붙는다",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-21",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "오래된 친구가 불편해질 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 아하 「혼자 밥 먹는 게 점점 익숙해지긴 했는데, 가끔은 너무…」 · 인스타 · Daum 「혼자 밥먹는 게 편해지는 사람의 공통점」",
+      "automationDecision": "HOLD",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-22",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "혼자 밥 먹는 게 익숙해질 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 🔴 Reddit r/AskWomenOver50 1위 「50대에 새로운 친구를 사귀거나 만드는 데 성공한 적 있으세요?」 — 우리 독자 연령대 커뮤니티가 정확히 그 질문을 한다",
+      "automationDecision": "HOLD",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-23",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이 나이에 새 친구를 만들 수 있을까",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ rel7·rel8+paa4. 🔴 Reddit r/AskWomenOver50 「50세 이상 여성을 위한 혼자 그룹 여행」 · 브런치 「50대 여성 홀로 해외여행」 · 82Cook · 유튜브 「50대 여자혼자 7개월 6개국」",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-24",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "혼자 여행을 떠난다는 것",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 82Cook 「40~50대 9명 모임 이름 추천해주세요」 — 나가기 싫은 쪽이 아니라 만드는 쪽이다",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-26",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "모임을 만들고 꾸려 갈 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "혼자 사는 생활의 실제, 외로움과 홀가분함이 같이 온다는 것",
+      "audienceSituation": "혼자가 된 뒤 하루를 어떻게 보내는지, 남들은 어떻게 사는지 궁금할 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "이혼 절차",
+        "재산 분할",
+        "법률 상담"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-27",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이혼하거나 혼자가 된 뒤의 생활",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "이 나이의 연애가 어떤 모습인지, 주변에 말하기 어려운 이유",
+      "audienceSituation": "누군가를 다시 만나고 싶은 마음이 드는데 말하기 민망할 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "결혼정보회사 안내",
+        "데이팅 앱 추천",
+        "재혼 중개"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-28",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이 나이에 다시 연애를 생각할 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "I-T7-24(혼자 여행을 떠난다는 것) 의 반대편. 안 좋았던 이야기도 자리가 있다",
+      "audienceSituation": "큰맘 먹고 혼자 떠났는데 기대만큼이 아니었을 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "여행지 추천",
+        "패키지 안내"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-30",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "혼자 하는 여행이 생각보다 재미없을 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "편한 사람의 모양. 처세술이 아니라 각자의 경험",
+      "audienceSituation": "관계가 줄어드는 나이에 어떤 사람으로 남고 싶은지 생각될 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "인간관계 기술",
+        "처세 조언"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-31",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "같이 있으면 편한 사람이 되고 싶을 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "다시 연락한 사람들의 이야기와, 안 하기로 한 사람들의 이야기",
+      "audienceSituation": "연락이 끊긴 지 오래됐는데 먼저 하기는 어색할 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "인간관계 기술",
+        "화해 매뉴얼"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-32",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "멀어진 친구와 다시 가까워질 수 있을까",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "오래 쉬었다 다시 하는 사람들의 이야기. 면허 절차가 아니라 두려움",
+      "audienceSituation": "아이를 다 키우고 나서, 혹은 남편이 아파서 다시 운전해야 할 때",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "운전 교습 안내",
+        "면허 절차 정본 주장",
+        "차량 추천"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-33",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "장롱면허로 지내다 다시 운전대를 잡을 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "그 말이 가리키는 시기와 사람들, 그리고 실제로 한 사람들의 이야기",
+      "audienceSituation": "뉴스나 주변에서 그 말을 듣고 내 이야기인가 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "이혼 절차",
+        "재산 분할",
+        "법률 상담",
+        "이혼 권유"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-35",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "황혼이혼이라는 말을 만났을 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "숫자가 무엇을 말하고 무엇을 말하지 않는지",
+      "audienceSituation": "내 생각이 유별난 건지 숫자로 확인해 보고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "relationship",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "통계 단정",
+        "이혼 조장",
+        "법률 안내"
+      ],
+      "forbiddenClaims": [
+        "성적 묘사",
+        "행위 지침",
+        "정상·비정상 판정",
+        "빈도 권장",
+        "배우자 비난"
+      ],
+      "inclusions": [],
+      "intentId": "I-T7-36",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "남들은 얼마나 헤어지나 궁금할 때",
+      "quarantined": false,
+      "territoryId": "T7",
+      "textProvenance": "CLEAR",
+      "validationProfile": "SENSITIVE"
+    },
+    {
+      "answerScope": "몸의 변화를 설명하는 선까지",
+      "audienceSituation": "예전과 똑같이 먹는데 몸이 달라졌다고 느낄 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 감량 방법·식단 처방",
+        "다이어트 제품"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기 이후 살이 잘 안 빠질 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "정답이 없다는 것과 이어 가는 선",
+      "audienceSituation": "운동을 시작하려는데 얼마나 해야 하는지 몰라 미룰 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "운동 프로그램 처방",
+        "🔴 관절 통증이 있을 때의 판단(I-T1-15)"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "하루에 얼마나 움직이면 될까요",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "이 시기 피부 변화의 설명",
+      "audienceSituation": "쓰던 화장품이 안 맞고 당김이 심해졌을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 「피부 안좋은 여자」 류 외모 판단 표현",
+        "제품 추천",
+        "피부 질환 진단"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "피부가 갑자기 건조해지고 달라질 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "—",
+      "audienceSituation": "약 말고 먹는 것으로 도움이 될까 싶을 때",
+      "automationDecision": "REJECT",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "전부"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-04",
+      "policyScope": "BLOCKED",
+      "primaryQuery": "무엇을 먹는 게 좋을까요",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "무엇을 먹느냐가 아니라 고르기 어렵다는 경험",
+      "audienceSituation": "무엇을 골라야 할지 모르겠고 광고만 보일 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 제품명·성분 효능 — 1페이지가 제품 순위표와 11번가다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "갱년기에 영양제를 챙긴다는 것",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "계절 변화와 몸의 반응",
+      "audienceSituation": "계절이 바뀔 때마다 몸이 먼저 알아채는 시기",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/menopause",
+      "exclusions": [
+        "🔴 감기·독감 감별",
+        "치료"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "환절기만 되면 기운이 없을 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "몸을 쓰는 일이 몰릴 때의 준비와 회복",
+      "audienceSituation": "큰일을 치르고 난 다음 날 허리와 손목이 아플 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "🔴 허리디스크·척추관협착증 같은 질환 — 1페이지가 전부 병원 콘텐츠다"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "명절·김장 뒤에 몸이 아플 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "각자의 아침 이야기",
+      "audienceSituation": "하루의 시작을 바꿔 보고 싶을 때",
+      "automationDecision": "HOLD",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "루틴 처방"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "아침을 어떻게 시작하시나요",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 🔴 82Cook 3위 「50세 옷고민이요~~」 — 우리 독자의 말 그대로다. Reddit r/GenXWomen 도 있다",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-30",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "이 나이에 뭘 입어야 할지 모르겠을 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 🔴 82Cook 6위 「새치 염색 한 번 하게 되면 계속 해야 돼요?」, 오마이뉴스 「생존 염색과 헤어질 결심」, 1위 미용사 글 「염색해야 한다는 당연함에 대한 의문」",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-31",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "흰머리 염색을 계속해야 할까요",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "🔴 국민건강보험 1위·서울아산병원 5위. 「근감소증」 이라는 질환명이 1페이지를 지배한다. 우리 독자의 말은 없다",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-32",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 들면 근육이 빠지는 이유",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 82Cook 4위 「살림 짐 줄이는 법 좀 알려주세요」. 🔴 앞서 「짐 정리」 가 gym 으로 읽혔던 문제가 「살림」 으로 풀렸다",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-33",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "살림을 줄이려고 할 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 82Cook · 아하 「오래된 물건을 버릴때 기준이 있나요?」 · 「못 버리는 이유, 미련 아니었다 — 뇌가 만든 심리」",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-34",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "오래된 물건을 못 버릴 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 강하게 적중. 🔴 82Cook 1위 「김장 안하기로 했는데요」 · Daum 「가족 김장 취소, 100포기→70포기…김장 포기도 늘어」",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-35",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "김장을 그만두기로 할 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "그만둔 사람들이 무엇을 겪었는지, 남의 눈을 어떻게 넘겼는지",
+      "audienceSituation": "뿌리 염색을 얼마에 한 번씩 하다가 이걸 언제까지 해야 하나 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "염색약 추천",
+        "미용실 시술 가격"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-36",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "염색을 그만둘지 결정할 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "고잉그레이·그레이블렌딩이라는 말이 무엇인지, 어떤 과정을 거치는지",
+      "audienceSituation": "완전히 그만두기는 겁나고, 흰머리를 자연스럽게 섞는 방법이 있다는 걸 알게 됐을 때",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "특정 미용실·제품 추천",
+        "시술 가격 안내"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-37",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "흰머리를 감추지 않고 살리는 방법을 찾을 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "그만둔 뒤의 실제 — 자라는 속도, 남의 반응, 되돌릴 수 있는지",
+      "audienceSituation": "그만두면 무슨 일이 생기는지부터 알고 싶을 때",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "염색약 추천",
+        "미용실 가격"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-38",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "흰머리를 그대로 두면 어떻게 되는지",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "기준을 만드는 법. 정리법이 아니라 마음의 문제",
+      "audienceSituation": "버려야 하는 건 아는데 손이 안 갈 때",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "정리 서비스",
+        "수납 제품"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-39",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "물건을 어떻게 버려야 할지 모를 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "피부와 머리색이 달라지면 어울리는 색도 달라진다는 것",
+      "audienceSituation": "늘 입던 색이 어느 날 안 어울려 보일 때",
+      "automationDecision": "PASS",
+      "cluster": "daily",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "퍼스널 컬러 진단",
+        "브랜드 추천"
+      ],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-40",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "나이 들며 어울리는 색이 달라질 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": "공개 dry-skin-menopause 는 건조함이다. 예민함·통증은 다른 증상",
+      "audienceSituation": "건조한 걸 넘어 스치기만 해도 따갑고 예민해질 때",
+      "automationDecision": "PASS",
+      "cluster": "menopause-symptom",
+      "communityDestination": "/community/free",
+      "exclusions": [
+        "화장품 추천",
+        "피부과 시술",
+        "진단"
+      ],
+      "forbiddenClaims": [
+        "진단",
+        "치료법 권고",
+        "복용량·기간 제시",
+        "효과 보장",
+        "정상 수치 판정",
+        "응급 여부 판단"
+      ],
+      "inclusions": [],
+      "intentId": "I-T8-41",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "피부가 예민해지고 따가울 때",
+      "quarantined": false,
+      "territoryId": "T8",
+      "textProvenance": "CLEAR",
+      "validationProfile": "MEDICAL"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "🔴 1위가 Reddit r/AskOldPeopleAdvice 였다. 한국어 1페이지에 돌보는 사람 본인의 글이 얇다. 3·5위는 돌봄 서비스 업체·매거진이다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-01",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부모님 돌봄을 언제부터 생각해야 하나요",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. Reddit r/AgingParents 1위, Daum 카페 「부모 병간호 앞에 희생하는 형제가 왜 계속 희생할까요?」, 아하 「형제에게 계속 지원해야 할까요」 — 우리 독자의 말이다",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-02",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "형제끼리 부모님 간병을 어떻게 나누나요",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 서울대암병원 「소진되지 않으려면」, 티스토리 「어머니 간병 17년, 이제 아버지 간병」, 유유테이진 「간병하는 자녀의 죄책감」",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-03",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "간병하다 지칠 때",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 적중. 🔴 82Cook 3위 「부모님 병원 모시고 다니는거 너무 지치네요」 · 클리앙 「부모님 모시고 병원 가보면」 — 우리 독자의 말 그대로다",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-05",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부모님 병원에 모시고 다니는 일",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 강하게 적중. 🔴 82Cook 4위 「엄마를 요양원 보내드린지 한 달… 엄마가 달라지셨어요」 · DVDPrime 「어제 어머니를 요양원으로 보내드렸네요」 · 아줌마닷컴",
+      "automationDecision": "HOLD",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-06",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "요양원에 모시기로 결정할 때",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "THIRD_PARTY_TEXT",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ 제도 축이 열렸다. 국민건강보험공단 1위·찾기쉬운 생활법령정보·보건복지부. 재가/시설 비교는 민간 정리 블로그가 받는다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-07",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "부모님 요양 등급과 급여를 알아볼 때",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ rel8+paa4. 케어링·프라임요양병원 등 업체 콘텐츠가 상위다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-08",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "요양원과 요양병원 중 어디로 모시나",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    },
+    {
+      "answerScope": null,
+      "audienceSituation": "✅ rel8+paa4 + 82Cook. 방문요양센터 업체가 상위를 채운다",
+      "automationDecision": "PASS",
+      "cluster": null,
+      "communityDestination": "/community/free",
+      "exclusions": [],
+      "forbiddenClaims": [
+        "의학·재정 단정",
+        "제품 추천"
+      ],
+      "inclusions": [],
+      "intentId": "I-T9-09",
+      "policyScope": "ALLOWED",
+      "primaryQuery": "요양보호사를 부르려면",
+      "quarantined": false,
+      "territoryId": "T9(후보)",
+      "textProvenance": "CLEAR",
+      "validationProfile": "STANDARD"
+    }
+  ],
+  "mappings": [
+    {
+      "intentId": "I-T0-02",
+      "slug": "moment-body-changed"
+    },
+    {
+      "intentId": "I-T1-01",
+      "slug": "when-does-menopause-start"
+    },
+    {
+      "intentId": "I-T1-02",
+      "slug": "hot-flash-how-long"
+    },
+    {
+      "intentId": "I-T1-02",
+      "slug": "how-long-did-menopause-last"
+    },
+    {
+      "intentId": "I-T1-03",
+      "slug": "when-does-menopause-start"
+    },
+    {
+      "intentId": "I-T1-05",
+      "slug": "after-menopause-body"
+    },
+    {
+      "intentId": "I-T1-06",
+      "slug": "which-clinic-menopause"
+    },
+    {
+      "intentId": "I-T1-07",
+      "slug": "hot-flash-how-long"
+    },
+    {
+      "intentId": "I-T1-08",
+      "slug": "when-does-menopause-start"
+    },
+    {
+      "intentId": "I-T1-10",
+      "slug": "after-menopause-body"
+    },
+    {
+      "intentId": "I-T1-11",
+      "slug": "after-menopause-body"
+    },
+    {
+      "intentId": "I-T1-12",
+      "slug": "hardest-part-of-menopause"
+    },
+    {
+      "intentId": "I-T1-14",
+      "slug": "menopause-waking-up-at-3am"
+    },
+    {
+      "intentId": "I-T1-14",
+      "slug": "night-sweats-waking"
+    },
+    {
+      "intentId": "I-T1-15",
+      "slug": "cold-weather-joint-pain"
+    },
+    {
+      "intentId": "I-T1-15",
+      "slug": "holiday-cooking-wrist-pain"
+    },
+    {
+      "intentId": "I-T1-15",
+      "slug": "menopause-joint-pain-exercise"
+    },
+    {
+      "intentId": "I-T1-16",
+      "slug": "hair-loss-menopause"
+    },
+    {
+      "intentId": "I-T1-17",
+      "slug": "dry-eyes-menopause"
+    },
+    {
+      "intentId": "I-T1-17",
+      "slug": "dry-mouth-menopause"
+    },
+    {
+      "intentId": "I-T1-17",
+      "slug": "frequent-urination-menopause"
+    },
+    {
+      "intentId": "I-T1-18",
+      "slug": "dizziness-menopause"
+    },
+    {
+      "intentId": "I-T1-26",
+      "slug": "hormone-therapy-who"
+    },
+    {
+      "intentId": "I-T2-01",
+      "slug": "less-sleep-with-age"
+    },
+    {
+      "intentId": "I-T2-02",
+      "slug": "what-not-to-do-when-cant-sleep"
+    },
+    {
+      "intentId": "I-T2-03",
+      "slug": "does-nap-affect-sleep"
+    },
+    {
+      "intentId": "I-T2-03",
+      "slug": "sleep-habit-two-weeks"
+    },
+    {
+      "intentId": "I-T2-04",
+      "slug": "sleep-habit-two-weeks"
+    },
+    {
+      "intentId": "I-T2-04",
+      "slug": "what-not-to-do-when-cant-sleep"
+    },
+    {
+      "intentId": "I-T2-06",
+      "slug": "menopause-tears"
+    },
+    {
+      "intentId": "I-T2-07",
+      "slug": "menopause-tears"
+    },
+    {
+      "intentId": "I-T2-07",
+      "slug": "no-motivation-50s"
+    },
+    {
+      "intentId": "I-T2-08",
+      "slug": "no-motivation-50s"
+    },
+    {
+      "intentId": "I-T2-09",
+      "slug": "memory-worry-menopause"
+    },
+    {
+      "intentId": "I-T2-10",
+      "slug": "autumn-low-mood"
+    },
+    {
+      "intentId": "I-T2-10",
+      "slug": "seasonal-change-fatigue"
+    },
+    {
+      "intentId": "I-T2-10",
+      "slug": "year-end-loneliness"
+    },
+    {
+      "intentId": "I-T2-11",
+      "slug": "palpitations-menopause"
+    },
+    {
+      "intentId": "I-T3-01",
+      "slug": "husband-doesnt-understand"
+    },
+    {
+      "intentId": "I-T3-02",
+      "slug": "how-much-talk-with-husband"
+    },
+    {
+      "intentId": "I-T3-04",
+      "slug": "husband-retired-at-home"
+    },
+    {
+      "intentId": "I-T3-05",
+      "slug": "empty-nest-quiet"
+    },
+    {
+      "intentId": "I-T3-06",
+      "slug": "child-marriage-silence"
+    },
+    {
+      "intentId": "I-T3-07",
+      "slug": "holiday-family-remarks"
+    },
+    {
+      "intentId": "I-T3-08",
+      "slug": "things-not-told-to-children"
+    },
+    {
+      "intentId": "I-T3-47",
+      "slug": "when-child-does-not-want-marriage"
+    },
+    {
+      "intentId": "I-T4-01",
+      "slug": "which-clinic-menopause"
+    },
+    {
+      "intentId": "I-T4-03",
+      "slug": "national-checkup-eligibility"
+    },
+    {
+      "intentId": "I-T4-04",
+      "slug": "checkup-items-50s"
+    },
+    {
+      "intentId": "I-T4-05",
+      "slug": "hormone-therapy-who"
+    },
+    {
+      "intentId": "I-T4-06",
+      "slug": "bone-density-test-when"
+    },
+    {
+      "intentId": "I-T4-07",
+      "slug": "breast-exam-interval"
+    },
+    {
+      "intentId": "I-T4-09",
+      "slug": "clinic-or-wait"
+    },
+    {
+      "intentId": "I-T4-15",
+      "slug": "clinic-booking-app"
+    },
+    {
+      "intentId": "I-T5-01",
+      "slug": "pension-early-vs-normal"
+    },
+    {
+      "intentId": "I-T5-02",
+      "slug": "national-pension-voluntary"
+    },
+    {
+      "intentId": "I-T5-03",
+      "slug": "health-insurance-after-retire"
+    },
+    {
+      "intentId": "I-T5-04",
+      "slug": "retirement-prep-status"
+    },
+    {
+      "intentId": "I-T5-05",
+      "slug": "year-end-tax-medical"
+    },
+    {
+      "intentId": "I-T5-06",
+      "slug": "irp-tax-benefit"
+    },
+    {
+      "intentId": "I-T5-07",
+      "slug": "irp-tax-benefit"
+    },
+    {
+      "intentId": "I-T6-01",
+      "slug": "rehire-where-to-start"
+    },
+    {
+      "intentId": "I-T6-02",
+      "slug": "back-to-work-homemaker"
+    },
+    {
+      "intentId": "I-T6-03",
+      "slug": "resume-age-career-gap"
+    },
+    {
+      "intentId": "I-T6-04",
+      "slug": "certificate-in-50s"
+    },
+    {
+      "intentId": "I-T6-05",
+      "slug": "age-learning"
+    },
+    {
+      "intentId": "I-T6-09",
+      "slug": "rehire-where-to-start"
+    },
+    {
+      "intentId": "I-T6-12",
+      "slug": "retirement-others-what-work"
+    },
+    {
+      "intentId": "I-T6-13",
+      "slug": "job-credentials"
+    },
+    {
+      "intentId": "I-T7-01",
+      "slug": "fewer-friends-50s"
+    },
+    {
+      "intentId": "I-T7-02",
+      "slug": "avoiding-gatherings"
+    },
+    {
+      "intentId": "I-T7-02",
+      "slug": "year-end-gathering-reluctance"
+    },
+    {
+      "intentId": "I-T7-03",
+      "slug": "avoiding-gatherings"
+    },
+    {
+      "intentId": "I-T7-04",
+      "slug": "fewer-friends-50s"
+    },
+    {
+      "intentId": "I-T7-05",
+      "slug": "alone-pastime"
+    },
+    {
+      "intentId": "I-T8-01",
+      "slug": "belly-fat-menopause"
+    },
+    {
+      "intentId": "I-T8-01",
+      "slug": "dinner-change-two-weeks"
+    },
+    {
+      "intentId": "I-T8-01",
+      "slug": "weight-harder-after-menopause"
+    },
+    {
+      "intentId": "I-T8-02",
+      "slug": "restart-exercise-menopause"
+    },
+    {
+      "intentId": "I-T8-02",
+      "slug": "walking-minutes-50s"
+    },
+    {
+      "intentId": "I-T8-03",
+      "slug": "dry-skin-menopause"
+    },
+    {
+      "intentId": "I-T8-05",
+      "slug": "menopause-supplements-talk"
+    },
+    {
+      "intentId": "I-T8-06",
+      "slug": "seasonal-change-fatigue"
+    },
+    {
+      "intentId": "I-T8-07",
+      "slug": "after-holiday-body-ache"
+    },
+    {
+      "intentId": "I-T8-07",
+      "slug": "holiday-cooking-wrist-pain"
+    },
+    {
+      "intentId": "I-T8-07",
+      "slug": "kimjang-back-pain-prep"
+    },
+    {
+      "intentId": "I-T8-36",
+      "slug": "hair-loss-menopause"
+    },
+    {
+      "intentId": "I-T8-38",
+      "slug": "gray-hair-leave-as-is"
+    },
+    {
+      "intentId": "I-T8-41",
+      "slug": "dry-skin-menopause"
+    }
+  ],
+  "provenance": {
+    "product": {
+      "controlSha256": "22d1bf79aad635727ab674c3d47b2120a00c48fbe1c06155c94675dc3c07f180",
+      "currentSha256": "a9c544e131d9783310d260b8d7fb5805bf5b0aa8792d677d9a651d9cd939b9d2",
+      "graphFile": "src/content/magazine/graph/g-20261128-3fbfc8.ts",
+      "graphFileSha256": "a49464047c46347af5274f243ec6ecc34fa86abe446f94dd75857d31eff03c57"
+    },
+    "research": {
+      "contentCombined": "3fbfc857bd341bb3",
+      "exportHash": "209486dc3fed6baa",
+      "inputHashes": {
+        "assets-published.jsonl": "386144e1b188e37a12727fa5e96c7708aa5f1a620a02d7b90d4d9de0b180f997",
+        "assets-queue.jsonl": "50b7ac2e2ab4220aef92f8795c960f9dcb79dc6eb91df14b487bf805d5143dbc",
+        "g4-automation-2026-09-23.jsonl": "ca06cb18a288c005c3712130df444dd78fca7d81f8b0bb269dafa519ab3bebcb",
+        "g4-intents-canonical.jsonl": "7f257115254ca4c57ee77bc7ab1d7fd2ee8c4c388104ba43c144545aa619f17e",
+        "g5-graph-2026-09-23.jsonl": "4a1e84facb0b010e11b02cc4681e74087e41d2d36a42dd0fc79e7930d8394251"
+      },
+      "manifestSha256": "c32bdb9f23a548727644ba1fb482d78ac5b8236cca4dce5d0c40dd417663972a",
+      "semanticHash": "3e75f71ed30d1410",
+      "treeSha256": "525eb819798178042ee9979168024a42bebe422b17d2fb1d3020ad824b63b035"
+    },
+    "sourceText": {
+      "corpusSha256": "de3d9ae9fec9173c0ab0aeebfba94ae94ce54e7829c08cc0d434ad52f216f712",
+      "rule": "magazine-source-text-rule/1"
+    }
+  },
+  "recordHash": "097381312025fbdc2536f71dc41283c17eff260f1844d43013245cfd477734c4",
+  "relations": [
+    {
+      "anchorLabel": "내세울 스펙이 없다고 느낄 때",
+      "edgeId": "E-0092",
+      "evidence": {
+        "basisSha256": "4c1cdf539ef7fb55c10d8205dfaeb9338a3d8487133b04b42f0f3ba769e3ed3a",
+        "objectSha256": "3e8319f625419ea5b0127fedebbf770e6d2b7b589e6b4fe922b50d630342745f",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-09-21T17-23-36-441Z_c587a50f.json",
+            "sha256": "ea1f4565b1577227262eaf75532fc9e2cefc0f806af9619518d9a9d8b6211161"
+          }
+        ]
+      },
+      "fromIntentId": "I-T6-11",
+      "placement": "FOOTER_NEXT",
+      "priority": 1,
+      "readerReason": "밀려난 다음은 내세울 게 없다는 막막함이다",
+      "relationType": "NEXT_QUESTION",
+      "slot": "DIRECT_NEXT",
+      "toIntentId": "I-T6-13"
+    },
+    {
+      "anchorLabel": "자녀가 독립한 뒤 집이 조용할 때",
+      "edgeId": "E-0326",
+      "evidence": {
+        "basisSha256": "43fad15aaead5fada155dc745afc44fcceffc42184c4a35ae5120eb76be27b54",
+        "objectSha256": "c77216c3de144ee74b4ace7f37a3f31969eafaff17e5fb57c4169d053db266e6",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-09-21T06-44-09-306Z_bb8b8000.json",
+            "sha256": "8ca7e6446dba31e58085ce05045e8167fbe614a8910342dda335d4127038839a"
+          },
+          {
+            "ref": "evidence/serpapi/2026-09-21T12-24-03-617Z_f3c4807a.json",
+            "sha256": "619a9b0ca9babd2377bdcbe5d9ecce40d6c954a6afc6a7b2b6e5143d59434c80"
+          }
+        ]
+      },
+      "fromIntentId": "I-T3-47",
+      "placement": "FOOTER_NEXT",
+      "priority": 1,
+      "readerReason": "자녀의 결혼 계획을 존중하면서도 독립 후 내 생활이 걱정된다면, 혼자 쓰게 된 시간에 관한 이야기로 이어진다",
+      "relationType": "NEXT_QUESTION",
+      "slot": "DIRECT_NEXT",
+      "toIntentId": "I-T3-05"
+    },
+    {
+      "anchorLabel": "재취업은 어디부터 알아볼까",
+      "edgeId": "E-0329",
+      "evidence": {
+        "basisSha256": "0f7af6eabd2358f941dee6eddee563d9d8c0e3362874630fa5dfa05f4c1b12c1",
+        "objectSha256": "3b4a882d3695cb22678fa267d4411349ee93995edaad9ad97df50673bd45a513",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-09-21T10-56-41-188Z_e96b5b07.json",
+            "sha256": "7a119e0b654363dcfe20bccfc744119fffd609c0c99f4cf9ccb904693843bf95"
+          }
+        ]
+      },
+      "fromIntentId": "I-T6-05",
+      "placement": "FOOTER_NEXT",
+      "priority": 2,
+      "readerReason": "배울 것을 고른 다음에는 지금 조건으로 일을 다시 시작하려면 어디부터 알아볼지 묻게 된다",
+      "relationType": "NEXT_QUESTION",
+      "slot": "DIRECT_NEXT",
+      "toIntentId": "I-T6-01"
+    },
+    {
+      "anchorLabel": "50대에 자격증 따는 게 의미가 있을까",
+      "edgeId": "E-0338",
+      "evidence": {
+        "basisSha256": "d74114523aa171e98ab5a2e2d98eb68a7baa96b4f08f65391f8dd83dad47904c",
+        "objectSha256": "62ddef6b8c0111f43435fdd9e0cabe3fb7177024e3b9f5054bba470b5e36c709",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-11-01T06-59-21-553Z_2a638c90.json",
+            "sha256": "ff001963dbf554b8c2415fcf72c0840c33f85caf5da91b659f04da189f04179d"
+          },
+          {
+            "ref": "evidence/serpapi/2026-11-01T06-59-21-556Z_6102768a.json",
+            "sha256": "ad56554e6614631e13db0c3c448fb8de7ce8bd124981313f190843394bad5edf"
+          },
+          {
+            "ref": "evidence/serpapi/2026-11-01T06-59-21-557Z_b3f87f66.json",
+            "sha256": "ff26288220bdf212b79933617c05b9926b89925e2edf41cddb98f04149b503de"
+          }
+        ]
+      },
+      "fromIntentId": "I-T6-03",
+      "placement": "FOOTER_NEXT",
+      "priority": 2,
+      "readerReason": "이력서 자격 칸이 비어 보이면 지금이라도 자격증을 따야 하나 묻게 된다",
+      "relationType": "NEXT_QUESTION",
+      "slot": "DIRECT_NEXT",
+      "toIntentId": "I-T6-04"
+    },
+    {
+      "anchorLabel": "주부로 지내다 다시 일하려고 할 때",
+      "edgeId": "E-0339",
+      "evidence": {
+        "basisSha256": "06ba5e469ab245cfb66c0e5c82652ab1fb6bf012dcf704fc70b9d05d9e8b2290",
+        "objectSha256": "d8d2bd60f8dc332d6e074039fd3b86826be88f624a5a15f890cbd05537d5c214",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-09-21T12-24-50-082Z_a080e3e0.json",
+            "sha256": "2b212e2534e2dc72d2143be4968fe28057af4a06b156fb4f327ad9a774801b80"
+          }
+        ]
+      },
+      "fromIntentId": "I-T6-03",
+      "placement": "FOOTER_SIBLING",
+      "priority": 2,
+      "readerReason": "이력서에서 가장 막히는 곳이 오래 비어 있는 경력 칸이라면, 주부로 지내다 다시 일하려는 사람의 이야기가 같은 자리다",
+      "relationType": "SIBLING",
+      "slot": "SAME_EXPERIENCE",
+      "toIntentId": "I-T6-02"
+    },
+    {
+      "anchorLabel": "이 나이에 뭘 배우면 좋을까",
+      "edgeId": "E-0340",
+      "evidence": {
+        "basisSha256": "06ba5e469ab245cfb66c0e5c82652ab1fb6bf012dcf704fc70b9d05d9e8b2290",
+        "objectSha256": "f2ce9ee011b47d1128bb945b32b1b33719d4be7ae4dc24d0f78aff476c0a341f",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-09-21T12-24-50-082Z_a080e3e0.json",
+            "sha256": "2b212e2534e2dc72d2143be4968fe28057af4a06b156fb4f327ad9a774801b80"
+          }
+        ]
+      },
+      "fromIntentId": "I-T6-03",
+      "placement": "FOOTER_BRIDGE",
+      "priority": 3,
+      "readerReason": "온라인 이력서 작성 자체가 낯설다면, 취업 준비에 필요한 배움을 고르는 기준으로 이어진다",
+      "relationType": "BRIDGE",
+      "slot": "BRIDGE_DISCOVERY",
+      "toIntentId": "I-T6-05"
+    },
+    {
+      "anchorLabel": "남편이 은퇴하고 집에 있을 때",
+      "edgeId": "E-0341",
+      "evidence": {
+        "basisSha256": "b3f3208f7ec7001b539418d4a1ce05845dd1c1dbd2e6c6caf0d59e83f8b0fd85",
+        "objectSha256": "e130a58a2554691380e0491f5df32c55538d7df96480c2660e78746a1357f8e1",
+        "refs": [
+          {
+            "ref": "evidence/serpapi/2026-09-21T10-56-43-015Z_371c6b10.json",
+            "sha256": "6162e5f36ea148e4323674d6117950b96d9002d9ae1ed29a182e8e5b2c326cd5"
+          },
+          {
+            "ref": "evidence/serpapi/2026-09-21T12-24-02-768Z_df583a8f.json",
+            "sha256": "8bc2169e7a6993f5266cf2d09c6ffcde96884b43acd89af47c57a470618d569a"
+          }
+        ]
+      },
+      "fromIntentId": "I-T3-03",
+      "placement": "FOOTER_NEXT",
+      "priority": 2,
+      "readerReason": "말다툼이 배우자의 은퇴 뒤 집안일이나 혼자 쓸 시간을 두고 반복된다면, 두 사람의 하루 일정을 다시 나누는 이야기로 이어진다.",
+      "relationType": "NEXT_QUESTION",
+      "slot": "DIRECT_NEXT",
+      "toIntentId": "I-T3-04"
+    }
+  ],
+  "schemaVersion": "magazine-content-plan-input/1"
+}
