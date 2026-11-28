@@ -1,7 +1,21 @@
-# 매거진 continuation 런북 — producer 결과를 제작으로 잇는 절차
+# 📜 [이력 · 조건부 복구] 매거진 continuation 런북 — producer 결과를 제작으로 잇는 절차
+
+> 📜 **2026-11-26 분류. 브라우저 방식의 당시 복구 절차를 보존한다.**
+>
+> 2026-08-25 ~ 08-30 에 Claude Code 세션이 브라우저를 이어받아 원고를 예약까지 나르던 절차의 기록이다.
+> 아래 본문은 그때의 사실을 그대로 둔 것이다 — 현재형 문장도 전부 당시의 설명으로 읽는다.
+>
+> - **지금의 절차**는 [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) 하나다. 신규 글(vNext · STANDARD)의 생산에 이 문서의 단계는 하나도 필요하지 않다.
+> - **이 문서를 여는 경우는 하나다** — rollout 을 `legacy` 로 되돌렸고, 사람이 legacy 웹 UI 경로를 직접 이어받아야 할 때. 그때도 runbook §0.0A 와 §11 을 먼저 읽는다.
+> - **지금과 다른 것**(본문에 남아 있지만 따르지 않는다): 01:00 생산 시각 · symlink 로 plist 를 까는 설치 절차(TCC 때문에 등록되지 않는다 — runbook §1) ·
+>   "merge 는 자동화하지 않는다" · "자동 commit·push 0" · 재고가 14일 이상이면 생산을 멈춘다는 규칙 · 옛 위험 등급으로 등록을 막는 조건 · CDP 포트 9333 과 옛 프로필 폴더.
+> - **지금도 재현되는 사례**는 runbook §11 로 옮겼다 — node 경로(§9-A) · 날짜를 옮긴 시험이 실전 회차를 선점하는 일(§9-B) · headless 불가와 세션 쿠키 소실(§9-D).
+> - **지우는 조건**: runbook §0.0B.7 의 네 조건으로 옛 실행 경로가 퇴역하고, 대체 복구 시험과 문서 목록·외부 인계 링크 정리가 끝난 뒤. 그 전에는 지우지 않는다. 소유자는 매거진 담당이다.
+>
+> 운영 문서 전체의 지도는 [`README.md`](./README.md) 다.
 
 > 작성 2026-08-25 · 대상 Claude Code 세션
-> 상위 문서: `2026-08-23-soransoran-magazine-seo-production-strategy.md`
+> 상위 문서(당시): `2026-08-23-soransoran-magazine-seo-production-strategy.md` — 지금은 안내만 남은 이력이다
 
 ---
 

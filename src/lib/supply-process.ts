@@ -222,7 +222,7 @@ export function hasWork(p: Pending): boolean {
 /**
  * 🔴 **유료 생성 수요 = (다가오는 슬롯 − 그 슬롯들에 eligible 로 남을 READY) 중 그날 쓸 수 있는 사람이 있는 자리.**
  *
- *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots`) — 오늘 발행기가 회수할 수 있는 기회 + 다음 첫 공개 기회 한 칸.
+ *    다가오는 슬롯 = 가까운 수요 지평(`upcomingSlots`) — 지금 창 끝까지 발행기가 회수할 수 있는 기회 + 다음 창 첫 자리 한 칸(2026-11-25 밤 4).
  *    READY 가 그 슬롯에 eligible 로 남는가는 정본 `judgeSlotRelease` 가 **그 슬롯 시각에** 본다
  *    (`readyOpportunitiesOf` · `matchOpportunitiesToSlots`).
  *    🔴 **`writable`** — 빈 자리 중 그날 쓸 수 있는 사람이 있는 수(`planSeatWriters`). 쓸 사람이 없는 자리의 글은

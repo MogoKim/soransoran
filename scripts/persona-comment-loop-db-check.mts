@@ -41,7 +41,7 @@ const { SANITIZER_VERSION } = await import('../src/lib/persona-eval-invalidation
 const { REFERENCE_MANIFEST_FILE } = await import('../src/lib/persona-reference-asset')
 const { GATE_CODES } = await import('../src/lib/persona-comment-gate-report')
 const { publishCandidateTx } = await import('../src/lib/persona-publish-tx')
-const { AUTO_LANE_DECIDED_BY, AUTO_LANE_EXPIRE_REASON, commentLoopLimitsFromEnv } = await import('../src/lib/persona-comment-auto-lane')
+const { AUTO_LANE_DECIDED_BY, AUTO_LANE_EXPIRE_REASON, COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, commentLoopLimitsFromEnv } = await import('../src/lib/persona-comment-auto-lane')
 const { dedupKeyOf } = await import('../src/lib/persona-comment-queue')
 const { makeDbTargetSource } = await import('./lib/persona-comment-source-db')
 const { runCommentLoop, sweepAutoLane, generationGateOf } = await import('./lib/persona-comment-loop.mjs')
@@ -191,7 +191,7 @@ const auditReplies = async (): Promise<void> => {
 async function loop(gen: CommentGenerate, over: { generation?: { ok: boolean; reason: string } } = {}) {
   const r = await runCommentLoop({
     prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
-    makeGenerate: () => gen, generation: over.generation ?? { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+    makeGenerate: () => gen, generation: over.generation ?? { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
   })
   await auditReplies()
   return r
@@ -256,7 +256,7 @@ async function main(): Promise<void> {
     const f = fakeGenerate()
     const r = await runCommentLoop({
       prisma, now: runAt, env: process.env, live: true, source: source(), canon: canonRead,
-      makeGenerate: () => f.gen, generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+      makeGenerate: () => f.gen, generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
     })
     await auditReplies()
     const cs = await personaComments(pid)
@@ -355,7 +355,7 @@ async function main(): Promise<void> {
     check('🔴 세 글 모두 시도하고 대체 후보를 포함해도 회차 호출 상한을 넘지 않았다',
       new Set(r.outcomes.map((o) => o.postId)).size === 3
       && f.calls() === r.providerCalls
-      && f.calls() <= 6,
+      && f.calls() <= COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT,
     `calls=${f.calls()} posts=${new Set(r.outcomes.map((o) => o.postId)).size}`)
 
     await wipe()
@@ -377,6 +377,56 @@ async function main(): Promise<void> {
       && fallbackRun.outcomes[1]?.step === 'ENQUEUED'
       && (await personaComments(fallbackPost)).length === 1,
     JSON.stringify(fallbackRun.outcomes.map((o) => `${o.personaCode}:${o.step}`)))
+
+    // 🔴 반례① DB 판 (2026-11-25) — 라운드 1 후보가 모두 관문에 막혀도 같은 회차 라운드 2 가 다른 조합으로 실제 PENDING 1행을 만든다
+    //    라운드 1 한 벌(5)은 본문 복제 → ① 관문 막힘 · 그 뒤는 깨끗한 문장.
+    //    🔴 (2026-11-28 밤 5-b) 오늘 자리(관리형 글 × 5)는 **적재 수** 상한이고 호출 상한이 아니다 — 막힌 호출은 자리를 쓰지 않는다.
+    //       재시도 호출 = min(회차 호출 상한 − 라운드 1 호출, 오늘 자리 − 라운드 1 적재).
+    const retryScenario = async (extraManagedPosts: number) => {
+      await wipe()
+      const author = await persona('P01')
+      for (const c of ['P02', 'P03', 'P04', 'P05', 'P06', 'P07']) await persona(c)
+      const target = await post(author, 10)
+      // 🔴 60분 창 밖 · 오늘 만든 관리형 글 — 대상은 아니고 오늘 자리(+5)만 늘린다
+      for (let i = 0; i < extraManagedPosts; i += 1) await post(author, 70 + i)
+      const sent: { code: string; role: string }[] = []
+      const gen: CommentGenerate = async ({ input }) => {
+        sent.push({ code: input.personaCode, role: input.reactionRole })
+        return { ok: true, text: sent.length <= 5 ? input.post.bodyDigest : GOOD, errorCode: null }
+      }
+      const run = await runCommentLoop({
+        prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
+        makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
+      })
+      await auditReplies()
+      const blockedKeys = new Set(run.outcomes.filter((o) => o.step === 'ENQUEUE_BLOCKED').map((o) => dedupKeyOf(o.postId, o.personaCode, o.reactionRole)))
+      const rows = await prisma.personaApprovalQueue.findMany({ where: { targetPostId: target }, select: { dedupKey: true, status: true } })
+      return { run, sent, target, blockedKeys, rows }
+    }
+    {
+      const only = await retryScenario(0)
+      const onlyEnq = only.run.outcomes.find((o) => o.step === 'ENQUEUED')
+      check('🔴 🔴 반례③ DB (밤 5-b) — 오늘 자리 5(관리형 글 1편 · 자정 직후 모양)여도 라운드 1 관문 막힘 5 뒤 재시도가 돈다 · Queue 1행 · 댓글 1',
+        only.run.providerCalls === 6 && only.sent.length === 6 && only.blockedKeys.size === 5
+        && only.rows.length === 1 && !only.blockedKeys.has(only.rows[0]!.dedupKey) && only.run.enqueued === 1
+        && onlyEnq !== undefined && only.rows[0]!.dedupKey === dedupKeyOf(onlyEnq.postId, onlyEnq.personaCode, onlyEnq.reactionRole)
+        && only.run.lines.some((l) => l.startsWith('예산 ') && l.endsWith('→ 남은 5건'))
+        && only.run.lines.some((l) => l.startsWith('재시도 — 후보가 모두 관문에 막힌 글 1편'))
+        && !only.run.lines.some((l) => l.startsWith('재시도 없음'))
+        && (await personaComments(only.target)).length === 1,
+      `${only.run.providerCalls} · ${only.run.lines.filter((l) => l.startsWith('재시도') || l.startsWith('예산')).join(' / ')}`)
+      const r = await retryScenario(1)
+      const enq = r.run.outcomes.find((o) => o.step === 'ENQUEUED')
+      check('🔴 🔴 반례① DB — 라운드 1 관문 막힘 5건 → 같은 회차 라운드 2 가 Queue 1행 · 막힌 조합 행 0 · 댓글 1',
+        r.blockedKeys.size === 5 && r.rows.length === 1 && !r.blockedKeys.has(r.rows[0]!.dedupKey)
+        && enq !== undefined && r.rows[0]!.dedupKey === dedupKeyOf(enq.postId, enq.personaCode, enq.reactionRole)
+        && r.run.enqueued === 1 && r.run.providerCalls === 6 && r.sent.length === 6
+        && r.run.lines.some((l) => l.startsWith('재시도 — 후보가 모두 관문에 막힌 글 1편'))
+        && (await personaComments(r.target)).length === 1,
+      `${JSON.stringify(r.run.outcomes.map((o) => `${o.personaCode}/${o.reactionRole}:${o.step}`))} · rows ${r.rows.length} · ${r.run.lines.filter((l) => l.startsWith('재시도') || l.startsWith('예산')).join(' / ')}`)
+      check('🔴 반례① DB — 같은 조합 재전송 0(보낸 조합 6개 모두 다르다) · 회차 상한 안',
+        new Set(r.sent.map((x) => `${x.code}:${x.role}`)).size === r.sent.length && r.run.providerCalls <= COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT)
+    }
   }
 
   console.log('\n⑦ 비용 상한 — 요청 전에 막는다')
@@ -398,7 +448,7 @@ async function main(): Promise<void> {
       reservedUsd: 0.199, inputTokens: 1805, outputTokens: 231, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
       settledUsd: 0.199, pricingVersion: 'x', startedAt: day.toISOString(), endedAt: day.toISOString(), errorCode: null,
     })
-    const session = new SupplyLlmSession({ runId: 'db-cap', dir, limits: commentLoopLimitsFromEnv({}).limits })
+    const session = new SupplyLlmSession({ runId: 'db-cap', dir, limits: commentLoopLimitsFromEnv({}, null).limits })
     let genFetch = 0
     const realFetch = globalThis.fetch
     process.env.GEMINI_API_KEY = 'fixture-fake-key'
@@ -514,7 +564,7 @@ async function main(): Promise<void> {
       reservedUsd: 0.2, inputTokens: 1805, outputTokens: 231, cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [],
       settledUsd: 0.2, pricingVersion: 'x', startedAt: day.toISOString(), endedAt: day.toISOString(), errorCode: null,
     })
-    const ledger = readCostSignals(day, {}, { comment: dir }).commentLedger
+    const ledger = readCostSignals(day, null, {}, { comment: dir }).commentLedger
     const gate = generationGateOf({ missingEnv: [], ledger })
     check('🔴 소진 장부 → 생성 문 닫힘(DAILY_EXHAUSTED)', !gate.ok && ledger.codes.includes('DAILY_EXHAUSTED'), `${gate.reason}`)
     let anyFetch = 0
@@ -527,7 +577,7 @@ async function main(): Promise<void> {
         f.calls() === 0 && r.providerCalls === 0 && anyFetch === 0 && (await personaComments(fresh)).length === 0, `${f.calls()} ${anyFetch}`)
       check('🟢 이미 돈을 쓴 PENDING 은 발행된다(유료 호출 없음)', (await personaComments(left)).length === 1 && r.sweepBefore?.published === 1)
     } finally { globalThis.fetch = realFetch }
-    const okGate = generationGateOf({ missingEnv: [], ledger: readCostSignals(day, {}, { comment: join(HOME, 'ledger-empty') }).commentLedger })
+    const okGate = generationGateOf({ missingEnv: [], ledger: readCostSignals(day, null, {}, { comment: join(HOME, 'ledger-empty') }).commentLedger })
     check('기준선 — 빈 장부(오늘 0원)는 생성 문이 열린다', okGate.ok, okGate.reason)
   }
 
@@ -562,7 +612,7 @@ async function main(): Promise<void> {
       }
       const r = await runCommentLoop({
         prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
-        makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: store,
+        makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: store,
       })
       await auditReplies()
       return { r, sent }

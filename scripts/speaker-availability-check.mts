@@ -45,9 +45,17 @@ console.log('\n══ 화자 여력 계획 검사 (🔴 DB 0 · 네트워크 0 �
 const d3 = PROFILES.d3
 const CAPS = { postsPerWeek: d3.postsPerWeek, minDaysBetween: d3.minDaysBetween }
 const START = new Date('2026-09-22T15:00:00.000Z') // 2026-09-23 00:00 KST
+const H = 3_600_000
 
-/** 🔴 9/23 d3 증명일 슬롯 — 정본 슬롯 표(`slotTimesOn`) */
-const SLOTS = slotTimesOn('2026-09-23', d3)
+/**
+ * 🔴 9/23 하루 세 자리 — 같은 날 한 화자 한 편을 잰다.
+ *    🔴 (2026-11-25 밤 4) 원천은 수집 뒤 6시간 안의 자리에만 걸린다 — 정본 d3 증명일 세 자리(09:30 · 13:30 · 19:00)는
+ *       한 글이 다 덮을 수 없는 폭(9.5h)이다. 같은 날 · 같은 화자 규칙은 그대로이므로 **수집 6시간 안 세 자리**
+ *       (09:30 · 11:30 · 13:30)로 잰다. 판정 시각은 첫 자리 09:30 · 증거는 08:06 수집(`fakeEvidenceGate(13:00)`).
+ */
+const SLOTS = [9.5, 11.5, 13.5].map((h) => new Date(START.getTime() + h * H))
+const JUDGE_AT = SLOTS[0]!
+const EVIDENCE_AT = new Date(START.getTime() + 13 * H)
 
 /**
  * 🔴 **화자가 못박힌 기계 글 = 기회 하나.** 생성된 글은 그 사람의 말투로 쓰였으므로 남에게 넘길 수 없다 —
@@ -55,13 +63,13 @@ const SLOTS = slotTimesOn('2026-09-23', d3)
  *    (`availablePersonasAt` — 주간 상한 · 최소 간격) 정본 공개 판정이 eligible 이어야 그 슬롯에 유효하다.
  */
 const oppOf = (id: string, speaker: string, history: readonly PersonaHistory[]): SlotOpportunity => {
-  const gateResults = fakeEvidenceGate(START, { id })
+  const gateResults = fakeEvidenceGate(EVIDENCE_AT, { id })
   return {
     key: id, personaCode: speaker,
     validAt: (slotAt) => {
       const free = availablePersonasAt(history, slotAt, CAPS).includes(speaker)
       return judgeSlotRelease({
-        gateResults, slotAt, now: START, hardGates: { ok: true, codes: [] },
+        gateResults, slotAt, now: JUDGE_AT, hardGates: { ok: true, codes: [] },
         assignment: free ? { ok: true } : { ok: false, route: 'defer', codes: ['PERSONA_NOT_FREE_AT_SLOT'] },
         tieBreak: id,
       }).verdict === 'eligible'
@@ -77,7 +85,9 @@ console.log(`① 🔴 🔴 실측 재현 — P01 글 2건 + P06 글 1건은 9/23
 {
   const hist = fresh(['P01', 'P06', 'P07', 'P10'])
   const m = matchOpportunitiesToSlots(SLOTS, [oppOf('a', 'P01', hist), oppOf('b', 'P01', hist), oppOf('c', 'P06', hist)])
-  check('fixture 전제 — d3 증명일 슬롯이 3개다', SLOTS.length === 3, String(SLOTS.length))
+  check('fixture 전제 — 같은 날 세 자리 · d3 증명일 자리 수(3)와 같다 · 셋 다 수집 6시간 안',
+    SLOTS.length === 3 && slotTimesOn('2026-09-23', d3).length === 3
+    && SLOTS.every((d) => d.getTime() - (EVIDENCE_AT.getTime() - 4.9 * H) < 6 * H), String(SLOTS.length))
   check('🔴 🔴 **같은 화자 2건은 하루에 한 편만 나간다 — 2/3**',
     m.filled === 2 && keysOf(m.bySlot).filter((k) => k === 'a' || k === 'b').length === 1, JSON.stringify(m))
   check('🔴 쓸 수 있던 화자는 넉넉했다 — 사람이 모자란 것이 아니다',

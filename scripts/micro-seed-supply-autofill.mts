@@ -34,6 +34,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { dirname } from 'node:path'
 import { readWorkset, worksetFileName, sourceIdentityOf, type SupplyIntent } from '../src/lib/supply-workset'
+import { SOURCE_EVIDENCE_KEY, sortBySourceRank, sourceRankSignalOf } from '../src/lib/source-slot-release'
 import { SUPPLY_JIT_CONTRACT, sameSupplyQualityContract } from '../src/lib/supply-intent'
 import { currentQualityContract } from '../src/lib/quality-contract'
 import { findCjkIdeograph, HANJA_LANGUAGE_FIT } from '../src/lib/cjk-ideograph'
@@ -44,7 +45,7 @@ import {
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Candidate, type HeldEntry,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY, MACHINE_SITE_PREFIX,
-  buildQueuePayload, queueProfileOf, machineProfileMismatch, isOurSite,
+  buildQueuePayload, queueProfileOf, machineProfileMismatch, isOurSite, sourceEvidenceOf,
   type Envelope, type AutoJudgeProvenance,
 } from '../src/lib/micro-seed-supply-autofill'
 import { FILL_REPORT_PREFIX, type FillReport, type FillReportFile, type FillSkipCode } from '../src/lib/supply-fill-retry'
@@ -169,6 +170,21 @@ function fillReport(input: {
 function autoJudgeOf(c: Candidate): AutoJudgeProvenance { return ajMap.get(c as object) ?? {} }
 
 /**
+ * 🔴 **적재 순서 = 원천 순위 정본** (canon §2.3 · 2026-11-28) — 생성 · 판정 · 발행과 같은 한 계약이다.
+ *    수집 시각 최신 먼저 → 같으면 결정적 열쇠(사이트 · 원문 id · 제목, 코드 포인트). 비교는 `sortBySourceRank` →
+ *    `compareReleaseRank` 그대로이고, 수집 시각은 이 후보가 큐에 실을 원문 증거(`sourceEvidenceOf`)를 발행 줄과 같은
+ *    엄격 판독기(`sourceRankSignalOf`)로 읽는다 — 칸이 없거나 깨졌으면 언제나 뒤다. 파일 순서가 달라도 같은 순서다.
+ *    선별(중복 · 형제는 앞이 이긴다) · 「자동 READY 우선」 두 묶음 · `--up-to` 컷이 이 순서를 앞에서부터 쓴다 —
+ *    상한에 걸리면 오래전에 수집된 후보가 잘린다.
+ */
+export function fillOrderOf(rows: readonly Candidate[]): Candidate[] {
+  return sortBySourceRank(rows, (c) => sourceRankSignalOf(
+    { [SOURCE_EVIDENCE_KEY]: sourceEvidenceOf(c, null) },
+    [S(c.sourceSite), S(c.sourceArticleId), S(c.title)].join('\u0000'),
+  ))
+}
+
+/**
  * JIT 상한을 자르기 전에 자동 READY까지 갈 수 있는 기계 후보를 앞에 둔다.
  * 나머지 후보는 기존 큐 의미를 보존하려고 제거하지 않고 뒤에 둔다.
  */
@@ -287,7 +303,7 @@ async function main(): Promise<void> {
   for (const p2 of inputPaths) if (!existsSync(p2)) fail(`후보 파일을 찾지 못했습니다: ${p2}`)
 
   // 🔴 파일을 합치되 **봉투를 잃지 않는다.** 후보마다 어느 봉투에서 왔는지 기억한다
-  const candidates: Candidate[] = []
+  const fileRows: Candidate[] = []
   const fileNote: string[] = []
   const fileCounts: { name: string; candidates: number }[] = []
   for (const p2 of inputPaths) {
@@ -306,13 +322,11 @@ async function main(): Promise<void> {
       // 🔴 후보에 실려 온 판정 출처를 이관한다 — 상수를 찍지 않는다
       const aj = (r as unknown as Record<string, unknown>).autoJudge
       if (aj !== null && typeof aj === 'object') ajMap.set(r as object, aj as AutoJudgeProvenance)
-      candidates.push(r)
+      fileRows.push(r)
     }
   }
-  // 🔴 순서를 고정한다 — 파일 순서가 달라도 같은 것을 고른다
-  candidates.sort((a, b) =>
-    S(a.sourceArticleId).localeCompare(S(b.sourceArticleId))
-    || S(a.title).localeCompare(S(b.title)))
+  // 🔴 적재 순서 = 원천 순위 정본(`fillOrderOf`) — 수집 시각 최신 먼저 · 모르면 뒤 · 파일 순서가 달라도 같은 순서
+  const candidates = fillOrderOf(fileRows)
   const { held, missing } = readHeld(HELD_FILE)
 
   console.log(APPLY ? '\n══ 🔴 실제 보충 (--apply) ══\n' : '\n══ dry-run (DB write 0 · Post 0) ══\n')

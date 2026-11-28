@@ -42,7 +42,7 @@ const { SANITIZER_VERSION } = await import('../src/lib/persona-eval-invalidation
 const { REFERENCE_MANIFEST_FILE } = await import('../src/lib/persona-reference-asset')
 const { GATE_CODES } = await import('../src/lib/persona-comment-gate-report')
 const { publishCandidateTx } = await import('../src/lib/persona-publish-tx')
-const { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY } = await import('../src/lib/persona-comment-auto-lane')
+const { AUTO_LANE_ACTIVITY_DECIDED_BY, AUTO_LANE_DECIDED_BY, COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT } = await import('../src/lib/persona-comment-auto-lane')
 const F = await import('../src/lib/persona-comment-followup')
 const { threadPlanOf } = await import('../src/lib/persona-thread-plan')
 const {
@@ -178,10 +178,11 @@ const managedCreatedAtMs = (nowMs: number, minutesAgo: number): number =>
  */
 type PlanShape = (plan: ReturnType<typeof threadPlanOf>) => boolean
 const DEFAULT_SHAPE: PlanShape = (plan) => plan.size === 10 && plan.slots[0]?.kind === 'author'
-function planPostId(n: number, shape: PlanShape): string {
+function planPostId(n: number, shape: PlanShape, publishedAtMs: number): string {
   for (let k = 0; k < 2_000_000; k += 1) {
     const id = `fu-db-${n}-${k}`
-    if (shape(threadPlanOf(id))) return id
+    // 🔴 계획은 공개 시각에 효력이 있던 줄로 센다 — 판정(`judgeFollowupPost`)과 같은 시각 · 이 검사의 글은 뜨겁지 않다(큐 행 없음)
+    if (shape(threadPlanOf(id, publishedAtMs, false))) return id
   }
   throw new Error('원하는 모양의 대화 계획을 찾지 못했다 — 시나리오가 실제 계획이 낼 수 없는 모양을 요구한다')
 }
@@ -197,7 +198,7 @@ async function post(author: P, minutesAgo: number, shape: PlanShape = DEFAULT_SH
   const createdAt = managedCreatedAtMs(now, minutesAgo)
   const p = await prisma.post.create({
     data: {
-      id: planPostId(seq, shape),
+      id: planPostId(seq, shape, publishedAt),
       boardType: 'FREE', title: `요즘 밤마다 잠이 안 와요 ${seq}`, status: 'PUBLISHED', source: 'SYSTEM',
       content: `새벽 세 시만 되면 눈이 떠져서 다시 잠들기가 어렵네요. 다들 이런 밤 어떻게 보내세요? (${seq})`,
       authorId: author.userId, personaId: author.id, publishAt: new Date(publishedAt),
@@ -359,7 +360,7 @@ async function main(): Promise<void> {
     const r = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
       makeGenerate: () => async () => ({ ok: true, text: '읽으면서 고개가 계속 끄덕여졌어요. 그런 밤은 괜히 마음이 싱숭생숭하죠. 오늘은 푹 주무셨으면 좋겠네요~', errorCode: null }),
-      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+      generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
       followupPhase: () => phase(g.gen),
     })
     const cs = await personaRows(pid)
@@ -373,7 +374,7 @@ async function main(): Promise<void> {
     const r2 = await runCommentLoop({
       prisma, now: new Date(), env: process.env, live: true, source: source(), canon: canonRead,
       makeGenerate: () => async () => ({ ok: true, text: '어머 그 새벽 얼마나 길게 느껴지셨을까요. 오늘은 꼭 푹 주무셨으면 좋겠어요.', errorCode: null }),
-      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: freshAttemptStore(),
+      generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: freshAttemptStore(),
       followupPhase: () => phase(g2.gen, { conversationAudit: { verdict: 'FAIL', codes: ['FOLLOWUP_SELF'], counts: {} } }),
     })
     const cs2 = await personaRows(pid2)
@@ -391,7 +392,7 @@ async function main(): Promise<void> {
     // 🔴 실제 장부 세션 — 추가 댓글 생성이 `commentFollowupGen` 줄로 남는가(가짜 fetch · 네트워크 0)
     const ledgerDir = join(HOME, 'ledger-followup')
     mkdirSync(ledgerDir, { recursive: true })
-    const session = new SupplyLlmSession({ runId: 'fu-db', dir: ledgerDir, limits: commentLoopLimitsFromEnv({}).limits })
+    const session = new SupplyLlmSession({ runId: 'fu-db', dir: ledgerDir, limits: commentLoopLimitsFromEnv({}, null).limits })
     const realFetch = globalThis.fetch
     process.env.GEMINI_API_KEY = 'fixture-fake-key'
     let genFetch = 0
@@ -552,7 +553,8 @@ async function main(): Promise<void> {
     // 🔴 질문이 계속 이어지는 대화 — 계획 크기까지 실제로 닿아야 "넘지 않는다"가 빈말이 아니다
     check(
       '🔴 Persona 댓글 정확히 10(이 글의 계획) · 넘지 않음 · 추가 9 · 대화 마감 안',
-      cs.length === threadPlanOf(pid).size && cs.length === 10,
+      cs.length === threadPlanOf(pid, (await prisma.post.findUniqueOrThrow({ where: { id: pid }, select: { publishAt: true } })).publishAt!.getTime(), false).size
+      && cs.length === 10,
       `${cs.length} · queues=${JSON.stringify(queueRows)} · ${roundLines.join(' || ')}`,
     )
     const nonAuthorRows = cs.filter((c) => c.personaId !== a.id)

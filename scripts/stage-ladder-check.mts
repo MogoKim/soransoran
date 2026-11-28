@@ -1270,7 +1270,8 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
    *    `stageStock` 결과와 같은 답을 내는지 본다.
    */
   const RUN_AT = new Date('2026-09-24T09:00:00+09:00')
-  const fresh = new Date(RUN_AT.getTime() - 2 * 864e5)
+  // 🔴 (2026-11-25 밤 4) 신선한 원문 = 게시 3시간 전 · 수집 1.9시간 전 — 옛 값(게시 이틀 전)은 수집 뒤 6시간이 지나 만료다
+  const fresh = new Date(RUN_AT.getTime() - 3 * 3_600_000)
   const stale = new Date(RUN_AT.getTime() - 40 * 864e5)
   const qrow = (o: {
     id: string; persona?: string | null; captured: Date | null; gate?: string

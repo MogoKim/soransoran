@@ -25,6 +25,7 @@ import {
 } from '../src/lib/supply-fill-retry'
 import { planBoundedCommonPhase, planCarryOverFill, runFileName, type Pending } from '../src/lib/supply-process'
 import { qualityContractDigest } from '../src/lib/quality-contract'
+import { CAPTURE_AGE_LIMIT_HOURS } from '../src/lib/source-slot-release'
 import { planCarryOver, planPostRunCarryOver } from './lib/fill-carry-over.mjs'
 
 type Check = (label: string, ok: boolean, detail?: string) => void
@@ -130,12 +131,17 @@ export async function runFillRetryChecks(check: Check): Promise<void> {
     applied: true, loaded: 0, cut: 0, skipped: {},
     files: files.map((f) => ({ name: f.name, candidates: 2, loaded: 2 - f.cut, skipped: {}, cut: f.cut })),
   })
-  const A = rid(7) /* 09-27 05:15 UTC — 실측 회차 모양 */; const B = rid(30); const C = rid(5); const D = rid(4)
+  /**
+   * 🔴 (2026-11-25 밤 4) 이월 기한 = 수집 뒤 6시간 — 옛 24시간 fixture 의 7h · 6.5h · 6h 회차(A · L · K)는 6시간 안으로 옮겼다
+   *    (이월해야 하는 실패 회차라는 뜻은 그대로다). 24시간이면 이월됐을 6.5h 회차(M)가 이제 STALE 인 것을 따로 본다.
+   */
+  const A = rid(5.9) /* 09-27 06:21 UTC — 실측 회차 모양(fill 실패) */; const B = rid(30); const C = rid(5); const D = rid(4)
   const E = rid(3.5); const F = rid(3); const G = rid(2.5); const H = rid(2); const I = rid(1.5); const J = rid(1)
-  const K = rid(6); const L = rid(6.5)
+  const K = rid(5.7); const L = rid(5.8); const M = rid(6.5)
   const runs: CarryRunRecord[] = [
     { runId: A, stages: st('failed') },                  // 옛 기록 · fill 실패 → 이월
     { runId: B, stages: st('failed') },                  // 기한 밖
+    { runId: M, stages: st('failed') },                  // 🔴 24h 면 이월 · 6h 기한 밖
     { runId: C, stages: st('ok') },                      // 옛 기록 · fill ok → 끝냄
     { runId: D, stages: st('failed') },                  // fill 실패 — 뒤 회차 E 가 이월로 끝냈다
     { runId: E, stages: st('ok'), fill: { ok: true, inputs: [cf(E).name, cf(D).name], report: rep([{ name: cf(E).name, cut: 0 }, { name: cf(D).name, cut: 0 }]) } },
@@ -148,7 +154,7 @@ export async function runFillRetryChecks(check: Check): Promise<void> {
     { runId: cur, stages: st('') },
   ]
   const files: CarryCandidateFile[] = [
-    cf(A), cf(B), cf(C), cf(D), cf(E), cf(F),
+    cf(A), cf(B), cf(M), cf(C), cf(D), cf(E), cf(F),
     cf(G, { ...good, qualityContractDigest: 'f'.repeat(64) }),
     cf(H, { provenance: 'x' }),
     cf(I), cf(J), cf(K), cf(L), cf(cur),
@@ -163,7 +169,8 @@ export async function runFillRetryChecks(check: Check): Promise<void> {
     sel.picked.some((p) => p.runId === runId) ? 'PICK'
       : sel.rejected.find((r) => r.name === `auto-draft-${runId}.candidates.json`)?.code ?? '?'
   check('[FR] 🔴 fill 실패한 앞 회차 파일(옛 기록)을 이월한다', codeOf(A) === 'PICK', codeOf(A))
-  check('[FR] 🔴 24h 기한 밖은 얹지 않는다 (STALE)', codeOf(B) === 'STALE', codeOf(B))
+  check('[FR] 🔴 기한 밖(30h)은 얹지 않는다 (STALE)', codeOf(B) === 'STALE', codeOf(B))
+  check('[FR] 🔴 🔴 **수집 뒤 6시간을 넘긴 6.5h 회차 파일은 얹지 않는다 (STALE · 옛 24h 기한이면 이월이었다)**', codeOf(M) === 'STALE', codeOf(M))
   check('[FR] 🔴 fill 이 끝난 옛 기록 파일은 얹지 않는다 (COMPLETED)', codeOf(C) === 'COMPLETED', codeOf(C))
   check('[FR] 🔴 뒤 회차가 이월로 끝낸 파일은 다시 얹지 않는다 (COMPLETED)', codeOf(D) === 'COMPLETED', codeOf(D))
   check('[FR] 새 기록 · 컷 0 → 끝냄', codeOf(E) === 'COMPLETED', codeOf(E))
@@ -182,7 +189,21 @@ export async function runFillRetryChecks(check: Check): Promise<void> {
   const capped = selectCarryOver({ files, runs, currentRunId: cur, nowMs: NOW_MS })
   check(`[FR] 🔴 한 회차 이월은 ${CARRY_OVER_MAX_FILES}개까지 — 넘친 것은 OVER_MAX(다음 회차)`,
     capped.picked.length === CARRY_OVER_MAX_FILES && capped.rejected.filter((r) => r.code === 'OVER_MAX').length === 1)
-  check('[FR] 기한 기본값은 24h', CARRY_OVER_LOOKBACK_MS === 24 * 3_600_000)
+  check('[FR] 🔴 기한 기본값은 6h — 수집 뒤 만료와 같은 값 하나(`CAPTURE_AGE_LIMIT_HOURS`)',
+    CARRY_OVER_LOOKBACK_MS === 6 * 3_600_000 && CARRY_OVER_LOOKBACK_MS === CAPTURE_AGE_LIMIT_HOURS * 3_600_000)
+  {
+    // 🔴 경계 — 정확히 6h 는 기한 안(`nowMs − 회차 > 기한` 이 STALE) · 6h 를 1초라도 넘기면 STALE
+    const edgeIn = rid(6)
+    const edgeOut = new Date(NOW_MS - 6 * 3_600_000 - 1000).toISOString()
+    const edgeOutId = `${edgeOut.slice(0, 10).replace(/-/g, '')}-${edgeOut.slice(11, 19).replace(/:/g, '')}`
+    const e = selectCarryOver({
+      files: [cf(edgeIn), cf(edgeOutId)], runs: [{ runId: edgeIn, stages: st('failed') }, { runId: edgeOutId, stages: st('failed') }],
+      currentRunId: cur, nowMs: NOW_MS,
+    })
+    check('[FR] 🔴 이월 기한 경계 — 6h 정각 회차는 이월 · 6h + 1초 회차는 STALE',
+      e.picked.map((x) => x.runId).join(',') === edgeIn && e.rejected.some((r) => r.code === 'STALE' && r.name.includes(edgeOutId)),
+      JSON.stringify(e))
+  }
   check('[FR] 🔴 옛 기록의 fill ok 는 자기 파일만 끝낸다 — 남의 파일을 끝냈다고 하지 않는다',
     !completedCandidateFiles([{ runId: C, stages: st('ok') }]).has(cf(A).name))
 

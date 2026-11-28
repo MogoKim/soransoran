@@ -20,9 +20,10 @@ import type { PrismaClient } from '@prisma/client'
 
 import {
   AUTO_COMMENT_THINKING_LEVEL, AUTO_FIRST_COMMENT_WINDOW_MINUTES, AUTO_PERSONA_COMMENTS_PER_POST_MAX, COMMENT_LOOP_BUDGET_ENV,
-  COMMENT_LOOP_DAILY_USD_DEFAULT, COMMENT_LOOP_DAILY_USD_MAX, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
+  COMMENT_DAILY_USD_CAP, commentDailyCapOf, commentLoopLimitsFromEnv, firstPerPost, isAutoLaneCandidatePost,
   judgeAutoLane, type AutoLaneFacts,
   firstCommentDelayMs, firstCommentWaitMs, FIRST_COMMENT_DELAY_MIN_MS, FIRST_COMMENT_DELAY_MAX_MS, AUTO_FIRST_COMMENT_WINDOW_MS,
+  COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT,
 } from '../src/lib/persona-comment-auto-lane'
 import { costOf, reserveOf } from '../src/lib/llm-pricing'
 import { ledgerDateOf, type LedgerEntry } from '../src/lib/llm-ledger'
@@ -35,7 +36,7 @@ import {
 import { MAX_OUTPUT_TOKENS } from './lib/persona-prompt'
 import {
   commentLoopLedgerDir, makeCanonGate, runCommentLoop, generationGateOf, COMMENT_LOOP_LOCK_FILE, type CommentGenerate,
-  autoLaneTargetSource,
+  autoLaneTargetSource, retryPostIdsOf,
 } from './lib/persona-comment-loop.mjs'
 import { materializeTargets, type SourcePersona, type SourcePost } from './lib/persona-comment-targets'
 import { legacyRepeatBand } from './lib/persona-voice-legacy-oracle.mjs'
@@ -48,7 +49,7 @@ import {
   type AttemptFsOps, type AttemptStore,
 } from './lib/persona-comment-attempt-store.mjs'
 import { failedAttemptCounts, parseAttemptJournal, serializeAttemptJournal, type AttemptEntry } from '../src/lib/persona-comment-attempt-policy'
-import { BOOTSTRAP_SLOTS_PER_POST } from '../src/lib/persona-comment-bootstrap-budget'
+import { BOOTSTRAP_DAILY_MAX, BOOTSTRAP_SLOTS_PER_POST } from '../src/lib/persona-comment-bootstrap-budget'
 import { lockfUsable, shouldRunFollowUp, MAX_FOLLOW_UPS, LOCKF_PATH, LEASE_INNER_ENV, LEASE_FD_ENV, FOLLOW_UP_FILE } from './lib/runner-lease.mjs'
 import { spawn } from 'node:child_process'
 import type { TargetSource, GateContext } from './lib/persona-comment-targets'
@@ -60,6 +61,10 @@ import {
 } from './lib/persona-comment-runner-template'
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { auditLedgerDir } from './lib/auto-ready-semantic-provider.mjs'
+import { RUNTIME_STAGES } from '../src/lib/scale-profile'
+import { decisionStageEnv } from '../src/lib/scale-runtime'
+import { followupStageOf } from '../src/lib/persona-comment-followup'
+import { kstDateString } from '../src/lib/release-canary'
 
 let pass = 0
 let fail = 0
@@ -150,27 +155,82 @@ console.log('\n② 생성 전 대상 필터 · 글당 첫 대상만')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 예산 env — 기본값 · 상한 · 잘못 쓴 값')
+console.log('\n③ 예산 env — 기본값 · 그날 단계 천장 · 잘못 쓴 값')
 // ─────────────────────────────────────────────────────────
 {
-  const d = commentLoopLimitsFromEnv({})
-  check('🟢 env 가 없으면 기본값 — 하루 $0.20 · 회차 6 · 여유 1.5',
-    d.limits.dailyUsd === 0.2 && d.limits.runRequestCap === 6 && d.limits.headroomMultiplier === 1.5)
-  check('🔴 기본값 $0.20은 그대로이고 코드 천장은 $0.90이다(D50 준비 · 11-19 승인 총비용 안)',
-    COMMENT_LOOP_DAILY_USD_DEFAULT === 0.2 && COMMENT_LOOP_DAILY_USD_MAX === 0.9)
-  const atCap = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.9' })
-  check('🟢 env $0.90(천장)까지는 그대로 읽는다', atCap.limits.dailyUsd === 0.9)
-  const prev = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.5' })
-  check('🟢 env $0.50(옛 천장)은 그대로 읽는다 — 천장을 올려도 운영값은 env 를 바꿀 때까지 그대로다', prev.limits.dailyUsd === 0.5)
-  const hi = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '5' })
-  check('🔴 🔴 **env 가 $5 여도 코드 천장 $0.90으로 내린다**', hi.limits.dailyUsd === 0.9)
-  const lo = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.05' })
+  const daily = (raw: string) => ({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: raw })
+  const d = commentLoopLimitsFromEnv({}, null)
+  check('🟢 env 가 없으면 기본값 — 하루 $0.20 · 회차 10 · 여유 1.5',
+    d.limits.dailyUsd === 0.2 && d.limits.runRequestCap === 10 && d.limits.headroomMultiplier === 1.5)
+  check('🔴 반례⑦ 첫 댓글 회차 상한 기본값 10 = 한 글 후보 한 벌 + 같은 회차 재시도 한 벌(2 × BOOTSTRAP_SLOTS_PER_POST)',
+    d.limits.runRequestCap === 2 * BOOTSTRAP_SLOTS_PER_POST, `${d.limits.runRequestCap}`)
+  check('🟢 기본값은 그날 단계로 올라가지 않는다 — D50 날도 env 가 없으면 기본값', commentLoopLimitsFromEnv({}, 'd50').limits.dailyUsd === d.limits.dailyUsd)
+  // 🔴 천장 값은 상수에서 읽는다(값 고정은 stage-scheduler-check 의 비용 상한 정본 한 줄) — 여기는 단계 → 칸의 갈림만 본다
+  check('🔴 🔴 **그날 단계 천장 — d50 만 d50 칸 · d1~d30 과 모름(null)은 base 칸 · null 을 내지 않는다**',
+    commentDailyCapOf('d50') === COMMENT_DAILY_USD_CAP.d50
+    && [...RUNTIME_STAGES.filter((s) => s !== 'd50'), null].every((s) => commentDailyCapOf(s) === COMMENT_DAILY_USD_CAP.base)
+    && COMMENT_DAILY_USD_CAP.d50 > COMMENT_DAILY_USD_CAP.base)
+  check('🔴 단계는 기본값 없는 필수 인자다(부르는 곳마다 그날 단계를 넘긴다)', commentLoopLimitsFromEnv.length === 2)
+  for (const s of [...RUNTIME_STAGES, null]) {
+    const v = commentLoopLimitsFromEnv(daily('2.0'), s).limits.dailyUsd
+    check(`🔴 env $2.00 · 단계 ${s ?? '모름'} → ${s === 'd50' ? 'd50' : 'base'} 칸으로 내린다`,
+      v === (s === 'd50' ? COMMENT_DAILY_USD_CAP.d50 : COMMENT_DAILY_USD_CAP.base), String(v))
+  }
+  const atCap = commentLoopLimitsFromEnv(daily(String(COMMENT_DAILY_USD_CAP.base)), 'd30')
+  check('🟢 env = base 천장이면 그대로 읽는다', atCap.limits.dailyUsd === COMMENT_DAILY_USD_CAP.base)
+  for (const s of ['d50', 'd30', null] as const) {
+    const prev = commentLoopLimitsFromEnv(daily('0.5'), s)
+    check(`🟢 env $0.50 · 단계 ${s ?? '모름'} → $0.50 그대로 — 천장을 올려도 운영값은 env 를 바꿀 때까지 그대로다`, prev.limits.dailyUsd === 0.5)
+  }
+  const mid = (COMMENT_DAILY_USD_CAP.base + COMMENT_DAILY_USD_CAP.d50) / 2
+  check('🔴 env 가 두 칸 사이면 — D50 날은 env 그대로(낮추기만) · D30 날은 base 로 내린다 = min(env, 그날 천장)',
+    commentLoopLimitsFromEnv(daily(String(mid)), 'd50').limits.dailyUsd === mid
+    && commentLoopLimitsFromEnv(daily(String(mid)), 'd30').limits.dailyUsd === COMMENT_DAILY_USD_CAP.base)
+  const hi = commentLoopLimitsFromEnv(daily('5'), null)
+  check('🔴 🔴 **env 가 $5 여도 그날 단계 천장(모름 → base)으로 내린다**', hi.limits.dailyUsd === COMMENT_DAILY_USD_CAP.base)
+  const lo = commentLoopLimitsFromEnv(daily('0.05'), 'd50')
   check('🟢 낮추는 것은 된다 — $0.05', lo.limits.dailyUsd === 0.05)
-  const bad = commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.dailyUsd]: '0.2O' })
-  check('🔴 오타는 기본값이 아니라 보류다(null)', bad.limits.dailyUsd === null)
-  check('🔴 회차 상한 2.5 → 보류', commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.runRequestCap]: '2.5' }).limits.runRequestCap === null)
+  for (const s of ['d50', null] as const) {
+    const bad = commentLoopLimitsFromEnv(daily('0.2O'), s)
+    check(`🔴 오타는 기본값이 아니라 보류다(null) — 단계 ${s ?? '모름'}에서도 천장으로 덮지 않는다`, bad.limits.dailyUsd === null)
+  }
+  check('🔴 회차 상한 2.5 → 보류', commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.runRequestCap]: '2.5' }, null).limits.runRequestCap === null)
   check('🔴 여유 배수 0.5 → 보류(1 미만은 예약이 추정 오차를 못 덮는다)',
-    commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.headroomMultiplier]: '0.5' }).limits.headroomMultiplier === null)
+    commentLoopLimitsFromEnv({ [COMMENT_LOOP_BUDGET_ENV.headroomMultiplier]: '0.5' }, null).limits.headroomMultiplier === null)
+
+  /**
+   * 🔴 **러너의 그날 단계 = 추가 댓글과 같은 판독**(`followupStageOf(decisionStageEnv(env), now)`).
+   *    오늘 표식 · 그날 결정 전의 어제 표식만 단계를 낸다. 표식 없음 · 깨짐 · 이틀 낡음은 모름 → base(유료 생성을 닫지 않는다).
+   */
+  const at = new Date(NOW)
+  const today = kstDateString(at)
+  const yesterday = kstDateString(new Date(NOW - 864e5))
+  const twoDaysAgo = kstDateString(new Date(NOW - 2 * 864e5))
+  const runnerEnv = (mark: string | undefined, release: string) => ({
+    ...daily('2.0'), SORAN_RELEASE_STAGE: release, SORAN_CAPACITY_STAGE: release,
+    ...(mark === undefined ? {} : { SORAN_STAGE_DECISION_DATE: mark }),
+  })
+  const runnerCap = (env: Record<string, string>): number | null =>
+    commentLoopLimitsFromEnv(env, followupStageOf(decisionStageEnv(env), at).stage).limits.dailyUsd
+  const cases: [string, Record<string, string>, number][] = [
+    ['오늘 결정 d50', runnerEnv(today, 'd50'), COMMENT_DAILY_USD_CAP.d50],
+    ['그날 결정 전 · 어제 표식 d50', runnerEnv(yesterday, 'd50'), COMMENT_DAILY_USD_CAP.d50],
+    ['오늘 결정 d30', runnerEnv(today, 'd30'), COMMENT_DAILY_USD_CAP.base],
+    ['표식 없음(consumer 미경유) · 칸은 d50', runnerEnv(undefined, 'd50'), COMMENT_DAILY_USD_CAP.base],
+    ['깨진 표식 · 칸은 d50', runnerEnv('today', 'd50'), COMMENT_DAILY_USD_CAP.base],
+    ['이틀 낡은 표식 d50', runnerEnv(twoDaysAgo, 'd50'), COMMENT_DAILY_USD_CAP.base],
+  ]
+  for (const [name, env, want] of cases) {
+    const got = runnerCap(env)
+    check(`🔴 러너 그날 단계 — ${name} → ${want === COMMENT_DAILY_USD_CAP.d50 ? 'd50' : 'base'} 칸 · null 아님`, got === want, String(got))
+  }
+  const runnerSource = readFileSync('scripts/persona-comment-loop.mts', 'utf-8')
+  check('🔴 연결: 러너가 그날 단계를 한 번 읽어 세션 상한과 장부 관문에 같은 값을 넘긴다',
+    /const day = followupStageOf\(decisionStageEnv\(process\.env\), now\)/.test(runnerSource)
+    && /commentLoopLimitsFromEnv\(process\.env, day\.stage\)/.test(runnerSource)
+    && /readCostSignals\(now, day\.stage, process\.env/.test(runnerSource)
+    && (runnerSource.match(/commentLoopLimitsFromEnv\(/g) ?? []).length === 1
+    && (runnerSource.match(/readCostSignals\(/g) ?? []).length === 1)
   check('🔴 env 이름이 공급·감사와 다르다',
     Object.values(COMMENT_LOOP_BUDGET_ENV).every((n) => n.startsWith('SORAN_PERSONA_COMMENT_')))
 }
@@ -213,7 +273,7 @@ const fakeFetch = (inTokens: number, outTokens: number): typeof globalThis.fetch
     countCalls = 0; genCalls = 0
     const dir = mkdtempSync(join(tmpdir(), 'soran-comment-loop-ledger-'))
     if (spent > 0) seedSpent(dir, spent)
-    const session = new SupplyLlmSession({ runId: 'loop-check', dir, limits: commentLoopLimitsFromEnv({}).limits, now: () => day })
+    const session = new SupplyLlmSession({ runId: 'loop-check', dir, limits: commentLoopLimitsFromEnv({}, null).limits, now: () => day })
     process.env.GEMINI_API_KEY = 'test-key-not-real'
     globalThis.fetch = fakeFetch(1805, 231)
     try {
@@ -260,7 +320,7 @@ console.log('\n④-b 🔴 thinkingLevel 계약 — 실제 요청 body · 네트�
   const callWith = async (stage: 'commentGen' | 'commentFollowupGen', level: Parameters<typeof thinkingLevelVerdict>[1]) => {
     bodies.length = 0; sent = 0
     const dir = mkdtempSync(join(tmpdir(), 'soran-comment-thinking-'))
-    const session = new SupplyLlmSession({ runId: 'thinking-check', dir, limits: commentLoopLimitsFromEnv({}).limits, now: () => day })
+    const session = new SupplyLlmSession({ runId: 'thinking-check', dir, limits: commentLoopLimitsFromEnv({}, null).limits, now: () => day })
     process.env.GEMINI_API_KEY = 'test-key-not-real'
     globalThis.fetch = capture
     try {
@@ -333,7 +393,7 @@ console.log('\n⑥ 오케스트레이터 — 단계·모델 관문 · 관문 정
   const noStore = new Proxy({}, { get: () => { throw new Error('시도 기억 저장소에 닿았다') } }) as AttemptStore
   const deps = (stage: string | undefined, over: Partial<Parameters<typeof runCommentLoop>[0]> = {}) => ({
     prisma: noDb, now: new Date(NOW), env: { SORAN_PERSONA_COMMENT_STAGE: stage }, live: true,
-    source: noSource, canon: canonOk, makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: 6,
+    source: noSource, canon: canonOk, makeGenerate: () => gen, generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT,
     attemptStore: noStore, ...over,
   })
   for (const stage of [undefined, 'shadow', 'bootstrap-review', 'organic', 'release', 'bootstrap-autoo']) {
@@ -627,7 +687,8 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
    *
    *    · 14:20 KST 발행 · 20분 간격 3회차(+15 · +35 · +55분) — 전부 60분 window 안
    *    · 경쟁 대상 글은 발행 시각만 다르다 — 대상 수 1 → 2 → 3 은 정본 필터가 만든다
-   *    · 회차 provider 호출 상한은 운영 기본(runRequestCap) → 이 글의 호출 기회 5 → 3 → 2
+   *    · 회차 provider 호출 상한은 운영 기본(runRequestCap 10) → 이 글의 호출 10(한 벌 5 + 같은 회차 재시도 5) → 5 → 0
+   *      (2026-11-25 회차 안 재시도 · 조합 15개를 반복 없이 다 쓰면 3회차는 보낼 새 조합이 없다)
    *    · 모든 후보가 Gate 에서 막힌다(생성문이 글 본문 그대로 → ① 복제) → 적재 0 → 다음 회차가 읽는 DB 상태는 그대로다
    */
   const MIN = 60_000
@@ -677,18 +738,21 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
     capStates: async () => new Map(personas.map((p) => [p.code, { limits: { dailyCap: 99, weeklyCap: 999 }, used: { usedToday: 0, usedWeek: 0 } }])),
   })
 
-  /** 🔴 DB 는 읽기 몇 개만 안다. create · $transaction 등 그 밖의 접근은 `bypass` 에 남는다 — 0 이어야 한다 */
-  const makeDb = () => {
+  /**
+   * 🔴 DB 는 읽기 몇 개만 안다. create · $transaction 등 그 밖의 접근은 `bypass` 에 남는다 — 0 이어야 한다.
+   *    오늘 자리는 운영과 같은 두 읽기로 정한다 — 오늘 관리형 글 수(`managedPosts` × 자리 5) · 오늘 발행한 Persona 댓글 수(`publishedToday`).
+   */
+  const makeDb = (o: { managedPosts?: number; publishedToday?: number } = {}) => {
     const bypass: string[] = []
     const calls = { sweepFind: 0 }
     const known: Record<string, unknown> = {
       personaApprovalQueue: new Proxy({
         findMany: async () => { calls.sweepFind += 1; return [] },
       }, { get: (t, k) => (k in t ? (t as Record<string | symbol, unknown>)[k] : (bypass.push(`personaApprovalQueue.${String(k)}`), async () => { throw new Error('우회') })) }),
-      comment: { findMany: async () => [], count: async () => 0 },
+      comment: { findMany: async () => [], count: async () => o.publishedToday ?? 0 },
       personaGlobalSwitch: { findUnique: async () => null },
-      // 🔴 오늘 예산(`countManagedPostsToday`)이 읽는 모양 — 관리형 Persona 글 6편 × 운영 예산 자리 5 = 30자리
-      post: { findMany: async () => Array.from({ length: 6 }, () => ({
+      // 🔴 오늘 예산(`countManagedPostsToday`)이 읽는 모양 — 기본은 관리형 Persona 글 6편 × 운영 예산 자리 5 = 30자리
+      post: { findMany: async () => Array.from({ length: o.managedPosts ?? 6 }, () => ({
         source: 'SYSTEM', status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
         persona: { code: 'P02' }, operatorWriterId: null, author: null, comments: [],
       })) },
@@ -715,7 +779,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       o.sent.push({ round: o.round, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
       return { ok: true, text: o.text ?? BODY, errorCode: null }
     },
-    generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+    generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0,
     attemptStore: o.store,
   })
 
@@ -751,18 +815,21 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
 
     check('🟢 재현 모양 — 세 회차 모두 발행 후 60분 window 안 · 20분 간격',
       ROUND_OFFSETS_MIN.every((m) => m * MIN <= WINDOW_MS) && ROUND_OFFSETS_MIN.every((m, i) => i === 0 || m - ROUND_OFFSETS_MIN[i - 1]! === 20))
-    check('🔴 재현 모양 유지 — 이 글의 호출 기회 5 → 3 → 2 (호출 수를 잃지 않고 새 조합으로 채운다)',
-      perRound.join(',') === '5,3,2', `호출 ${perRound.join(',')}`)
-    check('🔴 구조 상한이 첫 댓글 한 글의 provider 기회를 운영 예산 기준 5보다 크게 만들지 않는다',
-      perRound[0] !== undefined && perRound[0] <= BOOTSTRAP_SLOTS_PER_POST,
-      `첫 회차 ${perRound[0] ?? '없음'} · 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST}`)
+    check('🔴 재현 모양 — 이 글의 호출 10 → 5 → 0 (1회차는 한 벌 + 같은 회차 재시도 한 벌 · 새 조합을 다 쓰면 멈춘다)',
+      perRound.join(',') === '10,5,0', `호출 ${perRound.join(',')}`)
+    const r1Lines = reports[0]!.lines
+    const retryAt = r1Lines.findIndex((l) => l.startsWith('재시도 — 후보가 모두 관문에 막힌 글'))
+    const r1Pass1 = r1Lines.slice(0, retryAt < 0 ? r1Lines.length : retryAt).filter((l) => l.includes(`→ 글 ${TARGET_ID.slice(0, 8)}`)).length
+    check('🔴 구조 상한 — 한 라운드의 한 글 provider 기회는 운영 예산 기준 5 이하 · 회차(두 라운드 합)는 2 × 5 이하',
+      perRound[0] !== undefined && perRound[0] <= 2 * BOOTSTRAP_SLOTS_PER_POST && r1Pass1 <= BOOTSTRAP_SLOTS_PER_POST && retryAt > 0,
+      `첫 회차 ${perRound[0] ?? '없음'} · 라운드 1 ${r1Pass1} · 예산 기준 ${BOOTSTRAP_SLOTS_PER_POST}`)
     check('🔴 🔴 같은 글 60분 window — provider 로 보낸 post×Persona×role 조합 반복 0 (이전 회차 실패를 기억한다)',
       repeated.length === 0,
       `반복 ${repeated.length}개 — ${repeated.map(([k, rounds]) => `${k}(회차 ${rounds.join('·')})`).join(' · ')}`)
-    check('🔴 총 10회 호출이면 distinct 조합도 10 — 후속 회차가 새 조합으로 채운다',
-      onTarget.length === 10 && seen.size === 10, `호출 ${onTarget.length} · distinct ${seen.size}`)
-    check('🔴 Gate 우회 0 — 이 글 호출 10회 전부 진짜 관문에서 막힘(ENQUEUE_BLOCKED) · 첫 댓글 적재 0',
-      steps.length === 10 && steps.every((x) => x === 'ENQUEUE_BLOCKED') && reports.every((r) => r.enqueued === 0),
+    check('🔴 총 15회 호출이면 distinct 조합도 15 — 재시도 · 후속 회차가 새 조합으로 채운다',
+      onTarget.length === 15 && seen.size === 15, `호출 ${onTarget.length} · distinct ${seen.size}`)
+    check('🔴 Gate 우회 0 — 이 글 호출 15회 전부 진짜 관문에서 막힘(ENQUEUE_BLOCKED) · 첫 댓글 적재 0',
+      steps.length === 15 && steps.every((x) => x === 'ENQUEUE_BLOCKED') && reports.every((r) => r.enqueued === 0),
       `${steps.join(',')}`)
     check('🔴 Queue · publish 우회 0 — 가짜 DB 의 읽기 밖 접근 0 · 발행 sweep 은 회차마다 앞뒤로 돈다',
       db.bypass.length === 0 && db.calls.sweepFind === 6 && reports.every((r) => r.sweepBefore !== null && r.sweepAfter !== null),
@@ -772,7 +839,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       second.attemptExcluded > 0 && second.lines.some((l) => l.includes('이미 보낸 조합')), `제외 ${second.attemptExcluded}`)
     const read = store.read(PUBLISHED_MS + 55 * MIN)
     check('🔴 기억의 모양 — 조합·시각·단계·실패 관문만(전부 ENQUEUE_BLOCKED + 실패 관문 기록) · 후보 본문 없음 · 0600',
-      read.ok && read.entries.filter((e) => e.postId === TARGET_ID).length === 10
+      read.ok && read.entries.filter((e) => e.postId === TARGET_ID).length === 15
       && read.entries.every((e) => e.step === 'ENQUEUE_BLOCKED' && e.failedGates.some((g) => g.startsWith('①:')))
       && !readFileSync(store.path, 'utf-8').includes(BODY.slice(0, 10))
       && (statSync(store.path).mode & 0o777) === 0o600 && readdirSync(dir).length === 1,
@@ -855,7 +922,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
             sent.push({ round: i + 1, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole })
             return { ok: true, text: gen(input.personaCode), errorCode: null }
           },
-          generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          generation: { ok: true, reason: '' }, runRequestCap: commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0,
           attemptStore: store,
         })
         reports.push(r)
@@ -880,7 +947,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       for (const [i, offsetMin] of ROUND_OFFSETS_MIN.entries()) {
         const nowMs = PUB + offsetMin * MIN
         const mat = await materializeTargets({
-          source: autoLaneTargetSource(replaySource(), nowMs), limit: commentLoopLimitsFromEnv({}).limits.runRequestCap ?? 0,
+          source: autoLaneTargetSource(replaySource(), nowMs), limit: commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0,
           nowMs, windowMs: RATIO_WINDOW_DAYS * 86_400_000, attemptedCombos: attempted,
         })
         for (const t of mat.targets) {
@@ -916,12 +983,281 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       s2.outs.filter((o) => o.round === 1 && LOCKED_CODES.includes(o.persona)).every((o) => o.step === 'ENQUEUE_BLOCKED' && o.line.includes('⑧ 후보 원인'))
       && s2.outs.some((o) => o.round === 1 && LOCKED_CODES.includes(o.persona)))
     const blockedR1 = new Set(s2.outs.filter((o) => o.round === 1 && o.step === 'ENQUEUE_BLOCKED' && o.line.includes('⑧ 후보 원인')).map((o) => o.persona))
-    check('🔴 🔴 S2 — ⑧ 로 막힌 Persona 는 그 글에서 역할만 바꿔 다시 부르지 않는다(post × Persona)',
-      blockedR1.size > 0 && later.every((x) => !blockedR1.has(x.personaCode)), [...blockedR1].join(','))
-    check('🔴 S2 — 다음 회차가 다른 Persona 로 이어 60분 안에 적재한다',
-      s2.created.length === 1 && !blockedR1.has(s2.created[0]!.personaCode))
-    check('🔴 S2 — planner skip 이 원인별로 로그에 남는다(⑧ 시도)',
-      s2.reports.slice(1).some((r) => r.lines.some((l) => l.startsWith('planner skip ⑧ 시도'))))
+    // 🔴 같은 회차 재시도(라운드 2)까지 포함해 ⑧ 로 막힌 Persona 는 그 글에 한 번만 불린다
+    check('🔴 🔴 S2 — ⑧ 로 막힌 Persona 는 그 글에서 역할만 바꿔 다시 부르지 않는다(post × Persona · 같은 회차 재시도 포함)',
+      blockedR1.size > 0 && [...blockedR1].every((c) => s2.sent.filter((x) => x.personaCode === c).length === 1)
+      && later.every((x) => !blockedR1.has(x.personaCode)), [...blockedR1].join(','))
+    check('🔴 🔴 S2 — 같은 회차 재시도가 다른 Persona 로 이어 첫 회차(+15분)에 적재한다(다음 회차를 기다리지 않는다)',
+      s2.created.length === 1 && !blockedR1.has(s2.created[0]!.personaCode)
+      && s2.outs.some((o) => o.round === 1 && o.step === 'ENQUEUED') && later.length === 0,
+      s2.outs.map((o) => `${o.round}:${o.persona}:${o.step}`).join(' '))
+    const s2r1 = s2.reports[0]!.lines
+    const s2Retry = s2r1.findIndex((l) => l.startsWith('재시도 — 후보가 모두 관문에 막힌 글 1편'))
+    check('🔴 S2 — planner skip 이 원인별로 로그에 남는다(⑧ 시도 · 재시도 라운드)',
+      s2Retry >= 0 && s2r1.slice(s2Retry).some((l) => l.startsWith('planner skip ⑧ 시도')))
+  }
+
+  // ── R. 🔴 회차 안 재시도(라운드 2) — 후보가 모두 관문에 막힌 글만 · 기억을 다시 읽어 한 번만 (2026-11-25 D50 첫 댓글 10분) ──
+  {
+    /**
+     * 운영 실측(11-25 16:00 글): 공개 깨움 회차가 첫 댓글 후보 5건을 모두 관문에 막혀 적재 0 → 다음 시도는 20분 뒤 회차였다.
+     * 이 블록은 **운영 경로 그대로**(`runCommentLoop` → 진짜 target source 필터 → `materializeTargets` → pipeline → 진짜 관문)를 돌리고
+     * provider · DB 쓰기만 가짜다. 막히는 후보는 글 본문을 그대로 쓴다(① 복제 → ENQUEUE_BLOCKED), 통과 후보는 깨끗한 문장이다.
+     */
+    const RX = 'cmw9retryx0001xm0aaaaaaaa1'
+    const RY = 'cmw9retryy0001xm0bbbbbbbb2'
+    const PUB_R = Date.parse('2026-11-25T07:00:00.000Z') // 16:00 KST
+    const NOW_R = PUB_R + 12 * MIN // 읽는 시간(최대 9분)이 지난 뒤
+    const PASS_TEXT = '이런 얘기 들으니 마음이 편해지네'
+    const makeRetryDb = (day: Parameters<typeof makeDb>[0] = {}) => {
+      const base = makeDb(day)
+      const created: { dedupKey: string; personaCode: string }[] = []
+      const tx = {
+        post: {
+          findUnique: async ({ where }: { where: { id: string } }) => ({ id: where.id, boardType: 'FREE', status: 'PUBLISHED', updatedAt: new Date(PUB_R) }),
+          updateMany: async () => ({ count: 1 }),
+        },
+        personaApprovalQueue: {
+          create: async ({ data }: { data: { dedupKey: string; persona: { connect: { code: string } } } }) => {
+            created.push({ dedupKey: data.dedupKey, personaCode: data.persona.connect.code })
+            return { id: `q${created.length}` }
+          },
+        },
+      }
+      const prisma = new Proxy(base.prisma as unknown as Record<string, unknown>, {
+        get: (t, k) => (k === '$transaction' ? async (fn: (x: typeof tx) => Promise<unknown>) => fn(tx) : t[k as string]),
+      }) as unknown as PrismaClient
+      return { ...base, prisma, created }
+    }
+    type Call = { n: number; postId: string; personaCode: string; role: string }
+    /** 한 회차 — `answer(call)` 이 이 호출의 생성 결과를 정한다 */
+    const retryRound = async (o: {
+      posts: readonly SourcePost[]; runRequestCap: number
+      answer: (c: Call) => { ok: boolean; text: string | null; errorCode: string | null }
+      /** 오늘 자리 — 생략하면 30자리(관리형 글 6편) */
+      day?: Parameters<typeof makeDb>[0]
+    }) => {
+      const store = createAttemptStore({ dir: freshDir() })
+      const db = makeRetryDb(o.day)
+      const calls: Call[] = []
+      const report = await runCommentLoop({
+        prisma: db.prisma, now: new Date(NOW_R), env: ENV, live: true,
+        source: sourceOf(o.posts, POOL.map((c) => persona(c))), canon,
+        makeGenerate: () => async ({ input }) => {
+          const c: Call = { n: calls.length + 1, postId: input.post.id, personaCode: input.personaCode, role: input.reactionRole }
+          calls.push(c)
+          return o.answer(c)
+        },
+        generation: { ok: true, reason: '' }, runRequestCap: o.runRequestCap, attemptStore: store,
+      })
+      const comboOf = (c: { postId: string; personaCode: string; role: string }) => `${c.postId}:${c.personaCode}:${c.role}`
+      const retryLine = report.lines.findIndex((l) => l.startsWith('재시도 — '))
+      return { report, calls, db, store, comboOf, retryLine, distinct: new Set(calls.map(comboOf)).size }
+    }
+    const blockText = { ok: true, text: BODY, errorCode: null }
+    const passText = { ok: true, text: PASS_TEXT, errorCode: null }
+    const cap = commentLoopLimitsFromEnv({}, null).limits.runRequestCap ?? 0
+
+    // ① 라운드 1 이 모두 관문 막힘 → 라운드 2 가 다른 Persona 로 적재 · 같은 조합 재전송 0
+    {
+      const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, answer: (c) => (c.n <= 5 ? blockText : passText) })
+      const round1 = r.calls.filter((c) => c.n <= 5)
+      const enq = r.report.outcomes.find((o) => o.step === 'ENQUEUED')
+      console.log(`     R① 라운드 1 ${round1.map((c) => `${c.personaCode}/${c.role}`).join(' · ')} → 라운드 2 적재 ${enq ? `${enq.personaCode}/${enq.reactionRole}` : '없음'}`)
+      check('🔴 🔴 반례① 라운드 1 이 모두 관문 막힘(5건) → 같은 회차 라운드 2 가 적재 1 · PENDING 1행',
+        r.report.enqueued === 1 && r.db.created.length === 1 && r.report.providerCalls === 6 && r.calls.length === 6
+        && r.report.outcomes.filter((o) => o.step === 'ENQUEUE_BLOCKED').length === 5 && r.retryLine > 0,
+        `적재 ${r.report.enqueued} · 호출 ${r.report.providerCalls} · 줄 ${r.retryLine}`)
+      check('🔴 🔴 반례① 라운드 2 는 라운드 1 에서 보낸 조합을 다시 보내지 않는다(재전송 0 · 적재 조합은 새 조합)',
+        r.distinct === r.calls.length && enq !== undefined
+        && !round1.some((c) => r.comboOf(c) === `${enq.postId}:${enq.personaCode}:${enq.reactionRole}`)
+        && r.report.outcomes.every((o) => o.step !== 'ATTEMPT_BLOCKED'),
+        `호출 ${r.calls.length} · distinct ${r.distinct}`)
+      check('🟢 반례① 줄 — "재시도 — 후보가 모두 관문에 막힌 글 1편 · 후보 N건" · 이미 보낸 조합 제외 줄 · 요약 칸 합계',
+        r.report.lines.some((l) => /^재시도 — 후보가 모두 관문에 막힌 글 1편 · 후보 \d+건$/.test(l))
+        && r.report.lines.slice(r.retryLine).some((l) => /^이미 보낸 조합 \d+건 제외/.test(l))
+        && r.report.attemptExcluded > 0 && r.report.targets === 1 && r.report.outcomes.length === 6)
+      const mem = r.store.read(NOW_R)
+      check('🔴 반례① 두 라운드 모두 시도 기억에 결과까지 남는다(STARTED 0 · 6건)',
+        mem.ok && mem.entries.length === 6 && mem.entries.every((e) => e.step !== 'STARTED'),
+        mem.ok ? mem.entries.map((e) => e.step).join(',') : mem.reason)
+    }
+
+    // ② 라운드 1 에서 적재된 글은 라운드 2 대상이 아니다
+    {
+      const seenY = { n: 0 }
+      const r = await retryRound({
+        posts: [postAt(RX, PUB_R, '동네 산책'), postAt(RY, PUB_R - MIN, '오늘 저녁 반찬')], runRequestCap: cap,
+        answer: (c) => {
+          if (c.postId === RX) return blockText
+          seenY.n += 1
+          return seenY.n === 1 ? blockText : passText
+        },
+      })
+      const onY = r.calls.filter((c) => c.postId === RY)
+      const afterRetry = r.retryLine < 0 ? [] : r.report.lines.slice(r.retryLine).filter((l) => / → 글 /.test(l))
+      check('🔴 🔴 반례② 라운드 1 에서 적재된 글(관문 막힘 1 + 적재 1)은 라운드 2 대상이 아니다 — 재시도는 막히기만 한 글 1편',
+        onY.length === 2 && r.db.created.length === 1 && r.report.lines.some((l) => l.startsWith('재시도 — 후보가 모두 관문에 막힌 글 1편'))
+        && afterRetry.length > 0 && afterRetry.every((l) => l.includes(`→ 글 ${RX.slice(0, 8)}`)),
+        `Y 호출 ${onY.length} · 재시도 줄 ${afterRetry.length}`)
+      check('🔴 반례⑤ 두 라운드 합 providerCalls ≤ 회차 상한 · 호출 수 = provider 실제 호출',
+        r.report.providerCalls <= cap && r.report.providerCalls === r.calls.length && r.distinct === r.calls.length,
+        `${r.report.providerCalls}/${cap}`)
+      const pure = retryPostIdsOf([
+        { postId: 'a', personaCode: 'P1', reactionRole: 'other', step: 'ENQUEUE_BLOCKED', reason: '', plan: null },
+        { postId: 'a', personaCode: 'P2', reactionRole: 'other', step: 'ENQUEUED', reason: '', plan: null },
+        { postId: 'b', personaCode: 'P1', reactionRole: 'other', step: 'ENQUEUE_BLOCKED', reason: '', plan: null },
+        { postId: 'c', personaCode: 'P1', reactionRole: 'other', step: 'PROVIDER_FAILED', reason: '', plan: null },
+        { postId: 'd', personaCode: 'P1', reactionRole: 'other', step: 'ATTEMPT_BLOCKED', reason: '', plan: null },
+      ])
+      check('🔴 반례②④ 재시도 대상 판정 — 관문 막힘 있고 적재 0 인 글만(적재된 글 · provider 실패만 · 시도 기록 막힘만은 아니다)',
+        [...pure].join(',') === 'b', [...pure].join(','))
+    }
+
+    // ③ 남은 호출 0 이면 라운드 2 없음
+    {
+      const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: BOOTSTRAP_SLOTS_PER_POST, answer: () => blockText })
+      check('🔴 반례③ 남은 호출 0(상한 5 · 라운드 1 이 5 사용) → 라운드 2 없음 · 이유 한 줄',
+        r.report.providerCalls === 5 && r.calls.length === 5 && r.retryLine < 0
+        && r.report.lines.some((l) => l.startsWith('재시도 없음 — 후보가 모두 관문에 막힌 글 1편 · 남은 호출 0')),
+        `호출 ${r.report.providerCalls}`)
+    }
+
+    // ④ provider 실패만 있었던 글 · 라운드 1 이 멈춘 경우 → 라운드 2 없음
+    {
+      const failOnly = await retryRound({
+        posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, answer: () => ({ ok: false, text: null, errorCode: 'HTTP_503' }),
+      })
+      check('🔴 반례④ provider 실패만 있었던 글 → 라운드 2 없음(재시도 줄 0 · 호출 = 라운드 1 후보 수)',
+        failOnly.report.providerCalls === 5 && failOnly.retryLine < 0
+        && !failOnly.report.lines.some((l) => l.startsWith('재시도')),
+        `호출 ${failOnly.report.providerCalls}`)
+      const stopped = await retryRound({
+        posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap,
+        answer: (c) => (c.n === 1 ? blockText : { ok: false, text: null, errorCode: 'HTTP_400' }),
+      })
+      check('🔴 반례④ 라운드 1 이 stoppedReason 으로 멈췄으면(관문 막힘이 있어도) 라운드 2 없음',
+        stopped.report.providerCalls === 2 && stopped.retryLine < 0
+        && stopped.report.lines.some((l) => l.startsWith('재시도 없음 — 후보가 모두 관문에 막힌 글 1편 · 라운드 1 이 멈췄다')),
+        `호출 ${stopped.report.providerCalls}`)
+    }
+
+    // ⑤ 두 라운드 합 ≤ limit — 상한 7 이면 라운드 2 는 남은 2 만
+    {
+      const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: 7, answer: () => blockText })
+      check('🔴 반례⑤ 두 라운드 합 providerCalls ≤ 회차 상한 — 상한 7 · 라운드 1 5 → 라운드 2 는 남은 2 만',
+        r.report.providerCalls === 7 && r.calls.length === 7 && r.distinct === 7 && r.retryLine > 0,
+        `호출 ${r.report.providerCalls}`)
+    }
+
+    // ⑥ 라운드 3 없음 — 상한이 넉넉하고 새 조합이 남아도 두 라운드에서 멈춘다
+    {
+      const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: 25, answer: () => blockText })
+      check('🔴 반례⑥ 라운드 3 없음 — 상한 25 · 새 조합이 남아도 두 라운드(5 + 5)에서 멈춘다',
+        r.report.providerCalls === 10 && r.calls.length === 10 && r.distinct === 10
+        && r.report.lines.filter((l) => l.startsWith('재시도 — ')).length === 1,
+        `호출 ${r.report.providerCalls}`)
+    }
+
+    /**
+     * 🔴 **밤 5-b (2026-11-28) — 호출 한도(돈)와 자리 한도(적재 수)를 뗀다.**
+     *    운영 모양: 자정 직후 60분 창 안 관리형 글 1편 → 오늘 남은 자리 5 · 회차 호출 상한 10(기본값).
+     *    옛 식은 재시도 한도를 `min(25, 회차 상한, 남은 자리) − 라운드 1 호출` 로 잡아 라운드 1 이 막힌 호출 5 를 쓰면 0 이었다.
+     *    오늘 자리는 운영과 같은 두 읽기로만 정한다 — 오늘 관리형 글(`managedPosts` × 5) · 오늘 발행 수(하루 절대 상한 잔량).
+     *    🟡 "라운드 1 뒤 남은 자리 0 인데 막힌 글이 있다" 는 한 회차 안에서 생기지 않는다 — 라운드 1 후보 ≤ 자리이고 막힌 후보는 적재가 아니다.
+     */
+    {
+      const RZ = 'cmw9retryz0001xm0cccccccc3'
+      const midnight = { managedPosts: 1 }
+      const dayLeft = (n: number) => ({ publishedToday: BOOTSTRAP_DAILY_MAX - n })
+      type RetryRun = Awaited<ReturnType<typeof retryRound>>
+      /** 라운드 1 — 첫 `재시도` 줄 앞의 결과 줄 수만큼이 라운드 1 호출이다(이 시나리오는 결과마다 provider 1회) */
+      const roundOneOf = (r: RetryRun) => {
+        const at = r.report.lines.findIndex((l) => l.startsWith('재시도'))
+        const n = r.report.lines.slice(0, at < 0 ? undefined : at).filter((l) => / → 글 /.test(l)).length
+        return { calls: r.calls.slice(0, n), created: r.report.outcomes.slice(0, n).filter((o) => o.step === 'ENQUEUED').length }
+      }
+      const budgetLine = (r: RetryRun): string => r.report.lines.find((l) => l.startsWith('예산 ')) ?? ''
+      const retryLines = (r: RetryRun): string => r.report.lines.filter((l) => l.startsWith('재시도')).join(' / ')
+
+      // ① 자리 5 · 후보 5 전부 관문 막힘 · 호출 상한 10 → 재시도가 돈다
+      {
+        const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, day: midnight, answer: () => blockText })
+        const one = roundOneOf(r)
+        check('🟢 밤 5-b 모양 — 자정 직후 오늘 남은 자리 5 · 회차 호출 상한 10(기본값)',
+          budgetLine(r).endsWith('→ 남은 5건') && cap === 10, budgetLine(r))
+        check('🔴 🔴 밤 5-b 반례① 자리 5 · 라운드 1 후보 5 전부 관문 막힘 · 호출 상한 10 → 재시도가 돈다(재시도 5 = min(10 − 5, 5 − 0) · 합 ≤ 10)',
+          r.retryLine > 0 && one.calls.length === 5 && r.calls.length - one.calls.length === 5
+          && r.report.providerCalls === r.calls.length && r.report.providerCalls <= cap && r.distinct === r.calls.length
+          && !r.report.lines.some((l) => l.startsWith('재시도 없음')),
+          `라운드 1 ${one.calls.length} · 재시도 ${r.calls.length - one.calls.length} · ${retryLines(r)}`)
+        check('🔴 밤 5-b 반례④ 라운드 1 은 옛 식 그대로 — 호출 5 = min(호출 상한 10, 자리 5) · 적재 0',
+          one.calls.length === 5 && one.created === 0, `${one.calls.length} · ${one.created}`)
+        const first = await retryRound({
+          posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, day: midnight, answer: (c) => (c.n <= 5 ? blockText : passText),
+        })
+        check('🔴 🔴 밤 5-b 반례① 자정 첫 글 — 라운드 1 막힘 5 뒤 같은 회차 재시도가 적재 1(첫 댓글을 다음 회차로 미루지 않는다)',
+          first.report.enqueued === 1 && first.db.created.length === 1 && first.report.providerCalls === 6 && first.retryLine > 0,
+          `적재 ${first.report.enqueued} · 호출 ${first.report.providerCalls} · ${retryLines(first)}`)
+      }
+
+      // ② 오늘 남은 자리 0 → 재시도 안 돈다(라운드 1 도 없다)
+      {
+        const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, day: dayLeft(0), answer: () => blockText })
+        check('🔴 밤 5-b 반례② 오늘 남은 자리 0 → provider 0 · 재시도 줄 0 · 이유는 자리',
+          budgetLine(r).endsWith('→ 남은 0건') && r.calls.length === 0 && r.report.providerCalls === 0 && r.report.enqueued === 0
+          && !r.report.lines.some((l) => l.startsWith('재시도')) && (r.report.generationSkipped ?? '').startsWith('오늘 남은 자리 0'),
+          `${budgetLine(r)} · ${r.report.generationSkipped ?? ''}`)
+      }
+
+      // ③ 호출 상한을 라운드 1 이 다 썼으면 재시도 안 돈다(자리가 남아도)
+      {
+        const r = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: BOOTSTRAP_SLOTS_PER_POST, day: midnight, answer: () => blockText })
+        check('🔴 밤 5-b 반례③ 호출 상한 5 를 라운드 1 이 다 썼다(자리 5 남음) → 재시도 없음 · 이유 줄은 호출 상한을 말한다',
+          r.report.providerCalls === 5 && r.calls.length === 5 && r.retryLine < 0
+          && r.report.lines.includes('재시도 없음 — 후보가 모두 관문에 막힌 글 1편 · 남은 호출 0 (회차 호출 상한 5 · 사용 5 · 오늘 남은 자리 5)'),
+          retryLines(r))
+      }
+
+      // ④ 라운드 1 의 호출 수 · 적재 수는 바꾸기 전과 같다
+      {
+        const r = await retryRound({
+          posts: [postAt(RX, PUB_R, '동네 산책'), postAt(RY, PUB_R - MIN, '오늘 저녁 반찬'), postAt(RZ, PUB_R - 2 * MIN, '요즘 잠이 안 와요')],
+          runRequestCap: cap, day: dayLeft(2), answer: () => blockText,
+        })
+        const one = roundOneOf(r)
+        check('🔴 🔴 밤 5-b 반례④ 라운드 1 은 자리에 눌린 채다 — 자리 2 · 호출 상한 10 · 글 3편 → 라운드 1 호출 2(글 2편) · 적재 0',
+          budgetLine(r).endsWith('→ 남은 2건') && one.calls.length === 2 && new Set(one.calls.map((c) => c.postId)).size === 2 && one.created === 0,
+          `${budgetLine(r)} · 라운드 1 ${one.calls.map((c) => c.postId.slice(0, 10)).join(',')}`)
+        check('🔴 밤 5-b 반례④ 재시도는 라운드 1 에서 막힌 글에만 — 라운드 1 이 닿지 않은 글은 부르지 않는다(재시도 2 = 남은 자리)',
+          r.retryLine > 0 && r.calls.length - one.calls.length === 2
+          && r.calls.slice(one.calls.length).every((c) => one.calls.some((x) => x.postId === c.postId)) && !r.calls.some((c) => c.postId === RZ),
+          `재시도 ${r.calls.slice(one.calls.length).map((c) => c.postId.slice(0, 10)).join(',')}`)
+        const enq = await retryRound({
+          posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, day: midnight, answer: (c) => (c.n <= 2 ? blockText : passText),
+        })
+        check('🔴 밤 5-b 반례④ 라운드 1 에서 적재되면 옛 식과 같다 — 자리 5 · 막힘 2 → 3번째 적재 · 호출 3 · 재시도 줄 0',
+          enq.report.providerCalls === 3 && enq.report.enqueued === 1 && enq.db.created.length === 1
+          && !enq.report.lines.some((l) => l.startsWith('재시도')),
+          `호출 ${enq.report.providerCalls} · 적재 ${enq.report.enqueued}`)
+      }
+
+      // ⑤ 재시도 적재(와 호출)는 남은 자리 − 라운드 1 적재를 넘지 않는다
+      {
+        const r = await retryRound({
+          posts: [postAt(RX, PUB_R, '동네 산책'), postAt(RY, PUB_R - MIN, '오늘 저녁 반찬')],
+          runRequestCap: cap, day: dayLeft(2), answer: (c) => (c.n <= 2 ? blockText : passText),
+        })
+        check('🔴 🔴 밤 5-b 반례⑤ 재시도 적재 ≤ 남은 자리 — 자리 2 · 라운드 1 막힘 2 → 재시도 적재 2(글마다 1) · 회차 합 2 = 자리',
+          r.report.enqueued === 2 && r.db.created.length === 2 && r.report.providerCalls === 4 && r.retryLine > 0,
+          `적재 ${r.report.enqueued} · 행 ${r.db.created.length} · 호출 ${r.report.providerCalls}`)
+        const lone = await retryRound({ posts: [postAt(RX, PUB_R, '동네 산책')], runRequestCap: cap, day: dayLeft(2), answer: () => blockText })
+        const one = roundOneOf(lone)
+        check('🔴 🔴 밤 5-b 반례⑤ 재시도 호출도 남은 자리까지 — 자리 2 · 글 1편 전부 막힘 → 라운드 1 2 · 재시도 2(호출 상한이 8 남아도 글 자리 5 까지 가지 않는다)',
+          one.calls.length === 2 && lone.calls.length === 4 && lone.report.providerCalls === 4 && lone.retryLine > 0 && lone.distinct === 4,
+          `라운드 1 ${one.calls.length} · 합 ${lone.calls.length}`)
+      }
+    }
   }
 
   // ── 같은 Persona 의 다른 허용 role 은 별 조합 — planner feasible 단계에서 정확한 조합만 뺀다 ──
@@ -1061,7 +1397,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       prisma: makeDb().prisma, now: new Date(PUBLISHED_MS + 15 * MIN), env: ENV, live: false,
       source: sourceOf([postAt(TARGET_ID, PUBLISHED_MS, '동네 산책')], [persona('P14')]), canon,
       makeGenerate: () => { throw new Error('dry-run 에서 생성기를 만들면 안 된다') },
-      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: createAttemptStore({ dir }),
+      generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: createAttemptStore({ dir }),
     })
     check('🟢 E dry-run — 읽기 실패 경고를 보이되 쓰지 않는다(provider 0 · 파일 그대로)',
       dry.outcome === 'DRY_RUN' && dry.attemptWarnings.length === 1 && readFileSync(join(dir, ATTEMPT_JOURNAL_FILE), 'utf-8') === '{"version":1,"entries":[')
@@ -1102,7 +1438,7 @@ console.log('\n⑨ 🔴 첫 댓글 재시도 — 같은 글 60분 window 안에�
       prisma: makeDb().prisma, now: new Date(later), env: ENV, live: false,
       source: sourceOf([postAt(TARGET_ID, later - 10 * MIN, '동네 산책')], [persona('P14')]), canon,
       makeGenerate: () => { throw new Error('preview에서 생성기를 만들면 안 된다') },
-      generation: { ok: true, reason: '' }, runRequestCap: 6, attemptStore: createAttemptStore({ dir: previewDir }),
+      generation: { ok: true, reason: '' }, runRequestCap: COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT, attemptStore: createAttemptStore({ dir: previewDir }),
     })
     check('🔴 E-2 만료된 손상 장부여도 dry-run preview는 격리·초기화·새 파일 write 0',
       preview.outcome === 'DRY_RUN' && preview.providerCalls === 0

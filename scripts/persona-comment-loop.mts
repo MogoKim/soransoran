@@ -16,7 +16,8 @@
  *    · lease · 예산은 provider 호출 · DB write **전에** 본다 — lease 가 먼저, 유료 생성 전에 예산
  *    기계 사이는 발행 트랜잭션(Serializable · 글당 1건 재검사)이 막는다.
  * 🔴 **비용** — 댓글 전용 장부(`persona-comment-ledger`) · 하루 상한은 env(`SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`)가 정한다 —
- *    없으면 기본 $0.20 · 코드 천장 $0.90(`COMMENT_LOOP_DAILY_USD_MAX`)을 넘는 값은 천장으로 내린다.
+ *    없으면 기본 $0.20 · 그날 단계의 코드 천장(`commentDailyCapOf` — D50 날 $1.50 · 그 밖과 모름 $0.90)을 넘는 값은 천장으로 내린다.
+ *    그날 단계는 추가 댓글과 같은 판독(`followupStageOf`)이다 — 표식 없음 · 낡음 · 브레이크 날은 모름(→ $0.90).
  *
  * 종료 코드 — 0 정상(할 일이 없던 회차 포함) · 1 잠금/설정/예외 · 2 발행 오류(재시도 대상)가 남았다
  *
@@ -33,7 +34,8 @@ import { AUTO_COMMENT_THINKING_LEVEL, commentLoopLimitsFromEnv } from '../src/li
 import { leaseEntry, type LeaseProof, type PassContext } from './lib/runner-lease.mjs'
 import { readCostSignals, readLedgerToday } from './lib/ops-signals.mjs'
 import { followupEligibleFor, readFollowupContext, runFollowupPhase } from './lib/persona-comment-followup-run.mjs'
-import { followupLedgerRunIdOf, followupRunRequestCap } from '../src/lib/persona-comment-followup'
+import { followupLedgerRunIdOf, followupRunRequestCap, followupStageOf } from '../src/lib/persona-comment-followup'
+import { decisionStageEnv } from '../src/lib/scale-runtime'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 import { attemptStoreInLease, followupAttemptStoreInLease } from './lib/persona-comment-attempt-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -112,15 +114,18 @@ async function waitForReadingPosts(prisma: PrismaClient): Promise<void> {
 /** 🔴 `proof` — 커널 잠금 fd 증명을 받은 쪽만 회차를 돈다(타입이 요구한다). 첫 댓글 시도 기억 저장소도 이 증명에서 만든다 */
 async function runPass(prisma: PrismaClient, now: Date, pass: number, proof: LeaseProof, ctx: PassContext): Promise<number> {
   try {
-    const budget = commentLoopLimitsFromEnv(process.env)
+    // 🔴 그날 단계 — 세션 상한과 장부 관문이 **같은 값**을 쓴다(한 번만 읽는다). 모르면 null → base 천장
+    const day = followupStageOf(decisionStageEnv(process.env), now)
+    const budget = commentLoopLimitsFromEnv(process.env, day.stage)
     const missing = missingBudgetEnvNames(budget.limits)
+    console.log(`  예산  그날 단계 ${day.stage ?? '모름'} — ${day.reason}`)
     for (const n of budget.notes) console.log(`  예산  ${n}`)
     /**
      * 🔴 **예산 — 유료 생성 전에 본다**(정기 · 사건 · 복구가 같은 장부 · 같은 상한). 소진 · 보류 · 못 읽음이면
      *    provider 0(사전 계산 포함). 발행 sweep 은 돈다 — 이미 쓴 돈으로 만든 후보를 내는 데는 유료 호출이 없다.
      */
     const ledger = ((): Parameters<typeof generationGateOf>[0]['ledger'] => {
-      try { return readCostSignals(now, process.env as Record<string, string>).commentLedger } catch { return null }
+      try { return readCostSignals(now, day.stage, process.env as Record<string, string>).commentLedger } catch { return null }
     })()
     const gate = generationGateOf({ missingEnv: missing, ledger })
     // 🔴 첫 댓글과 추가 댓글은 장부 회차가 다르다 — 회차 유료 요청 상한을 서로 먹지 않는다(하루 USD 는 같은 장부라 공용)

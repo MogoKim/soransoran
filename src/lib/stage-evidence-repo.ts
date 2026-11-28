@@ -28,6 +28,7 @@ import type { RuntimeStage } from './scale-profile'
 import { isCalendarDate, type ValidatedStageDecision } from './stage-decision-contract'
 import { UNATTENDED_PUBLISH_DECIDED_BY } from './original-post-publish-tx'
 import { AUTO_DECIDER } from './auto-ready-v2'
+import { hotSourceByPost, isHotThread } from './persona-thread-hot'
 import { machineReviewedByHuman } from './original-post-auto-publish'
 import { personaCommentProvenanceOf, type EvidencePost, type PostDecider, type StageEvidenceFacts } from './stage-evidence'
 import { publishEventAtOf, readSourceEvidence, releaseStampStatusOf } from './source-slot-release'
@@ -93,6 +94,8 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
   const deciderOfPost = new Map<string, PostDecider>()
   const queueIdOfPost = new Map<string, string>()
   const capturedAtOfPost = new Map<string, number>()
+  // 🔴 뜨거운 글 판독 재료 — 러너 · 발행 트랜잭션과 같은 판독(`persona-thread-hot`) · PUBLISHED 큐 행만. 재기만 한다(counts)
+  const hotSourceOf = hotSourceByPost(queue.filter((q) => q.status === 'PUBLISHED'))
   for (const q of queue) {
     if (q.status !== 'PUBLISHED') continue
     queueOf.set(q.createdPostId!, (queueOf.get(q.createdPostId!) ?? 0) + 1)
@@ -154,11 +157,12 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
 
   const evidencePosts: EvidencePost[] = posts.map((p) => {
     const mine = logsOf(p.id)
+    // 🔴 공개 시각 = 발행 기록 시각(가장 이른 줄 — 중복은 DUP_PUBLISH_LOG 가 따로 잡는다). posts 는 logs 에서 왔으므로 mine ≥ 1
+    const publishedAtMs = Math.min(...mine.map((l) => l.createdAt.getTime()))
     return {
       postId: p.id,
       queueId: queueIdOfPost.get(p.id) ?? null,
-      // 🔴 공개 시각 = 발행 기록 시각(가장 이른 줄 — 중복은 DUP_PUBLISH_LOG 가 따로 잡는다). posts 는 logs 에서 왔으므로 mine ≥ 1
-      publishedAtMs: Math.min(...mine.map((l) => l.createdAt.getTime())),
+      publishedAtMs,
       capturedAtMs: capturedAtOfPost.get(p.id) ?? null,
       // 🔴 발행 기록이 여럿이면 전부 표식이 있어야 무인이다 — 중복은 아래 DUP_PUBLISH_LOG 가 따로 잡는다
       unattended: mine.length > 0 && mine.every((l) => l.decidedBy === UNATTENDED_PUBLISH_DECIDED_BY),
@@ -182,6 +186,7 @@ export async function readStageEvidenceFacts(db: PrismaClient, i: {
         provenance: c.commentOrigin === 'PERSONA' ? provenanceOf(c) : null,
       })),
       release: releaseOfPost.get(p.id) ?? 'MISSING',
+      hot: isHotThread(hotSourceOf.get(p.id) ?? null, publishedAtMs),
     }
   })
 

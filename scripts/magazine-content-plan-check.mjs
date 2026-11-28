@@ -36,7 +36,7 @@
  *        관련 글 제목은 그 시각의 articles.ts 에서만
  *   CP28 Article 출처(release · S3 P1) — 엄격 schema 반례 · 같은 release.intentId 두 행 → 전체 실패 · 출시 intent 는 상태 · graphVersion
  *        무관 DUPLICATE_RELEASED_INTENT · revert 뒤 재승인 · 옛 inFlightPlanIds 거부 · 진행 중은 intent 단위 · planHash 불변 ·
- *        공개 출처 행이 대상 신원 · 둘 이상이면 고르지 않음 · 실제 articles.ts 는 출처 0
+ *        공개 출처 행이 대상 신원 · 둘 이상이면 고르지 않음 · 실제 articles.ts 의 출처를 원본 행과 대조
  * 마지막 줄: `content-plan 검사: <n> pass, <n> fail`
  */
 import { spawnSync } from 'node:child_process'
@@ -839,9 +839,21 @@ try {
     assert(mappedPlan, '전제 — mapping 이 있고 컴파일 plan 도 있는 intent')
     assert(ov([{ slug: someMap.slug, release: boundRel(target.intentId) }]).length === 0, 'canonical 같은 slug(다른 intent) 출처를 더했다')
     assert(ov([{ slug: 'fx-c', release: boundRel(mappedPlan.intentId) }]).length === 0, 'canonical 같은 intent(다른 slug) 출처를 더했다')
-    // ⑧ 실제 제품 articles.ts — 출처 없는 legacy 57편 그대로 판독
-    const real = parseArticleIdentityText(readFileSync(join(ROOT, 'src/content/magazine/articles.ts'), 'utf8'))
-    assert(real.ok && real.rows.every((r) => r.release === null), `실제 articles 출처 ${real.ok ? real.rows.filter((r) => r.release).length : real.code}`)
+    // ⑧ 원본 행과 신원 투영을 대조한다. 배포된 글의 수나 등록 방식의 비율은 고정하지 않는다.
+    const productText = readFileSync(join(ROOT, 'src/content/magazine/articles.ts'), 'utf8')
+    const product = parseArticleIdentityText(productText)
+    assert(product.ok, `제품 글 신원 판독 실패: ${product.code}`)
+    const sources = parseArticlesSource(productText, '제품 글')
+    const bySlug = new Map(product.rows.map((row) => [row.slug, row.release]))
+    assert(bySlug.size === sources.length, '제품 글과 신원 행 개수가 다르다')
+    for (const row of sources) {
+      let expected = null
+      if (Object.hasOwn(row, 'release')) {
+        expected = structuredClone(row.release)
+        delete expected.schemaVersion // 신원에는 검증을 마친 출처 필드만 남는다.
+      }
+      assert(bySlug.has(row.slug) && canonicalJson(bySlug.get(row.slug)) === canonicalJson(expected), `${row.slug}: 원본과 신원 출처 불일치`)
+    }
   })
 
 } finally {

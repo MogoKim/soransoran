@@ -88,6 +88,12 @@ async function personas(): Promise<void> {
     await prisma.persona.create({ data: { code, userId: u.id, status: 'active' } })
   }
 }
+/**
+ * 🔴 (2026-11-25 밤 4) 수집 뒤 6시간 — 옛 fixture 의 수집(게시 + 1.1h)은 50시간 · 23시간 전이라 시험 시계에서 전부 만료다.
+ *    게시 나이(72h 판정)는 그대로 두고 수집 나이만 1/10 로 줄여 **수집 최신순(정본 순서)을 그대로** 둔다
+ *    (`publish-lane-fairness-db-check` 와 같은 식). 함수 선언이라 아래 `EVIDENCE_AT` 를 부를 때 읽는다.
+ */
+function capturedOf(ageH: number): Date { return new Date(EVIDENCE_AT.getTime() - ((ageH - 1.1) * 3_600_000) / 10) }
 const human = async (daysAgo: number, pinnedCode: string | null = null) => {
   const r = await raw(`${AUTOFILL_SITE_PREFIX}fixture`, new Date(NOW.getTime() - daysAgo * DAY))
   const pinned = pinnedCode === null ? null
@@ -95,7 +101,7 @@ const human = async (daysAgo: number, pinnedCode: string | null = null) => {
   return (await prisma.originalPostApprovalQueue.create({
     data: { sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `가을 이불 꺼낸 날 ${seq}`,
       draftBody: `가을 이불을 꺼내 햇볕에 말렸어요 ${seq}. 다들 이불 바꾸셨어요?`, gateVerdict: 'PASS',
-      gateResults: fakeEvidenceGate(EVIDENCE_AT, { id: `pd-h-${seq}`, ageH: 48 + daysAgo }) as never,
+      gateResults: fakeEvidenceGate(EVIDENCE_AT, { id: `pd-h-${seq}`, ageH: 48 + daysAgo, capturedAt: capturedOf(48 + daysAgo) }) as never,
       promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, decidedBy: 'founder', dedupKey: `pd-h-${seq}`,
       // 🔴 복구 행 — 앞 회차가 배정만 쓰고 끊긴 사람 행(평소에는 줄 맨 앞이다)
       ...(pinned === null ? {} : { matchedPersonaId: pinned, matchedAt: new Date(NOW.getTime() - DAY) }) },
@@ -108,7 +114,7 @@ const auto = async (voice: string, daysAgo: number) => {
   const body = `저녁 먹고 동네를 한 바퀴 걸었어요 ${seq}. 다들 요즘 저녁에 뭐 하세요?`
   return (await prisma.originalPostApprovalQueue.create({
     data: { sourceRawContentId: r.id, status: 'APPROVED', draftTitle: title, draftBody: body, gateVerdict: 'PASS',
-      gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(EVIDENCE_AT, { id: `pd-a-${seq}`, ageH: daysAgo * 24 }),
+      gateResults: { holds: [], blocks: [], ...fakeEvidenceGate(EVIDENCE_AT, { id: `pd-a-${seq}`, ageH: daysAgo * 24, capturedAt: capturedOf(daysAgo * 24) }),
         semanticReview: { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 },
         autoDraft: { provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: voice, bundleDigest: `bd-${voice}`, comments: 3 } },

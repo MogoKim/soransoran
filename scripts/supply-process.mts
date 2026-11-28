@@ -305,8 +305,8 @@ export const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *    적는 함수 안에만 있으면 read-only 로 확인할 방법이 없다 — 값을 돌려주는 함수를 따로 둔다.
  */
 /**
- * 🔴 **화자 여력 지평 = JIT 수요 지평 하나.** 지평의 자리는 `jitCoverageOf`(오늘 발행기가 회수할 수 있는 기회 +
- *    다음 첫 기회)에서 그대로 나온다 — 수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 release 눈금이다.
+ * 🔴 **화자 여력 지평 = JIT 수요 지평 하나.** 지평의 자리는 `jitCoverageOf`(지금 창 끝까지 발행기가 회수할 수 있는 기회 +
+ *    다음 창 첫 자리 — 2026-11-25 밤 4)에서 그대로 나온다 — 수요가 보지 않는 날의 자리로 화자를 앞당겨 쓰지 않는다. cap 은 release 눈금이다.
  * 🔴 **생성 시도 여력은 "그 글이 나갈 날에 쓸 수 있는가"다**(`planSeatWriters`). 오늘 빈 자리를 채울 초안은
  *    오늘 아직 안 쓴 사람에게만 간다. 쓸 사람이 있는 빈 자리(`seats.fillable`)가 이 회차의 수요다 —
  *    수요 판정(`snapshot`)과 여력 파일이 **이 함수 하나**를 쓴다.
@@ -947,7 +947,7 @@ async function main(proof: LeaseProof | null): Promise<number> {
         for (const d of load.seats.byDate) {
           console.log(`   ▸ 화자 ${d.date} 빈 자리 ${d.unfilled}개 · 그날부터 쓸 수 있는 사람 ${d.writers}명 → 채울 자리 ${d.fill}개`)
         }
-        console.log(`   🟢 화자 여력 — 가까운 수요 지평 ${load.horizonDays}일(${load.planningStage} release 슬롯 · 오늘 남은 + 다음 첫 기회)`
+        console.log(`   🟢 화자 여력 — 가까운 수요 지평 ${load.horizonDays}일(${load.planningStage} release 슬롯 · 지금 창 + 다음 창 첫 자리)`
           + ` · WIP ${load.wip.total}건 (자동 도장 대기 ${load.wip.autoReadyPending} · 발행 가능 ${load.wip.publishableNow})`
           + ` · 자동 품질 격리 ${load.wip.qualityQuarantine}건은 WIP 아님`
           + ` · 옛 품질 계약 ${load.wip.qualityContractMismatch}건은 WIP 아님`

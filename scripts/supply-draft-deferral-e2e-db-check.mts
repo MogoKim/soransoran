@@ -73,16 +73,27 @@ const birthdayKst = (y: number): number => Date.parse(`${y}-${bm}-${bd}T00:00:00
 while (birthdayKst(year) - wall < 7 * 864e5) year += 1
 const RUN_AT = new Date(birthdayKst(year) - 500)
 /**
- * 🔴 (2026-09-30 · source-slot-v1) 원천 시각은 회차 시각 기준이다 — 게시 6h 전 · 목록 관측 5h 전 · 수집 4.9h 전.
+ * 🔴 (2026-09-30 · source-slot-v1) 원천 시각은 회차 시각 기준이다 — 게시 6h 전 · 목록 관측 1.1h 전 · 수집 1h 전.
  *    고정 날짜(2026-09-27)를 쓰면 회차가 그 72h 뒤일 때 원천이 전부 SOURCE_TOO_OLD_AT_SLOT 이 되어
  *    생성 전 판정이 묶음을 비운다(이 검사가 보려는 여력 대기 경로에 닿지 않는다).
+ * 🔴 (2026-11-25 밤 4) 수집 뒤 6시간 · 지평 = 지금 창 끝 + 다음 창 첫 자리 — 원천은 **그 회차** 1시간 전에 수집했고,
+ *    러너 회차(⑤ · ⑥)는 그 원천이 닿는 자리가 지평에 있는 시각에 띄운다(옛: 23:59 · 02:00 회차가 내일 08:10 자리를 샀다 —
+ *    수집 뒤 6시간 밖이라 이제 아무것도 못 산다).
  */
-const SRC_POSTED = new Date(RUN_AT.getTime() - 6 * 3_600_000).toISOString()
-const SRC_LISTED = new Date(RUN_AT.getTime() - 5 * 3_600_000).toISOString()
-const SRC_CAPTURED = new Date(RUN_AT.getTime() - 4.9 * 3_600_000).toISOString()
+type SrcTimes = { posted: string; listed: string; captured: string; listFile: string }
+const srcTimesAt = (runAt: Date): SrcTimes => ({
+  posted: new Date(runAt.getTime() - 6 * 3_600_000).toISOString(),
+  listed: new Date(runAt.getTime() - 1.1 * 3_600_000).toISOString(),
+  captured: new Date(runAt.getTime() - 1 * 3_600_000).toISOString(),
+  listFile: new Date(runAt.getTime() - 1.1 * 3_600_000).toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-'),
+})
+/** 🔴 ⑤ JIT 선택 회차 — 생일 당일 04:15(04:00 바퀴 공급 · 창 끝 07:00). d10 지평 = 다음 창 첫 자리 08:10 한 칸 · 부족 1 */
+const RUN5_AT = new Date(birthdayKst(year) + (4 * 60 + 15) * 60_000)
+/** 🔴 ⑥ 중복 회차 — 생일 당일 21:35(20:20 바퀴 · 창 끝 22:50) · 발행 0 이라 d10 자리 10칸이 밀려 지평이 넓다 · 2회차는 1시간 뒤 */
+const RUN6_AT = new Date(birthdayKst(year) + (21 * 60 + 35) * 60_000)
 /** 🔴 목록 관측 파일 — 원천 상대 표본(sourceStats)의 재료. 러너가 읽는 이름 모양 그대로(`navercafe-<카페>-<RUN>.list.jsonl`) */
-const writeListObs = (dir: string, rows: readonly { id: string; site: string; c: number }[]): void => {
-  const t = new Date(RUN_AT.getTime() - 5 * 3_600_000).toISOString().replace(/[-:]/g, '').slice(0, 15).replace('T', '-')
+const writeListObs = (dir: string, rows: readonly { id: string; site: string; c: number }[], times: SrcTimes): void => {
+  const t = times.listFile
   const bySite = new Map<string, typeof rows[number][]>()
   for (const r of rows) bySite.set(r.site, [...(bySite.get(r.site) ?? []), r])
   for (const [site, rs] of bySite) {
@@ -94,7 +105,7 @@ const writeListObs = (dir: string, rows: readonly { id: string; site: string; c:
      */
     const population = [0, 1, 3, 8].map((c, k) => ({ id: `${cafe}-pop-${k}`, site, c }))
     writeFileSync(join(dir, `navercafe-${cafe}-${t}.list.jsonl`), `${[...rs, ...population].map((r) => JSON.stringify({
-      sourceSite: site, sourceArticleId: r.id, sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED,
+      sourceSite: site, sourceArticleId: r.id, sourcePostedAt: times.posted, sourceListedAt: times.listed,
       sourceCommentCount: r.c, sourceViewCount: r.c * 10,
     })).join('\n')}\n`)
   }
@@ -214,6 +225,8 @@ async function main(): Promise<void> {
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: code, bundleDigest: `bd-${code}`, comments: 3 },
         }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: `dd-${seq}` }) } as never,
         decidedBy: 'machine:auto-draft-v5', dedupKey: `dd-${seq}`,
+        // 🔴 (2026-11-25 밤 4) 큐 읽기 범위(지금 − 6h − 시계 오차) — 회차 시각(벽시계보다 미래)의 4시간 전에 적재됐다
+        createdAt: new Date(RUN_AT.getTime() - 4 * 3_600_000),
       },
     })
   }
@@ -351,6 +364,7 @@ async function worksetAxisRunner(
   const D2 = join(T2, '.microseed-data')
   mkdirSync(D2, { recursive: true })
 
+  const T5 = srcTimesAt(RUN5_AT)
   /** seed 6건(댓글 10~5) · raw 4건(댓글 50~47) — 모양은 adapt 가 내는 `detail`/`raw-detail` 쌍 그대로 */
   const src = [
     ...[10, 9, 8, 7, 6, 5].map((c, i) => ({ id: `wsxs${i + 1}`, c, axis: SEED_AXIS })),
@@ -362,13 +376,13 @@ async function worksetAxisRunner(
     title: `우리 나이 이야기 ${x.id}`,
     bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
-    sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED, sourceCapturedAt: SRC_CAPTURED,
+    sourcePostedAt: T5.posted, sourceListedAt: T5.listed, sourceCapturedAt: T5.captured,
   })
   writeFileSync(join(D2, 'wsaxis-1.detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
   writeFileSync(join(D2, 'wsaxis-1.raw-detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
-  writeListObs(D2, src.map((x) => ({ id: x.id, site: 'navercafe:wgang', c: x.c })))
+  writeListObs(D2, src.map((x) => ({ id: x.id, site: 'navercafe:wgang', c: x.c })), T5)
 
   // 🔴 같은 원문의 미발행 형제 — 러너가 **이 DB 를 읽어야만** wsxs1 을 뺄 수 있다.
   //    적재 행의 id 는 `<원문id>-<해시8>` 이다(`baseArticleId` 가 뒤를 뗀다) — 그 모양 그대로 넣는다
@@ -386,8 +400,8 @@ async function worksetAxisRunner(
       gateResults: { holds: [], blocks: [], autoDraft: {
         provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
         draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: codes[0] ?? 'P01', bundleDigest: 'bd-wsx', comments: 3 },
-      }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN_AT, { id: 'wsx-dd-1' }) } as never,
-      decidedBy: 'machine:auto-draft-v5', dedupKey: 'wsx-dd-1',
+      }, [QUALITY_CONTRACT_KEY]: currentQualityContract(), ...fakeEvidenceGate(RUN5_AT, { id: 'wsx-dd-1' }) } as never,
+      decidedBy: 'machine:auto-draft-v5', dedupKey: 'wsx-dd-1', createdAt: new Date(RUN5_AT.getTime() - 0.5 * 3_600_000),
     },
   })
 
@@ -402,8 +416,10 @@ async function worksetAxisRunner(
       NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
       // 🔴 러너는 마지막 정기 슬롯 회차로 뜬다 — 정기 회차 몫 보호가 이 시험을 시각에 따라 막지 않게(2026-09-29)
       ...LAST_SLOT_SCHEDULED_ENV,
+      // 🔴 (2026-11-25 밤 4) 회차 시각 04:15 — 04:00 바퀴 창(04:30~07:00)에 d10 자리가 없어 지평은 다음 창 첫 자리 08:10 한 칸이다
+      SORAN_RUN_AT: RUN5_AT.toISOString(),
       // 🔴 JIT(2026-10-04 P0-2) — 유료 원천 수 = 부족 슬롯 수다. 결정이 넣은 모양(표식 포함) d10.
-      //    🔴 (2026-10-11 Batch A2) 가까운 지평 — 회차 시각이 23:59 KST 라 오늘 슬롯은 끝났다 → 다음 첫 기회 1칸 · 부족 1 · 묶음 1
+      //    🔴 (2026-10-11 Batch A2) 가까운 지평 → 다음 첫 기회 1칸 · 부족 1 · 묶음 1
       //       (옛: 내일 capacity 전체 10칸 · 부족 10). 선택 순서 전체는 `supply:jit-selection-check` 가 순수로 본다
       ...markedStageEnv({ SORAN_CAPACITY_STAGE: 'd10', SORAN_RELEASE_STAGE: 'd10' }),
       FAKE_PROVIDER_LOG: fakeLog,
@@ -499,6 +515,7 @@ async function duplicateSourceRunner(
   // 🔴 적재기는 보류 목록 파일이 없으면 멈춘다 — "없다" 와 "비었다" 는 다르다
   writeFileSync(join(D3, 'held-candidates.json'), '{"held":[]}\n')
 
+  const T6 = srcTimesAt(RUN6_AT)
   const src = [
     { id: 'dup1', site: 'navercafe:wgang', c: 40 },          // 발행된 형제 (PUBLISHED + Post)
     { id: 'dup2', site: 'navercafe:wgang', c: 39 },          // 거절된 형제 (DECLINED)
@@ -512,13 +529,13 @@ async function duplicateSourceRunner(
     title: `우리 나이 이야기 ${x.id}`,
     bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
-    sourcePostedAt: SRC_POSTED, sourceListedAt: SRC_LISTED, sourceCapturedAt: SRC_CAPTURED,
+    sourcePostedAt: T6.posted, sourceListedAt: T6.listed, sourceCapturedAt: T6.captured,
   })
   writeFileSync(join(D3, 'dupsrc-1.detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
   writeFileSync(join(D3, 'dupsrc-1.raw-detail.jsonl'),
     `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
-  writeListObs(D3, src)
+  writeListObs(D3, src, T6)
 
   // ── 큐 · 글 — 🔴 원천 칸만 의미가 있다. 적재 행의 id 는 `<원문id>-<해시8>` 모양 그대로 ──
   const u = await prisma.user.create({ data: { nickname: '중복검사' }, select: { id: true } })
@@ -571,7 +588,7 @@ async function duplicateSourceRunner(
     return { out, ws: existsSync(f) ? JSON.parse(readFileSync(f, 'utf-8')) as { runId: string; sources: { sourceSite: string; sourceArticleId: string }[] } : null }
   }
   const postBefore = await prisma.post.count()
-  const r1At = new Date(RUN_AT.getTime() + 2 * 3600e3)
+  const r1At = RUN6_AT
   const r1 = runOnce(r1At)
   check('🔴 1회차가 돌아 묶음 파일을 적었다', r1.ws !== null, r1.out.slice(-800))
   const ids1 = r1.ws?.sources.map((s) => s.sourceArticleId) ?? []
@@ -625,7 +642,8 @@ async function duplicateSourceRunner(
   check('🔴 1회차가 후보를 실제로 적재했다 (가짜 provider · 격리 DB)', loaded1.length > 0, [...q1.entries()].map(([k, n]) => `${k}:${n}`).join(' '))
   check('🔴 🔴 **원천마다 큐 행 ≤ 1 — 중복 0**', [...q1.values()].every((n) => n === 1), [...q1.entries()].map(([k, n]) => `${k}:${n}`).join(' '))
 
-  const r2At = new Date(r1At.getTime() + 4 * 3600e3)
+  // 🔴 (2026-11-25 밤 4) 2회차는 1시간 뒤(22:35 · 같은 날) — 원천이 수집 6시간 안이라 남은 원천을 실제로 다시 고를 수 있다
+  const r2At = new Date(r1At.getTime() + 1 * 3600e3)
   const r2 = runOnce(r2At)
   const ids2 = r2.ws?.sources.map((s) => s.sourceArticleId) ?? []
   check('🔴 🔴 **2회차 묶음에 1회차가 적재한 원천이 없다** — 재시도로도 다시 뽑히지 않는다',

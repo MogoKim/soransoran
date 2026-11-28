@@ -612,9 +612,16 @@ async function main(): Promise<void> {
         evidence: Array.from({ length: n }, (_, i) => evidence(i)),
       }))
     }
+    /**
+     * 🔴 (2026-11-25 밤 4) 지금 원천(06:00 수집)은 수집 뒤 6시간 안의 자리에만 걸린다 — d3 증명일 세 자리(09:30 · 13:30 · 19:00) 중
+     *    09:30 하나뿐이다(나머지는 그날 회차의 순유입이 채운다 · `measuredFutureSourceOpportunities`). 이 반례는 수율 할인 산수를 보므로
+     *    d3 자리 수(3)만큼의 자리를 그날 수집 6시간 안(07:30 · 09:30 · 11:30)에 둔다.
+     */
+    const proof3 = ['07:30', '09:30', '11:30'].map((hm) => new Date(`2026-10-01T${hm}:00+09:00`))
+    check('fixture 전제 — d3 하루 자리 수와 같은 3칸', proof3.length === slotTimesOn('2026-10-01', profileOf('d3')).length)
     const facts = async (): Promise<Awaited<ReturnType<typeof readPreflightFacts>>> => readPreflightFacts(prisma, {
       loaded: await loadPublishableStock(prisma, now, { autoReadyOpen: false }),
-      autoOpen: { open: false, reasons: [] }, proofSlots: slotTimesOn('2026-10-01', profileOf('d3')),
+      autoOpen: { open: false, reasons: [] }, proofSlots: proof3,
       caps: releaseCapsOf(profileOf('d3')), evidenceDate: '2026-09-30', env: {}, dataDir: dir, now,
 contractValidPersonas: async () => 30,
     })

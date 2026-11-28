@@ -156,12 +156,20 @@ try {
     }
     out.d10 = { date: D10_DATE, decision: decision?.release ?? null, evidence: evidence.verdict, ledgerRead: entries !== null, followup: fu, first, acceptedFollowups: accepted, acceptedFirstComments: evidence.counts?.firstCommentOk ?? null }
   }
+  /**
+   * 🔴 댓글 천장의 그날 단계 — 이 도구는 오늘 결정을 읽지 않는다(StageDecision adapter 호출 자리는 잠겨 있다 · `stage:ladder-check`).
+   *    그래서 단계 미확인(null → base 칸)으로 잰다. 지어내지 않는다 — 화면 · JSON 에 "단계 미확인"을 적는다.
+   */
+  const commentStage = null
   const derived = deriveFollowupProfile({
     measure, targetStage: TARGET, targetDailyPosts: prof.dailyTarget,
     commentRunsPerDay: RUNNER_GRID.commentSlots.length, contractValidPersonas: personas,
-    commentDailyUsdCap: commentLoopLimitsFromEnv(pe.values).limits.dailyUsd,
+    commentDailyUsdCap: commentLoopLimitsFromEnv(pe.values, commentStage).limits.dailyUsd,
   })
-  out.followup = { installedD20: installedD20.ok, installedReason: installedD20.ok ? null : installedD20.reason, derive: derived }
+  out.followup = {
+    installedD20: installedD20.ok, installedReason: installedD20.ok ? null : installedD20.reason, derive: derived,
+    commentCapStage: '단계 미확인(오늘 결정을 읽지 않는다) — 댓글 천장 base',
+  }
   if (PROFILE_OUT !== null) {
     if (derived.candidate === null) fail(`후보가 서지 않았다 — ${derived.verdict} [${derived.codes.join(',')}] · 파일 0`)
     writeFileSync(PROFILE_OUT, `${JSON.stringify(derived.candidate, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
@@ -176,7 +184,7 @@ if (JSON_OUT) {
 } else {
   const p = out.preflight as { verdict: string; codes: string[]; counts: Record<string, number>; notes: string[] }
   const per = out.persona as { contractValid: number | null; canaryFloor: number; sustainedTarget: number }
-  const fu = out.followup as { installedD20: boolean; installedReason: string | null; derive: ReturnType<typeof deriveFollowupProfile> }
+  const fu = out.followup as { installedD20: boolean; installedReason: string | null; derive: ReturnType<typeof deriveFollowupProfile>; commentCapStage: string }
   const c = p.counts
   console.log(`\n══ D20 준비도 — read-only · 증명일 ${DATE} · DB write 0 ══`)
   console.log(`\n① Persona  계약 유효 ${String(per.contractValid)} · canary 하한 ${per.canaryFloor} · 지속 목표 ${per.sustainedTarget}`)
@@ -195,6 +203,7 @@ if (JSON_OUT) {
   console.log(`\n③ 추가 댓글 profile  설치된 D20 profile ${fu.installedD20 ? '✅' : `없음 — ${String(fu.installedReason)}`}`)
   if (out.d10 !== undefined) console.log(`   D10 실측 ${JSON.stringify(out.d10)}`)
   const d = fu.derive
+  console.log(`   🟡 ${fu.commentCapStage}`)
   console.log(`   D20 후보 ${d.verdict}${d.codes.length > 0 ? ` [${d.codes.join(',')}]` : ''} · ${JSON.stringify(d.counts)}`)
   if (d.candidate !== null) console.log(`   후보(승인 전 — 설치해도 0건) ${JSON.stringify(d.candidate)}`)
   if (out.profileOut !== undefined) console.log(`   → ${String(out.profileOut)} (0600 · 승인칸 비어 있음)`)

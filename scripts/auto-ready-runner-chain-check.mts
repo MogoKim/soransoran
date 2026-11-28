@@ -83,7 +83,8 @@ const SR = { complete: true, deterministicPass: true, unsupportedAdditions: 0, l
 const gate = (voiceCode: string | null, evidence: { at: Date; id: string } | null = null) => ({
   holds: [], blocks: [], semanticReview: SR, [QUALITY_CONTRACT_KEY]: currentQualityContract(),
   // 🔴 원문 증거 — 초안 적재 시각 기준으로 만든다(게시 < 목록 < 수집 < 초안 ≤ 행 생성)
-  ...(evidence === null ? {} : fakeEvidenceGate(evidence.at, { id: evidence.id })),
+  //    🔴 (2026-11-25 밤 4) 수집은 적재 1시간 전이다 — 옛 기본(적재 4.9h 전)은 적재 2~3시간 뒤 회차에서 수집 뒤 6시간을 넘겨 만료다
+  ...(evidence === null ? {} : fakeEvidenceGate(evidence.at, { id: evidence.id, capturedAt: new Date(evidence.at.getTime() - 3_600_000) })),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
