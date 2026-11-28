@@ -15,7 +15,10 @@
  *   ④ 라운드 1 이 멈춘(stoppedReason) 회차에도 재시도한다
  *   ⑤ 남은 호출에서 라운드 1 사용분을 빼지 않는다 — 두 라운드 합이 회차 상한을 넘는다
  *   ⑥ 첫 댓글 회차 상한 기본값이 옛 6 으로 돌아간다(한 벌 + 재시도 한 벌이 들어가지 않는다)
- *   🟡 오늘 자리(`readiness.allowance.remaining`) 상한은 DB 가 필요해 격리 DB 검사(`persona:comment-loop-db-check` 반례③)가 본다
+ *   ⑦ 재시도 호출 한도가 옛 식(라운드 1 한도 = 자리에 눌린 값)으로 돌아간다 — 자정 직후 자리 5 면 재시도 0 (밤 5-b)
+ *   ⑧ 재시도 한도에서 자리 한도가 빠진다 — 재시도가 남은 자리보다 많이 부른다 (밤 5-b)
+ *   ⑨ 라운드 1 이 자리 한도를 보지 않는다 — 라운드 1 이 호출 한도까지 고르고 부른다 (밤 5-b)
+ *   오늘 자리(`readiness.allowance.remaining`)는 가짜 DB 의 두 읽기(오늘 관리형 글 · 오늘 발행 수)로 정한다 — 격리 DB 판은 `persona:comment-loop-db-check` 반례③
  */
 import { spawnSync } from 'node:child_process'
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -48,11 +51,23 @@ const mutations: readonly Mutation[] = [
   },
   {
     name: '⑤ 남은 호출에서 라운드 1 사용분을 빼지 않는다 — 두 라운드 합이 회차 상한을 넘는다',
-    file: LOOP, from: 'Math.min(limit - result.providerCalls, ', to: 'Math.min(limit, ', check: LOOP_CHECK,
+    file: LOOP, from: 'Math.min(callCap - result.providerCalls, ', to: 'Math.min(callCap, ', check: LOOP_CHECK,
   },
   {
     name: '⑥ 첫 댓글 회차 상한 기본값이 옛 6 으로 돌아간다',
     file: LANE, from: 'export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 10', to: 'export const COMMENT_LOOP_RUN_REQUEST_CAP_DEFAULT = 6', check: LOOP_CHECK,
+  },
+  {
+    name: '⑦ 재시도 호출 한도가 옛 식(라운드 1 한도)으로 돌아간다 — 자정 직후 자리 5 면 재시도 0',
+    file: LOOP, from: 'Math.min(callCap - result.providerCalls, ', to: 'Math.min(limit - result.providerCalls, ', check: LOOP_CHECK,
+  },
+  {
+    name: '⑧ 재시도 한도에서 자리 한도가 빠진다 — 재시도가 남은 자리보다 많이 부른다',
+    file: LOOP, from: ', readiness.allowance.remaining - result.created))', to: '))', check: LOOP_CHECK,
+  },
+  {
+    name: '⑨ 라운드 1 이 자리 한도를 보지 않는다 — 호출 한도까지 고르고 부른다',
+    file: LOOP, from: 'const limit = Math.max(0, Math.min(callCap, readiness.allowance.remaining))', to: 'const limit = callCap', check: LOOP_CHECK,
   },
 ]
 
